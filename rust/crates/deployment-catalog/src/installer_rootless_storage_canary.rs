@@ -29,6 +29,8 @@ const PULL_INTENT: &str = "rootless-canary-pull-intent.json";
 const INTENT: &str = "rootless-canary-intent.json";
 const CREATED: &str = "rootless-canary-created.json";
 const TRANSITION_CONTAINER: &str = "rootless-canary-transition-container.json";
+const TRANSITION_CREATED_UNVALIDATED: &str = "rootless-canary-transition-created-unvalidated.json";
+const RESTORE_CREATED_UNVALIDATED: &str = "rootless-canary-restore-created-unvalidated.json";
 const RESTORE_CONTAINER: &str = "rootless-canary-restore-container.json";
 const START_INTENT: &str = "rootless-canary-start-intent.json";
 const FOREIGN: &str = "rootless-canary-foreign-observed.json";
@@ -459,14 +461,26 @@ fn inspect(docker: &DockerRunner, id: &str) -> Result<Value> {
     crate::installer_container::inspect(docker, id, REFUSED)
 }
 fn capabilities(value: &Value) -> bool {
-    value.as_array().is_some_and(|items| {
-        items.len() == 2
-            && items
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<BTreeSet<_>>()
-                == BTreeSet::from(["CHOWN", "DAC_OVERRIDE"])
-    })
+    let Some(items) = value.as_array() else {
+        return false;
+    };
+    if items.len() != 2 {
+        return false;
+    }
+    let mut observed = BTreeSet::new();
+    for item in items {
+        let Some(raw) = item.as_str() else {
+            return false;
+        };
+        // Docker Engine inspect can return the CAP_ form even when the CLI
+        // accepted bare names. Strip exactly one prefix, never canonicalize
+        // arbitrary capability names or silently accept duplicates.
+        let name = raw.strip_prefix("CAP_").unwrap_or(raw);
+        if !matches!(name, "CHOWN" | "DAC_OVERRIDE") || !observed.insert(name) {
+            return false;
+        }
+    }
+    observed == BTreeSet::from(["CHOWN", "DAC_OVERRIDE"])
 }
 fn container_config(docker: &DockerRunner, id: &str, c: &Contract) -> Result<Value> {
     let value = inspect(docker, id)?;
@@ -489,10 +503,18 @@ fn validate_container_value(value: &Value, id: &str, c: &Contract) -> Result<()>
         },
         REFUSED,
     )?;
+    // Report only the bounded capability field; never emit the full Docker
+    // inspect object, which may contain inherited environment values.
+    if !capabilities(&value["HostConfig"]["CapAdd"]) {
+        let actual = value["HostConfig"]["CapAdd"].to_string();
+        return Err(format!(
+            "{REFUSED}: HostConfig.CapAdd expected CHOWN,DAC_OVERRIDE (optional CAP_ prefix), observed {}",
+            if actual.len() <= 256 { actual.as_str() } else { "<oversized>" }
+        ));
+    }
     require(
         value["Config"]["Labels"]["com.elevenid.installer.canary"] == c.canary_id.to_string()
             && value["Config"]["Labels"]["com.elevenid.installer.canary-role"] == c.role
-            && capabilities(&value["HostConfig"]["CapAdd"])
             && crate::installer_container::empty_or_null(&value["HostConfig"]["Tmpfs"])
             && crate::installer_container::environment_map(&value["Config"]["Env"], REFUSED)?
                 == c.environment,
@@ -530,7 +552,12 @@ fn validate_container(docker: &DockerRunner, id: &str, c: &Contract, terminal: b
     let value = container_config(docker, id, c)?;
     crate::installer_container::validate_stopped_state(&value, terminal, REFUSED)
 }
-fn create_container(docker: &DockerRunner, c: &Contract) -> Result<String> {
+fn create_container(
+    docker: &DockerRunner,
+    c: &Contract,
+    state: &mut InstallerState,
+    intent: &Intent,
+) -> Result<String> {
     require(
         docker
             .run_checked(&[
@@ -546,6 +573,28 @@ fn create_container(docker: &DockerRunner, c: &Contract) -> Result<String> {
     let id_value = run(docker, &command(c)?)?;
     let id_value = id_value.trim();
     require(id(id_value))?;
+    // Docker create is a mutation. Persist the returned ID before any inspect
+    // validation can fail. This record is deliberately NOT a validated receipt
+    // and must never authorize start, cleanup, adoption or recovery.
+    let unvalidated = json!({
+        "schema": "elevenid.rootless-canary-created-unvalidated/v1",
+        "intent_sha256": sha(&encoded(intent)?),
+        "role": c.role,
+        "name": c.name,
+        "id": id_value,
+        "validated": false,
+        "cleanup_authorized": false,
+        "installation_ready": false
+    });
+    persist(
+        state,
+        if c.role == "transition" {
+            TRANSITION_CREATED_UNVALIDATED
+        } else {
+            RESTORE_CREATED_UNVALIDATED
+        },
+        &encoded(&unvalidated)?,
+    )?;
     validate_container(docker, id_value, c, false)?;
     Ok(id_value.into())
 }
@@ -1529,7 +1578,7 @@ pub(crate) fn qualify_candidate(
             parent: parent_path.clone(),
             operator: operator.clone(),
         };
-        let id = create_container(&docker, &contract)?;
+        let id = create_container(&docker, &contract, state, &intent)?;
         let record = receipt(&intent, role, contract.name, id);
         let bytes = encoded(&record)?;
         persist(
@@ -2059,6 +2108,32 @@ mod tests {
             "NetworkSettings":{"Networks":{}},
             "State":{"Running":false,"Status":"created","ExitCode":0,"OOMKilled":false}
         })
+    }
+
+    #[test]
+    fn aws_rootless_capability_names_admit_one_optional_prefix_only() {
+        for accepted in [
+            json!(["CHOWN", "DAC_OVERRIDE"]),
+            json!(["CAP_CHOWN", "CAP_DAC_OVERRIDE"]),
+            json!(["CAP_DAC_OVERRIDE", "CAP_CHOWN"]),
+            json!(["CHOWN", "CAP_DAC_OVERRIDE"]),
+            json!(["CAP_CHOWN", "DAC_OVERRIDE"]),
+        ] {
+            assert!(capabilities(&accepted), "should accept {accepted}");
+        }
+        for rejected in [
+            json!(null), json!([]), json!(["CHOWN"]), json!(["CHOWN", "CHOWN"]),
+            json!(["CHOWN", "CAP_CHOWN"]),
+            json!(["CHOWN", "DAC_OVERRIDE", "SYS_ADMIN"]),
+            json!(["CAP_CAP_CHOWN", "CAP_DAC_OVERRIDE"]),
+            json!(["cap_chown", "DAC_OVERRIDE"]),
+            json!(["CAP_", "DAC_OVERRIDE"]),
+            json!(["", "DAC_OVERRIDE"]),
+            json!(["CHOWN", 7]),
+            json!({"unexpected":"object"}),
+        ] {
+            assert!(!capabilities(&rejected), "should refuse {rejected}");
+        }
     }
 
     #[test]
