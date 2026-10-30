@@ -2,17 +2,17 @@
 //! host trust, contacts Docker/OpenBao, resumes provisioning, or grants Ready.
 #![cfg(target_os = "linux")]
 use crate::{
-    installer_application_graph as graph, installer_generation_binding as generation,
+    installer_doctor, installer_generation_binding as generation,
     installer_ingress_outputs::IngressMetadata,
     installer_ingress_provision as ingress,
-    installer_state::{CleanupState, LockedInspection, Phase},
+    installer_state::{LockedInspection, Phase},
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use spki::der::{Encode, EncodePem};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -27,39 +27,6 @@ fn require(ok: bool) -> Result<()> {
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
-}
-fn identifier(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
-fn decode(bytes: &[u8]) -> Result<Value> {
-    crate::installer_json::decode(bytes).map_err(|_| REFUSED.into())
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Startup {
-    schema: String,
-    installation_id: String,
-    project: String,
-    engine_id: String,
-    network_id: String,
-    containers: BTreeMap<String, String>,
-    redis_volume: String,
-    completed_initializers: Vec<String>,
-    healthy_services: Vec<String>,
-    running_workers: Vec<String>,
-    installation_ready: bool,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Created {
-    containers: BTreeMap<String, String>,
-    redis_volume: String,
-    network_id: String,
 }
 #[derive(Serialize)]
 pub struct TrustInfo {
@@ -88,55 +55,6 @@ fn origin(model: &Value) -> Result<String> {
     let number = port.parse::<u16>().map_err(|_| REFUSED)?;
     require(number >= 1024 && port == number.to_string())?;
     Ok(value.to_owned())
-}
-fn startup(
-    record: &Startup,
-    created: &Created,
-    model: &Value,
-    selected: &[String],
-    identity: (&str, &str, &str, &str),
-) -> Result<()> {
-    let (id, project, engine, network) = identity;
-    require(
-        record.schema == "elevenid.installer-application-start/v1"
-            && record.installation_id == id
-            && record.project == project
-            && record.engine_id == engine
-            && record.network_id == network
-            && !record.installation_ready
-            && created.network_id == network
-            && record.containers == created.containers
-            && record.redis_volume == created.redis_volume
-            && record.redis_volume == format!("{project}_redis-socket"),
-    )?;
-    let roles = graph::startup_order(model, selected)?;
-    require(
-        record.containers.keys().cloned().collect::<BTreeSet<_>>()
-            == roles.iter().cloned().collect()
-            && record.containers.values().all(|v| identifier(v))
-            && record.containers.values().collect::<BTreeSet<_>>().len() == roles.len(),
-    )?;
-    for (values, kind) in [
-        (
-            &record.completed_initializers,
-            graph::Completion::ExitedZero,
-        ),
-        (&record.healthy_services, graph::Completion::Healthy),
-        (&record.running_workers, graph::Completion::Running),
-    ] {
-        let expected = roles
-            .iter()
-            .filter_map(|role| match graph::completion(model, role) {
-                Ok(actual) if actual == kind => Some(role.clone()),
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
-        require(
-            values.len() == expected.len()
-                && values.iter().cloned().collect::<BTreeSet<_>>() == expected,
-        )?;
-    }
-    Ok(())
 }
 fn public_pem(bytes: &[u8]) -> Result<String> {
     let text = std::str::from_utf8(bytes).map_err(|_| REFUSED)?;
@@ -208,21 +126,34 @@ pub fn inspect(path: &Path) -> Result<TrustInfo> {
 
 pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<TrustInfo> {
     state.require_path_binding(path)?;
+    require(matches!(
+        state.journal().phase(),
+        Phase::Provisioning | Phase::Provisioned
+    ))?;
+    // A started stop/removal may have an uncertain daemon-side result. Historical
+    // startup evidence is not a live trust/readiness assertion in that state.
+    let maintenance = crate::installer_uninstall::status(state)?;
     require(
-        state.cleanup_status()?.state == CleanupState::NotStarted
-            && matches!(
-                state.journal().phase(),
-                Phase::Provisioning | Phase::Provisioned
-            ),
+        maintenance["operations"]["down"] == "not_started"
+            && maintenance["operations"]
+                .as_object()
+                .ok_or(REFUSED)?
+                .values()
+                .all(|value| value != "uncertain"),
+    )?;
+    let saved = installer_doctor::load_session(state, path)?;
+    let resources = saved.receipt.resources.as_ref().ok_or(REFUSED)?;
+    require(
+        installer_doctor::summarize(resources, &saved.receipt.status)?
+            ["all_expected_states_observed"]
+            == true,
     )?;
     let id = state.journal().installation_id().to_string();
     let engine = &state.journal().runtime().ok_or(REFUSED)?.engine_id;
     let binding = generation::load_verified(path, &id, engine)?.ok_or(REFUSED)?;
     let names = [
         "installer-ingress.json",
-        "application-plan.json",
-        "application-created-resources.json",
-        "application-start-result.json",
+        installer_doctor::SESSION_RECORD,
         "application-generation-selection.json",
     ];
     let records = names
@@ -230,28 +161,9 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
         .map(|name| Ok((*name, state.read_evidence(name)?)))
         .collect::<Result<BTreeMap<_, _>>>()?;
     for bytes in records.values() {
-        decode(bytes)?;
+        crate::installer_json::decode(bytes).map_err(|_| REFUSED)?;
     }
-    let plan = decode(&records["application-plan.json"])?;
-    let selected: Vec<String> =
-        serde_json::from_value(plan["selected_services"].clone()).map_err(|_| REFUSED)?;
-    let receipt: Startup =
-        serde_json::from_slice(&records["application-start-result.json"]).map_err(|_| REFUSED)?;
-    let created: Created = serde_json::from_slice(&records["application-created-resources.json"])
-        .map_err(|_| REFUSED)?;
-    startup(
-        &receipt,
-        &created,
-        &plan["model"],
-        &selected,
-        (
-            &id,
-            &state.journal().compose_project(),
-            engine,
-            &binding.network_id,
-        ),
-    )?;
-    let origin = origin(&plan["model"])?;
+    let origin = origin(&saved.model)?;
     let ca = state.read_secret("installer_ingress_ca_cert")?;
     let leaf = state.read_secret("installer_ingress_tls_cert")?;
     require(
@@ -269,7 +181,10 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
     require(
         generation::load_verified(path, &id, engine)?.as_ref() == Some(&binding)
             && state.read_secret("installer_ingress_ca_cert")? == ca
-            && state.read_secret("installer_ingress_tls_cert")? == leaf,
+            && state.read_secret("installer_ingress_tls_cert")? == leaf
+            && serde_json::to_value(&saved).map_err(|_| REFUSED)?
+                == serde_json::to_value(installer_doctor::load_session(state, path)?)
+                    .map_err(|_| REFUSED)?,
     )?;
     state.require_path_binding(path)?;
     Ok(TrustInfo {
@@ -286,7 +201,7 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
             .iter()
             .map(|(name, bytes)| (name.to_string(), hash(bytes)))
             .collect(),
-        recorded_startup_containers: receipt.containers.len(),
+        recorded_startup_containers: resources.containers.len(),
         runtime_observed: false,
         host_trust_observed: false,
         host_trust_modified: false,
@@ -327,122 +242,6 @@ mod tests {
             assert!(origin(&json!({"services":{"installer-ingress":{"environment":{"OIDF_EDGE_PUBLIC_ORIGIN":value}}}})).is_err());
         }
         assert_eq!(origin(&json!({"services":{"installer-ingress":{"environment":{"OIDF_EDGE_PUBLIC_ORIGIN":"https://localhost:18443"}}}})).unwrap(),"https://localhost:18443");
-    }
-    #[test]
-    fn startup_identity_and_unknown_fields_are_refused() {
-        let raw = json!({"schema":"elevenid.installer-application-start/v1","installation_id":"wrong","project":"p","engine_id":"e","network_id":"n","containers":{},"redis_volume":"p_redis-socket","completed_initializers":[],"healthy_services":[],"running_workers":[],"installation_ready":false});
-        let receipt: Startup = serde_json::from_value(raw.clone()).unwrap();
-        let created = Created {
-            containers: BTreeMap::new(),
-            redis_volume: "p_redis-socket".into(),
-            network_id: "n".into(),
-        };
-        assert!(startup(
-            &receipt,
-            &created,
-            &json!({}),
-            &[],
-            ("expected", "p", "e", "n")
-        )
-        .is_err());
-        let mut extra = raw;
-        extra["trust_installed"] = json!(true);
-        assert!(serde_json::from_value::<Startup>(extra).is_err());
-    }
-    #[test]
-    fn nested_duplicate_receipt_fields_are_refused() {
-        assert!(decode(br#"{"containers":{"edge":"first","edge":"second"}}"#).is_err());
-        assert!(decode(
-            br#"{"model":{"services":{"edge":{"environment":{"A":"first","A":"second"}}}}}"#
-        )
-        .is_err());
-        assert!(decode(br#"{"installation_ready":false,"installation_ready":true}"#).is_err());
-    }
-    #[test]
-    fn recorded_startup_must_cover_exact_graph_ids_and_completion_classes() {
-        let mut services = serde_json::Map::new();
-        for role in [
-            "gateway",
-            "postgres",
-            "redis",
-            "revocation-profile-migrate",
-            "db-migrate",
-            "kms-initialize",
-            "keycloak-configurator",
-            "issuance-migrations",
-        ] {
-            services.insert(
-                role.into(),
-                json!({"restart":"no","healthcheck":{"test":["CMD","true"]}}),
-            );
-        }
-        for i in 0..22 {
-            services.insert(
-                format!("synthetic-{i}"),
-                json!({"healthcheck":{"test":["CMD","true"]}}),
-            );
-        }
-        services["kms-initialize"]["depends_on"] = json!({"postgres":{"condition":"service_healthy"},"redis":{"condition":"service_healthy"},"db-migrate":{"condition":"service_completed_successfully"},"revocation-profile-migrate":{"condition":"service_completed_successfully"}});
-        let selected = services
-            .keys()
-            .filter(|name| name.as_str() != "kms-initialize")
-            .cloned()
-            .collect::<Vec<_>>();
-        let model = json!({"services":services});
-        let roles = graph::startup_order(&model, &selected).unwrap();
-        let containers = roles
-            .iter()
-            .enumerate()
-            .map(|(i, role)| (role.clone(), format!("{i:064x}")))
-            .collect::<BTreeMap<_, _>>();
-        let initializers = roles
-            .iter()
-            .filter(|role| {
-                graph::completion(&model, role).unwrap() == graph::Completion::ExitedZero
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let healthy = roles
-            .iter()
-            .filter(|role| graph::completion(&model, role).unwrap() == graph::Completion::Healthy)
-            .cloned()
-            .collect::<Vec<_>>();
-        let raw = json!({"schema":"elevenid.installer-application-start/v1","installation_id":"id","project":"p","engine_id":"e","network_id":"n","containers":containers,"redis_volume":"p_redis-socket","completed_initializers":initializers,"healthy_services":healthy,"running_workers":[],"installation_ready":false});
-        let created = Created {
-            containers,
-            redis_volume: "p_redis-socket".into(),
-            network_id: "n".into(),
-        };
-        let validate = |value: Value| {
-            startup(
-                &serde_json::from_value::<Startup>(value).unwrap(),
-                &created,
-                &model,
-                &selected,
-                ("id", "p", "e", "n"),
-            )
-        };
-        validate(raw.clone()).unwrap();
-        for field in [
-            "installation_id",
-            "project",
-            "engine_id",
-            "network_id",
-            "redis_volume",
-        ] {
-            let mut bad = raw.clone();
-            bad[field] = json!("foreign");
-            assert!(validate(bad).is_err());
-        }
-        let mut bad = raw.clone();
-        bad["containers"]["gateway"] = json!("f".repeat(64));
-        assert!(validate(bad).is_err());
-        let mut bad = raw.clone();
-        bad["healthy_services"].as_array_mut().unwrap().pop();
-        assert!(validate(bad).is_err());
-        let mut bad = raw;
-        bad["installation_ready"] = json!(true);
-        assert!(validate(bad).is_err());
     }
     #[test]
     fn trust_information_never_adopts_active_or_incomplete_installation() {

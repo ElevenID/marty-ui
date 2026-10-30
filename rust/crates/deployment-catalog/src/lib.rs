@@ -9,10 +9,6 @@ mod deployment_environment;
 mod deployment_lifecycle;
 pub mod installer_application;
 pub mod installer_application_env;
-pub mod installer_application_graph;
-pub mod installer_application_model;
-pub mod installer_application_observation;
-pub mod installer_application_start;
 pub mod installer_artifacts;
 pub mod installer_bundle;
 #[cfg(target_os = "linux")]
@@ -20,6 +16,11 @@ pub mod installer_candidate_command;
 pub mod installer_candidate_nonce;
 pub mod installer_candidate_prepare;
 pub mod installer_command;
+pub mod installer_compose;
+#[cfg(all(test, target_os = "linux"))]
+mod installer_compose_development_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod installer_compose_engine_tests;
 #[cfg(target_os = "linux")]
 mod installer_compose_plugin;
 #[cfg(target_os = "linux")]
@@ -41,9 +42,9 @@ pub mod installer_host_storage_inventory;
 pub(crate) mod installer_host_tree_observer;
 pub mod installer_ingress;
 pub mod installer_ingress_config;
-pub mod installer_ingress_model;
 pub mod installer_ingress_outputs;
 pub mod installer_ingress_provision;
+mod installer_jobs;
 mod installer_json;
 pub mod installer_keycloak;
 pub mod installer_keycloak_bridge;
@@ -55,8 +56,6 @@ pub mod installer_prepare;
 pub(crate) mod installer_purge_host;
 #[allow(dead_code)] // No production caller until the purge coordinator is reviewed.
 pub(crate) mod installer_purge_ledger;
-#[allow(dead_code)] // Dormant until the reviewed purge coordinator supplies durable intent.
-pub(crate) mod installer_purge_volume;
 pub mod installer_release;
 pub mod installer_renewal;
 pub mod installer_renewal_bootstrap;

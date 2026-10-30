@@ -1,30 +1,38 @@
-//! Read-only inspection of recorded workloads. Configuration identity is separate
-//! from health; no resource is adopted, restarted, removed, or marked Ready.
+//! Read-only native Compose observations of the bound installation.
+//! Compose owns ordering and health waits; this module reports one snapshot.
 #![cfg(target_os = "linux")]
+
 use crate::{
-    installer_application_graph::{self as graph, Completion},
-    installer_application_model::ApplicationModelPlan,
-    installer_application_observation as observation, installer_generation_binding as generation,
-    installer_runtime::DockerRunner,
-    installer_state::LockedInspection,
+    installer_compose::{self, ComposeInputs, ComposeReceipt, ComposeSession, ProjectResources},
+    installer_state::{LockedInspection, RuntimeBinding},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 type Result<T> = std::result::Result<T, String>;
-const REFUSED: &str =
-    "Installer service inspection refused; preserve recorded resources and recovery evidence";
-const BAO: [&str; 4] = [
-    "openbao",
-    "openbao-bootstrap",
-    "openbao-tls-init",
-    "openbao-unseal",
-];
+const REFUSED: &str = "Installer service inspection refused; preserve the bound Compose inputs and operation evidence";
+pub(crate) const SESSION_RECORD: &str = "compose-session.json";
+pub(crate) const FAILED_RUNTIME_SESSION_SCHEMA: &str =
+    "elevenid.installer-failed-runtime-cleanup-session/v1";
+
+/// The final native model is a read-only snapshot, never a generated executable
+/// Compose document. The original authenticated layers remain the command inputs.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SavedSession {
+    pub schema: String,
+    pub installation_id: String,
+    pub inputs: ComposeInputs,
+    pub model: Value,
+    pub configuration_sha256: String,
+    pub receipt: ComposeReceipt,
+}
+
 fn require(ok: bool) -> Result<()> {
     if ok {
         Ok(())
@@ -32,642 +40,590 @@ fn require(ok: bool) -> Result<()> {
         Err(REFUSED.into())
     }
 }
-fn text(v: &Value) -> Result<&str> {
-    v.as_str().ok_or_else(|| REFUSED.into())
-}
-fn id(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
+fn identifier(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
-    serde_json::from_slice(bytes).map_err(|_| REFUSED.into())
-}
-fn one(raw: &str) -> Result<Value> {
-    let v: Value = parse(raw.as_bytes())?;
-    let a = v.as_array().ok_or(REFUSED)?;
-    require(a.len() == 1 && a[0].is_object())?;
-    Ok(a[0].clone())
-}
-fn ids(raw: &str) -> Result<BTreeSet<String>> {
-    let mut result = BTreeSet::new();
-    for line in raw.lines() {
-        require(id(line) && result.insert(line.into()))?;
-    }
-    Ok(result)
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SavedPlan {
-    model: Value,
-    selected_services: Vec<String>,
-    expected_network_id: String,
-    installation_ready: bool,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Created {
-    containers: BTreeMap<String, String>,
-    redis_volume: String,
-    network_id: String,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BaoCreated {
-    schema: String,
-    installation_id: String,
-    engine_id: String,
-    project: String,
-    image: String,
-    image_id: String,
-    network_id: String,
-    container_ids: BTreeMap<String, String>,
+fn name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 96
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
 
-fn container_ids(map: &BTreeMap<String, String>, roles: &[String]) -> Result<()> {
-    require(
-        map.keys().cloned().collect::<BTreeSet<_>>() == roles.iter().cloned().collect()
-            && map.values().all(|v| id(v))
-            && map.values().collect::<BTreeSet<_>>().len() == map.len(),
-    )
-}
-
-/// Closed fields only: never return Docker error bodies, environment or health logs.
-fn lifecycle(c: &Value, completion: Completion) -> Result<Value> {
-    let state = &c["State"];
-    let status = text(&state["Status"])?;
+fn validate_saved(
+    saved: &SavedSession,
+    installation: &Path,
+    id: &str,
+    project: &str,
+    binding: &RuntimeBinding,
+    approved_images: &BTreeSet<String>,
+) -> Result<()> {
+    let receipt = &saved.receipt;
     require(
         [
-            "created",
-            "running",
-            "exited",
-            "paused",
-            "restarting",
-            "dead",
+            "elevenid.installer-compose-session/v1",
+            FAILED_RUNTIME_SESSION_SCHEMA,
         ]
-        .contains(&status),
+        .contains(&saved.schema.as_str())
+            && saved.installation_id == id
+            && saved.inputs.installation == installation
+            && saved.inputs.project == project
+            && saved.model["name"] == project
+            && binding.profile == crate::installer_state::RuntimeProfile::Rootless
+            && &saved.inputs.approved_images == approved_images
+            && receipt.schema == "elevenid.installer-compose-operation/v1"
+            && receipt.project == project
+            && receipt.engine_id == binding.engine_id
+            && receipt.observation_validated
+            && !receipt.installation_ready
+            && installer_compose::model_sha256(&saved.model)? == saved.configuration_sha256
+            && serde_json::to_value(&saved.inputs.prior).map_err(|_| REFUSED)?
+                == serde_json::to_value(Some(receipt)).map_err(|_| REFUSED)?,
     )?;
-    let running = state["Running"].as_bool().ok_or(REFUSED)?;
-    let paused = state["Paused"].as_bool().ok_or(REFUSED)?;
-    let restarting = state["Restarting"].as_bool().ok_or(REFUSED)?;
-    let oom = state["OOMKilled"].as_bool().ok_or(REFUSED)?;
-    let exit = state["ExitCode"].as_i64().ok_or(REFUSED)?;
-    let restarts = c["RestartCount"].as_u64().ok_or(REFUSED)?;
-    let health = state["Health"]["Status"].as_str();
-    require(health.is_none_or(|h| ["healthy", "unhealthy", "starting"].contains(&h)))?;
-    let stable = !paused && !restarting && !oom && restarts == 0;
-    let expected = match completion {
-        Completion::Healthy => "healthy",
-        Completion::ExitedZero => "exited_zero",
-        Completion::Running => "running_only",
-    };
-    let satisfied = stable
-        && match completion {
-            Completion::Healthy => status == "running" && running && health == Some("healthy"),
-            Completion::ExitedZero => status == "exited" && !running && exit == 0,
-            Completion::Running => status == "running" && running,
-        };
-    Ok(
-        json!({"status":status,"running":running,"paused":paused,"restarting":restarting,
-        "oom_killed":oom,"exit_code":exit,"restart_count":restarts,"health":health,
-        "expected":expected,"expected_state_observed":satisfied}),
-    )
-}
-
-/// A bounded summary of Docker's inspected container configuration. This is
-/// emitted only after the complete owned-container observation succeeds. Do not
-/// include environment values, mount paths, command arguments or option text.
-fn security_posture(c: &Value) -> Result<Value> {
-    let host = &c["HostConfig"];
-    let user = text(&c["Config"]["User"])?;
-    let principal = user.split(':').next().ok_or(REFUSED)?;
-    let uid = principal.parse::<u32>().ok();
-    let user_class = if principal.is_empty() || principal == "root" || uid == Some(0) {
-        "root"
-    } else if uid.is_some() {
-        "numeric_non_root"
+    if saved.schema == FAILED_RUNTIME_SESSION_SCHEMA {
+        installer_compose::validate_failed_runtime_cleanup(receipt, &saved.model)?;
     } else {
-        "named_unresolved"
-    };
-    let options = host["SecurityOpt"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    let dropped = host["CapDrop"].as_array().map(Vec::as_slice).unwrap_or(&[]);
-    let added = host["CapAdd"].as_array().map(Vec::as_slice).unwrap_or(&[]);
-    let mounts = c["Mounts"].as_array().ok_or(REFUSED)?;
-    let writable_mounts = mounts.iter().try_fold(0usize, |count, mount| {
-        mount["RW"]
-            .as_bool()
-            .map(|writable| count + usize::from(writable))
-            .ok_or_else(|| REFUSED.to_owned())
-    })?;
-    let ports = &host["PortBindings"];
-    let published_ports = if ports.is_null() {
-        0
-    } else {
-        ports.as_object().ok_or(REFUSED)?.len()
-    };
-    Ok(json!({
-        "source":"docker_inspect",
-        "user_class":user_class,
-        "privileged":host["Privileged"].as_bool().ok_or(REFUSED)?,
-        "read_only_rootfs":host["ReadonlyRootfs"].as_bool().ok_or(REFUSED)?,
-        "no_new_privileges":options.iter().any(|v| v == "no-new-privileges:true"),
-        "cap_drop_all":dropped.iter().any(|v| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("all"))),
-        "cap_add_count":added.len(),
-        "device_count":host["Devices"].as_array().map_or(0, Vec::len),
-        "writable_inspected_mount_count":writable_mounts,
-        "published_port_count":published_ports,
-    }))
-}
-fn inventory(
-    docker: &DockerRunner,
-    projects: &[String],
-) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
-    let all = ids(&docker.run_checked(&["ps", "-aq", "--no-trunc"])?)?;
-    let mut scoped = BTreeSet::new();
-    for project in projects {
-        scoped.extend(ids(&docker.run_checked(&[
-            "ps",
-            "-aq",
-            "--no-trunc",
-            "--filter",
-            &format!("label=com.docker.compose.project={project}"),
-        ])?)?);
+        require(
+            receipt.command_succeeded
+                && receipt.client_exit_code == Some(0)
+                && receipt.failure_class.is_none()
+                && saved.configuration_sha256 == receipt.configuration_sha256,
+        )?;
     }
-    Ok((all, scoped))
-}
-fn check_inventory(
-    all: &BTreeSet<String>,
-    scoped: &BTreeSet<String>,
-    expected: &BTreeSet<String>,
-) -> Result<()> {
-    require(scoped.is_subset(expected) && scoped.is_subset(all))
-}
-
-/// The existing caller owns the installation lock and host observation. Absence
-/// of creation receipts is reported as incomplete, never inferred as no resources.
-pub fn services(
-    state: &LockedInspection,
-    installation: &Path,
-    docker: &DockerRunner,
-) -> Result<Value> {
-    inspect(state, installation, docker).map_err(|_| REFUSED.to_owned())
-}
-fn inspect(state: &LockedInspection, installation: &Path, docker: &DockerRunner) -> Result<Value> {
-    if state.cleanup_status()?.state != crate::installer_state::CleanupState::NotStarted {
-        return Ok(
-            json!({"services_observed":false,"reason":"cleanup_recorded",
-            "installation_ready":false}),
-        );
-    }
-    let began = Instant::now();
-    let journal = state.journal();
-    let engine = &journal.runtime().ok_or(REFUSED)?.engine_id;
-    let project = journal.compose_project();
-    let installation_id = journal.installation_id().to_string();
-    let names = [
-        (true, "application-plan.json"),
-        (true, "application-compose.json"),
-        (true, "application-created-resources.json"),
-        (false, "openbao-created.json"),
-        (false, "openbao-compose-model.json"),
-    ];
-    let mut sources = BTreeMap::new();
-    for (evidence, name) in names {
-        sources.insert(name, state.diagnostic_record(name, evidence)?);
-    }
-    if sources.values().any(Option::is_none) {
-        for (evidence, name) in names {
-            require(state.diagnostic_record(name, evidence)? == sources[name])?;
-        }
-        state.require_unchanged()?;
-        return Ok(
-            json!({"services_observed":false,"reason":"recorded_creation_inventory_incomplete",
-            "missing_records":sources.iter().filter_map(|(k,v)| v.is_none().then_some(*k)).collect::<Vec<_>>(),
-            "installation_ready":false}),
-        );
-    }
-    let bytes = |name| sources.get(name).and_then(Option::as_deref).ok_or(REFUSED);
-    let saved: SavedPlan = parse(bytes("application-plan.json")?)?;
-    let plan = ApplicationModelPlan {
-        model: saved.model,
-        selected_services: saved.selected_services,
-        expected_network_id: saved.expected_network_id,
-        installation_ready: saved.installation_ready,
-    };
+    let resources = receipt.resources.as_ref().ok_or(REFUSED)?;
     require(
-        !plan.installation_ready
-            && plan.model["name"] == project
-            && id(&plan.expected_network_id)
-            && bytes("application-compose.json")?
-                == crate::installer_application::compose_document(&plan.model)?,
-    )?;
-    let selected = generation::load_verified(installation, &installation_id, engine)?;
-    if let Some(g) = &selected {
-        generation::verify_model(installation, g, &plan)?;
-    } else {
-        crate::installer_uninstall::require_no_selected_generation(installation, &plan)?;
-    }
-    let roles = graph::startup_order(&plan.model, &plan.selected_services)?;
-    let created: Created = parse(bytes("application-created-resources.json")?)?;
-    container_ids(&created.containers, &roles)?;
-    require(
-        created.network_id == plan.expected_network_id
-            && created.redis_volume == format!("{project}_redis-socket"),
-    )?;
-    let bao: BaoCreated = parse(bytes("openbao-created.json")?)?;
-    let bao_project = format!("{project}-bao");
-    require(
-        bao.schema == "elevenid.installer-openbao-created/v1"
-            && bao.installation_id == installation_id
-            && bao.engine_id == *engine
-            && bao.project == bao_project
-            && bao.network_id == created.network_id
-            && bao.image_id.strip_prefix("sha256:").is_some_and(id),
-    )?;
-    container_ids(
-        &bao.container_ids,
-        &BAO.iter().map(|r| r.to_string()).collect::<Vec<_>>(),
-    )?;
-    let bao_model: Value = parse(bytes("openbao-compose-model.json")?)?;
-    require(
-        bao_model["name"] == bao_project
-            && bao_model["services"]
-                .as_object()
-                .ok_or(REFUSED)?
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>()
-                == BAO.into_iter().collect()
-            && bao_model["services"]
-                .as_object()
-                .ok_or(REFUSED)?
+        !resources.containers.is_empty()
+            && resources.containers.len() <= 128
+            && resources
+                .containers
                 .values()
-                .all(|v| v["image"] == bao.image),
+                .map(|v| &v.id)
+                .collect::<BTreeSet<_>>()
+                .len()
+                == resources.containers.len()
+            && resources.containers.iter().all(|(role, container)| {
+                name(role)
+                    && container.service == *role
+                    && identifier(&container.id)
+                    && identifier(&container.config_hash)
+                    && approved_images.contains(&container.image)
+            })
+            && resources.networks.values().all(|id| identifier(id)),
     )?;
-    let bao_plan = ApplicationModelPlan {
-        model: bao_model,
-        selected_services: BAO.iter().map(|r| r.to_string()).collect(),
-        expected_network_id: created.network_id.clone(),
-        installation_ready: false,
+    for file in saved
+        .inputs
+        .files
+        .iter()
+        .chain(std::iter::once(&saved.inputs.environment))
+        .chain(&saved.inputs.bound_inputs)
+    {
+        require(receipt.input_files.get(&file.path) == Some(&file.sha256))?;
+    }
+    Ok(())
+}
+
+/// Rebind the private session to the release inventory, journal, exact files,
+/// and native model. This does not contact Docker or grant lifecycle authority.
+pub(crate) fn load_session(state: &LockedInspection, installation: &Path) -> Result<SavedSession> {
+    state.require_path_binding(installation)?;
+    let session_bytes = state.diagnostic_record(SESSION_RECORD, true)?;
+    let (saved, records) = if let Some(bytes) = &session_bytes {
+        let saved: SavedSession =
+            serde_json::from_value(crate::installer_json::decode(bytes).map_err(|_| REFUSED)?)
+                .map_err(|_| REFUSED)?;
+        require(saved.schema == "elevenid.installer-compose-session/v1")?;
+        (saved, vec![(SESSION_RECORD, bytes.clone())])
+    } else {
+        failed_runtime_session(state, installation)?
     };
-    let expected: BTreeSet<_> = created
-        .containers
-        .values()
-        .chain(bao.container_ids.values())
-        .cloned()
-        .collect();
-    require(expected.len() == created.containers.len() + bao.container_ids.len())?;
-    let projects = [project.clone(), bao_project.clone()];
-    let (all, scoped) = inventory(docker, &projects)?;
-    check_inventory(&all, &scoped, &expected)?;
-    let network = one(&docker.run_checked(&["network", "inspect", &created.network_id])?)?;
-    let network_name = format!("{bao_project}_default");
+    let inventory_bytes = state.read_evidence("installer-inventory.json")?;
+    let journal = state.journal();
     require(
-        network["Id"] == created.network_id
-            && network["Name"] == network_name
-            && plan.model["networks"]["default"]["name"] == network_name
-            && bao_plan.model["networks"]["default"]["name"] == network_name
-            && network["Labels"]["com.docker.compose.project"] == bao_project
-            && network["Labels"]["com.docker.compose.network"] == "default"
-            && network["Containers"]
-                .as_object()
-                .ok_or(REFUSED)?
-                .keys()
-                .all(|v| expected.contains(v)),
+        format!(
+            "sha256:{}",
+            crate::installer_release::sha256(&inventory_bytes)
+        ) == journal.identity().inventory_sha256,
     )?;
-    observation::validate_volume(
-        &one(&docker.run_checked(&["volume", "inspect", &created.redis_volume])?)?,
-        &plan,
-    )?;
-    let mut images = BTreeMap::new();
-    let mut services = BTreeMap::new();
-    for (is_bao, model, containers) in [
-        (false, &plan, &created.containers),
-        (true, &bao_plan, &bao.container_ids),
-    ] {
-        for (role, container) in containers {
-            require(began.elapsed() < Duration::from_secs(120))?;
-            if !all.contains(container) {
-                services.insert(
-                    role.clone(),
-                    json!({"container_id":container,"status":"missing",
-                    "configuration_verified":false,"expected_state_observed":false}),
-                );
-                continue;
-            }
-            let image_name = text(&model.model["services"][role]["image"])?;
-            if !images.contains_key(image_name) {
-                images.insert(
-                    image_name.to_string(),
-                    one(&docker.run_checked(&["image", "inspect", image_name])?)?,
-                );
-            }
-            let image = images.get(image_name).ok_or(REFUSED)?;
-            let c = one(&docker.run_checked(&["inspect", "--type", "container", container])?)?;
-            if is_bao {
-                require(image["Id"] == bao.image_id)?;
-                observation::validate_openbao_container_for_cleanup(
-                    &c, container, role, model, image,
-                )?;
-            } else {
-                observation::validate_container_for_logs(&c, container, role, model, image)?;
-            }
-            let completion = if is_bao {
-                if ["openbao-bootstrap", "openbao-tls-init"].contains(&role.as_str()) {
-                    Completion::ExitedZero
-                } else if role == "openbao" {
-                    Completion::Healthy
-                } else {
-                    Completion::Running
-                }
-            } else {
-                graph::completion(&plan.model, role)?
-            };
-            let mut result = lifecycle(&c, completion)?;
-            // Diagnostic admission checks configured ports; observed publications
-            // must also match before describing a published service as healthy.
-            if result["expected_state_observed"] == true {
-                if let Some(ports) = c["HostConfig"]["PortBindings"].as_object() {
-                    if ports
-                        .iter()
-                        .any(|(p, v)| c["NetworkSettings"]["Ports"].get(p) != Some(v))
-                    {
-                        result["expected_state_observed"] = json!(false);
-                    }
-                }
-            }
-            result["container_id"] = json!(container);
-            result["configuration_verified"] = json!(true);
-            result["security_posture"] = security_posture(&c)?;
-            services.insert(role.clone(), result);
-        }
-    }
-    let (after, after_scoped) = inventory(docker, &projects)?;
-    check_inventory(&after, &after_scoped, &expected)?;
+    let inventory = crate::installer_release::parse_inventory(&inventory_bytes)?;
     require(
-        all.intersection(&expected)
-            .eq(after.intersection(&expected))
-            && scoped == after_scoped,
+        inventory.source_sha == journal.identity().source_sha
+            && inventory.release_tag == journal.identity().release_tag,
     )?;
-    for (evidence, name) in names {
-        require(state.diagnostic_record(name, evidence)? == sources[name])?;
+    let binding = journal.runtime().ok_or(REFUSED)?;
+    binding.validate()?;
+    let approved_images = inventory.images.values().cloned().collect();
+    validate_saved(
+        &saved,
+        installation,
+        &journal.installation_id().to_string(),
+        &journal.compose_project(),
+        binding,
+        &approved_images,
+    )?;
+    installer_compose::verify_input_files(installation, &saved.receipt.input_files)?;
+    for (name, bytes) in records {
+        require(bytes == state.read_evidence(name)?)?;
     }
     require(
-        serde_json::to_vec(&selected).map_err(|_| REFUSED)?
-            == serde_json::to_vec(&generation::load_verified(
-                installation,
-                &installation_id,
-                engine,
-            )?)
-            .map_err(|_| REFUSED)?,
+        session_bytes == state.diagnostic_record(SESSION_RECORD, true)?
+            && inventory_bytes == state.read_evidence("installer-inventory.json")?,
     )?;
     state.require_unchanged()?;
+    Ok(saved)
+}
+
+fn failed_runtime_session(
+    state: &LockedInspection,
+    installation: &Path,
+) -> Result<(SavedSession, Vec<(&'static str, Vec<u8>)>)> {
+    let plan_bytes = state.read_evidence(installer_compose::RUNTIME_CLEANUP_PLAN)?;
+    let result_bytes = state.read_evidence("compose-application-up-result.json")?;
+    let intent_bytes = state.read_evidence("compose-application-up-intent.json")?;
+    let plan: installer_compose::RuntimeCleanupPlan =
+        serde_json::from_value(crate::installer_json::decode(&plan_bytes).map_err(|_| REFUSED)?)
+            .map_err(|_| REFUSED)?;
+    let receipt: ComposeReceipt =
+        serde_json::from_value(crate::installer_json::decode(&result_bytes).map_err(|_| REFUSED)?)
+            .map_err(|_| REFUSED)?;
+    let intent = crate::installer_json::decode(&intent_bytes).map_err(|_| REFUSED)?;
+    let plan_path = installation
+        .join("evidence")
+        .join(installer_compose::RUNTIME_CLEANUP_PLAN);
+    require(
+        plan.schema == "elevenid.installer-runtime-cleanup-plan/v1"
+            && plan.installation_id == state.journal().installation_id().to_string()
+            && plan.inputs.installation == installation
+            && plan.inputs.services.is_empty()
+            && plan.application_configuration_sha256 == receipt.configuration_sha256
+            && installer_compose::model_sha256(&plan.model)? == plan.configuration_sha256
+            && receipt.input_files.get(&plan_path)
+                == Some(&crate::installer_release::sha256(&plan_bytes))
+            && intent["schema"] == "elevenid.installer-compose-intent/v1"
+            && intent["project"] == receipt.project
+            && intent["engine_id"] == receipt.engine_id
+            && intent["configuration_sha256"] == receipt.configuration_sha256
+            && intent["input_files"]
+                == serde_json::to_value(&receipt.input_files).map_err(|_| REFUSED)?
+            && intent["command"]
+                == json!([
+                    "up",
+                    "--no-build",
+                    "--pull",
+                    "never",
+                    "--no-recreate",
+                    "--wait",
+                    "--wait-timeout",
+                    "720"
+                ])
+            && intent["automatic_retry"] == false
+            && intent["installation_ready"] == false,
+    )?;
+    let before = plan.inputs.prior.as_ref().ok_or(REFUSED)?;
+    let prior_resources = before.resources.as_ref().ok_or(REFUSED)?;
+    let after = receipt.resources.as_ref().ok_or(REFUSED)?;
+    require(
+        before.command_succeeded
+            && before.observation_validated
+            && before.client_exit_code == Some(0)
+            && before.failure_class.is_none()
+            && before.project == receipt.project
+            && before.engine_id == receipt.engine_id
+            && before
+                .input_files
+                .iter()
+                .all(|(path, hash)| receipt.input_files.get(path) == Some(hash))
+            && intent["prior_resources"]
+                == serde_json::to_value(prior_resources).map_err(|_| REFUSED)?
+            && prior_resources
+                .containers
+                .iter()
+                .all(|(role, identity)| after.containers.get(role) == Some(identity))
+            && prior_resources
+                .networks
+                .iter()
+                .all(|(name, id)| after.networks.get(name) == Some(id))
+            && prior_resources.volumes.is_subset(&after.volumes),
+    )?;
+    installer_compose::validate_failed_runtime_cleanup(&receipt, &plan.model)?;
+    let mut inputs = plan.inputs;
+    inputs.prior = Some(receipt.clone());
+    let saved = SavedSession {
+        schema: FAILED_RUNTIME_SESSION_SCHEMA.into(),
+        installation_id: plan.installation_id,
+        inputs,
+        model: plan.model,
+        configuration_sha256: plan.configuration_sha256,
+        receipt,
+    };
+    Ok((
+        saved,
+        vec![
+            (installer_compose::RUNTIME_CLEANUP_PLAN, plan_bytes),
+            ("compose-application-up-result.json", result_bytes),
+            ("compose-application-up-intent.json", intent_bytes),
+        ],
+    ))
+}
+
+pub(crate) fn open_session(
+    state: &LockedInspection,
+    installation: &Path,
+    docker: &Path,
+) -> Result<(SavedSession, ComposeSession)> {
+    open_session_with_deadline(state, installation, docker, None)
+}
+fn open_session_with_deadline(
+    state: &LockedInspection,
+    installation: &Path,
+    docker: &Path,
+    deadline: Option<Instant>,
+) -> Result<(SavedSession, ComposeSession)> {
+    let saved = load_session(state, installation)?;
+    let binding = state.journal().runtime().ok_or(REFUSED)?;
+    let session = if saved.schema == FAILED_RUNTIME_SESSION_SCHEMA {
+        ComposeSession::for_failed_runtime_cleanup(docker, binding, saved.inputs.clone(), deadline)?
+    } else if let Some(deadline) = deadline {
+        ComposeSession::new_with_deadline(docker, binding, saved.inputs.clone(), deadline)?
+    } else {
+        ComposeSession::new(docker, binding, saved.inputs.clone())?
+    };
+    require(
+        session.model() == &saved.model
+            && session.configuration_sha256() == saved.configuration_sha256,
+    )?;
+    Ok((saved, session))
+}
+
+/// Only fixed fields from native `compose ps` are public; command text, health
+/// logs, paths, environment and untrusted error bodies never enter this report.
+pub(crate) fn summarize(resources: &ProjectResources, rows: &[Value]) -> Result<Value> {
+    let mut by_role = BTreeMap::new();
+    for row in rows {
+        let role = row["Service"].as_str().ok_or(REFUSED)?;
+        let identity = resources.containers.get(role).ok_or(REFUSED)?;
+        require(row["ID"] == identity.id && by_role.insert(role, row).is_none())?;
+    }
+    let mut services = BTreeMap::new();
+    let mut passed = true;
+    for (role, identity) in &resources.containers {
+        let Some(row) = by_role.get(role.as_str()) else {
+            passed = false;
+            services.insert(
+                role.clone(),
+                json!({"container_id":identity.id,"status":"missing",
+                "configuration_verified":true,"expected_state_observed":false}),
+            );
+            continue;
+        };
+        let status = row["State"].as_str().ok_or(REFUSED)?;
+        require(
+            [
+                "created",
+                "running",
+                "exited",
+                "paused",
+                "restarting",
+                "dead",
+                "removing",
+            ]
+            .contains(&status),
+        )?;
+        let health = row["Health"].as_str().ok_or(REFUSED)?;
+        require(["", "healthy", "unhealthy", "starting"].contains(&health))?;
+        let exit = row["ExitCode"].as_i64().ok_or(REFUSED)?;
+        let (expected, satisfied) = if identity.setup {
+            ("exited_zero", status == "exited" && exit == 0)
+        } else if identity.health_required {
+            ("healthy", status == "running" && health == "healthy")
+        } else {
+            ("running_only", status == "running")
+        };
+        passed &= satisfied;
+        services.insert(
+            role.clone(),
+            json!({"container_id":identity.id,"status":status,
+            "health":if health.is_empty() { Value::Null } else { json!(health) },"exit_code":exit,
+            "expected":expected,"expected_state_observed":satisfied,"configuration_verified":true,
+            "observation_source":"docker_compose_ps","oom_kill_history_observed":false,
+            "restart_history_observed":false}),
+        );
+    }
     Ok(
-        json!({"services_observed":true,"scope":"recorded_application_and_openbao",
-        "not_atomic_snapshot":true,"services":services,"network_id":created.network_id,
-        "redis_volume":created.redis_volume,"all_expected_states_observed":services.values().all(|v|v["expected_state_observed"]==true),
-        "installation_ready":false}),
+        json!({"services_observed":true,"all_expected_states_observed":passed,
+        "services":services,"not_atomic_snapshot":true,"installation_ready":false}),
     )
+}
+
+pub fn services(state: &LockedInspection, installation: &Path, docker: &Path) -> Result<Value> {
+    inspect(state, installation, docker, None).map_err(|_| REFUSED.into())
+}
+pub(crate) fn services_with_deadline(
+    state: &LockedInspection,
+    installation: &Path,
+    docker: &Path,
+    deadline: Instant,
+) -> Result<Value> {
+    inspect(state, installation, docker, Some(deadline)).map_err(|_| REFUSED.into())
+}
+fn inspect(
+    state: &LockedInspection,
+    installation: &Path,
+    docker: &Path,
+    deadline: Option<Instant>,
+) -> Result<Value> {
+    if state.diagnostic_record(SESSION_RECORD, true)?.is_none()
+        && state
+            .diagnostic_record(installer_compose::RUNTIME_CLEANUP_PLAN, true)?
+            .is_none()
+    {
+        return Ok(
+            json!({"services_observed":false,"reason":"compose_session_incomplete",
+            "installation_ready":false}),
+        );
+    }
+    let (saved, session) = open_session_with_deadline(state, installation, docker, deadline)?;
+    let before = session.observe_resources()?;
+    let statuses = session.status()?;
+    let result = summarize(&before, &statuses)?;
+    require(
+        before == session.observe_resources()?
+            && serde_json::to_value(&saved).map_err(|_| REFUSED)?
+                == serde_json::to_value(load_session(state, installation)?).map_err(|_| REFUSED)?,
+    )?;
+    state.require_unchanged()?;
+    Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    fn fixture(mode: &str) -> tempfile::TempDir {
-        let (root, _) = crate::installer_uninstall::tests::mock(mode);
-        let path = root.path().join("ledger.json");
-        let mut ledger: Value = parse(&fs::read(&path).unwrap()).unwrap();
-        for c in ledger["containers"].as_object_mut().unwrap().values_mut() {
-            c["RestartCount"] = json!(0);
-            c["State"]["Paused"] = json!(false);
-            c["State"]["Restarting"] = json!(false);
-            c["State"]["ExitCode"] = json!(0);
-            c["State"]["Health"] =
-                json!({"Status":"healthy","Log":[{"Output":"private-health-output"}]});
-            let role = c["Config"]["Labels"]["com.docker.compose.service"]
-                .as_str()
-                .unwrap();
-            if [
-                "openbao-bootstrap",
-                "openbao-tls-init",
-                "db-migrate",
-                "revocation-profile-migrate",
-                "kms-initialize",
-                "keycloak-configurator",
-                "issuance-migrations",
+    use crate::installer_compose::{ContainerIdentity, SetupExecution};
+
+    fn resources() -> ProjectResources {
+        ProjectResources {
+            containers: [
+                ("database", false, true),
+                ("setup-job", true, false),
+                ("worker", false, false),
             ]
-            .contains(&role)
-            {
-                c["State"]["Status"] = json!("exited");
-                c["State"]["Running"] = json!(false);
+            .into_iter()
+            .enumerate()
+            .map(|(i, (role, setup, health_required))| {
+                (
+                    role.into(),
+                    ContainerIdentity {
+                        id: format!("{i:064x}"),
+                        service: role.into(),
+                        image: format!("example.invalid/image@sha256:{}", "a".repeat(64)),
+                        config_hash: "b".repeat(64),
+                        setup,
+                        health_required,
+                        setup_execution: setup.then(|| SetupExecution {
+                            started_at: "2026-10-30T00:00:01Z".into(),
+                            finished_at: "2026-10-30T00:00:02Z".into(),
+                            completed_without_restart: true,
+                        }),
+                        cap_add: BTreeSet::new(),
+                        cap_drop: BTreeSet::from(["ALL".into()]),
+                        read_only: true,
+                        memory_limit: 64 * 1024 * 1024,
+                    },
+                )
+            })
+            .collect(),
+            ..ProjectResources::default()
+        }
+    }
+    fn statuses() -> Vec<Value> {
+        resources().containers.values().map(|v| json!({"ID":v.id,"Service":v.service,
+            "State":if v.setup {"exited"} else {"running"},"Health":if v.health_required {"healthy"} else {""},
+            "ExitCode":0,"Command":"private command sentinel","Publishers":["private metadata sentinel"]})).collect()
+    }
+    #[test]
+    fn native_status_uses_recorded_completion_contract_without_a_role_table() {
+        let report = summarize(&resources(), &statuses()).unwrap();
+        assert_eq!(report["all_expected_states_observed"], true);
+        assert_eq!(report["services"]["worker"]["expected"], "running_only");
+        assert_eq!(report["services"]["setup-job"]["expected"], "exited_zero");
+        assert_eq!(report["installation_ready"], false);
+        assert!(!report.to_string().contains("sentinel"));
+        assert_eq!(
+            report["services"]["database"]["restart_history_observed"],
+            false
+        );
+    }
+    #[test]
+    fn failed_setup_missing_service_and_unhealthy_service_do_not_pass() {
+        let mut rows = statuses();
+        rows.iter_mut()
+            .find(|r| r["Service"] == "setup-job")
+            .unwrap()["ExitCode"] = json!(1);
+        assert_eq!(
+            summarize(&resources(), &rows).unwrap()["all_expected_states_observed"],
+            false
+        );
+        let mut rows = statuses();
+        rows.retain(|r| r["Service"] != "worker");
+        assert_eq!(
+            summarize(&resources(), &rows).unwrap()["all_expected_states_observed"],
+            false
+        );
+        let mut rows = statuses();
+        rows.iter_mut()
+            .find(|r| r["Service"] == "database")
+            .unwrap()["Health"] = json!("unhealthy");
+        assert_eq!(
+            summarize(&resources(), &rows).unwrap()["all_expected_states_observed"],
+            false
+        );
+    }
+    #[test]
+    fn status_identity_duplicates_unknown_roles_and_untrusted_states_refuse() {
+        for mutation in 0..5 {
+            let mut rows = statuses();
+            match mutation {
+                0 => rows.push(rows[0].clone()),
+                1 => rows[0]["ID"] = json!("f".repeat(64)),
+                2 => rows[0]["Service"] = json!("foreign"),
+                3 => rows[0]["State"] = json!("private state sentinel"),
+                _ => rows[0]["ExitCode"] = json!(false),
             }
+            assert!(summarize(&resources(), &rows).is_err());
         }
-        fs::write(path, serde_json::to_vec(&ledger).unwrap()).unwrap();
-        root
     }
-    fn inspect_fixture(root: &tempfile::TempDir) -> Result<Value> {
-        let installation = root.path().join("install");
-        let state = LockedInspection::open(&installation)?;
-        let binding = state.journal().runtime().unwrap();
-        let docker =
-            DockerRunner::from_binding(&root.path().join("docker-stub"), binding, &installation)?;
-        docker.preflight()?;
-        services(&state, &installation, &docker)
-    }
-    fn assert_read_only(root: &tempfile::TempDir) {
-        let v: Value = parse(&fs::read(root.path().join("ledger.json")).unwrap()).unwrap();
-        assert_eq!(v["mutations"], json!([]));
-        assert!(v["commands"].as_array().unwrap().iter().all(|a| [
-            "info", "compose", "ps", "network", "volume", "image", "inspect"
-        ]
-        .contains(&a[0].as_str().unwrap())));
-        assert_eq!(
-            fs::read(root.path().join("install/retained-data")).unwrap(),
-            b"private data stays"
-        );
-    }
-    #[test]
-    fn actual_mocked_routing_reports_health_missing_and_oom_without_mutation() {
-        let root = fixture("success");
-        let result = inspect_fixture(&root).unwrap();
-        assert_eq!(result["services"].as_object().unwrap().len(), 34);
-        assert_eq!(result["all_expected_states_observed"], true);
-        assert_eq!(result["installation_ready"], false);
-        let postgres_security = &result["services"]["postgres"]["security_posture"];
-        assert_eq!(postgres_security["source"], "docker_inspect");
-        assert_eq!(postgres_security["privileged"], false);
-        assert!(postgres_security["writable_inspected_mount_count"].is_number());
-        assert!(postgres_security["published_port_count"].is_number());
-        assert!(!result.to_string().contains("private-health-output"));
-        let path = root.path().join("ledger.json");
-        let mut v: Value = parse(&fs::read(&path).unwrap()).unwrap();
-        let map = v["containers"].as_object_mut().unwrap();
-        let missing = map
-            .iter()
-            .find(|(_, c)| c["Config"]["Labels"]["com.docker.compose.service"] == "gateway")
-            .unwrap()
-            .0
-            .clone();
-        map.remove(&missing);
-        let postgres = map
-            .values_mut()
-            .find(|c| c["Config"]["Labels"]["com.docker.compose.service"] == "postgres")
-            .unwrap();
-        postgres["State"]["OOMKilled"] = json!(true);
-        fs::write(path, serde_json::to_vec(&v).unwrap()).unwrap();
-        let result = inspect_fixture(&root).unwrap();
-        assert_eq!(result["services"]["gateway"]["status"], "missing");
-        assert!(result["services"]["gateway"]
-            .get("security_posture")
-            .is_none());
-        assert_eq!(result["services"]["postgres"]["oom_killed"], true);
-        assert_eq!(result["all_expected_states_observed"], false);
-        assert_read_only(&root);
-    }
-    #[test]
-    fn security_summary_omits_sensitive_runtime_strings_and_rejects_bad_mount_state() {
-        let mut container = json!({
-            "Config":{"User":"1001:1001","Env":["CANARY=private-secret"]},
-            "HostConfig":{"Privileged":false,"ReadonlyRootfs":true,
-                "SecurityOpt":["no-new-privileges:true","private-secret"],
-                "CapDrop":["ALL"],"CapAdd":[],"Devices":[],"PortBindings":{}},
-            "Mounts":[{"Source":"/private-secret","Destination":"/run/secrets/private-secret","RW":false}]
-        });
-        let summary = security_posture(&container).unwrap();
-        assert_eq!(summary["user_class"], "numeric_non_root");
-        assert_eq!(summary["no_new_privileges"], true);
-        assert_eq!(summary["cap_drop_all"], true);
-        assert_eq!(summary["writable_inspected_mount_count"], 0);
-        assert!(!summary.to_string().contains("private-secret"));
-        container["HostConfig"]["SecurityOpt"] = Value::Null;
-        container["HostConfig"]["CapDrop"] = Value::Null;
-        container["HostConfig"]["Devices"] = Value::Null;
-        let defaults = security_posture(&container).unwrap();
-        assert_eq!(defaults["no_new_privileges"], false);
-        assert_eq!(defaults["cap_drop_all"], false);
-        assert_eq!(defaults["device_count"], 0);
-        container["Mounts"][0]["RW"] = json!("unknown");
-        assert!(security_posture(&container).is_err());
-    }
-    #[test]
-    fn actual_mocked_routing_refuses_replacement_foreign_attachment_and_command_failure() {
-        for mode in [
-            "replacement",
-            "unknown",
-            "foreign-attachment",
-            "command-failure",
-        ] {
-            let root = fixture(mode);
-            assert!(inspect_fixture(&root).is_err(), "{mode}");
-            assert_read_only(&root);
-        }
-        let root = fixture("success");
-        let path = root.path().join("ledger.json");
-        let mut v: Value = parse(&fs::read(&path).unwrap()).unwrap();
-        v["containers"]
-            .as_object_mut()
-            .unwrap()
-            .values_mut()
-            .next()
-            .unwrap()["Config"]["Env"] = json!(["UNADMITTED=value"]);
-        fs::write(path, serde_json::to_vec(&v).unwrap()).unwrap();
-        assert!(inspect_fixture(&root).is_err());
-        assert_read_only(&root);
-    }
-    #[test]
-    fn partial_inventory_is_unobserved_and_linked_record_refused() {
-        use std::os::unix::fs::symlink;
-        let root = fixture("success");
-        let evidence = root.path().join("install/evidence");
-        let path = evidence.join("application-created-resources.json");
-        let held = evidence.join("held-created.json");
-        fs::rename(&path, &held).unwrap();
-        let result = inspect_fixture(&root).unwrap();
-        assert_eq!(result["services_observed"], false);
-        symlink(&held, &path).unwrap();
-        assert!(inspect_fixture(&root).is_err());
-        assert_read_only(&root);
-    }
-    fn running() -> Value {
-        json!({"RestartCount":0,"State":{"Status":"running","Running":true,
-        "Paused":false,"Restarting":false,"OOMKilled":false,"ExitCode":0,"Health":{"Status":"healthy","Log":["private"]}}})
-    }
-    #[test]
-    fn diagnostic_identity_is_not_health() {
-        let mut c = running();
-        assert_eq!(
-            lifecycle(&c, Completion::Healthy).unwrap()["expected_state_observed"],
-            true
-        );
-        for field in ["OOMKilled", "Paused", "Restarting"] {
-            c = running();
-            c["State"][field] = json!(true);
-            assert_eq!(
-                lifecycle(&c, Completion::Healthy).unwrap()["expected_state_observed"],
-                false
-            );
-        }
-        c = running();
-        c["RestartCount"] = json!(1);
-        assert_eq!(
-            lifecycle(&c, Completion::Healthy).unwrap()["expected_state_observed"],
-            false
-        );
-        c = running();
-        c["State"]["Health"]["Status"] = json!("unhealthy");
-        assert_eq!(
-            lifecycle(&c, Completion::Healthy).unwrap()["expected_state_observed"],
-            false
-        );
-        assert_eq!(
-            lifecycle(&c, Completion::Running).unwrap()["expected"],
-            "running_only"
-        );
-        assert!(!lifecycle(&c, Completion::Running)
-            .unwrap()
-            .to_string()
-            .contains("private"));
-    }
-    #[test]
-    fn initializer_requires_terminal_zero_and_no_oom() {
-        let mut c = running();
-        assert_eq!(
-            lifecycle(&c, Completion::ExitedZero).unwrap()["expected_state_observed"],
-            false
-        );
-        c["State"]["Status"] = json!("exited");
-        c["State"]["Running"] = json!(false);
-        assert_eq!(
-            lifecycle(&c, Completion::ExitedZero).unwrap()["expected_state_observed"],
-            true
-        );
-        c["State"]["ExitCode"] = json!(1);
-        assert_eq!(
-            lifecycle(&c, Completion::ExitedZero).unwrap()["expected_state_observed"],
-            false
-        );
-    }
-    #[test]
-    fn recorded_ids_cannot_be_duplicated_or_replaced_by_project_discovery() {
-        let a = "a".repeat(64);
-        let b = "b".repeat(64);
-        let expected = BTreeSet::from([a.clone()]);
-        check_inventory(&BTreeSet::new(), &BTreeSet::new(), &expected).unwrap();
-        assert!(check_inventory(
-            &BTreeSet::from([b.clone()]),
-            &BTreeSet::from([b.clone()]),
-            &expected
+    fn saved_fixture() -> (SavedSession, RuntimeBinding) {
+        let installation = Path::new("/private/install");
+        let project = "marty-install-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let model = json!({"name":project,"services":{"worker":{"image":resources().containers["worker"].image}}});
+        let hash = installer_compose::model_sha256(&model).unwrap();
+        let files = vec![installer_compose::BoundFile {
+            path: installation.join("bundle/compose.yml"),
+            sha256: "c".repeat(64),
+        }];
+        let environment = installer_compose::BoundFile {
+            path: installation.join("evidence/application.env"),
+            sha256: "d".repeat(64),
+        };
+        let receipt = ComposeReceipt {
+            schema: "elevenid.installer-compose-operation/v1".into(),
+            project: project.into(),
+            engine_id: "engine".into(),
+            operation: "runtime".into(),
+            configuration_sha256: hash.clone(),
+            input_files: files
+                .iter()
+                .chain(std::iter::once(&environment))
+                .map(|f| (f.path.clone(), f.sha256.clone()))
+                .collect(),
+            command_succeeded: true,
+            client_exit_code: Some(0),
+            failure_class: None,
+            observation_validated: true,
+            resources: Some(resources()),
+            status: statuses(),
+            installation_ready: false,
+        };
+        let inputs = ComposeInputs {
+            installation: installation.into(),
+            project: project.into(),
+            files,
+            environment,
+            bound_inputs: Vec::new(),
+            profiles: vec!["setup".into()],
+            services: vec![],
+            approved_images: resources()
+                .containers
+                .values()
+                .map(|c| c.image.clone())
+                .collect(),
+            writable_bind_roots: BTreeSet::new(),
+            readonly_bind_roots: BTreeSet::new(),
+            allowed_loopback_ports: BTreeSet::new(),
+            prior: Some(receipt.clone()),
+        };
+        (
+            SavedSession {
+                schema: "elevenid.installer-compose-session/v1".into(),
+                installation_id: "installation".into(),
+                inputs,
+                model,
+                configuration_sha256: hash,
+                receipt,
+            },
+            RuntimeBinding {
+                docker_host: "unix:///run/user/1001/docker.sock".into(),
+                engine_id: "engine".into(),
+                openbao_port: 18200,
+                profile: crate::installer_state::RuntimeProfile::Rootless,
+            },
         )
-        .is_err());
-        assert!(container_ids(
-            &BTreeMap::from([("one".into(), a.clone()), ("two".into(), a)]),
-            &["one".into(), "two".into()]
-        )
-        .is_err());
-        assert!(container_ids(&BTreeMap::from([("other".into(), b)]), &["one".into()]).is_err());
+    }
+    #[test]
+    fn saved_session_binds_inventory_runtime_content_and_successful_receipt() {
+        let (saved, binding) = saved_fixture();
+        let approved = saved.inputs.approved_images.clone();
+        let check = |candidate: &SavedSession| {
+            validate_saved(
+                candidate,
+                Path::new("/private/install"),
+                "installation",
+                "marty-install-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                &binding,
+                &approved,
+            )
+        };
+        check(&saved).unwrap();
+        for mutation in 0..10 {
+            let mut bad = saved.clone();
+            match mutation {
+                0 => bad.installation_id = "other".into(),
+                1 => bad.inputs.project = "other".into(),
+                2 => bad.receipt.engine_id = "other".into(),
+                3 => bad.receipt.client_exit_code = Some(1),
+                4 => bad.receipt.failure_class = Some("uncertain".into()),
+                5 => bad
+                    .inputs
+                    .approved_images
+                    .insert(format!("example.invalid/foreign@sha256:{}", "f".repeat(64)))
+                    .then_some(())
+                    .unwrap(),
+                6 => bad.model["services"]["worker"]["image"] = json!("changed"),
+                7 => {
+                    bad.receipt
+                        .resources
+                        .as_mut()
+                        .unwrap()
+                        .containers
+                        .get_mut("worker")
+                        .unwrap()
+                        .id = "0".repeat(64)
+                }
+                8 => {
+                    bad.receipt.input_files.remove(&bad.inputs.environment.path);
+                }
+                _ => bad.receipt.observation_validated = false,
+            }
+            bad.inputs.prior = Some(bad.receipt.clone());
+            assert!(check(&bad).is_err(), "mutation {mutation}");
+        }
+        let mut bad = saved.clone();
+        bad.inputs.prior.as_mut().unwrap().operation = "different".into();
+        assert!(check(&bad).is_err());
+    }
+    #[test]
+    fn saved_session_rejects_duplicate_and_unrecognized_receipt_fields() {
+        assert!(
+            crate::installer_json::decode(br#"{"receipt":{"engine_id":"a","engine_id":"b"}}"#)
+                .is_err()
+        );
+        let (saved, _) = saved_fixture();
+        let mut value = serde_json::to_value(saved).unwrap();
+        value["receipt"]["unreviewed_create_id"] = json!("a".repeat(64));
+        assert!(serde_json::from_value::<SavedSession>(value).is_err());
     }
 }

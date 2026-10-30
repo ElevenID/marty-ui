@@ -3,6 +3,9 @@
 //! Local candidate preparation alone does not prove public replay. The optional
 //! published fetch helper observes anonymous bytes only when run on the guest;
 //! the controller still must authenticate guest identity and the public release.
+//! Reuse the caller's VerificationTools within one acquisition or preparation
+//! command. Its content/proof/policy cache never supplies candidate authority,
+//! expiry, nonce consumption, public acquisition or runtime admission.
 #![cfg(target_os = "linux")]
 
 use crate::{

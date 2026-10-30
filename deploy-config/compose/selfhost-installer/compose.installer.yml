@@ -1,0 +1,309 @@
+# Authenticated installer layer. The packaged docker-compose.yml is FIRST -f.
+# Compose owns all health/completion dependencies; Rust never rewrites this model.
+# First install enables installer-init. Ordinary startup also uses compose.runtime.yml.
+# Compose replaces a volume entry with the same target. Repeat its complete
+# source and access policy when disabling automatic bind-source creation.
+x-installer-runtime: &installer-runtime
+  init: true
+  security_opt: [no-new-privileges:true]
+  labels:
+    com.elevenid.installer.id: ${MARTY_INSTALLER_ID:?set the installation identifier}
+    com.elevenid.installer.phase: runtime
+
+x-installer-setup: &installer-setup
+  <<: *installer-runtime
+  profiles: [installer-init]
+  restart: "no"
+  labels:
+    com.elevenid.installer.id: ${MARTY_INSTALLER_ID:?set the installation identifier}
+    com.elevenid.installer.phase: setup
+
+x-kms-complete: &kms-complete
+  kms-initialize:
+    condition: service_completed_successfully
+
+x-no-host-create: &no-host-create
+  create_host_path: false
+
+services:
+  postgres:
+    <<: *installer-runtime
+    volumes:
+      - type: bind
+        source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/postgres
+        target: /var/lib/postgresql/data
+        read_only: false
+        bind: *no-host-create
+      - type: bind
+        source: ./docker/init-databases.sh
+        target: /docker-entrypoint-initdb.d/init-databases.sh
+        read_only: true
+        bind: *no-host-create
+  redis:
+    <<: *installer-runtime
+    volumes:
+      - type: bind
+        source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/redis
+        target: /data
+        read_only: false
+        bind: *no-host-create
+  revocation-profile-migrate:
+    <<: *installer-setup
+  db-migrate:
+    <<: *installer-setup
+  kms-initialize:
+    <<: *installer-setup
+  keycloak:
+    <<: *installer-runtime
+    ports: !reset []
+    depends_on: *kms-complete
+    volumes:
+      - type: bind
+        source: ./config/keycloak
+        target: /opt/keycloak/data/import
+        read_only: true
+        bind: *no-host-create
+      - type: bind
+        source: ./config/keycloak/themes
+        target: /opt/keycloak/themes
+        read_only: true
+        bind: *no-host-create
+      - type: bind
+        source: ./scripts/load-secrets-env.sh
+        target: /scripts/load-secrets-env.sh
+        read_only: true
+        bind: *no-host-create
+      - type: bind
+        source: ./scripts/keycloak-selfhost-start.sh
+        target: /scripts/keycloak-selfhost-start.sh
+        read_only: true
+        bind: *no-host-create
+  keycloak-configurator:
+    <<: *installer-setup
+    depends_on: *kms-complete
+    environment:
+      KEYCLOAK_SETUP_STRICT: "true"
+      CANVAS_DEMO_ADMIN_ENABLED: "false"
+      MARTY_ORG_ADMIN_EMAIL: operator@localhost
+      MARTY_ORG_ADMIN_PASSWORD_FILE: /run/secrets/operator_bootstrap_password
+    secrets:
+      - source: operator_bootstrap_password
+        target: /run/secrets/operator_bootstrap_password
+    volumes:
+      - type: bind
+        source: ./scripts/setup-keycloak.sh
+        target: /scripts/setup-keycloak.sh
+        read_only: true
+        bind: *no-host-create
+      - type: bind
+        source: ./scripts/setup-keycloak-selfhost-production.sh
+        target: /scripts/setup-keycloak-selfhost-production.sh
+        read_only: true
+        bind: *no-host-create
+      - type: bind
+        source: ./scripts/load-secrets-env.sh
+        target: /scripts/load-secrets-env.sh
+        read_only: true
+        bind: *no-host-create
+  issuance-migrations:
+    <<: *installer-setup
+    depends_on: *kms-complete
+    volumes:
+      - type: bind
+        source: ./scripts/load-secrets-env.sh
+        target: /app/load-secrets-env.sh
+        read_only: true
+        bind: *no-host-create
+  gateway:
+    <<: *installer-runtime
+    ports: !reset []
+    depends_on: *kms-complete
+  auth:
+    <<: *installer-runtime
+    depends_on:
+      <<: *kms-complete
+      applicant:
+        condition: service_healthy
+      event-stream:
+        condition: service_healthy
+  organization:
+    <<: *installer-runtime
+    depends_on: *kms-complete
+  credential-template:
+    <<: *installer-runtime
+    depends_on:
+      <<: *kms-complete
+      organization:
+        condition: service_healthy
+      revocation-profile:
+        condition: service_healthy
+  trust-profile:
+    <<: *installer-runtime
+    depends_on:
+      <<: *kms-complete
+      organization:
+        condition: service_healthy
+  issuance:
+    <<: *installer-runtime
+    depends_on: *kms-complete
+    volumes:
+      - type: bind
+        source: ./scripts/load-openbao-token-and-start.sh
+        target: /app/load-openbao-token-and-start.sh
+        read_only: true
+        bind: *no-host-create
+  issuance-native:
+    <<: *installer-runtime
+    depends_on: *kms-complete
+  canvas-sync-worker:
+    <<: *installer-runtime
+    depends_on:
+      <<: *kms-complete
+      signing-keys:
+        condition: service_healthy
+  applicant:
+    <<: *installer-runtime
+    group_add: !override ["${MARTY_INSTALLER_APPLICANT_CONTAINER_GID:?set the validated container group}"]
+    depends_on: *kms-complete
+    volumes:
+      - type: bind
+        source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/applicant
+        target: /app/data
+        read_only: false
+        bind: *no-host-create
+  notification:
+    <<: *installer-runtime
+    depends_on: *kms-complete
+  compliance-profile:
+    <<: *installer-runtime
+    depends_on:
+      <<: *kms-complete
+      organization:
+        condition: service_healthy
+  presentation-policy:
+    <<: *installer-runtime
+    depends_on: *kms-complete
+  deployment-profile:
+    <<: *installer-runtime
+    depends_on:
+      <<: *kms-complete
+      organization:
+        condition: service_healthy
+  signing-keys:
+    <<: *installer-runtime
+    depends_on: *kms-complete
+  flow:
+    <<: *installer-runtime
+    depends_on:
+      <<: *kms-complete
+      trust-profile:
+        condition: service_healthy
+      deployment-profile:
+        condition: service_healthy
+      signing-keys:
+        condition: service_healthy
+  verification:
+    <<: *installer-runtime
+    depends_on: *kms-complete
+  revocation-profile:
+    <<: *installer-runtime
+    depends_on:
+      <<: *kms-complete
+      organization:
+        condition: service_healthy
+  device-registration:
+    <<: *installer-runtime
+    depends_on:
+      <<: *kms-complete
+      organization:
+        condition: service_healthy
+  event-stream:
+    <<: *installer-runtime
+    depends_on: *kms-complete
+  ui:
+    <<: *installer-runtime
+    depends_on: *kms-complete
+  edge:
+    <<: *installer-runtime
+    ports: !reset []
+    depends_on: *kms-complete
+    volumes:
+      - type: bind
+        source: ${MARTY_INSTALLER_NGINX_CONFIG:?set the private rendered nginx input}
+        target: /etc/nginx/conf.d/default.conf.template
+        read_only: true
+        bind: *no-host-create
+      - type: bind
+        source: ./scripts/nginx-entrypoint-selfhost.sh
+        target: /docker-entrypoint.d/40-render-selfhost.sh
+        read_only: true
+        bind: *no-host-create
+  installer-ingress:
+    <<: *installer-runtime
+    image: ${MARTY_INSTALLER_HELPER_IMAGE:?set the approved gateway image digest}
+    mem_limit: 512m
+    entrypoint: [/usr/local/bin/marty-oidf-keyless-edge]
+    command: []
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    restart: "no"
+    labels:
+      com.elevenid.installer.id: ${MARTY_INSTALLER_ID:?set the installation identifier}
+      com.elevenid.installer.phase: runtime
+      com.elevenid.installer.stage: ingress
+    ports:
+      - target: 8443
+        published: "${MARTY_INSTALLER_HTTPS_PORT:?set the reserved loopback port}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    depends_on:
+      edge:
+        condition: service_healthy
+    environment:
+      OIDF_EDGE_PROFILE: installer
+      OIDF_EDGE_PUBLIC_ORIGIN: ${PUBLIC_API_URL:?set the installation origin}
+      OIDF_EDGE_BIND: 0.0.0.0:8443
+      OIDF_EDGE_TLS_CERT_FILE: /run/installer/tls.crt
+      OIDF_EDGE_TLS_KMS_CA_CERT_FILE: /run/installer/openbao-ca.crt
+      OIDF_EDGE_TLS_KMS_TOKEN_FILE: /run/installer/signer.token
+      OIDF_EDGE_TLS_KMS_ADDR: https://openbao:8200
+      OIDF_EDGE_TLS_KMS_KEY_NAME: ${MARTY_INSTALLER_INGRESS_KEY_NAME:?set the validated installation key name}
+      OIDF_EDGE_TLS_KMS_KEY_VERSION: "1"
+    volumes:
+      - type: bind
+        source: ${SELFHOST_SECRET_DIR:?set the verified generation directory}/installer_ingress_tls_cert
+        target: /run/installer/tls.crt
+        read_only: true
+        bind: *no-host-create
+      - type: bind
+        source: ${SELFHOST_SECRET_DIR:?set the verified generation directory}/installer_ingress_ca_cert
+        target: /run/installer/ca.crt
+        read_only: true
+        bind: *no-host-create
+      - type: bind
+        source: ${SELFHOST_SECRET_DIR:?set the verified generation directory}/installer_ingress_tls_kms_token
+        target: /run/installer/signer.token
+        read_only: true
+        bind: *no-host-create
+      - type: bind
+        source: ${SELFHOST_SECRET_DIR:?set the verified generation directory}/openbao_tls_ca_cert
+        target: /run/installer/openbao-ca.crt
+        read_only: true
+        bind: *no-host-create
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --show-error, --max-time, "10", --noproxy, "*", --cacert, /run/installer/ca.crt, --connect-to, "localhost:${MARTY_INSTALLER_HTTPS_PORT}:127.0.0.1:8443", "${PUBLIC_API_URL}/"]
+      interval: 10s
+      timeout: 12s
+      start_period: 30s
+      retries: 12
+  cloudflared:
+    profiles: !override [installer-tunnel]
+  tunnel-nginx-proxy:
+    profiles: !override [installer-diagnostics]
+  cloudflared-beta:
+    profiles: !override [installer-diagnostics]
+
+secrets:
+  operator_bootstrap_password:
+    file: ${SELFHOST_SECRET_DIR:?set the verified generation directory}/operator_bootstrap_password

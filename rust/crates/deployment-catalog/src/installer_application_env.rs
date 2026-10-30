@@ -2,6 +2,7 @@
 //! Does not create accounts, directories, containers, or claim readiness. Caller
 //! authenticates example/Compose bytes and persists parameters before execution.
 #![cfg(target_os = "linux")]
+use crate::installer_state::ApplicantContainerGroup;
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -23,7 +24,7 @@ pub const OPTIONAL_EMPTY_SECRETS: [&str; 6] = [
 
 pub struct ApplicationParameters {
     pub installation: PathBuf,
-    pub applicant_state_gid: u32,
+    pub applicant_container_group: ApplicantContainerGroup,
     pub version: String,
     pub origin: String,
     pub gateway_port: u16,
@@ -168,10 +169,9 @@ pub fn render(
     ] {
         values.insert(key.into(), safe_path(&p.installation.join(relative))?);
     }
-    require(p.applicant_state_gid != 0)?;
     values.insert(
         "APPLICANT_STATE_GID".into(),
-        p.applicant_state_gid.to_string(),
+        p.applicant_container_group.container_gid().to_string(),
     );
     for (key, value) in [
         ("SELFHOST_IMAGE_PREFIX", "ghcr.io/elevenid/marty-ui-oss"),
@@ -344,11 +344,21 @@ pub fn select_generation(source: &[u8], installation: &std::path::Path) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn rootful_applicant_group() -> crate::installer_state::ApplicantContainerGroup {
+        use crate::installer_state::{applicant_container_group, RuntimeBinding, RuntimeProfile};
+        applicant_container_group(&RuntimeBinding {
+            docker_host: "unix:///var/run/docker.sock".into(),
+            engine_id: "fixture-engine".into(),
+            openbao_port: 18200,
+            profile: RuntimeProfile::Rootful,
+        })
+        .unwrap()
+    }
     const COMPOSE: &str = include_str!("../../../../docker-compose.selfhost.prod.yml");
     fn parameters() -> ApplicationParameters {
         ApplicationParameters {
             installation: PathBuf::from("/private/marty $literal #path"),
-            applicant_state_gid: 10001,
+            applicant_container_group: rootful_applicant_group(),
             version: "v1.2.3".into(),
             origin: "https://localhost:18443".into(),
             gateway_port: 18000,
@@ -408,6 +418,44 @@ mod tests {
         assert!(!result.operator_account_created);
         assert_eq!(result.optional_empty_secrets.len(), 6);
     }
+    #[test]
+    fn applicant_environment_uses_the_container_group_without_changing_other_inputs() {
+        use crate::installer_state::{applicant_container_group, RuntimeBinding, RuntimeProfile};
+        let mut p = parameters();
+        let rootful = render(EXAMPLE, COMPOSE, &tls(), &p, &images()).unwrap();
+        let rootful_text = String::from_utf8(rootful.env_bytes).unwrap();
+        assert!(rootful_text.contains(&format!(
+            "APPLICANT_STATE_GID='{}'\n",
+            p.applicant_container_group.host_gid()
+        )));
+        let binding = RuntimeBinding {
+            docker_host: format!("unix:///run/user/{}/docker.sock", unsafe {
+                libc::geteuid()
+            }),
+            engine_id: "fixture-engine".into(),
+            openbao_port: 18200,
+            profile: RuntimeProfile::Rootless,
+        };
+        if unsafe { libc::geteuid() } == 0 {
+            assert!(applicant_container_group(&binding).is_err());
+            return;
+        }
+        p.applicant_container_group = applicant_container_group(&binding).unwrap();
+        let rootless = render(EXAMPLE, COMPOSE, &tls(), &p, &images()).unwrap();
+        let rootless_text = String::from_utf8(rootless.env_bytes).unwrap();
+        assert!(rootless_text.contains("APPLICANT_STATE_GID='0'\n"));
+        assert_eq!(
+            rootful_text
+                .lines()
+                .filter(|line| !line.starts_with("APPLICANT_STATE_GID="))
+                .collect::<Vec<_>>(),
+            rootless_text
+                .lines()
+                .filter(|line| !line.starts_with("APPLICANT_STATE_GID="))
+                .collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn rejects_unsafe_origin_paths_ports_and_versions() {
         for origin in [

@@ -1,4 +1,4 @@
-//! Candidate-only rootless storage probe. Every Docker object and host inode
+//! Authenticated installation rootless storage probe. Every Docker object and host inode
 //! belongs to this fresh installation. A refusal preserves evidence and leaves
 //! provisioning stopped; no path is adopted or cleaned by name alone.
 #![cfg(target_os = "linux")]
@@ -1197,9 +1197,10 @@ pub fn restore_interrupted(installation: &Path, dockerpath: &Path) -> Result<()>
     crate::installer_command::require_rootless_process()?;
     let mut maintenance = LockedMaintenance::open(installation)?;
     let journal = maintenance.journal();
-    require(
-        matches!(journal.execution_scope(), ExecutionScope::CandidateTest(_))
-            && journal.phase() == Phase::Verified,
+    require(journal.phase() == Phase::Verified)?;
+    require_verified_scope(
+        maintenance.inspection(),
+        &crate::installer_verify::current_operator_digest()?,
     )?;
     let binding = journal.runtime().ok_or(REFUSED)?.clone();
     require(binding.profile == crate::installer_state::RuntimeProfile::Rootless)?;
@@ -1233,7 +1234,7 @@ pub fn restore_interrupted(installation: &Path, dockerpath: &Path) -> Result<()>
         &maintenance.read_evidence(START_INTENT)?.ok_or(REFUSED)?,
     )?;
     let inventory = maintenance
-        .read_evidence("candidate-test-inventory.json")?
+        .read_evidence("installer-inventory.json")?
         .ok_or(REFUSED)?;
     require(format!("sha256:{}", sha(&inventory)) == intent.inventory_sha256)?;
     let operator = installation.join("marty-deploy");
@@ -1480,9 +1481,40 @@ pub fn restore_interrupted(installation: &Path, dockerpath: &Path) -> Result<()>
     Ok(())
 }
 
-/// The caller has authenticated the exact candidate inventory and complete
-/// bundle, received user confirmation, and has not generated runtime secrets.
-/// This function requires a fresh CandidateTest journal and never grants Ready.
+/// Private evidence only: this is a consistency check after established
+/// signature/provenance verification, not an alternative authentication path.
+fn require_verified_scope(view: &LockedInspection, operator_sha: &str) -> Result<()> {
+    let j = view.journal();
+    require(j.phase() == Phase::Verified)?;
+    let bytes = view.read_evidence("installer-inventory.json")?;
+    require(format!("sha256:{}", sha(&bytes)) == j.identity().inventory_sha256)?;
+    let inventory = crate::installer_release::parse_inventory(&bytes)?;
+    require(
+        inventory.source_sha == j.identity().source_sha
+            && inventory.release_tag == j.identity().release_tag,
+    )?;
+    match j.execution_scope() {
+        ExecutionScope::CandidateTest(scope) => require(
+            scope.inventory_sha256 == sha(&bytes)
+                && scope.build_run_id == inventory.build_run_id
+                && scope.build_run_attempt == inventory.build_run_attempt,
+        ),
+        ExecutionScope::Unclassified => {
+            let admission = crate::installer_release::parse_admission(
+                &view.read_evidence("installer-admission.json")?,
+            )?;
+            require(
+                admission.source_sha == inventory.source_sha
+                    && admission.release_tag == inventory.release_tag
+                    && admission.inventory_sha256 == sha(&bytes)
+                    && admission.operator_sha256 == operator_sha,
+            )
+        }
+        _ => Err(REFUSED.into()),
+    }
+}
+/// Compatibility for the private candidate test harness; this selects the same
+/// implementation, with an additional candidate-scope check, never another engine.
 pub(crate) fn qualify_candidate(
     dockerpath: &Path,
     installation: &Path,
@@ -1490,11 +1522,27 @@ pub(crate) fn qualify_candidate(
     inventory: &crate::installer_release::Inventory,
     operator_sha: &str,
 ) -> Result<()> {
-    state.require_live_phase(Phase::Verified)?;
     require(matches!(
         state.journal().execution_scope(),
         ExecutionScope::CandidateTest(_)
     ))?;
+    qualify_installation(dockerpath, installation, state, inventory, operator_sha)
+}
+
+/// The caller has authenticated the inventory, complete bundle and (for an
+/// admitted installation) promotion admission before creating private state.
+/// Both execution scopes use the same probe and never gain Ready from it.
+pub(crate) fn qualify_installation(
+    dockerpath: &Path,
+    installation: &Path,
+    state: &mut InstallerState,
+    inventory: &crate::installer_release::Inventory,
+    operator_sha: &str,
+) -> Result<()> {
+    state.require_live_phase(Phase::Verified)?;
+    state.with_inspection(|view| require_verified_scope(view, operator_sha))?;
+    let persisted = state.with_inspection(|v| v.read_evidence("installer-inventory.json"))?;
+    require(crate::installer_release::parse_inventory(&persisted)? == *inventory)?;
     let binding = state.journal().runtime().ok_or(REFUSED)?.clone();
     require(binding.profile == crate::installer_state::RuntimeProfile::Rootless)?;
     let docker = DockerRunner::from_binding(dockerpath, &binding, installation)?;

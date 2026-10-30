@@ -469,7 +469,7 @@ fn run() -> Result<(), String> {
                 std::path::Path::new(&args[2]),
             )?;
             let journal = inspection.journal();
-            let cleanup = inspection.cleanup_status()?;
+            let cleanup = marty_deployment_catalog::installer_uninstall::status(&inspection)?;
             inspection.require_unchanged()?;
             println!(
                 "{}",
@@ -524,11 +524,11 @@ fn run() -> Result<(), String> {
                 docker, runtime, directory,
             )?;
             let observation = runner.preflight()?;
-            let cleanup = inspection.cleanup_status()?;
+            let cleanup = marty_deployment_catalog::installer_uninstall::status(&inspection)?;
             let services = marty_deployment_catalog::installer_doctor::services(
                 &inspection,
                 directory,
-                &runner,
+                docker,
             )?;
             inspection.require_unchanged()?;
             println!(
@@ -555,6 +555,30 @@ fn run() -> Result<(), String> {
         }
         #[cfg(not(target_os = "linux"))]
         return Err("installer logs currently requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "start") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_uninstall::start(&args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer start currently requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "stop") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_uninstall::stop(&args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer stop currently requires Linux".into());
     }
     if args.first().is_some_and(|arg| arg == "uninstall") {
         #[cfg(target_os = "linux")]
