@@ -201,6 +201,27 @@ fn internal_keycloak_bridge_refuses_invalid_nonce_without_output() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("Keycloak bridge input refused"));
 }
 
+fn assert_no_maintenance_history(report: &Value) {
+    assert_eq!(
+        report["cleanup"],
+        serde_json::json!({
+            "operations": {
+                "start": "not_started",
+                "stop": "not_started",
+                "down": "not_started"
+            },
+            "next_operations": {
+                "start": "start-0001",
+                "stop": "stop-0001",
+                "down": "down-0001"
+            },
+            "historical_evidence_only": true,
+            "automatic_retry": false,
+            "host_data_credentials_images_and_named_volumes_retained": true
+        })
+    );
+}
+
 #[test]
 fn persisted_operator_runs_after_bootstrap_storage_is_removed() {
     use sha2::{Digest, Sha256};
@@ -236,7 +257,7 @@ fn persisted_operator_runs_after_bootstrap_storage_is_removed() {
     assert!(output.status.success(), "{:?}", output.stderr);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["runtime_observed"], false);
-    assert_eq!(report["cleanup"]["state"], "not_started");
+    assert_no_maintenance_history(&report);
 }
 
 #[test]
@@ -299,18 +320,15 @@ esac
     assert_eq!(report["compose_project"], project);
     assert_eq!(report["services_observed"], false);
     assert_eq!(
-        report["service_inspection"]["reason"],
-        "recorded_creation_inventory_incomplete"
-    );
-    assert!(
-        report["service_inspection"]["missing_records"]
-            .as_array()
-            .unwrap()
-            .len()
-            == 5
+        report["service_inspection"],
+        serde_json::json!({
+            "services_observed": false,
+            "reason": "compose_session_incomplete",
+            "installation_ready": false
+        })
     );
     assert_eq!(report["installation_ready"], false);
-    assert_eq!(report["cleanup"]["state"], "not_started");
+    assert_no_maintenance_history(&report);
     let journal_before = std::fs::read(path.join("installation.json")).unwrap();
     let mut saved = Vec::new();
     for _ in 0..2 {
@@ -360,6 +378,10 @@ esac
         "#!/bin/sh\nprintf 'private-backend-diagnostic' >&2\nexit 19\n",
     )
     .unwrap();
+    let output = invoke();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("private-backend-diagnostic"));
     let output = Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
         .args(["validate", "--install-dir"])
         .arg(&path)

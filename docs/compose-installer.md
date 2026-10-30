@@ -219,7 +219,8 @@ Later CI corrections remove unused legacy helpers and a test fixture constant,
 retain live evidence-reader regressions, document intentional provisioning
 argument boundaries, and update the frozen selfhost asset list. They are newer
 than the VM build; canonical repository CI must validate each subsequent PR head
-separately.
+separately. CLI integration assertions now cover the native Compose session and
+maintenance-history reports, including a direct doctor error-redaction check.
 Replace each remaining **PENDING** entry only after recording its exact build,
 engine, result, and preserved-evidence bindings. The successful build left all
 214 previously recorded containers and all 178 files in the original
@@ -328,11 +329,11 @@ and safe shutdown.
 
 The final submitted-source inventory compares base commit
 `5c5e1fe88a8053df9a79a8fc596867844b136f7b`, whose tree is
-`85eb1ff3bc11d095c34980b39fef82e0098c5c51`, with the exact 49-path publication
+`85eb1ff3bc11d095c34980b39fef82e0098c5c51`, with the exact 50-path publication
 delta. The local recount used the complete pinned Git-tree inventory and
 independently verified every required base blob against its Git object ID.
 The report records the counter and per-file SHA-256 values; its SHA-256 is
-`5dd7ca35a457420e6125db549d308f9e2da6aa116bfcdf7d9f2003a09364d30a`.
+`37fbd8643df9584d1252f5a09d277fd9152fa5e1cd95af9d37515b783daa85cf`.
 Both call-site inventories have zero unresolved entries and
 `callsite_review_complete: true`.
 
@@ -345,8 +346,8 @@ these totals; their changed paths remain explicitly accounted for.
 | --- | ---: | ---: | ---: |
 | Complete installer Rust inventory, files | 61 | 58 | -3 |
 | Complete installer Rust inventory, production lines | 26,172 | 22,556 | -3,616 |
-| Complete installer Rust inventory, test lines | 17,287 | 14,600 | -2,687 |
-| Complete installer Rust inventory, total lines | 43,459 | 37,156 | -6,303 |
+| Complete installer Rust inventory, test lines | 17,287 | 14,622 | -2,665 |
+| Complete installer Rust inventory, total lines | 43,459 | 37,178 | -6,281 |
 | Orchestration subset, files | 22 | 18 | -4 |
 | Orchestration subset, production Rust lines | 10,727 | 7,402 | -3,325 |
 | Orchestration subset, test lines | 6,357 | 3,055 | -3,302 |
