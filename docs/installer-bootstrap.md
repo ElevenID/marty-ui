@@ -9,10 +9,13 @@ not supported.
 Normal admitted installation remains held pending separate qualification.
 An exact signed nightly `--candidate-test` attempts an experimental rootless
 storage canary and, only if that succeeds on this host, stack provisioning and
-required read-only validation. The canary has not been qualified against a live
-user-owned rootless daemon; this source is not yet a published outside trial.
+required read-only validation. An unsigned development harness has completed a
+rootless ownership transition and restoration on one disposable host; see
+[Installer development canary](installer-development-canary.md). These results
+do not qualify a signed release or admit normal installation. Complete
+application validation and signed release qualification remain separate gates.
 
-The development invocation puts the entire download-and-script pipeline under
+The bootstrap invocation puts the entire download-and-script pipeline under
 no-new-privileges and propagates download errors:
 
 ```sh
