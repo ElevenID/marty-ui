@@ -23,6 +23,44 @@ fn compose(root: &Path, executable: &OsString, args: &[&str]) -> String {
     )
     .expect("standalone Compose config must succeed")
 }
+
+fn roundtrip_generated_bind(generated: &Value, observed: &Value) -> Option<Value> {
+    let disabled = serde_json::json!({"create_host_path":false});
+    (generated == &disabled && (observed == &serde_json::json!({}) || observed == &disabled))
+        .then(|| observed.clone())
+}
+
+#[test]
+fn generated_bind_roundtrip_accepts_only_omitted_or_explicit_false() {
+    let disabled = serde_json::json!({"create_host_path":false});
+    for observed in [serde_json::json!({}), disabled.clone()] {
+        assert_eq!(
+            roundtrip_generated_bind(&disabled, &observed),
+            Some(observed)
+        );
+    }
+    for observed in [
+        Value::Null,
+        serde_json::json!(false),
+        serde_json::json!([]),
+        serde_json::json!({"create_host_path":true}),
+        serde_json::json!({"create_host_path":null}),
+        serde_json::json!({"create_host_path":"false"}),
+        serde_json::json!({"create_host_path":false,"propagation":"rprivate"}),
+        serde_json::json!({"propagation":"rprivate"}),
+    ] {
+        assert!(roundtrip_generated_bind(&disabled, &observed).is_none());
+    }
+    for generated in [
+        Value::Null,
+        serde_json::json!({}),
+        serde_json::json!({"create_host_path":true}),
+        serde_json::json!({"create_host_path":false,"propagation":"rprivate"}),
+    ] {
+        assert!(roundtrip_generated_bind(&generated, &disabled).is_none());
+    }
+}
+
 #[test]
 #[ignore = "requires explicit MARTY_INSTALLER_COMPOSE_EXECUTABLE; read-only real Compose parser test"]
 fn actual_source_compose_matches_installer_application_contract() {
@@ -104,9 +142,18 @@ fn actual_source_compose_matches_installer_application_contract() {
         })
         .map(|line| format!("{line}\n"))
         .collect::<String>();
+    let applicant_group = marty_deployment_catalog::installer_state::applicant_container_group(
+        &marty_deployment_catalog::installer_state::RuntimeBinding {
+            docker_host: "unix:///var/run/docker.sock".into(),
+            engine_id: "compose-fixture-engine".into(),
+            openbao_port: 18200,
+            profile: marty_deployment_catalog::installer_state::RuntimeProfile::Rootful,
+        },
+    )
+    .unwrap();
     let parameters = ApplicationParameters {
         installation: installation.clone(),
-        applicant_state_gid: 10001,
+        applicant_container_group: applicant_group,
         version: "v1.2.3".into(),
         origin: "https://localhost:18443".into(),
         gateway_port: 18000,
@@ -142,7 +189,7 @@ fn actual_source_compose_matches_installer_application_contract() {
         &images,
         &ApplicationModelParameters {
             installation: installation.clone(),
-            applicant_state_gid: 10001,
+            applicant_container_group: applicant_group,
             bundle: bundle.clone(),
             compose_project: project.clone(),
             openbao_network_name: format!("{project}-bao_default"),
@@ -161,6 +208,7 @@ fn actual_source_compose_matches_installer_application_contract() {
     )
     .unwrap();
     assert_eq!(plan.selected_services.len(), 29);
+    assert_eq!(plan.model["services"]["installer-ingress"]["init"], true);
     for service in plan.model["services"].as_object().unwrap().values() {
         let limit = &service["mem_limit"];
         let bytes = limit
@@ -180,6 +228,54 @@ fn actual_source_compose_matches_installer_application_contract() {
     .unwrap();
     assert_eq!(order.len(), 30);
     assert_eq!(order[4], "kms-initialize");
+    let position = |role| order.iter().position(|value| value == role).unwrap();
+    assert!(
+        position("organization") < position("compliance-profile"),
+        "eager organization prerequisite must precede compliance readiness"
+    );
+    assert!(
+        position("organization") < position("revocation-profile"),
+        "eager organization prerequisite must precede revocation-profile readiness"
+    );
+    assert!(
+        position("organization") < position("deployment-profile"),
+        "eager organization prerequisite must precede deployment-profile readiness"
+    );
+    assert!(
+        position("organization") < position("device-registration"),
+        "eager organization prerequisite must precede device-registration readiness"
+    );
+    assert!(
+        position("organization") < position("credential-template")
+            && position("revocation-profile") < position("credential-template"),
+        "both eager control-plane prerequisites must precede credential-template readiness"
+    );
+    for (role, peer) in [
+        ("flow", "deployment-profile"),
+        ("flow", "signing-keys"),
+        ("flow", "trust-profile"),
+        ("trust-profile", "organization"),
+        ("auth", "applicant"),
+        ("auth", "event-stream"),
+    ] {
+        assert!(
+            position(peer) < position(role),
+            "eager prerequisite {peer} must precede {role}"
+        );
+    }
+    assert!(
+        position("signing-keys") < position("canvas-sync-worker"),
+        "eager integration-secret KMS proof must precede worker process observation"
+    );
+    assert_eq!(
+        marty_deployment_catalog::installer_application_graph::completion(
+            &plan.model,
+            "canvas-sync-worker",
+        )
+        .unwrap(),
+        marty_deployment_catalog::installer_application_graph::Completion::Running,
+        "the headless worker remains process-observed, not health-qualified"
+    );
     assert_eq!(
         order[..4]
             .iter()
@@ -258,6 +354,7 @@ fn actual_source_compose_matches_installer_application_contract() {
         ],
     );
     let normalized: Value = serde_json::from_str(&again).unwrap();
+    assert_eq!(normalized["services"]["installer-ingress"]["init"], true);
     assert_eq!(normalized["networks"]["default"]["external"], true);
     assert_eq!(
         normalized["networks"]["default"]["name"],
@@ -267,24 +364,34 @@ fn actual_source_compose_matches_installer_application_contract() {
         normalized["secrets"], plan.model["secrets"],
         "all scoped secret declarations must roundtrip exactly"
     );
-    // Compose omits the false create_host_path value on normalized output.
-    // The execution document deliberately keeps explicit false on this new bind.
+    // Compose versions may omit or preserve false in normalized bind options.
+    // The execution document must still explicitly disable host-path creation.
     let mut roundtrip_expected = plan.model.clone();
-    for mount in roundtrip_expected["services"]["edge"]["volumes"]
+    for (index, mount) in roundtrip_expected["services"]["edge"]["volumes"]
         .as_array_mut()
         .unwrap()
+        .iter_mut()
+        .enumerate()
     {
         if mount["target"] == "/etc/nginx/conf.d/default.conf.template" {
-            assert_eq!(mount["bind"], serde_json::json!({"create_host_path":false}));
-            mount["bind"] = serde_json::json!({});
+            mount["bind"] = roundtrip_generated_bind(
+                &mount["bind"],
+                &normalized["services"]["edge"]["volumes"][index]["bind"],
+            )
+            .expect("generated edge bind must retain disabled host-path creation");
         }
     }
-    for mount in roundtrip_expected["services"]["installer-ingress"]["volumes"]
+    for (index, mount) in roundtrip_expected["services"]["installer-ingress"]["volumes"]
         .as_array_mut()
         .unwrap()
+        .iter_mut()
+        .enumerate()
     {
-        assert_eq!(mount["bind"], serde_json::json!({"create_host_path":false}));
-        mount["bind"] = serde_json::json!({});
+        mount["bind"] = roundtrip_generated_bind(
+            &mount["bind"],
+            &normalized["services"]["installer-ingress"]["volumes"][index]["bind"],
+        )
+        .expect("generated ingress bind must retain disabled host-path creation");
     }
     for (role, service) in normalized["services"].as_object().unwrap() {
         if role == "installer-ingress" {
@@ -459,14 +566,26 @@ fn actual_source_compose_matches_installer_application_contract() {
             .keys()
             .collect::<std::collections::BTreeSet<_>>()
     );
+    assert_eq!(
+        selected_normalized["services"]["installer-ingress"]["init"],
+        true
+    );
     let mut selected_expected = plan.model.clone();
     for role in ["edge", "installer-ingress"] {
-        for mount in selected_expected["services"][role]["volumes"]
+        for (index, mount) in selected_expected["services"][role]["volumes"]
             .as_array_mut()
             .unwrap()
+            .iter_mut()
+            .enumerate()
         {
-            if mount["bind"] == serde_json::json!({"create_host_path":false}) {
-                mount["bind"] = serde_json::json!({});
+            if role == "installer-ingress"
+                || mount["target"] == "/etc/nginx/conf.d/default.conf.template"
+            {
+                mount["bind"] = roundtrip_generated_bind(
+                    &mount["bind"],
+                    &selected_normalized["services"][role]["volumes"][index]["bind"],
+                )
+                .expect("selected generated bind must retain disabled host-path creation");
             }
         }
     }

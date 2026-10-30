@@ -2,6 +2,7 @@
 //! uncertain container. Durable intent, ID and outputs survive every failure.
 #![cfg(target_os = "linux")]
 use crate::{
+    installer_helper_output,
     installer_openbao::{self, OpenBaoInventory},
     installer_runtime::DockerRunner,
     installer_state::{InstallerState, Phase},
@@ -315,8 +316,12 @@ pub fn provision(
     )?;
     validate_observation(&inspect(&docker, container)?, container, &contract, true)?;
     installer_openbao::verify_observation(&docker, installation, bundle, state, bao)?;
-    let validated =
-        installer_tls_outputs::validate_and_transfer(&output_directory, &secrets, bundle)?;
+    let validated = installer_tls_outputs::validate_and_transfer(
+        &output_directory,
+        &secrets,
+        bundle,
+        installer_helper_output::expected_host_uid(&binding)?,
+    )?;
     state.write_evidence("selfhost-tls-kms-roles.json", &validated.metadata_bytes)?;
     state.write_evidence(
         "selfhost-tls-kms.env.fragment",

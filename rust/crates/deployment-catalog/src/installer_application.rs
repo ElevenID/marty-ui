@@ -81,9 +81,10 @@ fn prepare_inner(
         reservations.push(listener);
     }
     let origin = format!("https://localhost:{}", ports[0]);
+    let applicant_group = crate::installer_state::applicant_container_group(&binding)?;
     let parameters = ApplicationParameters {
         installation: installation.into(),
-        applicant_state_gid: crate::installer_state::applicant_state_gid()?,
+        applicant_container_group: applicant_group,
         version: state.journal().identity().release_tag.clone(),
         origin: origin.clone(),
         gateway_port: ports[1],
@@ -116,7 +117,7 @@ fn prepare_inner(
         "optional_empty_secrets":env.optional_empty_secrets, "installation_ready":false,
     })).map_err(|_| "cannot serialize application intent")?)?;
     state.prepare_application_storage()?;
-    if state.validate_applicant_storage()? != parameters.applicant_state_gid {
+    if state.validate_applicant_storage()? != applicant_group.host_gid() {
         return Err("applicant state group changed during preparation".into());
     }
     state.persist_application_storage_creation_receipt(installation)?;
@@ -150,7 +151,7 @@ fn prepare_inner(
         images,
         &ApplicationModelParameters {
             installation: installation.into(),
-            applicant_state_gid: crate::installer_state::applicant_state_gid()?,
+            applicant_container_group: applicant_group,
             bundle: bundle.into(),
             compose_project: project,
             openbao_network_name: bao.network_name.clone(),

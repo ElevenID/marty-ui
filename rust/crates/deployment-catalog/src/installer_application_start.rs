@@ -61,7 +61,13 @@ fn validate_selected_inputs(
         &journal.installation_id().to_string(),
         &journal.runtime().ok_or(REFUSED)?.engine_id,
     )?;
-    observation::validate_inputs_with_generation(plan, installation, bundle, generation.as_ref())
+    observation::validate_inputs_with_generation(
+        plan,
+        installation,
+        bundle,
+        crate::installer_state::applicant_container_group(journal.runtime().ok_or(REFUSED)?)?,
+        generation.as_ref(),
+    )
 }
 fn text(v: &Value) -> Result<&str> {
     v.as_str().ok_or_else(|| REFUSED.into())
@@ -289,16 +295,14 @@ fn check_dependencies(
     containers: &BTreeMap<String, String>,
     role: &str,
 ) -> Result<()> {
-    if let Some(deps) = plan.model["services"][role]["depends_on"].as_object() {
-        for dependency in deps.keys() {
-            require(observed_role(
-                docker,
-                plan,
-                images,
-                dependency,
-                containers.get(dependency).ok_or(REFUSED)?,
-            )?)?;
-        }
+    for dependency in graph::required_dependencies(&plan.model, role)? {
+        require(observed_role(
+            docker,
+            plan,
+            images,
+            &dependency,
+            containers.get(&dependency).ok_or(REFUSED)?,
+        )?)?;
     }
     Ok(())
 }
@@ -322,15 +326,17 @@ pub fn start(
         port_reservations,
     } = prepared;
     let binding = state.journal().runtime().ok_or(REFUSED)?.clone();
+    let applicant_group = crate::installer_state::applicant_container_group(&binding)?;
     let project = state.journal().compose_project();
     let installation_id = state.journal().installation_id().to_string();
     require(
-        plan.model["name"] == project
+        applicant_gid == applicant_group.host_gid()
+            && plan.model["name"] == project
             && plan.expected_network_id == bao.network_id
             && !plan.installation_ready
             && plan.model["services"]["applicant"].get("user").is_none()
             && plan.model["services"]["applicant"]["group_add"]
-                == json!([applicant_gid.to_string()]),
+                == json!([applicant_group.container_gid().to_string()]),
     )?;
     let roles = graph::startup_order(&plan.model, &plan.selected_services)?;
     let volume = text(&plan.model["volumes"]["redis-socket"]["name"])?.to_owned();

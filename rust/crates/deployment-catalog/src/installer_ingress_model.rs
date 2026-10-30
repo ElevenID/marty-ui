@@ -73,8 +73,11 @@ pub fn add(
             && services.values().all(|s| s.get("ports").is_none())
             && plan.model["services"]["edge"]["healthcheck"]["test"].is_array(),
     )?;
+    // The pinned edge binary does not register a shutdown signal handler.
+    // Keep it out of PID 1 so Docker's init forwards normal stop signals and
+    // reaps children without changing the immutable service image.
     let service = json!({
-        "image":services_image,"pull_policy":"always",
+        "image":services_image,"pull_policy":"always","init":true,
         "mem_limit":536870912,
         "entrypoint":["/usr/local/bin/marty-oidf-keyless-edge"],"command":[],
         "user":"10001:10001","read_only":true,"cap_drop":["ALL"],
@@ -156,6 +159,40 @@ mod tests {
             )
             .is_err());
         }
+    }
+    #[test]
+    fn ingress_init_is_explicit_without_changing_other_service_contracts() {
+        let (mut plan, image) = fixture();
+        let before = plan.model.clone();
+        add(
+            &mut plan,
+            Path::new("/owned"),
+            ID,
+            "https://localhost:18443",
+            &image,
+        )
+        .unwrap();
+        let service = &plan.model["services"][SERVICE];
+        assert_eq!(service["init"], true);
+        assert_eq!(
+            service["entrypoint"],
+            json!(["/usr/local/bin/marty-oidf-keyless-edge"])
+        );
+        assert_eq!(service["command"], json!([]));
+        assert_eq!(service["image"], image);
+        assert_eq!(service["user"], "10001:10001");
+        assert_eq!(service["read_only"], true);
+        assert_eq!(service["cap_drop"], json!(["ALL"]));
+        assert_eq!(service["security_opt"], json!(["no-new-privileges:true"]));
+        assert_eq!(service["restart"], "no");
+        for (role, prior) in before["services"].as_object().unwrap() {
+            assert_eq!(&plan.model["services"][role], prior);
+        }
+        assert_eq!(
+            plan.selected_services,
+            vec!["edge".to_owned(), SERVICE.to_owned()]
+        );
+        assert!(!plan.installation_ready);
     }
     #[test]
     fn only_scoped_inputs_and_verified_https_are_exposed() {

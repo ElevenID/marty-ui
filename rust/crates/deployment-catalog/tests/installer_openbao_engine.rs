@@ -864,7 +864,15 @@ fn run_fixture(renewal: bool, generation: bool, application: bool) -> Result<()>
                 &selected,
                 &prepared.plan,
             )?;
-            marty_deployment_catalog::installer_application_observation::validate_inputs_with_generation(&prepared.plan,&installation,&bundle,Some(&selected))?;
+            marty_deployment_catalog::installer_application_observation::validate_inputs_with_generation(
+                &prepared.plan,
+                &installation,
+                &bundle,
+                marty_deployment_catalog::installer_state::applicant_container_group(
+                    state.journal().runtime().ok_or("installer runtime binding absent")?,
+                )?,
+                Some(&selected),
+            )?;
             require(
                 prepared.plan.model["services"]
                     .as_object()
