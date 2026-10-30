@@ -208,6 +208,7 @@ fn actual_source_compose_matches_installer_application_contract() {
     )
     .unwrap();
     assert_eq!(plan.selected_services.len(), 29);
+    assert_eq!(plan.model["services"]["installer-ingress"]["init"], true);
     for service in plan.model["services"].as_object().unwrap().values() {
         let limit = &service["mem_limit"];
         let bytes = limit
@@ -353,6 +354,7 @@ fn actual_source_compose_matches_installer_application_contract() {
         ],
     );
     let normalized: Value = serde_json::from_str(&again).unwrap();
+    assert_eq!(normalized["services"]["installer-ingress"]["init"], true);
     assert_eq!(normalized["networks"]["default"]["external"], true);
     assert_eq!(
         normalized["networks"]["default"]["name"],
@@ -563,6 +565,10 @@ fn actual_source_compose_matches_installer_application_contract() {
             .unwrap()
             .keys()
             .collect::<std::collections::BTreeSet<_>>()
+    );
+    assert_eq!(
+        selected_normalized["services"]["installer-ingress"]["init"],
+        true
     );
     let mut selected_expected = plan.model.clone();
     for role in ["edge", "installer-ingress"] {

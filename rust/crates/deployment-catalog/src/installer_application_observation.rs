@@ -540,6 +540,15 @@ fn validate_container_inner(
     let p = project(plan)?;
     let config = &c["Config"];
     let host = &c["HostConfig"];
+    // New ingress models explicitly require Docker's init process. Compare
+    // boolean declarations exactly; a daemon default must not replace them.
+    // Historical models omitted init and remain observable only with Docker's
+    // unset or false representation, never an unrecorded init process.
+    if let Some(expected) = s.get("init") {
+        require(expected.is_boolean() && host.get("Init") == Some(expected))?;
+    } else {
+        require(host["Init"].is_null() || host["Init"] == false)?;
+    }
     // Historical cleanup observations may have no declared cap. New source
     // models require it at admission, and each observed container must match.
     if let Some(limit) = s.get("mem_limit") {
@@ -888,6 +897,138 @@ mod tests {
             "Mounts":[{"Type":"bind","Source":"/private/install $literal/secrets/token","Destination":"/run/secrets/token","RW":false,"Propagation":"rprivate"}],
             "State":{"Status":"created","Running":false,"Paused":false,"Restarting":false,"OOMKilled":false}});
         (plan, image, observed)
+    }
+    #[test]
+    fn observed_init_requires_the_declared_boolean_in_every_phase() {
+        let (mut plan, image, mut c) = fixture();
+        let id = "d".repeat(64);
+        plan.model["services"]["app"]["init"] = json!(true);
+        c["HostConfig"]["Init"] = json!(true);
+        validate_container(&c, &id, "app", &plan, &image, ContainerPhase::Created).unwrap();
+        validate_container_for_logs(&c, &id, "app", &plan, &image).unwrap();
+        for actual in [
+            Value::Null,
+            json!(false),
+            json!(0),
+            json!("true"),
+            json!([]),
+        ] {
+            let mut changed = c.clone();
+            changed["HostConfig"]["Init"] = actual;
+            assert!(validate_container(
+                &changed,
+                &id,
+                "app",
+                &plan,
+                &image,
+                ContainerPhase::Created
+            )
+            .is_err());
+            assert!(validate_container_for_logs(&changed, &id, "app", &plan, &image).is_err());
+        }
+        let mut missing = c.clone();
+        missing["HostConfig"]
+            .as_object_mut()
+            .unwrap()
+            .remove("Init");
+        assert!(
+            validate_container(&missing, &id, "app", &plan, &image, ContainerPhase::Created)
+                .is_err()
+        );
+        c["State"]["Status"] = json!("running");
+        c["State"]["Running"] = json!(true);
+        c["NetworkSettings"]["Networks"]["owned-bao_default"]["NetworkID"] =
+            json!(plan.expected_network_id);
+        validate_container(&c, &id, "app", &plan, &image, ContainerPhase::Running).unwrap();
+        c["HostConfig"]["Init"] = json!(false);
+        assert!(
+            validate_container(&c, &id, "app", &plan, &image, ContainerPhase::Running).is_err()
+        );
+        c["State"]["Status"] = json!("exited");
+        c["State"]["Running"] = json!(false);
+        c["State"]["ExitCode"] = json!(0);
+        assert!(validate_container(
+            &c,
+            &id,
+            "app",
+            &plan,
+            &image,
+            ContainerPhase::ExitedSuccessfully
+        )
+        .is_err());
+        c["HostConfig"]["Init"] = json!(true);
+        validate_container(
+            &c,
+            &id,
+            "app",
+            &plan,
+            &image,
+            ContainerPhase::ExitedSuccessfully,
+        )
+        .unwrap();
+    }
+    #[test]
+    fn observed_init_rejects_malformed_policy_and_preserves_legacy_defaults() {
+        let (mut plan, image, mut c) = fixture();
+        let id = "d".repeat(64);
+        // No new init authority is inferred from an old journal without a field.
+        validate_container(&c, &id, "app", &plan, &image, ContainerPhase::Created).unwrap();
+        for actual in [Value::Null, json!(false)] {
+            c["HostConfig"]["Init"] = actual;
+            validate_container(&c, &id, "app", &plan, &image, ContainerPhase::Created).unwrap();
+            validate_container_for_logs(&c, &id, "app", &plan, &image).unwrap();
+        }
+        for actual in [json!(true), json!(0), json!("false"), json!({})] {
+            c["HostConfig"]["Init"] = actual;
+            assert!(validate_container_for_logs(&c, &id, "app", &plan, &image).is_err());
+        }
+        plan.model["services"]["app"]["init"] = json!(false);
+        c["HostConfig"]["Init"] = json!(false);
+        validate_container(&c, &id, "app", &plan, &image, ContainerPhase::Created).unwrap();
+        c["HostConfig"]["Init"] = Value::Null;
+        assert!(
+            validate_container(&c, &id, "app", &plan, &image, ContainerPhase::Created).is_err()
+        );
+        for malformed in [Value::Null, json!(0), json!("true"), json!([]), json!({})] {
+            plan.model["services"]["app"]["init"] = malformed.clone();
+            c["HostConfig"]["Init"] = malformed;
+            assert!(
+                validate_container(&c, &id, "app", &plan, &image, ContainerPhase::Created).is_err()
+            );
+            assert!(validate_container_for_logs(&c, &id, "app", &plan, &image).is_err());
+        }
+    }
+    #[test]
+    fn observed_init_does_not_replace_existing_identity_and_security_checks() {
+        let (mut plan, image, mut c) = fixture();
+        let id = "d".repeat(64);
+        plan.model["services"]["app"]["init"] = json!(true);
+        c["HostConfig"]["Init"] = json!(true);
+        validate_container(&c, &id, "app", &plan, &image, ContainerPhase::Created).unwrap();
+        for (pointer, value) in [
+            ("/Image", json!(format!("sha256:{}", "e".repeat(64)))),
+            (
+                "/Config/Labels/com.docker.compose.project",
+                json!("foreign"),
+            ),
+            ("/Config/Entrypoint", json!(["/unreviewed"])),
+            ("/Config/User", json!("0:0")),
+            ("/HostConfig/Privileged", json!(true)),
+            ("/Mounts/0/RW", json!(true)),
+        ] {
+            let mut changed = c.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert!(validate_container(
+                &changed,
+                &id,
+                "app",
+                &plan,
+                &image,
+                ContainerPhase::Created
+            )
+            .is_err());
+            assert!(validate_container_for_logs(&changed, &id, "app", &plan, &image).is_err());
+        }
     }
     #[test]
     fn observed_ram_cap_must_match_declared_finite_limit() {
