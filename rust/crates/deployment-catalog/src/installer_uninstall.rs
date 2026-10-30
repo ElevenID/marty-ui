@@ -22,7 +22,15 @@ use std::{
     path::{Path, PathBuf},
 };
 type Result<T> = std::result::Result<T, String>;
-const REFUSED: &str = "Scoped uninstall refused or interrupted; preserve installation data and cleanup receipts. Incomplete provisioning helpers require explicit recovery";
+const REFUSED: &str = "Scoped uninstall refused or interrupted; preserve installation data and cleanup receipts. Inspect retained evidence before choosing a recovery action";
+const INSTALLER_INVENTORY_REFUSED: &str = "Scoped uninstall refused: installer-labeled containers differ from the verified cleanup scope. Preserve installation data and cleanup receipts";
+fn public_refusal(error: String) -> String {
+    if error == INSTALLER_INVENTORY_REFUSED {
+        error
+    } else {
+        REFUSED.to_owned()
+    }
+}
 const BAO: [&str; 4] = [
     "openbao-unseal",
     "openbao",
@@ -640,6 +648,48 @@ fn network_present(docker: &DockerRunner, plan: &CleanupPlan) -> Result<bool> {
     require(found.is_empty() || found == BTreeSet::from([plan.network_id.clone()]))?;
     Ok(!found.is_empty())
 }
+fn expected_installer_labeled_containers(
+    docker: &DockerRunner,
+    loaded: &Loaded,
+    live: &BTreeSet<String>,
+) -> Result<BTreeSet<String>> {
+    let role = crate::installer_ingress_model::SERVICE;
+    let mut ingress = loaded
+        .plan
+        .resources
+        .iter()
+        .filter(|r| !r.bao && r.role == role);
+    let Some(resource) = ingress.next() else {
+        return Ok(BTreeSet::new());
+    };
+    require(
+        ingress.next().is_none()
+            && !loaded.plan.pre_application()
+            && loaded
+                .application
+                .selected_services
+                .iter()
+                .filter(|selected| selected.as_str() == role)
+                .count()
+                == 1
+            && id(&resource.container_id)
+            && !loaded.helper_ids.contains(&resource.container_id),
+    )?;
+    let labels = &loaded.application.model["services"][role]["labels"];
+    require(
+        labels["com.elevenid.installer.id"] == loaded.plan.installation_id
+            && labels["com.elevenid.installer.stage"] == "ingress",
+    )?;
+    if !live.contains(&resource.container_id) {
+        // scope() has already required the exact removal intent for absence.
+        return Ok(BTreeSet::new());
+    }
+    // This resource came from the committed application creation record, not a
+    // label query or provisional helper receipt. Keep the complete model/image
+    // observation before allowing its persistent installer label in the scope.
+    observe(docker, loaded, resource)?;
+    Ok(BTreeSet::from([resource.container_id.clone()]))
+}
 fn scope(
     docker: &DockerRunner,
     state: &LockedMaintenance,
@@ -683,14 +733,15 @@ fn scope(
             &format!("name=^/{}-", regex::escape(&p.project)),
         )? == live,
     )?;
-    require(
-        listed(
-            docker,
-            "container",
-            &format!("label=com.elevenid.installer.id={}", p.installation_id),
-        )?
-        .is_empty(),
+    let expected_installer = expected_installer_labeled_containers(docker, loaded, &live)?;
+    let installer_labeled = listed(
+        docker,
+        "container",
+        &format!("label=com.elevenid.installer.id={}", p.installation_id),
     )?;
+    if installer_labeled != expected_installer {
+        return Err(INSTALLER_INVENTORY_REFUSED.into());
+    }
     for helper in &loaded.helper_ids {
         require(!observed_ids.contains(helper))?;
     }
@@ -826,7 +877,7 @@ fn pre_application_mutation_guard(
 /// or changing Docker resources. This is a point-in-time view; uninstall must
 /// repeat every check before it mutates anything.
 pub fn plan(args: &[String]) -> Result<String> {
-    plan_inner(args).map_err(|_| REFUSED.to_owned())
+    plan_inner(args).map_err(public_refusal)
 }
 fn plan_inner(args: &[String]) -> Result<String> {
     let args = arguments(args)?;
@@ -920,7 +971,7 @@ fn plan_inner(args: &[String]) -> Result<String> {
 /// Remove a complete runtime or the proven pre-application boundary, retaining data.
 /// A retry resumes this cleanup transaction; it never resumes provisioning.
 pub fn uninstall(args: &[String]) -> Result<String> {
-    uninstall_inner(args).map_err(|_| REFUSED.to_owned())
+    uninstall_inner(args).map_err(public_refusal)
 }
 fn uninstall_inner(args: &[String]) -> Result<String> {
     let args = arguments(args)?;
@@ -1090,6 +1141,18 @@ pub(crate) mod tests {
                 json!({"image":digest,"restart":"no","healthcheck":{"test":["CMD","true"]}}),
             );
         }
+        if mode == "persistent-ingress" {
+            let mut ingress = services.remove("synthetic-0").unwrap();
+            ingress["labels"] = json!({
+                "com.elevenid.installer.id": owner,
+                "com.elevenid.installer.stage": "ingress"
+            });
+            ingress["user"] = json!("10001:10001");
+            ingress["read_only"] = json!(true);
+            ingress["cap_drop"] = json!(["ALL"]);
+            ingress["security_opt"] = json!(["no-new-privileges:true"]);
+            services.insert(crate::installer_ingress_model::SERVICE.into(), ingress);
+        }
         services["kms-initialize"]["depends_on"] = json!({"postgres":{"condition":"service_healthy"},"redis":{"condition":"service_healthy"},"db-migrate":{"condition":"service_completed_successfully"},"revocation-profile-migrate":{"condition":"service_completed_successfully"}});
         services["kms-initialize"]["profiles"] = json!(["kms-init"]);
         services["kms-initialize"]["environment"] = json!({"MARTY_KMS_BOOTSTRAP_ENABLED":"true","BAO_TOKEN_FILE":"/run/secrets/openbao_bootstrap_token"});
@@ -1189,6 +1252,14 @@ pub(crate) mod tests {
                         "BAO_TOKEN_FILE=/run/secrets/openbao_bootstrap_token"
                     ]);
                 }
+                if role == crate::installer_ingress_model::SERVICE {
+                    c["Config"]["Labels"]["com.elevenid.installer.id"] = json!(owner);
+                    c["Config"]["Labels"]["com.elevenid.installer.stage"] = json!("ingress");
+                    c["Config"]["User"] = json!("10001:10001");
+                    c["HostConfig"]["ReadonlyRootfs"] = json!(true);
+                    c["HostConfig"]["CapDrop"] = json!(["ALL"]);
+                    c["HostConfig"]["SecurityOpt"] = json!(["no-new-privileges:true"]);
+                }
                 observed.insert(id.clone(), c);
             }
         }
@@ -1226,6 +1297,8 @@ elif a[0]=='ps':
  if s['mode']=='command-failure' or s['fail_ps']:
   s['fail_ps']=False;persist();sys.exit(19)
  f=filt()
+ if f and f.startswith('label=com.elevenid.installer.id=') and 'installer_label_output' in s:
+  sys.stdout.write(s['installer_label_output']);sys.exit(0)
  for i,c in s['containers'].items():
   if f is None: print(i)
   elif f.startswith('id=') and i==f[3:]: print(i)
@@ -1288,6 +1361,248 @@ else: sys.exit(98)
     }
     fn ledger(root: &tempfile::TempDir) -> Value {
         parse(&fs::read(root.path().join("ledger.json")).unwrap()).unwrap()
+    }
+    fn persistent_ingress_id(root: &tempfile::TempDir) -> String {
+        let created: Created = parse(
+            &fs::read(
+                root.path()
+                    .join("install/evidence/application-created-resources.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        created.containers[crate::installer_ingress_model::SERVICE].clone()
+    }
+    fn evidence_bytes(root: &tempfile::TempDir) -> BTreeMap<std::ffi::OsString, Vec<u8>> {
+        fs::read_dir(root.path().join("install/evidence"))
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (entry.file_name(), fs::read(entry.path()).unwrap())
+            })
+            .collect()
+    }
+    #[test]
+    fn persistent_ingress_preview_accepts_only_the_committed_resource_without_mutation() {
+        for (status, running, action) in [
+            ("created", false, "remove"),
+            ("exited", false, "remove"),
+            ("running", true, "stop_and_remove"),
+        ] {
+            let (root, args) = mock("persistent-ingress");
+            let container_id = persistent_ingress_id(&root);
+            let mut saved = ledger(&root);
+            saved["containers"][&container_id]["State"]["Status"] = json!(status);
+            saved["containers"][&container_id]["State"]["Running"] = json!(running);
+            save(root.path().join("ledger.json"), &saved);
+            let before = evidence_bytes(&root);
+            let preview: Value = parse(plan(&args).unwrap().as_bytes()).unwrap();
+            let containers = preview["containers"].as_array().unwrap();
+            assert_eq!(containers.len(), 34);
+            let ingress: Vec<_> = containers
+                .iter()
+                .filter(|r| r["role"] == crate::installer_ingress_model::SERVICE)
+                .collect();
+            assert_eq!(ingress.len(), 1);
+            assert_eq!(ingress[0]["id"], container_id);
+            assert_eq!(ingress[0]["action"], action);
+            assert_eq!(evidence_bytes(&root), before);
+            assert_eq!(ledger(&root)["containers"], saved["containers"]);
+            assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
+            assert_eq!(ledger(&root)["installation_staging_seen"], false);
+        }
+    }
+    #[test]
+    fn persistent_ingress_label_inventory_refuses_missing_extra_duplicate_and_malformed_ids() {
+        let (root, args) = mock("persistent-ingress");
+        let container_id = persistent_ingress_id(&root);
+        let before = evidence_bytes(&root);
+        for (output, expected) in [
+            (String::new(), INSTALLER_INVENTORY_REFUSED),
+            (format!("{}\n", "f".repeat(64)), INSTALLER_INVENTORY_REFUSED),
+            (
+                format!("{container_id}\n{}\n", "f".repeat(64)),
+                INSTALLER_INVENTORY_REFUSED,
+            ),
+            (format!("{container_id}\n{container_id}\n"), REFUSED),
+            ("short-id\n".into(), REFUSED),
+            (format!("{}\n", "g".repeat(64)), REFUSED),
+        ] {
+            let mut saved = ledger(&root);
+            saved["installer_label_output"] = json!(output);
+            save(root.path().join("ledger.json"), &saved);
+            assert_eq!(plan(&args).unwrap_err(), expected);
+            assert_eq!(uninstall(&args).unwrap_err(), expected);
+            assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
+            assert_eq!(evidence_bytes(&root), before);
+        }
+    }
+    #[test]
+    fn persistent_ingress_observation_preserves_identity_and_security_checks() {
+        let (root, args) = mock("persistent-ingress");
+        let container_id = persistent_ingress_id(&root);
+        let original = ledger(&root);
+        let before = evidence_bytes(&root);
+        for (pointer, value) in [
+            ("/Image", json!(format!("sha256:{}", "e".repeat(64)))),
+            ("/Name", json!("/foreign-ingress-1")),
+            ("/Config/Labels/com.elevenid.installer.id", json!("foreign")),
+            ("/Config/Labels/com.elevenid.installer.stage", json!("tls")),
+            ("/Config/User", json!("0:0")),
+            ("/HostConfig/Privileged", json!(true)),
+            ("/HostConfig/ReadonlyRootfs", json!(false)),
+            ("/HostConfig/CapDrop", json!([])),
+            ("/HostConfig/SecurityOpt", json!([])),
+            ("/HostConfig/NetworkMode", json!("host")),
+        ] {
+            let mut changed = original.clone();
+            *changed["containers"][&container_id]
+                .pointer_mut(pointer)
+                .unwrap() = value;
+            save(root.path().join("ledger.json"), &changed);
+            assert_eq!(plan(&args).unwrap_err(), REFUSED, "{pointer}");
+            assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
+            assert_eq!(evidence_bytes(&root), before);
+        }
+    }
+    #[test]
+    fn persistent_ingress_requires_committed_creation_and_exact_model_labels() {
+        let (root, args) = mock("persistent-ingress");
+        let evidence = root.path().join("install/evidence");
+        let plan_path = evidence.join("application-plan.json");
+        let original_plan = fs::read(&plan_path).unwrap();
+        let compose_path = evidence.join("application-compose.json");
+        let original_compose = fs::read(&compose_path).unwrap();
+        for (label, value) in [
+            ("com.elevenid.installer.id", Value::Null),
+            ("com.elevenid.installer.id", json!("foreign")),
+            ("com.elevenid.installer.stage", Value::Null),
+            ("com.elevenid.installer.stage", json!("tls")),
+        ] {
+            let mut saved: Value = parse(&original_plan).unwrap();
+            saved["model"]["services"][crate::installer_ingress_model::SERVICE]["labels"][label] =
+                value;
+            save(&plan_path, &saved);
+            fs::write(
+                &compose_path,
+                crate::installer_application::compose_document(&saved["model"]).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(plan(&args).unwrap_err(), REFUSED);
+            assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
+        }
+        fs::write(&plan_path, &original_plan).unwrap();
+        fs::write(&compose_path, &original_compose).unwrap();
+        let created_path = evidence.join("application-created-resources.json");
+        let created_bytes = fs::read(&created_path).unwrap();
+        let mut malformed: Value = parse(&created_bytes).unwrap();
+        malformed["containers"][crate::installer_ingress_model::SERVICE] = json!(1);
+        save(&created_path, &malformed);
+        assert_eq!(plan(&args).unwrap_err(), REFUSED);
+        fs::write(&created_path, &created_bytes).unwrap();
+        let installation = root.path().join("install");
+        let identity = InstallerState::inspect(&installation)
+            .unwrap()
+            .identity()
+            .clone();
+        let mut state = InstallerState::resume(&installation, &identity).unwrap();
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        drop(state);
+        fs::rename(
+            &created_path,
+            evidence.join("application-discovered-resources.json"),
+        )
+        .unwrap();
+        assert_eq!(plan(&args).unwrap_err(), REFUSED);
+        assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
+        assert!(!evidence.join("uninstall-plan.json").exists());
+    }
+    #[test]
+    fn persistent_ingress_absence_requires_the_exact_prior_removal_intent() {
+        let (root, args) = mock("persistent-ingress");
+        let installation = root.path().join("install");
+        let container_id = persistent_ingress_id(&root);
+        let mut state = LockedMaintenance::open(&installation).unwrap();
+        let loaded = load(&state, &installation).unwrap();
+        record(
+            &mut state,
+            "uninstall-plan.json",
+            &serde_json::to_value(&loaded.plan).unwrap(),
+        )
+        .unwrap();
+        drop(state);
+        let mut saved = ledger(&root);
+        saved["containers"]
+            .as_object_mut()
+            .unwrap()
+            .remove(&container_id);
+        save(root.path().join("ledger.json"), &saved);
+        assert_eq!(plan(&args).unwrap_err(), REFUSED);
+        let path = installation
+            .join("evidence")
+            .join(removal_name(&container_id));
+        save(
+            &path,
+            &operation(&loaded.plan, "remove-container", &"f".repeat(64)),
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(plan(&args).unwrap_err(), REFUSED);
+        save(
+            &path,
+            &operation(&loaded.plan, "remove-container", &container_id),
+        );
+        let before = evidence_bytes(&root);
+        let preview: Value = parse(plan(&args).unwrap().as_bytes()).unwrap();
+        let ingress = preview["containers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["role"] == crate::installer_ingress_model::SERVICE)
+            .unwrap();
+        assert_eq!(ingress["id"], container_id);
+        assert_eq!(ingress["action"], "already_removed");
+        assert_eq!(evidence_bytes(&root), before);
+        assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
+    }
+    #[test]
+    fn persistent_ingress_does_not_adopt_other_installer_labeled_resources() {
+        for mode in ["normal", "persistent-ingress"] {
+            let (root, args) = mock(mode);
+            let mut saved = ledger(&root);
+            let installation = root.path().join("install");
+            let owner = InstallerState::inspect(&installation)
+                .unwrap()
+                .installation_id()
+                .to_string();
+            let gateway = saved["containers"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+                .find(|c| c["Config"]["Labels"]["com.docker.compose.service"] == "gateway")
+                .unwrap();
+            gateway["Config"]["Labels"]["com.elevenid.installer.id"] = json!(owner);
+            save(root.path().join("ledger.json"), &saved);
+            assert_eq!(plan(&args).unwrap_err(), INSTALLER_INVENTORY_REFUSED);
+            assert_eq!(uninstall(&args).unwrap_err(), INSTALLER_INVENTORY_REFUSED);
+            assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
+            assert!(!installation.join("evidence/uninstall-plan.json").exists());
+        }
+    }
+    #[test]
+    fn sanitized_refusal_preserves_only_the_fixed_inventory_diagnostic() {
+        assert_eq!(
+            public_refusal(INSTALLER_INVENTORY_REFUSED.into()),
+            INSTALLER_INVENTORY_REFUSED
+        );
+        for error in [
+            "synthetic-secret-token /private/path".to_owned(),
+            format!("{INSTALLER_INVENTORY_REFUSED}: synthetic-secret-token"),
+        ] {
+            assert_eq!(public_refusal(error), REFUSED);
+        }
+        assert!(!REFUSED.contains("Incomplete provisioning helpers"));
+        assert!(!INSTALLER_INVENTORY_REFUSED.contains("recovery"));
     }
     fn pre_application_mock(mode: &str) -> (tempfile::TempDir, Vec<String>) {
         let (root, args) = mock(mode);
