@@ -731,7 +731,7 @@ const DEVELOPMENT_RUNTIME_FIXTURE_SOURCE: &str = "225818494f4ba716e75df7225d6c43
 const DEVELOPMENT_RUNTIME_FIXTURE_INVENTORY_SHA: &str =
     "972cf706ba3c98a5d8e76eb8df1cc29d6e48631895b1115302791399c284b319";
 const DEVELOPMENT_RUNTIME_HELPER_SHA: &str =
-    "9f008078ef4f04b4dd993b1e4f97d408a0b61ceb6554b382acef1ee468998789";
+    "c72fd3cba53682563c9f135ebd21283312dba93fe9a8543ec12417ef3db95836";
 const DEVELOPMENT_RUNTIME_EXPECTED_HOLD: &str = "Owned application startup observations recorded. Explicit local CA trust onboarding and installed journey qualification remain incomplete; preserve the reported state for recovery. Installation is not ready.";
 
 /// Exercise real installer orchestration with independently authenticated,
@@ -892,7 +892,7 @@ fn development_rootless_runtime_from_verified_payloads() {
                 &encoded(&json!({
                     "schema":"elevenid.unsigned-development-runtime-scope/v1",
                     "classification":"UNSIGNED DEVELOPMENT ONLY",
-                    "host_source":"4e693cf7a656bc234790fce5989ed05a6f88a3b7 plus reviewed Flow, Trust Profile, and Auth eager startup prerequisites and development helper pin",
+                    "host_source":"64806a0b91ab2140ea96c3293e9c065b0dfe18c3 plus reviewed Canvas worker KMS prerequisite and installer ingress init policy with development helper pin",
                     "helper_sha256":DEVELOPMENT_RUNTIME_HELPER_SHA,
                     "helper_build_identity":"unknown:unreleased",
                     "helper_release_authenticated":false,
