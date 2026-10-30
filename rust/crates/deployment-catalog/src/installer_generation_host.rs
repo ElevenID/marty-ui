@@ -428,7 +428,6 @@ pub fn provision(
 mod tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
-    const OWNER: &str = "12345678-1234-4234-8234-123456789abc";
     fn host_output_owner_for_test() -> installer_helper_output::HelperOutputOwner {
         let uid = unsafe { libc::geteuid() };
         let profile = if uid == 0 {

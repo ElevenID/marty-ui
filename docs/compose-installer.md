@@ -215,10 +215,11 @@ The recovered inspection SHA-256 is
 `7a6c78c200077bc5ebe6f78a14a9db870bfbc41c4bcbe5504829f37c4638595a`.
 This build binds the first submitted source commit
 `25f3cdbf1ce32ee512a421d1429fbec4d2de6c6f`, excluding documentation differences.
-Later CI corrections remove unused legacy helpers, retain live evidence-reader
-regressions, document intentional provisioning argument boundaries, and update
-the frozen selfhost asset list. They are newer than the VM build; canonical
-repository CI must validate each subsequent PR head separately.
+Later CI corrections remove unused legacy helpers and a test fixture constant,
+retain live evidence-reader regressions, document intentional provisioning
+argument boundaries, and update the frozen selfhost asset list. They are newer
+than the VM build; canonical repository CI must validate each subsequent PR head
+separately.
 Replace each remaining **PENDING** entry only after recording its exact build,
 engine, result, and preserved-evidence bindings. The successful build left all
 214 previously recorded containers and all 178 files in the original
@@ -331,7 +332,7 @@ The final submitted-source inventory compares base commit
 delta. The local recount used the complete pinned Git-tree inventory and
 independently verified every required base blob against its Git object ID.
 The report records the counter and per-file SHA-256 values; its SHA-256 is
-`f734fb5172e30821c7692de206a65ddcedc2094e0c5bbdada15686b472db2c4a`.
+`5dd7ca35a457420e6125db549d308f9e2da6aa116bfcdf7d9f2003a09364d30a`.
 Both call-site inventories have zero unresolved entries and
 `callsite_review_complete: true`.
 
@@ -344,12 +345,12 @@ these totals; their changed paths remain explicitly accounted for.
 | --- | ---: | ---: | ---: |
 | Complete installer Rust inventory, files | 61 | 58 | -3 |
 | Complete installer Rust inventory, production lines | 26,172 | 22,556 | -3,616 |
-| Complete installer Rust inventory, test lines | 17,287 | 14,601 | -2,686 |
-| Complete installer Rust inventory, total lines | 43,459 | 37,157 | -6,302 |
+| Complete installer Rust inventory, test lines | 17,287 | 14,600 | -2,687 |
+| Complete installer Rust inventory, total lines | 43,459 | 37,156 | -6,303 |
 | Orchestration subset, files | 22 | 18 | -4 |
 | Orchestration subset, production Rust lines | 10,727 | 7,402 | -3,325 |
-| Orchestration subset, test lines | 6,357 | 3,056 | -3,301 |
-| Orchestration subset, total Rust lines | 17,084 | 10,458 | -6,626 |
+| Orchestration subset, test lines | 6,357 | 3,055 | -3,302 |
+| Orchestration subset, total Rust lines | 17,084 | 10,457 | -6,627 |
 | Installer Compose configuration | 0 files / 0 lines | 3 files / 636 lines | +636 lines |
 | Production orchestration Rust plus installer YAML | 10,727 lines | 8,038 lines | -2,689 lines / -25.1% |
 | Reviewed direct Docker lifecycle invocation sites | 41 | 9 | -32 |
