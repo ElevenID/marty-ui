@@ -249,6 +249,19 @@ fn actual_source_compose_matches_installer_application_contract() {
             && position("revocation-profile") < position("credential-template"),
         "both eager control-plane prerequisites must precede credential-template readiness"
     );
+    for (role, peer) in [
+        ("flow", "deployment-profile"),
+        ("flow", "signing-keys"),
+        ("flow", "trust-profile"),
+        ("trust-profile", "organization"),
+        ("auth", "applicant"),
+        ("auth", "event-stream"),
+    ] {
+        assert!(
+            position(peer) < position(role),
+            "eager prerequisite {peer} must precede {role}"
+        );
+    }
     assert_eq!(
         order[..4]
             .iter()

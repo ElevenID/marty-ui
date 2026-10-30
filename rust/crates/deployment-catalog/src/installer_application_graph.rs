@@ -65,8 +65,8 @@ pub fn completion(model: &Value, role: &str) -> Result<Completion> {
 }
 
 /// Dependencies checked both when ordering starts and immediately before each
-/// start. Published services establish eager gRPC connections before exposing
-/// their health listeners, although the older signed Compose model omits these
+/// start. Published services establish eager connections and HTTP health checks
+/// before exposing their listeners, although the older signed Compose model omits these
 /// prerequisites. Serial installer startup must establish them without changing
 /// the authenticated model.
 pub(crate) fn required_dependencies(model: &Value, role: &str) -> Result<BTreeSet<String>> {
@@ -95,8 +95,11 @@ pub(crate) fn required_dependencies(model: &Value, role: &str) -> Result<BTreeSe
         "compliance-profile"
         | "deployment-profile"
         | "device-registration"
-        | "revocation-profile" => &["organization"],
+        | "revocation-profile"
+        | "trust-profile" => &["organization"],
         "credential-template" => &["organization", "revocation-profile"],
+        "flow" => &["deployment-profile", "signing-keys", "trust-profile"],
+        "auth" => &["applicant", "event-stream"],
         _ => &[],
     };
     for &peer in eager {
@@ -192,9 +195,15 @@ mod tests {
                 "device-registration",
                 "credential-template",
                 "revocation-profile",
+                "flow",
+                "trust-profile",
+                "signing-keys",
+                "auth",
+                "applicant",
+                "event-stream",
             ])
             .map(str::to_owned)
-            .chain((0..17).map(|index| format!("fixture-{index:02}")))
+            .chain((0..11).map(|index| format!("fixture-{index:02}")))
         {
             services.insert(role.clone(), json!({
                 "restart": if INITIALIZERS.contains(&role.as_str()) { "no" } else { "unless-stopped" },
@@ -229,6 +238,22 @@ mod tests {
         model["services"]["revocation-profile"]["depends_on"] = json!({
             "db-migrate": {"condition": "service_completed_successfully"},
             "redis": {"condition": "service_healthy"}
+        });
+        for role in ["trust-profile", "signing-keys", "applicant", "event-stream"] {
+            model["services"][role]["depends_on"] =
+                json!({"db-migrate": {"condition": "service_completed_successfully"}});
+        }
+        model["services"]["flow"]["depends_on"] = json!({
+            "db-migrate": {"condition": "service_completed_successfully"},
+            "redis": {"condition": "service_healthy"},
+            "organization": {"condition": "service_healthy"},
+            "credential-template": {"condition": "service_healthy"}
+        });
+        model["services"]["auth"]["depends_on"] = json!({
+            "db-migrate": {"condition": "service_completed_successfully"},
+            "redis": {"condition": "service_healthy"},
+            "flow": {"condition": "service_healthy"},
+            "keycloak-configurator": {"condition": "service_completed_successfully"}
         });
         let selected = model["services"]
             .as_object()
@@ -507,6 +532,115 @@ mod tests {
             let mut changed = model.clone();
             changed["services"]["organization"]["depends_on"][peer] =
                 json!({"condition": "service_healthy"});
+            assert!(startup_order(&changed, &selected).is_err());
+        }
+    }
+
+    const FLOW_TRUST_AUTH_EDGES: [(&str, &str); 6] = [
+        ("flow", "deployment-profile"),
+        ("flow", "signing-keys"),
+        ("flow", "trust-profile"),
+        ("trust-profile", "organization"),
+        ("auth", "applicant"),
+        ("auth", "event-stream"),
+    ];
+
+    #[test]
+    fn flow_trust_and_auth_prerequisites_order_eager_peers_without_changing_model() {
+        let (model, selected) = model();
+        let before = model.clone();
+        for (role, eager) in [
+            (
+                "flow",
+                vec!["deployment-profile", "signing-keys", "trust-profile"],
+            ),
+            ("trust-profile", vec!["organization"]),
+            ("auth", vec!["applicant", "event-stream"]),
+        ] {
+            let declared: BTreeSet<String> = model["services"][role]["depends_on"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect();
+            assert!(eager.iter().all(|peer| !declared.contains(*peer)));
+            let expected: BTreeSet<_> = declared
+                .into_iter()
+                .chain(eager.into_iter().map(str::to_owned))
+                .collect();
+            assert_eq!(required_dependencies(&model, role).unwrap(), expected);
+        }
+        let order = startup_order(&model, &selected).unwrap();
+        assert_eq!(order.len(), 30);
+        assert_eq!(order[4], "kms-initialize");
+        assert_eq!(
+            order[..4]
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            MIGRATIONS.into_iter().collect::<BTreeSet<_>>()
+        );
+        let position = |role| order.iter().position(|value| value == role).unwrap();
+        for (role, peer) in FLOW_TRUST_AUTH_EDGES {
+            assert!(
+                position(peer) < position(role),
+                "{peer} must precede {role}"
+            );
+        }
+        assert!(position("kms-initialize") < position("organization"));
+        assert!(position("flow") < position("auth"));
+        assert!(required_dependencies(&model, "fixture-00")
+            .unwrap()
+            .is_empty());
+        assert_eq!(model, before);
+    }
+
+    #[test]
+    fn flow_trust_and_auth_prerequisites_preserve_health_and_declared_conditions() {
+        let (model, selected) = model();
+        for (role, peer) in FLOW_TRUST_AUTH_EDGES {
+            for invalid in [
+                json!({"condition": "service_started"}),
+                json!({"condition": "service_healthy", "required": false}),
+                json!({"condition": "service_completed_successfully"}),
+            ] {
+                let mut changed = model.clone();
+                changed["services"][role]["depends_on"][peer] = invalid;
+                assert!(required_dependencies(&changed, role).is_err());
+                assert!(startup_order(&changed, &selected).is_err());
+            }
+            let mut changed = model.clone();
+            changed["services"][peer]["healthcheck"]["disable"] = json!(true);
+            assert!(required_dependencies(&changed, role).is_err());
+            assert!(startup_order(&changed, &selected).is_err());
+            let mut changed = model.clone();
+            let removed = changed["services"]
+                .as_object_mut()
+                .unwrap()
+                .remove(peer)
+                .unwrap();
+            changed["services"]["replacement"] = removed;
+            let selected: Vec<_> = selected
+                .iter()
+                .map(|value| {
+                    if value == peer {
+                        "replacement".into()
+                    } else {
+                        value.clone()
+                    }
+                })
+                .collect();
+            assert!(required_dependencies(&changed, role).is_err());
+            assert!(startup_order(&changed, &selected).is_err());
+        }
+    }
+
+    #[test]
+    fn flow_trust_and_auth_prerequisites_refuse_reverse_dependency_cycles() {
+        let (model, selected) = model();
+        for (role, peer) in FLOW_TRUST_AUTH_EDGES {
+            let mut changed = model.clone();
+            changed["services"][peer]["depends_on"][role] = json!({"condition": "service_healthy"});
             assert!(startup_order(&changed, &selected).is_err());
         }
     }
