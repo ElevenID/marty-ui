@@ -65,10 +65,10 @@ pub fn completion(model: &Value, role: &str) -> Result<Completion> {
 }
 
 /// Dependencies checked both when ordering starts and immediately before each
-/// start. The published compliance-profile service connects to organization
-/// before exposing its health listener, although the older signed Compose
-/// model declares only its database dependency. Serial installer startup must
-/// establish that prerequisite without changing the authenticated model.
+/// start. Published services establish eager gRPC connections before exposing
+/// their health listeners, although the older signed Compose model omits these
+/// prerequisites. Serial installer startup must establish them without changing
+/// the authenticated model.
 pub(crate) fn required_dependencies(model: &Value, role: &str) -> Result<BTreeSet<String>> {
     let service = model["services"]
         .get(role)
@@ -91,11 +91,16 @@ pub(crate) fn required_dependencies(model: &Value, role: &str) -> Result<BTreeSe
             dependencies.insert(peer.clone());
         }
     }
-    if role == "compliance-profile" {
-        if completion(model, "organization")? != Completion::Healthy {
+    let eager: &[&str] = match role {
+        "compliance-profile" | "revocation-profile" => &["organization"],
+        "credential-template" => &["organization", "revocation-profile"],
+        _ => &[],
+    };
+    for &peer in eager {
+        if completion(model, peer)? != Completion::Healthy {
             return Err(REFUSED.into());
         }
-        dependencies.insert("organization".into());
+        dependencies.insert(peer.into());
     }
     Ok(dependencies)
 }
@@ -175,9 +180,16 @@ mod tests {
         for role in INITIALIZERS
             .iter()
             .copied()
-            .chain(["postgres", "redis", "organization", "compliance-profile"])
+            .chain([
+                "postgres",
+                "redis",
+                "organization",
+                "compliance-profile",
+                "credential-template",
+                "revocation-profile",
+            ])
             .map(str::to_owned)
-            .chain((0..21).map(|index| format!("fixture-{index:02}")))
+            .chain((0..19).map(|index| format!("fixture-{index:02}")))
         {
             services.insert(role.clone(), json!({
                 "restart": if INITIALIZERS.contains(&role.as_str()) { "no" } else { "unless-stopped" },
@@ -201,6 +213,12 @@ mod tests {
         });
         model["services"]["compliance-profile"]["depends_on"] =
             json!({"db-migrate": {"condition": "service_completed_successfully"}});
+        model["services"]["credential-template"]["depends_on"] =
+            json!({"db-migrate": {"condition": "service_completed_successfully"}});
+        model["services"]["revocation-profile"]["depends_on"] = json!({
+            "db-migrate": {"condition": "service_completed_successfully"},
+            "redis": {"condition": "service_healthy"}
+        });
         let selected = model["services"]
             .as_object()
             .unwrap()
@@ -284,5 +302,107 @@ mod tests {
         model["services"]["organization"]["depends_on"]["compliance-profile"] =
             json!({"condition": "service_healthy"});
         assert!(startup_order(&model, &selected).is_err());
+    }
+
+    #[test]
+    fn credential_prerequisites_order_the_eager_chain_without_changing_model() {
+        let (model, selected) = model();
+        let before = model.clone();
+        assert_eq!(
+            required_dependencies(&model, "credential-template").unwrap(),
+            BTreeSet::from([
+                "db-migrate".into(),
+                "organization".into(),
+                "revocation-profile".into(),
+            ])
+        );
+        assert_eq!(
+            required_dependencies(&model, "revocation-profile").unwrap(),
+            BTreeSet::from(["db-migrate".into(), "organization".into(), "redis".into()])
+        );
+        assert!(required_dependencies(&model, "fixture-00")
+            .unwrap()
+            .is_empty());
+        let order = startup_order(&model, &selected).unwrap();
+        assert_eq!(order.len(), 30);
+        assert_eq!(order[4], "kms-initialize");
+        assert_eq!(
+            order[..4]
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            MIGRATIONS.into_iter().collect::<BTreeSet<_>>()
+        );
+        let position = |role| order.iter().position(|value| value == role).unwrap();
+        assert!(position("kms-initialize") < position("organization"));
+        assert!(position("organization") < position("revocation-profile"));
+        assert!(position("revocation-profile") < position("credential-template"));
+        assert!(position("organization") < position("compliance-profile"));
+        assert_eq!(model, before);
+        assert_eq!(
+            model["services"]["credential-template"]["depends_on"],
+            json!({"db-migrate": {"condition": "service_completed_successfully"}})
+        );
+        assert!(model["services"]["revocation-profile"]["depends_on"]
+            .get("organization")
+            .is_none());
+    }
+
+    #[test]
+    fn credential_prerequisites_require_health_and_preserve_declared_conditions() {
+        let (model, selected) = model();
+        for (role, peer) in [
+            ("credential-template", "organization"),
+            ("credential-template", "revocation-profile"),
+            ("revocation-profile", "organization"),
+        ] {
+            for invalid in [
+                json!({"condition": "service_started"}),
+                json!({"condition": "service_healthy", "required": false}),
+                json!({"condition": "service_completed_successfully"}),
+            ] {
+                let mut changed = model.clone();
+                changed["services"][role]["depends_on"][peer] = invalid;
+                assert!(required_dependencies(&changed, role).is_err());
+                assert!(startup_order(&changed, &selected).is_err());
+            }
+            let mut changed = model.clone();
+            changed["services"][peer]["healthcheck"]["disable"] = json!(true);
+            assert!(required_dependencies(&changed, role).is_err());
+            assert!(startup_order(&changed, &selected).is_err());
+            let mut changed = model.clone();
+            let removed = changed["services"]
+                .as_object_mut()
+                .unwrap()
+                .remove(peer)
+                .unwrap();
+            changed["services"]["replacement"] = removed;
+            let selected: Vec<_> = selected
+                .iter()
+                .map(|value| {
+                    if value == peer {
+                        "replacement".into()
+                    } else {
+                        value.clone()
+                    }
+                })
+                .collect();
+            assert!(required_dependencies(&changed, role).is_err());
+            assert!(startup_order(&changed, &selected).is_err());
+        }
+    }
+
+    #[test]
+    fn credential_prerequisites_refuse_cycles_in_each_eager_edge() {
+        let (model, selected) = model();
+        for (role, peer) in [
+            ("organization", "credential-template"),
+            ("revocation-profile", "credential-template"),
+            ("organization", "revocation-profile"),
+        ] {
+            let mut changed = model.clone();
+            changed["services"][role]["depends_on"][peer] = json!({"condition": "service_healthy"});
+            assert!(startup_order(&changed, &selected).is_err());
+        }
     }
 }

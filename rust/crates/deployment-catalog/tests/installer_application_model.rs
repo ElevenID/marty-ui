@@ -227,16 +227,19 @@ fn actual_source_compose_matches_installer_application_contract() {
     .unwrap();
     assert_eq!(order.len(), 30);
     assert_eq!(order[4], "kms-initialize");
+    let position = |role| order.iter().position(|value| value == role).unwrap();
     assert!(
-        order
-            .iter()
-            .position(|role| role == "organization")
-            .unwrap()
-            < order
-                .iter()
-                .position(|role| role == "compliance-profile")
-                .unwrap(),
+        position("organization") < position("compliance-profile"),
         "eager organization prerequisite must precede compliance readiness"
+    );
+    assert!(
+        position("organization") < position("revocation-profile"),
+        "eager organization prerequisite must precede revocation-profile readiness"
+    );
+    assert!(
+        position("organization") < position("credential-template")
+            && position("revocation-profile") < position("credential-template"),
+        "both eager control-plane prerequisites must precede credential-template readiness"
     );
     assert_eq!(
         order[..4]
