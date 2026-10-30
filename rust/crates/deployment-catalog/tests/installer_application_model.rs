@@ -23,6 +23,44 @@ fn compose(root: &Path, executable: &OsString, args: &[&str]) -> String {
     )
     .expect("standalone Compose config must succeed")
 }
+
+fn roundtrip_generated_bind(generated: &Value, observed: &Value) -> Option<Value> {
+    let disabled = serde_json::json!({"create_host_path":false});
+    (generated == &disabled && (observed == &serde_json::json!({}) || observed == &disabled))
+        .then(|| observed.clone())
+}
+
+#[test]
+fn generated_bind_roundtrip_accepts_only_omitted_or_explicit_false() {
+    let disabled = serde_json::json!({"create_host_path":false});
+    for observed in [serde_json::json!({}), disabled.clone()] {
+        assert_eq!(
+            roundtrip_generated_bind(&disabled, &observed),
+            Some(observed)
+        );
+    }
+    for observed in [
+        Value::Null,
+        serde_json::json!(false),
+        serde_json::json!([]),
+        serde_json::json!({"create_host_path":true}),
+        serde_json::json!({"create_host_path":null}),
+        serde_json::json!({"create_host_path":"false"}),
+        serde_json::json!({"create_host_path":false,"propagation":"rprivate"}),
+        serde_json::json!({"propagation":"rprivate"}),
+    ] {
+        assert!(roundtrip_generated_bind(&disabled, &observed).is_none());
+    }
+    for generated in [
+        Value::Null,
+        serde_json::json!({}),
+        serde_json::json!({"create_host_path":true}),
+        serde_json::json!({"create_host_path":false,"propagation":"rprivate"}),
+    ] {
+        assert!(roundtrip_generated_bind(&generated, &disabled).is_none());
+    }
+}
+
 #[test]
 #[ignore = "requires explicit MARTY_INSTALLER_COMPOSE_EXECUTABLE; read-only real Compose parser test"]
 fn actual_source_compose_matches_installer_application_contract() {
@@ -276,24 +314,34 @@ fn actual_source_compose_matches_installer_application_contract() {
         normalized["secrets"], plan.model["secrets"],
         "all scoped secret declarations must roundtrip exactly"
     );
-    // Compose omits the false create_host_path value on normalized output.
-    // The execution document deliberately keeps explicit false on this new bind.
+    // Compose versions may omit or preserve false in normalized bind options.
+    // The execution document must still explicitly disable host-path creation.
     let mut roundtrip_expected = plan.model.clone();
-    for mount in roundtrip_expected["services"]["edge"]["volumes"]
+    for (index, mount) in roundtrip_expected["services"]["edge"]["volumes"]
         .as_array_mut()
         .unwrap()
+        .iter_mut()
+        .enumerate()
     {
         if mount["target"] == "/etc/nginx/conf.d/default.conf.template" {
-            assert_eq!(mount["bind"], serde_json::json!({"create_host_path":false}));
-            mount["bind"] = serde_json::json!({});
+            mount["bind"] = roundtrip_generated_bind(
+                &mount["bind"],
+                &normalized["services"]["edge"]["volumes"][index]["bind"],
+            )
+            .expect("generated edge bind must retain disabled host-path creation");
         }
     }
-    for mount in roundtrip_expected["services"]["installer-ingress"]["volumes"]
+    for (index, mount) in roundtrip_expected["services"]["installer-ingress"]["volumes"]
         .as_array_mut()
         .unwrap()
+        .iter_mut()
+        .enumerate()
     {
-        assert_eq!(mount["bind"], serde_json::json!({"create_host_path":false}));
-        mount["bind"] = serde_json::json!({});
+        mount["bind"] = roundtrip_generated_bind(
+            &mount["bind"],
+            &normalized["services"]["installer-ingress"]["volumes"][index]["bind"],
+        )
+        .expect("generated ingress bind must retain disabled host-path creation");
     }
     for (role, service) in normalized["services"].as_object().unwrap() {
         if role == "installer-ingress" {
@@ -470,12 +518,20 @@ fn actual_source_compose_matches_installer_application_contract() {
     );
     let mut selected_expected = plan.model.clone();
     for role in ["edge", "installer-ingress"] {
-        for mount in selected_expected["services"][role]["volumes"]
+        for (index, mount) in selected_expected["services"][role]["volumes"]
             .as_array_mut()
             .unwrap()
+            .iter_mut()
+            .enumerate()
         {
-            if mount["bind"] == serde_json::json!({"create_host_path":false}) {
-                mount["bind"] = serde_json::json!({});
+            if role == "installer-ingress"
+                || mount["target"] == "/etc/nginx/conf.d/default.conf.template"
+            {
+                mount["bind"] = roundtrip_generated_bind(
+                    &mount["bind"],
+                    &selected_normalized["services"][role]["volumes"][index]["bind"],
+                )
+                .expect("selected generated bind must retain disabled host-path creation");
             }
         }
     }
