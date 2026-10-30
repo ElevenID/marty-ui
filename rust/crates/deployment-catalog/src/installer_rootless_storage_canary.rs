@@ -2353,3 +2353,7 @@ mod tests {
         assert!(validate_container_value(&extra, &id, &c).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "installer_rootless_storage_canary_development_tests.rs"]
+mod development_tests;
