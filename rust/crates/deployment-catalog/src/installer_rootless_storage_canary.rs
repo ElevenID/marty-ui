@@ -2155,6 +2155,17 @@ mod tests {
         let id = "c".repeat(64);
         let baseline = fixture_container(&c, &id);
         validate_container_value(&baseline, &id, &c).unwrap();
+        // The AWS Docker 29.9.2 inspection reported both capabilities with
+        // CAP_ prefixes; all unrelated container invariants stay unchanged.
+        let mut aws_observed = baseline.clone();
+        aws_observed["HostConfig"]["CapAdd"] =
+            json!(["CAP_CHOWN", "CAP_DAC_OVERRIDE"]);
+        validate_container_value(&aws_observed, &id, &c).unwrap();
+        aws_observed["HostConfig"]["CapAdd"] =
+            json!(["CAP_CHOWN", "CAP_SYS_ADMIN"]);
+        assert!(validate_container_value(&aws_observed, &id, &c)
+            .unwrap_err()
+            .contains("HostConfig.CapAdd"));
         for (pointer, wrong) in [
             (
                 "/Config/Labels/com.elevenid.installer.canary",
