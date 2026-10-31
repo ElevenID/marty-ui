@@ -44,6 +44,7 @@ def write_image(path: Path, source: str, **changes: Any) -> tuple[str, str]:
         "runtime_config": {
             "Entrypoint": ["/usr/local/bin/marty-signing-keys"],
             "User": "10001:10001",
+            "WorkingDir": "/",
         },
         **changes,
     }
@@ -168,6 +169,7 @@ def test_closed_signing_profile_binds_oci_without_claiming_release_uri(
         {"runtime_config": {"Entrypoint": ["/usr/local/bin/marty-signing-keys"], "User": "0"}},
         {"runtime_config": {"Entrypoint": ["/usr/local/bin/marty-signing-keys"], "User": "10001:10001", "Cmd": ["extra"]}},
         {"runtime_config": {"Entrypoint": ["/usr/local/bin/marty-signing-keys"], "User": "10001:10001", "Volumes": {"/unexpected": {}}}},
+        {"runtime_config": {"Entrypoint": ["/usr/local/bin/marty-signing-keys"], "User": "10001:10001", "WorkingDir": "/unexpected"}},
         {"revision": "b" * 40},
         {"version_label": "release"},
         {"source_label": "https://example.invalid/other"},

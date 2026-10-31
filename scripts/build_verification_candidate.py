@@ -604,7 +604,7 @@ def inspect_oci_archive(
                 and runtime_config.get("User") == "10001:10001"
                 and runtime_config.get("Cmd") in (None, [])
                 and runtime_config.get("Volumes") in (None, {})
-                and runtime_config.get("WorkingDir") in (None, ""),
+                and runtime_config.get("WorkingDir") in (None, "", "/"),
                 "development image runtime identity changed",
             )
         else:

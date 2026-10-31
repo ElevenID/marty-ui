@@ -3,6 +3,7 @@ FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92e
 WORKDIR /build/rust
 COPY rust /build/rust
 COPY proto /build/proto
+COPY contracts /build/contracts
 ARG CARGO_BUILD_JOBS=1
 RUN CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" cargo build --locked --release -p marty-signing-keys --bin marty-signing-keys
 
