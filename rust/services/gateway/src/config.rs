@@ -138,16 +138,7 @@ pub struct GatewayConfig {
     pub release_identity: ReleaseIdentity,
 }
 
-#[derive(Clone, Debug)]
-pub struct GatewayAuthClientTls {
-    pub certificate: PathBuf,
-    pub ca_certificate: PathBuf,
-    pub kms_endpoint: String,
-    pub kms_ca_certificate: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
-}
+pub use marty_service_runtime::WorkloadTlsFiles as GatewayAuthClientTls;
 
 // Runtime credentials and connection targets must never enter diagnostic logs.
 impl fmt::Debug for GatewayConfig {
@@ -860,55 +851,19 @@ fn gateway_auth_client_tls(
     if values.contains_key("GRPC_WORKLOAD_TLS_CLIENT_KEY") {
         return Err(error("GRPC_WORKLOAD_TLS_CLIENT_KEY is retired"));
     }
-    const NAMES: [&str; 7] = [
-        "GRPC_WORKLOAD_TLS_CLIENT_CERT",
+    GatewayAuthClientTls::from_values(
+        |name| values.get(name).map(String::as_str),
+        marty_service_runtime::TlsIdentityNames::new("GRPC_WORKLOAD_TLS_CLIENT"),
         "GRPC_WORKLOAD_TLS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION",
-    ];
-    let configured = NAMES
-        .iter()
-        .filter(|name| value(values, name).is_some())
-        .count();
-    if configured == 0 && !required {
-        return Ok(None);
-    }
-    if configured != NAMES.len() {
-        return Err(error(
-            "Gateway Auth mTLS requires complete remote KMS client identity",
-        ));
-    }
-    let endpoint = value(values, NAMES[2]).unwrap_or_default();
-    let parsed =
-        url::Url::parse(&endpoint).map_err(|_| error("Gateway Auth TLS KMS origin is invalid"))?;
-    if parsed.scheme() != "https"
-        || parsed.host_str().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.path() != "/"
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err(error("Gateway Auth TLS KMS origin must be HTTPS"));
-    }
-    let version = value(values, NAMES[6])
-        .unwrap_or_default()
-        .parse::<u32>()
-        .ok()
-        .filter(|version| *version > 0)
-        .ok_or_else(|| error("Gateway Auth TLS KMS version must be positive"))?;
-    Ok(Some(GatewayAuthClientTls {
-        certificate: PathBuf::from(value(values, NAMES[0]).unwrap_or_default()),
-        ca_certificate: PathBuf::from(value(values, NAMES[1]).unwrap_or_default()),
-        kms_endpoint: endpoint,
-        kms_ca_certificate: PathBuf::from(value(values, NAMES[3]).unwrap_or_default()),
-        kms_token_file: PathBuf::from(value(values, NAMES[4]).unwrap_or_default()),
-        kms_key_name: value(values, NAMES[5]).unwrap_or_default(),
-        kms_key_version: version,
-    }))
+        required || value(values, "GRPC_WORKLOAD_TLS_CA_CERT").is_some(),
+        std::time::Duration::from_secs(10),
+        64,
+    )
+    .map_err(|detail| {
+        error(format!(
+            "Gateway Auth mTLS configuration is invalid: {detail}"
+        ))
+    })
 }
 
 fn csv(raw: &str) -> Vec<String> {
@@ -980,6 +935,38 @@ fn error(message: impl Into<String>) -> GatewayConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aws_auth_client_tls_keeps_peer_ca_and_rejects_openbao_residue() {
+        let mut values = BTreeMap::from([
+            ("GRPC_WORKLOAD_TLS_CLIENT_CERT".into(), "client.pem".into()),
+            ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "auth-ca.pem".into()),
+            (
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_PROVIDER".into(),
+                "aws-kms".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_REGION".into(),
+                "us-east-1".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_ARN".into(),
+                "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
+                    .into(),
+            ),
+        ]);
+        let tls = gateway_auth_client_tls(&values, true).unwrap().unwrap();
+        assert_eq!(tls.identity.provider(), "aws-kms");
+        assert_eq!(tls.ca_certificate, PathBuf::from("auth-ca.pem"));
+        values.insert(
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE".into(),
+            "old-token".into(),
+        );
+        assert!(gateway_auth_client_tls(&values, true).is_err());
+        values.remove("GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE");
+        values.remove("GRPC_WORKLOAD_TLS_CA_CERT");
+        assert!(gateway_auth_client_tls(&values, true).is_err());
+    }
 
     fn add_remote_auth_client(values: &mut BTreeMap<String, String>) {
         for (name, value) in [

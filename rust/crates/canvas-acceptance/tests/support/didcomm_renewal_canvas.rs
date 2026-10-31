@@ -122,12 +122,42 @@ pub(super) async fn run(pool: &PgPool) {
                 serde_json::from_str::<Value>(&query[0].1).unwrap(),
                 json!({"credential_issuer":format!("https://issuer.example/org/{ORGANIZATION}"),"credential_configuration_ids":["OpenBadgeCredential#sd-jwt"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":format!("pre-auth-{id}")}}})
             );
-            assert_eq!(
-                response,
-                json!({"source_credential_id":source,"transaction_id":id,"credential_offer_uri":uri,
+            let expected_response = json!({"source_credential_id":source,"transaction_id":id,"credential_offer_uri":uri,
               "credential_offer_uris":if ordinary {json!({})}else{json!({"didcomm":if stale {format!("didcomm://pending?transaction_id={id}")}else{format!("didcomm://{}",graph.endpoint)}})},
               "credential_offer_labels":if ordinary {json!({})}else{json!({"didcomm":"Synthetic Wallet"})},
-              "expires_at":(Utc.timestamp_opt(1_700_000_000,0).single().unwrap()+chrono::Duration::days(7)).to_rfc3339()})
+              "expires_at":(Utc.timestamp_opt(1_700_000_000,0).single().unwrap()+chrono::Duration::days(7)).to_rfc3339()});
+            // Observe the failed phase without retrying delivery or printing
+            // credentials, ciphertext, provider references, or raw database rows.
+            let phase = if response != expected_response {
+                let observed = snapshot(pool, &id).await;
+                let transaction_status = observed["transaction"]["status"]
+                    .as_str()
+                    .filter(|status| {
+                        matches!(
+                            *status,
+                            "pending" | "authorized" | "signing" | "issued" | "failed"
+                        )
+                    })
+                    .unwrap_or("absent_or_unexpected");
+                Some(json!({
+                    "phase": "renewal_offer",
+                    "transaction_status": transaction_status,
+                    "renewal_link_present": observed["transaction"]["renewal_of_credential_id"].is_string(),
+                    "credential_reserved": observed["transaction"]["reserved_credential_id"].is_string(),
+                    "recipient_resolutions": graph.resolutions.load(Ordering::SeqCst),
+                    "status_allocations": graph.allocations.load(Ordering::SeqCst),
+                    "credential_builds": graph.builder.calls.load(Ordering::SeqCst),
+                    "credential_rows": observed["credentials"].as_array().map(Vec::len),
+                    "delivery_rows": observed["deliveries"].as_array().map(Vec::len),
+                    "event_rows": observed["events"].as_array().map(Vec::len),
+                    "revocation_publications": graph.publications.lock().unwrap().len(),
+                }))
+            } else {
+                None
+            };
+            assert_eq!(
+                response, expected_response,
+                "bounded synthetic Canvas renewal phase: {phase:?}"
             );
             let after_offer = canvas_snapshot(pool, &id).await;
             assert_eq!(after_offer["application"]["issuance_transaction_id"], id);

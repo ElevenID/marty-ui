@@ -27,6 +27,8 @@ The deployment package includes these authenticated source files:
 | `deploy-config/compose/selfhost-installer/compose.bootstrap.yml` | Explicit installer setup jobs and bootstrap configuration. |
 | `deploy-config/compose/selfhost-installer/compose.installer.yml` | Installer service policy, dependencies, scoped storage, and loopback ingress. |
 | `deploy-config/compose/selfhost-installer/compose.runtime.yml` | Ordinary runtime selection with completed setup dependencies removed. |
+| `deploy-config/compose/selfhost-installer/compose.aws-foundation.yml` | Fresh installation with preprovisioned AWS KMS and external OIDC. |
+| `deploy-config/compose/selfhost-installer/compose.organization-bootstrap.yml` | Scoped first-boot organization credential issuance and revocation. |
 
 Compose resolves the final model through `config`. The installer inspects that
 model and its service hashes; it executes the verified source files, not a
@@ -142,6 +144,56 @@ deleted. The HTTPS certificate is pinned before the API key is sent.
 This command requires an existing installation and operator credential; it does
 not establish AWS-only installation readiness or remove the OpenBao dependency.
 
+## Preprovisioned AWS foundation
+
+For a fresh installation, pass `--foundation-file /absolute/private/foundation.json`
+to the normal `install.sh` command or its candidate-test path. The existing signed
+release admission and rootless host checks still apply. The default installation
+continues to use managed OpenBao. Foundation selection is immutable; this is not
+an in-place provider or OIDC issuer migration.
+
+The input uses schema `elevenid.installer-foundation/v1` and
+`foundation: "aws-kms"`. It supplies the fixed loopback HTTPS `public_origin`,
+`external_oidc` issuer/client/admin email, public workload/ingress CA files,
+the `tls` identities for the existing sixteen workload certificate roles plus
+`installer-ingress`, `signing_grant_authorities_file`, separate
+`integration_secret` and `notification_secret` key references,
+`workload_identities`, and the existing `registration_file` described above.
+Keys, public certificates, the OIDC client and workload identity delivery must
+already exist. The installer creates no AWS resources or identity provider.
+
+Each workload receives its own role ARN and read-only rotating web-identity token
+directory. A private `0700` parent stays outside the container; its dedicated
+`0755` leaf contains only the workload's `0444` `token` file. Token bytes are not
+copied into installation evidence or immutable generations. Every AWS service
+disables SDK instance-metadata credentials. IAM trust and network isolation must
+prevent one workload from acquiring another workload's identity; a shared EC2
+role able to assume every runtime role does not establish that isolation.
+
+Signing grants retain seven fixed origins and one-use replay protection. Supply
+seven distinct native `HMAC_256` keys in a
+`marty.aws-signing-grant-authorities/v1` configuration. Minters need only their
+assigned `GenerateMac` authority; Signing Keys needs `VerifyMac`, without mint
+authority. Existing TLS identities use native P-256 signing keys and matching
+public certificates. Secret storage uses native symmetric encryption keys;
+integration-secret envelopes, including their identity fields, must fit AWS's
+4096-byte direct-encryption bound.
+
+After ordinary Organization startup, the installer uses its existing application
+owner to issue a fifteen-minute `keys:write` credential. It registers through the
+same public API as the console, revokes the credential on every completed
+registration attempt, and requires a public API `401` before success. Uncertain
+setup or revocation blocks completion and never automatically mints another key.
+
+The AWS foundation omits OpenBao and Keycloak runtime dependencies. Operations
+requiring the existing OpenBao extension fail with `capability_unavailable` when
+that capability is absent; selected DIDComm authcrypt never downgrades to
+anoncrypt. Provider-neutral issuer/DID routing and multiple KMS registrations
+remain owned by the existing registry. Full AWS-only qualification still requires
+the installed login and issue/present/verify/revoke/deny journey, real IAM
+isolation checks, credential refresh, and recovery tests. Local source tests and
+native Compose parsing do not establish that qualification.
+
 ## Inspection, shutdown, and removal
 
 Use the retained installer helper with the installation's absolute private path:
@@ -255,9 +307,10 @@ are separate from runtime coverage and exclude documentation.
 
 Use the [audited installer-only build procedure](installer-development-canary.md#audited-development-build-and-focused-tests)
 with the existing pinned Rust builder, one build job, and the musl target. The
-Compose replacement's isolated workspace contains five installer crates:
+Compose replacement's isolated workspace contains six installer crates:
 `deployment-catalog`, `managed-key-reference`, `selfhost-identity`,
-`openbao-http`, and `selfhost-bundle`, plus their existing pinned dependencies.
+`openbao-http`, `selfhost-bundle`, and `signing-grant`, plus their existing pinned
+dependencies.
 Resolve the development metadata offline, audit dependency versions, checksums,
 features, and source revisions, then compile with `--offline --locked`.
 Canonical repository manifests and the release lockfile remain unchanged; the

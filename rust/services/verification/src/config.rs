@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, fmt, net::SocketAddr, time::Duration};
 
 use thiserror::Error;
 use url::Url;
@@ -376,46 +376,26 @@ fn workload_tls(
     values: &BTreeMap<String, String>,
     environment: Environment,
 ) -> Result<Option<WorkloadClientTlsFiles>, VerificationConfigError> {
-    let names = [
-        "GRPC_WORKLOAD_TLS_CLIENT_CERT",
-        "GRPC_WORKLOAD_TLS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_KMS_ADDR",
-        "GRPC_WORKLOAD_TLS_KMS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE",
-        "GRPC_WORKLOAD_TLS_KMS_KEY_NAME",
-        "GRPC_WORKLOAD_TLS_KMS_KEY_VERSION",
-    ];
+    const CERT: &str = "GRPC_WORKLOAD_TLS_CLIENT_CERT";
     if values.contains_key("GRPC_WORKLOAD_TLS_CLIENT_KEY") {
         return Err(invalid("GRPC_WORKLOAD_TLS_CLIENT_KEY"));
     }
-    let configured = names
-        .iter()
-        .filter(|name| value(values, name).is_some())
-        .count();
-    if configured == 0 && !environment.is_deployed() {
-        return Ok(None);
+    let mut names = marty_service_runtime::TlsIdentityNames::new("GRPC_WORKLOAD_TLS");
+    names.certificate = CERT.into();
+    names.private_key = "GRPC_WORKLOAD_TLS_CLIENT_KEY".into();
+    let files = WorkloadClientTlsFiles::from_values(
+        |name| values.get(name).map(String::as_str),
+        names,
+        "GRPC_WORKLOAD_TLS_CA_CERT",
+        value(values, "GRPC_WORKLOAD_TLS_CA_CERT").is_some(),
+        std::time::Duration::from_secs(10),
+        64,
+    )
+    .map_err(|_| invalid(CERT))?;
+    if files.is_none() && environment.is_deployed() {
+        return Err(VerificationConfigError::Missing { name: CERT });
     }
-    if configured != names.len() {
-        return Err(if configured == 0 {
-            VerificationConfigError::Missing { name: names[0] }
-        } else {
-            invalid(names[0])
-        });
-    }
-    Ok(Some(WorkloadClientTlsFiles {
-        certificate: PathBuf::from(value(values, names[0]).unwrap_or_default()),
-        ca_certificate: PathBuf::from(value(values, names[1]).unwrap_or_default()),
-        kms_endpoint: value(values, names[2]).unwrap_or_default().into(),
-        kms_ca_certificate: PathBuf::from(value(values, names[3]).unwrap_or_default()),
-        kms_token_file: PathBuf::from(value(values, names[4]).unwrap_or_default()),
-        kms_key_name: value(values, names[5]).unwrap_or_default().into(),
-        kms_key_version: value(values, names[6])
-            .unwrap_or_default()
-            .parse::<u32>()
-            .ok()
-            .filter(|version| *version > 0)
-            .ok_or_else(|| invalid(names[6]))?,
-    }))
+    Ok(files)
 }
 
 fn address(
@@ -514,6 +494,28 @@ const fn invalid(name: &'static str) -> VerificationConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aws_workload_identity_uses_existing_client_certificate_spelling() {
+        let mut values = BTreeMap::from([
+            ("GRPC_WORKLOAD_TLS_CLIENT_CERT".into(), "client.pem".into()),
+            ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "peer-ca.pem".into()),
+            ("GRPC_WORKLOAD_TLS_KMS_PROVIDER".into(), "aws-kms".into()),
+            ("GRPC_WORKLOAD_TLS_KMS_REGION".into(), "us-east-1".into()),
+            (
+                "GRPC_WORKLOAD_TLS_KMS_KEY_ARN".into(),
+                "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
+                    .into(),
+            ),
+        ]);
+        let tls = workload_tls(&values, Environment::Beta).unwrap().unwrap();
+        let marty_service_runtime::RemoteTlsIdentityFiles::AwsKms(identity) = tls.identity else {
+            panic!("configured AWS identity must reach verification providers");
+        };
+        assert_eq!(identity.certificate_chain_file.to_str(), Some("client.pem"));
+        values.insert("GRPC_WORKLOAD_TLS_KMS_KEY_VERSION".into(), "1".into());
+        assert!(workload_tls(&values, Environment::Beta).is_err());
+    }
 
     #[test]
     fn deployed_configuration_fails_closed() {

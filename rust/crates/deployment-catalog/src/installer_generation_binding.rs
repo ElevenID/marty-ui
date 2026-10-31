@@ -21,6 +21,7 @@ const REFUSED: &str = "application generation binding refused; preserve installa
 const ROOT: &str = "application-generation";
 const RECORD: &str = "application-generation.json";
 const PENDING: &str = "application-generation-pending.json";
+const IMPORTED_PROVENANCE: &str = "application-generation-imported-provenance.json";
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GenerationSource {
@@ -42,7 +43,9 @@ pub struct GenerationBinding {
     pub schema: String,
     pub installation_id: String,
     pub engine_id: String,
-    pub network_id: String,
+    // Imported AWS certificates precede network creation. Only the canonical
+    // successful application Compose receipt can observe that runtime network.
+    pub network_id: Option<String>,
     pub generation_receipt_sha256: String,
     pub files: BTreeMap<String, GenerationFile>,
     pub activated: bool,
@@ -189,7 +192,8 @@ fn read(dir: &File, name: &str, record: bool) -> Result<(Vec<u8>, u32)> {
     require(
         !bytes.is_empty()
             || (!record
-                && crate::installer_application_env::OPTIONAL_EMPTY_SECRETS.contains(&name)),
+                && (crate::installer_application_env::OPTIONAL_EMPTY_SECRETS.contains(&name)
+                    || name == "external_oidc_client_secret")),
     )?;
     Ok((bytes, mode))
 }
@@ -234,10 +238,12 @@ fn closure(installation: &Path, model: &serde_json::Value, root: &str) -> Result
             }
         }
     }
-    require(crate::installer_renewal_bootstrap::current_inputs().is_subset(&result))?;
     Ok(result)
 }
 impl GenerationBinding {
+    pub(crate) fn imported_foundation(&self) -> bool {
+        self.schema == "elevenid.installer-application-generation/v2"
+    }
     pub fn secret_dir(&self, installation: &Path) -> Result<PathBuf> {
         self.validate()?;
         Ok(installation.join(ROOT))
@@ -257,13 +263,14 @@ impl GenerationBinding {
     fn validate(&self) -> Result<()> {
         crate::installer_renewal_bootstrap::validate_id(&self.installation_id)?;
         require(
-            self.schema == "elevenid.installer-application-generation/v1"
+            (self.schema == "elevenid.installer-application-generation/v1"
+                || self.imported_foundation())
                 && !self.engine_id.is_empty()
                 && self.engine_id.len() <= 128
                 && !self.activated
                 && !self.root_retired
                 && !self.installation_ready
-                && self.files.len() >= 40
+                && self.files.len() >= if self.imported_foundation() { 1 } else { 40 }
                 && self.files.len() <= 128,
         )?;
         let hash = |s: &str| {
@@ -271,7 +278,14 @@ impl GenerationBinding {
                 && s.bytes()
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         };
-        require(hash(&self.generation_receipt_sha256) && hash(&self.network_id))?;
+        require(
+            hash(&self.generation_receipt_sha256)
+                && if self.imported_foundation() {
+                    self.network_id.is_none()
+                } else {
+                    self.network_id.as_deref().is_some_and(hash)
+                },
+        )?;
         let renewable = crate::installer_renewal_bootstrap::current_inputs();
         for (name, file) in &self.files {
             safe_name(name)?;
@@ -280,14 +294,22 @@ impl GenerationBinding {
                     && file.size <= 65536
                     && (file.size > 0
                         || crate::installer_application_env::OPTIONAL_EMPTY_SECRETS
-                            .contains(&name.as_str()))
+                            .contains(&name.as_str())
+                        || (self.imported_foundation() && name == "external_oidc_client_secret"))
                     && file.mode == 0o444
                     && (file.source_mode == 0o444
                         || (name == "openbao_tls_ca_cert" && file.source_mode == 0o644))
-                    && ((file.source == GenerationSource::Candidate) == renewable.contains(name)),
+                    && if self.imported_foundation() {
+                        file.source == GenerationSource::Original
+                    } else {
+                        (file.source == GenerationSource::Candidate) == renewable.contains(name)
+                    },
             )?;
         }
-        require(renewable.is_subset(&self.files.keys().cloned().collect()))
+        require(
+            self.imported_foundation()
+                || renewable.is_subset(&self.files.keys().cloned().collect()),
+        )
     }
 }
 #[derive(Deserialize)]
@@ -416,27 +438,61 @@ fn candidate(installation: &Path, id: &str, engine: &str) -> Result<(Vec<u8>, Ca
     }
     Ok((bytes, outputs))
 }
+
+struct Provenance {
+    bytes: Vec<u8>,
+    candidates: CandidateFiles,
+    network_id: Option<String>,
+    foundation: Option<crate::installer_foundation::Selection>,
+}
+
+fn provenance(installation: &Path, id: &str, engine: &str) -> Result<Provenance> {
+    let id_uuid = uuid::Uuid::parse_str(id).map_err(|_| REFUSED)?;
+    if let Some((selected, foundation)) =
+        crate::installer_foundation::record(installation, id_uuid)?
+    {
+        let bytes = serde_json::to_vec(&json!({"schema":"elevenid.installer-imported-generation-provenance/v1",
+            "installation_id":id,"engine_id":engine,"project":format!("marty-install-{}",id.replace('-',"")),
+            "network_id":null,"network_observed":false,"foundation_selection_sha256":digest(&selected),
+            "cloud_resources_created":false,"iam_isolation_observed":false,"installation_ready":false})).map_err(|_| REFUSED)?;
+        Ok(Provenance {
+            bytes,
+            candidates: BTreeMap::new(),
+            network_id: None,
+            foundation: Some(foundation),
+        })
+    } else {
+        let (bytes, candidates) = candidate(installation, id, engine)?;
+        let record: Receipt = serde_json::from_slice(&bytes).map_err(|_| REFUSED)?;
+        Ok(Provenance {
+            bytes,
+            candidates,
+            network_id: Some(record.network_id),
+            foundation: None,
+        })
+    }
+}
+
 pub fn stage(
     installation: &Path,
     state: &mut InstallerState,
     model: &serde_json::Value,
-    network_id: &str,
+    network_id: Option<&str>,
 ) -> Result<GenerationBinding> {
     state.require_live_phase(Phase::Provisioning)?;
     let id = state.journal().installation_id().to_string();
     let engine = state.journal().runtime().ok_or(REFUSED)?.engine_id.clone();
     let wanted = closure(installation, model, "secrets")?;
-    let (receipt, candidates) = candidate(installation, &id, &engine)?;
-    let candidate_record: Receipt = serde_json::from_slice(&receipt).map_err(|_| REFUSED)?;
+    let proof = provenance(installation, &id, &engine)?;
     require(
-        candidate_record.network_id == network_id
+        proof.network_id.as_deref() == network_id
             && model["name"] == format!("marty-install-{}", id.replace('-', "")),
     )?;
     let source = directory(&installation.join("secrets"))?;
     let mut values = BTreeMap::new();
     let mut files = BTreeMap::new();
     for name in wanted {
-        let (bytes, source_mode, category) = if let Some(v) = candidates.get(&name) {
+        let (bytes, source_mode, category) = if let Some(v) = proof.candidates.get(&name) {
             (v.clone(), 0o444, GenerationSource::Candidate)
         } else {
             let (v, m) = read(&source, &name, false)?;
@@ -454,12 +510,21 @@ pub fn stage(
         );
         values.insert(name, bytes);
     }
+    if let Some(foundation) = &proof.foundation {
+        foundation.verify_imported(&values)?;
+        state.write_evidence(IMPORTED_PROVENANCE, &proof.bytes)?;
+    }
     let result = GenerationBinding {
-        schema: "elevenid.installer-application-generation/v1".into(),
+        schema: if proof.foundation.is_some() {
+            "elevenid.installer-application-generation/v2"
+        } else {
+            "elevenid.installer-application-generation/v1"
+        }
+        .into(),
         installation_id: id,
         engine_id: engine,
-        network_id: candidate_record.network_id,
-        generation_receipt_sha256: digest(&receipt),
+        network_id: proof.network_id,
+        generation_receipt_sha256: digest(&proof.bytes),
         files,
         activated: false,
         root_retired: false,
@@ -494,16 +559,25 @@ pub fn stage(
 }
 pub fn verify(installation: &Path, b: &GenerationBinding) -> Result<()> {
     b.validate()?;
-    let (receipt, candidates) = candidate(installation, &b.installation_id, &b.engine_id)?;
-    require(digest(&receipt) == b.generation_receipt_sha256)?;
-    let r: Receipt = serde_json::from_slice(&receipt).map_err(|_| REFUSED)?;
-    require(r.network_id == b.network_id)?;
+    let proof = provenance(installation, &b.installation_id, &b.engine_id)?;
+    require(
+        digest(&proof.bytes) == b.generation_receipt_sha256
+            && proof.network_id == b.network_id
+            && b.imported_foundation() == proof.foundation.is_some(),
+    )?;
+    if proof.foundation.is_some() {
+        let evidence = directory(&installation.join("evidence"))?;
+        require(read(&evidence, IMPORTED_PROVENANCE, true)?.0 == proof.bytes)?;
+    }
     let output = directory(&installation.join(ROOT))?;
     let source = directory(&installation.join("secrets"))?;
     require(names(&output)? == b.files.keys().cloned().collect())?;
+    let mut originals = BTreeMap::new();
     for (name, item) in &b.files {
         let (bytes, mode) = match item.source {
-            GenerationSource::Candidate => (candidates.get(name).ok_or(REFUSED)?.clone(), 0o444),
+            GenerationSource::Candidate => {
+                (proof.candidates.get(name).ok_or(REFUSED)?.clone(), 0o444)
+            }
             GenerationSource::Original => read(&source, name, false)?,
         };
         require(
@@ -512,6 +586,10 @@ pub fn verify(installation: &Path, b: &GenerationBinding) -> Result<()> {
                 && digest(&bytes) == item.sha256
                 && b.read(installation, name)? == bytes,
         )?;
+        originals.insert(name.clone(), bytes);
+    }
+    if let Some(foundation) = &proof.foundation {
+        foundation.verify_imported(&originals)?;
     }
     Ok(())
 }
@@ -537,7 +615,7 @@ fn selection_bytes(installation: &Path, b: &GenerationBinding) -> Result<Selecti
     let env = read(&evidence, "application.env", true)?.0;
     let source = read(&evidence, "application-source.env", true)?.0;
     require(crate::installer_application_env::select_generation(&source, installation)? == env)?;
-    verify_model(installation, b, &model, &b.network_id)?;
+    verify_model(installation, b, &model, b.network_id.as_deref())?;
     Ok(Selection {
         schema: "elevenid.installer-application-generation-selection/v2".into(),
         installation_id: b.installation_id.clone(),
@@ -604,11 +682,11 @@ pub fn verify_model(
     installation: &Path,
     b: &GenerationBinding,
     model: &serde_json::Value,
-    network_id: &str,
+    network_id: Option<&str>,
 ) -> Result<()> {
     b.validate()?;
     require(
-        network_id == b.network_id
+        network_id == b.network_id.as_deref()
             && model["name"] == format!("marty-install-{}", b.installation_id.replace('-', "")),
     )?;
     require(closure(installation, model, ROOT)? == b.files.keys().cloned().collect())
@@ -656,7 +734,7 @@ mod tests {
                 schema: "elevenid.installer-application-generation/v1".into(),
                 installation_id: ID.into(),
                 engine_id: "engine".into(),
-                network_id: "a".repeat(64),
+                network_id: Some("a".repeat(64)),
                 generation_receipt_sha256: "b".repeat(64),
                 files,
                 activated: false,
@@ -670,7 +748,7 @@ mod tests {
     fn native_secret_selection_rejects_external_or_original_paths_without_rewriting() {
         let root = Path::new("/private/install $path");
         let (binding, model) = fixture();
-        verify_model(root, &binding, &model, &"a".repeat(64)).unwrap();
+        verify_model(root, &binding, &model, Some(&"a".repeat(64))).unwrap();
         let saved = model.clone();
         assert_eq!(model, saved);
         for path in [
@@ -679,9 +757,9 @@ mod tests {
         ] {
             let mut changed = model.clone();
             changed["secrets"]["smtp_password"]["file"] = json!(path);
-            assert!(verify_model(root, &binding, &changed, &binding.network_id).is_err());
+            assert!(verify_model(root, &binding, &changed, binding.network_id.as_deref()).is_err());
         }
-        assert!(verify_model(root, &binding, &model, &"c".repeat(64)).is_err());
+        assert!(verify_model(root, &binding, &model, Some(&"c".repeat(64))).is_err());
     }
     #[test]
     fn closed_binding_forbids_source_downgrade_missing_candidates_and_ready_claims() {

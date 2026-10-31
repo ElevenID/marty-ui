@@ -11,6 +11,8 @@
     "deploy-config/compose/selfhost-installer/compose.installer.yml",
     "deploy-config/compose/selfhost-installer/compose.runtime.yml",
     "deploy-config/compose/selfhost-installer/compose.bootstrap.yml",
+    "deploy-config/compose/selfhost-installer/compose.aws-foundation.yml",
+    "deploy-config/compose/selfhost-installer/compose.organization-bootstrap.yml",
     "docker-compose.selfhost.no-canvas.yml",
     "docker-compose.service.issuance-native-runtime.yml",
     ".env.selfhost.production.example",

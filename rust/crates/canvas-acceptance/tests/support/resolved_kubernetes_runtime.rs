@@ -361,7 +361,6 @@ struct Spec {
     policy_directory: PathBuf,
     kms_url: String,
     kms_ca_file: PathBuf,
-    kms_token_file: PathBuf,
     integration_secret_kms_url: String,
     integration_secret_kms_ca_file: PathBuf,
     authcrypt: bool,
@@ -540,9 +539,7 @@ fn checked_spec(value: &Value) -> Result<Spec> {
             && spec.kms_ca_file.is_file()
             && spec.integration_secret_kms_ca_file.is_file()
             && spec.policy_directory.is_dir()
-            && spec.ca_file.parent() == Some(spec.policy_directory.as_path())
-            && spec.kms_token_file.is_file()
-            && spec.kms_token_file.parent() == Some(spec.policy_directory.as_path()),
+            && spec.ca_file.parent() == Some(spec.policy_directory.as_path()),
     )?;
     Ok(spec)
 }
@@ -680,6 +677,16 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
     require(
         signing["SIGNING_KEYS_INTERNAL_API_KEY"] == native["SIGNING_KEYS_INTERNAL_API_KEY"]
             && signing["SIGNING_KEYS_INTERNAL_API_KEY"] == gateway["SIGNING_KEYS_INTERNAL_API_KEY"],
+    )?;
+    require(
+        signing.get("DIDCOMM_KMS_TOKEN_FILE").map(String::as_str)
+            == Some("/run/secrets/didcomm-kms/token")
+            && native.get("INTEGRATION_SECRET_KMS_URL").map(String::as_str)
+                == Some("https://signing-keys:8018/internal")
+            && native
+                .get("INTEGRATION_SECRET_KMS_CA_FILE")
+                .map(String::as_str)
+                == Some("/run/secrets/integration-secret-ca/ca.crt"),
     )?;
     require(
         native["ISSUANCE_API_KEY"] == gateway["ISSUANCE_API_KEY"]
@@ -826,18 +833,13 @@ fn overlay(
         "BAO_CACERT".into(),
         spec.kms_ca_file.to_str().ok_or(ERROR)?.into(),
     );
-    require(native["DIDCOMM_KMS_ADDR"] == "https://vault.example.com")?;
-    require(native["DIDCOMM_KMS_TOKEN_FILE"] == "/run/secrets/didcomm-kms/token")?;
-    require(native["DIDCOMM_KMS_CA_CERT_FILE"] == "/run/secrets/issuance-server-kms/ca.crt")?;
-    native.insert("DIDCOMM_KMS_ADDR".into(), spec.kms_url.clone());
-    native.insert(
-        "DIDCOMM_KMS_CA_CERT_FILE".into(),
-        spec.kms_ca_file.to_str().ok_or(ERROR)?.into(),
-    );
-    native.insert(
-        "DIDCOMM_KMS_TOKEN_FILE".into(),
-        spec.kms_token_file.to_str().ok_or(ERROR)?.into(),
-    );
+    for name in [
+        "DIDCOMM_KMS_ADDR",
+        "DIDCOMM_KMS_CA_CERT_FILE",
+        "DIDCOMM_KMS_TOKEN_FILE",
+    ] {
+        require(!native.contains_key(name))?;
+    }
     require(native["DIDCOMM_TLS_CA_FILE"] == "/run/marty-didcomm-ca/ca.pem")?;
     native.insert(
         "DIDCOMM_TLS_CA_FILE".into(),
@@ -1131,7 +1133,6 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
         "policy_directory": directory.path(),
         "kms_url": "https://127.0.0.1:18200",
         "kms_ca_file": ca,
-        "kms_token_file": token,
         "integration_secret_kms_url": "https://127.0.0.1:18201/internal",
         "integration_secret_kms_ca_file": ca,
         "authcrypt": false,
@@ -1149,10 +1150,16 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
         let native = &resolved.native_environment;
         let gateway = &resolved.gateway_environment;
         assert!(matches!(resolved.isolation, Isolation::Kubernetes));
-        assert_eq!(
-            native.get("DIDCOMM_KMS_CA_CERT_FILE").map(String::as_str),
-            Some(ca_path)
-        );
+        for name in [
+            "DIDCOMM_KMS_ADDR",
+            "DIDCOMM_KMS_CA_CERT_FILE",
+            "DIDCOMM_KMS_TOKEN_FILE",
+        ] {
+            assert!(
+                !native.contains_key(name),
+                "extension custody remains at Signing Keys"
+            );
+        }
         for name in ["GRPC_WORKLOAD_TLS_SERVER_CERT", "GRPC_WORKLOAD_TLS_CA_CERT"] {
             assert_eq!(native.get(name).map(String::as_str), Some(ca_path));
         }
@@ -1189,14 +1196,6 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
         assert_eq!(
             native.get("DIDCOMM_TLS_CA_FILE").map(String::as_str),
             Some(ca_path)
-        );
-        assert_eq!(
-            native.get("DIDCOMM_KMS_ADDR").map(String::as_str),
-            Some("https://127.0.0.1:18200")
-        );
-        assert_eq!(
-            native.get("DIDCOMM_KMS_TOKEN_FILE").map(String::as_str),
-            Some(token.to_str().unwrap())
         );
         assert_eq!(
             native.get("INTEGRATION_SECRET_KMS_URL").map(String::as_str),

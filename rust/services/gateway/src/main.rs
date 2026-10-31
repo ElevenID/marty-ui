@@ -17,10 +17,8 @@ use marty_gateway::{
     },
     transport::ReqwestUpstream,
 };
-use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
-use mmf_platform::{
-    GatewayProxy, KeylessGrpcTransportOptions, OpenBaoTlsIdentityFiles, ProxyConfig,
-};
+use marty_signing_grant::{configuration::GrantAuthority, SigningOrigin};
+use mmf_platform::{GatewayProxy, KeylessGrpcTransportOptions, ProxyConfig};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -47,32 +45,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .init();
 
     let config = GatewayConfig::from_env()?;
-    if config.sign_grant_mint_token_file == config.issuer_csr_grant_mint_token_file {
+    let grant_authority = GrantAuthority::from_environment()?;
+    if grant_authority.is_openbao()
+        && config.sign_grant_mint_token_file == config.issuer_csr_grant_mint_token_file
+    {
         return Err(
             "Gateway service and issuer CSR grants require distinct scoped token files".into(),
         );
     }
-    let service_sign_grant_minter = GrantMinter::for_managed_openbao(
-        config
-            .sign_grant_bao_addr
-            .as_deref()
-            .ok_or("BAO_ADDR is required for Gateway signing grants")?,
+    let service_sign_grant_minter = grant_authority.minter(
         SigningOrigin::GatewayService,
-        config
-            .sign_grant_mint_token_file
-            .clone()
-            .ok_or("GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE is required")?,
+        config.sign_grant_bao_addr.as_deref(),
+        config.sign_grant_mint_token_file.clone(),
     )?;
-    let issuer_csr_grant_minter = GrantMinter::for_managed_openbao(
-        config
-            .sign_grant_bao_addr
-            .as_deref()
-            .ok_or("BAO_ADDR is required for Gateway signing grants")?,
+    let issuer_csr_grant_minter = grant_authority.minter(
         SigningOrigin::GatewayIssuerDid,
-        config
-            .issuer_csr_grant_mint_token_file
-            .clone()
-            .ok_or("GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE is required")?,
+        config.sign_grant_bao_addr.as_deref(),
+        config.issuer_csr_grant_mint_token_file.clone(),
     )?;
     let contract = GatewayContract::load()?;
     let routes = contract.runtime_route_table_with_passport_selectors(
@@ -103,22 +92,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     })
     .await?;
     let auth_channel = if let Some(tls) = &config.auth_grpc_client_tls {
-        OpenBaoTlsIdentityFiles {
-            certificate_chain_file: tls.certificate.clone(),
-            kms_ca_cert_file: tls.kms_ca_certificate.clone(),
-            kms_endpoint: tls.kms_endpoint.clone(),
-            kms_token_file: tls.kms_token_file.clone(),
-            kms_key_name: tls.kms_key_name.clone(),
-            kms_key_version: tls.kms_key_version,
-            request_timeout: Duration::from_secs(10),
-            max_concurrent_signs: 64,
-        }
-        .grpc_channel_connected(
-            &config.auth_grpc_target,
-            &tls.ca_certificate,
-            KeylessGrpcTransportOptions::default(),
-        )
-        .await?
+        tls.identity
+            .grpc_channel_connected(
+                &config.auth_grpc_target,
+                &tls.ca_certificate,
+                KeylessGrpcTransportOptions::default(),
+            )
+            .await?
     } else {
         grpc_channel(&config, &config.auth_grpc_target, None)?
     };

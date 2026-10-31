@@ -4,7 +4,6 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
 };
-use url::Url;
 
 const DEFAULT_HTTP_PORT: u16 = 8013;
 const DEFAULT_GRPC_PORT: u16 = 9013;
@@ -38,15 +37,7 @@ pub struct Config {
     pub build_revision: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GrpcServerTls {
-    pub certificate: PathBuf,
-    pub kms_endpoint: String,
-    pub kms_ca_certificate: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
-}
+pub use marty_service_runtime::GrpcServerTls;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationConfig {
@@ -289,50 +280,12 @@ fn grpc_server_tls(values: &HashMap<String, String>) -> Result<Option<GrpcServer
     if values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY") {
         return Err("GRPC_WORKLOAD_TLS_SERVER_KEY is retired".into());
     }
-    const NAMES: [&str; 6] = [
-        "GRPC_WORKLOAD_TLS_SERVER_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
-    ];
-    let present = NAMES
-        .iter()
-        .filter(|name| value(values, name).is_some())
-        .count();
-    if present == 0 {
-        return Ok(None);
-    }
-    if present != NAMES.len() {
-        return Err("gRPC server TLS requires public certificate and complete KMS identity".into());
-    }
-    let endpoint = value(values, NAMES[1]).unwrap_or_default();
-    let url = Url::parse(&endpoint).map_err(|_| "invalid gRPC server TLS KMS origin")?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err("gRPC server TLS KMS origin must use credential-free HTTPS".into());
-    }
-    let version = value(values, NAMES[5])
-        .unwrap_or_default()
-        .parse::<u32>()
-        .ok()
-        .filter(|version| *version > 0)
-        .ok_or("gRPC server TLS KMS key version must be positive")?;
-    Ok(Some(GrpcServerTls {
-        certificate: PathBuf::from(value(values, NAMES[0]).unwrap_or_default()),
-        kms_endpoint: endpoint,
-        kms_ca_certificate: PathBuf::from(value(values, NAMES[2]).unwrap_or_default()),
-        kms_token_file: PathBuf::from(value(values, NAMES[3]).unwrap_or_default()),
-        kms_key_name: value(values, NAMES[4]).unwrap_or_default(),
-        kms_key_version: version,
-    }))
+    marty_service_runtime::GrpcServerTls::from_values(
+        |name| values.get(name).map(String::as_str),
+        marty_service_runtime::TlsIdentityNames::new("GRPC_WORKLOAD_TLS_SERVER"),
+        std::time::Duration::from_secs(10),
+        64,
+    )
 }
 
 fn normalize_grpc_target(target: &str) -> String {
@@ -502,13 +455,13 @@ mod tests {
             "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
             "https://bao:8200".into(),
         );
-        assert_eq!(
-            Config::from_values(&values, |_| unreachable!())
-                .unwrap()
-                .grpc_server_tls
-                .unwrap()
-                .kms_key_version,
-            1
-        );
+        let tls = Config::from_values(&values, |_| unreachable!())
+            .unwrap()
+            .grpc_server_tls
+            .unwrap();
+        let GrpcServerTls::OpenBao(identity) = tls else {
+            panic!("omitted provider must select OpenBao");
+        };
+        assert_eq!(identity.kms_key_version, 1);
     }
 }

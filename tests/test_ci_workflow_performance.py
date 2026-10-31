@@ -86,6 +86,7 @@ CANVAS_COMPOSITION_COMMAND = (
     'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
     'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '
     'MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" '
+    'BAO_ADDR="$kms_url" BAO_CACERT="$kms_ca_file" '
     'python3 "$obligation_runner" --name canvas_composition_acceptance '
     '--owner canvas -- "$composition_executable" --skip "$serial_composition_test" '
     '"${config_skips[@]}" "${timeout_skips[@]}" --nocapture '
@@ -1984,6 +1985,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Qualify scoped provider callback verification against disposable OpenBao"
     ]["run"]
     assert "document_storage_contract:1" in live_signing
+    assert "didcomm_publication_routes:2" in live_signing
     assert "service_rotation_live_contract" not in live_signing
     assert "vdsnc_registration_live_contract" not in live_signing
     live_openbao = steps[
@@ -5452,7 +5454,7 @@ def test_every_issuance_and_acceptance_integration_test_remains_registered(
     )
 
 
-def test_service_acceptance_keeps_composition_dependencies_out_of_service_builds() -> (
+def test_service_acceptance_keeps_composition_dependencies_in_test_targets() -> (
     None
 ):
     directory = ROOT / "rust/crates/service-acceptance"
@@ -5469,17 +5471,17 @@ def test_service_acceptance_keeps_composition_dependencies_out_of_service_builds
     assert {"marty-issuance-service", "marty-signing-keys"} <= set(
         acceptance["dev-dependencies"]
     )
-    assert "marty-signing-keys" not in issuance.get("dev-dependencies", {})
+    _assert_signing_keys_fixture_dependency(
+        issuance, workspace["workspace"]["dependencies"], "../signing-keys"
+    )
 
 
-def _dev_dependency_packages(
-    manifest: dict, workspace_dependencies: dict
+def _dependency_packages(
+    manifest: dict, workspace_dependencies: dict, kinds: tuple[str, ...]
 ) -> set[str]:
     tables = []
     for owner in (manifest, *manifest.get("target", {}).values()):
-        tables.extend(
-            owner.get(key, {}) for key in ("dev-dependencies", "dev_dependencies")
-        )
+        tables.extend(owner.get(key, {}) for key in kinds)
     packages = set()
     for dependencies in tables:
         for alias, declaration in dependencies.items():
@@ -5493,7 +5495,29 @@ def _dev_dependency_packages(
     return packages
 
 
-def test_service_dev_dependencies_do_not_reintroduce_cross_service_test_edges() -> (
+def _dev_dependency_packages(
+    manifest: dict, workspace_dependencies: dict
+) -> set[str]:
+    return _dependency_packages(
+        manifest, workspace_dependencies, ("dev-dependencies", "dev_dependencies")
+    )
+
+
+def _assert_signing_keys_fixture_dependency(
+    manifest: dict, workspace_dependencies: dict, path: str
+) -> None:
+    # The real registered DIDComm fixture is shared by live Issuance and Canvas
+    # tests. Its service dependency must never reach production or build scripts,
+    # including renamed, workspace-inherited, or target-specific declarations.
+    assert manifest["dev-dependencies"]["marty-signing-keys"] == {"path": path}
+    assert "marty-signing-keys" not in _dependency_packages(
+        manifest,
+        workspace_dependencies,
+        ("dependencies", "build-dependencies", "build_dependencies"),
+    )
+
+
+def test_service_dev_dependencies_only_allow_registered_didcomm_signing_edge() -> (
     None
 ):
     rust = ROOT / "rust"
@@ -5511,7 +5535,10 @@ def test_service_dev_dependencies_do_not_reintroduce_cross_service_test_edges() 
         for dependency in _dev_dependency_packages(document, workspace_dependencies)
         if dependency in service_packages
     }
-    assert not edges, f"Move cross-service tests to an acceptance package: {sorted(edges)}"
+    assert edges == {("marty-issuance-service", "marty-signing-keys")}, (
+        "Only the shared registered DIDComm fixture may add a service test edge: "
+        f"{sorted(edges)}"
+    )
 
 
 def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> None:
@@ -5549,7 +5576,30 @@ def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> N
     }
 
 
-def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies() -> (
+@pytest.mark.parametrize("kind", ["dependencies", "build-dependencies", "build_dependencies"])
+@pytest.mark.parametrize("target_specific", [False, True])
+def test_signing_keys_fixture_dependency_rejects_production_edges(
+    kind: str, target_specific: bool
+) -> None:
+    manifest = {
+        "dev-dependencies": {"marty-signing-keys": {"path": "../signing-keys"}}
+    }
+    owner = manifest
+    if target_specific:
+        owner = manifest.setdefault("target", {}).setdefault("cfg(unix)", {})
+    owner[kind] = {"renamed_signing_keys": {"workspace": True}}
+    workspace_dependencies = {
+        "renamed_signing_keys": {
+            "package": "marty-signing-keys", "path": "services/signing-keys"
+        }
+    }
+    with pytest.raises(AssertionError):
+        _assert_signing_keys_fixture_dependency(
+            manifest, workspace_dependencies, "../signing-keys"
+        )
+
+
+def test_canvas_acceptance_has_distinct_targets_and_test_only_signing_owner() -> (
     None
 ):
     canvas = tomllib.loads(
@@ -5580,7 +5630,9 @@ def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies
         "tls_openbao_keyless",
         "holder_remote_live_kms",
     }
-    assert "marty-signing-keys" not in canvas["dev-dependencies"]
+    _assert_signing_keys_fixture_dependency(
+        canvas, workspace["workspace"]["dependencies"], "../../services/signing-keys"
+    )
     assert "marty-signing-keys" not in worker["dev-dependencies"]
     assert not {
         "marty-flow",

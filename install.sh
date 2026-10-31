@@ -7,7 +7,7 @@ main() (
     umask 077
     fail() { printf 'Marty installer: %s\n' "$*" >&2; exit 1; }
     usage() {
-        printf '%s\n' 'Usage: install.sh [--channel nightly|stable | --version TAG | --candidate-test NIGHTLY_TAG] [--install-dir PATH] [--yes]'
+        printf '%s\n' 'Usage: install.sh [--channel nightly|stable | --version TAG | --candidate-test NIGHTLY_TAG] [--install-dir PATH] [--foundation-file PATH] [--yes]'
     }
     # Candidate rootless entry must not execute even platform probes with
     # inherited root identity, capabilities, or privilege-gaining exec rights.
@@ -110,6 +110,7 @@ main() (
     version=
     selection=
     destination=
+    foundation_file=
     yes=false
     complete=false
     candidate_test=false
@@ -118,7 +119,7 @@ main() (
             --bootstrap-complete) [ "$#" -eq 1 ] || fail 'Invalid bootstrap terminator'; complete=true; shift ;;
             --help|-h) usage; exit 0 ;;
             --yes) yes=true; shift ;;
-            --channel|--version|--candidate-test|--install-dir)
+            --channel|--version|--candidate-test|--install-dir|--foundation-file)
                 [ "$#" -ge 2 ] && [ -n "$2" ] || fail "Missing value for $1"
                 case "$2" in --*) fail "Missing value for $1" ;; esac
                 case "$1" in
@@ -126,6 +127,7 @@ main() (
                     --version) [ -z "$selection" ] || fail 'Choose one release selector'; version=$2; selection=version ;;
                     --candidate-test) [ -z "$selection" ] || fail 'Choose one release selector'; version=$2; selection=candidate; candidate_test=true ;;
                     --install-dir) [ -z "$destination" ] || fail 'Repeated installation directory'; destination=$2 ;;
+                    --foundation-file) [ -z "$foundation_file" ] || fail 'Repeated foundation input'; foundation_file=$2 ;;
                 esac
                 shift 2 ;;
             *) fail "Unknown option: $1" ;;
@@ -235,6 +237,7 @@ main() (
             --docker-host "$docker_endpoint" --docker-engine-id "$docker_engine_id" --docker-bin "$docker_bin" \
             --runtime-profile rootless
         [ -z "$destination" ] || set -- "$@" --install-dir "$destination"
+        [ -z "$foundation_file" ] || set -- "$@" --foundation-file "$foundation_file"
         [ "$yes" = false ] || set -- "$@" --yes
         "$stage/marty-deploy" "$@"
         return
@@ -307,6 +310,7 @@ main() (
         --docker-host "$docker_endpoint" --docker-engine-id "$docker_engine_id" --docker-bin "$docker_bin" \
         --runtime-profile rootless
     [ -z "$destination" ] || set -- "$@" --install-dir "$destination"
+    [ -z "$foundation_file" ] || set -- "$@" --foundation-file "$foundation_file"
     if [ -f "$stage/channel.json" ]; then
         set -- "$@" --channel "$channel" --verified-channel "$stage/channel.json"
     fi

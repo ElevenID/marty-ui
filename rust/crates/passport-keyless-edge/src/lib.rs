@@ -1,9 +1,10 @@
 //! Shared remote TLS identity bootstrapping for Rust HTTPS edges.
 
 use http::HeaderName;
-use std::{env, error::Error, path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, env, error::Error, time::Duration};
 
-use mmf_platform::{keyless_https_server_config, OpenBaoTlsIdentityFiles};
+use marty_service_runtime::{RemoteTlsIdentityFiles, TlsIdentityNames};
+use mmf_platform::keyless_https_server_config;
 
 pub fn required(name: &str) -> Result<String, Box<dyn Error>> {
     let value = env::var(name)?;
@@ -16,20 +17,14 @@ pub fn required(name: &str) -> Result<String, Box<dyn Error>> {
 pub async fn keyless_tls_config(
     prefix: &str,
 ) -> Result<axum_server::tls_rustls::RustlsConfig, Box<dyn Error>> {
-    let key_version: u32 = required(&format!("{prefix}_TLS_KMS_KEY_VERSION"))?.parse()?;
-    if key_version == 0 {
-        return Err("remote TLS key version must be positive".into());
-    }
-    let identity = OpenBaoTlsIdentityFiles {
-        certificate_chain_file: PathBuf::from(required(&format!("{prefix}_TLS_CERT_FILE"))?),
-        kms_ca_cert_file: PathBuf::from(required(&format!("{prefix}_TLS_KMS_CA_CERT_FILE"))?),
-        kms_endpoint: required(&format!("{prefix}_TLS_KMS_ADDR"))?,
-        kms_token_file: PathBuf::from(required(&format!("{prefix}_TLS_KMS_TOKEN_FILE"))?),
-        kms_key_name: required(&format!("{prefix}_TLS_KMS_KEY_NAME"))?,
-        kms_key_version: key_version,
-        request_timeout: Duration::from_secs(5),
-        max_concurrent_signs: 32,
-    }
+    let values = env::vars().collect::<BTreeMap<_, _>>();
+    let identity = RemoteTlsIdentityFiles::from_values(
+        |name| values.get(name).map(String::as_str),
+        TlsIdentityNames::files(&format!("{prefix}_TLS")),
+        Duration::from_secs(5),
+        32,
+    )?
+    .ok_or("HTTPS edge requires a remote TLS identity")?
     .connect()
     .await?;
     Ok(axum_server::tls_rustls::RustlsConfig::from_config(

@@ -47,6 +47,11 @@ pub const SCALAR_SECRETS: [&str; 17] = [
     "signing_keys_service_sign_gateway_key",
     "token_hmac_key",
 ];
+pub(crate) const LOCAL_AUTH_SCALAR_SECRETS: [&str; 3] = [
+    "keycloak_admin_password",
+    "keycloak_db_password",
+    "marty_api_client_secret",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1125,6 +1130,7 @@ impl InstallerState {
                 "generation-identity",
                 "generation-transfer",
                 "application-generation",
+                "organization-bootstrap-output",
             ]
             .contains(&entry)
         {
@@ -1327,6 +1333,17 @@ impl InstallerState {
         {
             return Err("shipped operator password policy needs review".into());
         }
+        self.generate_local_scalar_credentials(true)
+    }
+
+    /// External authentication has no local operator or Keycloak password.
+    /// Scalar entropy, exclusive writes and creation receipts share one owner.
+    pub(crate) fn generate_external_auth_credentials(&mut self) -> Result<()> {
+        self.generate_local_scalar_credentials(false)
+    }
+
+    fn generate_local_scalar_credentials(&mut self, local_auth: bool) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
         self.poisoned = true;
         private(&self.directory, true)?;
         if unsafe { libc::mkdirat(self.directory.as_raw_fd(), name("secrets").as_ptr(), 0o700) }
@@ -1347,7 +1364,10 @@ impl InstallerState {
         let mut random = File::open("/dev/urandom").map_err(|_| "OS randomness unavailable")?;
         let mut seen = std::collections::BTreeSet::new();
         let mut operator_output = None;
-        for entry in SCALAR_SECRETS.into_iter().chain(["operator-password"]) {
+        let scalars = SCALAR_SECRETS
+            .into_iter()
+            .filter(|entry| local_auth || !LOCAL_AUTH_SCALAR_SECRETS.contains(entry));
+        for entry in scalars.chain(local_auth.then_some("operator-password")) {
             let mut entropy = [0u8; 32];
             random
                 .read_exact(&mut entropy)
@@ -1388,18 +1408,32 @@ impl InstallerState {
             .sync_all()
             .map_err(|_| "sync operator credential")?;
         if let Some(creation) = &mut self.credential_creation {
-            creation.capture(
-                &secrets,
-                operator_output
-                    .as_ref()
-                    .ok_or("operator creation descriptor unavailable")?,
-            )?;
+            creation.capture(&secrets, operator_output.as_ref())?;
         }
         self.poisoned = false;
         Ok(())
     }
 
-    /// Record only secrets-directory and operator-file creation identity.
+    fn optional_operator_password(&self) -> Result<Option<File>> {
+        let fd = unsafe {
+            libc::openat(
+                self.directory.as_raw_fd(),
+                name("operator-password").as_ptr(),
+                libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
+                return Ok(None);
+            }
+            return Err("operator credential observation unavailable".into());
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        private(&file, false)?;
+        Ok(Some(file))
+    }
+
+    /// Record only secrets-directory and optional operator-file creation identity.
     /// This requires fresh in-memory capture; resume cannot mint provenance.
     pub(crate) fn persist_credential_creation_receipt(
         &mut self,
@@ -1433,17 +1467,16 @@ impl InstallerState {
                 libc::O_RDONLY | libc::O_DIRECTORY,
                 0,
             )?;
-            let operator = open_at(&self.directory, &name("operator-password"), libc::O_PATH, 0)?;
+            let operator = self.optional_operator_password()?;
             private(&evidence, true)?;
             private(&secrets, true)?;
-            private(&operator, false)?;
             creation.receipt_bytes(
                 self.journal.installation_id(),
                 &self.journal.identity().source_sha,
                 &self.directory,
                 &evidence,
                 &secrets,
-                &operator,
+                operator.as_ref(),
             )
         })();
         let bytes = match prepared {
@@ -1467,14 +1500,14 @@ impl InstallerState {
                 libc::O_RDONLY | libc::O_DIRECTORY,
                 0,
             )?;
-            let operator = open_at(&self.directory, &name("operator-password"), libc::O_PATH, 0)?;
+            let operator = self.optional_operator_password()?;
             if creation.receipt_bytes(
                 self.journal.installation_id(),
                 &self.journal.identity().source_sha,
                 &self.directory,
                 &evidence,
                 &secrets,
-                &operator,
+                operator.as_ref(),
             )? != bytes
             {
                 return Err("credential identity changed after receipt write".into());
@@ -1504,6 +1537,56 @@ impl InstallerState {
             }
         }
         self.credential_creation = None;
+        Ok(())
+    }
+
+    /// Import preprovisioned application inputs into the same private scalar
+    /// custody owner. No private keys or rotating web-identity tokens belong
+    /// here; those credentials stay with their external producer.
+    pub(crate) fn stage_application_inputs(
+        &mut self,
+        values: &std::collections::BTreeMap<String, Vec<u8>>,
+    ) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        if values.is_empty()
+            || values.len() > 64
+            || values.iter().any(|(entry, bytes)| {
+                !regex::Regex::new(r"\A[a-z0-9][a-z0-9_-]{0,127}\z")
+                    .unwrap()
+                    .is_match(entry)
+                    || bytes.len() > 65_536
+                    || (bytes.is_empty() && entry != "external_oidc_client_secret")
+                    || bytes.windows(11).any(|value| value == b"PRIVATE KEY")
+            })
+        {
+            return Err("application input import refused".into());
+        }
+        let secrets = open_at(
+            &self.directory,
+            &name("secrets"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&secrets, true)?;
+        self.poisoned = true;
+        for (entry, bytes) in values {
+            let mut file = open_at(
+                &secrets,
+                &name(entry),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+                0o600,
+            )?;
+            private(&file, false)?;
+            file.write_all(bytes)
+                .map_err(|_| "application input import failed")?;
+            if unsafe { libc::fchmod(file.as_raw_fd(), 0o444) } != 0 {
+                return Err("application input projection failed".into());
+            }
+            file.sync_all()
+                .and_then(|_| secrets.sync_all())
+                .map_err(|_| "application input import uncertain")?;
+        }
+        self.poisoned = false;
         Ok(())
     }
 

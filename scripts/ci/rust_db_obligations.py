@@ -317,6 +317,11 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
             "migration_contract",
             ("CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL",),
         ),
+        "notification_migration": (
+            "marty-notification",
+            "migration_contract",
+            ("NOTIFICATION_MIGRATION_TEST_DATABASE_URL",),
+        ),
         "presentation_policy": (
             "marty-presentation-policy",
             "postgres_integration",
@@ -727,6 +732,7 @@ FLOW_RENDERER_RUNPY_EDGES = {
     "scripts/test_selfhost_native_owner_compose.py": (
         "scripts/test_canvas_worker_compose_render.py",
         "scripts/test_beta_application_image_compose.py",
+        "scripts/test_conformance_native_compose.py",
         "scripts/test_base_native_issuance_compose.py",
     ),
     "scripts/test_beta_application_image_compose.py": (
@@ -1151,15 +1157,17 @@ def flow_renderer_subgraph_inputs() -> list[dict[str, str]]:
             compose[0],
             compose[1],
             sources[2],
-            sources[3],
             sources[4],
         ),
         "scripts/test_selfhost_native_owner_compose.py": (
             compose[4],
             sources[2],
+        ),
+        "scripts/test_conformance_native_compose.py": (
+            compose[5],
+            compose[2],
             sources[3],
         ),
-        "scripts/test_conformance_native_compose.py": (compose[5], compose[2]),
         "scripts/test_canvas_worker_compose_render.py": (compose[0], compose[3]),
         "rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs": (
             sources[0],

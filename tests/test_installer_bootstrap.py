@@ -44,6 +44,7 @@ def test_help_does_not_require_docker_or_downloads():
     result = run(["--help"])
     assert result.returncode == 0
     assert "--channel nightly|stable" in result.stdout
+    assert "--foundation-file PATH" in result.stdout
 
 
 @pytest.mark.parametrize("args,reason", [
@@ -55,6 +56,9 @@ def test_help_does_not_require_docker_or_downloads():
     (["--candidate-test", "v1.2.3"], "Candidate testing requires an exact nightly tag"),
     (["--candidate-test", "v1.2.3-nightly.20261027.42", "--version", "v1.2.3"], "Choose one"),
     (["--install-dir", "/one", "--install-dir", "/two"], "Repeated"),
+    (["--foundation-file"], "Missing value"),
+    (["--foundation-file", "--yes"], "Missing value"),
+    (["--foundation-file", "/one", "--foundation-file", "/two"], "Repeated foundation"),
     (["--skip-verification"], "Unknown option"),
 ])
 def test_invalid_arguments_refused_before_host_mutation(args, reason):

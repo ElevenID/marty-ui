@@ -219,7 +219,6 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
             "policy_directory": directory.path(),
             "kms_url": "https://127.0.0.1:18200",
             "kms_ca_file": ca,
-            "kms_token_file": token,
             "integration_secret_kms_url": "https://127.0.0.1:18201/internal",
             "integration_secret_kms_ca_file": ca,
             "authcrypt": authenticated,
@@ -245,18 +244,16 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
             native.get("DIDCOMM_TLS_CA_FILE").map(String::as_str),
             Some(ca)
         );
-        assert_eq!(
-            native.get("DIDCOMM_KMS_ADDR").map(String::as_str),
-            Some("https://127.0.0.1:18200")
-        );
-        assert_eq!(
-            native.get("DIDCOMM_KMS_CA_CERT_FILE").map(String::as_str),
-            Some(ca)
-        );
-        assert_eq!(
-            native.get("DIDCOMM_KMS_TOKEN_FILE").map(String::as_str),
-            Some(token.to_str().unwrap())
-        );
+        for name in [
+            "DIDCOMM_KMS_ADDR",
+            "DIDCOMM_KMS_CA_CERT_FILE",
+            "DIDCOMM_KMS_TOKEN_FILE",
+        ] {
+            assert!(
+                !native.contains_key(name),
+                "extension custody remains at Signing Keys"
+            );
+        }
         assert_eq!(
             native.get("INTEGRATION_SECRET_KMS_URL").map(String::as_str),
             Some("https://127.0.0.1:18201/internal")

@@ -26,6 +26,7 @@ struct Options {
     host: String,
     engine: String,
     directory: Option<PathBuf>,
+    foundation_file: Option<PathBuf>,
     channel: Option<(String, PathBuf)>,
     profile: RuntimeProfile,
     yes: bool,
@@ -74,6 +75,7 @@ fn options(args: &[String]) -> Result<Options> {
             "--channel",
             "--verified-channel",
             "--runtime-profile",
+            "--foundation-file",
         ]
         .contains(&key)
         {
@@ -106,6 +108,7 @@ fn options(args: &[String]) -> Result<Options> {
         _ => return Err("new installation requires the explicit rootless runtime profile".into()),
     };
     let directory = values.remove("--install-dir").map(PathBuf::from);
+    let foundation_file = values.remove("--foundation-file").map(PathBuf::from);
     let channel = match (
         values.remove("--channel"),
         values.remove("--verified-channel"),
@@ -120,6 +123,7 @@ fn options(args: &[String]) -> Result<Options> {
         .iter()
         .any(|p| !p.is_absolute())
         || directory.as_ref().is_some_and(|p| !p.is_absolute())
+        || foundation_file.as_ref().is_some_and(|p| !p.is_absolute())
         || channel.as_ref().is_some_and(|(_, p)| !p.is_absolute())
     {
         return Err("installer paths must be absolute".into());
@@ -140,6 +144,7 @@ fn options(args: &[String]) -> Result<Options> {
         host,
         engine,
         directory,
+        foundation_file,
         channel,
         profile,
         yes,
@@ -462,6 +467,9 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         &prepared.inventory,
         &operator_sha,
     )?;
+    if let Some(path) = &o.foundation_file {
+        crate::installer_foundation::select(path, &directory, &mut state)?;
+    }
     provision_runtime(
         docker,
         &directory,
@@ -496,6 +504,32 @@ pub(crate) fn provision_runtime(
     port_reservation: std::net::TcpListener,
 ) -> Result<()> {
     state.require_live_phase(Phase::Verified)?;
+    if let Some(foundation) = state.with_inspection(crate::installer_foundation::load)? {
+        state.advance(Phase::Provisioning)?;
+        eprintln!("Marty runtime stage: local credentials and preprovisioned AWS inputs");
+        state.generate_external_auth_credentials()?;
+        state.persist_credential_creation_receipt(installation)?;
+        foundation.import_inputs(state)?;
+        drop(port_reservation);
+        let nonce = uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
+        let bootstrap = crate::installer_application::bootstrap_inputs(
+            installation,
+            bundle,
+            state,
+            &inventory.images,
+            &nonce,
+        )?;
+        eprintln!("Marty runtime stage: native Compose application startup");
+        crate::installer_application::start_aws(
+            docker,
+            installation,
+            bundle,
+            state,
+            &inventory.images,
+            &bootstrap,
+        )?;
+        return validate_and_complete(docker, installation, bundle, state, inventory, invocation);
+    }
     eprintln!("Marty runtime stage: packaged realm");
     let realm_path = bundle.join("config/keycloak/11id-realm.json");
     let realm: serde_json::Value = serde_json::from_slice(
@@ -635,6 +669,31 @@ pub(crate) fn provision_runtime(
         &bootstrap,
         receipt,
     )?;
+    validate_and_complete(docker, installation, bundle, state, inventory, invocation)
+}
+
+fn validate_and_complete(
+    docker: &Path,
+    installation: &Path,
+    bundle: &Path,
+    state: &mut InstallerState,
+    inventory: &release::Inventory,
+    invocation: RuntimeInvocation<'_>,
+) -> Result<()> {
+    if state
+        .with_inspection(crate::installer_foundation::load)?
+        .is_some()
+    {
+        eprintln!("Marty runtime stage: organization-scoped KMS registration");
+        crate::installer_foundation_registration::run(
+            docker,
+            installation,
+            bundle,
+            state,
+            &inventory.images,
+            invocation.operator_sha,
+        )?;
+    }
     eprintln!("Marty runtime stage: read-only deployment validation");
     state.with_inspection(|inspection| {
         crate::installer_validation::run_locked(installation, docker, inspection, false)

@@ -698,3 +698,302 @@ fn assert_actual_installer_layers(
         println!("\nUNSIGNED_SIGNING_IMAGE_PARSED={image}");
     }
 }
+
+#[test]
+#[ignore = "requires pinned standalone Compose 5.6.1; packages actual source and parses only, no daemon"]
+fn actual_aws_foundation_removes_managed_providers_and_preserves_native_lifecycle() {
+    let executable = executable();
+    let temp = PrivateFixture::new();
+    let root = temp.path();
+    baseline(&executable, root);
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let mut raw = String::new();
+    let bundle = marty_selfhost_bundle::package(
+        &marty_selfhost_bundle::Options {
+            repo: source.clone(),
+            output: root.join("bundle"),
+            archive: None,
+            replace: false,
+        },
+        |stage, arguments| {
+            raw = invoke(&executable, stage, root, arguments);
+            Ok(raw.clone())
+        },
+    )
+    .unwrap()
+    .output;
+    let mut values = BTreeMap::<String, String>::new();
+    for line in fs::read_to_string(source.join(".env.selfhost.production.example"))
+        .unwrap()
+        .lines()
+    {
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (name, value) = line.split_once('=').unwrap();
+        values.insert(name.into(), value.into());
+    }
+    let image = format!("example.invalid/fixture@sha256:{}", "a".repeat(64));
+    for (name, value) in [
+        ("SELFHOST_IMAGE_TAG", "1.2.3".into()),
+        ("MARTY_INSTALLATION_DIR", root.to_str().unwrap().into()),
+        (
+            "MARTY_INSTALLATION_ID",
+            "2e052c77-efe8-44c6-9421-9ef15fe8ee7c".into(),
+        ),
+        (
+            "MARTY_INSTALLER_ID",
+            "2e052c77-efe8-44c6-9421-9ef15fe8ee7c".into(),
+        ),
+        ("MARTY_INSTALLER_APPLICANT_CONTAINER_GID", "0".into()),
+        (
+            "SELFHOST_SECRET_DIR",
+            root.join("secrets").to_str().unwrap().into(),
+        ),
+        (
+            "SELFHOST_STATE_DIR",
+            root.join("state").to_str().unwrap().into(),
+        ),
+        (
+            "MARTY_INSTALLER_NGINX_CONFIG",
+            root.join("nginx.conf").to_str().unwrap().into(),
+        ),
+        ("MARTY_INSTALLER_HTTPS_PORT", "18443".into()),
+        (
+            "MARTY_INSTALLER_INGRESS_KEY_NAME",
+            "installer-ingress-fixture".into(),
+        ),
+        ("MARTY_INSTALLER_HELPER_IMAGE", image.clone()),
+        ("MARTY_INSTALLER_SERVICES_IMAGE", image.clone()),
+        ("MARTY_ISSUANCE_IMAGE", image.clone()),
+        ("MARTY_KEYCLOAK_KMS_IMAGE", image.clone()),
+        ("MARTY_OPENBAO_DIDCOMM_IMAGE", image),
+        ("PUBLIC_API_URL", "https://localhost:18443".into()),
+        ("PUBLIC_DOMAIN", "localhost:18443".into()),
+        (
+            "MARTY_EXTERNAL_OIDC_ISSUER",
+            "https://identity.example.invalid".into(),
+        ),
+        ("MARTY_EXTERNAL_OIDC_CLIENT_ID", "fixture".into()),
+        ("MARTY_EXTERNAL_OIDC_ALGORITHMS", "RS256".into()),
+    ] {
+        values.insert(name.into(), value);
+    }
+    let layers = bundle.join("deploy-config/compose/selfhost-installer");
+    let aws = layers.join("compose.aws-foundation.yml");
+    let aws_text = fs::read_to_string(&aws).unwrap();
+    let required = regex::Regex::new(r"\$\{([A-Z][A-Z0-9_]*):\?").unwrap();
+    for capture in required.captures_iter(&aws_text) {
+        let name = &capture[1];
+        if values.contains_key(name) {
+            continue;
+        }
+        let value = if name.ends_with("_KEY_ARN") {
+            "arn:aws:kms:us-east-2:123456789012:key/10000000-0000-4000-8000-000000000001".into()
+        } else if name.ends_with("_REGION") {
+            "us-east-2".into()
+        } else if name.ends_with("_ROLE_ARN") {
+            format!("arn:aws:iam::123456789012:role/{name}")
+        } else if name.ends_with("_IDENTITY_DIR") {
+            root.join("identities").join(name).to_str().unwrap().into()
+        } else {
+            panic!("unreviewed fixture variable {name}")
+        };
+        values.insert(name.into(), value);
+    }
+    let env = root.join("fixture.env");
+    private_write(
+        &env,
+        values
+            .iter()
+            .map(|(name, value)| format!("{name}='{value}'\n"))
+            .collect::<String>()
+            .as_bytes(),
+    );
+    let base = bundle.join("docker-compose.yml");
+    let installer = layers.join("compose.installer.yml");
+    let runtime = layers.join("compose.runtime.yml");
+    let managed = config(
+        &executable,
+        &bundle,
+        &[base.clone(), installer.clone()],
+        &env,
+        &["installer-init"],
+        &[],
+    );
+    assert!(managed["services"]["keycloak"].is_object());
+    assert_eq!(
+        managed["services"]["signing-keys"]["environment"]["DIDCOMM_KMS_TOKEN_FILE"],
+        "/run/secrets/didcomm_issuance_openbao_token"
+    );
+    assert!(managed["services"]["issuance"]["environment"]
+        .get("DIDCOMM_KMS_TOKEN_FILE")
+        .is_none());
+    // The packaging representation change must preserve the existing provider's
+    // native environment semantics, including raw dollars and interpolation.
+    let original = root.join("native-original.yml");
+    private_write(&original, raw.as_bytes());
+    let original = config(
+        &executable,
+        &bundle,
+        &[original, installer.clone()],
+        &env,
+        &["installer-init"],
+        &[],
+    );
+    for (name, service) in managed["services"].as_object().unwrap() {
+        assert_eq!(
+            service.get("environment"),
+            original["services"][name].get("environment"),
+            "managed environment changed for {name}"
+        );
+    }
+    let install = config(
+        &executable,
+        &bundle,
+        &[base.clone(), installer.clone(), aws.clone()],
+        &env,
+        &["installer-init"],
+        &[],
+    );
+    let services = install["services"].as_object().unwrap();
+    assert_eq!(services.len(), 27);
+    for removed in [
+        "openbao",
+        "openbao-init",
+        "openbao-unseal",
+        "keycloak",
+        "keycloak-configurator",
+        "kms-initialize",
+    ] {
+        assert!(!services.contains_key(removed));
+    }
+    let mut projected = BTreeSet::new();
+    let mut roles = BTreeSet::new();
+    for (name, service) in services {
+        let environment = service["environment"].as_object().unwrap();
+        assert_eq!(environment["AWS_EC2_METADATA_DISABLED"], "true");
+        for (key, value) in environment {
+            assert!(
+                value.is_null()
+                    || !(key.starts_with("BAO_")
+                        || key.contains("OPENBAO")
+                        || key.ends_with("_KMS_TOKEN_FILE")
+                        || key.ends_with("_KMS_KEY_NAME")
+                        || key.ends_with("_KMS_KEY_VERSION")
+                        || key.contains("GRANT_MINT_TOKEN_FILE")
+                        || key == "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE"),
+                "retained {name}/{key}"
+            );
+        }
+        if let Some(role) = environment.get("AWS_ROLE_ARN") {
+            assert!(roles.insert(role.as_str().unwrap()));
+            assert_eq!(
+                environment["AWS_WEB_IDENTITY_TOKEN_FILE"],
+                "/run/aws-identity/token"
+            );
+            let mounts: Vec<_> = service["volumes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|mount| mount["target"] == "/run/aws-identity")
+                .collect();
+            assert_eq!(mounts.len(), 1);
+            assert_eq!(mounts[0]["read_only"], true);
+            assert_eq!(mounts[0]["bind"]["create_host_path"], false);
+            assert!(projected.insert(mounts[0]["source"].as_str().unwrap()));
+        }
+        for secret in service["secrets"].as_array().into_iter().flatten() {
+            let source = secret["source"].as_str().unwrap();
+            assert!(
+                !source.contains("openbao")
+                    && !source.contains("keycloak")
+                    && !source.ends_with("_kms_token")
+            );
+        }
+    }
+    assert_eq!(roles.len(), 18);
+    assert_eq!(
+        services["auth"]["environment"]["OIDC_PROVIDER_MODE"],
+        "external"
+    );
+    assert!(services["auth"]["environment"]
+        .get("KEYCLOAK_ADMIN_URL")
+        .is_none());
+    assert_eq!(
+        services["postgres"]["environment"]["MARTY_INITIALIZE_KEYCLOAK_DATABASE"],
+        "false"
+    );
+    assert_eq!(
+        services["issuance"]["entrypoint"],
+        serde_json::json!(["/app/services/entrypoint.sh"])
+    );
+    let restarted = config(
+        &executable,
+        &bundle,
+        &[
+            base.clone(),
+            installer.clone(),
+            runtime.clone(),
+            aws.clone(),
+        ],
+        &env,
+        &[],
+        &[],
+    );
+    let restart = restarted["services"].as_object().unwrap();
+    let setup: BTreeSet<_> = services
+        .iter()
+        .filter(|(_, service)| service["labels"]["com.elevenid.installer.phase"] == "setup")
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(
+        restart.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        services
+            .keys()
+            .map(String::as_str)
+            .filter(|name| !setup.contains(name))
+            .collect()
+    );
+    for (name, service) in restart {
+        for dependency in service["depends_on"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(name, _)| name)
+        {
+            assert!(
+                restart.contains_key(dependency) && !setup.contains(dependency.as_str()),
+                "{name} retains setup dependency"
+            );
+        }
+    }
+    let bootstrap = config(
+        &executable,
+        &bundle,
+        &[
+            base,
+            installer,
+            runtime,
+            aws,
+            layers.join("compose.organization-bootstrap.yml"),
+        ],
+        &env,
+        &["setup", "installer-init"],
+        &[],
+    );
+    for name in [
+        "installer-organization-key-issue",
+        "installer-organization-key-revoke",
+    ] {
+        let job = &bootstrap["services"][name];
+        assert_eq!(job["environment"]["AWS_EC2_METADATA_DISABLED"], "true");
+        assert!(job["environment"].get("AWS_ROLE_ARN").is_none());
+        assert_eq!(job["read_only"], true);
+        assert_eq!(job["cap_drop"], serde_json::json!(["ALL"]));
+        assert_eq!(job["user"], "0:0");
+    }
+}

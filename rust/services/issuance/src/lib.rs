@@ -70,7 +70,7 @@ pub mod canvas_provider_http;
 pub mod canvas_readiness;
 pub mod canvas_readiness_runtime;
 mod canvas_response_text;
-pub mod didcomm_remote_kms;
+pub mod didcomm_kms;
 mod signing_error_detail;
 mod signing_http_response;
 pub use signing_http_response::SigningResponseFailure;

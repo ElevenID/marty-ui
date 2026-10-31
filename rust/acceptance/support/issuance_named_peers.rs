@@ -36,7 +36,7 @@ use serde_json::{json, Value};
 use super::didcomm_gateway_replay::OwnedHttp;
 
 pub(super) const ORGANIZATION: &str = "synthetic-org";
-pub(super) const ISSUER: &str = "did:web:issuer.example:issuer";
+pub(super) const ISSUER: &str = "did:web:issuer.example:orgs:issuer";
 pub(super) const HOLDER: &str = "did:web:issuer.example:holder";
 pub(super) const TEMPLATE: &str = "didcomm-template";
 pub(super) const PROFILE: &str = "didcomm-status";
@@ -408,11 +408,11 @@ async fn peer(State(state): State<PeerState>, request: Request<Body>) -> Respons
             }))
             .into_response()
         }
-        "/issuer/did.json" | "/holder/did.json" => {
+        "/orgs/issuer/did.json" | "/holder/did.json" => {
             assert_eq!(method, "GET");
             assert!(bytes.is_empty());
             assert!(args.is_empty());
-            Json(if path.starts_with("/issuer/") {
+            Json(if path.starts_with("/orgs/issuer/") {
                 state.sender.clone()
             } else {
                 state.recipient.clone()

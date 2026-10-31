@@ -4,6 +4,7 @@ from copy import deepcopy
 import hashlib
 import os
 from pathlib import Path
+import re
 import runpy
 import subprocess
 
@@ -125,6 +126,35 @@ def test_reference_identity_and_descriptor_closure():
 
     descriptor = json.loads((ROOT / "deploy-config/bundles/selfhost.json").read_text())
     assert "docker-compose.service.issuance-native-runtime.yml" in descriptor["assets"]
+
+
+def test_required_inputs_preserve_historical_and_current_contracts():
+    approved = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8")
+    current = (ROOT / GATE["GATE"]["BASE"]).read_text(encoding="utf-8")
+    historical, required = GATE["required_input_sets"](approved, current)
+    assert len(historical) == 63
+    assert len(required) == 10
+    assert "BAO_ADDR" in historical - required
+    assert "PUBLIC_DOMAIN" in required
+
+
+@pytest.mark.parametrize("fault", ["dropped", "added"])
+def test_required_inputs_reject_unrelated_changes(fault):
+    approved = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8")
+    current = (ROOT / GATE["GATE"]["BASE"]).read_text(encoding="utf-8")
+    if fault == "dropped":
+        changed, count = re.subn(
+            r"\$\{PUBLIC_DOMAIN:\?[^}]*\}", "${PUBLIC_DOMAIN:-}", current
+        )
+    else:
+        changed, count = re.subn(
+            r"\$\{MARTY_ORG_SLUG:-[^}]*\}",
+            "${MARTY_ORG_SLUG:?unreviewed required input}",
+            current,
+        )
+    assert count > 0
+    with pytest.raises(AssertionError, match="Unreviewed required self-host inputs"):
+        GATE["required_input_sets"](approved, changed)
 
 
 @pytest.fixture(scope="module")

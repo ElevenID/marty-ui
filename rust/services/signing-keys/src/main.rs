@@ -5,14 +5,15 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use axum_server::{tls_rustls::RustlsConfig, Handle};
-use marty_signing_grant::{replay::RedisGrantReplayStore, verifier::GrantVerifier};
+use marty_signing_grant::replay::RedisGrantReplayStore;
 use marty_signing_keys::{
     config::Config, csca_lifecycle::CscaLifecycleStore, documents::DocumentStore,
-    flow_envelope::OpenBaoEnvelopeProvider, http, managed_holder_http,
+    flow_envelope::OpenBaoEnvelopeProvider, http,
+    integration_secret_envelope::IntegrationSecretProvider, managed_holder_http,
     managed_holder_key::OpenBaoManagedHolderKeys, profiles::ProfileStore, registry::RegistryStore,
     vc_api_holder_proof::OpenBaoHolderProofProvider,
 };
-use mmf_platform::{keyless_https_server_config, OpenBaoTlsIdentityFiles};
+use mmf_platform::keyless_https_server_config;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -33,16 +34,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         error
     })?;
     let managed_openbao_endpoint = config.bao_addr.clone();
-    let holder_api = match (
-        config.holder_device_key.as_ref(),
-        config.bao_addr.as_ref(),
-        config.bao_token.as_ref(),
-    ) {
-        (Some(key), Some(endpoint), Some(_)) => Some((
-            key.clone(),
-            OpenBaoManagedHolderKeys::new(endpoint.clone())?,
-        )),
-        _ => None,
+    let holder_api = if let Some(key) = config.holder_device_key.as_ref() {
+        let provider = config
+            .bao_addr
+            .as_ref()
+            .map(|endpoint| OpenBaoManagedHolderKeys::new(endpoint.clone()))
+            .transpose()?;
+        Some((key.clone(), provider))
+    } else {
+        None
     };
     let registry_store = RegistryStore::connect(&config.registry_redis_url)
         .await?
@@ -67,17 +67,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (provider, None) => provider,
         (None, Some(_)) => unreachable!("configuration requires BAO_ADDR for HAIP token"),
     };
-    let registry_store = registry_store.with_auth_envelopes(flow_envelopes.clone());
-    let grant_verifier = GrantVerifier::for_managed_openbao(
-        managed_openbao_endpoint
-            .as_deref()
-            .ok_or("BAO_ADDR is required for signing grants")?,
-        config
-            .sign_grant_verify_token_file
-            .clone()
-            .ok_or("SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE is required")?,
-        RedisGrantReplayStore::new(registry_store.connection()),
-    )?;
+    let integration_secret_envelopes =
+        IntegrationSecretProvider::from_environment(flow_envelopes.clone()).await?;
+    let registry_store =
+        registry_store.with_auth_envelope_provider(integration_secret_envelopes.clone());
+    let grant_verifier = marty_signing_grant::configuration::GrantAuthority::from_environment()?
+        .verifier(
+            managed_openbao_endpoint.as_deref(),
+            config.sign_grant_verify_token_file.clone(),
+            RedisGrantReplayStore::new(registry_store.connection()),
+        )?;
     if let Some(holder_proofs) = holder_proofs {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
@@ -103,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         build_revision = %config.build_revision,
         "starting Rust signing-keys service"
     );
-    let app = http::router_with_all_keys_grants_and_mdoc(
+    let app = http::router_with_runtime_kms(
         config.internal_api_key,
         Some(config.service_sign_gateway_key),
         Some(config.issuer_sign_key),
@@ -115,15 +114,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(document_store),
         Some(csca_lifecycle_store),
         Some(profile_store),
-        flow_envelopes,
+        http::RuntimeKmsProviders {
+            flow_envelopes,
+            integration_secret_envelopes,
+        },
         config.public_domain,
         Some(grant_verifier),
         config.mdoc_certificates,
     );
     let app = match holder_api {
-        Some((device_key, provider)) => {
-            app.merge(managed_holder_http::router(device_key, provider))
-        }
+        Some((device_key, provider)) => app.merge(
+            managed_holder_http::router_with_optional_provider(device_key, provider),
+        ),
         None => app,
     };
     // The existing HTTP listener serves non-secret signing routes. Plaintext
@@ -132,18 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .layer(axum::middleware::from_fn(reject_integration_secret_http));
     if let Some(tls) = integration_secret_tls {
-        let identity = OpenBaoTlsIdentityFiles {
-            certificate_chain_file: tls.cert_file,
-            kms_ca_cert_file: tls.kms_ca_cert_file,
-            kms_endpoint: tls.kms_addr,
-            kms_token_file: tls.kms_token_file,
-            kms_key_name: tls.kms_key_name,
-            kms_key_version: tls.kms_key_version,
-            request_timeout: Duration::from_secs(3),
-            max_concurrent_signs: 32,
-        }
-        .connect()
-        .await?;
+        let identity = tls.identity.connect().await?;
         let tls_config = RustlsConfig::from_config(keyless_https_server_config(&identity)?);
         let handle = Handle::new();
         let shutdown_handle = handle.clone();
@@ -169,6 +160,10 @@ async fn reject_integration_secret_http(request: Request, next: Next) -> Respons
         .uri()
         .path()
         .starts_with("/internal/integration-secrets/")
+        || request
+            .uri()
+            .path()
+            .starts_with("/internal/compat/issuer-dids/didcomm/")
     {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -198,6 +193,14 @@ mod tests {
                 post(|| async { StatusCode::OK }),
             )
             .route("/other", post(|| async { StatusCode::OK }))
+            .route(
+                marty_signing_grant::didcomm::PACK_ROUTE,
+                post(|| async { StatusCode::OK }),
+            )
+            .route(
+                marty_signing_grant::didcomm::RESOLVE_ROUTE,
+                post(|| async { StatusCode::OK }),
+            )
             .layer(axum::middleware::from_fn(reject_integration_secret_http));
 
         for (path, expected) in [
@@ -210,6 +213,14 @@ mod tests {
                 StatusCode::NOT_FOUND,
             ),
             ("/other", StatusCode::OK),
+            (
+                marty_signing_grant::didcomm::PACK_ROUTE,
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                marty_signing_grant::didcomm::RESOLVE_ROUTE,
+                StatusCode::NOT_FOUND,
+            ),
         ] {
             let response = app
                 .clone()

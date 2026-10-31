@@ -207,42 +207,24 @@ fn grpc_server_tls(
         "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
         "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
     ];
-    let present = NAMES
-        .iter()
-        .filter(|name| value(values, name).is_some())
-        .count();
-    if present == 0 {
-        return Ok(None);
-    }
-    if present != NAMES.len() {
-        return Err(invalid("GRPC_WORKLOAD_TLS_SERVER_CERT"));
-    }
-    let endpoint = value(values, NAMES[1]).unwrap_or_default();
-    let url = Url::parse(endpoint).map_err(|_| invalid(NAMES[1]))?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(invalid(NAMES[1]));
-    }
-    let version = value(values, NAMES[5])
-        .unwrap_or_default()
-        .parse::<u32>()
-        .ok()
-        .filter(|version| *version > 0)
-        .ok_or_else(|| invalid(NAMES[5]))?;
-    Ok(Some(CredentialTemplateGrpcServerTls {
-        certificate: PathBuf::from(value(values, NAMES[0]).unwrap_or_default()),
-        kms_endpoint: endpoint.into(),
-        kms_ca_certificate: PathBuf::from(value(values, NAMES[2]).unwrap_or_default()),
-        kms_token_file: PathBuf::from(value(values, NAMES[3]).unwrap_or_default()),
-        kms_key_name: value(values, NAMES[4]).unwrap_or_default().into(),
-        kms_key_version: version,
-    }))
+    CredentialTemplateGrpcServerTls::from_values(
+        |name| values.get(name).map(String::as_str),
+        marty_service_runtime::TlsIdentityNames::new("GRPC_WORKLOAD_TLS_SERVER"),
+        Duration::from_secs(10),
+        64,
+    )
+    .map_err(|error| {
+        let name = if error.ends_with("is required") {
+            NAMES[0]
+        } else {
+            NAMES
+                .iter()
+                .copied()
+                .find(|name| error.starts_with(name))
+                .unwrap_or(NAMES[0])
+        };
+        invalid(name)
+    })
 }
 
 const fn environment_is_deployed(environment: RuntimeEnvironment) -> bool {

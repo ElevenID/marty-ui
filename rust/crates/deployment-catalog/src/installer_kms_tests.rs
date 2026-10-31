@@ -65,6 +65,33 @@ fn response(document: Value, revision: Option<&str>) -> Result<ApiResponse> {
 }
 
 #[test]
+fn canonical_body_revision_survives_gateway_etag_and_invalid_body_cannot_fallback() {
+    let rewritten = response(
+        json!({"config_revision": REVISION}),
+        Some("\"gateway-representation\""),
+    )
+    .unwrap();
+    assert_eq!(revision(&rewritten).unwrap(), REVISION);
+    assert_eq!(
+        revision(&response(json!({}), Some(REVISION)).unwrap()).unwrap(),
+        REVISION
+    );
+    for invalid in [
+        Value::Null,
+        true.into(),
+        1.into(),
+        json!([]),
+        json!({}),
+        "invalid".into(),
+    ] {
+        assert!(
+            revision(&response(json!({"config_revision":invalid}), Some(REVISION)).unwrap())
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn additive_registration_preserves_multiple_services_credentials_and_defaults() {
     let mut input = json!({"services":[service("aws-a"),service("aws-b")]});
     input["services"][1]["key_purposes"] = json!(["lti_tool_signing"]);

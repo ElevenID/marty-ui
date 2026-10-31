@@ -538,15 +538,44 @@ def test_didcomm_authcrypt_policy_is_mounted_only_into_native_issuance() -> None
             encoding="utf-8"
         )
     )["services"]["issuance-native"]
-    assert native["environment"]["DIDCOMM_KMS_ADDR"] == "https://openbao:8200"
-    assert (
-        native["environment"]["DIDCOMM_KMS_TOKEN_FILE"]
-        == "/bao/didcomm-issuance-token/token"
+    direct_kms_fields = {
+        "DIDCOMM_KMS_ADDR", "DIDCOMM_KMS_CA_CERT_FILE", "DIDCOMM_KMS_TOKEN_FILE"
+    }
+    assert direct_kms_fields.isdisjoint(native["environment"])
+    assert direct_kms_fields.isdisjoint(base["services"]["issuance"]["environment"])
+    assert native["environment"]["INTEGRATION_SECRET_KMS_URL"] == (
+        "https://signing-keys:8018/internal"
     )
     assert (
-        "openbao_didcomm_issuance_token:/bao/didcomm-issuance-token:ro"
+        native["environment"]["INTEGRATION_SECRET_KMS_CA_FILE"]
+        == "/run/secrets/dev_integration_secret_ca"
+    )
+    assert (
+        native["environment"]["ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE"]
+        == "/bao/issuance-credential-grant/token"
+    )
+    assert (
+        "openbao_issuance_credential_grant:/bao/issuance-credential-grant:ro"
         in native["volumes"]
     )
+    signing = base["services"]["signing-keys"]
+    assert signing["environment"]["DIDCOMM_KMS_TOKEN_FILE"] == (
+        "/bao/didcomm-issuance-token/token"
+    )
+    assert native["environment"]["SIGNING_KEYS_ISSUER_SIGN_KEY"] == (
+        signing["environment"]["SIGNING_KEYS_ISSUER_SIGN_KEY"]
+    )
+    assert signing["environment"]["SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE"] == (
+        "/bao/verify-grant/token"
+    )
+    assert (
+        "openbao_verify_grant:/bao/verify-grant:ro" in signing["volumes"]
+    )
+    token_mount = "openbao_didcomm_issuance_token:/bao/didcomm-issuance-token:ro"
+    assert token_mount in signing["volumes"]
+    for service in (native, base["services"]["issuance"]):
+        assert not any("openbao_didcomm_issuance_token:" in mount
+                       for mount in service.get("volumes", []))
     assert (
         base["services"]["openbao-init"]["environment"][
             "BAO_DIDCOMM_ISSUANCE_TOKEN_FILE"
@@ -1018,8 +1047,13 @@ def test_oidf_tls_edge_requires_remote_nonexportable_signing_identity() -> None:
     shared = (ROOT / "rust/crates/passport-keyless-edge/src/lib.rs").read_text(
         encoding="utf-8"
     )
+    selector = (ROOT / "rust/crates/service-runtime/src/tls.rs").read_text(
+        encoding="utf-8"
+    )
     assert 'keyless_tls_config("OIDF_EDGE")' in edge
-    assert "OpenBaoTlsIdentityFiles" in shared
+    assert "RemoteTlsIdentityFiles::from_values" in shared
+    assert "OpenBao(OpenBaoTlsIdentityFiles)" in selector
+    assert "AwsKms(AwsKmsTlsIdentityFiles)" in selector
     assert "keyless_https_server_config" in shared
     assert "OIDF_EDGE_TLS_KMS_KEY_VERSION" in profile
     assert "tls.key" not in profile

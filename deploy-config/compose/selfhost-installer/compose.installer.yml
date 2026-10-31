@@ -271,7 +271,7 @@ services:
       OIDF_EDGE_TLS_KMS_CA_CERT_FILE: /run/installer/openbao-ca.crt
       OIDF_EDGE_TLS_KMS_TOKEN_FILE: /run/installer/signer.token
       OIDF_EDGE_TLS_KMS_ADDR: https://openbao:8200
-      OIDF_EDGE_TLS_KMS_KEY_NAME: ${MARTY_INSTALLER_INGRESS_KEY_NAME:?set the validated installation key name}
+      OIDF_EDGE_TLS_KMS_KEY_NAME: ${MARTY_INSTALLER_INGRESS_KEY_NAME:-}
       OIDF_EDGE_TLS_KMS_KEY_VERSION: "1"
     volumes:
       - type: bind

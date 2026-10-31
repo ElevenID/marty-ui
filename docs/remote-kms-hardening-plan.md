@@ -1328,16 +1328,21 @@ preflight does not establish signing permission or installed qualification.
 New automatic DID verification-method identifiers hide provider coordinates;
 existing published methods and explicit identity bindings remain stable.
 
-The first installer operation attaches existing AWS IAM-role keys to a running,
-owned installation using an existing organization API key. It does not remove
-OpenBao, provision AWS keys, or complete first-boot authentication. Remaining
-work is the governed Organization bootstrap credential adapter, provider-aware
-grants/secrets/TLS/Keycloak prerequisites, and registered operation bindings for
-the existing DIDComm extension. Reuse those owners and the current extension;
-do not add another registry, crypto implementation or provider fallback.
-AWS-only readiness requires a fresh supported journey with no OpenBao runtime
-dependency. Hybrid readiness additionally qualifies the enabled extension
-operations; unavailable authcrypt must never downgrade to anoncrypt.
+The attach-existing operation uses an organization API key on an owned running
+installation. Fresh AWS foundation selection accepts preprovisioned keys,
+public certificates, external OIDC and separate workload identities. It uses
+the existing installer lifecycle and Organization credential owner for a scoped
+first-boot registration, followed by revocation and a public API rejection check.
+Shared MMF adapters supply AWS signing, TLS, grant MACs and secret envelopes.
+Registered DIDComm operation bindings reuse the existing OpenBao extension and
+signing-grant authorization; unavailable authcrypt fails without an anoncrypt
+downgrade. See [the installer inputs](compose-installer.md#preprovisioned-aws-foundation).
+
+AWS-only readiness still requires a fresh installed journey with the selected
+OIDC client, isolated IAM identities, certificate and credential refresh, and
+recovery checks. The earlier existing-key EC2 probe does not qualify that
+foundation. Hybrid readiness additionally qualifies the enabled extension
+operations. Source and fixture checks do not establish installed acceptance.
 
 The protected KMS consumer changes landed as UI #1192
 (`62607e860e3fe57abef39e29dfb59ae1c8bbd2a8`) and Credentials #313

@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use mmf_aws_kms::AwsKmsConfig;
 use serde_json::{json, Map, Value};
 
 use crate::bootstrap::{public_jwk_from_pem, KeyRecord, KeySpec, NOTIFICATION_ENVELOPE_KEY};
@@ -33,6 +34,20 @@ impl MemoryBackend<'_> {
 }
 
 impl Backend for MemoryBackend<'_> {
+    async fn notification_aws(
+        &mut self,
+        _config: &AwsKmsConfig,
+        _key_arn: &str,
+    ) -> Result<(), String> {
+        self.effects
+            .push("aws-kms.describe-key:notification-envelope".into());
+        if self.input["notification_aws_failure"] == true {
+            Err("injected AWS notification key readiness failure".into())
+        } else {
+            Ok(())
+        }
+    }
+
     async fn verify_database(&mut self, _database_url: &str) -> Result<(), String> {
         if self.input["database_connect_failure"] == true {
             return Err("injected database connectivity failure".into());
@@ -308,6 +323,76 @@ pub async fn replay(invocation: &Value) -> Result<Value, String> {
 mod tests {
     use super::replay;
     use serde_json::json;
+
+    fn aws_notification_input() -> serde_json::Value {
+        json!({
+            "environment": {
+                "DATABASE_URL": "postgresql://marty@postgres/marty",
+                "MARTY_KMS_BOOTSTRAP_ENABLED": "false",
+                "NOTIFICATION_SECRET_KMS_PROVIDER": "aws-kms",
+                "NOTIFICATION_SECRET_AWS_REGION": "us-east-2",
+                "NOTIFICATION_SECRET_AWS_KEY_ARN": "arn:aws:kms:us-east-2:111122223333:key/notification-envelope"
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn aws_notification_readiness_precedes_disabled_issuer_seeding_without_openbao() {
+        let input = aws_notification_input();
+        let successful = replay(&json!({"input": input})).await.unwrap();
+        assert_eq!(successful["exit_codes"], json!([0]));
+        assert_eq!(
+            successful["effects"].as_array().unwrap().last().unwrap(),
+            "aws-kms.describe-key:notification-envelope"
+        );
+        assert_eq!(successful["state"]["openbao_mounted"], false);
+        assert_eq!(successful["state"]["openbao_keys"], json!({}));
+        assert_eq!(successful["state"]["openbao_token_roles_used"], json!([]));
+        assert_eq!(successful["state"]["redis"], json!({}));
+
+        let mut failed = aws_notification_input();
+        failed["notification_aws_failure"] = json!(true);
+        let result = replay(&json!({"input": failed})).await.unwrap();
+        assert_eq!(result["exit_codes"], json!([1]));
+        assert_eq!(
+            result["error_tags"],
+            json!(["Notification webhook KMS preparation failed"])
+        );
+        assert_eq!(result["state"]["openbao_mounted"], false);
+    }
+
+    #[tokio::test]
+    async fn aws_notification_rejects_mixed_configuration_and_cannot_silently_skip_enabled_identity(
+    ) {
+        for (field, value) in [
+            ("NOTIFICATION_OPENBAO_TOKEN", "unexpected-token"),
+            ("NOTIFICATION_OPENBAO_TOKEN_FILE", "/unused/token"),
+            ("NOTIFICATION_OPENBAO_CA_CERT_FILE", "/unused/ca.pem"),
+            ("NOTIFICATION_SECRET_KMS_PROVIDER", "unknown"),
+            ("NOTIFICATION_SECRET_AWS_KEY_ARN", "alias/notification"),
+        ] {
+            let mut input = aws_notification_input();
+            input["environment"][field] = json!(value);
+            let result = replay(&json!({"input": input})).await.unwrap();
+            assert_eq!(result["exit_codes"], json!([1]));
+            assert!(!result["effects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|effect| effect.as_str().unwrap().starts_with("aws-kms")
+                    || effect.as_str().unwrap().starts_with("openbao")));
+        }
+        let mut input = aws_notification_input();
+        input["environment"]["MARTY_KMS_BOOTSTRAP_ENABLED"] = json!("true");
+        input["environment"]["REDIS_URL"] = json!("redis://redis/2");
+        let result = replay(&json!({"input": input})).await.unwrap();
+        assert_eq!(result["exit_codes"], json!([1]));
+        assert_eq!(
+            result["error_tags"],
+            json!(["Failed Marty KMS/DID bootstrap"])
+        );
+        assert_eq!(result["state"]["redis"], json!({}));
+    }
 
     #[tokio::test]
     async fn verify_only_checks_database_and_never_writes() {

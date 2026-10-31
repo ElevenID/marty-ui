@@ -35,6 +35,7 @@ def render(files, tmp_path, overrides=None):
             env[key] = "synthetic-required-value"
     env.update({
         "KEYCLOAK_KMS_IMAGE_DIGEST": "sha256:" + "a" * 64,
+        "MARTY_KEYCLOAK_KMS_IMAGE": "example.invalid/keycloak-kms@sha256:" + "a" * 64,
         "KEYCLOAK_KMS_ADDR": "https://openbao:8200",
         "KEYCLOAK_KMS_KEY_VERSION": "1",
         "MARTY_OPENBAO_DIDCOMM_IMAGE": "example.invalid/openbao@sha256:" + "b" * 64,

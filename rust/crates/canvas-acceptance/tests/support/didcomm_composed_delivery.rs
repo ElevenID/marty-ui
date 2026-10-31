@@ -61,7 +61,7 @@ use super::{
     remote_didcomm_sender::RemoteSenderFixture,
 };
 
-const ISSUER: &str = "did:web:fixture.example:issuer";
+const ISSUER: &str = "did:web:fixture.example:orgs:issuer";
 const HOLDER: &str = "did:web:fixture.example:holder";
 const ORGANIZATION: &str = "didcomm-composed-org";
 const SIGNED_CREDENTIAL: &str = "synthetic-controlled-signed-credential";
@@ -250,7 +250,7 @@ impl OwnedPeers {
         let publication_attempts = state.publication_attempts.clone();
         let publications = state.publications.clone();
         let app = Router::new()
-            .route("/issuer/did.json", get(sender))
+            .route("/orgs/issuer/did.json", get(sender))
             .route("/holder/did.json", get(recipient))
             .route(
                 "/internal/revocation-profiles/didcomm-status/reserve-index",
@@ -653,6 +653,7 @@ struct DeliveryGraph {
     builder: Arc<ControlledBuilder>,
     issuer: Arc<ControlledIssuer>,
     delivery: Arc<NativeInitiationDidcommDelivery>,
+    remote_sender: Option<RemoteSenderFixture>,
 }
 impl DeliveryGraph {
     async fn start_canvas(pool: &PgPool, authenticated: bool, fault: Option<Fault>) -> Self {
@@ -728,7 +729,7 @@ impl DeliveryGraph {
             .unwrap()
             .join("operator-reload-ca.pem");
         let mode = if authenticated {
-            json!({"mode":"authcrypt","sender_key_ref":remote_sender.as_ref().unwrap().reference})
+            json!({"mode":"authcrypt"})
         } else {
             json!({"mode":"anoncrypt"})
         };
@@ -777,7 +778,7 @@ impl DeliveryGraph {
                         let envelope =
                             NativeDidcommEnvelope::new(None, Some(&peers.origin), policy.to_str());
                         if let Some(sender) = &remote_sender {
-                            envelope.with_remote_kms(sender.client())
+                            envelope.with_registered_kms(sender.client())
                         } else {
                             envelope
                         }
@@ -818,6 +819,7 @@ impl DeliveryGraph {
             builder,
             issuer,
             delivery,
+            remote_sender,
         }
     }
 }
@@ -870,6 +872,7 @@ async fn run_case(
         builder,
         issuer,
         delivery,
+        remote_sender: _remote_sender,
         ..
     } = DeliveryGraph::start(
         pool,

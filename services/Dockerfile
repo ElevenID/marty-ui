@@ -110,6 +110,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-notification /
 COPY --from=rust-service-builder /build/rust/target/release/marty-flow /usr/local/bin/marty-flow
 COPY --from=rust-service-builder /build/rust/target/release/marty-organization /usr/local/bin/marty-organization
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-acceptance-api-key /usr/local/bin/marty-passport-acceptance-api-key
+COPY --from=rust-service-builder /build/rust/target/release/marty-installer-organization-api-key /usr/local/bin/marty-installer-organization-api-key
 COPY --from=rust-service-builder /build/rust/target/release/marty-auth /usr/local/bin/marty-auth
 COPY --from=rust-service-builder /build/rust/target/release/marty-credential-template /usr/local/bin/marty-credential-template
 COPY --from=rust-service-builder /build/rust/target/release/marty-presentation-policy /usr/local/bin/marty-presentation-policy

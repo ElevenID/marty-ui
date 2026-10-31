@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 import json
+from pathlib import Path
+import runpy
 import subprocess
 from types import SimpleNamespace
 
@@ -15,6 +17,8 @@ IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 ID = "b" * 64
 REVISION = "c" * 40
 PLAN = {"marty_ui_sha": REVISION, "release_version": "1.2.3"}
+ROOT = Path(__file__).resolve().parents[1]
+CUSTODY_MODEL = runpy.run_path(str(ROOT / "tests/test_beta_didcomm_selector.py"))["model"]
 
 
 def coverage():
@@ -350,35 +354,10 @@ def model(*, local=False, authcrypt=False):
         }
     else:
         candidate["pull_policy"] = "always"
-    if authcrypt:
-        candidate["environment"].update(
-            {
-                "DIDCOMM_ENCRYPTION_POLICY_FILE": "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json",
-                "DIDCOMM_KMS_ADDR": "http://openbao:8200",
-                "DIDCOMM_KMS_TOKEN_FILE": "/run/secrets/didcomm-kms/openbao-token",
-            }
-        )
-        candidate["volumes"].extend(
-            {
-                "type": "bind",
-                "source": f"/synthetic/policy/{name}",
-                "target": f"/run/secrets/didcomm-authcrypt/{name}",
-                "read_only": True,
-                "bind": {"create_host_path": False},
-            }
-            for name in ("didcomm-encryption-policy.json",)
-        )
-        candidate["volumes"].append(
-            {
-                "type": "volume",
-                "source": "didcomm_issuance_token",
-                "target": "/run/secrets/didcomm-kms",
-                "read_only": True,
-            }
-        )
-        candidate["depends_on"]["openbao-init"] = {
-            "condition": "service_completed_successfully"
-        }
+    custody = CUSTODY_MODEL(authcrypt)
+    selected_custody = custody["services"]["issuance-native"]
+    candidate["environment"].update(selected_custody["environment"])
+    candidate["volumes"].extend(selected_custody["volumes"])
     services = {
         **{
             name: {"environment": {"GRPC_SERVICE_TOKEN": env["GRPC_SERVICE_TOKEN"]}}
@@ -403,38 +382,11 @@ def model(*, local=False, authcrypt=False):
             "depends_on": {"issuance-native": {"condition": "service_healthy"}},
         },
     }
-    if authcrypt:
-        plugin_image = "synthetic.invalid/openbao-didcomm@sha256:" + "d" * 64
-        services["openbao"] = {
-            "image": plugin_image,
-            "command": ["server", "-dev", "-config", "/bao/config/didcomm-plugin.hcl"],
-            "volumes": [
-                {
-                    "type": "bind",
-                    "source": "/synthetic/docker/openbao-didcomm-dev.hcl",
-                    "target": "/bao/config/didcomm-plugin.hcl",
-                    "read_only": True,
-                    "bind": {"create_host_path": False},
-                }
-            ],
-        }
-        services["openbao-init"] = {
-            "image": plugin_image,
-            "environment": {
-                "DIDCOMM_KMS_PLUGIN_REQUIRED": "true",
-                "DIDCOMM_ISSUANCE_TOKEN_FILE": "/run/didcomm-token/openbao-token",
-            },
-            "volumes": [
-                {
-                    "type": "volume",
-                    "source": "didcomm_issuance_token",
-                    "target": "/run/didcomm-token",
-                }
-            ],
-        }
+    for name in ("signing-keys", "openbao", "openbao-init"):
+        services[name] = custody["services"][name]
     return {
         "services": services,
-        "volumes": {"didcomm_issuance_token": {}} if authcrypt else {},
+        "volumes": custody["volumes"],
     }
 
 

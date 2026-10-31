@@ -63,6 +63,24 @@ it('preserves existing transit CA trust through config normalization and new reg
   expect(createKeyManagementServicePayload({ service_type: 'openbao-transit' }, normalized.service_type_catalog).ca_cert_file).toBe('')
 })
 
+it('keeps server-reported extensions through default updates without accepting private operation bindings', () => {
+  const extensions = { didcomm_authcrypt: { enabled: true, basis: 'registered_binding' } }
+  const original = {
+    services: [
+      { id: 'extension', service_type: 'openbao-transit', extensions },
+      { id: 'aws', service_type: 'aws-kms' },
+    ],
+    default_service_id: 'extension',
+    did_operation_bindings: { 'did:example:issuer': { private: 'not-a-public-config-field' } },
+  }
+  const payload = createKeyManagementConfigUpdate(original, { default_service_id: 'aws' })
+  expect(payload.services[0].extensions).toEqual(extensions)
+  expect(payload.services[0].extensions).not.toBe(extensions)
+  expect(payload.services[1].extensions).toEqual({})
+  expect(payload).not.toHaveProperty('did_operation_bindings')
+  expect(payload.default_service_id).toBe('aws')
+})
+
 
 it('registration preserves explicit maps and authorizes only the selected key and declared purposes', () => {
   const original = {
