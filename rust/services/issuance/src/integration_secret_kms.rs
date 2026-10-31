@@ -1,6 +1,6 @@
 //! Typed client for the remote integration-secret envelope.
 //!
-//! The signing-keys service owns the Transit key. Issuance stores only the
+//! The signing-keys service owns the remote KMS key. Issuance stores only the
 //! returned versioned envelope and supplies database-bound identity on reads.
 
 use std::{env, fs, time::Duration};
@@ -31,6 +31,8 @@ pub enum KmsIntegrationSecretError {
     InvalidConfig,
     #[error("KMS integration-secret provider is unavailable")]
     Unavailable,
+    #[error("The configured KMS cannot encrypt this integration secret")]
+    CapabilityUnavailable,
     #[error("KMS integration-secret envelope is invalid")]
     InvalidEnvelope,
     #[error("integration-secret storage is unavailable")]
@@ -64,17 +66,7 @@ struct DecryptRequest<'a> {
 
 impl KmsIntegrationSecretCipher {
     pub fn from_environment(api_key: &str) -> Result<Self, KmsIntegrationSecretError> {
-        let base_url = env::var("INTEGRATION_SECRET_KMS_URL")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .and_then(|value| Url::parse(&value).ok())
-            .ok_or(KmsIntegrationSecretError::InvalidConfig)?;
-        let ca_pem = env::var("INTEGRATION_SECRET_KMS_CA_FILE")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .map(fs::read)
-            .transpose()
-            .map_err(|_| KmsIntegrationSecretError::InvalidConfig)?;
+        let (base_url, ca_pem) = internal_kms_environment()?;
         Self::new_with_ca_pem(base_url, api_key, ca_pem.as_deref())
     }
 
@@ -149,30 +141,10 @@ impl KmsIntegrationSecretCipher {
         api_key: &str,
         ca_pem: Option<&[u8]>,
     ) -> Result<Self, KmsIntegrationSecretError> {
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        if api_key.trim().is_empty()
-            || base_url.scheme() != "https"
-            || base_url.host_str().is_none()
-            || !base_url.username().is_empty()
-            || base_url.password().is_some()
-            || base_url.query().is_some()
-            || base_url.fragment().is_some()
-            || !matches!(base_url.path(), "/internal" | "/internal/")
-        {
+        if api_key.trim().is_empty() {
             return Err(KmsIntegrationSecretError::InvalidConfig);
         }
-        let mut client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::none())
-            .https_only(true);
-        if let Some(ca_pem) = ca_pem {
-            let ca = Certificate::from_pem(ca_pem)
-                .map_err(|_| KmsIntegrationSecretError::InvalidConfig)?;
-            client = client.tls_certs_merge([ca]);
-        }
-        let client = client
-            .build()
-            .map_err(|_| KmsIntegrationSecretError::InvalidConfig)?;
+        let client = internal_kms_https_client(&base_url, ca_pem)?;
         Ok(Self {
             client,
             base_url,
@@ -277,7 +249,7 @@ impl KmsIntegrationSecretCipher {
         endpoint
             .query_pairs_mut()
             .append_pair("organization_id", organization_id);
-        let response = self
+        let mut response = self
             .client
             .post(endpoint)
             .header("X-API-Key", &self.api_key)
@@ -285,15 +257,15 @@ impl KmsIntegrationSecretCipher {
             .send()
             .await
             .map_err(|_| KmsIntegrationSecretError::Unavailable)?;
-        if matches!(
-            response.status(),
-            StatusCode::UNPROCESSABLE_ENTITY | StatusCode::CONFLICT
-        ) {
-            return Err(KmsIntegrationSecretError::InvalidEnvelope);
+        let status = response.status();
+        if !status.is_success()
+            && !matches!(
+                status,
+                StatusCode::UNPROCESSABLE_ENTITY | StatusCode::CONFLICT
+            )
+        {
+            return Err(KmsIntegrationSecretError::Unavailable);
         }
-        let mut response = response
-            .error_for_status()
-            .map_err(|_| KmsIntegrationSecretError::Unavailable)?;
         let mut body = Vec::new();
         while let Some(chunk) = response
             .chunk()
@@ -305,15 +277,79 @@ impl KmsIntegrationSecretCipher {
             }
             body.extend_from_slice(&chunk);
         }
-        serde_json::from_slice(&body).map_err(|_| KmsIntegrationSecretError::InvalidEnvelope)
+        parse_response(status, &body)
     }
+}
+
+// Shared HTTPS admission for payloads sent to the same private Signing Keys listener.
+pub(crate) fn internal_kms_environment() -> Result<(Url, Option<Vec<u8>>), KmsIntegrationSecretError>
+{
+    let base_url = env::var("INTEGRATION_SECRET_KMS_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .and_then(|value| Url::parse(&value).ok())
+        .ok_or(KmsIntegrationSecretError::InvalidConfig)?;
+    let ca_pem = env::var("INTEGRATION_SECRET_KMS_CA_FILE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(fs::read)
+        .transpose()
+        .map_err(|_| KmsIntegrationSecretError::InvalidConfig)?;
+    Ok((base_url, ca_pem))
+}
+
+pub(crate) fn internal_kms_https_client(
+    base_url: &Url,
+    ca_pem: Option<&[u8]>,
+) -> Result<Client, KmsIntegrationSecretError> {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    if base_url.scheme() != "https"
+        || base_url.host_str().is_none()
+        || !base_url.username().is_empty()
+        || base_url.password().is_some()
+        || base_url.query().is_some()
+        || base_url.fragment().is_some()
+        || !matches!(base_url.path(), "/internal" | "/internal/")
+    {
+        return Err(KmsIntegrationSecretError::InvalidConfig);
+    }
+    let mut client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .https_only(true);
+    if let Some(ca_pem) = ca_pem {
+        let ca =
+            Certificate::from_pem(ca_pem).map_err(|_| KmsIntegrationSecretError::InvalidConfig)?;
+        client = client.tls_certs_merge([ca]);
+    }
+    let client = client
+        .build()
+        .map_err(|_| KmsIntegrationSecretError::InvalidConfig)?;
+    Ok(client)
+}
+
+fn parse_response(status: StatusCode, body: &[u8]) -> Result<Value, KmsIntegrationSecretError> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|_| KmsIntegrationSecretError::InvalidEnvelope)?;
+    if status == StatusCode::UNPROCESSABLE_ENTITY
+        && value["code"] == "capability_unavailable"
+        && value["capability"] == "integration_secret_encryption"
+    {
+        // Preserve the fixed capability classification, never provider text.
+        return Err(KmsIntegrationSecretError::CapabilityUnavailable);
+    }
+    if !status.is_success() {
+        return Err(KmsIntegrationSecretError::InvalidEnvelope);
+    }
+    Ok(value)
 }
 
 fn parse_envelope(value: Value) -> Result<Envelope, KmsIntegrationSecretError> {
     let envelope: Envelope =
         serde_json::from_value(value).map_err(|_| KmsIntegrationSecretError::InvalidEnvelope)?;
     if envelope.schema != SCHEMA
-        || !envelope.ciphertext.starts_with("vault:v")
+        || !(envelope.ciphertext.starts_with("vault:v")
+            || mmf_aws_kms::decode_ciphertext(&envelope.ciphertext).is_ok())
         || envelope.ciphertext.len() > MAX_CIPHERTEXT_BYTES
     {
         return Err(KmsIntegrationSecretError::InvalidEnvelope);
@@ -343,11 +379,40 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn unsupported_secret_remains_an_explicit_capability_error() {
+        let body = serde_json::to_vec(&json!({
+            "code":"capability_unavailable", "capability":"integration_secret_encryption",
+            "detail":"untrusted-provider-detail"
+        }))
+        .unwrap();
+        let error = parse_response(StatusCode::UNPROCESSABLE_ENTITY, &body).unwrap_err();
+        assert!(matches!(
+            error,
+            KmsIntegrationSecretError::CapabilityUnavailable
+        ));
+        assert!(!error.to_string().contains("untrusted-provider-detail"));
+        assert!(matches!(
+            parse_response(StatusCode::CONFLICT, &body),
+            Err(KmsIntegrationSecretError::InvalidEnvelope)
+        ));
+        assert!(matches!(
+            parse_response(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                br#"{"code":"capability_unavailable","capability":"another_operation"}"#
+            ),
+            Err(KmsIntegrationSecretError::InvalidEnvelope)
+        ));
+    }
+
+    #[test]
     fn envelope_parser_rejects_legacy_and_unexpected_fields() {
         assert!(parse_envelope(json!({"schema": SCHEMA, "ciphertext": "vault:v1:test"})).is_ok());
+        assert!(parse_envelope(json!({"schema": SCHEMA, "ciphertext": mmf_aws_kms::encode_ciphertext(b"opaque").unwrap()})).is_ok());
         for invalid in [
             json!({"schema": "legacy", "ciphertext": "vault:v1:test"}),
             json!({"schema": SCHEMA, "ciphertext": "local-key"}),
+            json!({"schema": SCHEMA, "ciphertext": "aws-kms:v2:Zg=="}),
+            json!({"schema": SCHEMA, "ciphertext": "aws-kms:v1:Zh=="}),
             json!({"schema": SCHEMA, "ciphertext": "vault:v1:test", "private_key": "bad"}),
         ] {
             assert!(parse_envelope(invalid).is_err());

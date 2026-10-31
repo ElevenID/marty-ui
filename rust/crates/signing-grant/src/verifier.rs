@@ -1,30 +1,23 @@
 //! Fail-closed issuer-signing authorization shared by every Signing Keys route.
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use thiserror::Error;
 
 use crate::{
+    provider::{GrantMac, GrantProviderError},
     replay::{ConsumedGrant, RedisGrantReplayStore, ReplayError},
     token_file::read_token_file,
     transit::{TransitGrantClient, TransitGrantError},
     verify_envelope, GrantBinding, GrantEnvelope, GrantError, SigningOrigin,
 };
 
-const ORIGINS: [SigningOrigin; 7] = [
-    SigningOrigin::GatewayService,
-    SigningOrigin::GatewayIssuerDid,
-    SigningOrigin::FlowWalletRequest,
-    SigningOrigin::IssuanceCredential,
-    SigningOrigin::IssuanceCanvas,
-    SigningOrigin::IssuanceReadiness,
-    SigningOrigin::IssuancePassport,
-];
+const ORIGINS: [SigningOrigin; 7] = SigningOrigin::ALL;
 
 #[derive(Clone)]
 pub struct GrantVerifier {
-    clients: HashMap<SigningOrigin, TransitGrantClient>,
-    verify_token_file: PathBuf,
+    clients: HashMap<SigningOrigin, Arc<dyn GrantMac>>,
+    verify_token_file: Option<PathBuf>,
     replay: RedisGrantReplayStore,
 }
 
@@ -48,12 +41,32 @@ impl GrantVerifier {
         let clients = ORIGINS
             .into_iter()
             .map(|origin| {
-                TransitGrantClient::for_origin(endpoint, origin).map(|client| (origin, client))
+                TransitGrantClient::for_origin(endpoint, origin)
+                    .map(|client| (origin, Arc::new(client) as Arc<dyn GrantMac>))
             })
             .collect::<Result<HashMap<_, _>, _>>()?;
         Ok(Self {
             clients,
-            verify_token_file,
+            verify_token_file: Some(verify_token_file),
+            replay,
+        })
+    }
+
+    pub(crate) fn for_aws(
+        config: &crate::configuration::AwsGrantConfiguration,
+        replay: RedisGrantReplayStore,
+    ) -> Result<Self, GrantProviderError> {
+        let clients = ORIGINS
+            .into_iter()
+            .map(|origin| {
+                config
+                    .client(origin)
+                    .map(|client| (origin, Arc::new(client) as Arc<dyn GrantMac>))
+            })
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        Ok(Self {
+            clients,
+            verify_token_file: None,
             replay,
         })
     }
@@ -71,10 +84,13 @@ impl GrantVerifier {
             .clients
             .get(&binding.origin)
             .ok_or(GrantAuthorizationError::Denied)?;
-        let token = read_token_file(&self.verify_token_file)
-            .await
-            .map_err(|_| GrantAuthorizationError::Unavailable)?;
-        let verified = verify_envelope(client, &token, &envelope, binding)
+        let token = match &self.verify_token_file {
+            Some(path) => read_token_file(path)
+                .await
+                .map_err(|_| GrantAuthorizationError::Unavailable)?,
+            None => String::new(),
+        };
+        let verified = verify_envelope(client.as_ref(), &token, &envelope, binding)
             .await
             .map_err(map_grant_error)?;
         self.replay

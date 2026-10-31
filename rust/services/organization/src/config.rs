@@ -199,42 +199,24 @@ fn grpc_server_tls(
         "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
         "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
     ];
-    let configured = NAMES
-        .iter()
-        .filter(|name| value(values, name).is_some())
-        .count();
-    if configured == 0 {
-        return Ok(None);
-    }
-    if configured != NAMES.len() {
-        return Err(invalid("GRPC_WORKLOAD_TLS_SERVER_CERT"));
-    }
-    let endpoint = value(values, NAMES[1]).ok_or_else(|| invalid(NAMES[1]))?;
-    let url = Url::parse(endpoint).map_err(|_| invalid(NAMES[1]))?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(invalid(NAMES[1]));
-    }
-    let kms_key_version = value(values, NAMES[5])
-        .ok_or_else(|| invalid(NAMES[5]))?
-        .parse::<u32>()
-        .ok()
-        .filter(|version| *version > 0)
-        .ok_or_else(|| invalid(NAMES[5]))?;
-    Ok(Some(OrganizationGrpcServerTls {
-        certificate: value(values, NAMES[0]).unwrap_or_default().into(),
-        kms_endpoint: endpoint.into(),
-        kms_ca_certificate: value(values, NAMES[2]).unwrap_or_default().into(),
-        kms_token_file: value(values, NAMES[3]).unwrap_or_default().into(),
-        kms_key_name: value(values, NAMES[4]).unwrap_or_default().into(),
-        kms_key_version,
-    }))
+    OrganizationGrpcServerTls::from_values(
+        |name| values.get(name).map(String::as_str),
+        marty_service_runtime::TlsIdentityNames::new("GRPC_WORKLOAD_TLS_SERVER"),
+        std::time::Duration::from_secs(10),
+        64,
+    )
+    .map_err(|error| {
+        let name = if error.ends_with("is required") {
+            NAMES[0]
+        } else {
+            NAMES
+                .iter()
+                .copied()
+                .find(|name| error.starts_with(name))
+                .unwrap_or(NAMES[0])
+        };
+        invalid(name)
+    })
 }
 
 fn environment(value: &str) -> Result<OrganizationEnvironment, OrganizationConfigError> {
@@ -474,14 +456,14 @@ mod tests {
         ] {
             values.insert(name.into(), value.into());
         }
-        assert_eq!(
-            OrganizationServiceConfig::from_values(values.clone())
-                .unwrap()
-                .grpc_server_tls
-                .unwrap()
-                .kms_key_version,
-            1
-        );
+        let tls = OrganizationServiceConfig::from_values(values.clone())
+            .unwrap()
+            .grpc_server_tls
+            .unwrap();
+        let OrganizationGrpcServerTls::OpenBao(identity) = tls else {
+            panic!("omitted provider must preserve OpenBao");
+        };
+        assert_eq!(identity.kms_key_version, 1);
         values.insert(
             "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
             "http://bao:8200".into(),

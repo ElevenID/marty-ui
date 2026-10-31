@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use marty_auth::{is_rate_limited_auth_path, AuthDependency, AuthRuntime, AuthServiceConfig};
+use marty_auth::{
+    is_rate_limited_auth_path, AuthDependency, AuthRuntime, AuthServiceConfig, OidcProviderMode,
+};
 use mmf_platform::{GrpcTransportSecurity, GrpcTrustMode};
 use serde_json::Value;
 
@@ -75,6 +77,47 @@ fn contract() -> Value {
 }
 
 #[test]
+fn aws_workload_tls_preserves_both_roles_and_rejects_mixed_or_missing_identity() {
+    let mut values = baseline("beta");
+    let arn = "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012";
+    for role in ["CLIENT", "SERVER"] {
+        let prefix = format!("GRPC_WORKLOAD_TLS_{role}");
+        for suffix in ["ADDR", "CA_CERT", "TOKEN_FILE", "KEY_NAME", "KEY_VERSION"] {
+            values.remove(&format!("{prefix}_KMS_{suffix}"));
+        }
+        for (suffix, value) in [
+            ("PROVIDER", "aws-kms"),
+            ("REGION", "us-east-1"),
+            ("KEY_ARN", arn),
+        ] {
+            values.insert(format!("{prefix}_KMS_{suffix}"), value.into());
+        }
+    }
+    let config = AuthServiceConfig::from_values(values.clone()).unwrap();
+    for tls in [
+        config.workload_client_tls.unwrap(),
+        config.workload_server_tls.unwrap(),
+    ] {
+        assert_eq!(tls.ca_certificate.to_str(), Some("/secrets/ca.pem"));
+        let marty_service_runtime::RemoteTlsIdentityFiles::AwsKms(identity) = tls.identity else {
+            panic!("configured AWS identity must reach runtime");
+        };
+        assert_eq!(identity.key_arn, arn);
+        assert!(identity.kms.endpoint.is_none());
+    }
+    for field in [
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+    ] {
+        let mut mixed = values.clone();
+        mixed.insert(field.into(), "leftover-openbao".into());
+        assert!(AuthServiceConfig::from_values(mixed).is_err(), "{field}");
+    }
+    values.remove("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_ARN");
+    assert!(AuthServiceConfig::from_values(values).is_err());
+}
+
+#[test]
 fn complete_beta_configuration_is_normalized_without_hidden_fallbacks() {
     let config = AuthServiceConfig::from_values(baseline("beta")).unwrap();
     assert_eq!(config.http_addr.to_string(), "0.0.0.0:8001");
@@ -94,6 +137,73 @@ fn complete_beta_configuration_is_normalized_without_hidden_fallbacks() {
     );
     assert_eq!(config.session_ttl_seconds, 86_400);
     assert_eq!(config.cookie.name, "sessionId");
+}
+
+fn external_values() -> BTreeMap<String, String> {
+    let mut values = baseline("beta");
+    values.remove("KEYCLOAK_REALM");
+    values.extend([
+        ("OIDC_PROVIDER_MODE".into(), "external".into()),
+        (
+            "OIDC_ISSUER_URL".into(),
+            "https://identity.example/tenant".into(),
+        ),
+        ("OIDC_CLIENT_ID".into(), "installed-client".into()),
+    ]);
+    values
+}
+
+#[test]
+fn external_oidc_starts_without_keycloak_admin_or_realm_and_retains_claim_only_policy() {
+    let mut values = external_values();
+    values.insert(
+        "OIDC_TRUSTED_ENDPOINT_ORIGINS".into(),
+        "https://login.example/,https://keys.example".into(),
+    );
+    let config = AuthServiceConfig::from_values(values).unwrap();
+    assert_eq!(config.oidc.provider_mode, OidcProviderMode::External);
+    assert_eq!(config.oidc.issuer_url, "https://identity.example/tenant");
+    assert_eq!(config.oidc.external_issuer_url, config.oidc.issuer_url);
+    assert_eq!(config.oidc.client_id, "installed-client");
+    assert_eq!(
+        config.oidc.trusted_endpoint_origins,
+        ["https://login.example", "https://keys.example"]
+    );
+    assert!(config.keycloak_admin.is_none());
+    assert!(!config.credential_login_require_existing_keycloak_user);
+    assert!(!config.credential_login_create_users);
+}
+
+#[test]
+fn external_oidc_rejects_missing_explicit_identity_and_keycloak_only_settings() {
+    for name in ["OIDC_ISSUER_URL", "OIDC_CLIENT_ID"] {
+        let mut values = external_values();
+        values.remove(name);
+        assert!(AuthServiceConfig::from_values(values).is_err(), "{name}");
+    }
+    for (name, value) in [
+        ("KEYCLOAK_ADMIN_URL", "https://keycloak.example"),
+        ("MARTY_API_CLIENT_ID", "marty-admin"),
+        ("MARTY_API_CLIENT_SECRET", "admin-secret"),
+        ("KEYCLOAK_TOKEN_EXCHANGE_ENABLED", "true"),
+        ("CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER", "true"),
+        ("CREDENTIAL_LOGIN_CREATE_USERS", "true"),
+        ("OIDC_EXTERNAL_ISSUER_URL", "https://other.example/tenant"),
+        ("OIDC_ISSUER_URL", "http://identity.example/tenant"),
+        (
+            "OIDC_ISSUER_URL",
+            "https://identity.example/tenant?issuer=other",
+        ),
+        ("OIDC_PROVIDER_MODE", "unknown"),
+        ("OIDC_SCOPES", "profile,email"),
+        ("OIDC_CLIENT_SECRET", ""),
+    ] {
+        let mut values = external_values();
+        values.insert(name.into(), value.into());
+        assert!(AuthServiceConfig::from_values(values).is_err(), "{name}");
+    }
+    let default = AuthServiceConfig::from_values(baseline("beta")).unwrap();
+    assert_eq!(default.oidc.provider_mode, OidcProviderMode::Keycloak);
 }
 
 #[test]

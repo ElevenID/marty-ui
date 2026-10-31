@@ -243,7 +243,7 @@ impl InitiationDidcommDelivery for Harness {
         );
         assert_eq!(self.reserved.lock().unwrap().as_ref(), Some(transaction));
         if self.input["wallet_status"] == 503 {
-            return Err(InitiationDidcommDeliveryError);
+            return Err(InitiationDidcommDeliveryError::Unavailable);
         }
         Ok(InitiationDidcommDeliveryReceipt {
             service_endpoint: "https://wallet.example/renewal-inbox".into(),

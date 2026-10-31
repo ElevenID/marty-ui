@@ -20,16 +20,7 @@ impl RuntimeEnvironment {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WorkloadServerTlsFiles {
-    pub certificate: PathBuf,
-    pub ca_certificate: PathBuf,
-    pub kms_endpoint: String,
-    pub kms_ca_certificate: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
-}
+pub use marty_service_runtime::WorkloadTlsFiles as WorkloadServerTlsFiles;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PresentationPolicyServiceConfig {
@@ -252,45 +243,23 @@ fn workload_server_tls(
     values: &BTreeMap<String, String>,
     environment: RuntimeEnvironment,
 ) -> Result<Option<WorkloadServerTlsFiles>, PresentationPolicyConfigError> {
-    let names = [
-        "GRPC_WORKLOAD_TLS_SERVER_CERT",
-        "GRPC_WORKLOAD_TLS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
-    ];
+    const CERT: &str = "GRPC_WORKLOAD_TLS_SERVER_CERT";
     if values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY") {
         return Err(invalid("GRPC_WORKLOAD_TLS_SERVER_KEY"));
     }
-    let configured = names
-        .iter()
-        .filter(|name| value(values, name).is_some())
-        .count();
-    if configured == 0 && !environment.is_deployed() {
-        return Ok(None);
+    let files = WorkloadServerTlsFiles::from_values(
+        |name| values.get(name).map(String::as_str),
+        marty_service_runtime::TlsIdentityNames::new("GRPC_WORKLOAD_TLS_SERVER"),
+        "GRPC_WORKLOAD_TLS_CA_CERT",
+        value(values, "GRPC_WORKLOAD_TLS_CA_CERT").is_some(),
+        std::time::Duration::from_secs(10),
+        64,
+    )
+    .map_err(|_| invalid(CERT))?;
+    if files.is_none() && environment.is_deployed() {
+        return Err(PresentationPolicyConfigError::Missing { name: CERT });
     }
-    if configured != names.len() {
-        return Err(if configured == 0 {
-            PresentationPolicyConfigError::Missing { name: names[0] }
-        } else {
-            invalid(names[0])
-        });
-    }
-    Ok(Some(WorkloadServerTlsFiles {
-        certificate: PathBuf::from(required(values, names[0])?),
-        ca_certificate: PathBuf::from(required(values, names[1])?),
-        kms_endpoint: required(values, names[2])?,
-        kms_ca_certificate: PathBuf::from(required(values, names[3])?),
-        kms_token_file: PathBuf::from(required(values, names[4])?),
-        kms_key_name: required(values, names[5])?,
-        kms_key_version: required(values, names[6])?
-            .parse::<u32>()
-            .ok()
-            .filter(|version| *version > 0)
-            .ok_or_else(|| invalid(names[6]))?,
-    }))
+    Ok(files)
 }
 
 fn secret(

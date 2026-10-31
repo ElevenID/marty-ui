@@ -725,7 +725,7 @@ def test_default_run_retains_only_original_bundle_issuance_and_rust_owners(
     ]
 
 
-@pytest.mark.parametrize("regression", [None, "secret", "legacy", "unrelated"])
+@pytest.mark.parametrize("regression", [None, "secret", "didcomm", "legacy", "unrelated"])
 def test_no_canvas_issuance_profile_preserves_runtime_except_disabled_canvas(
     compose_worker_gate, regression
 ):
@@ -759,6 +759,10 @@ def test_no_canvas_issuance_profile_preserves_runtime_except_disabled_canvas(
     if regression == "secret":
         preview["services"]["issuance"]["secrets"].append(
             {"source": "canvas_credentials_shared_secret"}
+        )
+    elif regression == "didcomm":
+        preview["services"]["issuance-native"]["secrets"].append(
+            {"source": "didcomm_issuance_openbao_token"}
         )
     elif regression == "legacy":
         preview["services"]["issuance-native"]["environment"][

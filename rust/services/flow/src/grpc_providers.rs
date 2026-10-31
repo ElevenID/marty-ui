@@ -1,9 +1,11 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
+#[cfg(test)]
+use mmf_platform::OpenBaoTlsIdentityFiles;
 use mmf_platform::{
     GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
-    KeylessGrpcTransportOptions, OpenBaoTlsIdentityFiles, PlatformError,
+    KeylessGrpcTransportOptions, PlatformError,
 };
 use mmf_security::{SecurityError, TenantMembership, TenantMembershipProvider};
 use serde::de::DeserializeOwned;
@@ -83,16 +85,7 @@ impl FlowWorkloadChannelFactory {
                 ca_certificate,
             } => server_tls_factory(target, ca_certificate)?.connect().await,
             Self::Keyless { target, files } => {
-                let identity = OpenBaoTlsIdentityFiles {
-                    certificate_chain_file: files.certificate.clone(),
-                    kms_ca_cert_file: files.kms_ca_certificate.clone(),
-                    kms_endpoint: files.kms_endpoint.clone(),
-                    kms_token_file: files.kms_token_file.clone(),
-                    kms_key_name: files.kms_key_name.clone(),
-                    kms_key_version: files.kms_key_version,
-                    request_timeout: std::time::Duration::from_secs(10),
-                    max_concurrent_signs: 64,
-                };
+                let identity = files.identity.clone();
                 identity
                     .grpc_channel_connected(
                         target,
@@ -867,13 +860,22 @@ mod tests {
         let factory = FlowWorkloadChannelFactory::Keyless {
             target: target.clone(),
             files: crate::WorkloadClientTlsFiles {
-                certificate: PathBuf::from(flow_issuance_fixture("FLOW_CLIENT_CERT")),
                 ca_certificate: ca.clone(),
-                kms_endpoint: flow_issuance_fixture("KMS_URL"),
-                kms_ca_certificate: PathBuf::from(flow_issuance_fixture("KMS_CA")),
-                kms_token_file: PathBuf::from(flow_issuance_fixture("FLOW_CLIENT_KMS_TOKEN_FILE")),
-                kms_key_name: flow_issuance_fixture("FLOW_CLIENT_KMS_KEY_NAME"),
-                kms_key_version: 1,
+                identity: OpenBaoTlsIdentityFiles {
+                    certificate_chain_file: PathBuf::from(flow_issuance_fixture(
+                        "FLOW_CLIENT_CERT",
+                    )),
+                    kms_endpoint: flow_issuance_fixture("KMS_URL"),
+                    kms_ca_cert_file: PathBuf::from(flow_issuance_fixture("KMS_CA")),
+                    kms_token_file: PathBuf::from(flow_issuance_fixture(
+                        "FLOW_CLIENT_KMS_TOKEN_FILE",
+                    )),
+                    kms_key_name: flow_issuance_fixture("FLOW_CLIENT_KMS_KEY_NAME"),
+                    kms_key_version: 1,
+                    request_timeout: Duration::from_secs(10),
+                    max_concurrent_signs: 64,
+                }
+                .into(),
             },
         };
         let channel = factory

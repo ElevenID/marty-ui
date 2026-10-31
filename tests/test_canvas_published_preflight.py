@@ -231,6 +231,7 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
         'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '
         'MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" '
+        'BAO_ADDR="$kms_url" BAO_CACERT="$kms_ca_file" '
     )
     assert (
         sum(
@@ -358,6 +359,23 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert sorted(set(re.findall(r"--test-threads=(\d+)", script))) == ["1", "4"]
 
 
+CANVAS_RENEWAL_GATE = (
+    "didcomm_renewal_canvas_preserves_real_association_and_delivery_phases",
+    "didcomm_composed_delivery::run_renewal_canvas",
+)
+CANVAS_RENEWAL_SCOPED_CALL = """didcomm_composed_delivery::run_renewal_canvas(&owned.url)
+        .with_subscriber(
+            tracing_subscriber::fmt()
+                .with_test_writer()
+                .with_ansi(false)
+                .with_env_filter(
+                    "off,marty_issuance_service::canvas_issuance_guard=debug,marty_issuance_service::initiation_response=warn",
+                )
+                .finish(),
+        )
+        .await;"""
+
+
 RENEWAL_GATES = [
     (
         PRIVATE_IP_PG,
@@ -383,10 +401,7 @@ RENEWAL_GATES = [
         "didcomm_renewal_gateway_selects_native_with_required_owner_read",
         "didcomm_composed_delivery::run_renewal_gateway",
     ),
-    (
-        "didcomm_renewal_canvas_preserves_real_association_and_delivery_phases",
-        "didcomm_composed_delivery::run_renewal_canvas",
-    ),
+    CANVAS_RENEWAL_GATE,
 ]
 
 
@@ -399,11 +414,19 @@ def assert_renewal_registration(script, source, name, owner):
         re.MULTILINE | re.DOTALL,
     )
     assert function is not None
-    body = function.group(1)
+    body = re.sub(r"(?m)^ *//[^\n]*\n", "", function.group(1))
     assert 'std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST")' in body
-    assert "canvas_published_database::PublishedDatabase::start()" in body
-    assert f"{owner}(&owned.url).await;" in body
-    assert "owned.close_verified().unwrap();" in body
+    start = """let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();"""
+    call = f"{owner}(&owned.url).await;"
+    if name == CANVAS_RENEWAL_GATE[0]:
+        assert (name, owner) == CANVAS_RENEWAL_GATE
+        call = CANVAS_RENEWAL_SCOPED_CALL
+    close = "owned.close_verified().unwrap();"
+    for statement in (start, call, close):
+        assert body.count(statement) == 1
+    assert body.index(start) < body.index(call) < body.index(close)
     if name == PRIVATE_IP_PG:
         marker = 'println!("\\nDIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1");'
         assert body.count(marker) == 1
@@ -464,11 +487,40 @@ def test_renewal_gate_registration_rejects_weakened_qualification(
     elif mutation == "ignored":
         source = source.replace(f"async fn {name}()", f"#[ignore]\nasync fn {name}()")
     elif mutation == "owner":
-        source = source.replace(f"{owner}(&owned.url).await;", "")
+        source = source.replace(f"{owner}(&owned.url)", "unreviewed_owner(&owned.url)")
     else:
         source = source.replace("owned.close_verified().unwrap();", "")
     with pytest.raises(AssertionError):
         assert_renewal_registration(script, source, name, owner)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["unbounded_logs", "unawaited", "foreign_database", "early_cleanup"]
+)
+def test_canvas_renewal_scoped_diagnostics_reject_weakened_execution(mutation):
+    source = (
+        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
+    ).read_text(encoding="utf-8")
+    name, owner = CANVAS_RENEWAL_GATE
+    if mutation == "unbounded_logs":
+        source = source.replace(
+            "off,marty_issuance_service::canvas_issuance_guard=debug,marty_issuance_service::initiation_response=warn",
+            "warn",
+        )
+    elif mutation == "unawaited":
+        source = source.replace("        )\n        .await;", "        );")
+    elif mutation == "foreign_database":
+        source = source.replace(f"{owner}(&owned.url)", f"{owner}(&other.url)")
+    else:
+        close = "owned.close_verified().unwrap();"
+        source = source.replace(close, "")
+        source = source.replace(
+            f"{owner}(&owned.url)", f"{close}\n    {owner}(&owned.url)"
+        )
+    with pytest.raises(AssertionError):
+        assert_renewal_registration(
+            SCRIPT.read_text(encoding="utf-8"), source, name, owner
+        )
 
 
 @pytest.fixture

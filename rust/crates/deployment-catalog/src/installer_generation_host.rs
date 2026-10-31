@@ -366,7 +366,7 @@ pub fn provision(
         installation,
         bundle,
         state,
-        bao,
+        Some(bao),
         inputs,
         "installer-generation",
         services_image,

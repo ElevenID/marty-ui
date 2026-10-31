@@ -10,12 +10,14 @@ publish = false
 [dependencies]
 marty-crypto = { workspace = true, optional = true }
 mmf-security = { workspace = true, optional = true }
-tonic = { workspace = true, optional = true }
+tonic.workspace = true
+mmf-aws-kms.workspace = true
 mmf-platform.workspace = true
 mmf-runtime.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tokio-rustls.workspace = true
+url.workspace = true
 
 [features]
-workload-identity = ["dep:marty-crypto", "dep:mmf-security", "dep:tonic"]
+workload-identity = ["dep:marty-crypto", "dep:mmf-security"]

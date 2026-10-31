@@ -1581,6 +1581,12 @@ jobs:
             exit 1
           fi
           cp "$credential_template_migration_executable" target/debug/credential-template-migration-contract
+          notification_migration_executable="$(resolve_recorded_contract_executable marty-notification migration_contract)"
+          if [[ -z "$notification_migration_executable" || ! -x "$notification_migration_executable" ]]; then
+            echo "Unable to locate the compiled Notification migration contract executable." >&2
+            exit 1
+          fi
+          cp "$notification_migration_executable" target/debug/notification-migration-contract
           presentation_policy_executable="$(resolve_recorded_contract_executable marty-presentation-policy postgres_integration)"
           if [[ -z "$presentation_policy_executable" || ! -x "$presentation_policy_executable" ]]; then
             echo "Unable to locate the compiled Presentation Policy PostgreSQL contract executable." >&2
@@ -1864,7 +1870,7 @@ jobs:
           done
           export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"
           export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13
-          for entry in csca_lifecycle_storage_contract:2 document_storage_contract:1; do
+          for entry in csca_lifecycle_storage_contract:2 document_storage_contract:1 didcomm_publication_routes:2; do
             suite="${entry%%:*}"
             expected="${entry##*:}"
             cargo test --locked -p marty-signing-keys --test "$suite" -- --ignored --test-threads=1 \

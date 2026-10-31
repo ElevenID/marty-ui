@@ -2154,9 +2154,16 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
         (
             "PUT",
             "/v1/signing-keys/issuer-identities/didcomm-key-agreement",
-            Some(
-                json!({"organization_id":organization_id.clone(),"issuer_did":format!("did:web:beta.example:orgs:{organization_id}"),"key_purpose":"vc_jwt_issuer","credential_format":"VC_JWT","algorithm":"EdDSA","public_jwk":{"kty":"OKP","crv":"X25519","x":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"}}),
-            ),
+            Some(json!({
+                "organization_id": organization_id.clone(),
+                "issuer_did": format!("did:web:beta.example:orgs:{organization_id}"),
+                "key_purpose": "vc_jwt_issuer",
+                "credential_format": "VC_JWT",
+                "algorithm": "EdDSA",
+                "public_jwk": {"kty":"OKP","crv":"X25519","x":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"},
+                "service_id": "missing-service",
+                "key_reference": format!("didcomm/keys/{organization_id}/sender/versions/{}", "a".repeat(32)),
+            })),
             StatusCode::NOT_FOUND,
             "issuer",
         ),

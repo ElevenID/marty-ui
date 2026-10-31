@@ -44,9 +44,6 @@ NATIVE_ONLY = {
     "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE": "/run/secrets/issuance_tls_kms_token",
     "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME": "${ISSUANCE_TLS_KMS_KEY_NAME:?ISSUANCE_TLS_KMS_KEY_NAME must be set}",
     "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION": "${ISSUANCE_TLS_KMS_KEY_VERSION:?ISSUANCE_TLS_KMS_KEY_VERSION must be set}",
-    "DIDCOMM_KMS_ADDR": "https://openbao:8200",
-    "DIDCOMM_KMS_CA_CERT_FILE": "/bao/public-ca/ca.crt",
-    "DIDCOMM_KMS_TOKEN_FILE": "/bao/didcomm-issuance-token/token",
     "PASSPORT_NATIVE_HTTP_ENABLED": "${PASSPORT_NATIVE_HTTP_ENABLED:-false}",
     "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}",
     "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "${PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED:-false}",
@@ -329,7 +326,6 @@ def assert_sources(base, profile, runtime):
     ]
     shared_mounts = [
         "openbao_public_ca:/bao/public-ca:ro",
-        "openbao_didcomm_issuance_token:/bao/didcomm-issuance-token:ro",
     ]
     grant_volumes = [
         f"{volume}:/bao/issuance-{origin}-grant:ro" for origin, volume in grant_mounts
@@ -350,12 +346,7 @@ def assert_sources(base, profile, runtime):
         "openbao_issuance_canvas_grant:/bao/issuance-canvas-grant:ro",
     ]
     EXTRACTION["complete_common"](source(EXTRACTION["COMMON"]), runtime)
-    text = (
-        (ROOT / "rust/services/issuance/src/config.rs")
-        .read_text(encoding="utf-8")
-        .split("#[cfg(test)]")[0]
-    )
-    inputs = set(re.findall(r'"([A-Z][A-Z0-9_]+)"', text))
+    inputs = EXTRACTION["issuance_configuration_inputs"]()
     omitted = (
         UNFORWARDED_LEGACY
         | BETA_OVERLAY_ONLY
@@ -363,6 +354,10 @@ def assert_sources(base, profile, runtime):
         | FILE_SELECTORS
         | NATIVE_CONFIG_META
         | FORBIDDEN_LOCAL_CUSTODY_INPUTS
+        | {"GRPC_WORKLOAD_TLS_SERVER_" + suffix for suffix in (
+            "KEY", "KEY_FILE", "PRIVATE_KEY", "PRIVATE_KEY_FILE",
+            "KMS_PROVIDER", "KMS_REGION", "KMS_KEY_ARN",
+        )}
     )
     assert not FORBIDDEN_LOCAL_CUSTODY_INPUTS & (set(env) | set(legacy))
     actual_omitted = inputs - set(env)
@@ -420,9 +415,6 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             ],
             "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
             "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
-            "DIDCOMM_KMS_ADDR": "https://openbao:8200",
-            "DIDCOMM_KMS_CA_CERT_FILE": "/bao/public-ca/ca.crt",
-            "DIDCOMM_KMS_TOKEN_FILE": "/bao/didcomm-issuance-token/token",
             "CANVAS_MIRROR_WORKER_ENABLED": inputs.get("CANVAS_MIRROR_WORKER_ENABLED")
             or "false",
             "PASSPORT_NATIVE_HTTP_ENABLED": inputs.get("PASSPORT_NATIVE_HTTP_ENABLED")
@@ -491,13 +483,6 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
                 "type": "volume",
                 "source": "openbao_public_ca",
                 "target": "/bao/public-ca",
-                "read_only": True,
-                "volume": {},
-            },
-            {
-                "type": "volume",
-                "source": "openbao_didcomm_issuance_token",
-                "target": "/bao/didcomm-issuance-token",
                 "read_only": True,
                 "volume": {},
             },

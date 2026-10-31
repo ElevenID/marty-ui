@@ -35,10 +35,12 @@ pub struct TrustInfo {
     pub origin: String,
     pub ca_certificate_pem: String,
     pub ca_der_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_der_sha256s: Option<Vec<String>>,
     pub certificate_der_sha256: String,
     pub ca_expires_at: u64,
     pub certificate_expires_at: u64,
-    pub recorded_token_expires_at: u64,
+    pub recorded_token_expires_at: Option<u64>,
     pub evidence_sha256: BTreeMap<String, String>,
     pub recorded_startup_containers: usize,
     pub runtime_observed: bool,
@@ -116,6 +118,76 @@ fn certificates(
     )?;
     Ok((m, ca_text, expires))
 }
+
+struct ImportedCertificates {
+    pem: String,
+    ca_hashes: Vec<String>,
+    leaf_hash: String,
+    ca_expiry: u64,
+    leaf_expiry: u64,
+}
+
+fn public_chain(bytes: &[u8]) -> Result<Vec<x509_cert::Certificate>> {
+    let text = std::str::from_utf8(bytes).map_err(|_| REFUSED)?;
+    require(bytes.len() <= 65536 && regex::Regex::new(
+        r"\A\s*(?:-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----\s*)+\z"
+    ).unwrap().is_match(text))?;
+    let certificates = x509_cert::Certificate::load_pem_chain(bytes).map_err(|_| REFUSED)?;
+    require(!certificates.is_empty() && certificates.len() <= 16)?;
+    Ok(certificates)
+}
+
+fn imported_certificates(ca: &[u8], leaf: &[u8], now: u64) -> Result<ImportedCertificates> {
+    let roots = public_chain(ca)?;
+    let chain = public_chain(leaf)?;
+    let chain_der = chain
+        .iter()
+        .map(|cert| {
+            cert.to_der()
+                .map(rustls::pki_types::CertificateDer::from)
+                .map_err(|_| REFUSED.into())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    crate::operator_certificates::check_chain(leaf, ca).map_err(|_| REFUSED)?;
+    crate::installer_transport::validate_server_chain(
+        ca,
+        &chain_der,
+        rustls::pki_types::UnixTime::since_unix_epoch(std::time::Duration::from_secs(now)),
+    )?;
+    let mut ca_hashes = Vec::new();
+    let mut ca_expiry = u64::MAX;
+    for root in &roots {
+        let validity = &root.tbs_certificate.validity;
+        let expires = validity.not_after.to_unix_duration().as_secs();
+        require(validity.not_before.to_unix_duration().as_secs() <= now && expires > now)?;
+        ca_expiry = ca_expiry.min(expires);
+        ca_hashes.push(hash(&root.to_der().map_err(|_| REFUSED)?));
+    }
+    Ok(ImportedCertificates {
+        pem: std::str::from_utf8(ca).map_err(|_| REFUSED)?.into(),
+        ca_hashes,
+        leaf_hash: hash(chain_der[0].as_ref()),
+        ca_expiry,
+        leaf_expiry: chain[0]
+            .tbs_certificate
+            .validity
+            .not_after
+            .to_unix_duration()
+            .as_secs(),
+    })
+}
+
+pub(crate) fn validate_imported_ingress(ca: &[u8], leaf: &[u8]) -> Result<()> {
+    imported_certificates(
+        ca,
+        leaf,
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| REFUSED)?
+            .as_secs(),
+    )
+    .map(|_| ())
+}
 /// Output is public certificate material, not a request to trust an arbitrary CA.
 /// The caller may explicitly import this certificate into a chosen browser trust
 /// store after checking its fingerprint. This command does not observe that store.
@@ -151,8 +223,13 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
     let id = state.journal().installation_id().to_string();
     let engine = &state.journal().runtime().ok_or(REFUSED)?.engine_id;
     let binding = generation::load_verified(path, &id, engine)?.ok_or(REFUSED)?;
+    let imported = binding.imported_foundation();
     let names = [
-        "installer-ingress.json",
+        if imported {
+            crate::installer_foundation::RECORD
+        } else {
+            "installer-ingress.json"
+        },
         installer_doctor::SESSION_RECORD,
         "application-generation-selection.json",
     ];
@@ -174,7 +251,32 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
         .duration_since(UNIX_EPOCH)
         .map_err(|_| REFUSED)?
         .as_secs();
-    let (m, pem, expires) = certificates(&records["installer-ingress.json"], &ca, &leaf, &id, now)?;
+    let (pem, ca_hash, ca_hashes, leaf_hash, ca_expiry, leaf_expiry, token_expiry) = if imported {
+        let selection = crate::installer_foundation::load(state)?.ok_or(REFUSED)?;
+        require(selection.configuration.public_origin == origin)?;
+        let c = imported_certificates(&ca, &leaf, now)?;
+        (
+            c.pem,
+            c.ca_hashes[0].clone(),
+            Some(c.ca_hashes),
+            c.leaf_hash,
+            c.ca_expiry,
+            c.leaf_expiry,
+            None,
+        )
+    } else {
+        let (m, pem, expires) =
+            certificates(&records["installer-ingress.json"], &ca, &leaf, &id, now)?;
+        (
+            pem,
+            m.ca_der_sha256,
+            None,
+            m.certificate_der_sha256,
+            m.ca_expires_at,
+            m.certificate_expires_at,
+            Some(expires),
+        )
+    };
     for (name, bytes) in &records {
         require(state.read_evidence(name)? == *bytes)?;
     }
@@ -188,15 +290,20 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
     )?;
     state.require_path_binding(path)?;
     Ok(TrustInfo {
-        schema: "elevenid.installer-trust-info/v2",
+        schema: if imported {
+            "elevenid.installer-trust-info/v3"
+        } else {
+            "elevenid.installer-trust-info/v2"
+        },
         installation_id: id,
         origin,
         ca_certificate_pem: pem,
-        ca_der_sha256: m.ca_der_sha256,
-        certificate_der_sha256: m.certificate_der_sha256,
-        ca_expires_at: m.ca_expires_at,
-        certificate_expires_at: m.certificate_expires_at,
-        recorded_token_expires_at: expires,
+        ca_der_sha256: ca_hash,
+        ca_der_sha256s: ca_hashes,
+        certificate_der_sha256: leaf_hash,
+        ca_expires_at: ca_expiry,
+        certificate_expires_at: leaf_expiry,
+        recorded_token_expires_at: token_expiry,
         evidence_sha256: records
             .iter()
             .map(|(name, bytes)| (name.to_string(), hash(bytes)))
@@ -206,11 +313,19 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
         host_trust_observed: false,
         host_trust_modified: false,
         installation_ready: false,
-        pending: vec![
-            "Explicit browser CA trust and TLS login",
+        pending: if imported {
+            vec![
+            "Explicit browser CA trust and external OIDC login",
             "Installed issue/present/verify/revoke/deny journey",
-            "Live custody, renewal, root retirement and recovery qualification",
-        ],
+            "Live IAM and network isolation, external identity/certificate refresh and recovery qualification",
+        ]
+        } else {
+            vec![
+                "Explicit browser CA trust and TLS login",
+                "Installed issue/present/verify/revoke/deny journey",
+                "Live custody, renewal, root retirement and recovery qualification",
+            ]
+        },
     })
 }
 

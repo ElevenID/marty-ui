@@ -23,7 +23,7 @@ exec cargo build --locked --release "$@" \
   -p marty-signing-keys --bin marty-signing-keys --bin marty-passport-callback-signer --bin marty-passport-callback-signer-supported \
   -p marty-notification --bin marty-notification \
   -p marty-flow --bin marty-flow \
-  -p marty-organization --bin marty-organization --bin marty-passport-acceptance-api-key \
+  -p marty-organization --bin marty-organization --bin marty-passport-acceptance-api-key --bin marty-installer-organization-api-key \
   -p marty-auth --bin marty-auth \
   -p marty-credential-template --bin marty-credential-template \
   -p marty-presentation-policy --bin marty-presentation-policy --bin marty-verifier-positive-gate \

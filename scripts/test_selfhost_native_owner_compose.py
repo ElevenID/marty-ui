@@ -82,6 +82,9 @@ REJECTED_MASTER_KEY_INPUTS = {
 EXPLICIT_POLICY = {"DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"}
 FORBIDDEN_LOCAL_CUSTODY_INPUTS = {
     "GRPC_WORKLOAD_TLS_SERVER_KEY",
+    "GRPC_WORKLOAD_TLS_SERVER_KEY_FILE",
+    "GRPC_WORKLOAD_TLS_SERVER_PRIVATE_KEY",
+    "GRPC_WORKLOAD_TLS_SERVER_PRIVATE_KEY_FILE",
     "ICAO_DOCUMENT_SIGNER_URL",
     "ICAO_DOCUMENT_SIGNER_API_KEY",
     "ICAO_DOCUMENT_SIGNER_API_KEY_FILE",
@@ -96,6 +99,11 @@ PASSPORT_BETA_OVERLAY_ONLY = {
     "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN",
 }
 CONFIG_META = {"CARGO_PKG_VERSION", "MARTY_ISSUANCE__"}
+ALTERNATE_TLS_PROVIDER_INPUTS = {
+    "GRPC_WORKLOAD_TLS_SERVER_KMS_PROVIDER",
+    "GRPC_WORKLOAD_TLS_SERVER_KMS_REGION",
+    "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_ARN",
+}
 SHARED_ADDITIONS = {
     "ALLOWED_REDIRECT_URIS": "${ALLOWED_REDIRECT_URIS:-}",
     "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": PUBLICATION_SETTINGS[
@@ -142,13 +150,10 @@ VCDM_RELATED_RESOURCE_URLS
 )
 
 
+
+
 def assert_input_inventory():
-    source = (
-        (ROOT / "rust/services/issuance/src/config.rs")
-        .read_text()
-        .split("#[cfg(test)]")[0]
-    )
-    inputs = set(re.findall(r'"([A-Z][A-Z0-9_]+)"', source))
+    inputs = runpy.run_path(str(ROOT / "scripts/test_conformance_native_compose.py"))["issuance_configuration_inputs"]()
     model = yaml.safe_load((ROOT / GATE["BASE"]).read_text())
     native = model["services"]["issuance-native"]["environment"]
     legacy = model["services"]["issuance"]["environment"]
@@ -176,6 +181,7 @@ def assert_input_inventory():
         | FORBIDDEN_LOCAL_CUSTODY_INPUTS
         | PASSPORT_BETA_OVERLAY_ONLY
         | CONFIG_META
+        | ALTERNATE_TLS_PROVIDER_INPUTS
         | UNFORWARDED
     )
     actual_omitted = inputs - set(native)
@@ -221,6 +227,56 @@ def assert_signing_binding(model):
     assert target != defaults[0], "Separate container must not use loopback fallback"
 
 
+def apply_foundation_reference_representation(model):
+    """Admit only the reviewed empty-provider references in the frozen model.
+
+    Compose interpolates the base before a selected foundation can remove its
+    provider fields. Runtime provider validation still requires complete inputs;
+    the model comparison continues to reject any unrelated environment change.
+    """
+    services = model["services"]
+    optional_inputs = set()
+
+    def replace(mapping, field, variable):
+        assert re.fullmatch(r"\$\{" + re.escape(variable) + r":\?[^}]*\}",
+                            mapping[field]), (field, variable)
+        mapping[field] = "${" + variable + ":-}"
+        optional_inputs.add(variable)
+
+    for service, runtime_prefix, input_prefix in (
+        ("signing-keys", "SIGNING_KEYS_INTEGRATION_SECRET_TLS", "SIGNING_KEYS"),
+        ("gateway", "GRPC_WORKLOAD_TLS_CLIENT", "GATEWAY"),
+        ("auth", "GRPC_WORKLOAD_TLS_CLIENT", "AUTH"),
+        ("auth", "GRPC_WORKLOAD_TLS_SERVER", "AUTH_SERVER"),
+        ("compliance-profile", "GRPC_WORKLOAD_TLS", "COMPLIANCE_PROFILE"),
+        ("deployment-profile", "GRPC_WORKLOAD_TLS", "DEPLOYMENT_PROFILE"),
+        ("issuance-native", "GRPC_WORKLOAD_TLS_SERVER", "ISSUANCE"),
+        ("organization", "GRPC_WORKLOAD_TLS_SERVER", "ORG"),
+        ("revocation-profile", "GRPC_WORKLOAD_TLS_SERVER", "RP"),
+        ("credential-template", "GRPC_WORKLOAD_TLS_SERVER", "CT"),
+        ("presentation-policy", "GRPC_WORKLOAD_TLS_SERVER", "PP"),
+        ("flow", "GRPC_WORKLOAD_TLS_CLIENT", "FLOW_CLIENT"),
+        ("flow", "GRPC_WORKLOAD_TLS_SERVER", "FLOW_SERVER"),
+        ("verification", "GRPC_WORKLOAD_TLS", "VERIFICATION"),
+        ("notification", "GRPC_TLS", "NOTIFICATION"),
+        ("event-stream", "GRPC_WORKLOAD_TLS_SERVER", "ES"),
+    ):
+        for suffix in ("ADDR", "KEY_NAME", "KEY_VERSION"):
+            replace(services[service]["environment"],
+                    f"{runtime_prefix}_KMS_{suffix}", f"{input_prefix}_TLS_KMS_{suffix}")
+    for service in ("issuance-native", "canvas-sync-worker", "flow"):
+        replace(services[service]["environment"], "BAO_ADDR", "BAO_ADDR")
+    for service in ("keycloak", "keycloak-configurator"):
+        replace(services[service], "image", "MARTY_KEYCLOAK_KMS_IMAGE")
+    replace(services["keycloak"]["environment"], "BAO_ADDR", "KEYCLOAK_KMS_ADDR")
+    replace(services["keycloak"]["environment"],
+            "MARTY_KEYCLOAK_KMS_KEY_VERSION", "KEYCLOAK_KMS_KEY_VERSION")
+    replace(services["keycloak-configurator"]["environment"],
+            "KEYCLOAK_SOCIAL_LOGIN_ENABLED", "KEYCLOAK_SOCIAL_LOGIN_ENABLED")
+    replace(model["x-issuance-application-env"], "BAO_ADDR", "BAO_ADDR")
+    return optional_inputs
+
+
 def assert_models(approved, actual, *, interpolated=False):
     """Check the complete current KMS-only model against its reviewed snapshot."""
     expected = deepcopy(approved)
@@ -255,6 +311,29 @@ def assert_models(approved, actual, *, interpolated=False):
     expected["services"]["keycloak"]["environment"]["JAVA_OPTS_KC_HEAP"] = (
         "-XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=65"
     )
+    if not interpolated:
+        apply_foundation_reference_representation(expected)
+    # Move the existing dedicated token only; its producer, secret name and
+    # authority remain unchanged. Both Issuance variants use Signing Keys HTTPS.
+    didcomm_secret = "didcomm_issuance_openbao_token"
+    didcomm_path = "/run/secrets/" + didcomm_secret
+    signing = expected["services"]["signing-keys"]
+    assert "DIDCOMM_KMS_TOKEN_FILE" not in signing["environment"]
+    for owner in ("issuance", "issuance-native"):
+        service = expected["services"][owner]
+        assert service["environment"].pop("DIDCOMM_KMS_TOKEN_FILE") == didcomm_path
+        assert service["environment"].pop("DIDCOMM_KMS_ADDR") == (
+            service["environment"]["BAO_ADDR"] if interpolated
+            else "${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}"
+        )
+        assert service["environment"].pop("DIDCOMM_KMS_CA_CERT_FILE") == "/run/secrets/openbao_tls_ca_cert"
+        selected = [item for item in service["secrets"] if item["source"] == didcomm_secret]
+        assert selected == [{"source": didcomm_secret, "target": didcomm_path}]
+        service["secrets"].remove(selected[0])
+    signing["environment"]["DIDCOMM_KMS_TOKEN_FILE"] = didcomm_path
+    token_position = next(index for index, item in enumerate(signing["secrets"])
+                          if item["source"] == "signing_keys_openbao_token") + 1
+    signing["secrets"].insert(token_position, {"source": didcomm_secret, "target": didcomm_path})
     issuance = expected["services"]["issuance"]
     envelope = "signing_keys_integration_secret_key"
     envelope_path = f"/run/secrets/{envelope}"
@@ -375,11 +454,22 @@ def assert_models(approved, actual, *, interpolated=False):
     assert_signing_binding(actual)
 
 
+def required_input_sets(approved, current):
+    required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", approved))
+    optional_inputs = apply_foundation_reference_representation(yaml.safe_load(approved))
+    current_required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", current))
+    assert current_required == required - optional_inputs, (
+        "Unreviewed required self-host inputs",
+        sorted(current_required - (required - optional_inputs)),
+        sorted((required - optional_inputs) - current_required),
+    )
+    return required, current_required
+
+
 def interpolated_models():
     approved = (ROOT / APPROVED).read_text(encoding="utf-8")
     current = (ROOT / GATE["BASE"]).read_text(encoding="utf-8")
-    required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", approved))
-    assert required == set(re.findall(r"\$\{([A-Z0-9_]+):\?", current))
+    required, current_required = required_input_sets(approved, current)
     assert "MARTY_ISSUANCE_IMAGE" not in required
     assert "BAO_ADDR" in required
     environment = yaml.safe_load(approved)["services"]["issuance"]["environment"]
@@ -450,14 +540,17 @@ def interpolated_models():
                 assert set(expected_publication.values()) == {"synthetic-custom"}
             assert_models(render(APPROVED, values), after, interpolated=True)
             print(f"PASS: self-host {mode} interpolated whole model")
-        for name in sorted(required):
-            for value in (None, ""):
-                values = dict(inputs)
-                if value is None:
-                    values.pop(name)
-                else:
-                    values[name] = value
-                for file in (APPROVED, GATE["BASE"]):
+        for file, source_required in (
+            (APPROVED, required),
+            (GATE["BASE"], current_required),
+        ):
+            for name in sorted(source_required):
+                for value in (None, ""):
+                    values = dict(inputs)
+                    if value is None:
+                        values.pop(name)
+                    else:
+                        values[name] = value
                     try:
                         render(file, values)
                     except subprocess.CalledProcessError as error:
@@ -467,7 +560,8 @@ def interpolated_models():
                             f"Required self-host input accepted: {name}"
                         )
         print(
-            f"PASS: {len(required)} current required inputs reject missing/empty; "
+            f"PASS: {len(required)} historical/{len(current_required)} current "
+            "required inputs reject missing/empty; "
             "retired Python image input is absent"
         )
 

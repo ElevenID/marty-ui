@@ -143,7 +143,15 @@ impl From<InitiationOfferProjectionError> for InitiationHttpError {
 impl IntoResponse for InitiationHttpError {
     fn into_response(self) -> Response {
         let failure = self.failure();
-        (failure.status, Json(json!({"detail": failure.detail}))).into_response()
+        let mut body = json!({"detail": failure.detail});
+        if matches!(
+            self,
+            Self::Projection(InitiationOfferProjectionError::DidcommCapabilityUnavailable)
+        ) {
+            body["code"] = json!("capability_unavailable");
+            body["capability"] = json!("didcomm_authcrypt");
+        }
+        (failure.status, Json(body)).into_response()
     }
 }
 
@@ -159,6 +167,12 @@ impl InitiationHttpError {
             Self::Security(error) => security_failure(error),
             Self::DirectSigningSelection => failure(422, DIRECT_SIGNING_DETAIL),
             Self::Service(error) => service_failure(error),
+            Self::Projection(InitiationOfferProjectionError::DidcommCapabilityUnavailable) => {
+                failure(
+                    422,
+                    "DIDComm authcrypt requires a registered OpenBao extension",
+                )
+            }
             Self::Projection(_) | Self::Unavailable => {
                 failure(503, "Credential offer projection is unavailable")
             }

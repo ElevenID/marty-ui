@@ -9,12 +9,7 @@ const DEVELOPMENT_ISSUER_SIGN_KEY: &str = "dev-signing-keys-issuer-did-sign-key"
 #[derive(Clone, PartialEq, Eq)]
 pub struct IntegrationSecretTls {
     pub addr: SocketAddr,
-    pub cert_file: PathBuf,
-    pub kms_addr: String,
-    pub kms_ca_cert_file: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
+    pub identity: marty_service_runtime::RemoteTlsIdentityFiles,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -55,25 +50,16 @@ impl Config {
         if port == 0 {
             return Err("SIGNING_KEYS_SERVICE_PORT must be greater than zero".into());
         }
-        let tls_cert = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE");
-        if value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE").is_some() {
-            return Err("integration-secret TLS private-key files are not supported".into());
-        }
-        let kms_addr = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR");
-        let kms_ca = value(
-            values,
-            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE",
-        );
-        let kms_token = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE");
-        let kms_key = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME");
-        let kms_version = value(
-            values,
-            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION",
-        );
+        let identity = marty_service_runtime::RemoteTlsIdentityFiles::from_values(
+            |name| values.get(name).map(String::as_str),
+            marty_service_runtime::TlsIdentityNames::files("SIGNING_KEYS_INTEGRATION_SECRET_TLS"),
+            std::time::Duration::from_secs(3),
+            32,
+        )?;
         let tls_port = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_PORT");
-        let integration_secret_tls = match (tls_cert, kms_addr, kms_ca, kms_token, kms_key, kms_version, tls_port) {
-            (None, None, None, None, None, None, None) => None,
-            (Some(cert_file), Some(kms_addr), Some(kms_ca), Some(kms_token), Some(kms_key), Some(kms_version), tls_port) => {
+        let integration_secret_tls = match (identity, tls_port) {
+            (None, None) => None,
+            (Some(identity), tls_port) => {
                 let tls_port = tls_port
                     .map(|value| value.parse::<u16>())
                     .transpose()
@@ -82,22 +68,12 @@ impl Config {
                 if tls_port == 0 || tls_port == port {
                     return Err("integration-secret TLS port must differ from the HTTP port".into());
                 }
-                let kms_key_version = kms_version.parse::<u32>()
-                    .map_err(|_| "integration-secret TLS KMS key version is invalid")?;
-                if kms_key_version == 0 {
-                    return Err("integration-secret TLS KMS key version must be positive".into());
-                }
                 Some(IntegrationSecretTls {
                     addr: SocketAddr::from(([0, 0, 0, 0], tls_port)),
-                    cert_file: PathBuf::from(cert_file),
-                    kms_addr,
-                    kms_ca_cert_file: PathBuf::from(kms_ca),
-                    kms_token_file: PathBuf::from(kms_token),
-                    kms_key_name: kms_key,
-                    kms_key_version,
+                    identity,
                 })
             }
-            _ => {
+            (None, Some(_)) => {
                 return Err("integration-secret TLS requires a public certificate and complete remote KMS identity".into())
             }
         };
@@ -301,9 +277,6 @@ impl Config {
                     .into(),
             );
         }
-        if holder_device_key.is_some() && bao_addr.is_none() {
-            return Err("DEVICE_REGISTRATION_SIGNING_KEYS_KEY requires OpenBao".into());
-        }
         if haip_kms_token_file.is_some() && bao_addr.is_none() {
             return Err("HAIP_KMS_TOKEN_FILE requires BAO_ADDR".into());
         }
@@ -412,6 +385,56 @@ fn value(values: &HashMap<String, String>, name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn integration_secret_tls_accepts_aws_and_keeps_separate_listener_policy() {
+        let mut values = HashMap::from([
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE".into(),
+                "public.pem".into(),
+            ),
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_PROVIDER".into(),
+                "aws-kms".into(),
+            ),
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_REGION".into(),
+                "us-east-1".into(),
+            ),
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_ARN".into(),
+                "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
+                    .into(),
+            ),
+        ]);
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY".into(),
+            "dedicated-integration-secret-key-32-chars".into(),
+        );
+        let config = Config::from_values(&values).unwrap();
+        let tls = config.integration_secret_tls.unwrap();
+        assert_eq!(tls.addr.port(), DEFAULT_INTEGRATION_SECRET_TLS_PORT);
+        let marty_service_runtime::RemoteTlsIdentityFiles::AwsKms(identity) = tls.identity else {
+            panic!("configured AWS identity must reach the HTTPS listener");
+        };
+        assert_eq!(
+            identity.kms.request_timeout,
+            std::time::Duration::from_secs(3)
+        );
+        assert_eq!(identity.max_concurrent_signs, 32);
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE".into(),
+            "old-token".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE");
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_PORT".into(),
+            DEFAULT_HTTP_PORT.to_string(),
+        );
+        assert!(Config::from_values(&values).is_err());
+    }
 
     #[test]
     fn defaults_match_the_existing_service_contract() {
@@ -651,7 +674,7 @@ mod tests {
     }
 
     #[test]
-    fn device_registration_holder_key_requires_distinct_openbao_backed_authority() {
+    fn device_registration_authority_is_distinct_even_without_holder_capability() {
         let mut values = HashMap::from([
             ("BAO_ADDR".into(), "http://bao:8200".into()),
             (
@@ -675,7 +698,7 @@ mod tests {
         );
         values.remove("BAO_ADDR");
         values.remove("BAO_TOKEN");
-        assert!(Config::from_values(&values).is_err());
+        assert!(Config::from_values(&values).is_ok());
     }
 
     #[test]

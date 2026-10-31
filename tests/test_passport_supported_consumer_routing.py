@@ -180,6 +180,7 @@ def test_standalone_selfhost_compose_renders_native_flow_override(
     environment.update(
         SELFHOST_STATE_DIR=str(tmp_path / "state"),
         SELFHOST_SECRET_DIR=str(tmp_path / "secrets"),
+        MARTY_KEYCLOAK_KMS_IMAGE="example.invalid/keycloak-kms@sha256:" + "a" * 64,
         KEYCLOAK_SOCIAL_LOGIN_ENABLED="false",
         PASSPORT_NATIVE_GATEWAY_ENABLED=enabled,
         PASSPORT_NATIVE_FLOW_ENABLED=enabled,

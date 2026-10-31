@@ -355,6 +355,7 @@ struct VaultState {
     values: HashMap<(String, String), String>,
     saved: Vec<NewIntegrationSecret>,
     deleted: Vec<String>,
+    save_failure: Option<(String, CanvasOAuthError)>,
 }
 
 #[async_trait]
@@ -390,6 +391,11 @@ impl CanvasOAuthSecretVault for MemoryVault {
 
     async fn save(&self, secret: NewIntegrationSecret) -> Result<(), CanvasOAuthError> {
         let mut state = self.state.lock().expect("vault state");
+        if let Some((purpose, error)) = &state.save_failure {
+            if purpose == &secret.purpose {
+                return Err(error.clone());
+            }
+        }
         state.values.insert(
             (secret.organization_id.clone(), secret.id.clone()),
             secret.value.clone(),
@@ -701,6 +707,69 @@ async fn access_token_refreshes_under_a_lease_and_rotates_both_secrets() {
     let vault_state = vault.state.lock().expect("vault state");
     assert!(vault_state.deleted.contains(&"access-1".to_owned()));
     assert!(vault_state.deleted.contains(&"refresh-1".to_owned()));
+}
+
+#[tokio::test]
+async fn oauth_secret_capability_refusal_releases_refresh_without_replacing_tokens() {
+    for purpose in ["oauth_access_token", "oauth_refresh_token"] {
+        let (service, repository, vault, provider) = fixture();
+        install_connected_token_fixture(
+            &repository,
+            &vault,
+            Some(Utc::now() - Duration::seconds(1)),
+        );
+        provider.state.lock().unwrap().refresh_bundle = Some(CanvasOAuthTokenBundle {
+            access_token: "new-access-token".into(),
+            refresh_token: Some("new-refresh-token".into()),
+            expires_in_seconds: Some(3_600),
+        });
+        vault.state.lock().unwrap().save_failure = Some((
+            purpose.into(),
+            CanvasOAuthError::SecretCapabilityUnavailable,
+        ));
+
+        assert_eq!(
+            service
+                .access_token("platform-1", Some("management-key"), Some("org-1"))
+                .await,
+            Err(CanvasOAuthError::SecretCapabilityUnavailable),
+            "{purpose}"
+        );
+        let stored = repository.state.lock().unwrap();
+        assert!(stored.refresh_leases.is_empty());
+        let connection = stored
+            .connections
+            .get(&("org-1".into(), "platform-1".into()))
+            .unwrap();
+        assert_eq!(
+            connection.access_token_secret_ref.as_deref(),
+            Some("org_secret://org-1/access-1")
+        );
+        assert_eq!(
+            connection.refresh_token_secret_ref.as_deref(),
+            Some("org_secret://org-1/refresh-1")
+        );
+        let secrets = vault.state.lock().unwrap();
+        assert_eq!(
+            secrets
+                .values
+                .get(&("org-1".into(), "access-1".into()))
+                .map(String::as_str),
+            Some("current-access-token")
+        );
+        assert_eq!(
+            secrets
+                .values
+                .get(&("org-1".into(), "refresh-1".into()))
+                .map(String::as_str),
+            Some("current-refresh-token")
+        );
+        assert_eq!(secrets.values.len(), 3);
+        assert_eq!(
+            secrets.deleted.len(),
+            usize::from(purpose == "oauth_refresh_token")
+        );
+    }
 }
 
 #[tokio::test]
@@ -1499,6 +1568,93 @@ async fn callback_http_is_public_but_state_bound_and_never_browser_cacheable() {
         .expect("location");
     assert!(location.contains("error_code=oauth_authorization_denied"));
     assert!(!location.contains("access_denied"));
+}
+
+#[tokio::test]
+async fn oauth_secret_capability_refusal_is_noncacheable_without_publishing_tokens() {
+    for purpose in ["oauth_access_token", "oauth_refresh_token"] {
+        for failure in [
+            CanvasOAuthError::SecretCapabilityUnavailable,
+            CanvasOAuthError::SecretUnavailable,
+        ] {
+            let (service, repository, vault, provider) = fixture();
+            vault.state.lock().unwrap().save_failure = Some((purpose.into(), failure.clone()));
+            let started = service
+                .start(
+                    "platform-1",
+                    start_request(),
+                    Some("management-key"),
+                    Some("org-1"),
+                )
+                .await
+                .unwrap();
+            let state = state_from_authorization_url(&started.authorization_url);
+            let response = service_app(service.clone())
+                .oneshot(
+                    Request::get(format!(
+                        "/v1/integrations/canvas/oauth/callback?state={state}&code=authorization-code-secret"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            let capability = failure == CanvasOAuthError::SecretCapabilityUnavailable;
+            assert_eq!(
+                response.status(),
+                if capability {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                },
+                "{purpose}: {failure}"
+            );
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert_eq!(response.headers()[header::PRAGMA], "no-cache");
+            assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+            assert!(response.headers().get(header::RETRY_AFTER).is_none());
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let text = std::str::from_utf8(&bytes).unwrap();
+            for secret in [
+                state.as_str(),
+                "authorization-code-secret",
+                "client-secret-value",
+                "access-token-value",
+                "refresh-token-value",
+            ] {
+                assert!(!text.contains(secret));
+            }
+            if capability {
+                let body: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(body["code"], "capability_unavailable");
+                assert_eq!(body["capability"], "integration_secret_encryption");
+            } else {
+                assert_eq!(text, "Internal Server Error");
+            }
+            assert!(repository.state.lock().unwrap().connections.is_empty());
+            {
+                let secrets = vault.state.lock().unwrap();
+                assert_eq!(secrets.values.len(), 1);
+                assert_eq!(secrets.metadata.len(), 1);
+                assert_eq!(
+                    secrets.deleted.len(),
+                    usize::from(purpose == "oauth_refresh_token")
+                );
+            }
+            let replay = service
+                .callback(CanvasOAuthCallbackRequest {
+                    code: Some("authorization-code-secret".into()),
+                    state,
+                    error: None,
+                })
+                .await
+                .unwrap();
+            assert!(replay.location.contains("error_code=oauth_state_invalid"));
+            assert_eq!(provider.state.lock().unwrap().exchanges.len(), 1);
+        }
+    }
 }
 
 #[test]

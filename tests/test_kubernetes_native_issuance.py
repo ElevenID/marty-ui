@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import runpy
 
 import pytest
 import yaml
@@ -132,7 +133,7 @@ def signing_inventory(values):
     value = deployment(values, "signing-keys")
     selected = owner(value)
     entries = selected["env"]
-    assert len(entries) == len({v["name"] for v in entries}) == 20
+    assert len(entries) == len({v["name"] for v in entries}) == 21
     actual = {v["name"]: v for v in entries}
     expected = {
         "SERVICE_NAME": {"name": "SERVICE_NAME", "value": "signing-keys"},
@@ -159,6 +160,10 @@ def signing_inventory(values):
         "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE": {
             "name": "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE",
             "value": "/run/secrets/signing-grant-verify/token",
+        },
+        "DIDCOMM_KMS_TOKEN_FILE": {
+            "name": "DIDCOMM_KMS_TOKEN_FILE",
+            "value": "/run/secrets/didcomm-kms/token",
         },
         "BAO_CACERT": {
             "name": "BAO_CACERT",
@@ -231,6 +236,11 @@ def signing_inventory(values):
             "mountPath": "/run/secrets/signing-grant-verify",
             "readOnly": True,
         },
+        {
+            "name": "didcomm-kms-token",
+            "mountPath": "/run/secrets/didcomm-kms",
+            "readOnly": True,
+        },
     ]
     assert value["spec"]["template"]["spec"]["volumes"] == [
         {
@@ -250,6 +260,13 @@ def signing_inventory(values):
             "secret": {
                 "secretName": "marty-secrets",
                 "items": [{"key": "SIGNING_KEYS_GRANT_VERIFY_TOKEN", "path": "token"}],
+            },
+        },
+        {
+            "name": "didcomm-kms-token",
+            "secret": {
+                "secretName": "marty-secrets",
+                "items": [{"key": "DIDCOMM_ISSUANCE_OPENBAO_TOKEN", "path": "token"}],
             },
         },
     ]
@@ -277,7 +294,8 @@ def signing_inventory(values):
 
 
 @pytest.mark.parametrize(
-    "fault", [None, "missing-token", "wrong-redis", "broad-env", "sidecar"]
+    "fault", [None, "missing-token", "wrong-redis", "broad-env", "sidecar",
+              "missing-didcomm-token", "wrong-didcomm-token", "writable-didcomm-token"]
 )
 def test_signing_dependency_has_only_existing_declared_bindings(fault):
     values = resources("k8s/oracle/07b-signing-keys.yaml")
@@ -297,6 +315,13 @@ def test_signing_dependency_has_only_existing_declared_bindings(fault):
         deployment(values, "signing-keys")["spec"]["template"]["spec"][
             "containers"
         ].append({"name": "other"})
+    elif fault == "missing-didcomm-token":
+        selected["env"] = [v for v in selected["env"] if v["name"] != "DIDCOMM_KMS_TOKEN_FILE"]
+    elif fault == "wrong-didcomm-token":
+        volumes = deployment(values, "signing-keys")["spec"]["template"]["spec"]["volumes"]
+        next(v for v in volumes if v["name"] == "didcomm-kms-token")["secret"]["items"][0]["key"] = "SIGNING_KEYS_OPENBAO_TOKEN"
+    elif fault == "writable-didcomm-token":
+        next(v for v in selected["volumeMounts"] if v["name"] == "didcomm-kms-token")["readOnly"] = False
     if fault:
         with pytest.raises(AssertionError):
             signing_inventory(values)
@@ -408,7 +433,7 @@ def native_inventory(value):
     }
     assert set(refs) == (
         constants("INHERITED_SETTINGS")
-        | {"ISSUER_BASE_URL", "DIDCOMM_KMS_ADDR", "BAO_ADDR"}
+        | {"ISSUER_BASE_URL", "BAO_ADDR"}
         | set(server_kms_refs)
     )
     assert refs == {
@@ -418,7 +443,7 @@ def native_inventory(value):
                 name,
                 "PUBLIC_API_URL"
                 if name == "ISSUER_BASE_URL"
-                else "BAO_ADDR" if name == "DIDCOMM_KMS_ADDR" else name,
+                else name,
             ),
         }
         for name in refs
@@ -445,16 +470,9 @@ def native_inventory(value):
         }
     assert not any(
         ("BAO" in v["name"] and v["name"] != "BAO_ADDR")
+        or v["name"].startswith("DIDCOMM_KMS_")
         or v["name"] == "CANVAS_SYNC_PROCESSOR" for v in entries
     )
-    assert next(v for v in entries if v["name"] == "DIDCOMM_KMS_TOKEN_FILE") == {
-        "name": "DIDCOMM_KMS_TOKEN_FILE",
-        "value": "/run/secrets/didcomm-kms/token",
-    }
-    assert next(v for v in entries if v["name"] == "DIDCOMM_KMS_CA_CERT_FILE") == {
-        "name": "DIDCOMM_KMS_CA_CERT_FILE",
-        "value": "/run/secrets/issuance-server-kms/ca.crt",
-    }
     for origin in ("CREDENTIAL", "CANVAS", "READINESS", "PASSPORT"):
         name = f"ISSUANCE_{origin}_SIGN_GRANT_MINT_TOKEN_FILE"
         assert next(v for v in entries if v["name"] == name) == {
@@ -470,11 +488,6 @@ def native_inventory(value):
         {
             "name": "issuance-server-kms",
             "mountPath": "/run/secrets/issuance-server-kms",
-            "readOnly": True,
-        },
-        {
-            "name": "didcomm-kms-token",
-            "mountPath": "/run/secrets/didcomm-kms",
             "readOnly": True,
         },
         {
@@ -496,10 +509,6 @@ def native_inventory(value):
         {
             "name": "issuance-server-kms",
             "secret": {"secretName": "issuance-server-kms"},
-        },
-        {
-            "name": "didcomm-kms-token",
-            "secret": {"secretName": "marty-secrets", "items": [{"key": "DIDCOMM_ISSUANCE_OPENBAO_TOKEN", "path": "token"}]},
         },
         {
             "name": "integration-secret-ca",
@@ -553,7 +562,7 @@ def test_didcomm_workload_token_is_required_and_distinct_from_signing_tokens():
 
 @pytest.mark.parametrize(
     "fault",
-    [None, "broad-config", "custody", "missing-key", "duplicate-key", "wrong-secret", "missing-kms-token", "wrong-kms-token", "missing-grant-mount", "wrong-grant-token"],
+    [None, "broad-config", "custody", "missing-key", "duplicate-key", "wrong-secret", "missing-kms-token", "wrong-kms-token", "missing-grant-mount", "wrong-grant-token", "direct-didcomm-token", "plain-http-didcomm-owner", "wrong-issuer-authority"],
 )
 def test_native_inventory_is_complete_and_custody_free(fault):
     value = deployment(
@@ -583,24 +592,27 @@ def test_native_inventory_is_complete_and_custody_free(fault):
         value["spec"]["template"]["spec"].pop("volumes")
     elif fault == "wrong-kms-token":
         volumes = value["spec"]["template"]["spec"]["volumes"]
-        next(v for v in volumes if v["name"] == "didcomm-kms-token")["secret"]["items"][0]["key"] = "OPENBAO_SERVICE_TOKEN"
+        next(v for v in volumes if v["name"] == "issuance-server-kms")["secret"]["secretName"] = "marty-secrets"
     elif fault == "missing-grant-mount":
         owner(value)["volumeMounts"].pop()
     elif fault == "wrong-grant-token":
         volumes = value["spec"]["template"]["spec"]["volumes"]
         next(v for v in volumes if v["name"] == "issuance-sign-grants")["secret"]["items"][0]["key"] = "OPENBAO_SERVICE_TOKEN"
+    elif fault == "direct-didcomm-token":
+        owner(value)["env"].append({"name": "DIDCOMM_KMS_TOKEN_FILE", "value": "/run/secrets/direct-plugin-token"})
+    elif fault == "plain-http-didcomm-owner":
+        next(v for v in owner(value)["env"] if v["name"] == "INTEGRATION_SECRET_KMS_URL")["value"] = "http://signing-keys:8017/internal"
+    elif fault == "wrong-issuer-authority":
+        next(v for v in owner(value)["env"] if v["name"] == "SIGNING_KEYS_ISSUER_SIGN_KEY")["valueFrom"]["secretKeyRef"]["key"] = "SIGNING_KEYS_INTERNAL_API_KEY"
     if fault:
         with pytest.raises(AssertionError):
             native_inventory(value)
 
 
 def test_all_production_native_configuration_inputs_have_a_classification():
-    source = (
-        (ROOT / "rust/services/issuance/src/config.rs")
-        .read_text()
-        .split("#[cfg(test)]")[0]
-    )
-    inputs = set(re.findall(r'"([A-Z][A-Z0-9_]+)"', source))
+    inputs = runpy.run_path(
+        str(ROOT / "scripts/test_conformance_native_compose.py")
+    )["issuance_configuration_inputs"]()
     native = owner(
         deployment(resources("k8s/oracle/07a-issuance-native.yaml"), "issuance-native")
     )
@@ -627,6 +639,12 @@ def test_all_production_native_configuration_inputs_have_a_classification():
         "DIDCOMM_TLS_CA_FILE",
         "GRPC_SERVICE_TOKEN_FILE",
         "GRPC_WORKLOAD_TLS_SERVER_KEY",
+        "GRPC_WORKLOAD_TLS_SERVER_KEY_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_PRIVATE_KEY",
+        "GRPC_WORKLOAD_TLS_SERVER_PRIVATE_KEY_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_PROVIDER",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_REGION",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_ARN",
         "INTEGRATION_SECRET_MASTER_KEY",
         "INTEGRATION_SECRET_MASTER_KEY_FILE",
         "INTEGRATION_SECRET_MASTER_KEY_ENV",

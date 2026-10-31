@@ -82,16 +82,7 @@ pub struct FlowServiceConfig {
     pub build_revision: String,
 }
 
-#[derive(Clone, Eq, PartialEq)]
-pub struct WorkloadClientTlsFiles {
-    pub certificate: PathBuf,
-    pub ca_certificate: PathBuf,
-    pub kms_endpoint: String,
-    pub kms_ca_certificate: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
-}
+pub use marty_service_runtime::WorkloadTlsFiles as WorkloadClientTlsFiles;
 
 pub type WorkloadServerTlsFiles = WorkloadClientTlsFiles;
 
@@ -965,35 +956,33 @@ fn workload_keyless_tls(
     if values.contains_key(retired_key_name) {
         return Err(invalid(retired_key_name));
     }
-    let configured = names
-        .iter()
-        .filter(|name| value(values, name).is_some())
-        .count();
-    if configured == 0 && !environment.is_deployed() {
-        return Ok(None);
-    }
-    if configured != names.len() {
-        return Err(if configured == 0 {
-            FlowConfigError::Missing { name: names[0] }
+    let prefix = names[2]
+        .strip_suffix("_KMS_ADDR")
+        .expect("fixed TLS prefix");
+    let files = WorkloadClientTlsFiles::from_values(
+        |name| values.get(name).map(String::as_str),
+        marty_service_runtime::TlsIdentityNames::new(prefix),
+        names[1],
+        value(values, names[1]).is_some(),
+        std::time::Duration::from_secs(10),
+        64,
+    )
+    .map_err(|error| {
+        let name = if error.contains("is required") {
+            names[0]
         } else {
-            invalid(names[0])
-        });
+            names
+                .iter()
+                .copied()
+                .find(|name| error.starts_with(name))
+                .unwrap_or(names[0])
+        };
+        invalid(name)
+    })?;
+    if files.is_none() && environment.is_deployed() {
+        return Err(FlowConfigError::Missing { name: names[0] });
     }
-    let version = value(values, names[6])
-        .unwrap_or_default()
-        .parse::<u32>()
-        .ok()
-        .filter(|version| *version > 0)
-        .ok_or_else(|| invalid(names[6]))?;
-    Ok(Some(WorkloadClientTlsFiles {
-        certificate: PathBuf::from(value(values, names[0]).unwrap_or_default()),
-        ca_certificate: PathBuf::from(value(values, names[1]).unwrap_or_default()),
-        kms_endpoint: value(values, names[2]).unwrap_or_default().into(),
-        kms_ca_certificate: PathBuf::from(value(values, names[3]).unwrap_or_default()),
-        kms_token_file: PathBuf::from(value(values, names[4]).unwrap_or_default()),
-        kms_key_name: value(values, names[5]).unwrap_or_default().into(),
-        kms_key_version: version,
-    }))
+    Ok(files)
 }
 
 const fn invalid(name: &'static str) -> FlowConfigError {

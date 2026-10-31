@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use marty_service_runtime::workload::peer_uri_sans;
-use mmf_platform::{KeylessGrpcTlsAcceptor, OpenBaoTlsIdentityFiles};
+use mmf_platform::KeylessGrpcTlsAcceptor;
 use mmf_security::WorkloadIdentityPolicy;
 use thiserror::Error;
 use tonic::{Request, Status};
@@ -60,22 +60,14 @@ impl PresentationGrpcSecurity {
         let Some(files) = &self.server_tls else {
             return Ok(None);
         };
-        let acceptor = OpenBaoTlsIdentityFiles {
-            certificate_chain_file: files.certificate.clone(),
-            kms_ca_cert_file: files.kms_ca_certificate.clone(),
-            kms_endpoint: files.kms_endpoint.clone(),
-            kms_token_file: files.kms_token_file.clone(),
-            kms_key_name: files.kms_key_name.clone(),
-            kms_key_version: files.kms_key_version,
-            request_timeout: std::time::Duration::from_secs(10),
-            max_concurrent_signs: 64,
-        }
-        .grpc_acceptor(
-            &files.ca_certificate,
-            64,
-            std::time::Duration::from_secs(15),
-        )
-        .await?;
+        let acceptor = files
+            .identity
+            .grpc_acceptor(
+                &files.ca_certificate,
+                64,
+                std::time::Duration::from_secs(15),
+            )
+            .await?;
         Ok(Some(acceptor))
     }
 

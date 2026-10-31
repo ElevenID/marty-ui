@@ -2,11 +2,6 @@
 
 use std::{env, fs, path::Path, time::Duration};
 
-use aws_config::BehaviorVersion;
-use aws_credential_types::Credentials;
-use aws_sdk_kms::config::Region;
-use aws_sdk_kms::primitives::Blob;
-use aws_sdk_kms::types::{MessageType, SigningAlgorithmSpec};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -1849,13 +1844,12 @@ mod tests {
     }
 
     #[test]
-    fn aws_signing_requires_a_region_bound_key_arn_and_matching_response() {
+    fn aws_signing_requires_a_region_bound_key_arn() {
         let reference = "arn:aws:kms:us-east-1:111122223333:key/test";
         assert_eq!(
             aws_key_arn(&json!({"key_reference": reference})).unwrap(),
             reference
         );
-        assert!(require_aws_response_key(Some(reference), reference).is_ok());
         for invalid in [
             "alias/movable",
             "arn:aws:kms:us-east-1:111122223333:alias/movable",
@@ -1864,12 +1858,6 @@ mod tests {
         ] {
             assert!(aws_key_arn(&json!({"key_reference": invalid})).is_err());
         }
-        assert!(require_aws_response_key(None, reference).is_err());
-        assert!(require_aws_response_key(
-            Some("arn:aws:kms:us-east-1:111122223333:key/other"),
-            reference
-        )
-        .is_err());
     }
 
     #[tokio::test]

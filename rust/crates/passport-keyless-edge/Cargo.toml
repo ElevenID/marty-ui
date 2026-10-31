@@ -18,6 +18,7 @@ path = "src/bin/oidf_edge.rs"
 
 
 [dependencies]
+marty-service-runtime = { path = "../service-runtime" }
 marty-selfhost-identity = { path = "../selfhost-identity" }
 axum.workspace = true
 axum-server.workspace = true

@@ -205,7 +205,7 @@ pub fn provision(
         installation,
         bundle,
         state,
-        bao,
+        Some(bao),
         inputs,
         "installer-keycloak",
         &bao.image,

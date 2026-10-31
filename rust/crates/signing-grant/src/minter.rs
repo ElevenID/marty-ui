@@ -1,10 +1,11 @@
-//! Scoped OpenBao Transit HMAC minting for an authorized signing operation.
+//! Scoped remote HMAC minting for an authorized signing operation.
 
 use async_trait::async_trait;
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use crate::{
     mint_bound,
+    provider::GrantMac,
     token_file::read_token_file,
     transit::{TransitGrantClient, TransitGrantError},
     GrantBinding, GrantEnvelope, GrantError, SigningOrigin,
@@ -12,8 +13,8 @@ use crate::{
 
 #[derive(Clone)]
 pub struct GrantMinter {
-    client: TransitGrantClient,
-    mint_token_file: PathBuf,
+    client: Arc<dyn GrantMac>,
+    mint_token_file: Option<PathBuf>,
 }
 
 impl GrantMinter {
@@ -28,24 +29,34 @@ impl GrantMinter {
             return Err(TransitGrantError::InvalidConfig);
         }
         Ok(Self {
-            client: TransitGrantClient::for_origin(endpoint, origin)?,
-            mint_token_file,
+            client: Arc::new(TransitGrantClient::for_origin(endpoint, origin)?),
+            mint_token_file: Some(mint_token_file),
         })
+    }
+
+    pub(crate) fn for_aws(client: crate::aws::AwsGrantClient) -> Self {
+        Self {
+            client: Arc::new(client),
+            mint_token_file: None,
+        }
     }
 
     pub async fn mint(&self, binding: &GrantBinding<'_>) -> Result<GrantEnvelope, GrantError> {
         if self.client.origin() != binding.origin {
             return Err(GrantError::BindingMismatch);
         }
-        let token = read_token_file(&self.mint_token_file)
-            .await
-            .map_err(|_| GrantError::MinterUnavailable)?;
-        mint_bound(&self.client, &token, binding).await
+        let token = match &self.mint_token_file {
+            Some(path) => read_token_file(path)
+                .await
+                .map_err(|_| GrantError::MinterUnavailable)?,
+            None => String::new(),
+        };
+        mint_bound(self.client.as_ref(), &token, binding).await
     }
 }
 
 /// Mint a grant for an operation authorized by the calling service.
-/// Production uses OpenBao; callers can supply a contract-test implementation
+/// Production uses the configured remote KMS; callers can supply a contract-test implementation
 /// without enabling plaintext KMS transport in the production client.
 #[async_trait]
 pub trait GrantMinting: Send + Sync {

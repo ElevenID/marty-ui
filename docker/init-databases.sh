@@ -27,7 +27,11 @@ read_secret_value() {
     printf '%s' "${current_value:-${default_value}}"
 }
 
-KEYCLOAK_DB_PASSWORD_VALUE="$(read_secret_value KEYCLOAK_DB_PASSWORD keycloak)"
+case "${MARTY_INITIALIZE_KEYCLOAK_DATABASE:-true}" in
+    true) KEYCLOAK_DB_PASSWORD_VALUE="$(read_secret_value KEYCLOAK_DB_PASSWORD keycloak)" ;;
+    false) ;;
+    *) echo "MARTY_INITIALIZE_KEYCLOAK_DATABASE must be true or false." >&2; exit 1 ;;
+esac
 MARTY_DB_PASSWORD_VALUE="$(read_secret_value MARTY_DB_PASSWORD marty_dev_password)"
 
 # Function to create database and user
@@ -60,7 +64,9 @@ EOSQL
 }
 
 # Create Keycloak database
-create_database_and_user "keycloak" "keycloak" "${KEYCLOAK_DB_PASSWORD_VALUE}"
+if [ "${MARTY_INITIALIZE_KEYCLOAK_DATABASE:-true}" = true ]; then
+    create_database_and_user "keycloak" "keycloak" "${KEYCLOAK_DB_PASSWORD_VALUE}"
+fi
 
 # Create Marty microservices database
 create_database_and_user "marty" "marty" "${MARTY_DB_PASSWORD_VALUE}"

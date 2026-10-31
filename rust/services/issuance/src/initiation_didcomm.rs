@@ -16,6 +16,10 @@ use marty_didcomm::{
     encrypt_for_recipient, pack_credential_for_holder, unpack_didcomm_message, DidDocument,
     DidResolver,
 };
+use marty_signing_grant::didcomm::{
+    public_key_bytes, DidcommKeyReference, DidcommOperationBinding, DidcommPackPhase,
+    DidcommPackRequest, RemoteRecipientPublic,
+};
 use reqwest::{redirect::Policy, Certificate, Client, Url};
 use serde::{
     de::{self, MapAccess, Visitor},
@@ -32,7 +36,7 @@ use crate::{
         CredentialMaterializationContext, CredentialTransaction, CredentialTransactionStatus,
         IssuedCredential, IssuerContextResolver, VerifiedCredentialProof,
     },
-    didcomm_remote_kms::{DidcommKeyReference, RemoteDidcommKms, RemoteRecipientPublic},
+    didcomm_kms::RegisteredDidcommKms,
     initiation_response::{
         InitiationDidcommDelivery, InitiationDidcommDeliveryError, InitiationDidcommDeliveryReceipt,
     },
@@ -69,6 +73,8 @@ pub enum NativeDidcommError {
     EndpointNotPublic,
     #[error("DIDComm encryption policy is unavailable")]
     EncryptionPolicyUnavailable,
+    #[error("DIDComm authcrypt requires a registered OpenBao extension")]
+    CapabilityUnavailable,
     #[error("DIDComm sender authentication is unavailable")]
     SenderAuthenticationUnavailable,
     #[error("holder DID has no compatible DIDComm key agreement")]
@@ -348,6 +354,7 @@ pub trait DidcommEnvelopePort: Send + Sync {
     async fn prepare_encryption(
         &self,
         organization_id: &str,
+        operation_id: &str,
         issuer_did: &str,
         recipient_document: DidDocument,
     ) -> Result<PreparedDidcommEncryption, NativeDidcommError>;
@@ -390,7 +397,7 @@ pub trait DidcommTransportPort: Send + Sync {
 pub struct NativeDidcommEnvelope {
     resolver: Arc<DidResolver>,
     policy_file: Option<Arc<PathBuf>>,
-    remote_kms: Option<Arc<RemoteDidcommKms>>,
+    remote_kms: Option<Arc<RegisteredDidcommKms>>,
 }
 
 impl fmt::Debug for NativeDidcommEnvelope {
@@ -423,7 +430,7 @@ impl NativeDidcommEnvelope {
     }
 
     #[must_use]
-    pub fn with_remote_kms(mut self, remote_kms: RemoteDidcommKms) -> Self {
+    pub fn with_registered_kms(mut self, remote_kms: RegisteredDidcommKms) -> Self {
         self.remote_kms = Some(Arc::new(remote_kms));
         self
     }
@@ -455,6 +462,7 @@ impl NativeDidcommEnvelope {
     pub async fn prepare_encryption(
         &self,
         organization_id: &str,
+        operation_id: &str,
         issuer_did: &str,
         recipient_document: DidDocument,
     ) -> Result<PreparedDidcommEncryption, NativeDidcommError> {
@@ -469,33 +477,37 @@ impl NativeDidcommEnvelope {
                     .map_err(|_| NativeDidcommError::IncompatibleKeyAgreement)?;
                 PreparedEncryptionMode::Anoncrypt
             }
-            ActiveEncryptionPolicy::Authcrypt(key_reference) => {
-                if key_reference.tenant() != organization_id {
+            ActiveEncryptionPolicy::Authcrypt(legacy_reference) => {
+                if legacy_reference
+                    .as_ref()
+                    .is_some_and(|reference| reference.tenant() != organization_id)
+                {
                     return Err(NativeDidcommError::SenderAuthenticationUnavailable);
                 }
                 let kms = self
                     .remote_kms
                     .as_ref()
-                    .ok_or(NativeDidcommError::SenderAuthenticationUnavailable)?;
+                    .ok_or(NativeDidcommError::CapabilityUnavailable)?;
+                let binding = kms.resolve(organization_id, issuer_did).await?;
+                if legacy_reference
+                    .as_ref()
+                    .is_some_and(|reference| reference.to_string() != binding.key_reference)
+                {
+                    return Err(NativeDidcommError::SenderAuthenticationUnavailable);
+                }
                 let sender_document = self
                     .resolver
                     .resolve(issuer_did)
                     .await
                     .map_err(|_| NativeDidcommError::SenderAuthenticationUnavailable)?;
-                if sender_document.id != issuer_did {
-                    return Err(NativeDidcommError::SenderAuthenticationUnavailable);
-                }
-                let sender = kms
-                    .public_key(&key_reference, issuer_did)
-                    .await
+                let public = public_key_bytes(&binding.public_key)
                     .map_err(|_| NativeDidcommError::SenderAuthenticationUnavailable)?;
-                if !sender_document
-                    .x25519_key_agreement_methods()
-                    .map_err(|_| NativeDidcommError::SenderAuthenticationUnavailable)?
-                    .iter()
-                    .any(|(kid, public)| {
-                        kid == &sender.sender_key_id && public == &sender.public_key
-                    })
+                if sender_document.id != issuer_did
+                    || !sender_document
+                        .x25519_key_agreement_methods()
+                        .map_err(|_| NativeDidcommError::SenderAuthenticationUnavailable)?
+                        .iter()
+                        .any(|(kid, key)| kid == &binding.sender_key_id && key == &public)
                 {
                     return Err(NativeDidcommError::SenderAuthenticationUnavailable);
                 }
@@ -508,18 +520,21 @@ impl NativeDidcommEnvelope {
                 if recipients.is_empty() || recipients.len() > 32 {
                     return Err(NativeDidcommError::IncompatibleKeyAgreement);
                 }
-                kms.pack(
-                    &key_reference,
-                    &sender.sender_key_id,
-                    &recipient_document.id,
-                    &recipients,
-                    &plaintext,
-                )
-                .await
-                .map_err(|_| NativeDidcommError::SenderAuthenticationUnavailable)?;
+                kms.pack(&DidcommPackRequest {
+                    organization_id: organization_id.into(),
+                    issuer_did: issuer_did.into(),
+                    operation_id: operation_id.into(),
+                    phase: DidcommPackPhase::Preflight,
+                    binding: binding.clone(),
+                    recipient_did: recipient_document.id.clone(),
+                    recipients: recipients.clone(),
+                    plaintext,
+                })
+                .await?;
                 PreparedEncryptionMode::Authcrypt {
-                    key_reference,
-                    sender_key_id: sender.sender_key_id,
+                    organization_id: organization_id.into(),
+                    operation_id: operation_id.into(),
+                    binding,
                     recipients,
                 }
             }
@@ -571,22 +586,26 @@ impl NativeDidcommEnvelope {
                     .map_err(|_| NativeDidcommError::IncompatibleKeyAgreement)
             }
             PreparedEncryptionMode::Authcrypt {
-                key_reference,
-                sender_key_id,
+                organization_id,
+                operation_id,
+                binding,
                 recipients,
-            } => self
-                .remote_kms
-                .as_ref()
-                .ok_or(NativeDidcommError::SenderAuthenticationUnavailable)?
-                .pack(
-                    key_reference,
-                    sender_key_id,
-                    &prepared.recipient_document.id,
-                    recipients,
-                    plaintext,
-                )
-                .await
-                .map_err(|_| NativeDidcommError::SenderAuthenticationUnavailable),
+            } => {
+                self.remote_kms
+                    .as_ref()
+                    .ok_or(NativeDidcommError::CapabilityUnavailable)?
+                    .pack(&DidcommPackRequest {
+                        organization_id: organization_id.clone(),
+                        issuer_did: prepared.issuer_did.clone(),
+                        operation_id: operation_id.clone(),
+                        phase: DidcommPackPhase::Delivery,
+                        binding: binding.clone(),
+                        recipient_did: prepared.recipient_document.id.clone(),
+                        recipients: recipients.clone(),
+                        plaintext: plaintext.into(),
+                    })
+                    .await
+            }
         }
     }
 }
@@ -603,12 +622,14 @@ impl DidcommEnvelopePort for NativeDidcommEnvelope {
     async fn prepare_encryption(
         &self,
         organization_id: &str,
+        operation_id: &str,
         issuer_did: &str,
         recipient_document: DidDocument,
     ) -> Result<PreparedDidcommEncryption, NativeDidcommError> {
         NativeDidcommEnvelope::prepare_encryption(
             self,
             organization_id,
+            operation_id,
             issuer_did,
             recipient_document,
         )
@@ -677,8 +698,9 @@ impl fmt::Debug for PreparedDidcommEncryption {
 enum PreparedEncryptionMode {
     Anoncrypt,
     Authcrypt {
-        key_reference: DidcommKeyReference,
-        sender_key_id: String,
+        organization_id: String,
+        operation_id: String,
+        binding: DidcommOperationBinding,
         recipients: Vec<RemoteRecipientPublic>,
     },
 }
@@ -1186,6 +1208,7 @@ impl NativeInitiationDidcommDelivery {
             .envelope
             .prepare_encryption(
                 &transaction.organization_id,
+                &transaction.id,
                 &issuer.issuer_did,
                 recipient.document,
             )
@@ -1252,11 +1275,15 @@ impl NativeInitiationDidcommDelivery {
             .await
         {
             Ok(encrypted) => encrypted,
-            Err(_) => {
+            Err(error) => {
                 return self
                     .release_failure(
                         &claim,
-                        NativeInitiationDidcommDeliveryError::DidcommUnavailable,
+                        if error == NativeDidcommError::CapabilityUnavailable {
+                            NativeInitiationDidcommDeliveryError::Prerequisite(error)
+                        } else {
+                            NativeInitiationDidcommDeliveryError::DidcommUnavailable
+                        },
                     )
                     .await
             }
@@ -1504,13 +1531,18 @@ impl InitiationDidcommDelivery for NativeInitiationDidcommDelivery {
                 service_endpoint: receipt.service_endpoint,
                 delivered: receipt.status == NativeDidcommDeliveryStatus::Delivered,
             })
-            .map_err(|_| InitiationDidcommDeliveryError)
+            .map_err(|error| match error {
+                NativeInitiationDidcommDeliveryError::Prerequisite(
+                    NativeDidcommError::CapabilityUnavailable,
+                ) => InitiationDidcommDeliveryError::CapabilityUnavailable,
+                _ => InitiationDidcommDeliveryError::Unavailable,
+            })
     }
 }
 
 enum ActiveEncryptionPolicy {
     Anoncrypt,
-    Authcrypt(DidcommKeyReference),
+    Authcrypt(Option<DidcommKeyReference>),
 }
 
 #[derive(Deserialize)]
@@ -1522,7 +1554,7 @@ struct EncryptionPolicyFile {
 
 enum ConfiguredIssuerPolicy {
     Anoncrypt,
-    Authcrypt { sender_key_ref: String },
+    Authcrypt { sender_key_ref: Option<String> },
 }
 
 impl<'de> Deserialize<'de> for ConfiguredIssuerPolicy {
@@ -1552,6 +1584,9 @@ impl<'de> Deserialize<'de> for ConfiguredIssuerPolicy {
                 let mode = values.get("mode").and_then(serde_json::Value::as_str);
                 match mode {
                     Some("anoncrypt") if values.len() == 1 => Ok(Self::Value::Anoncrypt),
+                    Some("authcrypt") if values.len() == 1 => Ok(Self::Value::Authcrypt {
+                        sender_key_ref: None,
+                    }),
                     Some("authcrypt")
                         if values.len() == 2 && values.contains_key("sender_key_ref") =>
                     {
@@ -1561,7 +1596,9 @@ impl<'de> Deserialize<'de> for ConfiguredIssuerPolicy {
                             .ok_or_else(|| {
                                 de::Error::custom("authcrypt sender key must be a reference string")
                             })?;
-                        Ok(Self::Value::Authcrypt { sender_key_ref })
+                        Ok(Self::Value::Authcrypt {
+                            sender_key_ref: Some(sender_key_ref),
+                        })
                     }
                     _ => Err(de::Error::custom(
                         "DIDComm encryption policy entry has invalid fields or mode",
@@ -1649,13 +1686,18 @@ fn load_active_policy(
     for (did, configured) in std::mem::take(&mut policy.issuers.0) {
         let resolved = match configured {
             ConfiguredIssuerPolicy::Anoncrypt => ActiveEncryptionPolicy::Anoncrypt,
-            ConfiguredIssuerPolicy::Authcrypt { sender_key_ref } => {
+            ConfiguredIssuerPolicy::Authcrypt {
+                sender_key_ref: None,
+            } => ActiveEncryptionPolicy::Authcrypt(None),
+            ConfiguredIssuerPolicy::Authcrypt {
+                sender_key_ref: Some(sender_key_ref),
+            } => {
                 let key = DidcommKeyReference::parse(&sender_key_ref)
                     .map_err(|_| NativeDidcommError::EncryptionPolicyUnavailable)?;
                 if !used_authcrypt_keys.insert(sender_key_ref) {
                     return Err(NativeDidcommError::EncryptionPolicyUnavailable);
                 }
-                ActiveEncryptionPolicy::Authcrypt(key)
+                ActiveEncryptionPolicy::Authcrypt(Some(key))
             }
         };
         if did == issuer_did {
@@ -2311,6 +2353,7 @@ mod tests {
         async fn prepare_encryption(
             &self,
             _organization_id: &str,
+            _operation_id: &str,
             _issuer_did: &str,
             recipient_document: DidDocument,
         ) -> Result<PreparedDidcommEncryption, NativeDidcommError> {
@@ -3294,6 +3337,7 @@ mod tests {
             (NativeDidcommError::IncompatibleKeyAgreement, false),
             (NativeDidcommError::EncryptionPolicyUnavailable, false),
             (NativeDidcommError::SenderAuthenticationUnavailable, false),
+            (NativeDidcommError::CapabilityUnavailable, false),
         ] {
             let (mut delivery, repository, order) = delivery_harness(HarnessOptions {
                 endpoint_fail: false,
@@ -3370,6 +3414,35 @@ mod tests {
             assert!(!observed.contains(&"transport"));
             assert_eq!(observed.contains(&"encrypt"), !packing);
         }
+    }
+
+    #[tokio::test]
+    async fn removed_authcrypt_capability_releases_the_claim_without_staging_or_delivery() {
+        let (mut delivery, repository, order) = delivery_harness(HarnessOptions {
+            endpoint_fail: false,
+            builder_fail: false,
+            transport_outcome: DidcommTransportOutcome::Delivered,
+            post_issuance_fail: false,
+        });
+        delivery.ports.envelope = Arc::new(HarnessEnvelope {
+            order: order.clone(),
+            resolve_error: None,
+            prepare_error: None,
+            pack_error: None,
+            encrypt_error: Some(NativeDidcommError::CapabilityUnavailable),
+        });
+        assert_eq!(
+            delivery
+                .deliver_native(&transaction(), "did:example:holder")
+                .await,
+            Err(NativeInitiationDidcommDeliveryError::Prerequisite(
+                NativeDidcommError::CapabilityUnavailable
+            ))
+        );
+        assert_eq!(repository.releases.load(Ordering::SeqCst), 1);
+        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+        assert!(repository.delivery.lock().unwrap().is_none());
+        assert_eq!(order.lock().unwrap().last(), Some(&"release"));
     }
 
     #[tokio::test]
@@ -3882,7 +3955,12 @@ mod tests {
     async fn anoncrypt_preflight_is_frozen_and_reused_for_delivery() {
         let envelope = NativeDidcommEnvelope::new(None, None, None);
         let prepared = envelope
-            .prepare_encryption("organization-1", "did:example:issuer", recipient_document())
+            .prepare_encryption(
+                "organization-1",
+                "operation-1",
+                "did:example:issuer",
+                recipient_document(),
+            )
             .await
             .unwrap();
         assert_eq!(prepared.mode.name(), "anoncrypt");
@@ -3969,7 +4047,12 @@ mod tests {
         assert_eq!(resolved.endpoint, endpoint);
         assert_embedded_key_binding(&resolved.document, &holder_did, expected_key);
         let prepared = envelope
-            .prepare_encryption("organization-1", &sender.id, resolved.document)
+            .prepare_encryption(
+                "organization-1",
+                "operation-1",
+                &sender.id,
+                resolved.document,
+            )
             .await
             .unwrap();
         let packed = envelope
@@ -4009,17 +4092,22 @@ mod tests {
         ));
         assert_eq!(
             envelope
-                .prepare_encryption("other-organization", &sender.id, recipient.clone())
+                .prepare_encryption(
+                    "other-organization",
+                    "operation-1",
+                    &sender.id,
+                    recipient.clone()
+                )
                 .await
                 .err(),
             Some(NativeDidcommError::SenderAuthenticationUnavailable)
         );
         assert_eq!(
             envelope
-                .prepare_encryption("organization-1", &sender.id, recipient)
+                .prepare_encryption("organization-1", "operation-1", &sender.id, recipient)
                 .await
                 .err(),
-            Some(NativeDidcommError::SenderAuthenticationUnavailable),
+            Some(NativeDidcommError::CapabilityUnavailable),
             "missing remote KMS must not downgrade authcrypt to anoncrypt"
         );
         std::fs::remove_file(policy).unwrap();
@@ -4046,6 +4134,26 @@ mod tests {
             );
             std::fs::remove_file(path).unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn provider_neutral_authcrypt_policy_fails_explicitly_without_registered_extension() {
+        let issuer = "did:example:issuer";
+        let policy =
+            policy_file(&json!({"version":1,"issuers":{issuer:{"mode":"authcrypt"}}}).to_string());
+        assert!(matches!(
+            load_active_policy(Some(&policy), issuer),
+            Ok(ActiveEncryptionPolicy::Authcrypt(None))
+        ));
+        let envelope = NativeDidcommEnvelope::new(None, None, Some(policy.to_str().unwrap()));
+        assert_eq!(
+            envelope
+                .prepare_encryption("org-a", "transaction-a", issuer, recipient_document())
+                .await
+                .err(),
+            Some(NativeDidcommError::CapabilityUnavailable)
+        );
+        std::fs::remove_file(policy).unwrap();
     }
 
     #[test]

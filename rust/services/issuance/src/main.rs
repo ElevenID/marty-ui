@@ -1,6 +1,6 @@
 use marty_service_runtime::{shutdown_signal_best_effort as shutdown_signal, wait_for_shutdown};
 use marty_signing_grant::SigningOrigin;
-use std::{error::Error, future::Future, path::PathBuf, pin::Pin, sync::Arc, time::Duration};
+use std::{error::Error, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use marty_issuance_service::issuance_proto::issuance_service_server::IssuanceServiceServer;
 use marty_issuance_service::{
@@ -92,7 +92,7 @@ use marty_issuance_service::{
     credential_postgres::PostgresCredentialRepository,
     credential_renewal::CredentialRenewalService,
     dependency_probe,
-    didcomm_remote_kms::RemoteDidcommKms,
+    didcomm_kms::RegisteredDidcommKms,
     dpop::MartyDpopProofVerifier,
     ephemeral_postgres::PostgresProofNonceRepository,
     http::{
@@ -156,7 +156,6 @@ use marty_issuance_service::{
 };
 use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use marty_schema_startup::SchemaStartupMode;
-use mmf_platform::OpenBaoTlsIdentityFiles;
 use sqlx::ConnectOptions;
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
@@ -576,11 +575,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         pool.clone(),
         token_hmac_key,
     ));
+    let credential_grants = managed_grant_minter(SigningOrigin::IssuanceCredential)?;
     let credential_builder = Arc::new(HttpCredentialBuilder::new_with_grant(
         config.signing_keys_internal_url.clone(),
         config.issuer_sign_key.as_deref(),
         config.dependency_timeout,
-        managed_grant_minter(SigningOrigin::IssuanceCredential)?,
+        credential_grants.clone(),
     )?);
     let credential_lifecycle = Arc::new(PostgresCredentialLifecycle::new(
         pool.clone(),
@@ -594,24 +594,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.didcomm_did_web_internal_base_url.as_deref(),
         config.didcomm_encryption_policy_file.as_deref(),
     );
-    let kms_addr = std::env::var("DIDCOMM_KMS_ADDR").ok();
-    let kms_token_file = std::env::var("DIDCOMM_KMS_TOKEN_FILE").ok();
-    let kms_ca_file = std::env::var("DIDCOMM_KMS_CA_CERT_FILE").ok();
-    match (kms_addr, kms_token_file, kms_ca_file) {
-        (Some(addr), Some(token_file), ca_file) if !addr.is_empty() && !token_file.is_empty() => {
-            didcomm_envelope = didcomm_envelope
-                .with_remote_kms(RemoteDidcommKms::new(
-                    &addr,
-                    PathBuf::from(token_file),
-                    ca_file.map(PathBuf::from),
-                )?);
-        }
-        (None, None, None) => {}
-        _ => {
-            return Err(
-                "DIDCOMM_KMS_ADDR and DIDCOMM_KMS_TOKEN_FILE must be configured together; a CA requires both".into(),
-            )
-        }
+    if [
+        "DIDCOMM_KMS_ADDR",
+        "DIDCOMM_KMS_TOKEN_FILE",
+        "DIDCOMM_KMS_CA_CERT_FILE",
+    ]
+    .iter()
+    .any(|name| std::env::var_os(name).is_some())
+    {
+        return Err(
+            "DIDComm extension credentials belong to the registered Signing Keys service".into(),
+        );
+    }
+    if std::env::var_os("INTEGRATION_SECRET_KMS_URL").is_some() {
+        didcomm_envelope =
+            didcomm_envelope.with_registered_kms(RegisteredDidcommKms::from_environment(
+                config.issuer_sign_key.as_deref().unwrap_or_default(),
+                Arc::new(credential_grants),
+            )?);
     }
     let didcomm_delivery = Arc::new(NativeInitiationDidcommDelivery::new(
         NativeInitiationDidcommPorts {
@@ -855,18 +855,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     let tls_acceptor = if let Some(tls) = &config.workload_server_tls {
         Some(
-            OpenBaoTlsIdentityFiles {
-                certificate_chain_file: tls.certificate.clone(),
-                kms_ca_cert_file: tls.kms_ca_certificate.clone(),
-                kms_endpoint: tls.kms_endpoint.clone(),
-                kms_token_file: tls.kms_token_file.clone(),
-                kms_key_name: tls.kms_key_name.clone(),
-                kms_key_version: tls.kms_key_version,
-                request_timeout: Duration::from_secs(10),
-                max_concurrent_signs: 64,
-            }
-            .grpc_acceptor(&tls.ca_certificate, 64, Duration::from_secs(15))
-            .await?,
+            tls.identity
+                .grpc_acceptor(&tls.ca_certificate, 64, Duration::from_secs(15))
+                .await?,
         )
     } else {
         None

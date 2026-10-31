@@ -36,6 +36,7 @@ RUST_SERVICES = {
 UNROUTED_RUST_BINARIES = {
     "marty-verifier-positive-gate",
     "marty-passport-acceptance-api-key",
+    "marty-installer-organization-api-key",
 }
 PROFILE_RUST_BINARIES = {
     "marty-canvas-sandbox", "marty-passport-keyless-edge",

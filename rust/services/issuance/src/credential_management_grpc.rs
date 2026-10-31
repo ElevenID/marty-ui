@@ -1206,7 +1206,7 @@ mod tests {
             _transaction: &CredentialTransaction,
             _holder_did: &str,
         ) -> Result<InitiationDidcommDeliveryReceipt, InitiationDidcommDeliveryError> {
-            Err(InitiationDidcommDeliveryError)
+            Err(InitiationDidcommDeliveryError::Unavailable)
         }
     }
 
