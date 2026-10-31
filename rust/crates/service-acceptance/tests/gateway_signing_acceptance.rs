@@ -2275,13 +2275,20 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
         "../../../services/signing-keys/tests/fixtures/kms_provider_vectors.json"
     ))
     .unwrap();
-    let provider_response = provider_vectors["public_key_cases"]
+    let provider_case = provider_vectors["public_key_cases"]
         .as_array()
         .unwrap()
         .iter()
         .find(|case| case["name"] == "gcp_pem_public_key")
-        .unwrap()["provider_response"]
-        .clone();
+        .unwrap();
+    let provider_response = provider_case["provider_response"].clone();
+    let provider_jwk = &provider_case["expected_response"]["public_jwk"];
+    let expected_did_public_jwk = json!({
+        "kty": provider_jwk["kty"],
+        "crv": provider_jwk["crv"],
+        "x": provider_jwk["x"],
+        "y": provider_jwk["y"],
+    });
     let metadata = Router::new().route(
         "/computeMetadata/v1/instance/service-accounts/default/token",
         get(|headers: HeaderMap| async move {
@@ -2449,6 +2456,7 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
             "key_audit_log_unavailable",
         ),
     ];
+    let mut published_did_method = None;
     for (method, path, body, expected_status, expected_fragment) in positive_cases {
         let mut builder = Request::builder()
             .method(method)
@@ -2506,14 +2514,29 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
                 assert!(text.contains(reference));
             }
             ("POST", "/v1/signing-keys/services/gateway-service/publish-did-vm") => {
-                assert_eq!(
-                    result["verification_method"]["x5c"][0],
-                    certificate["certificate"]["expected_x5c"]
-                );
-                assert_eq!(
-                    result["verification_method"]["publicKeyJwk"]["kid"],
-                    reference
-                );
+                let method = &result["verification_method"];
+                assert_eq!(method["x5c"][0], certificate["certificate"]["expected_x5c"]);
+                assert_eq!(method["publicKeyJwk"], expected_did_public_jwk);
+                let method_id = method["id"].as_str().unwrap();
+                let controller = method["controller"].as_str().unwrap();
+                assert!(controller.starts_with("did:web:beta.example:orgs:"));
+                let fragment = method_id
+                    .strip_prefix(&format!("{controller}#"))
+                    .filter(|fragment| !fragment.is_empty())
+                    .expect("verification method belongs to its DID controller");
+                for provider_detail in [
+                    reference,
+                    "gateway-service",
+                    "projects",
+                    "cryptoKeys",
+                    "gcp",
+                ] {
+                    assert!(
+                        !fragment.contains(provider_detail),
+                        "public verification method exposes provider details: {method_id}"
+                    );
+                }
+                published_did_method = Some(method.clone());
             }
             ("GET", "/v1/signing-keys/jwks") => {
                 assert_eq!(
@@ -2524,12 +2547,21 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
                 assert_eq!(result["keys"][0]["kid"], reference);
             }
             ("GET", "/v1/signing-keys/did-document") => {
-                assert!(!result["assertionMethod"].as_array().unwrap().is_empty());
-                assert!(result["verificationMethod"]
+                let published = published_did_method
+                    .as_ref()
+                    .expect("service verification method was published");
+                assert_eq!(result["id"], published["controller"]);
+                let persisted = result["verificationMethod"]
                     .as_array()
                     .unwrap()
                     .iter()
-                    .any(|method| method["publicKeyJwk"]["kid"] == reference));
+                    .find(|method| method["id"] == published["id"])
+                    .expect("published verification method is persisted");
+                assert_eq!(persisted, published);
+                assert!(result["assertionMethod"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&published["id"]));
             }
             ("POST", "/v1/signing-keys/config/resolve") => {
                 assert_eq!(result["service"]["id"], "gateway-service");
