@@ -330,11 +330,23 @@ pub(super) async fn verify_aws(config: &Value) -> CapabilityResult {
     };
     match client.describe_key().key_id(key_id).send().await {
         Ok(output) if output.key_metadata().and_then(|metadata| metadata.arn()) == Some(key_id) => {
-            result.add_check(
-                "Key exists",
-                "pass",
-                format!("AWS KMS key '{key_id}' is reachable."),
-            )
+            let metadata = output.key_metadata().expect("checked key metadata");
+            if !metadata.enabled()
+                || metadata.key_state().map(|state| state.as_str()) != Some("Enabled")
+                || metadata.key_usage().map(|usage| usage.as_str()) != Some("SIGN_VERIFY")
+            {
+                result.add_check(
+                    "Signing key state",
+                    "fail",
+                    "AWS KMS key must be enabled with SIGN_VERIFY usage.",
+                );
+            } else {
+                result.add_check(
+                    "Key exists",
+                    "pass",
+                    format!("AWS KMS key '{key_id}' is reachable."),
+                );
+            }
         }
         Ok(_) => result.add_check(
             "Key exists",

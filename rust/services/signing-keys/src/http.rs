@@ -1645,11 +1645,11 @@ fn public_config_revision_response(
     registry: Value,
     revision: String,
 ) -> Response {
-    (
-        public_config_revision_headers(revision),
-        Json(public_config_document(state, registry)),
-    )
-        .into_response()
+    // Preserve the same opaque revision in JSON for clients whose shared
+    // transport exposes decoded bodies rather than response headers.
+    let mut document = public_config_document(state, registry);
+    document["config_revision"] = json!(revision);
+    (public_config_revision_headers(revision), Json(document)).into_response()
 }
 
 async fn public_config(
@@ -4789,11 +4789,30 @@ fn public_config_document(state: &AppState, registry: Value) -> Value {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let providers = services
+        .iter()
+        .filter_map(|service| service.get("provider").and_then(Value::as_str))
+        .collect::<std::collections::BTreeSet<_>>();
+    let provider = match providers.len() {
+        0 => None,
+        1 => providers.iter().next().copied(),
+        _ => Some("multiple"),
+    };
+    let native_management = services.iter().any(|service| {
+        service.get("id").and_then(Value::as_str) == Some("managed-openbao-transit")
+            && service.get("managed").and_then(Value::as_bool) == Some(true)
+    });
     json!({
-        "provider_metadata": {"provider": "openbao", "status": "configured", "managed_by": "Marty service stack"},
+        "provider_metadata": {
+            "provider": provider,
+            "providers": providers,
+            "status": if services.is_empty() { "unconfigured" } else { "registered" },
+            "basis": "registration",
+            "managed_by": if native_management { Some("Marty service stack") } else { None },
+        },
         "domain_config": {"public_domain": state.public_domain},
-        "supports_native_key_management": true,
-        "registration_mode": "managed-or-external",
+        "supports_native_key_management": native_management,
+        "registration_mode": if native_management { "managed-or-external" } else { "external-only" },
         "default_service_id": registry.get("default_service_id").cloned().unwrap_or(Value::Null),
         "format_defaults": registry.get("format_defaults").cloned().unwrap_or_else(|| json!({})),
         "type_defaults": registry.get("type_defaults").cloned().unwrap_or_else(|| json!({})),
@@ -8618,6 +8637,9 @@ mod public_contract_tests {
         );
         assert_eq!(projected["format_defaults"]["dc+sd-jwt"], "provider-b");
         assert_eq!(projected["type_defaults"]["vc_jwt_issuer"], "provider-c");
+        assert!(projected["provider_metadata"]["provider"].is_null());
+        assert_eq!(projected["provider_metadata"]["status"], "unconfigured");
+        assert_eq!(projected["supports_native_key_management"], false);
         for legacy in [
             "hsm_enabled",
             "hsm_settings",
@@ -8631,8 +8653,8 @@ mod public_contract_tests {
         }
     }
 
-    #[test]
-    fn public_config_redacts_credentials_without_hiding_service_metadata() {
+    #[tokio::test]
+    async fn public_config_redacts_credentials_without_hiding_service_metadata() {
         let state = AppState {
             internal_api_key: Arc::from("test-key"),
             service_sign_gateway_key: None,
@@ -8652,20 +8674,51 @@ mod public_contract_tests {
             grant_verifier: None,
             public_domain: None,
         };
-        let projected = public_config_document(
+        let revision = format!("\"r-{}\"", uuid::Uuid::new_v4());
+        let response = public_config_revision_response(
             &state,
             json!({"services": [{
                 "id": "provider-a",
+                "provider": "aws",
                 "endpoint": "https://kms.example.test",
                 "key_reference": "issuer-key",
                 "auth_reference": "sensitive-test-token"
             }]}),
+            revision.clone(),
         );
+        assert_eq!(response.headers()[ETAG], revision.as_str());
+        let projected: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(projected["config_revision"], revision);
         assert_eq!(projected["services"][0]["id"], "provider-a");
         assert_eq!(projected["services"][0]["key_reference"], "issuer-key");
         assert_eq!(projected["services"][0]["auth_reference"], "");
         assert_eq!(projected["services"][0]["auth_configured"], true);
         assert!(!projected.to_string().contains("sensitive-test-token"));
+        assert_eq!(projected["provider_metadata"]["provider"], "aws");
+        assert_eq!(projected["provider_metadata"]["providers"], json!(["aws"]));
+        assert_eq!(projected["provider_metadata"]["basis"], "registration");
+        assert_eq!(projected["supports_native_key_management"], false);
+        assert_eq!(projected["registration_mode"], "external-only");
+
+        let hybrid = public_config_document(
+            &state,
+            json!({"services": [
+                {"id": "provider-a", "provider": "aws"},
+                {"id": "managed-openbao-transit", "provider": "openbao", "managed": true}
+            ]}),
+        );
+        assert_eq!(hybrid["provider_metadata"]["provider"], "multiple");
+        assert_eq!(
+            hybrid["provider_metadata"]["providers"],
+            json!(["aws", "openbao"])
+        );
+        assert_eq!(hybrid["supports_native_key_management"], true);
+        assert_eq!(hybrid["registration_mode"], "managed-or-external");
     }
 
     #[test]

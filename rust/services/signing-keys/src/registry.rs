@@ -1789,7 +1789,7 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
     });
     kms::validate_service_auth_config(&auth_config)
         .map_err(|error| RegistryError::Invalid(error.to_string()))?;
-    let provider = nonblank_string(service.get("provider")).unwrap_or(definition.provider);
+    let provider = definition.provider;
     let provider_label = nonblank_string(service.get("provider_label")).unwrap_or(definition.label);
     let created_at = service
         .get("created_at")
@@ -1852,7 +1852,7 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
         "service_type": definition.id,
         "provider": provider,
         "provider_label": provider_label,
-        "protocol": nonblank_string(service.get("protocol")).unwrap_or(definition.protocol),
+        "protocol": definition.protocol,
         "category": definition.category,
         "endpoint": string_or(service.get("endpoint"), ""),
         "region": string_or(service.get("region"), ""),

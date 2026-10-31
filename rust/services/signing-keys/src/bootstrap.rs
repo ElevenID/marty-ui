@@ -329,6 +329,100 @@ pub fn backfill_scoped_did_documents(
     Ok(writes)
 }
 
+// These are existing publication aliases, not another custody registry. The
+// canonical identifier is shared with operator-created identities; the other
+// candidates let a bootstrap rerun keep methods published by older releases.
+fn bootstrap_method_candidates(
+    org: &str,
+    issuer_did: &str,
+    reference: &str,
+    legacy_name: &str,
+) -> [String; 3] {
+    [
+        format!(
+            "{issuer_did}#{}",
+            documents::issuer_did_fragment(org, issuer_did, MANAGED_SERVICE_ID, Some(reference))
+        ),
+        format!(
+            "{issuer_did}#{}",
+            documents::did_fragment("", Some(reference))
+        ),
+        format!(
+            "{issuer_did}#{}",
+            documents::did_fragment("", Some(legacy_name))
+        ),
+    ]
+}
+
+fn existing_bootstrap_methods(
+    methods: &[Value],
+    issuer_did: &str,
+    candidates: &[String; 3],
+    reference: &str,
+    legacy_name: &str,
+) -> Vec<usize> {
+    let mut matching = methods
+        .iter()
+        .enumerate()
+        .filter(|(_, method)| {
+            let Some(id) = method.get("id").and_then(Value::as_str) else {
+                return false;
+            };
+            if !id.starts_with(&format!("{issuer_did}#"))
+                || method.get("controller").and_then(Value::as_str) != Some(issuer_did)
+            {
+                return false;
+            }
+            candidates.iter().any(|candidate| candidate == id)
+                || method
+                    .pointer("/publicKeyJwk/kid")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kid| kid == reference || kid == legacy_name)
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    matching.sort_by_key(|index| {
+        candidates
+            .iter()
+            .position(|candidate| methods[*index]["id"] == *candidate)
+            .unwrap_or(candidates.len())
+    });
+    matching
+}
+
+fn refreshed_bootstrap_method(
+    existing: Option<&Value>,
+    issuer_did: &str,
+    method_id: &str,
+    record: &KeyRecord,
+) -> Value {
+    if let Some(existing) = existing {
+        if documents::same_public_jwk(&existing["publicKeyJwk"], &record.public_jwk) {
+            return existing.clone();
+        }
+    }
+    let mut jwk = record.public_jwk.clone();
+    if let Some(object) = jwk.as_object_mut() {
+        object.remove("kid");
+        if let Some(kid) = existing.and_then(|method| method.pointer("/publicKeyJwk/kid")) {
+            object.insert("kid".into(), kid.clone());
+        }
+    }
+    let mut method = existing.cloned().unwrap_or_else(|| {
+        json!({"id": method_id, "type": documents::JWK_VERIFICATION_METHOD_TYPE,
+            "controller": issuer_did})
+    });
+    // A changed remote key must refresh its already published method, not mint
+    // a new binding. An attached certificate for the previous key is stale.
+    if let Some(object) = method.as_object_mut() {
+        for field in ["x5c", "x5t", "x5t#S256"] {
+            object.remove(field);
+        }
+    }
+    method["publicKeyJwk"] = jwk;
+    method
+}
+
 pub fn seed_did_and_jwks(
     existing: Option<Value>,
     org: &str,
@@ -338,19 +432,10 @@ pub fn seed_did_and_jwks(
     let mut doc = object_or_empty(existing);
     doc.insert("id".into(), json!(issuer_did));
     doc.insert("controller".into(), json!(issuer_did));
-    let key_ids: BTreeSet<&str> = records
-        .iter()
-        .flat_map(|record| [record.reference.as_str(), record.spec.id])
-        .collect();
     let mut methods: Vec<Value> = vec![];
     if let Some(existing) = doc.get("verificationMethod").and_then(Value::as_array) {
         for method in existing {
-            let is_managed = method
-                .get("publicKeyJwk")
-                .and_then(|jwk| jwk.get("kid"))
-                .and_then(Value::as_str)
-                .is_some_and(|kid| key_ids.contains(kid));
-            if method.get("id").and_then(Value::as_str).is_some() && !is_managed {
+            if method.get("id").and_then(Value::as_str).is_some() {
                 if let Some(position) = methods
                     .iter()
                     .position(|prior| prior.get("id") == method.get("id"))
@@ -362,47 +447,56 @@ pub fn seed_did_and_jwks(
             }
         }
     }
-    let mut assertion: Vec<Value> = doc
+    let mut assertion = doc
         .get("assertionMethod")
         .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter(|entry| {
-                    entry.as_str().is_some_and(|id| {
-                        !key_ids.iter().any(|key| {
-                            id.ends_with(&format!("#{}", documents::did_fragment("", Some(key))))
-                        })
-                    })
-                })
-                .cloned()
-                .collect()
-        })
+        .cloned()
         .unwrap_or_default();
     let mut keys = vec![];
     for record in records {
-        let vm_id = format!(
-            "{issuer_did}#{}",
-            documents::did_fragment("", Some(&record.reference))
+        let candidates =
+            bootstrap_method_candidates(org, issuer_did, &record.reference, record.spec.id);
+        let mut matching = existing_bootstrap_methods(
+            &methods,
+            issuer_did,
+            &candidates,
+            &record.reference,
+            record.spec.id,
         );
-        let mut jwk = record.public_jwk.clone();
-        if let Some(object) = jwk.as_object_mut() {
-            object.insert("kid".into(), json!(record.reference));
-        }
-        let method = json!({"id": vm_id, "type": documents::JWK_VERIFICATION_METHOD_TYPE, "controller": issuer_did,
-            "publicKeyJwk": jwk});
-        if let Some(position) = methods
-            .iter()
-            .position(|prior| prior.get("id") == method.get("id"))
-        {
-            methods[position] = method;
+        if matching.is_empty() {
+            matching.push(methods.len());
+            methods.push(refreshed_bootstrap_method(
+                None,
+                issuer_did,
+                &candidates[0],
+                record,
+            ));
         } else {
-            methods.push(method);
+            for index in &matching {
+                let id = methods[*index]["id"]
+                    .as_str()
+                    .expect("matched method ID")
+                    .to_owned();
+                methods[*index] =
+                    refreshed_bootstrap_method(Some(&methods[*index]), issuer_did, &id, record);
+            }
         }
-        if !assertion.contains(&json!(vm_id)) {
-            assertion.push(json!(vm_id));
+        for index in matching {
+            let id = &methods[index]["id"];
+            if !assertion
+                .iter()
+                .any(|entry| entry == id || entry.get("id") == Some(id))
+            {
+                assertion.push(id.clone());
+            }
         }
         if !record.spec.purposes.contains(&"lti_tool_signing") {
+            // Preserve the existing JWKS contract. Changing its published kids
+            // requires a separate migration with the stored JWKS as input.
+            let mut jwk = record.public_jwk.clone();
+            if let Some(object) = jwk.as_object_mut() {
+                object.insert("kid".into(), json!(record.reference));
+            }
             keys.push(jwk);
         }
     }
@@ -480,6 +574,7 @@ pub fn seed_issuer_profiles(
     org: &str,
     issuer_did: &str,
     issuer_url: &str,
+    did_document: &Value,
 ) -> Value {
     let mut doc = object_or_empty(existing);
     let mut by_id: Vec<Value> = vec![];
@@ -498,28 +593,31 @@ pub fn seed_issuer_profiles(
         }
     }
     for spec in STANDARD_PROFILES {
-        let existing = by_id
-            .iter()
-            .position(|profile| profile.get("id").and_then(Value::as_str) == Some(spec.id));
+        if by_id.iter().any(|profile| profile["id"] == spec.id) {
+            // Bootstrap is not an explicit rebind or profile activation. Keep
+            // published legacy IDs and operator-selected provider bindings.
+            continue;
+        }
         let key_reference = tenant_standard_key_reference(org, spec.key);
-        let mut profile = json!({
+        let candidates = bootstrap_method_candidates(org, issuer_did, &key_reference, spec.key);
+        let methods = did_document["verificationMethod"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let method_id =
+            existing_bootstrap_methods(methods, issuer_did, &candidates, &key_reference, spec.key)
+                .first()
+                .and_then(|index| methods[*index]["id"].as_str())
+                .unwrap_or(&candidates[0]);
+        by_id.push(json!({
             "id": spec.id, "organization_id": org, "name": spec.name,
             "issuer_did": issuer_did, "issuer_url": issuer_url,
             "signing_service_id": MANAGED_SERVICE_ID,
             "signing_key_reference": key_reference,
-            "verification_method_id": format!("{issuer_did}#{}", documents::did_fragment("", Some(&key_reference))),
+            "verification_method_id": method_id,
             "key_purpose": spec.purpose, "credential_format": spec.format,
             "algorithm": spec.algorithm, "status": "active",
-        });
-        if let Some(position) = existing {
-            profile["created_at"] = by_id[position]
-                .get("created_at")
-                .cloned()
-                .unwrap_or(Value::Null);
-            by_id[position] = profile;
-        } else {
-            by_id.push(profile);
-        }
+        }));
     }
     by_id.sort_by_key(|profile| {
         if STANDARD_PROFILES
@@ -631,22 +729,56 @@ mod tests {
         }
     }
 
-    fn expected_interoperable_managed_methods(mut expected: Value, records: &[KeyRecord]) -> Value {
+    fn expected_opaque_managed_methods(
+        mut expected: Value,
+        org: &str,
+        records: &[KeyRecord],
+    ) -> Value {
+        let did = expected["id"].as_str().unwrap().to_owned();
+        let mut replaced = Vec::new();
         for method in expected["verificationMethod"].as_array_mut().unwrap() {
-            let managed = method["publicKeyJwk"]["kid"].as_str().is_some_and(|kid| {
+            let record = method["publicKeyJwk"]["kid"].as_str().and_then(|kid| {
                 records
                     .iter()
-                    .any(|record| kid == record.reference || kid == record.spec.id)
+                    .find(|record| kid == record.reference || kid == record.spec.id)
             });
-            if managed {
+            if let Some(record) = record {
+                let id = bootstrap_method_candidates(org, &did, &record.reference, record.spec.id)
+                    [0]
+                .clone();
+                replaced.push((method["id"].clone(), json!(id)));
+                method["id"] = json!(id);
                 method["type"] = json!(documents::JWK_VERIFICATION_METHOD_TYPE);
+                method["publicKeyJwk"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("kid");
+            }
+        }
+        for entry in expected["assertionMethod"].as_array_mut().unwrap() {
+            if let Some((_, id)) = replaced.iter().find(|(old, _)| old == entry) {
+                *entry = id.clone();
+            }
+        }
+        expected
+    }
+
+    fn expected_opaque_profiles(mut expected: Value, org: &str, did: &str) -> Value {
+        for profile in expected["profiles"].as_array_mut().unwrap() {
+            if let Some(spec) = STANDARD_PROFILES
+                .iter()
+                .find(|spec| profile["id"] == spec.id)
+            {
+                let reference = tenant_standard_key_reference(org, spec.key);
+                profile["verification_method_id"] =
+                    json!(bootstrap_method_candidates(org, did, &reference, spec.key)[0]);
             }
         }
         expected
     }
 
     #[test]
-    fn clean_registry_did_jwks_and_profiles_match_python_except_derived_managed_service() {
+    fn clean_bootstrap_keeps_reference_contract_with_opaque_public_method_ids() {
         let clean = case("clean_apply");
         let env = &clean["input"]["environment"];
         let org = env["MARTY_ORG_ID"].as_str().unwrap();
@@ -673,8 +805,9 @@ mod tests {
         let (did_doc, jwks) = seed_did_and_jwks(None, org, did, &records);
         assert_eq!(
             did_doc,
-            expected_interoperable_managed_methods(
+            expected_opaque_managed_methods(
                 scoped_historical_expected(&expected[did_key(org, Some(did))], org),
+                org,
                 &records
             )
         );
@@ -683,8 +816,12 @@ mod tests {
             scoped_historical_expected(&expected[jwks_key(org)], org)
         );
         assert_eq!(
-            seed_issuer_profiles(None, org, did, url),
-            scoped_historical_expected(&expected[issuer_profiles_key(org)], org)
+            seed_issuer_profiles(None, org, did, url, &did_doc),
+            expected_opaque_profiles(
+                scoped_historical_expected(&expected[issuer_profiles_key(org)], org),
+                org,
+                did
+            )
         );
     }
 
@@ -707,6 +844,166 @@ mod tests {
     }
 
     #[test]
+    fn fresh_bootstrap_publications_and_profile_bindings_are_stable() {
+        let clean = case("clean_apply");
+        let records = records(&clean);
+        let org = clean["input"]["environment"]["MARTY_ORG_ID"]
+            .as_str()
+            .unwrap();
+        let did = clean["input"]["environment"]["MARTY_ISSUER_DID"]
+            .as_str()
+            .unwrap();
+        let url = clean["input"]["environment"]["MARTY_ISSUER_BASE_URL"]
+            .as_str()
+            .unwrap();
+        let (document, jwks) = seed_did_and_jwks(None, org, did, &records);
+        let profiles = seed_issuer_profiles(None, org, did, url, &document);
+        for record in &records {
+            assert!(!document.to_string().contains(&record.reference));
+            let id = format!(
+                "{did}#{}",
+                documents::issuer_did_fragment(
+                    org,
+                    did,
+                    MANAGED_SERVICE_ID,
+                    Some(&record.reference)
+                )
+            );
+            let method = document["verificationMethod"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|method| method["id"] == id)
+                .unwrap();
+            assert!(method["publicKeyJwk"].get("kid").is_none());
+        }
+        for profile in profiles["profiles"].as_array().unwrap() {
+            assert!(document["assertionMethod"]
+                .as_array()
+                .unwrap()
+                .contains(&profile["verification_method_id"]));
+        }
+        assert_eq!(
+            seed_did_and_jwks(Some(document.clone()), org, did, &records),
+            (document.clone(), jwks)
+        );
+        assert_eq!(
+            seed_issuer_profiles(Some(profiles.clone()), org, did, url, &document),
+            profiles
+        );
+    }
+
+    #[test]
+    fn bootstrap_upgrade_reuses_legacy_publication_and_preserves_explicit_rebind() {
+        let clean = case("clean_apply");
+        let records = records(&clean);
+        let org = clean["input"]["environment"]["MARTY_ORG_ID"]
+            .as_str()
+            .unwrap();
+        let did = clean["input"]["environment"]["MARTY_ISSUER_DID"]
+            .as_str()
+            .unwrap();
+        let url = clean["input"]["environment"]["MARTY_ISSUER_BASE_URL"]
+            .as_str()
+            .unwrap();
+        let legacy =
+            scoped_historical_expected(&clean["state"]["redis"][did_key(org, Some(did))], org);
+        let existing_profiles =
+            scoped_historical_expected(&clean["state"]["redis"][issuer_profiles_key(org)], org);
+        let (published, _) = seed_did_and_jwks(Some(legacy.clone()), org, did, &records);
+        assert_eq!(
+            published, legacy,
+            "unchanged legacy methods retain all published metadata"
+        );
+        assert_eq!(
+            seed_issuer_profiles(Some(existing_profiles.clone()), org, did, url, &published),
+            existing_profiles
+        );
+
+        // A previous attempt may have saved the DID before saving profiles.
+        // Recovery must bind the existing methods without adding opaque aliases.
+        let recovered = seed_issuer_profiles(None, org, did, url, &published);
+        assert_eq!(recovered, existing_profiles);
+        assert_eq!(
+            published["verificationMethod"].as_array().unwrap().len(),
+            records.len()
+        );
+
+        let mut rebound = existing_profiles;
+        let profile = &mut rebound["profiles"][0];
+        profile["signing_service_id"] = json!("aws-primary");
+        profile["signing_key_reference"] =
+            json!("arn:aws:kms:us-east-2:111122223333:key/existing-key");
+        profile["verification_method_id"] = json!(format!("{did}#operator-selected"));
+        profile["name"] = json!("Operator issuer binding");
+        profile["status"] = json!("inactive");
+        let mut existing_did = published;
+        let external_method = json!({"id": format!("{did}#operator-selected"), "controller": did,
+            "type": documents::JWK_VERIFICATION_METHOD_TYPE,
+            "publicKeyJwk": {"kty":"EC", "crv":"P-256", "x":"external-x", "y":"external-y"}});
+        existing_did["verificationMethod"]
+            .as_array_mut()
+            .unwrap()
+            .push(external_method.clone());
+        existing_did["assertionMethod"]
+            .as_array_mut()
+            .unwrap()
+            .push(external_method["id"].clone());
+        let (published, _) = seed_did_and_jwks(Some(existing_did.clone()), org, did, &records);
+        assert_eq!(published, existing_did);
+        assert_eq!(
+            seed_issuer_profiles(Some(rebound.clone()), org, did, url, &published),
+            rebound,
+            "bootstrap must not reset or reactivate an explicitly rebound profile"
+        );
+    }
+
+    #[test]
+    fn bootstrap_rotation_refreshes_custom_legacy_method_without_changing_its_binding() {
+        let clean = case("clean_apply");
+        let mut records = records(&clean);
+        let record = &records[0];
+        let org = clean["input"]["environment"]["MARTY_ORG_ID"]
+            .as_str()
+            .unwrap();
+        let did = clean["input"]["environment"]["MARTY_ISSUER_DID"]
+            .as_str()
+            .unwrap();
+        let url = clean["input"]["environment"]["MARTY_ISSUER_BASE_URL"]
+            .as_str()
+            .unwrap();
+        let custom_id = format!("{did}#published-custom-issuer");
+        let mut jwk = record.public_jwk.clone();
+        jwk["kid"] = json!(record.reference);
+        let original = json!({"id":did,"controller":did,"verificationMethod":[{
+            "id":custom_id,"controller":did,"type":documents::JWK_VERIFICATION_METHOD_TYPE,
+            "publicKeyJwk":jwk,"label":"preserved publication","x5c":["prior-key-certificate"]
+        }],"assertionMethod":[custom_id]});
+        let (first, _) = seed_did_and_jwks(Some(original.clone()), org, did, &records[..1]);
+        assert_eq!(first, original);
+        let profiles = seed_issuer_profiles(None, org, did, url, &first);
+        assert_eq!(profiles["profiles"][0]["verification_method_id"], custom_id);
+        assert_eq!(profiles["profiles"][1]["verification_method_id"], custom_id);
+
+        records[0].public_jwk["x"] = json!(URL_SAFE_NO_PAD.encode([9_u8; 32]));
+        let (rotated, _) = seed_did_and_jwks(Some(first), org, did, &records[..1]);
+        assert_eq!(rotated["verificationMethod"].as_array().unwrap().len(), 1);
+        let method = &rotated["verificationMethod"][0];
+        assert_eq!(method["id"], custom_id);
+        assert_eq!(method["publicKeyJwk"]["x"], records[0].public_jwk["x"]);
+        assert_eq!(method["publicKeyJwk"]["kid"], records[0].reference);
+        assert_eq!(method["label"], "preserved publication");
+        assert!(
+            method.get("x5c").is_none(),
+            "a certificate for the old key cannot follow rotation"
+        );
+        assert_eq!(
+            seed_issuer_profiles(Some(profiles.clone()), org, did, url, &rotated),
+            profiles
+        );
+    }
+
+    #[test]
     fn preserves_customer_profile_and_backfills_legacy_did() {
         let clean = case("clean_apply");
         let records = records(&clean);
@@ -721,14 +1018,23 @@ mod tests {
             .as_str()
             .unwrap();
         let initial = &customer["input"]["initial_redis"];
+        let (published, _) = seed_did_and_jwks(None, org, did, &records);
         assert_eq!(
             seed_issuer_profiles(
                 Some(initial[issuer_profiles_key(org)].clone()),
                 org,
                 did,
-                url
+                url,
+                &published
             ),
-            scoped_historical_expected(&customer["state"]["redis"][issuer_profiles_key(org)], org)
+            expected_opaque_profiles(
+                scoped_historical_expected(
+                    &customer["state"]["redis"][issuer_profiles_key(org)],
+                    org
+                ),
+                org,
+                did
+            )
         );
 
         let backfill = case("backfill_mixed_did");
@@ -747,11 +1053,12 @@ mod tests {
         let (did_doc, jwks) = seed_did_and_jwks(current, org, did, &records);
         assert_eq!(
             did_doc,
-            expected_interoperable_managed_methods(
+            expected_opaque_managed_methods(
                 scoped_historical_expected(
                     &backfill["state"]["redis"][did_key(org, Some(did))],
                     org
                 ),
+                org,
                 &records
             )
         );
@@ -825,8 +1132,13 @@ mod tests {
             ));
             assert_ne!(reference, spec.id);
         }
-        let profiles =
-            seed_issuer_profiles(None, org, "did:example:issuer", "https://issuer.example");
+        let profiles = seed_issuer_profiles(
+            None,
+            org,
+            "did:example:issuer",
+            "https://issuer.example",
+            &json!({}),
+        );
         let vc = &profiles["profiles"][0]["signing_key_reference"];
         let sd_jwt = &profiles["profiles"][1]["signing_key_reference"];
         assert_eq!(vc, sd_jwt);

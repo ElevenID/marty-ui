@@ -441,6 +441,12 @@ fn run() -> Result<(), String> {
         println!("{}", env!("MARTY_DEPLOY_BUILD_IDENTITY"));
         return Ok(());
     }
+    if args.first().is_some_and(|arg| arg == "kms") {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_kms::run(&args[1..]);
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer KMS registration currently requires Linux".into());
+    }
     if args.first().is_some_and(|arg| arg == "trust-info") {
         if args.len() != 3 || args[1] != "--install-dir" {
             return Err("usage: marty-deploy trust-info --install-dir ABSOLUTE_PATH".into());

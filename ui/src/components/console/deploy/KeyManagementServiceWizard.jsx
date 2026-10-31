@@ -291,6 +291,15 @@ const KeyManagementServiceWizard = () => {
       ...data,
       auth_reference: serializeAuthReference(data.auth_mode, data.auth_fields),
     }, serviceCatalog);
+    const validation = await signingKeysApi.validateKeyManagementService({
+      ...orgRequestParams,
+      ...newService,
+      live_probe: true,
+    });
+    setPreflightChecks(Array.isArray(validation?.checks) ? validation.checks : []);
+    if (validation?.ok !== true) {
+      throw new Error('Key management service validation failed. Review the checks before registering.');
+    }
     await signingKeysApi.updateKeyManagementConfig({
       ...orgRequestParams,
       ...createKeyManagementRegistrationPayload(currentConfig, newService, data.make_default),

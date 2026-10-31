@@ -43,6 +43,22 @@ async fn serve(
     response: Vec<u8>,
     delay: Duration,
 ) -> (TrustInfo, tokio::task::JoinHandle<()>) {
+    serve_observed(
+        cert,
+        key,
+        response,
+        delay,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    )
+    .await
+}
+async fn serve_observed(
+    cert: &Path,
+    key: &Path,
+    response: Vec<u8>,
+    delay: Duration,
+    requests: Arc<std::sync::atomic::AtomicUsize>,
+) -> (TrustInfo, tokio::task::JoinHandle<()>) {
     let der = CertificateDer::from_pem_file(cert).unwrap();
     let fingerprint = format!("{:x}", Sha256::digest(&der));
     let config = rustls::ServerConfig::builder_with_provider(Arc::new(
@@ -65,7 +81,9 @@ async fn serve(
             .await
         {
             let mut request = [0; 4096];
-            let _ = stream.read(&mut request).await;
+            if stream.read(&mut request).await.is_ok_and(|count| count > 0) {
+                requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
             tokio::time::sleep(delay).await;
             let _ = stream.write_all(&response).await;
             let _ = stream.shutdown().await;
@@ -92,6 +110,49 @@ async fn serve(
         },
         handle,
     )
+}
+
+#[tokio::test]
+async fn wrong_leaf_is_rejected_before_an_authenticated_request_is_sent() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let root = tempfile::tempdir().unwrap();
+    let (cert, key) = certificate(root.path(), "localhost", "localhost");
+    let requests = Arc::new(AtomicUsize::new(0));
+    let (mut trust, task) = serve_observed(
+        &cert,
+        &key,
+        response(b"{}"),
+        Duration::ZERO,
+        requests.clone(),
+    )
+    .await;
+    // The CA and hostname remain trusted. The recorded leaf alone is wrong.
+    trust.certificate_der_sha256 = "0".repeat(64);
+    assert!(client(&trust)
+        .unwrap()
+        .get(format!("{}/v1/signing-keys/config", trust.origin))
+        .header("X-API-Key", "mk_test_never_transmit_to_wrong_leaf")
+        .send()
+        .await
+        .is_err());
+    let _ = tokio::time::timeout(Duration::from_secs(2), task).await;
+    assert_eq!(requests.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn bound_transport_accepts_a_recorded_leaf_from_the_second_ca_in_a_bundle() {
+    let root = tempfile::tempdir().unwrap();
+    let (first, _) = certificate(root.path(), "previous-ca", "previous.invalid");
+    let (cert, key) = certificate(root.path(), "localhost", "localhost");
+    let (mut trust, task) = serve(&cert, &key, response(b"{}"), Duration::ZERO).await;
+    trust.ca_certificate_pem = format!(
+        "{}\n{}",
+        std::fs::read_to_string(first).unwrap(),
+        trust.ca_certificate_pem
+    );
+    let observed = get(&client(&trust).unwrap(), &trust, "/health").await;
+    assert!(observed.tls_verified && observed.document.is_some());
+    task.abort();
 }
 fn response(body: &[u8]) -> Vec<u8> {
     let mut out = format!(

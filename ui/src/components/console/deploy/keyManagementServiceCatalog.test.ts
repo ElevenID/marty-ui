@@ -118,6 +118,18 @@ it('default updates preserve explicit maps and reject unregistered defaults with
   expect(original).toEqual(snapshot)
 })
 
+it('preserves an explicit absence of a default when another KMS is registered', () => {
+  const original = { ...routingConfig(), default_service_id: null,
+    config_revision: '"r-e4195bec-8a3a-43d5-828d-c7b5a0c4921c"' }
+  const next = createKeyManagementServicePayload({ id: 'third', service_type: 'aws-kms', key_reference: 'key-three' }, [])
+  const payload = createKeyManagementRegistrationPayload(original, next, false)
+  expect(payload.default_service_id).toBeNull()
+  expect(payload.config_revision).toBe(original.config_revision)
+  expect(payload.services.map((service) => service.id)).toEqual(['first', 'second', 'third'])
+  expect(payload.type_defaults).toEqual(original.type_defaults)
+  expect(payload.key_reference_purposes).toEqual(original.key_reference_purposes)
+})
+
 it('removal prunes only exact removed-service bindings and handles the last default explicitly', () => {
   const original = routingConfig()
   const snapshot = structuredClone(original)
@@ -128,7 +140,7 @@ it('removal prunes only exact removed-service bindings and handles the last defa
   expect(payload.type_defaults).toEqual({ oid4vp_request_signing: 'second' })
   expect(payload.format_defaults).toEqual({ SD_JWT_VC: 'second' })
   expect(createKeyManagementRemovalPayload(payload, 'second')).toEqual({
-    services: [], default_service_id: null, key_reference_purposes: {}, type_defaults: {}, format_defaults: {},
+    config_revision: null, services: [], default_service_id: null, key_reference_purposes: {}, type_defaults: {}, format_defaults: {},
   })
   expect(createKeyManagementRemovalPayload(original, 'second').default_service_id).toBe('first')
   expect(() => createKeyManagementRemovalPayload(original, 'foreign')).toThrow(/registered/)

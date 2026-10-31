@@ -48,6 +48,8 @@ mod installer_jobs;
 mod installer_json;
 pub mod installer_keycloak;
 pub mod installer_keycloak_bridge;
+#[cfg(target_os = "linux")]
+pub mod installer_kms;
 pub mod installer_logs;
 pub mod installer_openbao;
 #[cfg(target_os = "linux")]
@@ -69,6 +71,8 @@ pub mod installer_tls;
 pub mod installer_tls_outputs;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_top_level_census;
+#[cfg(target_os = "linux")]
+mod installer_transport;
 pub mod installer_trust;
 pub mod installer_uninstall;
 pub mod installer_validation;
