@@ -109,7 +109,7 @@ jobs:
           echo "archive_sha256=$archive_sha256" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v6.4.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v6.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -223,7 +223,7 @@ jobs:
           jq -e '.image_digest | test("^sha256:[0-9a-f]{64}$")' tests/artifacts/canvas-oss-image/canvas-oss-image-manifest.json >/dev/null
 
       - name: Upload digest and provenance record
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: canvas-oss-image-${{ steps.lock.outputs.source_sha }}
           path: |
