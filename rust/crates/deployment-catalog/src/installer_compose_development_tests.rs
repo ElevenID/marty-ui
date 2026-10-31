@@ -240,6 +240,33 @@ fn actual_layer_parser_gate(
     .env_bytes;
     for (key, value) in [
         (
+            "MARTY_INSTALLATION_DIR",
+            installation
+                .to_str()
+                .ok_or("parser installation path invalid")?
+                .into(),
+        ),
+        (
+            "MARTY_INSTALLATION_ID",
+            state.journal().installation_id().to_string(),
+        ),
+        (
+            "MARTY_INSTALLER_SERVICES_IMAGE",
+            inventory
+                .images
+                .get("gateway")
+                .ok_or("parser services image absent")?
+                .clone(),
+        ),
+        ("MARTY_KEYCLOAK_NONCE", "parser-only-native-compose".into()),
+        (
+            "MARTY_SELFHOST_PROJECT",
+            format!(
+                "marty-selfhost-disposable-{}",
+                state.journal().installation_id().simple()
+            ),
+        ),
+        (
             "MARTY_INSTALLER_ID",
             state.journal().installation_id().to_string(),
         ),
@@ -736,6 +763,48 @@ fn actual_pinned_marty_components_with_unsigned_compose_layers() -> Result<()> {
             )
         })?;
         canary_restored = true;
+        stage = "fresh application storage preflight";
+        eprintln!("UNSIGNED DEVELOPMENT Compose stage: {stage}");
+        let mut absent_storage_paths = Vec::new();
+        for relative in [
+            "state",
+            "state/postgres",
+            "state/redis",
+            "state/applicant",
+            "backups",
+            "openbao-exports",
+            "openbao-snapshot-identity",
+        ] {
+            let path = installation.join(relative);
+            need(
+                matches!(fs::symlink_metadata(&path), Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound),
+                "fresh development application storage already exists or is uncertain",
+            )?;
+            absent_storage_paths.push(path);
+        }
+        need(
+            container_ids(&observer)? == before,
+            "container inventory changed before fresh application provisioning",
+        )?;
+        let metadata = fs::symlink_metadata(&installation)
+            .map_err(|_| "fresh development installation metadata unavailable")?;
+        let fresh = encoded(&json!({
+            "schema":"elevenid.unsigned-compose-fresh-state/v1",
+            "classification":"UNSIGNED DEVELOPMENT ONLY",
+            "installation":installation,"installation_id":state.journal().installation_id(),
+            "installation_device":metadata.dev(),"installation_inode":metadata.ino(),
+            "installation_uid":metadata.uid(),"installation_gid":metadata.gid(),
+            "installation_mode":metadata.mode() & 0o7777,
+            "helper_sha256":helper_sha,"helper_build_identity":"unknown:unreleased",
+            "fixture_inventory_sha256":INVENTORY_SHA,"fixture_source":SOURCE,
+            "absent_storage_paths":absent_storage_paths,
+            "application_storage_absent_before_provisioning":true,
+            "preexisting_container_inventory_unchanged":true,
+            "canary_host_traversal_restored":true,"application_provisioning_started":false,
+            "docker_host_and_image_cache_retained":true,"installation_ready":false
+        }))?;
+        state.write_evidence("development-fresh-state.json", &fresh)?;
         stage = "real Compose provisioning and required HTTPS validation";
         eprintln!("UNSIGNED DEVELOPMENT Compose stage: {stage}");
         match provision_runtime(

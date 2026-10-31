@@ -5,6 +5,7 @@
 use marty_deployment_catalog::installer_compose::COMPOSE_VERSION;
 use serde_json::Value;
 use std::{
+    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fs,
     io::Write,
@@ -310,6 +311,8 @@ fn actual_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart
     fs::set_permissions(&env, fs::Permissions::from_mode(0o600)).unwrap();
     let layer_root = source.join("deploy-config/compose/selfhost-installer");
     let base = bundle.join("docker-compose.yml");
+    let openbao = bundle.join("docker-compose.selfhost.openbao.yml");
+    let bootstrap = layer_root.join("compose.bootstrap.yml");
     let installer = layer_root.join("compose.installer.yml");
     let runtime = layer_root.join("compose.runtime.yml");
     let install = config(
@@ -324,6 +327,7 @@ fn actual_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart
     assert!(services.len() >= 30);
     for (dependent, dependency) in [
         ("compliance-profile", "organization"),
+        ("presentation-policy", "organization"),
         ("credential-template", "organization"),
         ("credential-template", "revocation-profile"),
         ("revocation-profile", "organization"),
@@ -374,6 +378,11 @@ fn actual_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart
         );
         assert_eq!(services[job]["restart"], "no");
     }
+    assert_eq!(
+        services["issuance-native"]["depends_on"]["issuance-migrations"]["condition"],
+        "service_completed_successfully",
+        "the authenticated native issuance fixture must exercise its setup dependency"
+    );
     for optional in ["cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"] {
         assert!(!services.contains_key(optional));
     }
@@ -386,26 +395,103 @@ fn actual_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart
             .get("ports")
             .is_none_or(|p| p.as_array().is_some_and(Vec::is_empty)));
     }
+    // Ordinary start resolves the full retained maintenance union, including
+    // OpenBao and its live unseal worker. App-only layers missed this ordering.
+    let maintenance = config(
+        &executable,
+        &bundle,
+        &[
+            base.clone(),
+            openbao.clone(),
+            bootstrap.clone(),
+            installer.clone(),
+        ],
+        &env,
+        &["setup", "installer-init"],
+        &[],
+    );
+    let maintenance = maintenance["services"].as_object().unwrap();
+    let setup_roles: BTreeSet<_> = maintenance
+        .iter()
+        .filter(|(_, service)| service["labels"]["com.elevenid.installer.phase"] == "setup")
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let kms_consumers: BTreeSet<_> = maintenance
+        .iter()
+        .filter(|(name, service)| {
+            !setup_roles.contains(name.as_str())
+                && service["depends_on"].get("kms-initialize").is_some()
+        })
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert!(kms_consumers.contains("event-stream") && kms_consumers.contains("notification"));
     let restarted = config(
         &executable,
         &bundle,
-        &[base, installer, runtime],
+        &[base, openbao, bootstrap, installer, runtime],
         &env,
         &[],
         &[],
     );
     let restarted = restarted["services"].as_object().unwrap();
-    for job in [
-        "revocation-profile-migrate",
-        "db-migrate",
-        "kms-initialize",
-        "keycloak-configurator",
-        "issuance-migrations",
-    ] {
-        assert!(!restarted.contains_key(job));
-        assert!(restarted
-            .values()
-            .all(|s| s["depends_on"].get(job).is_none()));
+    assert_eq!(
+        restarted
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        maintenance
+            .keys()
+            .map(String::as_str)
+            .filter(|name| !setup_roles.contains(name))
+            .collect::<BTreeSet<_>>(),
+        "restart must retain every runtime service and exclude every setup role"
+    );
+    assert!(restarted.contains_key("issuance-native"));
+    assert!(restarted.contains_key("openbao") && restarted.contains_key("openbao-unseal"));
+    assert_eq!(
+        restarted["openbao-unseal"]["healthcheck"]["test"],
+        serde_json::json!([
+            "CMD-SHELL",
+            "bao status -address=https://openbao:8200 -ca-cert=/bao/data/tls/ca.crt >/dev/null 2>&1"
+        ]),
+        "the runtime KMS prerequisite must require successful unsealed status"
+    );
+    for (role, service) in restarted {
+        let mut expected: BTreeMap<_, _> = maintenance[role]["depends_on"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(dependency, _)| !setup_roles.contains(dependency.as_str()))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        if kms_consumers.contains(role.as_str()) {
+            expected.insert(
+                "openbao-unseal".into(),
+                serde_json::json!({"condition":"service_healthy","required":true}),
+            );
+        }
+        if role == "notification" {
+            expected.insert(
+                "postgres".into(),
+                serde_json::json!({"condition":"service_healthy","required":true}),
+            );
+        }
+        let actual: BTreeMap<_, _> = service["depends_on"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "{role} must preserve native runtime dependencies, replace completed KMS setup with live readiness, and exclude setup"
+        );
+        for dependency in actual.keys() {
+            assert!(
+                restarted.contains_key(dependency) && !setup_roles.contains(dependency.as_str()),
+                "{role} cannot retain excluded or setup dependency {dependency}"
+            );
+        }
     }
     assert_eq!(
         restarted["canvas-sync-worker"]["depends_on"]["signing-keys"]["condition"],

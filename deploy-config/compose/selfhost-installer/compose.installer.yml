@@ -182,7 +182,10 @@ services:
         condition: service_healthy
   presentation-policy:
     <<: *installer-runtime
-    depends_on: *kms-complete
+    depends_on:
+      <<: *kms-complete
+      organization:
+        condition: service_healthy
   deployment-profile:
     <<: *installer-runtime
     depends_on:
