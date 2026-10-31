@@ -44,6 +44,9 @@ pub(crate) mod installer_host_snapshot;
 pub mod installer_host_storage_inventory;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_host_tree_observer;
+pub mod installer_hosting;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_hosting_addon;
 pub mod installer_ingress;
 pub mod installer_ingress_config;
 pub mod installer_ingress_outputs;

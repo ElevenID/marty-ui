@@ -24,7 +24,6 @@ WORKFLOW = ".github/workflows/nightly-release.yml"
 IMAGE_COORDINATES = {
     **IMAGE_URIS,
     "ui_selfhost": "ghcr.io/elevenid/marty-ui-oss/ui-selfhost",
-    "cloudflared_wrapper": "ghcr.io/elevenid/marty-ui-oss/cloudflared-wrapper",
 }
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -82,7 +81,6 @@ def build_plan(claim: dict, lock: dict) -> list[dict]:
         "ui_selfhost": ("docker/ui.Dockerfile", "selfhost", {
             "UI_VARIANT": "selfhost", "SELFHOST_PUBLIC_PROFILE": "tester",
             "NGINX_CONFIG": "nginx.spa.conf"}),
-        "cloudflared_wrapper": ("docker/cloudflared-wrapper.Dockerfile", "", {}),
     }
     result = []
     for role, (dockerfile, target, overrides) in recipes.items():
@@ -192,7 +190,7 @@ def image_lock(candidate: dict, model: dict, source: Path, external: dict) -> di
     require(set(services) == names, "nightly Compose service set changed")
     _validate_external_services(services, roles, external)
     role_map = {"services": "services", "db-migrate": "migrations",
-                "ui-selfhost": "ui_selfhost", "cloudflared-wrapper": "cloudflared_wrapper"}
+                "ui-selfhost": "ui_selfhost"}
     resolved = {}
     for name, service in services.items():
         require("build" not in service, "nightly bundle contains a source build")

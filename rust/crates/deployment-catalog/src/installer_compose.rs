@@ -66,6 +66,7 @@ mod tests {
             writable_bind_roots: BTreeSet::from([root.join("state")]),
             readonly_bind_roots: BTreeSet::from([root.join("inputs")]),
             allowed_loopback_ports: BTreeSet::from([18443]),
+            ingress_listener: None,
             prior: None,
         }
     }
@@ -388,6 +389,72 @@ mod tests {
             wrong["services"]["app"]["ports"][0][field] = value;
             assert!(admit_model(&wrong, &p).is_err());
         }
+    }
+
+    #[test]
+    fn configured_ingress_publication_is_exact_and_requires_bound_selection() {
+        let listener = crate::installer_hosting::Listener {
+            bind_address: "0.0.0.0".parse().unwrap(),
+            port: 18443,
+        };
+        let port = json!({"host_ip":"0.0.0.0","published":"18443","target":8443,"protocol":"tcp"});
+        published_ingress(&port, listener).unwrap();
+        for (field, value) in [
+            ("host_ip", json!("127.0.0.1")),
+            ("host_ip", json!("::")),
+            ("published", json!("18444")),
+            ("target", json!(8200)),
+            ("protocol", json!("udp")),
+        ] {
+            let mut wrong = port.clone();
+            wrong[field] = value;
+            assert!(published_ingress(&wrong, listener).is_err());
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut p = inputs(root.path());
+        p.ingress_listener = Some(listener);
+        let mut m = model(&p);
+        m["services"]["app"]["ports"] = json!([port]);
+        // Constructing an allowance never grants a public bind, even if the
+        // exact listener would otherwise match. Private services stay private.
+        assert!(admit_model(&m, &p).is_err());
+    }
+
+    #[test]
+    fn connector_image_cannot_be_reassigned_to_core_services() {
+        let root = tempfile::tempdir().unwrap();
+        let mut p = inputs(root.path());
+        let connector = format!(
+            "{}@sha256:{}",
+            crate::installer_hosting_addon::IMAGE_REPOSITORY,
+            "d".repeat(64)
+        );
+        let core = p.approved_images.iter().next().unwrap().clone();
+        p.approved_images.insert(connector.clone());
+        assert!(p.permits_image("cloudflared", &connector));
+        assert!(!p.permits_image("gateway", &connector));
+        assert!(!p.permits_image("installer-ingress", &connector));
+        assert!(!p.permits_image("cloudflared", &core));
+    }
+
+    #[test]
+    fn stopped_ingress_keeps_configured_binding_without_requiring_live_ports() {
+        let root = tempfile::tempdir().unwrap();
+        let mut p = inputs(root.path());
+        p.ingress_listener = Some(crate::installer_hosting::Listener {
+            bind_address: "0.0.0.0".parse().unwrap(),
+            port: 18443,
+        });
+        let configured = json!({"8443/tcp":[{"HostIp":"0.0.0.0","HostPort":"18443"}]});
+        live_port_bindings(&configured, "installer-ingress", &p, true).unwrap();
+        live_port_bindings(&json!({"8443/tcp":null}), "installer-ingress", &p, false).unwrap();
+        assert!(
+            live_port_bindings(&json!({"8443/tcp":null}), "installer-ingress", &p, true).is_err()
+        );
+        assert!(live_port_bindings(&configured, "gateway", &p, false).is_err());
+        let mut wrong = configured.clone();
+        wrong["8200/tcp"] = json!([{"HostIp":"0.0.0.0","HostPort":"18443"}]);
+        assert!(live_port_bindings(&wrong, "installer-ingress", &p, false).is_err());
     }
 
     #[test]
@@ -752,6 +819,10 @@ pub struct ComposeInputs {
     pub writable_bind_roots: BTreeSet<PathBuf>,
     pub readonly_bind_roots: BTreeSet<PathBuf>,
     pub allowed_loopback_ports: BTreeSet<u16>,
+    /// Only the owned ingress service may use this explicitly selected bind.
+    /// Absent on legacy sessions, whose published ports remain loopback-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingress_listener: Option<crate::installer_hosting::Listener>,
     /// Only a successful, observed prior phase can authorize the next phase.
     /// Provisional create IDs and uncertain operation results are not admission.
     pub prior: Option<ComposeReceipt>,
@@ -765,7 +836,12 @@ impl ComposeInputs {
                 return image.permits(role, reference);
             }
         }
-        let _ = role;
+        let connector_image = crate::installer_hosting_addon::is_connector_image(reference);
+        if role == "cloudflared" || connector_image {
+            return role == "cloudflared"
+                && connector_image
+                && self.approved_images.contains(reference);
+        }
         self.approved_images.contains(reference)
     }
     fn valid_image_reference(&self, reference: &str) -> bool {
@@ -1167,6 +1243,105 @@ fn published(port: &Value, allowed: &BTreeSet<u16>) -> Result<()> {
     )
 }
 
+fn published_ingress(port: &Value, listener: crate::installer_hosting::Listener) -> Result<()> {
+    let number = port["published"]
+        .as_u64()
+        .and_then(|n| u16::try_from(n).ok())
+        .or_else(|| port["published"].as_str().and_then(|s| s.parse().ok()))
+        .ok_or(REFUSED)?;
+    require(
+        port["host_ip"] == listener.bind_address.to_string()
+            && port["target"] == 8443
+            && port["protocol"] == "tcp"
+            && number == listener.port
+            && number >= 1024,
+    )
+}
+
+fn live_port_bindings(
+    bindings: &Value,
+    role: &str,
+    inputs: &ComposeInputs,
+    require_active: bool,
+) -> Result<()> {
+    let selected = inputs
+        .ingress_listener
+        .filter(|_| role == "installer-ingress");
+    let mut observed = 0;
+    for (target, bindings) in bindings.as_object().into_iter().flat_map(|map| map.iter()) {
+        for port in bindings.as_array().into_iter().flatten() {
+            let raw = text(&port["HostPort"])?;
+            let number = raw.parse::<u16>().map_err(|_| REFUSED)?;
+            require(raw == number.to_string() && number >= 1024)?;
+            if let Some(listener) = selected {
+                require(
+                    target == "8443/tcp"
+                        && port["HostIp"] == listener.bind_address.to_string()
+                        && number == listener.port,
+                )?;
+                observed += 1;
+            } else {
+                require(
+                    target.ends_with("/tcp")
+                        && port["HostIp"] == "127.0.0.1"
+                        && inputs.allowed_loopback_ports.contains(&number),
+                )?;
+            }
+        }
+    }
+    require(
+        selected.is_none()
+            || if require_active {
+                observed == 1
+            } else {
+                observed <= 1
+            },
+    )
+}
+
+/// Only the journal-bound ingress service can publish the configured listener.
+/// An arbitrary ComposeInputs allowance cannot expose another service.
+fn selected_ingress(p: &ComposeInputs) -> Result<Option<crate::installer_hosting::Selection>> {
+    let Some(listener) = p.ingress_listener else {
+        return Ok(None);
+    };
+    let selection = crate::installer_hosting::for_inputs(p)?.ok_or(REFUSED)?;
+    require(selection.listener().bind_address == listener.bind_address)?;
+    selection.resolve_origin(listener.port)?;
+    Ok(Some(selection))
+}
+
+pub(crate) fn bound_ingress_listener(
+    model: &Value,
+    inputs: &ComposeInputs,
+) -> Result<crate::installer_hosting::Listener> {
+    let service = &model["services"]["installer-ingress"];
+    let ports = service["ports"].as_array().ok_or(REFUSED)?;
+    require(ports.len() == 1)?;
+    let listener = if let Some(selection) = selected_ingress(inputs)? {
+        let listener = inputs.ingress_listener.ok_or(REFUSED)?;
+        require(
+            service["environment"]["OIDF_EDGE_PUBLIC_ORIGIN"]
+                == selection.resolve_origin(listener.port)?.as_str(),
+        )?;
+        published_ingress(&ports[0], listener)?;
+        listener
+    } else {
+        published(&ports[0], &inputs.allowed_loopback_ports)?;
+        require(ports[0]["target"] == 8443)?;
+        let port = ports[0]["published"]
+            .as_u64()
+            .and_then(|n| u16::try_from(n).ok())
+            .or_else(|| ports[0]["published"].as_str().and_then(|s| s.parse().ok()))
+            .ok_or(REFUSED)?;
+        crate::installer_hosting::Listener {
+            bind_address: "127.0.0.1".parse().unwrap(),
+            port,
+        }
+    };
+    Ok(listener)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PrivateDirectoryIdentity {
@@ -1481,6 +1656,10 @@ fn admit_model(model: &Value, p: &ComposeInputs) -> Result<()> {
     }))?;
     let services = model["services"].as_object().ok_or(REFUSED)?;
     require(!services.is_empty() && services.len() <= 96)?;
+    let ingress = selected_ingress(p)?;
+    if ingress.is_some() {
+        bound_ingress_listener(model, p)?;
+    }
     for (role, service) in services {
         require(name(role) && p.permits_image(role, text(&service["image"])?))?;
         for field in [
@@ -1524,7 +1703,11 @@ fn admit_model(model: &Value, p: &ComposeInputs) -> Result<()> {
                 && service.get("deploy").is_none_or(|v| empty(Some(v))),
         )?;
         for port in service["ports"].as_array().into_iter().flatten() {
-            published(port, &p.allowed_loopback_ports)?;
+            if role == "installer-ingress" && ingress.is_some() {
+                published_ingress(port, p.ingress_listener.ok_or(REFUSED)?)?;
+            } else {
+                published(port, &p.allowed_loopback_ports)?;
+            }
         }
         for volume in service["volumes"].as_array().into_iter().flatten() {
             match text(&volume["type"])? {
@@ -2159,21 +2342,16 @@ impl ComposeSession {
                 _ => return Err(REFUSED.into()),
             }
         }
-        for bindings in c["NetworkSettings"]["Ports"]
-            .as_object()
-            .into_iter()
-            .flat_map(|m| m.values())
-        {
-            for port in bindings.as_array().into_iter().flatten() {
-                let port_number = text(&port["HostPort"])?
-                    .parse::<u16>()
-                    .map_err(|_| REFUSED)?;
-                require(
-                    port["HostIp"] == "127.0.0.1"
-                        && self.inputs.allowed_loopback_ports.contains(&port_number),
-                )?;
-            }
-        }
+        let role = text(&c["Config"]["Labels"]["com.docker.compose.service"])?;
+        // Docker retains configured port bindings after stop, while its live
+        // NetworkSettings ports can be null. Preserve stop/start admission.
+        live_port_bindings(&host["PortBindings"], role, &self.inputs, true)?;
+        live_port_bindings(
+            &c["NetworkSettings"]["Ports"],
+            role,
+            &self.inputs,
+            c["State"]["Running"] == true,
+        )?;
         Ok(())
     }
 

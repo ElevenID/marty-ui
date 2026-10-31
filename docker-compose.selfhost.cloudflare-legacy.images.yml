@@ -1,0 +1,10 @@
+# Compatibility only: published-image overrides for the explicit legacy tunnel overlay.
+services:
+  cloudflared:
+    build: !reset null
+    image: ${MARTY_CLOUDFLARED_IMAGE:?set the approved optional connector image digest}
+    pull_policy: always
+  cloudflared-beta:
+    build: !reset null
+    image: ${MARTY_CLOUDFLARED_IMAGE:?set the approved optional connector image digest}
+    pull_policy: always

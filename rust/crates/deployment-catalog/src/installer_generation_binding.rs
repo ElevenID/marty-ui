@@ -244,6 +244,49 @@ impl GenerationBinding {
     pub(crate) fn imported_foundation(&self) -> bool {
         self.schema == "elevenid.installer-application-generation/v2"
     }
+    pub(crate) fn managed_ingress(&self) -> bool {
+        self.schema == "elevenid.installer-application-generation/v3"
+    }
+    /// Public metadata of the exact leaf selected for this generation. The
+    /// original installer receipt remains immutable and is not the renewed
+    /// certificate's provenance.
+    pub(crate) fn ingress_metadata(
+        &self,
+        installation: &Path,
+    ) -> Result<Option<crate::installer_ingress_outputs::IngressMetadata>> {
+        self.validate()?;
+        if !self.managed_ingress() {
+            return Ok(None);
+        }
+        let evidence = directory(&installation.join("evidence"))?;
+        let bytes = read(&evidence, "generation-observation.json", true)?.0;
+        require(digest(&bytes) == self.generation_receipt_sha256)?;
+        let record: Receipt = serde_json::from_slice(&bytes).map_err(|_| REFUSED)?;
+        require(
+            record.schema == "elevenid.installer-generation-host/v3"
+                && record.ingress_renewal
+                && record.installation_id == self.installation_id
+                && record.engine_id == self.engine_id,
+        )?;
+        let metadata = record.ingress.ok_or(REFUSED)?;
+        require(
+            metadata.ca_pem_sha256
+                == self
+                    .files
+                    .get("installer_ingress_ca_cert")
+                    .ok_or(REFUSED)?
+                    .sha256
+                && metadata.certificate_pem_sha256
+                    == self
+                        .files
+                        .get("installer_ingress_tls_cert")
+                        .ok_or(REFUSED)?
+                        .sha256,
+        )?;
+        self.read(installation, "installer_ingress_ca_cert")?;
+        self.read(installation, "installer_ingress_tls_cert")?;
+        Ok(Some(metadata))
+    }
     pub fn secret_dir(&self, installation: &Path) -> Result<PathBuf> {
         self.validate()?;
         Ok(installation.join(ROOT))
@@ -264,13 +307,21 @@ impl GenerationBinding {
         crate::installer_renewal_bootstrap::validate_id(&self.installation_id)?;
         require(
             (self.schema == "elevenid.installer-application-generation/v1"
-                || self.imported_foundation())
+                || self.imported_foundation()
+                || self.managed_ingress())
                 && !self.engine_id.is_empty()
                 && self.engine_id.len() <= 128
                 && !self.activated
                 && !self.root_retired
                 && !self.installation_ready
-                && self.files.len() >= if self.imported_foundation() { 1 } else { 40 }
+                && self.files.len()
+                    >= if self.imported_foundation() {
+                        1
+                    } else if self.managed_ingress() {
+                        43
+                    } else {
+                        40
+                    }
                 && self.files.len() <= 128,
         )?;
         let hash = |s: &str| {
@@ -286,7 +337,7 @@ impl GenerationBinding {
                     self.network_id.as_deref().is_some_and(hash)
                 },
         )?;
-        let renewable = crate::installer_renewal_bootstrap::current_inputs();
+        let renewable = crate::installer_renewal_bootstrap::inventory(self.managed_ingress());
         for (name, file) in &self.files {
             safe_name(name)?;
             require(
@@ -324,6 +375,8 @@ struct Receipt {
     image: String,
     root_retired: bool,
     ingress_renewal: bool,
+    #[serde(default)]
+    ingress: Option<crate::installer_ingress_outputs::IngressMetadata>,
     candidate_validated: bool,
     activated: bool,
     candidate_sha256: BTreeMap<String, String>,
@@ -337,8 +390,11 @@ fn candidate(installation: &Path, id: &str, engine: &str) -> Result<(Vec<u8>, Ca
     let evidence = directory(&installation.join("evidence"))?;
     let bytes = read(&evidence, "generation-observation.json", true)?.0;
     let r: Receipt = serde_json::from_slice(&bytes).map_err(|_| REFUSED)?;
+    let managed_ingress = r.schema == "elevenid.installer-generation-host/v3";
+    let inventory = crate::installer_renewal_bootstrap::inventory(managed_ingress);
+    require(!names(&evidence)?.contains(crate::installer_hosting::RECORD) || managed_ingress)?;
     require(
-        r.schema == "elevenid.installer-generation-host/v2"
+        (r.schema == "elevenid.installer-generation-host/v2" || managed_ingress)
             && r.installation_id == id
             && r.engine_id == engine
             && hex(&r.container_id)
@@ -352,7 +408,8 @@ fn candidate(installation: &Path, id: &str, engine: &str) -> Result<(Vec<u8>, Ca
                 .strip_prefix("ghcr.io/elevenid/marty-ui-oss/services@sha256:")
                 .is_some_and(hex)
             && !r.root_retired
-            && !r.ingress_renewal
+            && r.ingress_renewal == managed_ingress
+            && r.ingress.is_some() == managed_ingress
             && r.candidate_validated
             && !r.activated
             && !r.container_removed
@@ -396,9 +453,9 @@ fn candidate(installation: &Path, id: &str, engine: &str) -> Result<(Vec<u8>, Ca
     let identity_dir = directory(&installation.join("generation-identity"))?;
     let mut current = BTreeMap::new();
     let mut outputs = BTreeMap::new();
-    for name in crate::installer_renewal_bootstrap::current_inputs() {
-        current.insert(name.clone(), read(&current_dir, &name, false)?.0);
-        outputs.insert(name.clone(), read(&delivered, &name, false)?.0);
+    for name in &inventory {
+        current.insert(name.clone(), read(&current_dir, name, false)?.0);
+        outputs.insert(name.clone(), read(&delivered, name, false)?.0);
     }
     let mut identity = BTreeMap::new();
     for name in [
@@ -408,11 +465,11 @@ fn candidate(installation: &Path, id: &str, engine: &str) -> Result<(Vec<u8>, Ca
     ] {
         identity.insert(name.into(), read(&identity_dir, name, true)?.0);
     }
-    require(names(&current_dir)? == crate::installer_renewal_bootstrap::current_inputs())?;
+    require(names(&current_dir)? == inventory)?;
     require(names(&identity_dir)? == identity.keys().cloned().collect())?;
-    let mut delivered_names = crate::installer_renewal_bootstrap::current_inputs();
+    let mut delivered_names = inventory.clone();
     delivered_names.extend(["pending.json", "validated.json", "completed.json"].map(String::from));
-    require(names(&delivered)? == delivered_names && r.outputs.len() == 40)?;
+    require(names(&delivered)? == delivered_names && r.outputs.len() == inventory.len())?;
     let kc = read(&evidence, "keycloak-observation.json", true)?.0;
     let records = ["pending.json", "validated.json", "completed.json"]
         .into_iter()
@@ -428,6 +485,7 @@ fn candidate(installation: &Path, id: &str, engine: &str) -> Result<(Vec<u8>, Ca
             keycloak_receipt: &kc,
         },
     )?;
+    require(crate::installer_generation::recorded_ingress(&records)? == r.ingress)?;
     require(
         hashes == r.candidate_sha256
             && r.outputs.into_iter().collect::<BTreeSet<_>>() == outputs.keys().cloned().collect(),
@@ -517,6 +575,10 @@ pub fn stage(
     let result = GenerationBinding {
         schema: if proof.foundation.is_some() {
             "elevenid.installer-application-generation/v2"
+        } else if proof.candidates.keys().cloned().collect::<BTreeSet<_>>()
+            == crate::installer_renewal_bootstrap::managed_inputs()
+        {
+            "elevenid.installer-application-generation/v3"
         } else {
             "elevenid.installer-application-generation/v1"
         }
@@ -760,6 +822,41 @@ mod tests {
             assert!(verify_model(root, &binding, &changed, binding.network_id.as_deref()).is_err());
         }
         assert!(verify_model(root, &binding, &model, Some(&"c".repeat(64))).is_err());
+    }
+    #[test]
+    fn managed_generation_requires_all_three_ingress_files_from_renewed_candidate() {
+        let (mut binding, _) = fixture();
+        binding.schema = "elevenid.installer-application-generation/v3".into();
+        assert!(binding.validate().is_err());
+        for name in crate::installer_ingress_provision::OUTPUTS[..3]
+            .iter()
+            .copied()
+        {
+            binding.files.insert(
+                name.into(),
+                GenerationFile {
+                    source: GenerationSource::Candidate,
+                    sha256: digest(b"synthetic"),
+                    size: 9,
+                    source_mode: 0o444,
+                    mode: 0o444,
+                },
+            );
+        }
+        binding.validate().unwrap();
+        for name in crate::installer_ingress_provision::OUTPUTS[..3]
+            .iter()
+            .copied()
+        {
+            let mut changed = binding.clone();
+            changed.files.get_mut(name).unwrap().source = GenerationSource::Original;
+            assert!(changed.validate().is_err());
+            let mut missing = binding.clone();
+            missing.files.remove(name);
+            assert!(missing.validate().is_err());
+        }
+        binding.schema = "elevenid.installer-application-generation/v1".into();
+        assert!(binding.validate().is_err());
     }
     #[test]
     fn closed_binding_forbids_source_downgrade_missing_candidates_and_ready_claims() {

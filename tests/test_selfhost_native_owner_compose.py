@@ -167,6 +167,38 @@ def rendered_models():
     return before, after
 
 
+def test_core_hosting_separates_optional_connectors_from_the_frozen_model(rendered_models):
+    approved, current = rendered_models
+    for section, names in (
+        ("services", {"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"}),
+        ("secrets", {"cloudflare_tunnel_token", "cloudflare_beta_tunnel_token"}),
+    ):
+        assert names <= set(approved[section])
+        assert not names & set(current[section])
+    assert current["services"]["gateway"]["environment"]["GATEWAY_OBSERVE_CLIENT_IP"] == (
+        "${GATEWAY_OBSERVE_CLIENT_IP:-true}"
+    )
+
+
+@pytest.mark.parametrize("fault", ["connector", "token", "gateway-default", "gateway-missing"])
+def test_core_hosting_gate_rejects_optional_owner_or_gateway_default_drift(rendered_models, fault):
+    approved, current = deepcopy(rendered_models)
+    if fault == "connector":
+        current["services"]["cloudflared"] = deepcopy(approved["services"]["cloudflared"])
+    elif fault == "token":
+        current["secrets"]["cloudflare_tunnel_token"] = deepcopy(
+            approved["secrets"]["cloudflare_tunnel_token"]
+        )
+    elif fault == "gateway-default":
+        current["services"]["gateway"]["environment"]["GATEWAY_OBSERVE_CLIENT_IP"] = (
+            "${GATEWAY_OBSERVE_CLIENT_IP:-false}"
+        )
+    else:
+        del current["services"]["gateway"]["environment"]["GATEWAY_OBSERVE_CLIENT_IP"]
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
 def test_ordinary_migration_cannot_provision_kms(rendered_models):
     _, current = rendered_models
     services = current["services"]

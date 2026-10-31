@@ -170,7 +170,8 @@ pub(crate) fn load_session(state: &LockedInspection, installation: &Path) -> Res
     )?;
     let binding = journal.runtime().ok_or(REFUSED)?;
     binding.validate()?;
-    let approved_images = inventory.images.values().cloned().collect::<BTreeSet<_>>();
+    let mut approved_images = inventory.images.values().cloned().collect::<BTreeSet<_>>();
+    approved_images.extend(crate::installer_hosting_addon::approved_images(state)?);
     #[cfg(feature = "installer-development")]
     let approved_images = {
         let mut images = approved_images;
@@ -585,6 +586,7 @@ mod tests {
             writable_bind_roots: BTreeSet::new(),
             readonly_bind_roots: BTreeSet::new(),
             allowed_loopback_ports: BTreeSet::new(),
+            ingress_listener: None,
             prior: Some(receipt.clone()),
         };
         (

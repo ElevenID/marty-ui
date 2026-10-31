@@ -1,0 +1,13 @@
+{
+  "schema": "elevenid.installation-hosting/v1",
+  "mode": "direct",
+  "public_origin": "https://marty.example.com:8443",
+  "listener": {
+    "bind_address": "0.0.0.0",
+    "port": 8443
+  },
+  "tls": {
+    "termination": "marty-keyless",
+    "certificate_source": "managed-ca"
+  }
+}

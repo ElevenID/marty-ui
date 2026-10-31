@@ -532,7 +532,7 @@ def test_explicitly_disabled_worker_healthcheck_does_not_block_closure() -> None
         live_services(json.dumps(rows), model)
 
 
-def test_local_secret_closure_excludes_only_unstarted_tunnels(tmp_path: Path) -> None:
+def test_local_secret_closure_excludes_only_kms_bootstrap(tmp_path: Path) -> None:
     from check_selfhost_installed_runtime_plan import (
         EXPECTED_ROLE_SECRETS, EXPECTED_SECRET_NAMES,
     )
@@ -541,10 +541,12 @@ def test_local_secret_closure_excludes_only_unstarted_tunnels(tmp_path: Path) ->
         secret for service in LOCAL_SERVICES
         for secret in EXPECTED_ROLE_SECRETS.get(service, ())
     )
-    assert EXPECTED_SECRET_NAMES - LOCAL_SECRET_NAMES == {
+    cloudflare_secrets = {
         "cloudflare_tunnel_token", "cloudflare_beta_tunnel_token",
-        "openbao_bootstrap_token",
     }
+    assert cloudflare_secrets.isdisjoint(EXPECTED_SECRET_NAMES)
+    assert cloudflare_secrets.isdisjoint(LOCAL_SECRET_NAMES)
+    assert EXPECTED_SECRET_NAMES - LOCAL_SECRET_NAMES == {"openbao_bootstrap_token"}
     for name in LOCAL_SECRET_NAMES:
         (tmp_path / name).write_text("disposable-test-material", encoding="utf-8")
     required_secrets(tmp_path)

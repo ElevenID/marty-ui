@@ -5049,6 +5049,10 @@ dependencies = [
 [[package]]
 name = "marty-selfhost-identity"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "url",
+]
 
 [[package]]
 name = "marty-service-acceptance"

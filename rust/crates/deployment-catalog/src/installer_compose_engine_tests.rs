@@ -177,6 +177,7 @@ impl Fixture {
             writable_bind_roots: BTreeSet::from([self.path.join("state")]),
             readonly_bind_roots: BTreeSet::new(),
             allowed_loopback_ports: BTreeSet::new(),
+            ingress_listener: None,
             prior,
         }
     }

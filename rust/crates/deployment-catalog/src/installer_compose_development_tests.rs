@@ -363,6 +363,7 @@ fn actual_layer_parser_gate(
         applicant_container_group: crate::installer_state::applicant_container_group(binding)?,
         version: inventory.release_tag.clone(),
         origin: "https://localhost:10443".into(),
+        https_listener_port: 10443,
         gateway_port: 18080,
         keycloak_port: 18081,
         edge_port: 18082,

@@ -59,6 +59,11 @@ pub fn provision(
     let binding = state.journal().runtime().ok_or(REFUSAL)?.clone();
     let owner = state.journal().installation_id().to_string();
     let authority_name = crate::installer_ingress_provision::resource_name(&owner)?;
+    let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
+    let identity = crate::installer_ingress_provision::IngressIdentity::new(
+        hosting.certificate_dns_name(),
+        hosting.certificate_ip_address(),
+    )?;
     let secrets = directory(&installation.join("secrets"))?;
     installer_ingress_outputs::preflight(&secrets)?;
     state.create_private_directory("ingress-output")?;
@@ -67,7 +72,8 @@ pub fn provision(
         "ingress-pending.json",
         &serde_json::to_vec(&json!({
             "schema":"elevenid.installer-ingress-intent/v2", "installation_id":owner,
-            "engine_id":binding.engine_id,"operator_sha256":expected_operator_sha
+            "engine_id":binding.engine_id,"operator_sha256":expected_operator_sha,
+            "certificate_identity":identity
         }))
         .map_err(|_| REFUSAL)?,
     )?;
@@ -82,11 +88,12 @@ pub fn provision(
         services_image,
         expected_operator_sha,
     )?;
-    let validated = installer_ingress_outputs::validate_and_transfer(
+    let validated = installer_ingress_outputs::validate_and_transfer_for(
         &output,
         &secrets,
         &owner,
         installer_helper_output::expected_host_uid(&binding)?,
+        &identity,
     )?;
     state.write_evidence("installer-ingress.json", &validated.metadata_bytes)?;
     let receipt = IngressReceipt {

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "groups": {
     "infra": ["postgres", "redis", "keycloak"],
-    "selfhost_core": ["db-migrate", "issuance-migrations", "keycloak-configurator", "ui", "edge", "cloudflared"],
+    "selfhost_core": ["db-migrate", "issuance-migrations", "keycloak-configurator", "ui", "edge"],
     "app": [
       "gateway",
       "auth",
@@ -22,6 +22,7 @@
       "device-registration",
       "event-stream"
     ],
+    "selfhost_cloudflare": ["cloudflared"],
     "selfhost_beta_tunnel": ["tunnel-nginx-proxy", "cloudflared-beta"],
     "canvas_experiments": ["canvas-real", "issuance-canvas-localhost-bridge", "canvas-sandbox"],
     "external_demo": ["northstar-admissions"]
@@ -35,7 +36,7 @@
     "issuance-migrations": {"compose_service": "issuance-migrations", "k8s_deployment": "issuance-migrations", "group": "selfhost_core", "image_name": "issuance", "artifact_role": "marty-ui-services", "public_image": true, "lifecycle": "oneshot"},
     "ui": {"compose_service": "ui", "k8s_deployment": "ui", "group": "selfhost_core", "image_name": "ui-selfhost", "dockerfile": "ui/Dockerfile.prod", "context": "ui", "public_image": true},
     "edge": {"compose_service": "edge", "k8s_deployment": "edge", "group": "selfhost_core", "image_name": "nginx", "public_image": true},
-    "cloudflared": {"compose_service": "cloudflared", "k8s_deployment": "cloudflared", "group": "selfhost_core", "image_name": "cloudflared-wrapper", "public_image": true},
+    "cloudflared": {"compose_service": "cloudflared", "k8s_deployment": "cloudflared", "group": "selfhost_cloudflare", "image_name": "cloudflared-wrapper", "public_image": true},
     "tunnel-nginx-proxy": {"compose_service": "tunnel-nginx-proxy", "k8s_deployment": "tunnel-nginx-proxy", "group": "selfhost_beta_tunnel", "image_name": "nginx", "public_image": true},
     "cloudflared-beta": {"compose_service": "cloudflared-beta", "k8s_deployment": "cloudflared-beta", "group": "selfhost_beta_tunnel", "image_name": "cloudflared-wrapper", "public_image": true},
     "gateway": {"compose_service": "gateway", "k8s_deployment": "gateway", "group": "app", "image_name": "gateway", "service_name_env": "gateway", "dockerfile": "services/Dockerfile", "context": ".", "public_image": true},

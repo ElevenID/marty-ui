@@ -323,7 +323,7 @@ async fn retire(bao: &OpenBaoHttp, token: &str) -> Result<()> {
     require(response.status() == StatusCode::FORBIDDEN)
 }
 
-/// Fixed mounts only; returns40 public certificate/scoped-token files staged in
+/// Fixed mounts only; returns 43 managed or 40 legacy public certificate/scoped-token files staged in
 /// /output/generation. No host delivery, activation, old-token revocation or root
 /// retirement. Caller must preserve this entire directory on every failure.
 pub async fn provision(owner: &str) -> Result<usize> {
@@ -335,6 +335,12 @@ async fn provision_at(owner: &str, output_path: &Path) -> Result<usize> {
     fs::validate_id(owner)?;
     let current = fs::directory(Path::new("/input/current"), false, true)?;
     let before = fs::current(&current)?;
+    let managed_ingress = fs::has_managed_ingress(&before)?;
+    let ingress_identity = crate::installer_ingress_provision::IngressIdentity::from_environment()?;
+    let inventory = fs::inventory(managed_ingress);
+    let file_count = inventory.len();
+    let token_count = if managed_ingress { 22 } else { 21 };
+    let changed_count = if managed_ingress { 41 } else { 39 };
     let identity = fs::directory(Path::new("/input/identity"), false, true)?;
     let credentials = identity_snapshot(&identity)?;
     let input_owner = current.metadata().map_err(|_| REFUSED)?.uid();
@@ -365,7 +371,7 @@ async fn provision_at(owner: &str, output_path: &Path) -> Result<usize> {
     fs::receipt(
         &output,
         "pending.json",
-        &json!({"schema":"elevenid.installer-generation-intent/v1",
+        &json!({"schema":if managed_ingress {"elevenid.installer-generation-intent/v2"} else {"elevenid.installer-generation-intent/v1"},
         "installation_id":owner,"nonce":nonce,"input_sha256":hashes(&before),"identity_sha256":hashes(&credentials),
         "keycloak_receipt_sha256":format!("{:x}",Sha256::digest(&receipt)),"root_retired":false,"activated":false}),
     )?;
@@ -393,11 +399,27 @@ async fn provision_at(owner: &str, output_path: &Path) -> Result<usize> {
             binding(&output_path.join("keycloak"),&keycloak,true,false)?;
             binding(&output_path.join("generation"),&candidate,true,false)?;
             producer_outputs(&tls,&keycloak)?;
-            require(generation::stage(Path::new("/input/current"),&output_path.join("tls"),&output_path.join("keycloak"),&output_path.join("generation"),false).map_err(|_| RECOVERY)? == 40)?;
+            // Reuse the native workload/Keycloak generation exactly as before.
+            // Its immutable 40-file view excludes the independently validated
+            // ingress inputs, which are appended to the same transaction.
+            let workload_source = if managed_ingress {
+                let view = fs::child(&output,"workload-current")?;
+                for name in fs::current_inputs() {
+                    deliver_copy(&view,&name,&before[&name],0o444,0,0)?;
+                }
+                output_path.join("workload-current")
+            } else { Path::new("/input/current").to_path_buf() };
+            require(generation::stage(&workload_source,&output_path.join("tls"),&output_path.join("keycloak"),&output_path.join("generation"),false).map_err(|_| RECOVERY)? == 40)?;
+            require(generation::verify(&workload_source,&output_path.join("generation"),false,false).map_err(|_| RECOVERY)? == (40,39))?;
+            let ingress = if managed_ingress {
+                let renewed = crate::installer_ingress_provision::renew(&bao,token,owner,&before,&ingress_identity).await?;
+                for (name, value) in &renewed.files { deliver_copy(&candidate,name,value,0o444,0,0)?; }
+                Some(renewed.metadata)
+            } else { None };
             let mut next = BTreeMap::new();
-            require(fs::names(&candidate)? == fs::current_inputs())?;
-            for name in fs::current_inputs() {
-                next.insert(name.clone(),fs::entry(&candidate,&name,&[0],&[0o444],false)?);
+            require(fs::names(&candidate)? == inventory)?;
+            for name in &inventory {
+                next.insert(name.clone(),fs::entry(&candidate,name,&[0],&[0o444],false)?);
             }
             fs::validate_current(&next)?;
             require(!next.values().any(|value|value.windows(token.len()).any(|part|part == token.as_bytes())))?;
@@ -405,10 +427,11 @@ async fn provision_at(owner: &str, output_path: &Path) -> Result<usize> {
                 "minimum_ttl":3600,"require_orphan_new":true,"require_orphan_old":false,"replacement":null,"retiring":false});
             activation_preflight::tokens(&bao,&checks).await.map_err(|_| RECOVERY)?;
             activation_preflight::certificates(&bao,&checks).await.map_err(|_| RECOVERY)?;
-            require(generation::verify(Path::new("/input/current"),&output_path.join("generation"),false,false).map_err(|_| RECOVERY)? == (40,39))?;
             tls.sync_all().and_then(|_|keycloak.sync_all()).and_then(|_|candidate.sync_all()).map_err(|_| RECOVERY)?;
-            fs::receipt(&output,"validated.json",&json!({"schema":"elevenid.installer-generation-validation/v1","installation_id":owner,
-                "output_sha256":hashes(&next),"orphan_tokens":21,"remote_key_version":1,"ca_changed":false}))?;
+            let mut validated = json!({"schema":if managed_ingress {"elevenid.installer-generation-validation/v2"} else {"elevenid.installer-generation-validation/v1"},"installation_id":owner,
+                "output_sha256":hashes(&next),"orphan_tokens":token_count,"remote_key_version":1,"ca_changed":false});
+            if let Some(ingress) = ingress { validated["ingress"] = serde_json::to_value(ingress).map_err(|_| RECOVERY)?; }
+            fs::receipt(&output,"validated.json",&validated)?;
             Ok(())
         }.await;
         // Execute even when producer/validation fails. Revocation does not
@@ -421,11 +444,13 @@ async fn provision_at(owner: &str, output_path: &Path) -> Result<usize> {
         require(fs::current(&current)? == before && identity_snapshot(&identity)? == credentials
             && fs::input(Path::new("/input/ca.crt"),65536,&[0,100],&[0o444,0o644])? == ca
             && fs::input(Path::new("/input/keycloak-receipt.json"),8192,&[0,input_owner],&[0o600])? == receipt)?;
-        require(fs::names(&output)? == ["pending.json","authority.token","tls","keycloak","generation","validated.json"].map(String::from).into())?;
-        fs::receipt(&output,"completed.json",&json!({"schema":"elevenid.installer-generation-result/v1","installation_id":owner,
-            "files":40,"changed_files":39,"orphan_tokens":21,"transient_revoked":true,
-            "activated":false,"root_retired":false,"ingress_renewal":false,"installation_ready":false}))?;
-        Ok(40)
+        let mut retained: BTreeSet<String> = ["pending.json","authority.token","tls","keycloak","generation","validated.json"].map(String::from).into();
+        if managed_ingress { retained.insert("workload-current".into()); }
+        require(fs::names(&output)? == retained)?;
+        fs::receipt(&output,"completed.json",&json!({"schema":if managed_ingress {"elevenid.installer-generation-result/v2"} else {"elevenid.installer-generation-result/v1"},"installation_id":owner,
+            "files":file_count,"changed_files":changed_count,"orphan_tokens":token_count,"transient_revoked":true,
+            "activated":false,"root_retired":false,"ingress_renewal":managed_ingress,"installation_ready":false}))?;
+        Ok(file_count)
     }.await;
     outcome.map_err(|_| RECOVERY.into())
 }
@@ -451,6 +476,17 @@ struct GenerationValidated {
     orphan_tokens: u64,
     remote_key_version: u64,
     ca_changed: bool,
+    #[serde(default)]
+    ingress: Option<crate::installer_ingress_outputs::IngressMetadata>,
+}
+
+pub(crate) fn recorded_ingress(
+    records: &BTreeMap<String, Vec<u8>>,
+) -> Result<Option<crate::installer_ingress_outputs::IngressMetadata>> {
+    let validated: GenerationValidated =
+        serde_json::from_slice(records.get("validated.json").ok_or(REFUSED)?)
+            .map_err(|_| REFUSED)?;
+    Ok(validated.ingress)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -483,6 +519,9 @@ pub(crate) fn validate_records(
     )?;
     fs::validate_current(proof.current)?;
     fs::validate_current(outputs)?;
+    let managed_ingress = fs::has_managed_ingress(proof.current)?;
+    require(fs::has_managed_ingress(outputs)? == managed_ingress)?;
+    let version = if managed_ingress { 2 } else { 1 };
     let pending: GenerationPending =
         serde_json::from_slice(&records["pending.json"]).map_err(|_| REFUSED)?;
     let validated: GenerationValidated =
@@ -491,7 +530,7 @@ pub(crate) fn validate_records(
         serde_json::from_slice(&records["completed.json"]).map_err(|_| REFUSED)?;
     let digests = hashes(outputs);
     require(
-        pending.schema == "elevenid.installer-generation-intent/v1"
+        pending.schema == format!("elevenid.installer-generation-intent/v{version}")
             && pending.installation_id == proof.owner
             && pending.nonce == original_nonce(proof.keycloak_receipt, proof.owner)?
             && pending.input_sha256 == hashes(proof.current)
@@ -508,27 +547,44 @@ pub(crate) fn validate_records(
             && !pending.activated,
     )?;
     require(
-        validated.schema == "elevenid.installer-generation-validation/v1"
+        validated.schema == format!("elevenid.installer-generation-validation/v{version}")
             && validated.installation_id == proof.owner
             && validated.output_sha256 == digests
-            && validated.orphan_tokens == 21
+            && validated.orphan_tokens == if managed_ingress { 22 } else { 21 }
             && validated.remote_key_version == 1
             && !validated.ca_changed,
     )?;
     require(
-        completed.schema == "elevenid.installer-generation-result/v1"
+        completed.schema == format!("elevenid.installer-generation-result/v{version}")
             && completed.installation_id == proof.owner
-            && completed.files == 40
-            && completed.changed_files == 39
-            && completed.orphan_tokens == 21
+            && completed.files == if managed_ingress { 43 } else { 40 }
+            && completed.changed_files == if managed_ingress { 41 } else { 39 }
+            && completed.orphan_tokens == if managed_ingress { 22 } else { 21 }
             && completed.transient_revoked
             && !completed.activated
             && !completed.root_retired
-            && !completed.ingress_renewal
+            && completed.ingress_renewal == managed_ingress
             && !completed.installation_ready,
     )?;
     for (name, value) in outputs {
-        require((value == &proof.current[name]) == (name == "workload_identity_ca_cert"))?;
+        require(
+            (value == &proof.current[name])
+                == (name == "workload_identity_ca_cert" || name == "installer_ingress_ca_cert"),
+        )?;
+    }
+    require(validated.ingress.is_some() == managed_ingress)?;
+    if let Some(metadata) = validated.ingress {
+        let identity = crate::installer_ingress_provision::IngressIdentity::from_metadata(
+            &metadata.dns_names,
+            &metadata.ip_addresses,
+        )?;
+        crate::installer_ingress_provision::validate_recorded_replacement(
+            proof.owner,
+            proof.current,
+            outputs,
+            &metadata,
+            &identity,
+        )?;
     }
     Ok(digests)
 }
@@ -566,25 +622,27 @@ pub async fn provision_transfer(owner: &str) -> Result<usize> {
         let output = fs::child(&parent, "output")?;
         binding(Path::new("/transfer"), &parent, false, false)?;
         binding(Path::new("/transfer/output"), &output, true, false)?;
-        provision_at(owner, Path::new("/transfer/output")).await?;
+        let count = provision_at(owner, Path::new("/transfer/output")).await?;
         binding(Path::new("/transfer/output"), &output, true, false)?;
-        require(
-            fs::names(&output)?
-                == [
-                    "pending.json",
-                    "authority.token",
-                    "tls",
-                    "keycloak",
-                    "generation",
-                    "validated.json",
-                    "completed.json",
-                ]
-                .map(String::from)
-                .into(),
-        )?;
+        let mut retained: BTreeSet<String> = [
+            "pending.json",
+            "authority.token",
+            "tls",
+            "keycloak",
+            "generation",
+            "validated.json",
+            "completed.json",
+        ]
+        .map(String::from)
+        .into();
+        if count == 43 {
+            retained.insert("workload-current".into());
+        }
+        require(fs::names(&output)? == retained)?;
         let current = fs::directory(Path::new("/input/current"), false, true)?;
         let identity = fs::directory(Path::new("/input/identity"), false, true)?;
         let before = fs::current(&current)?;
+        let inventory = fs::inventory(fs::has_managed_ingress(&before)?);
         let credentials = identity_snapshot(&identity)?;
         let input_owner = current.metadata().map_err(|_| RECOVERY)?.uid();
         let receipt = fs::input(
@@ -594,9 +652,9 @@ pub async fn provision_transfer(owner: &str) -> Result<usize> {
             &[0o600],
         )?;
         let candidate = fs::directory(Path::new("/transfer/output/generation"), true, false)?;
-        require(fs::names(&candidate)? == fs::current_inputs())?;
+        require(fs::names(&candidate)? == inventory)?;
         let mut values = BTreeMap::new();
-        for name in fs::current_inputs() {
+        for name in inventory {
             values.insert(
                 name.clone(),
                 fs::entry(&candidate, &name, &[0], &[0o444], false)?,
@@ -643,7 +701,7 @@ pub async fn provision_transfer(owner: &str) -> Result<usize> {
         binding(Path::new("/transfer"), &parent, false, false)?;
         fs::deliver_directory(&delivered, &parent, recipient.uid(), recipient.gid())?;
         binding(Path::new("/transfer"), &parent, false, false)?;
-        Ok(40)
+        Ok(values.len())
     }
     .await;
     result.map_err(|_| RECOVERY.into())

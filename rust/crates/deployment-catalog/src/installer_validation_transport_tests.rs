@@ -22,7 +22,14 @@ fn certificate(root: &Path, name: &str, dns: &str) -> (std::path::PathBuf, std::
             "-subj",
             "/CN=localhost",
             "-addext",
-            &format!("subjectAltName=DNS:{dns}"),
+            &format!(
+                "subjectAltName={}",
+                if dns.starts_with("IP:") {
+                    dns.to_owned()
+                } else {
+                    format!("DNS:{dns}")
+                }
+            ),
             "-addext",
             "basicConstraints=critical,CA:FALSE",
         ])
@@ -59,6 +66,16 @@ async fn serve_observed(
     delay: Duration,
     requests: Arc<std::sync::atomic::AtomicUsize>,
 ) -> (TrustInfo, tokio::task::JoinHandle<()>) {
+    serve_bound(cert, key, response, delay, requests, None).await
+}
+async fn serve_bound(
+    cert: &Path,
+    key: &Path,
+    response: Vec<u8>,
+    delay: Duration,
+    requests: Arc<std::sync::atomic::AtomicUsize>,
+    expected: Option<(String, Option<String>)>,
+) -> (TrustInfo, tokio::task::JoinHandle<()>) {
     let der = CertificateDer::from_pem_file(cert).unwrap();
     let fingerprint = format!("{:x}", Sha256::digest(&der));
     let config = rustls::ServerConfig::builder_with_provider(Arc::new(
@@ -70,6 +87,7 @@ async fn serve_observed(
     .with_single_cert(vec![der], PrivateKeyDer::from_pem_file(key).unwrap())
     .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let local_probe_address = listener.local_addr().unwrap();
     let origin = format!(
         "https://localhost:{}",
         listener.local_addr().unwrap().port()
@@ -81,7 +99,18 @@ async fn serve_observed(
             .await
         {
             let mut request = [0; 4096];
-            if stream.read(&mut request).await.is_ok_and(|count| count > 0) {
+            if let Ok(count) = stream.read(&mut request).await {
+                assert!(count > 0);
+                if let Some((authority, sni)) = expected {
+                    assert_eq!(stream.get_ref().1.server_name(), sni.as_deref());
+                    let text = std::str::from_utf8(&request[..count])
+                        .unwrap()
+                        .to_ascii_lowercase();
+                    assert!(
+                        text.contains(&format!("\r\nhost: {authority}\r\n")),
+                        "{text}"
+                    );
+                }
                 requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
             tokio::time::sleep(delay).await;
@@ -94,6 +123,9 @@ async fn serve_observed(
             schema: "test",
             installation_id: "test".into(),
             origin,
+            local_probe_address,
+            certificate_scope: "public-ingress",
+            public_endpoint_observed: false,
             ca_certificate_pem: std::fs::read_to_string(cert).unwrap(),
             ca_der_sha256: fingerprint.clone(),
             certificate_der_sha256: fingerprint,
@@ -111,6 +143,126 @@ async fn serve_observed(
         },
         handle,
     )
+}
+
+#[tokio::test]
+async fn public_dns_identity_and_authority_survive_a_different_local_listener() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let root = tempfile::tempdir().unwrap();
+    let (cert, key) = certificate(root.path(), "public-dns", "marty.example.com");
+    let requests = Arc::new(AtomicUsize::new(0));
+    let (mut trust, task) = serve_bound(
+        &cert,
+        &key,
+        response(b"{}"),
+        Duration::ZERO,
+        requests.clone(),
+        Some(("marty.example.com".into(), Some("marty.example.com".into()))),
+    )
+    .await;
+    trust.origin = "https://marty.example.com".into();
+    let endpoint = crate::installer_transport::endpoint(&trust).unwrap();
+    assert_eq!(
+        endpoint,
+        format!(
+            "https://marty.example.com:{}",
+            trust.local_probe_address.port()
+        )
+    );
+    let client = crate::installer_transport::client(&trust, Duration::from_secs(2)).unwrap();
+    assert!(client
+        .get(endpoint)
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .is_success());
+    task.await.unwrap();
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn public_ip_san_is_checked_while_the_probe_connects_to_loopback() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let root = tempfile::tempdir().unwrap();
+    let (cert, key) = certificate(root.path(), "public-ip", "IP:192.0.2.10");
+    let requests = Arc::new(AtomicUsize::new(0));
+    let (mut trust, task) = serve_bound(
+        &cert,
+        &key,
+        response(b"{}"),
+        Duration::ZERO,
+        requests.clone(),
+        Some(("192.0.2.10:8443".into(), None)),
+    )
+    .await;
+    trust.origin = "https://192.0.2.10:8443".into();
+    let endpoint = crate::installer_transport::endpoint(&trust).unwrap();
+    assert_eq!(endpoint, format!("https://{}", trust.local_probe_address));
+    let client = crate::installer_transport::client(&trust, Duration::from_secs(2)).unwrap();
+    assert!(client
+        .get(endpoint)
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .is_success());
+    task.await.unwrap();
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn public_ipv6_identity_is_independent_of_an_ipv4_local_probe() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let root = tempfile::tempdir().unwrap();
+    let (cert, key) = certificate(root.path(), "public-ipv6", "IP:2001:db8::10");
+    let requests = Arc::new(AtomicUsize::new(0));
+    let (mut trust, task) = serve_bound(
+        &cert,
+        &key,
+        response(b"{}"),
+        Duration::ZERO,
+        requests.clone(),
+        Some(("[2001:db8::10]".into(), None)),
+    )
+    .await;
+    trust.origin = "https://[2001:db8::10]".into();
+    let client = crate::installer_transport::client(&trust, Duration::from_secs(2)).unwrap();
+    assert!(client
+        .get(crate::installer_transport::endpoint(&trust).unwrap())
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .is_success());
+    task.await.unwrap();
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_matching_pin_cannot_override_a_wrong_public_name() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let root = tempfile::tempdir().unwrap();
+    let (cert, key) = certificate(root.path(), "wrong-public-name", "localhost");
+    let requests = Arc::new(AtomicUsize::new(0));
+    let (mut trust, task) = serve_observed(
+        &cert,
+        &key,
+        response(b"{}"),
+        Duration::ZERO,
+        requests.clone(),
+    )
+    .await;
+    trust.origin = "https://marty.example.com".into();
+    let client = crate::installer_transport::client(&trust, Duration::from_secs(2)).unwrap();
+    assert!(client
+        .get(crate::installer_transport::endpoint(&trust).unwrap())
+        .bearer_auth("must-not-arrive")
+        .send()
+        .await
+        .is_err());
+    task.await.unwrap();
+    assert_eq!(requests.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

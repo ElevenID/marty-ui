@@ -16,7 +16,7 @@ from check_prepared_selfhost_consumer import check, verify_descriptor
 
 
 EXPECTED_SERVICES = frozenset({
-    "applicant", "auth", "canvas-sync-worker", "cloudflared", "cloudflared-beta",
+    "applicant", "auth", "canvas-sync-worker",
     "compliance-profile", "credential-template", "db-migrate",
     "deployment-profile", "device-registration", "edge", "event-stream", "flow",
     "gateway", "issuance", "issuance-migrations", "issuance-native", "keycloak",
@@ -24,9 +24,9 @@ EXPECTED_SERVICES = frozenset({
     "kms-initialize",
     "presentation-policy", "redis", "revocation-profile",
     "revocation-profile-migrate", "signing-keys", "trust-profile",
-    "tunnel-nginx-proxy", "ui", "verification",
+    "ui", "verification",
 })
-BETA_SERVICES = frozenset({"cloudflared-beta", "tunnel-nginx-proxy"})
+BETA_SERVICES: frozenset[str] = frozenset()
 CONDITIONS = frozenset({"service_healthy", "service_completed_successfully"})
 H, C = "service_healthy", "service_completed_successfully"
 # Reviewed all-profile Compose edge set. An intentional source dependency change
@@ -35,8 +35,6 @@ EXPECTED_DEPENDENCIES = {
     "applicant": {"db-migrate": C},
     "auth": {"db-migrate": C, "flow": H, "keycloak-configurator": C, "redis": H},
     "canvas-sync-worker": {"db-migrate": C, "issuance-migrations": C},
-    "cloudflared": {"edge": H},
-    "cloudflared-beta": {"tunnel-nginx-proxy": H},
     "compliance-profile": {"db-migrate": C},
     "credential-template": {"db-migrate": C},
     "db-migrate": {"postgres": H, "redis": H, "revocation-profile-migrate": C},
@@ -66,7 +64,6 @@ EXPECTED_DEPENDENCIES = {
     "revocation-profile-migrate": {"postgres": H},
     "signing-keys": {"db-migrate": C, "redis": H},
     "trust-profile": {"db-migrate": C},
-    "tunnel-nginx-proxy": {"edge": H},
     "verification": {"credential-template": H, "presentation-policy": H, "redis": H},
 }
 EXPECTED_ROLE_SECRETS = {
@@ -81,8 +78,6 @@ EXPECTED_ROLE_SECRETS = {
                            "signing_keys_integration_secret_key", "signing_keys_issuer_sign_key",
                            "sign_grant_mint_issuance_canvas_token", "openbao_tls_ca_cert",
                            "workload_identity_ca_cert"},
-    "cloudflared": {"cloudflare_tunnel_token"},
-    "cloudflared-beta": {"cloudflare_beta_tunnel_token"},
     "compliance-profile": {"marty_db_password", "grpc_service_token",
                            "compliance_profile_workload_client_cert",
                            "openbao_tls_ca_cert", "compliance_profile_tls_kms_token",

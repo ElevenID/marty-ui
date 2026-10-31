@@ -131,6 +131,7 @@ pub struct GatewayConfig {
     pub default_organization_id: Option<String>,
     pub required_ready_services: Vec<String>,
     pub rate_limit_rpm: u64,
+    pub observe_client_ip: bool,
     pub maximum_response_bytes: usize,
     pub hosted_pilot_auto_purge_enabled: bool,
     pub hosted_pilot_auto_purge_interval_seconds: u64,
@@ -208,6 +209,7 @@ impl fmt::Debug for GatewayConfig {
             .field("default_organization_id", &self.default_organization_id)
             .field("required_ready_services", &self.required_ready_services)
             .field("rate_limit_rpm", &self.rate_limit_rpm)
+            .field("observe_client_ip", &self.observe_client_ip)
             .field("maximum_response_bytes", &self.maximum_response_bytes)
             .field(
                 "hosted_pilot_auto_purge_enabled",
@@ -704,6 +706,7 @@ impl GatewayConfig {
             default_organization_id: value(values, "DEFAULT_ORG_ID"),
             required_ready_services,
             rate_limit_rpm: parse(values, "RATE_LIMIT_RPM", 120_u64)?,
+            observe_client_ip: boolean(values, "GATEWAY_OBSERVE_CLIENT_IP", true)?,
             maximum_response_bytes: parse(
                 values,
                 "GATEWAY_MAXIMUM_RESPONSE_BYTES",
@@ -1014,6 +1017,7 @@ mod tests {
         assert!(!config.production);
         assert_eq!(config.address.port(), 8000);
         assert_eq!(config.rate_limit_rpm, 120);
+        assert!(config.observe_client_ip);
         assert_eq!(config.public_domain, "localhost:8000");
         assert_eq!(
             config.service_urls["issuance-native"],
@@ -1024,6 +1028,25 @@ mod tests {
         assert!(!config.passport_native_gateway_enabled);
         assert!(!config.passport_provider_ingress_gateway_enabled);
         assert!(config.release_identity.component_revisions.is_empty());
+    }
+
+    #[test]
+    fn client_ip_observation_is_explicit_validated_and_independent_of_rate_limits() {
+        let mut values = BTreeMap::from([("GATEWAY_OBSERVE_CLIENT_IP".into(), "false".into())]);
+        let config = GatewayConfig::from_values(&values).unwrap();
+        assert!(!config.observe_client_ip);
+        assert_eq!(config.rate_limit_rpm, 120);
+        values.insert("GATEWAY_OBSERVE_CLIENT_IP".into(), "true".into());
+        assert!(
+            GatewayConfig::from_values(&values)
+                .unwrap()
+                .observe_client_ip
+        );
+        values.insert("GATEWAY_OBSERVE_CLIENT_IP".into(), "unknown".into());
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("GATEWAY_OBSERVE_CLIENT_IP must be a boolean"));
     }
 
     #[test]

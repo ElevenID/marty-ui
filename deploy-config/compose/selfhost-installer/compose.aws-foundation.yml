@@ -737,34 +737,6 @@ services:
       keycloak: !reset 'null'
       kms-initialize: !reset 'null'
       openbao-unseal: !reset 'null'
-  cloudflared:
-    environment:
-      AWS_EC2_METADATA_DISABLED: 'true'
-    depends_on:
-      keycloak-configurator: !reset 'null'
-      keycloak: !reset 'null'
-      kms-initialize: !reset 'null'
-      openbao-unseal: !reset 'null'
-    secrets: !override
-    - cloudflare_tunnel_token
-  tunnel-nginx-proxy:
-    environment:
-      AWS_EC2_METADATA_DISABLED: 'true'
-    depends_on:
-      keycloak-configurator: !reset 'null'
-      keycloak: !reset 'null'
-      kms-initialize: !reset 'null'
-      openbao-unseal: !reset 'null'
-  cloudflared-beta:
-    environment:
-      AWS_EC2_METADATA_DISABLED: 'true'
-    depends_on:
-      keycloak-configurator: !reset 'null'
-      keycloak: !reset 'null'
-      kms-initialize: !reset 'null'
-      openbao-unseal: !reset 'null'
-    secrets: !override
-    - cloudflare_beta_tunnel_token
   installer-ingress:
     environment:
       AWS_EC2_METADATA_DISABLED: 'true'

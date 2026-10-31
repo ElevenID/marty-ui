@@ -10,6 +10,7 @@ use crate::{
     installer_json,
     installer_state::{InstallerState, LockedInspection, Phase},
 };
+use marty_selfhost_identity::origin::PublicOrigin;
 use marty_selfhost_identity::SELFHOST_ROLES;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -158,7 +159,7 @@ pub(crate) struct Selection {
 impl Configuration {
     fn validate(&self) -> Result<()> {
         require(self.schema == "elevenid.installer-foundation/v1" && self.foundation == "aws-kms")?;
-        crate::installer_application_env::origin_port(&self.public_origin)?;
+        PublicOrigin::parse(&self.public_origin)?;
         for value in [
             &self.external_oidc.issuer_url,
             &self.external_oidc.client_id,
@@ -283,6 +284,12 @@ impl Configuration {
 
 /// Called only from a fresh, authenticated install before Provisioning. The
 /// record binds inputs, not a successful AWS/IAM/identity qualification.
+pub(crate) fn preflight_origin(path: &Path) -> Result<PublicOrigin> {
+    let configuration: Configuration = decode(&bytes(path)?)?;
+    configuration.validate()?;
+    PublicOrigin::parse(&configuration.public_origin)
+}
+
 pub(crate) fn select(path: &Path, installation: &Path, state: &mut InstallerState) -> Result<()> {
     state.require_live_phase(Phase::Verified)?;
     let raw = bytes(path)?;
@@ -301,7 +308,10 @@ pub(crate) fn select(path: &Path, installation: &Path, state: &mut InstallerStat
         );
         imported.insert(name, content);
     }
-    validate_imports(&imported)?;
+    validate_imports(
+        &imported,
+        &PublicOrigin::parse(&configuration.public_origin)?,
+    )?;
     let mut identities = BTreeMap::new();
     for (workload, input) in &configuration.workload_identities {
         require(
@@ -392,7 +402,7 @@ fn hash(value: &str) -> bool {
             .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
 }
 
-fn validate_imports(values: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+fn validate_imports(values: &BTreeMap<String, Vec<u8>>, origin: &PublicOrigin) -> Result<()> {
     marty_signing_grant::configuration::AwsGrantConfiguration::decode(
         &values["signing_grant_authorities"],
     )
@@ -404,9 +414,10 @@ fn validate_imports(values: &BTreeMap<String, Vec<u8>>) -> Result<()> {
         )
         .map_err(|_| REFUSED)?;
     }
-    crate::installer_trust::validate_imported_ingress(
+    crate::installer_trust::validate_imported_ingress_for_origin(
         &values["installer_ingress_ca_cert"],
         &values["installer_ingress_tls_cert"],
+        origin,
     )
     .map_err(|_| REFUSED)?;
     Ok(())
@@ -465,7 +476,10 @@ impl Selection {
             require(digest(&content) == selected.sha256)?;
             values.insert(name.clone(), content);
         }
-        validate_imports(&values)?;
+        validate_imports(
+            &values,
+            &PublicOrigin::parse(&self.configuration.public_origin)?,
+        )?;
         values
             .entry("external_oidc_client_secret".into())
             .or_default();

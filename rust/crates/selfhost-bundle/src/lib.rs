@@ -26,7 +26,6 @@ const DEFAULT_ASSETS: &[&str] = &[
     "SELFHOST_BUNDLE.md",
     "docker/init-databases.sh",
     "docker/nginx-selfhost.prod.conf.template",
-    "docker/tunnel-nginx-proxy.edge.conf",
     "docker/openbao-init.sh",
     "docker/openbao-selfhost.hcl",
     "docker/openbao-selfhost-init.sh",
@@ -35,7 +34,6 @@ const DEFAULT_ASSETS: &[&str] = &[
     "config/keycloak",
     "scripts/bootstrap-selfhost-vault.sh",
     "scripts/generate_selfhost_disposable_credentials.py",
-    "scripts/cloudflared-selfhost.sh",
     "scripts/keycloak-selfhost-start.sh",
     "scripts/load-openbao-token-and-start.sh",
     "scripts/load-secrets-env.sh",
@@ -255,6 +253,14 @@ fn directories(root: &Path) -> Result<Vec<String>> {
         .collect())
 }
 fn copy_asset(source: &Path, destination: &Path, top_level: bool) -> Result<()> {
+    // Optional connector inputs never enter the core package, including the
+    // backwards-compatible default asset list used without a manifest.
+    if ["cloudflare_tunnel_token", "cloudflare_beta_tunnel_token"]
+        .iter()
+        .any(|name| source.ends_with(Path::new("docker/secrets/selfhost.example").join(name)))
+    {
+        return Ok(());
+    }
     let metadata = fs::symlink_metadata(source).map_err(failure("Bundle asset is missing"))?;
     if !plain(&metadata) {
         return Err("Symlink/reparse bundle assets are forbidden".into());

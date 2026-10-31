@@ -33,7 +33,7 @@ PREFLIGHT = {
     "release": "v1.2.3",
     "source_sha": "b" * 40,
     "run_id": "123",
-    "service_count": 32,
+    "service_count": 29,
 }
 
 
@@ -79,7 +79,7 @@ def model() -> dict:
             "configs": {}}
 
 
-def test_plan_is_exact_artifact_bound_and_covers_both_profiles() -> None:
+def test_plan_is_exact_artifact_bound_and_excludes_optional_connectors() -> None:
     assert "integration_secret_master_key" not in EXPECTED_SECRET_NAMES
     assert {"sign_grant_verify_token", "signing_keys_openbao_token"} <= (
         EXPECTED_ROLE_SECRETS["signing-keys"]
@@ -90,13 +90,15 @@ def test_plan_is_exact_artifact_bound_and_covers_both_profiles() -> None:
     result = plan(model(), PREFLIGHT, SECRET_ROOT)
     assert result["qualification"] == "unqualified"
     assert result["archive_sha256"] == "a" * 64
-    assert result["service_count"] == 32
-    assert result["default_service_count"] == 29
-    assert result["beta_tunnel_service_count"] == 2
+    assert result["service_count"] == 29
+    assert result["default_service_count"] == 28
+    assert result["beta_tunnel_service_count"] == 0
     assert result["kms_init_service_count"] == 1
     assert result["dependency_count"] == sum(map(len, EXPECTED_DEPENDENCIES.values()))
     layers = result["startup_layers"]
-    assert sum(map(len, layers)) == 32
+    assert sum(map(len, layers)) == 29
+    assert not {"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"} & EXPECTED_SERVICES
+    assert not {"cloudflare_tunnel_token", "cloudflare_beta_tunnel_token"} & EXPECTED_SECRET_NAMES
     assert next(i for i, layer in enumerate(layers) if "db-migrate" in layer) < next(
         i for i, layer in enumerate(layers) if "signing-keys" in layer)
 
@@ -144,7 +146,7 @@ def test_plan_rejects_dag_and_declaration_drift(change) -> None:
 
 def test_plan_rejects_unbound_preflight() -> None:
     changed = copy.deepcopy(PREFLIGHT)
-    changed["service_count"] = 29
+    changed["service_count"] = 32
     with pytest.raises(ValueError, match="preflight"):
         plan(model(), changed, SECRET_ROOT)
 
@@ -171,7 +173,7 @@ def test_source_compose_has_reviewed_full_dag() -> None:
         cwd=ROOT, env=env, check=True, capture_output=True, text=True,
     )
     result = plan(json.loads(completed.stdout), PREFLIGHT, SECRET_ROOT)
-    assert result["service_count"] == 32
+    assert result["service_count"] == 29
     assert result["dependency_count"] > 30
 
 

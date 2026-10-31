@@ -102,7 +102,10 @@ async fn get(client: &reqwest::Client, trust: &TrustInfo, path: &str) -> Probe {
         tls_verified: false,
         document: None,
     };
-    let Ok(response) = client.get(format!("{}{path}", trust.origin)).send().await else {
+    let Ok(endpoint) = crate::installer_transport::endpoint(trust) else {
+        return failed();
+    };
+    let Ok(response) = client.get(format!("{endpoint}{path}")).send().await else {
         return failed();
     };
     let Some(peer) = response
@@ -475,12 +478,11 @@ esac
         assert!(security_summary(&changed).is_none());
     }
     #[test]
-    fn fixed_loopback_origin_refuses_url_overrides() {
+    fn canonical_origin_refuses_url_injection() {
         for origin in [
             "http://localhost:18443",
             "https://localhost:443",
             "https://localhost:018443",
-            "https://foreign:18443",
             "https://localhost:18443/path",
             "https://localhost:18443@foreign",
         ] {

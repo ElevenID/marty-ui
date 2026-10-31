@@ -117,6 +117,8 @@ services:
   gateway:
     <<: *installer-runtime
     ports: !reset []
+    # The installer-owned env file disables client-IP observation in the base.
+    # Avoid an intermediate environment map: preserve foundation !reset merges.
     depends_on: *kms-complete
   auth:
     <<: *installer-runtime
@@ -257,8 +259,8 @@ services:
       com.elevenid.installer.stage: ingress
     ports:
       - target: 8443
-        published: "${MARTY_INSTALLER_HTTPS_PORT:?set the reserved loopback port}"
-        host_ip: 127.0.0.1
+        published: "${MARTY_INSTALLER_HTTPS_PORT:?set the reserved ingress port}"
+        host_ip: ${MARTY_INSTALLER_HTTPS_BIND_ADDRESS:-127.0.0.1}
         protocol: tcp
     depends_on:
       edge:
@@ -295,18 +297,11 @@ services:
         read_only: true
         bind: *no-host-create
     healthcheck:
-      test: [CMD, curl, --fail, --silent, --show-error, --max-time, "10", --noproxy, "*", --cacert, /run/installer/ca.crt, --connect-to, "localhost:${MARTY_INSTALLER_HTTPS_PORT}:127.0.0.1:8443", "${PUBLIC_API_URL}/"]
+      test: [CMD, curl, --fail, --silent, --show-error, --max-time, "10", --noproxy, "*", --cacert, /run/installer/ca.crt, --connect-to, "${MARTY_INSTALLER_INGRESS_CONNECT_TO:?set the public identity and local TLS target}", "${PUBLIC_API_URL}/"]
       interval: 10s
       timeout: 12s
       start_period: 30s
       retries: 12
-  cloudflared:
-    profiles: !override [installer-tunnel]
-  tunnel-nginx-proxy:
-    profiles: !override [installer-diagnostics]
-  cloudflared-beta:
-    profiles: !override [installer-diagnostics]
-
 secrets:
   operator_bootstrap_password:
     file: ${SELFHOST_SECRET_DIR:?set the verified generation directory}/operator_bootstrap_password
