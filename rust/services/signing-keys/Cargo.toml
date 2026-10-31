@@ -30,13 +30,10 @@ test = false
 
 [dependencies]
 mmf-runtime.workspace = true
+mmf-aws-kms.workspace = true
 marty-managed-key-reference = { path = "../../crates/managed-key-reference" }
 axum.workspace = true
 axum-server.workspace = true
-aws-config.workspace = true
-aws-credential-types.workspace = true
-aws-sdk-kms.workspace = true
-aws-smithy-http-client.workspace = true
 base64.workspace = true
 bs58 = "0.4"
 chrono.workspace = true

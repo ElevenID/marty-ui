@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
 use thiserror::Error;
 use url::Url;
@@ -18,16 +18,7 @@ impl RuntimeEnvironment {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WorkloadTlsFiles {
-    pub certificate: PathBuf,
-    pub ca_certificate: PathBuf,
-    pub kms_endpoint: String,
-    pub kms_ca_certificate: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
-}
+pub use marty_service_runtime::WorkloadTlsFiles;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeploymentServiceConfig {
@@ -138,46 +129,34 @@ fn workload_tls(
     values: &BTreeMap<String, String>,
     environment: RuntimeEnvironment,
 ) -> Result<Option<WorkloadTlsFiles>, DeploymentConfigError> {
-    let names = [
-        "GRPC_WORKLOAD_TLS_CLIENT_CERT",
-        "GRPC_WORKLOAD_TLS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_KMS_ADDR",
-        "GRPC_WORKLOAD_TLS_KMS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE",
-        "GRPC_WORKLOAD_TLS_KMS_KEY_NAME",
-        "GRPC_WORKLOAD_TLS_KMS_KEY_VERSION",
-    ];
     if values.contains_key("GRPC_WORKLOAD_TLS_CLIENT_KEY") {
         return Err(invalid("GRPC_WORKLOAD_TLS_CLIENT_KEY"));
     }
-    let configured = names
-        .iter()
-        .filter(|name| value(values, name).is_some())
-        .count();
-    if configured == 0 && !environment.is_deployed() {
-        return Ok(None);
-    }
-    if configured != names.len() {
-        return Err(if configured == 0 {
-            DeploymentConfigError::Missing { name: names[0] }
+    let mut names = marty_service_runtime::TlsIdentityNames::new("GRPC_WORKLOAD_TLS");
+    names.certificate = "GRPC_WORKLOAD_TLS_CLIENT_CERT".into();
+    names.private_key = "GRPC_WORKLOAD_TLS_CLIENT_KEY".into();
+    let tls = WorkloadTlsFiles::from_values(
+        |name| values.get(name).map(String::as_str),
+        names,
+        "GRPC_WORKLOAD_TLS_CA_CERT",
+        value(values, "GRPC_WORKLOAD_TLS_CA_CERT").is_some(),
+        Duration::from_secs(10),
+        64,
+    )
+    .map_err(|error| {
+        if error.starts_with("GRPC_WORKLOAD_TLS_KMS_KEY_VERSION") && !error.ends_with("is required")
+        {
+            invalid("GRPC_WORKLOAD_TLS_KMS_KEY_VERSION")
         } else {
-            invalid(names[0])
+            invalid("GRPC_WORKLOAD_TLS_CLIENT_CERT")
+        }
+    })?;
+    if tls.is_none() && environment.is_deployed() {
+        return Err(DeploymentConfigError::Missing {
+            name: "GRPC_WORKLOAD_TLS_CLIENT_CERT",
         });
     }
-    Ok(Some(WorkloadTlsFiles {
-        certificate: value(values, names[0]).unwrap_or_default().into(),
-        ca_certificate: value(values, names[1]).unwrap_or_default().into(),
-        kms_endpoint: value(values, names[2]).unwrap_or_default().into(),
-        kms_ca_certificate: value(values, names[3]).unwrap_or_default().into(),
-        kms_token_file: value(values, names[4]).unwrap_or_default().into(),
-        kms_key_name: value(values, names[5]).unwrap_or_default().into(),
-        kms_key_version: value(values, names[6])
-            .unwrap_or_default()
-            .parse::<u32>()
-            .ok()
-            .filter(|version| *version > 0)
-            .ok_or_else(|| invalid(names[6]))?,
-    }))
+    Ok(tls)
 }
 
 fn boolean(
@@ -300,14 +279,14 @@ mod tests {
             })
         );
         values.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
-        assert_eq!(
-            DeploymentServiceConfig::from_values(values.clone())
-                .unwrap()
-                .workload_tls
-                .unwrap()
-                .kms_key_version,
-            1
-        );
+        let tls = DeploymentServiceConfig::from_values(values.clone())
+            .unwrap()
+            .workload_tls
+            .unwrap();
+        let marty_service_runtime::RemoteTlsIdentityFiles::OpenBao(identity) = tls.identity else {
+            panic!("omitted provider must preserve OpenBao");
+        };
+        assert_eq!(identity.kms_key_version, 1);
         values.insert("GRPC_WORKLOAD_TLS_CLIENT_KEY".into(), "legacy.pem".into());
         assert_eq!(
             DeploymentServiceConfig::from_values(values),

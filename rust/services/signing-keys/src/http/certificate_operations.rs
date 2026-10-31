@@ -1007,6 +1007,10 @@ pub(super) fn dsc_compat_failure(error: CompatibilityError) -> PublicSigningErro
             StatusCode::UNPROCESSABLE_ENTITY,
             "Managed issuer binding is invalid.",
         ),
+        CompatibilityError::SecretCapabilityUnavailable => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Integration secret encryption capability is unavailable.",
+        ),
         CompatibilityError::Unavailable => (
             StatusCode::SERVICE_UNAVAILABLE,
             "Managed issuer backend is unavailable.",

@@ -337,6 +337,61 @@ impl OwnedRedis {
         &self.url
     }
 
+    /// Reserve the existing Signing Keys test database on this exact-owned
+    /// Redis instance. Child fixtures only read this sentinel; they never get
+    /// Docker authority or permission to select an ambient Redis endpoint.
+    #[allow(
+        dead_code,
+        reason = "Only Canvas's registered DIDComm fixture uses database 13"
+    )]
+    pub(super) fn prepare_signing_keys_database(&self) -> Result<String, String> {
+        self.network.verify_parent()?;
+        let id = self.id.as_deref().ok_or("Missing owned Redis")?;
+        if checked_url(&inspect(id)?, id, &self.scope, &self.image, &self.network)? != self.url {
+            return Err("Owned Redis URL changed".into());
+        }
+        let nonce = Uuid::new_v4().simple().to_string();
+        if docker(&[
+            "exec",
+            id,
+            "redis-cli",
+            "-n",
+            "13",
+            "SET",
+            "marty:tests:disposable-guard",
+            &nonce,
+            "NX",
+        ])? != "OK"
+        {
+            return Err("Signing Keys Redis database is already reserved".into());
+        }
+        self.verify_signing_keys_database(&nonce)?;
+        Ok(nonce)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Only Canvas's registered DIDComm fixture uses database 13"
+    )]
+    pub(super) fn verify_signing_keys_database(&self, nonce: &str) -> Result<(), String> {
+        self.network.verify_parent()?;
+        let id = self.id.as_deref().ok_or("Missing owned Redis")?;
+        if checked_url(&inspect(id)?, id, &self.scope, &self.image, &self.network)? != self.url
+            || docker(&[
+                "exec",
+                id,
+                "redis-cli",
+                "-n",
+                "13",
+                "GET",
+                "marty:tests:disposable-guard",
+            ])? != nonce
+        {
+            return Err("Signing Keys Redis ownership sentinel changed".into());
+        }
+        Ok(())
+    }
+
     fn owned_ids(&self) -> Result<Vec<String>, String> {
         if !self.creation_attempted {
             return Ok(Vec::new());

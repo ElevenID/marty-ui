@@ -3182,6 +3182,10 @@ impl IntoResponse for CanvasOAuthHttpError {
             Self::Service(Error::Security(error)) => {
                 TransactionReadHttpError(error).into_response()
             }
+            Self::Service(Error::SecretCapabilityUnavailable) => CanvasManagementHttpError::from(
+                crate::canvas_management_service::CanvasPlatformManagementError::SecretCapabilityUnavailable,
+            )
+            .into_response(),
             Self::Service(
                 Error::RepositoryUnavailable
                 | Error::SecretUnavailable
@@ -3219,6 +3223,7 @@ impl IntoResponse for CanvasOAuthHttpError {
                     }
                     Error::RepositoryUnavailable
                     | Error::SecretUnavailable
+                    | Error::SecretCapabilityUnavailable
                     | Error::InvalidConfiguration
                     | Error::RefreshRateLimited { .. } => unreachable!("handled above"),
                     Error::Security(_) => unreachable!("handled above"),

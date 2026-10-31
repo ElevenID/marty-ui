@@ -1018,8 +1018,13 @@ def test_oidf_tls_edge_requires_remote_nonexportable_signing_identity() -> None:
     shared = (ROOT / "rust/crates/passport-keyless-edge/src/lib.rs").read_text(
         encoding="utf-8"
     )
+    selector = (ROOT / "rust/crates/service-runtime/src/tls.rs").read_text(
+        encoding="utf-8"
+    )
     assert 'keyless_tls_config("OIDF_EDGE")' in edge
-    assert "OpenBaoTlsIdentityFiles" in shared
+    assert "RemoteTlsIdentityFiles::from_values" in shared
+    assert "OpenBao(OpenBaoTlsIdentityFiles)" in selector
+    assert "AwsKms(AwsKmsTlsIdentityFiles)" in selector
     assert "keyless_https_server_config" in shared
     assert "OIDF_EDGE_TLS_KMS_KEY_VERSION" in profile
     assert "tls.key" not in profile

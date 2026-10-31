@@ -257,6 +257,7 @@ export const normalizeKeyManagementService = (service, catalog) => {
           delete_keys: false,
           multiple_key_references: true,
         },
+    extensions: cloneConfigMap(service.extensions),
     key_purposes: Array.isArray(service.key_purposes) ? service.key_purposes.filter((p) => typeof p === 'string') : [],
     credential_formats: Array.isArray(service.credential_formats) ? service.credential_formats.filter((f) => typeof f === 'string') : [],
     rotation_policy: service.rotation_policy && typeof service.rotation_policy === 'object'

@@ -3,7 +3,9 @@
 #![cfg(target_os = "linux")]
 
 use crate::{
-    installer_host_fs, installer_json, installer_state::LockedMaintenance, installer_trust,
+    installer_host_fs, installer_json,
+    installer_state::{InstallerState, LockedMaintenance, Phase},
+    installer_trust,
 };
 use reqwest::{
     header::{HeaderValue, ETAG, IF_MATCH},
@@ -97,6 +99,10 @@ impl RegistrationPlan {
     }
 }
 
+pub(crate) fn validate_registration(bytes: &[u8]) -> Result<()> {
+    RegistrationPlan::decode(bytes).map(|_| ())
+}
+
 struct ApiResponse {
     document: Value,
     revision: Option<String>,
@@ -112,43 +118,94 @@ trait RegistryApi {
     ) -> Result<ApiResponse>;
 }
 
-struct PublicRegistryApi<'a> {
+// The existing install writer can lend its lock for first-boot registration.
+// Ordinary CLI registration continues to use the maintenance owner. Neither
+// path reacquires the installation lock or writes registry persistence itself.
+trait RegistrationOwner {
+    fn check(&self, installation: &Path) -> Result<()>;
+    fn installation_id(&self) -> uuid::Uuid;
+    fn record(&mut self, name: &str, bytes: &[u8]) -> Result<()>;
+}
+
+impl RegistrationOwner for LockedMaintenance {
+    fn check(&self, installation: &Path) -> Result<()> {
+        self.inspection().require_path_binding(installation)?;
+        self.require_unchanged()
+    }
+    fn installation_id(&self) -> uuid::Uuid {
+        self.journal().installation_id()
+    }
+    fn record(&mut self, name: &str, bytes: &[u8]) -> Result<()> {
+        self.write_evidence_exclusive(name, bytes)
+    }
+}
+
+impl RegistrationOwner for InstallerState {
+    fn check(&self, installation: &Path) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        self.with_inspection(|inspection| inspection.require_path_binding(installation))
+    }
+    fn installation_id(&self) -> uuid::Uuid {
+        self.journal().installation_id()
+    }
+    fn record(&mut self, name: &str, bytes: &[u8]) -> Result<()> {
+        self.write_evidence(name, bytes)
+    }
+}
+
+struct PublicRegistryApi<'a, Owner> {
     client: reqwest::Client,
     origin: String,
     organization_id: String,
     api_key: HeaderValue,
     installation: &'a Path,
-    state: &'a mut LockedMaintenance,
+    state: &'a mut Owner,
     operation: String,
     mutation_attempted: bool,
 }
 
-impl RegistryApi for PublicRegistryApi<'_> {
-    async fn request(
-        &mut self,
+impl<'a, Owner: RegistrationOwner> PublicRegistryApi<'a, Owner> {
+    fn new(
+        installation: &'a Path,
+        state: &'a mut Owner,
+        trust: installer_trust::TrustInfo,
+        organization_id: String,
+        credential: &[u8],
+    ) -> Result<Self> {
+        state.check(installation)?;
+        let key = std::str::from_utf8(credential)
+            .map_err(|_| INPUT_REFUSED)?
+            .trim();
+        if key.is_empty()
+            || key.len() > 4096
+            || key
+                .bytes()
+                .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+        {
+            return Err(INPUT_REFUSED.into());
+        }
+        let mut api_key = HeaderValue::from_str(key).map_err(|_| INPUT_REFUSED)?;
+        api_key.set_sensitive(true);
+        Ok(Self {
+            client: crate::installer_transport::client(&trust, Duration::from_secs(15))?,
+            origin: trust.origin,
+            organization_id,
+            api_key,
+            installation,
+            state,
+            operation: uuid::Uuid::new_v4().to_string(),
+            mutation_attempted: false,
+        })
+    }
+
+    async fn send(
+        &self,
         method: Method,
         path: &'static str,
         body: Option<&Value>,
         revision: Option<&str>,
-    ) -> Result<ApiResponse> {
-        self.state
-            .inspection()
-            .require_path_binding(self.installation)?;
-        self.state.require_unchanged()?;
-        if method == Method::PATCH {
-            // Persist intent before the one write. A lost response is never retried automatically.
-            self.state.write_evidence_exclusive(
-                &format!("kms-registration-{}-intent.json", self.operation),
-                &serde_json::to_vec(&json!({
-                    "schema":"elevenid.kms-registration-intent/v1", "operation_id":self.operation,
-                    "installation_id":self.state.journal().installation_id(),
-                    "organization_id":self.organization_id, "registry_revision":revision,
-                    "path":CONFIG_PATH, "automatic_retry":false,
-                }))
-                .map_err(|_| "cannot encode KMS registration intent")?,
-            )?;
-            self.mutation_attempted = true;
-        }
+    ) -> Result<reqwest::Response> {
+        self.state.check(self.installation)?;
         let mut url = url::Url::parse(&format!("{}{path}", self.origin))
             .map_err(|_| "invalid bound KMS registration origin")?;
         url.query_pairs_mut()
@@ -164,10 +221,39 @@ impl RegistryApi for PublicRegistryApi<'_> {
         if let Some(body) = body {
             request = request.json(body);
         }
-        let mut response = request
+        let response = request
             .send()
             .await
             .map_err(|_| "KMS registration request failed; inspect the registry before retrying")?;
+        self.state.check(self.installation)?;
+        Ok(response)
+    }
+}
+
+impl<Owner: RegistrationOwner> RegistryApi for PublicRegistryApi<'_, Owner> {
+    async fn request(
+        &mut self,
+        method: Method,
+        path: &'static str,
+        body: Option<&Value>,
+        revision: Option<&str>,
+    ) -> Result<ApiResponse> {
+        self.state.check(self.installation)?;
+        if method == Method::PATCH {
+            // Persist intent before the one write. A lost response is never retried automatically.
+            self.state.record(
+                &format!("kms-registration-{}-intent.json", self.operation),
+                &serde_json::to_vec(&json!({
+                    "schema":"elevenid.kms-registration-intent/v1", "operation_id":self.operation,
+                    "installation_id":self.state.installation_id(),
+                    "organization_id":self.organization_id, "registry_revision":revision,
+                    "path":CONFIG_PATH, "automatic_retry":false,
+                }))
+                .map_err(|_| "cannot encode KMS registration intent")?,
+            )?;
+            self.mutation_attempted = true;
+        }
+        let mut response = self.send(method, path, body, revision).await?;
         if !response.status().is_success() {
             return Err(match response.status().as_u16() {
                 401 | 403 => "KMS registration was not authorized for this organization",
@@ -199,19 +285,23 @@ impl RegistryApi for PublicRegistryApi<'_> {
         }
         let document =
             installer_json::decode(&bytes).map_err(|_| "KMS registration response is invalid")?;
-        self.state
-            .inspection()
-            .require_path_binding(self.installation)?;
-        self.state.require_unchanged()?;
+        self.state.check(self.installation)?;
         Ok(ApiResponse { document, revision })
     }
 }
 
 fn revision(response: &ApiResponse) -> Result<&str> {
-    let revision = response
-        .revision
-        .as_deref()
-        .ok_or("KMS registry omitted its revision")?;
+    // Gateway may replace a GET ETag for its representation. The public
+    // registry's body revision is the canonical CAS value used by the UI.
+    let revision = match response.document.get("config_revision") {
+        Some(value) => value
+            .as_str()
+            .ok_or("KMS registry returned an invalid revision")?,
+        None => response
+            .revision
+            .as_deref()
+            .ok_or("KMS registry omitted its revision")?,
+    };
     let id = revision
         .strip_prefix("\"r-")
         .and_then(|value| value.strip_suffix('"'))
@@ -476,6 +566,103 @@ fn private_input(path: &Path) -> Result<Vec<u8>> {
     installer_host_fs::read_entry(&directory, name, 0o600, false, INPUT_REFUSED)
 }
 
+fn execute(
+    installation: &Path,
+    state: &mut impl RegistrationOwner,
+    trust: installer_trust::TrustInfo,
+    organization_id: String,
+    registration: RegistrationPlan,
+    credential: &[u8],
+) -> Result<Value> {
+    let mut api = PublicRegistryApi::new(installation, state, trust, organization_id, credential)?;
+    let runtime =
+        tokio::runtime::Runtime::new().map_err(|_| "KMS registration runtime unavailable")?;
+    let result = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(180), register(&mut api, &registration))
+            .await
+            .map_err(|_| {
+                "KMS registration deadline exceeded; inspect the registry before retrying"
+                    .to_string()
+            })?
+    });
+    let record = match &result {
+        Ok(report) => report.clone(),
+        Err(_) => {
+            json!({"schema":"elevenid.kms-registration/v1","status":"failed","mutation_attempted":api.mutation_attempted,"automatic_retry":false,"installation_ready":false})
+        }
+    };
+    api.state.record(
+        &format!("kms-registration-{}-result.json", api.operation),
+        &serde_json::to_vec(&record).map_err(|_| "cannot encode KMS registration result")?,
+    )?;
+    result
+}
+
+/// Fresh first boot lends the existing installation writer. The ordinary
+/// Organization startup and pinned application session must already exist.
+/// Caller owns issuance and unconditional revocation of the short-lived key.
+pub(crate) fn register_locked(
+    installation: &Path,
+    state: &mut InstallerState,
+    organization_id: uuid::Uuid,
+    registration: &[u8],
+    credential: &[u8],
+) -> Result<Value> {
+    state.require_live_phase(Phase::Provisioning)?;
+    let plan = RegistrationPlan::decode(registration)?;
+    let trust = state
+        .with_inspection(|inspection| installer_trust::inspect_locked(installation, inspection))?;
+    execute(
+        installation,
+        state,
+        trust,
+        organization_id.to_string(),
+        plan,
+        credential,
+    )
+}
+
+/// Prove revocation through the same pinned public endpoint, including the
+/// Gateway's authentication cache. Only bounded read-only observations retry.
+pub(crate) fn verify_revoked_locked(
+    installation: &Path,
+    state: &mut InstallerState,
+    organization_id: uuid::Uuid,
+    credential: &[u8],
+) -> Result<()> {
+    let trust = state
+        .with_inspection(|inspection| installer_trust::inspect_locked(installation, inspection))?;
+    let api = PublicRegistryApi::new(
+        installation,
+        state,
+        trust,
+        organization_id.to_string(),
+        credential,
+    )?;
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|_| "KMS revocation observation runtime unavailable")?;
+    runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            for attempt in 0..6 {
+                let status = api
+                    .send(Method::GET, CONFIG_PATH, None, None)
+                    .await?
+                    .status();
+                if status == reqwest::StatusCode::UNAUTHORIZED {
+                    return Ok(());
+                }
+                if !status.is_success() || attempt == 5 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            Err("Installer credential revocation was not observed at the public API".into())
+        })
+        .await
+        .map_err(|_| "Installer credential revocation observation deadline exceeded".to_string())?
+    })
+}
+
 pub fn run(args: &[String]) -> Result<()> {
     if args == ["--help"] || args == ["register", "--help"] {
         println!("{USAGE}");
@@ -504,54 +691,17 @@ pub fn run(args: &[String]) -> Result<()> {
     let installation = PathBuf::from(options["--install-dir"]);
     let registration =
         RegistrationPlan::decode(&private_input(Path::new(options["--registration-file"]))?)?;
-    let bytes = private_input(Path::new(options["--api-key-file"]))?;
-    let key = std::str::from_utf8(&bytes)
-        .map_err(|_| INPUT_REFUSED)?
-        .trim();
-    if key.is_empty()
-        || key.len() > 4096
-        || key
-            .bytes()
-            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
-    {
-        return Err(INPUT_REFUSED.into());
-    }
-    let mut api_key = HeaderValue::from_str(key).map_err(|_| INPUT_REFUSED)?;
-    api_key.set_sensitive(true);
+    let credential = private_input(Path::new(options["--api-key-file"]))?;
     let mut state = LockedMaintenance::open(&installation)?;
     let trust = installer_trust::inspect_locked(&installation, state.inspection())?;
-    let client = crate::installer_transport::client(&trust, Duration::from_secs(15))?;
-    let mut api = PublicRegistryApi {
-        client,
-        origin: trust.origin,
+    let report = execute(
+        &installation,
+        &mut state,
+        trust,
         organization_id,
-        api_key,
-        installation: &installation,
-        state: &mut state,
-        operation: uuid::Uuid::new_v4().to_string(),
-        mutation_attempted: false,
-    };
-    let runtime =
-        tokio::runtime::Runtime::new().map_err(|_| "KMS registration runtime unavailable")?;
-    let result = runtime.block_on(async {
-        tokio::time::timeout(Duration::from_secs(180), register(&mut api, &registration))
-            .await
-            .map_err(|_| {
-                "KMS registration deadline exceeded; inspect the registry before retrying"
-                    .to_string()
-            })?
-    });
-    let record = match &result {
-        Ok(report) => report.clone(),
-        Err(_) => {
-            json!({"schema":"elevenid.kms-registration/v1","status":"failed","mutation_attempted":api.mutation_attempted,"automatic_retry":false,"installation_ready":false})
-        }
-    };
-    api.state.write_evidence_exclusive(
-        &format!("kms-registration-{}-result.json", api.operation),
-        &serde_json::to_vec(&record).map_err(|_| "cannot encode KMS registration result")?,
+        registration,
+        &credential,
     )?;
-    let report = result?;
     println!(
         "{}",
         serde_json::to_string(&report).map_err(|_| "cannot encode KMS registration result")?

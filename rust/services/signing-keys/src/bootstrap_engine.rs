@@ -1,7 +1,10 @@
 //! Shared bootstrap state machine, independent of live or in-memory adapters.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
+use marty_service_runtime::{SecretKmsNames, SecretKmsSelection};
+use mmf_aws_kms::AwsKmsConfig;
 use serde_json::{json, Value};
 use thiserror::Error;
 
@@ -42,6 +45,20 @@ impl Config {
         !matches!(
             self.get(name).trim().to_ascii_lowercase().as_str(),
             "0" | "false" | "no" | "off" | "disabled"
+        )
+    }
+    pub fn notification_kms(&self) -> Result<SecretKmsSelection, String> {
+        SecretKmsSelection::from_values(
+            |name| self.environment.get(name).map(String::as_str),
+            SecretKmsNames {
+                prefix: "NOTIFICATION_SECRET",
+                openbao_fields: &[
+                    "NOTIFICATION_OPENBAO_TOKEN",
+                    "NOTIFICATION_OPENBAO_TOKEN_FILE",
+                    "NOTIFICATION_OPENBAO_CA_CERT_FILE",
+                ],
+            },
+            Duration::from_secs(8),
         )
     }
     pub fn org(&self) -> String {
@@ -241,6 +258,11 @@ pub trait Backend {
         key: &str,
         description: &str,
     ) -> Result<(), String>;
+    async fn notification_aws(
+        &mut self,
+        config: &AwsKmsConfig,
+        key_arn: &str,
+    ) -> Result<(), String>;
     async fn ping(&mut self, redis_url: &str) -> Result<(), String>;
     async fn sleep(&mut self, seconds: u64);
     async fn key(
@@ -275,23 +297,33 @@ pub async fn run<B: Backend>(config: &Config, backend: &mut B) -> Result<(), Run
     let address = config.get("BAO_ADDR").trim();
     let service_token = config.secret("OPENBAO_SERVICE_TOKEN");
     let dedicated_token = config.secret("BAO_TOKEN");
-    let notification_token = config.secret("NOTIFICATION_OPENBAO_TOKEN");
-    if address.is_empty() || notification_token.is_empty() {
-        return Err(RunError::MissingNotificationKms);
+    match config.notification_kms().map_err(RunError::Notification)? {
+        SecretKmsSelection::OpenBao => {
+            let notification_token = config.secret("NOTIFICATION_OPENBAO_TOKEN");
+            if address.is_empty() || notification_token.is_empty() {
+                return Err(RunError::MissingNotificationKms);
+            }
+            backend
+                .mount(address, notification_token)
+                .await
+                .map_err(RunError::Notification)?;
+            backend
+                .symmetric(
+                    address,
+                    notification_token,
+                    NOTIFICATION_ENVELOPE_KEY,
+                    "notification webhook envelope",
+                )
+                .await
+                .map_err(RunError::Notification)?;
+        }
+        SecretKmsSelection::AwsKms { config, key_arn } => {
+            backend
+                .notification_aws(&config, &key_arn)
+                .await
+                .map_err(RunError::Notification)?;
+        }
     }
-    backend
-        .mount(address, notification_token)
-        .await
-        .map_err(RunError::Notification)?;
-    backend
-        .symmetric(
-            address,
-            notification_token,
-            NOTIFICATION_ENVELOPE_KEY,
-            "notification webhook envelope",
-        )
-        .await
-        .map_err(RunError::Notification)?;
 
     if !config.enabled("MARTY_KMS_BOOTSTRAP_ENABLED") {
         return Ok(());
@@ -300,7 +332,9 @@ pub async fn run<B: Backend>(config: &Config, backend: &mut B) -> Result<(), Run
         return Ok(());
     };
     if address.is_empty() {
-        return Ok(());
+        return Err(RunError::Identity(
+            "Issuer key bootstrap requires a configured OpenBao address".into(),
+        ));
     }
     let identity_token = if dedicated_token.is_empty() {
         service_token

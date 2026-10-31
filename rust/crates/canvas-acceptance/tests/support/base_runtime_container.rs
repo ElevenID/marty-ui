@@ -269,6 +269,7 @@ struct OwnedContainer {
     child: &'static str,
     prepared: Option<(String, String)>,
     kms: Option<(String, String, String)>,
+    signing_redis_nonce: Option<String>,
 }
 
 impl OwnedContainer {
@@ -358,6 +359,12 @@ impl OwnedContainer {
             (
                 "MARTY_CANVAS_OPENBAO_CA_CERT_FILE",
                 self.kms.as_ref().map(|v| v.2.as_str()),
+            ),
+            ("BAO_ADDR", self.kms.as_ref().map(|v| v.0.as_str())),
+            ("BAO_CACERT", self.kms.as_ref().map(|v| v.2.as_str())),
+            (
+                "MARTY_CANVAS_SIGNING_REDIS_NONCE",
+                self.signing_redis_nonce.as_deref(),
             ),
         ] {
             let prefix = format!("{name}=");
@@ -738,10 +745,13 @@ async fn run_child(
             .as_ref()
             .map(|v| (v.path.to_str().unwrap().to_owned(), v.hash.clone())),
         kms: None,
+        signing_redis_nonce: None,
     };
     // All Linux executable, renderer, asset and image preconditions above are
     // checked before creating the optional sidecar. The separate image-only
     // gate may still validate Linux Envoy from a Windows host.
+    let signing_redis_nonce = redis.prepare_signing_keys_database()?;
+    container.signing_redis_nonce = Some(signing_redis_nonce.clone());
     let mut envoy = Vec::new();
     if child == ENVOY_CHILD {
         envoy.push(super::envoy_runtime_sidecar::OwnedEnvoy::start_baseline(owned).await?);
@@ -784,7 +794,8 @@ async fn run_child(
             )?;
         }
         PublishedDatabase::borrowed_url(&descriptor)?;
-        redis.verify_published_namespace(owned)
+        redis.verify_published_namespace(owned)?;
+        redis.verify_signing_keys_database(&signing_redis_nonce)
     })();
     let result = retain_failure(
         retain_failure(
@@ -829,6 +840,15 @@ async fn execute(container: &mut OwnedContainer) -> Result<(), String> {
     let kms_url_env = format!("MARTY_CANVAS_OPENBAO_URL={}", kms.0);
     let kms_token_env = format!("MARTY_CANVAS_OPENBAO_ROOT_TOKEN={}", kms.1);
     let kms_ca_env = format!("MARTY_CANVAS_OPENBAO_CA_CERT_FILE={}", kms.2);
+    let bao_addr_env = format!("BAO_ADDR={}", kms.0);
+    let bao_ca_env = format!("BAO_CACERT={}", kms.2);
+    let redis_nonce_env = format!(
+        "MARTY_CANVAS_SIGNING_REDIS_NONCE={}",
+        container
+            .signing_redis_nonce
+            .as_deref()
+            .ok_or("Signing Keys Redis sentinel is missing")?
+    );
     let mounts: Vec<_> = container
         .mounts
         .iter()
@@ -864,6 +884,12 @@ async fn execute(container: &mut OwnedContainer) -> Result<(), String> {
         &kms_token_env,
         "--env",
         &kms_ca_env,
+        "--env",
+        &bao_addr_env,
+        "--env",
+        &bao_ca_env,
+        "--env",
+        &redis_nonce_env,
         "--env",
         "PYTHONDONTWRITEBYTECODE=1",
     ];
@@ -1001,6 +1027,7 @@ mod tests {
             creation_attempted: false,
             prepared: None,
             kms: None,
+            signing_redis_nonce: None,
         };
         let info = json!({
             "Id":id,"Config":{"Labels":{LABEL:container.scope},"Image":container.image,
@@ -1055,6 +1082,7 @@ mod tests {
             "a".repeat(32),
             "/synthetic/canvas-ca.pem".into(),
         ));
+        container.signing_redis_nonce = Some("d".repeat(32));
         container.mounts.insert("/synthetic/canvas-ca.pem".into());
         let mut kms_info = info.clone();
         kms_info["Config"]["Env"].as_array_mut().unwrap().extend([
@@ -1064,6 +1092,12 @@ mod tests {
                 "a".repeat(32)
             )),
             json!("MARTY_CANVAS_OPENBAO_CA_CERT_FILE=/synthetic/canvas-ca.pem"),
+            json!("BAO_ADDR=https://127.0.0.1:8200"),
+            json!("BAO_CACERT=/synthetic/canvas-ca.pem"),
+            json!(format!(
+                "MARTY_CANVAS_SIGNING_REDIS_NONCE={}",
+                "d".repeat(32)
+            )),
         ]);
         kms_info["Mounts"].as_array_mut().unwrap().push(json!({
             "Type":"bind", "Source":"/synthetic/canvas-ca.pem",
@@ -1074,12 +1108,16 @@ mod tests {
             (6, json!("MARTY_CANVAS_OPENBAO_URL=http://foreign:8200")),
             (7, json!("MARTY_CANVAS_OPENBAO_ROOT_TOKEN=wrong")),
             (8, json!("MARTY_CANVAS_OPENBAO_CA_CERT_FILE=/foreign")),
+            (9, json!("BAO_ADDR=https://foreign.invalid")),
+            (10, json!("BAO_CACERT=/foreign")),
+            (11, json!("MARTY_CANVAS_SIGNING_REDIS_NONCE=foreign")),
         ] {
             let mut changed = kms_info.clone();
             changed["Config"]["Env"][index] = value;
             assert!(container.checked(&changed, &id).is_err());
         }
         container.kms = None;
+        container.signing_redis_nonce = None;
         container.mounts.remove("/synthetic/canvas-ca.pem");
         container.child = KUBERNETES_CHILD;
         container.prepared = Some(("/synthetic/prepared.json".into(), "a".repeat(64)));

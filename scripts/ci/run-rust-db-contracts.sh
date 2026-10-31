@@ -37,6 +37,7 @@ export ISSUANCE_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/
 export MARTY_ISSUANCE_POSTGRES_CONTRACT_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
 export ORGANIZATION_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
 export TEST_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
+export NOTIFICATION_MIGRATION_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
 export MARTY_RETENTION_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_retention_contract_test
 export MARTY_PASSPORT_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_contract_test
 set -euo pipefail
@@ -137,6 +138,9 @@ for contract in "${canvas_issuance_contracts[@]}"; do
 done
 test -x target/debug/credential-template-migration-contract
 run_timed credential_template_migration target/debug/credential-template-migration-contract --test-threads=1
+test -x target/debug/notification-migration-contract
+run_timed notification_migration target/debug/notification-migration-contract \
+  native_postgres_preserves_both_envelope_formats_across_migration_reruns --ignored --exact --test-threads=1
 test -x target/debug/trust-profile-migration-contract
 run_timed trust_profile_migration target/debug/trust-profile-migration-contract --test-threads=1
 test -x target/debug/organization-migration-contract

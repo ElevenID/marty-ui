@@ -1984,6 +1984,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Qualify scoped provider callback verification against disposable OpenBao"
     ]["run"]
     assert "document_storage_contract:1" in live_signing
+    assert "didcomm_publication_routes:2" in live_signing
     assert "service_rotation_live_contract" not in live_signing
     assert "vdsnc_registration_live_contract" not in live_signing
     live_openbao = steps[

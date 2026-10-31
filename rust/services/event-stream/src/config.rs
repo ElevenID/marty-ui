@@ -1,6 +1,5 @@
-use std::{collections::HashMap, env, fs, net::SocketAddr, path::PathBuf};
+use std::{collections::HashMap, env, fs, net::SocketAddr};
 use tonic::metadata::AsciiMetadataValue;
-use url::Url;
 
 const DEFAULT_HTTP_PORT: u16 = 8015;
 const DEFAULT_GRPC_PORT: u16 = 9015;
@@ -15,15 +14,7 @@ pub struct Config {
     pub service_authentication_required: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GrpcServerTls {
-    pub certificate: PathBuf,
-    pub kms_endpoint: String,
-    pub kms_ca_certificate: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
-}
+pub use marty_service_runtime::GrpcServerTls;
 
 impl Config {
     pub fn from_env() -> Result<Self, String> {
@@ -67,58 +58,12 @@ impl Config {
         if values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY") {
             return Err("GRPC_WORKLOAD_TLS_SERVER_KEY is retired".into());
         }
-        const TLS_NAMES: [&str; 6] = [
-            "GRPC_WORKLOAD_TLS_SERVER_CERT",
-            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
-            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
-            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
-            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
-            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
-        ];
-        let tls_fields = TLS_NAMES
-            .iter()
-            .filter(|name| value(values, name).is_some())
-            .count();
-        let grpc_server_tls = if tls_fields == 0 {
-            None
-        } else if tls_fields != TLS_NAMES.len() {
-            return Err("Event Stream gRPC TLS requires a complete remote KMS identity".into());
-        } else {
-            let endpoint = value(values, TLS_NAMES[1]).expect("complete TLS settings checked");
-            let url = Url::parse(endpoint).map_err(|_| "Event Stream TLS KMS origin is invalid")?;
-            if url.scheme() != "https"
-                || url.host_str().is_none()
-                || !url.username().is_empty()
-                || url.password().is_some()
-                || url.path() != "/"
-                || url.query().is_some()
-                || url.fragment().is_some()
-            {
-                return Err("Event Stream TLS KMS origin must be HTTPS".into());
-            }
-            let version = value(values, TLS_NAMES[5])
-                .expect("complete TLS settings checked")
-                .parse::<u32>()
-                .ok()
-                .filter(|version| *version > 0)
-                .ok_or("Event Stream TLS KMS version must be positive")?;
-            Some(GrpcServerTls {
-                certificate: value(values, TLS_NAMES[0])
-                    .expect("complete TLS settings checked")
-                    .into(),
-                kms_endpoint: endpoint.into(),
-                kms_ca_certificate: value(values, TLS_NAMES[2])
-                    .expect("complete TLS settings checked")
-                    .into(),
-                kms_token_file: value(values, TLS_NAMES[3])
-                    .expect("complete TLS settings checked")
-                    .into(),
-                kms_key_name: value(values, TLS_NAMES[4])
-                    .expect("complete TLS settings checked")
-                    .into(),
-                kms_key_version: version,
-            })
-        };
+        let grpc_server_tls = marty_service_runtime::GrpcServerTls::from_values(
+            |name| values.get(name).map(String::as_str),
+            marty_service_runtime::TlsIdentityNames::new("GRPC_WORKLOAD_TLS_SERVER"),
+            std::time::Duration::from_secs(10),
+            64,
+        )?;
         if deployed && grpc_enabled && grpc_server_tls.is_none() {
             return Err("deployed Event Stream gRPC requires a remote KMS TLS identity".into());
         }

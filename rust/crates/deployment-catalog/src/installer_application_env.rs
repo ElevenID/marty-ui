@@ -83,7 +83,7 @@ fn safe_path(path: &std::path::Path) -> Result<String> {
     )?;
     Ok(value.into())
 }
-fn origin_port(origin: &str) -> Result<u16> {
+pub(crate) fn origin_port(origin: &str) -> Result<u16> {
     let port = origin.strip_prefix("https://localhost:").ok_or(REFUSED)?;
     let number = port.parse::<u16>().map_err(|_| REFUSED)?;
     require(number >= 1024 && port == number.to_string())?;
@@ -117,6 +117,17 @@ pub fn render(
     p: &ApplicationParameters,
     images: &BTreeMap<String, String>,
 ) -> Result<ApplicationEnvironment> {
+    render_selected(example, compose, tls_fragment, p, images, None)
+}
+
+pub(crate) fn render_selected(
+    example: &str,
+    compose: &str,
+    tls_fragment: &str,
+    p: &ApplicationParameters,
+    images: &BTreeMap<String, String>,
+    foundation: Option<&crate::installer_foundation::Selection>,
+) -> Result<ApplicationEnvironment> {
     let baseline = parse(EXAMPLE)?;
     let mut values = parse(example)?;
     require(values == baseline)?;
@@ -125,7 +136,14 @@ pub fn render(
         .filter(|(key, _)| key.contains("_TLS_KMS_KEY_"))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    require(expected_tls.len() == 32 && parse(tls_fragment)? == expected_tls)?;
+    require(
+        expected_tls.len() == 32
+            && if foundation.is_some() {
+                tls_fragment.is_empty()
+            } else {
+                parse(tls_fragment)? == expected_tls
+            },
+    )?;
     crate::installer_release::release_tier(&p.version)?;
     safe_path(&p.installation)?;
     let https_port = origin_port(&p.origin)?;
@@ -151,11 +169,18 @@ pub fn render(
     };
     let services = selected("gateway", "services")?;
     require(images.get("signing-keys") == Some(&services))?;
-    let keycloak = selected("keycloak", "keycloak")?;
-    require(images.get("keycloak-configurator") == Some(&keycloak))?;
+    let managed_identity_images = if foundation.is_none() {
+        let keycloak = selected("keycloak", "keycloak")?;
+        require(images.get("keycloak-configurator") == Some(&keycloak))?;
+        Some((
+            keycloak,
+            selected("openbao_didcomm_image", "openbao-didcomm")?,
+        ))
+    } else {
+        None
+    };
     let issuance = selected("issuance", "services")?;
     require(images.get("issuance-native") == Some(&issuance))?;
-    let openbao = selected("openbao_didcomm_image", "openbao-didcomm")?;
     for (key, relative) in [
         ("SELFHOST_SECRET_DIR", "secrets"),
         ("SELFHOST_STATE_DIR", "state"),
@@ -193,8 +218,6 @@ pub fn render(
             "SELFHOST_IMAGE_TAG",
             p.version.strip_prefix('v').ok_or(REFUSED)?.to_owned(),
         ),
-        ("MARTY_OPENBAO_DIDCOMM_IMAGE", openbao),
-        ("MARTY_KEYCLOAK_KMS_IMAGE", keycloak),
         ("MARTY_ISSUANCE_IMAGE", issuance),
         ("PUBLIC_DOMAIN", format!("localhost:{https_port}")),
         ("SELFHOST_GATEWAY_HOST_PORT", p.gateway_port.to_string()),
@@ -203,6 +226,10 @@ pub fn render(
         ("SELFHOST_OPENBAO_HOST_PORT", p.openbao_port.to_string()),
     ] {
         values.insert(key.into(), value);
+    }
+    if let Some((keycloak, openbao)) = managed_identity_images {
+        values.insert("MARTY_KEYCLOAK_KMS_IMAGE".into(), keycloak);
+        values.insert("MARTY_OPENBAO_DIDCOMM_IMAGE".into(), openbao);
     }
     for key in [
         "PUBLIC_API_URL",
@@ -259,8 +286,9 @@ pub fn render(
     ] {
         values.insert(key.into(), String::new());
     }
-    // Canonical configurator does not yet mount operator-password or pass its
-    // required password variable; do not synthesize an account or leak it here.
+    if let Some(foundation) = foundation {
+        foundation.apply_environment(&mut values)?;
+    }
     required_variables(compose, &values)?;
     let mut env_bytes = Vec::new();
     for (key, value) in values {

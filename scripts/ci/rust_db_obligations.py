@@ -317,6 +317,11 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
             "migration_contract",
             ("CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL",),
         ),
+        "notification_migration": (
+            "marty-notification",
+            "migration_contract",
+            ("NOTIFICATION_MIGRATION_TEST_DATABASE_URL",),
+        ),
         "presentation_policy": (
             "marty-presentation-policy",
             "postgres_integration",

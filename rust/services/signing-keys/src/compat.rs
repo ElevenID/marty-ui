@@ -319,6 +319,8 @@ pub enum CompatibilityError {
     BadRequest(String),
     #[error("Native issuer-profile backend is unavailable.")]
     Unavailable,
+    #[error("The configured KMS cannot encrypt this service credential.")]
+    SecretCapabilityUnavailable,
     #[error("{0}")]
     Invalid(String),
     #[error("{0}")]
@@ -337,10 +339,17 @@ impl IntoResponse for CompatibilityError {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::AmbiguousProfile | Self::Conflict(_) => StatusCode::CONFLICT,
             Self::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
-            Self::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::Invalid(_) | Self::SecretCapabilityUnavailable => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
         };
-        (status, Json(json!({"detail": self.to_string()}))).into_response()
+        let mut body = json!({"detail": self.to_string()});
+        if matches!(self, Self::SecretCapabilityUnavailable) {
+            body["code"] = json!("capability_unavailable");
+            body["capability"] = json!("integration_secret_encryption");
+        }
+        (status, Json(body)).into_response()
     }
 }
 
@@ -2569,6 +2578,9 @@ fn map_registry_binding_error(error: crate::registry::RegistryError) -> Compatib
             CompatibilityError::PreconditionFailed
         }
         crate::registry::RegistryError::Invalid(detail) => CompatibilityError::Invalid(detail),
+        crate::registry::RegistryError::SecretCapabilityUnavailable => {
+            CompatibilityError::SecretCapabilityUnavailable
+        }
         crate::registry::RegistryError::Storage(_) | crate::registry::RegistryError::Corrupt(_) => {
             CompatibilityError::Unavailable
         }

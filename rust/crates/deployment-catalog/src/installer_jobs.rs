@@ -135,7 +135,7 @@ pub(crate) fn run(
     installation: &Path,
     bundle: &Path,
     state: &mut InstallerState,
-    bao: &OpenBaoInventory,
+    bao: Option<&OpenBaoInventory>,
     inputs: ComposeInputs,
     service: &str,
     expected_image: &str,
@@ -147,7 +147,8 @@ pub(crate) fn run(
             && inputs.installation == installation
             && inputs.project == state.journal().compose_project()
             && inputs.services == [service]
-            && inputs.profiles == ["setup"]
+            && (inputs.profiles == ["setup"]
+                || (bao.is_none() && inputs.profiles == ["setup", "installer-init"]))
             && inputs.prior.is_some(),
     )?;
     let binding = state.journal().runtime().ok_or(REFUSED)?.clone();
@@ -158,16 +159,28 @@ pub(crate) fn run(
         .resources
         .as_ref()
         .ok_or(REFUSED)?;
-    require(
-        bao.installation_id == state.journal().installation_id().to_string()
-            && bao.engine_id == binding.engine_id
-            && bao.project == inputs.project
-            && prior.networks.get(&bao.network_name) == Some(&bao.network_id)
-            && bao
-                .container_ids
-                .iter()
-                .all(|(role, id)| prior.containers.get(role).is_some_and(|c| &c.id == id)),
-    )?;
+    if let Some(bao) = bao {
+        require(
+            bao.installation_id == state.journal().installation_id().to_string()
+                && bao.engine_id == binding.engine_id
+                && bao.project == inputs.project
+                && prior.networks.get(&bao.network_name) == Some(&bao.network_id)
+                && bao
+                    .container_ids
+                    .iter()
+                    .all(|(role, id)| prior.containers.get(role).is_some_and(|c| &c.id == id)),
+        )?;
+    } else {
+        require(
+            state
+                .with_inspection(crate::installer_foundation::load)?
+                .is_some()
+                && prior.networks.len() == 1
+                && prior
+                    .networks
+                    .contains_key(&format!("{}_default", inputs.project)),
+        )?;
+    }
     let docker = DockerRunner::from_binding(dockerpath, &binding, installation)?;
     require(bundle.starts_with(installation))?;
     let operator = installation.join("marty-deploy");

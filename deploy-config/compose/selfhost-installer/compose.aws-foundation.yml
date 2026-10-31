@@ -1,0 +1,846 @@
+# Fresh AWS foundation, applied after the canonical installer layer.
+# Native Compose owns the model. Existing runtime owners validate AWS keys,
+# certificates, external OIDC and the selected web-identity credential source.
+# Each external identity directory is mounted into exactly its workload; its
+# private parent is never mounted. External owners refresh token atomically.
+# These structural bindings do not prove IAM or network isolation.
+services:
+  postgres:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      KEYCLOAK_DB_PASSWORD_FILE: !reset 'null'
+      MARTY_INITIALIZE_KEYCLOAK_DATABASE: 'false'
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres && pg_isready -U marty -d marty]
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - postgres_password
+    - marty_db_password
+  redis:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+  keycloak: !reset 'null'
+  keycloak-configurator: !reset 'null'
+  revocation-profile-migrate:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+  db-migrate:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      BAO_ADDR: !reset 'null'
+      BAO_CACERT: !reset 'null'
+      NOTIFICATION_OPENBAO_TOKEN_FILE: !reset 'null'
+      NOTIFICATION_OPENBAO_CA_CERT_FILE: !reset 'null'
+      NOTIFICATION_SECRET_KMS_PROVIDER: aws-kms
+      NOTIFICATION_SECRET_AWS_REGION: ${MARTY_NOTIFICATION_SECRET_AWS_REGION:?preprovisioned AWS foundation input required}
+      NOTIFICATION_SECRET_AWS_KEY_ARN: ${MARTY_NOTIFICATION_SECRET_AWS_KEY_ARN:?preprovisioned AWS foundation input required}
+      AWS_ROLE_ARN: ${MARTY_AWS_DB_MIGRATE_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_DB_MIGRATE_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  kms-initialize: !reset 'null'
+  issuance-migrations:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+  gateway:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: !reset 'null'
+      BAO_ADDR: !reset 'null'
+      BAO_CACERT: !reset 'null'
+      GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
+      GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_PROVIDER: aws-kms
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_REGION: ${MARTY_AWS_TLS_GATEWAY_CLIENT_REGION:?preprovisioned AWS foundation input required}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_ARN: ${MARTY_AWS_TLS_GATEWAY_CLIENT_KEY_ARN:?preprovisioned AWS foundation input required}
+      MARTY_SIGNING_GRANT_PROVIDER: aws-kms
+      MARTY_SIGNING_GRANT_AWS_CONFIG_FILE: /run/secrets/signing_grant_authorities
+      AWS_ROLE_ARN: ${MARTY_AWS_GATEWAY_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - issuance_api_key
+    - signing_keys_service_sign_gateway_key
+    - signing_keys_issuer_sign_key
+    - grpc_service_token
+    - device_registration_gateway_key
+    - workload_identity_ca_cert
+    - gateway_workload_client_cert
+    - signing_grant_authorities
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_GATEWAY_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  auth:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_PROVIDER: aws-kms
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_REGION: ${MARTY_AWS_TLS_AUTH_CLIENT_REGION:?preprovisioned AWS foundation input required}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_ARN: ${MARTY_AWS_TLS_AUTH_CLIENT_KEY_ARN:?preprovisioned AWS foundation input required}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_PROVIDER: aws-kms
+      GRPC_WORKLOAD_TLS_SERVER_KMS_REGION: ${MARTY_AWS_TLS_AUTH_SERVER_REGION:?preprovisioned AWS foundation input required}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_ARN: ${MARTY_AWS_TLS_AUTH_SERVER_KEY_ARN:?preprovisioned AWS foundation input required}
+      KEYCLOAK_REALM: !reset 'null'
+      KEYCLOAK_ADMIN_URL: !reset 'null'
+      MARTY_API_CLIENT_ID: !reset 'null'
+      MARTY_API_CLIENT_SECRET_FILE: !reset 'null'
+      OIDC_PROVIDER_MODE: external
+      OIDC_ISSUER_URL: ${MARTY_EXTERNAL_OIDC_ISSUER:?preprovisioned AWS foundation input required}
+      OIDC_EXTERNAL_ISSUER_URL: ${MARTY_EXTERNAL_OIDC_ISSUER:?preprovisioned AWS foundation input required}
+      OIDC_CLIENT_ID: ${MARTY_EXTERNAL_OIDC_CLIENT_ID:?preprovisioned AWS foundation input required}
+      OIDC_TRUSTED_ENDPOINT_ORIGINS: ${MARTY_EXTERNAL_OIDC_TRUSTED_ORIGINS:-}
+      OIDC_ALLOWED_ALGORITHMS: ${MARTY_EXTERNAL_OIDC_ALGORITHMS:?preprovisioned AWS foundation input required}
+      OIDC_CLIENT_SECRET_FILE: ${MARTY_EXTERNAL_OIDC_SECRET_FILE:-}
+      CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: 'false'
+      CREDENTIAL_LOGIN_CREATE_USERS: 'false'
+      KEYCLOAK_TOKEN_EXCHANGE_ENABLED: 'false'
+      AWS_ROLE_ARN: ${MARTY_AWS_AUTH_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - grpc_service_token
+    - auth_workload_client_cert
+    - auth_workload_server_cert
+    - workload_identity_ca_cert
+    - flow_webhook_secret
+    - external_oidc_client_secret
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_AUTH_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  organization:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_PROVIDER: aws-kms
+      GRPC_WORKLOAD_TLS_SERVER_KMS_REGION: ${MARTY_AWS_TLS_ORGANIZATION_SERVER_REGION:?preprovisioned AWS foundation input
+        required}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_ARN: ${MARTY_AWS_TLS_ORGANIZATION_SERVER_KEY_ARN:?preprovisioned AWS foundation input
+        required}
+      AWS_ROLE_ARN: ${MARTY_AWS_ORGANIZATION_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - grpc_service_token
+    - org_workload_server_cert
+    - workload_identity_ca_cert
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_ORGANIZATION_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  credential-template:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_PROVIDER: aws-kms
+      GRPC_WORKLOAD_TLS_SERVER_KMS_REGION: ${MARTY_AWS_TLS_CREDENTIAL_TEMPLATE_SERVER_REGION:?preprovisioned AWS foundation
+        input required}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_ARN: ${MARTY_AWS_TLS_CREDENTIAL_TEMPLATE_SERVER_KEY_ARN:?preprovisioned AWS foundation
+        input required}
+      AWS_ROLE_ARN: ${MARTY_AWS_CREDENTIAL_TEMPLATE_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - issuance_api_key
+    - grpc_service_token
+    - workload_identity_ca_cert
+    - ct_workload_server_cert
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_CREDENTIAL_TEMPLATE_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  trust-profile:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - grpc_service_token
+    - issuance_api_key
+    - workload_identity_ca_cert
+  issuance:
+    entrypoint: [/app/services/entrypoint.sh]
+    command: []
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      BAO_ADDR: !reset 'null'
+      BAO_CACERT: !reset 'null'
+      ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
+      ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
+      ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
+      ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
+      BAO_TOKEN_FILE: !reset 'null'
+      DIDCOMM_KMS_ADDR: !reset 'null'
+      DIDCOMM_KMS_TOKEN_FILE: !reset 'null'
+      DIDCOMM_KMS_CA_CERT_FILE: !reset 'null'
+      MARTY_SIGNING_GRANT_PROVIDER: aws-kms
+      MARTY_SIGNING_GRANT_AWS_CONFIG_FILE: /run/secrets/signing_grant_authorities
+      AWS_ROLE_ARN: ${MARTY_AWS_ISSUANCE_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - issuance_api_key
+    - signing_keys_issuer_sign_key
+    - signing_keys_integration_secret_key
+    - token_hmac_key
+    - canvas_credentials_shared_secret
+    - grpc_service_token
+    - workload_identity_ca_cert
+    - signing_grant_authorities
+    volumes: !override
+    - type: bind
+      source: ${MARTY_AWS_ISSUANCE_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  issuance-native:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      BAO_ADDR: !reset 'null'
+      BAO_CACERT: !reset 'null'
+      ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
+      ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
+      ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
+      ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
+      DIDCOMM_KMS_ADDR: !reset 'null'
+      DIDCOMM_KMS_TOKEN_FILE: !reset 'null'
+      DIDCOMM_KMS_CA_CERT_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_PROVIDER: aws-kms
+      GRPC_WORKLOAD_TLS_SERVER_KMS_REGION: ${MARTY_AWS_TLS_ISSUANCE_SERVER_REGION:?preprovisioned AWS foundation input required}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_ARN: ${MARTY_AWS_TLS_ISSUANCE_SERVER_KEY_ARN:?preprovisioned AWS foundation input required}
+      MARTY_SIGNING_GRANT_PROVIDER: aws-kms
+      MARTY_SIGNING_GRANT_AWS_CONFIG_FILE: /run/secrets/signing_grant_authorities
+      AWS_ROLE_ARN: ${MARTY_AWS_ISSUANCE_NATIVE_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - issuance_api_key
+    - signing_keys_issuer_sign_key
+    - signing_keys_integration_secret_key
+    - token_hmac_key
+    - canvas_credentials_shared_secret
+    - grpc_service_token
+    - workload_identity_ca_cert
+    - issuance_workload_server_cert
+    - signing_grant_authorities
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_ISSUANCE_NATIVE_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  canvas-sync-worker:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      BAO_ADDR: !reset 'null'
+      BAO_CACERT: !reset 'null'
+      ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
+      MARTY_SIGNING_GRANT_PROVIDER: aws-kms
+      MARTY_SIGNING_GRANT_AWS_CONFIG_FILE: /run/secrets/signing_grant_authorities
+      AWS_ROLE_ARN: ${MARTY_AWS_CANVAS_SYNC_WORKER_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - issuance_api_key
+    - signing_keys_issuer_sign_key
+    - signing_keys_integration_secret_key
+    - token_hmac_key
+    - workload_identity_ca_cert
+    - signing_grant_authorities
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_CANVAS_SYNC_WORKER_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  applicant:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - grpc_service_token
+    - notification_applicant_event_token
+    - flow_application_event_hmac_key
+    - workload_identity_ca_cert
+  notification:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      GRPC_TLS_KMS_ADDR: !reset 'null'
+      GRPC_TLS_KMS_CA_CERT: !reset 'null'
+      GRPC_TLS_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_TLS_KMS_KEY_NAME: !reset 'null'
+      GRPC_TLS_KMS_KEY_VERSION: !reset 'null'
+      BAO_ADDR: !reset 'null'
+      NOTIFICATION_OPENBAO_TOKEN_FILE: !reset 'null'
+      NOTIFICATION_OPENBAO_CA_CERT_FILE: !reset 'null'
+      GRPC_TLS_KMS_PROVIDER: aws-kms
+      GRPC_TLS_KMS_REGION: ${MARTY_AWS_TLS_NOTIFICATION_SERVER_REGION:?preprovisioned AWS foundation input required}
+      GRPC_TLS_KMS_KEY_ARN: ${MARTY_AWS_TLS_NOTIFICATION_SERVER_KEY_ARN:?preprovisioned AWS foundation input required}
+      NOTIFICATION_SECRET_KMS_PROVIDER: aws-kms
+      NOTIFICATION_SECRET_AWS_REGION: ${MARTY_NOTIFICATION_SECRET_AWS_REGION:?preprovisioned AWS foundation input required}
+      NOTIFICATION_SECRET_AWS_KEY_ARN: ${MARTY_NOTIFICATION_SECRET_AWS_KEY_ARN:?preprovisioned AWS foundation input required}
+      AWS_ROLE_ARN: ${MARTY_AWS_NOTIFICATION_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - grpc_service_token
+    - smtp_password
+    - notification_webhook_secret
+    - notification_applicant_event_token
+    - notification_workload_server_cert
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_NOTIFICATION_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  compliance-profile:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      GRPC_WORKLOAD_TLS_KMS_ADDR: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_CA_CERT: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_PROVIDER: aws-kms
+      GRPC_WORKLOAD_TLS_KMS_REGION: ${MARTY_AWS_TLS_COMPLIANCE_PROFILE_CLIENT_REGION:?preprovisioned AWS foundation input
+        required}
+      GRPC_WORKLOAD_TLS_KMS_KEY_ARN: ${MARTY_AWS_TLS_COMPLIANCE_PROFILE_CLIENT_KEY_ARN:?preprovisioned AWS foundation input
+        required}
+      AWS_ROLE_ARN: ${MARTY_AWS_COMPLIANCE_PROFILE_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - grpc_service_token
+    - compliance_profile_workload_client_cert
+    - workload_identity_ca_cert
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_COMPLIANCE_PROFILE_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  presentation-policy:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_PROVIDER: aws-kms
+      GRPC_WORKLOAD_TLS_SERVER_KMS_REGION: ${MARTY_AWS_TLS_PP_SERVER_REGION:?preprovisioned AWS foundation input required}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_ARN: ${MARTY_AWS_TLS_PP_SERVER_KEY_ARN:?preprovisioned AWS foundation input required}
+      AWS_ROLE_ARN: ${MARTY_AWS_PRESENTATION_POLICY_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - grpc_service_token
+    - issuance_api_key
+    - pp_workload_server_cert
+    - workload_identity_ca_cert
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_PRESENTATION_POLICY_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  deployment-profile:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      GRPC_WORKLOAD_TLS_KMS_ADDR: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_CA_CERT: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_PROVIDER: aws-kms
+      GRPC_WORKLOAD_TLS_KMS_REGION: ${MARTY_AWS_TLS_DEPLOYMENT_PROFILE_CLIENT_REGION:?preprovisioned AWS foundation input
+        required}
+      GRPC_WORKLOAD_TLS_KMS_KEY_ARN: ${MARTY_AWS_TLS_DEPLOYMENT_PROFILE_CLIENT_KEY_ARN:?preprovisioned AWS foundation input
+        required}
+      AWS_ROLE_ARN: ${MARTY_AWS_DEPLOYMENT_PROFILE_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - grpc_service_token
+    - deployment_profile_workload_client_cert
+    - workload_identity_ca_cert
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_DEPLOYMENT_PROFILE_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  signing-keys:
+    environment:
+      DIDCOMM_KMS_TOKEN_FILE: !reset 'null'
+      AWS_EC2_METADATA_DISABLED: 'true'
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR: !reset 'null'
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE: !reset 'null'
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE: !reset 'null'
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME: !reset 'null'
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION: !reset 'null'
+      BAO_ADDR: !reset 'null'
+      BAO_TOKEN_FILE: !reset 'null'
+      BAO_CACERT: !reset 'null'
+      HAIP_KMS_TOKEN_FILE: !reset 'null'
+      SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE: !reset 'null'
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_PROVIDER: aws-kms
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_REGION: ${MARTY_AWS_TLS_SIGNING_KEYS_SERVER_REGION:?preprovisioned AWS foundation
+        input required}
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_ARN: ${MARTY_AWS_TLS_SIGNING_KEYS_SERVER_KEY_ARN:?preprovisioned AWS foundation
+        input required}
+      MARTY_SIGNING_GRANT_PROVIDER: aws-kms
+      MARTY_SIGNING_GRANT_AWS_CONFIG_FILE: /run/secrets/signing_grant_authorities
+      SIGNING_KEYS_INTEGRATION_SECRET_KMS_PROVIDER: aws-kms
+      SIGNING_KEYS_INTEGRATION_SECRET_AWS_REGION: ${MARTY_INTEGRATION_SECRET_AWS_REGION:?preprovisioned AWS foundation input
+        required}
+      SIGNING_KEYS_INTEGRATION_SECRET_AWS_KEY_ARN: ${MARTY_INTEGRATION_SECRET_AWS_KEY_ARN:?preprovisioned AWS foundation input
+        required}
+      AWS_ROLE_ARN: ${MARTY_AWS_SIGNING_KEYS_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - issuance_api_key
+    - signing_keys_service_sign_gateway_key
+    - signing_keys_issuer_sign_key
+    - signing_keys_integration_secret_key
+    - device_registration_signing_keys_key
+    - signing_keys_workload_server_cert
+    - workload_identity_ca_cert
+    - signing_grant_authorities
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_SIGNING_KEYS_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  flow:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: !reset 'null'
+      BAO_ADDR: !reset 'null'
+      BAO_CACERT: !reset 'null'
+      FLOW_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_PROVIDER: aws-kms
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_REGION: ${MARTY_AWS_TLS_FLOW_CLIENT_REGION:?preprovisioned AWS foundation input required}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_ARN: ${MARTY_AWS_TLS_FLOW_CLIENT_KEY_ARN:?preprovisioned AWS foundation input required}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_PROVIDER: aws-kms
+      GRPC_WORKLOAD_TLS_SERVER_KMS_REGION: ${MARTY_AWS_TLS_FLOW_SERVER_REGION:?preprovisioned AWS foundation input required}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_ARN: ${MARTY_AWS_TLS_FLOW_SERVER_KEY_ARN:?preprovisioned AWS foundation input required}
+      MARTY_SIGNING_GRANT_PROVIDER: aws-kms
+      MARTY_SIGNING_GRANT_AWS_CONFIG_FILE: /run/secrets/signing_grant_authorities
+      AWS_ROLE_ARN: ${MARTY_AWS_FLOW_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - grpc_service_token
+    - flow_workload_client_cert
+    - flow_workload_server_cert
+    - workload_identity_ca_cert
+    - flow_webhook_secret
+    - flow_application_event_hmac_key
+    - issuance_api_key
+    - signing_keys_issuer_sign_key
+    - signing_grant_authorities
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_FLOW_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  verification:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      GRPC_WORKLOAD_TLS_KMS_ADDR: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_CA_CERT: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: !reset 'null'
+      GRPC_WORKLOAD_TLS_KMS_PROVIDER: aws-kms
+      GRPC_WORKLOAD_TLS_KMS_REGION: ${MARTY_AWS_TLS_VERIFICATION_CLIENT_REGION:?preprovisioned AWS foundation input required}
+      GRPC_WORKLOAD_TLS_KMS_KEY_ARN: ${MARTY_AWS_TLS_VERIFICATION_CLIENT_KEY_ARN:?preprovisioned AWS foundation input required}
+      AWS_ROLE_ARN: ${MARTY_AWS_VERIFICATION_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - grpc_service_token
+    - verification_workload_client_cert
+    - workload_identity_ca_cert
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_VERIFICATION_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  revocation-profile:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_PROVIDER: aws-kms
+      GRPC_WORKLOAD_TLS_SERVER_KMS_REGION: ${MARTY_AWS_TLS_REVOCATION_PROFILE_SERVER_REGION:?preprovisioned AWS foundation
+        input required}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_ARN: ${MARTY_AWS_TLS_REVOCATION_PROFILE_SERVER_KEY_ARN:?preprovisioned AWS foundation
+        input required}
+      AWS_ROLE_ARN: ${MARTY_AWS_REVOCATION_PROFILE_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - grpc_service_token
+    - workload_identity_ca_cert
+    - rp_workload_server_cert
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_REVOCATION_PROFILE_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  device-registration:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - marty_db_password
+    - grpc_service_token
+    - device_registration_gateway_key
+    - device_registration_signing_keys_key
+    - workload_identity_ca_cert
+  event-stream:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: !reset 'null'
+      GRPC_WORKLOAD_TLS_SERVER_KMS_PROVIDER: aws-kms
+      GRPC_WORKLOAD_TLS_SERVER_KMS_REGION: ${MARTY_AWS_TLS_EVENT_STREAM_SERVER_REGION:?preprovisioned AWS foundation input
+        required}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_ARN: ${MARTY_AWS_TLS_EVENT_STREAM_SERVER_KEY_ARN:?preprovisioned AWS foundation input
+        required}
+      AWS_ROLE_ARN: ${MARTY_AWS_EVENT_STREAM_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - grpc_service_token
+    - es_workload_server_cert
+    volumes:
+    - type: bind
+      source: ${MARTY_AWS_EVENT_STREAM_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+  ui:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - google_analytics_measurement_id
+    - google_site_verification
+  edge:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+  cloudflared:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - cloudflare_tunnel_token
+  tunnel-nginx-proxy:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+  cloudflared-beta:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+      kms-initialize: !reset 'null'
+      openbao-unseal: !reset 'null'
+    secrets: !override
+    - cloudflare_beta_tunnel_token
+  installer-ingress:
+    environment:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      AWS_ROLE_ARN: ${MARTY_AWS_INSTALLER_INGRESS_ROLE_ARN:?preprovisioned AWS foundation input required}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
+      OIDF_EDGE_TLS_KMS_PROVIDER: aws-kms
+      OIDF_EDGE_TLS_KMS_REGION: ${MARTY_AWS_TLS_INSTALLER_INGRESS_REGION:?preprovisioned AWS foundation input required}
+      OIDF_EDGE_TLS_KMS_KEY_ARN: ${MARTY_AWS_TLS_INSTALLER_INGRESS_KEY_ARN:?preprovisioned AWS foundation input required}
+      OIDF_EDGE_TLS_KMS_ADDR: !reset 'null'
+      OIDF_EDGE_TLS_KMS_CA_CERT_FILE: !reset 'null'
+      OIDF_EDGE_TLS_KMS_TOKEN_FILE: !reset 'null'
+      OIDF_EDGE_TLS_KMS_KEY_NAME: !reset 'null'
+      OIDF_EDGE_TLS_KMS_KEY_VERSION: !reset 'null'
+    volumes: !override
+    - type: bind
+      source: ${SELFHOST_SECRET_DIR:?verified generation required}/installer_ingress_tls_cert
+      target: /run/installer/tls.crt
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${SELFHOST_SECRET_DIR:?verified generation required}/installer_ingress_ca_cert
+      target: /run/installer/ca.crt
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${MARTY_AWS_INSTALLER_INGRESS_IDENTITY_DIR:?preprovisioned AWS foundation input required}
+      target: /run/aws-identity
+      read_only: true
+      bind:
+        create_host_path: false
+secrets:
+  sign_grant_verify_token: !reset 'null'
+  sign_grant_mint_flow_wallet_token: !reset 'null'
+  sign_grant_mint_gateway_service_token: !reset 'null'
+  sign_grant_mint_gateway_issuer_did_token: !reset 'null'
+  sign_grant_mint_issuance_credential_token: !reset 'null'
+  sign_grant_mint_issuance_canvas_token: !reset 'null'
+  sign_grant_mint_issuance_readiness_token: !reset 'null'
+  sign_grant_mint_issuance_passport_token: !reset 'null'
+  keycloak_db_password: !reset 'null'
+  keycloak_signing_kms_token: !reset 'null'
+  keycloak_master_rs256_cert: !reset 'null'
+  keycloak_11id_rs256_cert: !reset 'null'
+  keycloak_master_cookie_token: !reset 'null'
+  keycloak_master_ciba_token: !reset 'null'
+  keycloak_11id_cookie_token: !reset 'null'
+  keycloak_11id_ciba_token: !reset 'null'
+  keycloak_admin_password: !reset 'null'
+  marty_api_client_secret: !reset 'null'
+  org_tls_kms_token: !reset 'null'
+  es_tls_kms_token: !reset 'null'
+  rp_tls_kms_token: !reset 'null'
+  ct_tls_kms_token: !reset 'null'
+  pp_tls_kms_token: !reset 'null'
+  notification_tls_kms_token: !reset 'null'
+  flow_client_tls_kms_token: !reset 'null'
+  flow_server_tls_kms_token: !reset 'null'
+  auth_tls_kms_token: !reset 'null'
+  auth_server_tls_kms_token: !reset 'null'
+  gateway_tls_kms_token: !reset 'null'
+  issuance_tls_kms_token: !reset 'null'
+  verification_tls_kms_token: !reset 'null'
+  deployment_profile_tls_kms_token: !reset 'null'
+  compliance_profile_tls_kms_token: !reset 'null'
+  openbao_service_token: !reset 'null'
+  openbao_bootstrap_token: !reset 'null'
+  signing_keys_openbao_token: !reset 'null'
+  openbao_tls_ca_cert: !reset 'null'
+  signing_keys_tls_kms_token: !reset 'null'
+  didcomm_issuance_openbao_token: !reset 'null'
+  haip_kms_token: !reset 'null'
+  notification_openbao_token: !reset 'null'
+  operator_bootstrap_password: !reset 'null'
+  signing_grant_authorities:
+    file: ${SELFHOST_SECRET_DIR:?verified generation required}/signing_grant_authorities
+  external_oidc_client_secret:
+    file: ${SELFHOST_SECRET_DIR:?verified generation required}/external_oidc_client_secret

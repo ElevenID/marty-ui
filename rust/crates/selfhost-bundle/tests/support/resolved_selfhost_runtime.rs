@@ -348,7 +348,6 @@ pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
             "issuance_api_key",
             "signing_keys_issuer_sign_key",
             "signing_keys_integration_secret_key",
-            "didcomm_issuance_openbao_token",
             "sign_grant_mint_issuance_credential_token",
             "sign_grant_mint_issuance_canvas_token",
             "sign_grant_mint_issuance_readiness_token",
@@ -423,8 +422,7 @@ fn secret_field(owner: &str, key: &str) -> Result<&'static str> {
         }
         "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE" => Ok("signing_keys_issuer_sign_key"),
         "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE" => Ok("signing_keys_integration_secret_key"),
-        "DIDCOMM_KMS_TOKEN_FILE" => Ok("didcomm_issuance_openbao_token"),
-        "DIDCOMM_KMS_CA_CERT_FILE" | "BAO_CACERT" => Ok("openbao_tls_ca_cert"),
+        "BAO_CACERT" => Ok("openbao_tls_ca_cert"),
         "INTEGRATION_SECRET_KMS_CA_FILE" => Ok("workload_identity_ca_cert"),
         "TOKEN_HMAC_KEY_FILE" => Ok("token_hmac_key"),
         "CANVAS_CREDENTIALS_SHARED_SECRET_FILE" => Ok("canvas_credentials_shared_secret"),
@@ -578,15 +576,60 @@ impl ClosedSelfhostModel {
                 && native["command"] == json!([]),
         )?;
         require(native["environment"]["DIDCOMM_ALLOW_PRIVATE_IPS"] == "false")?;
-        require(native["environment"]["DIDCOMM_KMS_ADDR"] == "https://openbao.invalid:8200")?;
         require(native["environment"]["BAO_ADDR"] == "https://openbao.invalid:8200")?;
         require(native["environment"]["BAO_CACERT"] == "/run/secrets/openbao_tls_ca_cert")?;
         require(
-            native["environment"]["DIDCOMM_KMS_CA_CERT_FILE"] == "/run/secrets/openbao_tls_ca_cert",
+            native["environment"]["INTEGRATION_SECRET_KMS_URL"]
+                == "https://signing-keys:8018/internal"
+                && native["environment"]["INTEGRATION_SECRET_KMS_CA_FILE"]
+                    == "/run/secrets/workload_identity_ca_cert",
         )?;
         require(
-            native["environment"]["DIDCOMM_KMS_TOKEN_FILE"]
-                == "/run/secrets/didcomm_issuance_openbao_token",
+            native["environment"]["SIGNING_KEYS_ISSUER_SIGN_KEY_FILE"]
+                == "/run/secrets/signing_keys_issuer_sign_key"
+                && native["environment"]["SIGNING_KEYS_ISSUER_SIGN_KEY_FILE"]
+                    == services["signing-keys"]["environment"]["SIGNING_KEYS_ISSUER_SIGN_KEY_FILE"]
+                && native["environment"]["ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE"]
+                    == "/run/secrets/sign_grant_mint_issuance_credential_token"
+                && services["signing-keys"]["environment"]["SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE"]
+                    == "/run/secrets/sign_grant_verify_token",
+        )?;
+        for owner in ["issuance", "issuance-native"] {
+            require(
+                !object(&services[owner]["environment"])?
+                    .keys()
+                    .any(|key| key.starts_with("DIDCOMM_KMS_")),
+            )?;
+        }
+        let plugin_token = "didcomm_issuance_openbao_token";
+        let signer = &services["signing-keys"];
+        require(
+            signer["environment"]["DIDCOMM_KMS_TOKEN_FILE"]
+                == format!("/run/secrets/{plugin_token}"),
+        )?;
+        require(
+            !object(&signer["environment"])?.contains_key("DIDCOMM_KMS_ADDR")
+                && !object(&signer["environment"])?.contains_key("DIDCOMM_KMS_CA_CERT_FILE"),
+        )?;
+        for (owner, service) in services {
+            let mounts: Vec<_> = service["secrets"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|mount| mount["source"] == plugin_token)
+                .collect();
+            if owner == "signing-keys" {
+                require(
+                    mounts.len() == 1
+                        && mounts[0]["target"] == format!("/run/secrets/{plugin_token}"),
+                )?;
+            } else {
+                require(mounts.is_empty())?;
+            }
+        }
+        require(
+            self.full_model["secrets"][plugin_token]["file"]
+                == path_text(&self.secret_directory.join(plugin_token))?,
         )?;
         require(!object(&native["environment"])?.keys().any(|key| {
             (key.starts_with("BAO_") && key != "BAO_ADDR" && key != "BAO_CACERT")
@@ -1187,6 +1230,30 @@ fn negative_controls(
             json!("true"),
         ),
         (
+            "/services/issuance-native/environment/INTEGRATION_SECRET_KMS_URL",
+            json!("http://signing-keys:8018/internal"),
+        ),
+        (
+            "/services/issuance-native/environment/ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+            json!("/run/secrets/sign_grant_mint_issuance_canvas_token"),
+        ),
+        (
+            "/services/signing-keys/environment/SIGNING_KEYS_ISSUER_SIGN_KEY_FILE",
+            json!("/run/secrets/signing_keys_integration_secret_key"),
+        ),
+        (
+            "/services/signing-keys/environment/SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE",
+            json!("/run/secrets/sign_grant_mint_issuance_credential_token"),
+        ),
+        (
+            "/services/signing-keys/environment/DIDCOMM_KMS_TOKEN_FILE",
+            json!("/run/secrets/signing_keys_openbao_token"),
+        ),
+        (
+            "/secrets/didcomm_issuance_openbao_token/file",
+            json!("/unowned/plugin-token"),
+        ),
+        (
             "/services/issuance-native/environment/DATABASE_URL_TEMPLATE",
             json!("postgresql://already-loaded"),
         ),
@@ -1247,6 +1314,12 @@ fn negative_controls(
                 "Independent binding guard must also reject jointly changed models"
             );
         }
+    }
+    for owner in ["issuance", "issuance-native"] {
+        let mut changed = model.full_model.clone();
+        changed["services"][owner]["environment"]["DIDCOMM_KMS_ADDR"] =
+            json!("https://openbao.invalid:8200");
+        assert!(ClosedSelfhostModel::from_rendered(&changed, changed.clone(), directory).is_err());
     }
     for fault in 0..3 {
         let mut ports = endpoints.0.clone();

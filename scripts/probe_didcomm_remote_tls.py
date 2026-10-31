@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the native DIDComm authcrypt contract against disposable HTTPS OpenBao."""
+"""Run native DIDComm authcrypt with disposable HTTPS OpenBao and guarded Redis."""
 
 from __future__ import annotations
 
@@ -20,6 +20,11 @@ from probe_didcomm_openbao_ha import docker_host_path
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = os.environ.get("MARTY_OPENBAO_PROBE_IMAGE", "marty-openbao-didcomm-tls-local")
+REDIS_IMAGE = json.loads(
+    (ROOT / "deploy-config/passport-supported-disposable-infra-images.json").read_text(
+        encoding="utf-8"
+    )
+)["images"]["redis"]["reference"]
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -57,6 +62,30 @@ def request(base: str, context: ssl.SSLContext, token: str, method: str,
         return error.code, {}
 
 
+def prepare_redis(container_id: str) -> tuple[str, str]:
+    """Initialize the same guarded DB13 contract used by Signing Keys fixtures."""
+    binding = docker("port", container_id, "6379/tcp")
+    match = re.fullmatch(r"127\.0\.0\.1:([0-9]{2,5})", binding)
+    if match is None or not 1024 <= int(match[1]) <= 65535:
+        raise RuntimeError("disposable DIDComm Redis port is invalid")
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        try:
+            if docker("exec", container_id, "redis-cli", "ping", timeout=2) == "PONG":
+                break
+        except (RuntimeError, subprocess.TimeoutExpired):
+            pass
+        time.sleep(0.25)
+    else:
+        raise RuntimeError("disposable DIDComm Redis did not become ready")
+    nonce = secrets.token_hex(32)
+    result = docker("exec", container_id, "redis-cli", "-n", "13", "SET",
+                    "marty:tests:disposable-guard", nonce, timeout=5)
+    if result != "OK":
+        raise RuntimeError("disposable DIDComm Redis guard could not be initialized")
+    return f"redis://127.0.0.1:{match[1]}/13", nonce
+
+
 def probe() -> None:
     image_id = docker("image", "inspect", IMAGE, "--format", "{{.Id}}")
     if re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None:
@@ -65,6 +94,8 @@ def probe() -> None:
     name = f"marty-didcomm-tls-{suffix}"
     token_volume = f"marty-didcomm-tls-token-{suffix}"
     ca_volume = f"marty-didcomm-tls-ca-{suffix}"
+    redis_name = f"marty-didcomm-tls-redis-{suffix}"
+    redis_id = None
     with tempfile.TemporaryDirectory(prefix="marty-didcomm-tls-") as temporary:
         root = Path(temporary)
         token = secrets.token_hex(32)
@@ -133,11 +164,23 @@ def probe() -> None:
                                 {"type": "openbao-didcomm-authcrypt"})
             if status not in (200, 204):
                 raise RuntimeError("disposable DIDComm plugin mount failed")
+            redis_id = docker(
+                "run", "-d", "--name", redis_name,
+                "--label", "marty.disposable=didcomm-tls-probe",
+                "--memory", "128m", "--memory-swap", "128m",
+                "--tmpfs", "/data:rw,mode=700", "-p", "127.0.0.1::6379",
+                REDIS_IMAGE, "redis-server", "--save", "", "--appendonly", "no",
+            )
+            if re.fullmatch(r"[0-9a-f]{64}", redis_id) is None:
+                raise RuntimeError("disposable DIDComm Redis identity is invalid")
+            redis_url, redis_nonce = prepare_redis(redis_id)
             environment = os.environ.copy()
             environment.update({
                 "MARTY_TEST_OPENBAO_URL": base,
                 "MARTY_TEST_OPENBAO_TOKEN": token,
                 "MARTY_TEST_OPENBAO_CA_CERT_FILE": str(ca),
+                "MARTY_TEST_REDIS_URL": redis_url,
+                "MARTY_TEST_REDIS_DISPOSABLE_NONCE": redis_nonce,
             })
             result = subprocess.run([
                 "cargo", "+1.95.0", "test", "--locked", "-p", "marty-issuance-service",
@@ -148,11 +191,16 @@ def probe() -> None:
                 raise RuntimeError("native DIDComm authcrypt HTTPS contract failed")
             print(f"Native DIDComm authcrypt HTTPS contract passed: {image_id}")
         finally:
-            subprocess.run(["docker", "rm", "-f", name], capture_output=True,
-                           check=False, timeout=30)
-            for volume in (ca_volume, token_volume):
-                subprocess.run(["docker", "volume", "rm", "-f", volume],
-                               capture_output=True, check=False, timeout=30)
+            try:
+                # Remove only the immutable ID returned for this owned fixture.
+                if redis_id is not None and re.fullmatch(r"[0-9a-f]{64}", redis_id):
+                    docker("rm", "-f", redis_id, timeout=30)
+            finally:
+                subprocess.run(["docker", "rm", "-f", name], capture_output=True,
+                               check=False, timeout=30)
+                for volume in (ca_volume, token_volume):
+                    subprocess.run(["docker", "volume", "rm", "-f", volume],
+                                   capture_output=True, check=False, timeout=30)
 
 
 if __name__ == "__main__":

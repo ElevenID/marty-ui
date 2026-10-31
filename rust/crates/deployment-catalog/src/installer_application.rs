@@ -68,7 +68,12 @@ pub(crate) fn bootstrap_inputs(
     images: &BTreeMap<String, String>,
     nonce: &str,
 ) -> Result<ComposeInputs> {
-    let binding = state.journal().runtime().ok_or("runtime binding absent")?;
+    let foundation = state.with_inspection(crate::installer_foundation::load)?;
+    let binding = state
+        .journal()
+        .runtime()
+        .ok_or("runtime binding absent")?
+        .clone();
     let mut env = Vec::new();
     for (name, value) in [
         ("MARTY_INSTALLATION_DIR", path(installation)?.to_owned()),
@@ -81,14 +86,6 @@ pub(crate) fn bootstrap_inputs(
             images.get("gateway").ok_or("gateway image absent")?.clone(),
         ),
         (
-            "MARTY_OPENBAO_DIDCOMM_IMAGE",
-            images
-                .get("openbao_didcomm_image")
-                .ok_or("OpenBao image absent")?
-                .clone(),
-        ),
-        ("MARTY_KEYCLOAK_NONCE", nonce.into()),
-        (
             "MARTY_SELFHOST_PROJECT",
             format!(
                 "marty-selfhost-disposable-{}",
@@ -96,19 +93,33 @@ pub(crate) fn bootstrap_inputs(
             ),
         ),
         (
-            "SELFHOST_OPENBAO_STATE_DIR",
-            path(&installation.join("openbao-state"))?.into(),
-        ),
-        (
             "SELFHOST_SECRET_DIR",
             path(&installation.join("secrets"))?.into(),
         ),
-        (
-            "SELFHOST_OPENBAO_HOST_PORT",
-            binding.openbao_port.to_string(),
-        ),
     ] {
         append(&mut env, name, &value)?;
+    }
+    if foundation.is_none() {
+        for (name, value) in [
+            (
+                "MARTY_OPENBAO_DIDCOMM_IMAGE",
+                images
+                    .get("openbao_didcomm_image")
+                    .ok_or("OpenBao image absent")?
+                    .clone(),
+            ),
+            ("MARTY_KEYCLOAK_NONCE", nonce.into()),
+            (
+                "SELFHOST_OPENBAO_STATE_DIR",
+                path(&installation.join("openbao-state"))?.into(),
+            ),
+            (
+                "SELFHOST_OPENBAO_HOST_PORT",
+                binding.openbao_port.to_string(),
+            ),
+        ] {
+            append(&mut env, name, &value)?;
+        }
     }
     let port = binding.openbao_port;
     state.write_evidence("bootstrap.env", &env)?;
@@ -140,13 +151,21 @@ pub(crate) fn bootstrap_inputs(
     .map(|n| installation.join(n))
     .collect();
     readonly_bind_roots.insert(bundle.into());
-    Ok(ComposeInputs {
+    let mut inputs = ComposeInputs {
         installation: installation.into(),
         project: state.journal().compose_project(),
-        files: vec![
-            bundle_bound(bundle, "docker-compose.selfhost.openbao.yml")?,
-            bundle_bound(bundle, &format!("{LAYERS}/compose.bootstrap.yml"))?,
-        ],
+        files: if foundation.is_some() {
+            vec![
+                bundle_bound(bundle, "docker-compose.yml")?,
+                bundle_bound(bundle, &format!("{LAYERS}/compose.installer.yml"))?,
+                bundle_bound(bundle, crate::installer_foundation::LAYER)?,
+            ]
+        } else {
+            vec![
+                bundle_bound(bundle, "docker-compose.selfhost.openbao.yml")?,
+                bundle_bound(bundle, &format!("{LAYERS}/compose.bootstrap.yml"))?,
+            ]
+        },
         bound_inputs: Vec::new(),
         environment: bound(installation.join("evidence/bootstrap.env"))?,
         profiles: vec!["setup".into()],
@@ -156,9 +175,22 @@ pub(crate) fn bootstrap_inputs(
         development_image: None,
         writable_bind_roots,
         readonly_bind_roots,
-        allowed_loopback_ports: BTreeSet::from([port]),
+        allowed_loopback_ports: if foundation.is_some() {
+            BTreeSet::new()
+        } else {
+            BTreeSet::from([port])
+        },
         prior: None,
-    })
+    };
+    if let Some(foundation) = foundation {
+        foundation.bind_inputs(&mut inputs);
+        inputs.bound_inputs.push(bound(
+            installation
+                .join("evidence")
+                .join(crate::installer_foundation::RECORD),
+        )?);
+    }
+    Ok(inputs)
 }
 pub(crate) fn job_inputs(
     base: &ComposeInputs,
@@ -185,8 +217,59 @@ pub fn start(
     bootstrap: &ComposeInputs,
     prior: ComposeReceipt,
 ) -> Result<()> {
+    start_inner(
+        docker_path,
+        installation,
+        bundle,
+        state,
+        Some(bao),
+        images,
+        bootstrap,
+        Some(prior),
+    )
+}
+
+pub(crate) fn start_aws(
+    docker_path: &Path,
+    installation: &Path,
+    bundle: &Path,
+    state: &mut InstallerState,
+    images: &BTreeMap<String, String>,
+    bootstrap: &ComposeInputs,
+) -> Result<()> {
+    start_inner(
+        docker_path,
+        installation,
+        bundle,
+        state,
+        None,
+        images,
+        bootstrap,
+        None,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Selected infrastructure shares the existing application/generation/lifecycle owner."
+)]
+fn start_inner(
+    docker_path: &Path,
+    installation: &Path,
+    bundle: &Path,
+    state: &mut InstallerState,
+    bao: Option<&OpenBaoInventory>,
+    images: &BTreeMap<String, String>,
+    bootstrap: &ComposeInputs,
+    prior: Option<ComposeReceipt>,
+) -> Result<()> {
     state.require_live_phase(Phase::Provisioning)?;
-    crate::installer_openbao::require_binding(state, bao)?;
+    let foundation = state.with_inspection(crate::installer_foundation::load)?;
+    match (bao, foundation.as_ref()) {
+        (Some(bao), None) => crate::installer_openbao::require_binding(state, bao)?,
+        (None, Some(_)) => {}
+        _ => return Err("infrastructure selection differs from the fresh installation".into()),
+    }
     let binding = state
         .journal()
         .runtime()
@@ -194,14 +277,23 @@ pub fn start(
         .clone();
     let mut reservations = Vec::new();
     let mut ports = Vec::new();
-    for _ in 0..4 {
-        let listener =
-            TcpListener::bind(("127.0.0.1", 0)).map_err(|_| "cannot reserve loopback port")?;
+    for ordinal in 0..4 {
+        let requested_port = if ordinal == 0 {
+            foundation
+                .as_ref()
+                .map(|v| installer_application_env::origin_port(&v.configuration.public_origin))
+                .transpose()?
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let listener = TcpListener::bind(("127.0.0.1", requested_port))
+            .map_err(|_| "cannot reserve the selected loopback port")?;
         let port = listener
             .local_addr()
             .map_err(|_| "loopback reservation unavailable")?
             .port();
-        if port < 1024 || port == binding.openbao_port {
+        if port < 1024 || (bao.is_some() && port == binding.openbao_port) {
             return Err("loopback port conflicts with runtime".into());
         }
         ports.push(port);
@@ -219,22 +311,29 @@ pub fn start(
         edge_port: ports[3],
         openbao_port: binding.openbao_port,
     };
-    let tls = crate::installer_verify::read_private_record(
-        &installation.join("evidence/selfhost-tls-kms.env.fragment"),
-    )?;
-    let env = installer_application_env::render(
+    let tls = if foundation.is_some() {
+        Vec::new()
+    } else {
+        crate::installer_verify::read_private_record(
+            &installation.join("evidence/selfhost-tls-kms.env.fragment"),
+        )?
+    };
+    let env = installer_application_env::render_selected(
         &bundle_text(bundle, ".env.selfhost.production.example", 16384)?,
         &bundle_text(bundle, "docker-compose.yml", 262144)?,
         std::str::from_utf8(&tls).map_err(|_| "invalid TLS environment fragment")?,
         &parameters,
         images,
+        foundation.as_ref(),
     )?;
     state.prepare_application_storage()?;
     if state.validate_applicant_storage()? != group.host_gid() {
         return Err("applicant state group changed".into());
     }
     state.persist_application_storage_creation_receipt(installation)?;
-    state.stage_operator_password()?;
+    if foundation.is_none() {
+        state.stage_operator_password()?;
+    }
     let nginx = crate::installer_ingress_config::render(
         &bundle_text(bundle, "docker/nginx-selfhost.prod.conf.template", 131072)?,
         &origin,
@@ -275,18 +374,21 @@ pub fn start(
             images.get("gateway").ok_or("gateway image absent")?.clone(),
         ),
         ("MARTY_INSTALLER_HTTPS_PORT", ports[0].to_string()),
-        (
-            "MARTY_INSTALLER_INGRESS_KEY_NAME",
-            crate::installer_ingress_provision::resource_name(
-                &state.journal().installation_id().to_string(),
-            )?,
-        ),
     ] {
         append(&mut source_env, key, &value)?;
     }
+    if foundation.is_none() {
+        append(
+            &mut source_env,
+            "MARTY_INSTALLER_INGRESS_KEY_NAME",
+            &crate::installer_ingress_provision::resource_name(
+                &state.journal().installation_id().to_string(),
+            )?,
+        )?;
+    }
     state.write_evidence("application-source.env", &source_env)?;
     let mut inputs = bootstrap.clone();
-    inputs.prior = Some(prior);
+    inputs.prior = prior;
     inputs.services.clear();
     inputs.profiles = vec!["installer-init".into()];
     inputs.allowed_loopback_ports.extend(ports.iter().copied());
@@ -294,6 +396,11 @@ pub fn start(
         bundle_bound(bundle, "docker-compose.yml")?,
         bundle_bound(bundle, &format!("{LAYERS}/compose.installer.yml"))?,
     ];
+    if foundation.is_some() {
+        inputs
+            .files
+            .push(bundle_bound(bundle, crate::installer_foundation::LAYER)?);
+    }
     #[cfg(feature = "installer-development")]
     if let Some(image) = state.with_inspection(crate::installer_development_image::load)? {
         image.bind_inputs(&mut inputs)?;
@@ -304,7 +411,7 @@ pub fn start(
         installation,
         state,
         source.model(),
-        &bao.network_id,
+        bao.map(|v| v.network_id.as_str()),
     )?;
     state.write_evidence(
         "application.env",
@@ -316,7 +423,7 @@ pub fn start(
         installation,
         &generation,
         application.model(),
-        &bao.network_id,
+        bao.map(|v| v.network_id.as_str()),
     )?;
     state.write_evidence(
         "application-native-model.json",
@@ -327,13 +434,22 @@ pub fn start(
     // mutation. A later finite runtime failure never fabricates a success receipt.
     let mut maintenance_inputs = inputs.clone();
     maintenance_inputs.profiles = vec!["setup".into(), "installer-init".into()];
-    maintenance_inputs.files = vec![
-        bundle_bound(bundle, "docker-compose.yml")?,
-        bundle_bound(bundle, "docker-compose.selfhost.openbao.yml")?,
-        bundle_bound(bundle, &format!("{LAYERS}/compose.bootstrap.yml"))?,
-        bundle_bound(bundle, &format!("{LAYERS}/compose.installer.yml"))?,
-        bundle_bound(bundle, &format!("{LAYERS}/compose.runtime.yml"))?,
-    ];
+    maintenance_inputs.files = if foundation.is_some() {
+        vec![
+            bundle_bound(bundle, "docker-compose.yml")?,
+            bundle_bound(bundle, &format!("{LAYERS}/compose.installer.yml"))?,
+            bundle_bound(bundle, &format!("{LAYERS}/compose.runtime.yml"))?,
+            bundle_bound(bundle, crate::installer_foundation::LAYER)?,
+        ]
+    } else {
+        vec![
+            bundle_bound(bundle, "docker-compose.yml")?,
+            bundle_bound(bundle, "docker-compose.selfhost.openbao.yml")?,
+            bundle_bound(bundle, &format!("{LAYERS}/compose.bootstrap.yml"))?,
+            bundle_bound(bundle, &format!("{LAYERS}/compose.installer.yml"))?,
+            bundle_bound(bundle, &format!("{LAYERS}/compose.runtime.yml"))?,
+        ]
+    };
     #[cfg(feature = "installer-development")]
     if let Some(image) = &maintenance_inputs.development_image {
         maintenance_inputs

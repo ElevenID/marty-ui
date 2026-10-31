@@ -119,8 +119,16 @@ fn credential_names(
     Ok(entries)
 }
 fn corpus(state: &LockedInspection, entries: &BTreeSet<String>) -> Result<Vec<Vec<u8>>> {
-    let mut result = vec![state.read_operator_password()?];
+    let external = crate::installer_foundation::load(state)?.is_some();
+    let mut result = if external {
+        Vec::new()
+    } else {
+        vec![state.read_operator_password()?]
+    };
     for entry in entries {
+        if external && crate::installer_state::LOCAL_AUTH_SCALAR_SECRETS.contains(&entry.as_str()) {
+            continue;
+        }
         result.push(state.read_secret(entry)?);
     }
     Ok(result)

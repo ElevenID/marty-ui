@@ -140,9 +140,28 @@ def test_database_runner_uses_positive_execution_guard() -> None:
     assert (
         'source "$(dirname "${BASH_SOURCE[0]}")/rust_contract_execution.sh"' in source
     )
-    assert source.count("run_timed ") == 19
+    assert source.count("run_timed ") == 20
     assert 'run_timed_rust_test contract "$name" python3 "$obligation_runner"' in source
     assert 'rust_db_obligations.py"' in source
+
+
+def test_notification_migration_has_required_postgres_and_exact_native_case() -> None:
+    package, target, inputs = INVENTORY.obligation("notification_migration")
+    assert (package, target) == ("marty-notification", "migration_contract")
+    assert [(item["name"], item["requirement"]) for item in inputs] == [
+        ("NOTIFICATION_MIGRATION_TEST_DATABASE_URL", "required")
+    ]
+    runner = RUNNER.read_text(encoding="utf-8")
+    assert "export NOTIFICATION_MIGRATION_TEST_DATABASE_URL=" in runner
+    assert "run_timed notification_migration target/debug/notification-migration-contract" in runner
+    case = "native_postgres_preserves_both_envelope_formats_across_migration_reruns"
+    assert f"{case} --ignored --exact --test-threads=1" in runner
+    source = (ROOT / "rust/services/notification/tests/migration_contract.rs").read_text(
+        encoding="utf-8"
+    )
+    assert '#[ignore = "requires the owned Notification PostgreSQL fixture"]' in source
+    assert 'let Ok(database_url)' not in source
+    assert 'expect("owned Notification PostgreSQL URL is required")' in source
 
 
 PASSPORT_RECONCILIATION_CASES = (
@@ -236,7 +255,7 @@ def test_passport_reconciliation_cases_require_owned_postgres_and_exact_roster()
 def test_db_inventory_covers_every_current_dispatch_and_owned_runtime_input() -> None:
     source = RUNNER.read_text(encoding="utf-8")
     names = re.findall(r"^\s*run_timed ([a-z0-9_]+) ", source, re.MULTILINE)
-    assert len(names) == len(set(names)) == 18
+    assert len(names) == len(set(names)) == 19
     canvas = [
         path.stem
         for path in (ROOT / "rust/services/issuance/tests").glob(
@@ -2053,6 +2072,7 @@ def test_database_contract_preparation_uses_package_scoped_artifacts() -> None:
         ("marty-signing-keys", "issuer_profile_storage_contract"),
         ("marty-credential-template", "postgres_integration"),
         ("marty-credential-template", "migration_contract"),
+        ("marty-notification", "migration_contract"),
         ("marty-presentation-policy", "postgres_integration"),
         ("marty-issuance-service", "issuance_transaction_postgres_contract"),
         ("marty-issuance-service", "credential_postgres_contract"),

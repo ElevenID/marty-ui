@@ -76,7 +76,7 @@ pub fn provision(
         installation,
         bundle,
         state,
-        bao,
+        Some(bao),
         inputs,
         "installer-ingress-provision",
         services_image,

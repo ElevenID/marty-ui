@@ -61,6 +61,8 @@ pub enum FlowEnvelopeError {
     Unauthorized,
     #[error("KMS flow-key provider is unavailable.")]
     Unavailable,
+    #[error("HAIP response encryption requires a configured compatible remote provider.")]
+    CapabilityUnavailable,
     #[error("Invalid HAIP response-key scope or version.")]
     InvalidHaipScope,
     #[error("Remote HAIP response-key operation failed.")]
@@ -70,11 +72,17 @@ pub enum FlowEnvelopeError {
 impl IntoResponse for FlowEnvelopeError {
     fn into_response(self) -> Response {
         let status = match self {
+            Self::CapabilityUnavailable => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::InvalidHaipScope => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Unavailable | Self::HaipFailed => StatusCode::SERVICE_UNAVAILABLE,
         };
-        (status, Json(json!({"detail": self.to_string()}))).into_response()
+        let mut body = json!({"detail": self.to_string()});
+        if matches!(self, Self::CapabilityUnavailable) {
+            body["code"] = json!("capability_unavailable");
+            body["capability"] = json!("haip_response_encryption");
+        }
+        (status, Json(body)).into_response()
     }
 }
 

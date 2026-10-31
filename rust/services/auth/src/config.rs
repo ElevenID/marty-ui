@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
+use std::{collections::HashMap, net::SocketAddr};
 
 use thiserror::Error;
 use tonic::metadata::AsciiMetadataValue;
@@ -6,7 +6,9 @@ use url::Url;
 
 use mmf_messaging::OutboxDispatcherConfig;
 
-use crate::{KeycloakAdminConfig, OidcConfig, SessionCookieConfig, UiOriginPolicy};
+use crate::{
+    KeycloakAdminConfig, OidcConfig, OidcProviderMode, SessionCookieConfig, UiOriginPolicy,
+};
 
 #[derive(Clone, Debug)]
 pub struct AuthServiceConfig {
@@ -55,16 +57,7 @@ pub struct AuthServiceConfig {
     pub workload_server_tls: Option<AuthWorkloadServerTlsFiles>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AuthWorkloadClientTlsFiles {
-    pub ca_certificate: PathBuf,
-    pub certificate: PathBuf,
-    pub kms_endpoint: String,
-    pub kms_ca_certificate: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
-}
+pub use marty_service_runtime::WorkloadTlsFiles as AuthWorkloadClientTlsFiles;
 
 pub type AuthWorkloadServerTlsFiles = AuthWorkloadClientTlsFiles;
 
@@ -95,7 +88,16 @@ impl AuthServiceConfig {
             _ => return Err(invalid("ENVIRONMENT is invalid")),
         }
         .to_owned();
-        let realm = required(get("KEYCLOAK_REALM"), "KEYCLOAK_REALM")?;
+        let provider_mode = match get("OIDC_PROVIDER_MODE").unwrap_or("keycloak") {
+            "keycloak" => OidcProviderMode::Keycloak,
+            "external" => OidcProviderMode::External,
+            _ => return Err(invalid("OIDC_PROVIDER_MODE must be keycloak or external")),
+        };
+        let realm = if provider_mode == OidcProviderMode::Keycloak {
+            required(get("KEYCLOAK_REALM"), "KEYCLOAK_REALM")?
+        } else {
+            String::new()
+        };
         let ui_base = get("UI_BASE_URL").unwrap_or("http://localhost:3000");
         let ui_additional = get("UI_ALLOWED_ORIGINS")
             .or_else(|| get("UI_ADDITIONAL_BASE_URLS"))
@@ -106,17 +108,31 @@ impl AuthServiceConfig {
             .collect::<Vec<_>>();
         let ui_origins = UiOriginPolicy::new(ui_base, ui_additional)
             .map_err(|error| invalid(error.to_string()))?;
-        let issuer = get("OIDC_ISSUER_URL")
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("http://localhost:8180/realms/{realm}"));
+        let (issuer, client_id) = if provider_mode == OidcProviderMode::External {
+            (
+                required(get("OIDC_ISSUER_URL"), "OIDC_ISSUER_URL")?,
+                required(get("OIDC_CLIENT_ID"), "OIDC_CLIENT_ID")?,
+            )
+        } else {
+            (
+                get("OIDC_ISSUER_URL")
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("http://localhost:8180/realms/{realm}")),
+                get("OIDC_CLIENT_ID").unwrap_or("marty-ui").into(),
+            )
+        };
         let redirect_uri = get("OIDC_REDIRECT_URI")
             .map(str::to_owned)
             .unwrap_or_else(|| format!("{}/v1/auth/callback", ui_base.trim_end_matches('/')));
         let allowed_algorithms = list(get("OIDC_ALLOWED_ALGORITHMS").unwrap_or("RS256"));
         let oidc = OidcConfig {
+            provider_mode,
+            trusted_endpoint_origins: list(
+                get("OIDC_TRUSTED_ENDPOINT_ORIGINS").unwrap_or_default(),
+            ),
             issuer_url: issuer.clone(),
             external_issuer_url: get("OIDC_EXTERNAL_ISSUER_URL").unwrap_or(&issuer).into(),
-            client_id: get("OIDC_CLIENT_ID").unwrap_or("marty-ui").into(),
+            client_id,
             client_secret: get("OIDC_CLIENT_SECRET").map(str::to_owned),
             redirect_uri,
             scopes: list(get("OIDC_SCOPES").unwrap_or("openid,profile,email")),
@@ -183,7 +199,29 @@ impl AuthServiceConfig {
         cookie
             .validate()
             .map_err(|error| invalid(error.to_string()))?;
-        let keycloak_admin = keycloak_admin(&values, &realm)?;
+        let keycloak_admin = if provider_mode == OidcProviderMode::External {
+            if [
+                "KEYCLOAK_ADMIN_URL",
+                "MARTY_API_CLIENT_ID",
+                "MARTY_API_CLIENT_SECRET",
+            ]
+            .iter()
+            .any(|name| get(name).is_some_and(|value| !value.trim().is_empty()))
+                || boolean(get("KEYCLOAK_TOKEN_EXCHANGE_ENABLED"), false)?
+                || boolean(
+                    get("CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER"),
+                    false,
+                )?
+                || boolean(get("CREDENTIAL_LOGIN_CREATE_USERS"), false)?
+            {
+                return Err(invalid(
+                    "External OIDC cannot configure Keycloak Admin, account requirements, user creation, or token exchange",
+                ));
+            }
+            None
+        } else {
+            keycloak_admin(&values, &realm)?
+        };
         let credential_login_organization_id = required(
             get("CREDENTIAL_LOGIN_ORGANIZATION_ID").or_else(|| get("MARTY_ORG_ID")),
             "CREDENTIAL_LOGIN_ORGANIZATION_ID",
@@ -490,58 +528,20 @@ fn workload_tls(
             .map(str::trim)
             .filter(|value| !value.is_empty())
     };
-    let client_names = [
-        "GRPC_WORKLOAD_TLS_CLIENT_CERT",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION",
-    ];
-    let server_names = [
-        "GRPC_WORKLOAD_TLS_SERVER_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
-    ];
-    if values.contains_key("GRPC_WORKLOAD_TLS_CLIENT_KEY")
-        || values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY")
-    {
-        return Err(invalid("workload TLS private-key files are not supported"));
-    }
     let ca = value("GRPC_WORKLOAD_TLS_CA_CERT");
-    let parse_role =
-        |names: [&'static str; 6]| -> Result<Option<AuthWorkloadClientTlsFiles>, AuthConfigError> {
-            let configured = names.iter().filter(|name| value(name).is_some()).count();
-            if configured == 0 {
-                return Ok(None);
-            }
-            if configured != names.len() || ca.is_none() {
-                return Err(invalid(format!(
-                    "{} requires public certificate, CA and remote KMS identity",
-                    names[0]
-                )));
-            }
-            let version = value(names[5])
-                .unwrap_or_default()
-                .parse::<u32>()
-                .ok()
-                .filter(|version| *version > 0)
-                .ok_or_else(|| invalid(format!("{} is invalid", names[5])))?;
-            Ok(Some(AuthWorkloadClientTlsFiles {
-                ca_certificate: PathBuf::from(ca.unwrap_or_default()),
-                certificate: PathBuf::from(value(names[0]).unwrap_or_default()),
-                kms_endpoint: value(names[1]).unwrap_or_default().into(),
-                kms_ca_certificate: PathBuf::from(value(names[2]).unwrap_or_default()),
-                kms_token_file: PathBuf::from(value(names[3]).unwrap_or_default()),
-                kms_key_name: value(names[4]).unwrap_or_default().into(),
-                kms_key_version: version,
-            }))
-        };
-    let client = parse_role(client_names)?;
-    let server = parse_role(server_names)?;
+    let parse_role = |prefix: &str| {
+        AuthWorkloadClientTlsFiles::from_values(
+            |name| values.get(name).map(String::as_str),
+            marty_service_runtime::TlsIdentityNames::new(prefix),
+            "GRPC_WORKLOAD_TLS_CA_CERT",
+            false,
+            std::time::Duration::from_secs(10),
+            64,
+        )
+        .map_err(invalid)
+    };
+    let client = parse_role("GRPC_WORKLOAD_TLS_CLIENT")?;
+    let server = parse_role("GRPC_WORKLOAD_TLS_SERVER")?;
     if ca.is_some() && client.is_none() && server.is_none() {
         return Err(invalid("workload TLS CA requires a remote identity"));
     }

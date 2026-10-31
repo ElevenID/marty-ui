@@ -142,6 +142,11 @@ def test_tls_env_fragment_is_exact_and_drift_fails_closed(tmp_path: Path) -> Non
     compose = root / "docker-compose.yml"
     original_example = example.read_text(encoding="ascii")
     original_compose = compose.read_text(encoding="ascii")
+    compose.write_text(original_compose.replace(
+        "GATEWAY_TLS_KMS_KEY_NAME:-}", "GATEWAY_TLS_KMS_KEY_NAME:?required}"
+    ), encoding="ascii")
+    assert stage.render_tls_env_fragment(root, key_metadata()) == fragment
+    compose.write_text(original_compose, encoding="ascii")
     mutations = (
         (example, original_example + "\nGATEWAY_TLS_KMS_KEY_NAME=duplicate\n"),
         (example, original_example.replace("GATEWAY_TLS_KMS_KEY_VERSION=1",
@@ -156,10 +161,14 @@ def test_tls_env_fragment_is_exact_and_drift_fails_closed(tmp_path: Path) -> Non
             "AUTH_TLS_KMS_KEY_NAME=workload-tls-auth-client",
             "AUTH_TLS_KMS_KEY_NAME=workload-tls-gateway-auth-client",
         )),
-        (compose, original_compose.replace("${GATEWAY_TLS_KMS_KEY_NAME:?",
-                                            "${UNLISTED_TLS_KMS_KEY_NAME:?", 1)),
-        (compose, original_compose.replace("${GATEWAY_TLS_KMS_KEY_NAME:?",
-                                            "${GATEWAY_TLS_KMS_KEY_VERSION:?", 1)),
+        (compose, original_compose.replace("${GATEWAY_TLS_KMS_KEY_NAME:-}",
+                                            "${UNLISTED_TLS_KMS_KEY_NAME:-}", 1)),
+        (compose, original_compose.replace("${GATEWAY_TLS_KMS_KEY_NAME:-}",
+                                            "${GATEWAY_TLS_KMS_KEY_VERSION:-}", 1)),
+        (compose, original_compose.replace("${GATEWAY_TLS_KMS_KEY_NAME:-}",
+                                            "${GATEWAY_TLS_KMS_KEY_NAME}", 1)),
+        (compose, original_compose.replace("${GATEWAY_TLS_KMS_KEY_NAME:-}",
+                                            "${GATEWAY_TLS_KMS_KEY_NAME:-other}", 1)),
         (compose, original_compose + "\nx-drift: ${EXTRA_TLS_KMS_KEY_NAME:-other}\n"),
     )
     for path, changed in mutations:

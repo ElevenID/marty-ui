@@ -162,9 +162,10 @@ fn render_text(example: &str, compose: &str) -> Result<String> {
     let assignment =
         regex::Regex::new(r"\A([A-Z][A-Z0-9_]*_TLS_KMS_KEY_(?:NAME|VERSION))=([^\r\n]*)\z")
             .unwrap();
-    let required =
-        regex::Regex::new(r"\A\$\{([A-Z][A-Z0-9_]*_TLS_KMS_KEY_(?:NAME|VERSION)):\?[^}]*\}\z")
-            .unwrap();
+    let required = regex::Regex::new(
+        r"\A\$\{([A-Z][A-Z0-9_]*_TLS_KMS_KEY_(?:NAME|VERSION)):(?:\?[^}]*|-)\}\z",
+    )
+    .unwrap();
     let variables = regex::Regex::new(r"\$\{[^}]*\}").unwrap();
     let mut values = BTreeMap::new();
     for line in example
@@ -553,12 +554,23 @@ mod tests {
     #[test]
     fn shipped_wiring_accepts_actual_files_and_refuses_swaps_and_weak_references() {
         let example = include_str!("../../../../.env.selfhost.production.example");
-        // Source of the rendered bundle's docker-compose.yml; its KMS required
+        // Source of the rendered bundle's docker-compose.yml; its explicit
         // substitutions survive the packager's no-interpolate rendering.
         let compose = include_str!("../../../../docker-compose.selfhost.prod.yml");
         let fragment = render_text(example, compose).unwrap();
         assert_eq!(fragment.lines().count(), 32);
         assert!(fragment.contains("GATEWAY_TLS_KMS_KEY_NAME=workload-tls-gateway-auth-client\n"));
+        assert_eq!(
+            render_text(
+                example,
+                &compose.replace(
+                    "GATEWAY_TLS_KMS_KEY_NAME:-}",
+                    "GATEWAY_TLS_KMS_KEY_NAME:?required}"
+                )
+            )
+            .unwrap(),
+            fragment
+        );
         assert!(render_text(
             &example.replace(
                 "GATEWAY_TLS_KMS_KEY_NAME=workload-tls-gateway-auth-client",
@@ -569,7 +581,15 @@ mod tests {
         .is_err());
         assert!(render_text(
             example,
-            &compose.replace("GATEWAY_TLS_KMS_KEY_NAME:?", "GATEWAY_TLS_KMS_KEY_NAME:-")
+            &compose.replace("GATEWAY_TLS_KMS_KEY_NAME:-}", "GATEWAY_TLS_KMS_KEY_NAME}")
+        )
+        .is_err());
+        assert!(render_text(
+            example,
+            &compose.replace(
+                "GATEWAY_TLS_KMS_KEY_NAME:-}",
+                "GATEWAY_TLS_KMS_KEY_NAME:-other}"
+            )
         )
         .is_err());
         assert!(render_text(

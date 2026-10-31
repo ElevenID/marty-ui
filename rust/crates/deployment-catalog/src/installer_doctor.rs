@@ -146,7 +146,7 @@ fn validate_saved(
 pub(crate) fn load_session(state: &LockedInspection, installation: &Path) -> Result<SavedSession> {
     state.require_path_binding(installation)?;
     let session_bytes = state.diagnostic_record(SESSION_RECORD, true)?;
-    let (saved, records) = if let Some(bytes) = &session_bytes {
+    let (mut saved, mut records) = if let Some(bytes) = &session_bytes {
         let saved: SavedSession =
             serde_json::from_value(crate::installer_json::decode(bytes).map_err(|_| REFUSED)?)
                 .map_err(|_| REFUSED)?;
@@ -190,6 +190,20 @@ pub(crate) fn load_session(state: &LockedInspection, installation: &Path) -> Res
         binding,
         &approved_images,
     )?;
+    if let Some(original) = &session_bytes {
+        let (extended, extensions) =
+            crate::installer_foundation_registration::extend_session(state, original, saved)?;
+        saved = extended;
+        records.extend(extensions);
+        validate_saved(
+            &saved,
+            installation,
+            &journal.installation_id().to_string(),
+            &journal.compose_project(),
+            binding,
+            &approved_images,
+        )?;
+    }
     installer_compose::verify_input_files(installation, &saved.receipt.input_files)?;
     for (name, bytes) in records {
         require(bytes == state.read_evidence(name)?)?;

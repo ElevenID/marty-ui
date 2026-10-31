@@ -1614,7 +1614,7 @@ impl ComposeSession {
                     .is_match(&inputs.project)
                 && !inputs.files.is_empty()
                 && inputs.files.len() <= 8
-                && inputs.bound_inputs.len() <= 8
+                && inputs.bound_inputs.len() <= 16
                 && inputs.profiles.len() <= 8
                 && inputs.profiles.iter().all(|v| name(v))
                 && inputs.services.len() <= 96
@@ -1634,6 +1634,7 @@ impl ComposeSession {
                 inputs.project == journal.compose_project() && journal.runtime() == Some(binding),
             )?;
         }
+        let foundation = crate::installer_foundation::for_inputs(&inputs)?;
         for root in inputs
             .writable_bind_roots
             .iter()
@@ -1641,7 +1642,15 @@ impl ComposeSession {
         {
             require(
                 clean_path(root)
-                    && root.starts_with(&inputs.installation)
+                    && (root.starts_with(&inputs.installation)
+                        || (inputs.readonly_bind_roots.contains(root)
+                            && !inputs.writable_bind_roots.contains(root)
+                            && foundation.as_ref().is_some_and(|selection| {
+                                selection
+                                    .identities
+                                    .values()
+                                    .any(|identity| &identity.projection.directory == root)
+                            })))
                     && root != &inputs.installation,
             )?;
         }
@@ -1705,6 +1714,9 @@ impl ComposeSession {
         )?;
         let model: Value = serde_json::from_str(&output).map_err(|_| REFUSED)?;
         admit_model(&model, &session.inputs)?;
+        if let Some(foundation) = foundation {
+            foundation.validate_model(&model)?;
+        }
         if cleanup_only {
             validate_failed_runtime_cleanup(session.inputs.prior.as_ref().ok_or(REFUSED)?, &model)?;
         }
@@ -1737,6 +1749,11 @@ impl ComposeSession {
     }
     fn recheck(&self) -> Result<()> {
         verify_input_files(&self.inputs.installation, &self.bindings)?;
+        if let Some(foundation) = crate::installer_foundation::for_inputs(&self.inputs)? {
+            if !self.model.is_null() {
+                foundation.validate_model(&self.model)?;
+            }
+        }
         #[cfg(feature = "installer-development")]
         if let Some(image) = &self.inputs.development_image {
             let journal =

@@ -47,6 +47,8 @@ use crate::{
 pub enum CanvasManagementRepositoryError {
     #[error("Canvas management repository is unavailable")]
     Unavailable,
+    #[error("The configured KMS cannot encrypt this integration secret")]
+    SecretCapabilityUnavailable,
     #[error("Canvas platform already exists")]
     Duplicate,
     #[error("Canvas platform configuration changed")]
@@ -95,6 +97,8 @@ pub enum CanvasPlatformManagementError {
     Conflict,
     #[error("Canvas platform repository is unavailable")]
     RepositoryUnavailable,
+    #[error("The configured KMS cannot encrypt this integration secret")]
+    SecretCapabilityUnavailable,
     #[error("Canvas program binding not found")]
     BindingNotFound,
     #[error("Canvas readiness dependencies are not configured")]
@@ -1598,6 +1602,9 @@ fn map_repository_error(error: CanvasManagementRepositoryError) -> CanvasPlatfor
         }
         CanvasManagementRepositoryError::Unavailable => {
             CanvasPlatformManagementError::RepositoryUnavailable
+        }
+        CanvasManagementRepositoryError::SecretCapabilityUnavailable => {
+            CanvasPlatformManagementError::SecretCapabilityUnavailable
         }
     }
 }

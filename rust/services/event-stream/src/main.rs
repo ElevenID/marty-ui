@@ -2,7 +2,6 @@ use marty_event_stream::{
     bus::EventBus, config::Config, grpc::EventStreamGrpc, http,
     proto::event_stream_service_server::EventStreamServiceServer,
 };
-use mmf_platform::OpenBaoTlsIdentityFiles;
 use std::{future::Future, pin::Pin, time::Duration};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
@@ -55,18 +54,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let grpc_listener = TcpListener::bind(config.grpc_addr).await?;
         let tls_acceptor = if let Some(files) = &config.grpc_server_tls {
             Some(
-                OpenBaoTlsIdentityFiles {
-                    certificate_chain_file: files.certificate.clone(),
-                    kms_ca_cert_file: files.kms_ca_certificate.clone(),
-                    kms_endpoint: files.kms_endpoint.clone(),
-                    kms_token_file: files.kms_token_file.clone(),
-                    kms_key_name: files.kms_key_name.clone(),
-                    kms_key_version: files.kms_key_version,
-                    request_timeout: Duration::from_secs(10),
-                    max_concurrent_signs: 64,
-                }
-                .grpc_acceptor_without_client_auth(64, Duration::from_secs(15))
-                .await?,
+                files
+                    .grpc_acceptor_without_client_auth(64, Duration::from_secs(15))
+                    .await?,
             )
         } else {
             None

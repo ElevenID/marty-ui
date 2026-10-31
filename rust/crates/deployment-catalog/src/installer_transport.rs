@@ -86,22 +86,8 @@ pub(crate) fn client(trust: &TrustInfo, timeout: Duration) -> Result<reqwest::Cl
     {
         return Err("invalid bound HTTPS origin or certificate".into());
     }
-    let mut roots = rustls::RootCertStore::empty();
-    for certificate in CertificateDer::pem_slice_iter(trust.ca_certificate_pem.as_bytes()) {
-        roots
-            .add(certificate.map_err(|_| "invalid bound HTTPS CA")?)
-            .map_err(|_| "invalid bound HTTPS CA")?;
-    }
-    if roots.is_empty() {
-        return Err("invalid bound HTTPS CA".into());
-    }
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let verifier = rustls::client::WebPkiServerVerifier::builder_with_provider(
-        Arc::new(roots),
-        provider.clone(),
-    )
-    .build()
-    .map_err(|_| "bound HTTPS verifier unavailable")?;
+    let verifier = verifier(trust.ca_certificate_pem.as_bytes(), provider.clone())?;
     let tls = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .map_err(|_| "bound HTTPS verifier unavailable")?
@@ -123,4 +109,44 @@ pub(crate) fn client(trust: &TrustInfo, timeout: Duration) -> Result<reqwest::Cl
         .timeout(timeout)
         .build()
         .map_err(|_| "bound HTTPS transport unavailable".into())
+}
+
+fn verifier(
+    ca: &[u8],
+    provider: Arc<rustls::crypto::CryptoProvider>,
+) -> Result<Arc<rustls::client::WebPkiServerVerifier>, String> {
+    let mut roots = rustls::RootCertStore::empty();
+    for certificate in CertificateDer::pem_slice_iter(ca) {
+        roots
+            .add(certificate.map_err(|_| "invalid bound HTTPS CA")?)
+            .map_err(|_| "invalid bound HTTPS CA")?;
+    }
+    if roots.is_empty() {
+        return Err("invalid bound HTTPS CA".into());
+    }
+    rustls::client::WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider)
+        .build()
+        .map_err(|_| "bound HTTPS verifier unavailable".into())
+}
+
+/// Admission uses exactly the public chain, name and usage checks that the
+/// authenticated HTTP transport will repeat before sending any credential.
+pub(crate) fn validate_server_chain(
+    ca: &[u8],
+    chain: &[CertificateDer<'_>],
+    now: UnixTime,
+) -> Result<(), String> {
+    let (leaf, intermediates) = chain
+        .split_first()
+        .ok_or("bound HTTPS certificate absent")?;
+    verifier(ca, Arc::new(rustls::crypto::aws_lc_rs::default_provider()))?
+        .verify_server_cert(
+            leaf,
+            intermediates,
+            &ServerName::try_from("localhost").map_err(|_| "invalid bound HTTPS name")?,
+            &[],
+            now,
+        )
+        .map_err(|_| "bound HTTPS certificate chain, name or usage is invalid")?;
+    Ok(())
 }
