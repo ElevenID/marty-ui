@@ -94,6 +94,7 @@ describe('KeyManagementServiceWizard', () => {
     mockUpdateKeyManagementConfig.mockResolvedValue({ ok: true })
     mockValidateKeyManagementService.mockResolvedValue({
       ok: true,
+      basis: 'live',
       checks: [
         {
           name: 'Provider connectivity',
@@ -221,6 +222,48 @@ describe('KeyManagementServiceWizard', () => {
     expect(screen.getByText(/create or verify the signing key in the KMS provider you just registered/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Create issuer identity' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Use managed OpenBao key creation' })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    {
+      name: 'legacy warning-only success without a basis',
+      validation: {
+        ok: true,
+        checks: [{ name: 'Provider connectivity', status: 'warning', detail: 'Live probe failed.' }],
+      },
+    },
+    { name: 'configuration-only success', validation: { ok: true, basis: 'configuration' } },
+    { name: 'unknown basis', validation: { ok: true, basis: 'unknown' } },
+    { name: 'null basis', validation: { ok: true, basis: null } },
+    { name: 'array basis', validation: { ok: true, basis: ['live'] } },
+    { name: 'object basis', validation: { ok: true, basis: { type: 'live' } } },
+    { name: 'non-boolean success', validation: { ok: 'true', basis: 'live' } },
+  ])('does not save or complete registration after $name', async ({ validation }) => {
+    mockValidateKeyManagementService.mockResolvedValueOnce(validation)
+    const { user } = renderWithRouter(<KeyManagementServiceWizard />, {
+      initialEntries: ['/console/org/deploy/signing-keys/services/new'],
+    })
+    await screen.findByText('Choose a key management service')
+    await user.click(screen.getByText('AWS KMS'))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.type(screen.getByRole('textbox', { name: /service name/i }), 'Existing AWS signer')
+    await user.type(screen.getByRole('textbox', { name: /region \/ location/i }), 'us-west-2')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.type(screen.getByRole('textbox', { name: /key arn/i }), 'arn:aws:kms:us-west-2:123456789012:key/abc')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.click(screen.getByRole('button', { name: 'Register service' }))
+
+    await screen.findByText('Key management service validation failed. Review the checks before registering.')
+    expect(mockValidateKeyManagementService).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: 'org-123',
+      live_probe: true,
+    }))
+    expect(mockUpdateKeyManagementConfig).not.toHaveBeenCalled()
+    expect(mockShowNotification).not.toHaveBeenCalled()
+    expect(screen.queryByText('Signing service registered')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Create issuer identity' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Review' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Register service' })).toBeEnabled()
   })
 
   it('submits structured AWS credentials without exposing them in review', async () => {
