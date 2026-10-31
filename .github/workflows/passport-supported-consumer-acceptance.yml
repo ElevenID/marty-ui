@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Inspect dedicated Passport runner before preparing tools
         run: python3 scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
       - name: Prepare read-only Rust Passport model policy
@@ -105,7 +105,7 @@ jobs:
             and .status == "accepted"' "$report"
       - name: Upload blocked supported consumer receipt
         if: always() && (steps.collect.outcome == 'success' || steps.collect.outcome == 'failure')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: passport-supported-consumer-acceptance-${{ github.run_id }}
           path: passport-supported-consumer-acceptance-${{ github.run_id }}.json
