@@ -281,8 +281,22 @@ def assert_models(approved, actual, *, interpolated=False):
     """Check the complete current KMS-only model against its reviewed snapshot."""
     expected = deepcopy(approved)
     # Keep the approved snapshot and its hash frozen. Admit only the exact
-    # memory ceilings and Keycloak heap setting reviewed for this change;
+    # hosting separation, memory ceilings and Keycloak heap setting reviewed;
     # the whole-model comparison below still rejects every other drift.
+    # Synthetic interpolation uses the default profile; Compose omits the two
+    # beta-tunnel services and their unused secret before this comparison.
+    connector_services = ("cloudflared",) if interpolated else (
+        "cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"
+    )
+    connector_secrets = ("cloudflare_tunnel_token",) if interpolated else (
+        "cloudflare_tunnel_token", "cloudflare_beta_tunnel_token"
+    )
+    for name in connector_services:
+        assert name in expected["services"]
+        del expected["services"][name]
+    for name in connector_secrets:
+        assert name in expected["secrets"]
+        del expected["secrets"][name]
     one_gib = {
         "postgres",
         "db-migrate",
@@ -310,6 +324,11 @@ def assert_models(approved, actual, *, interpolated=False):
     assert "JAVA_OPTS_KC_HEAP" not in expected["services"]["keycloak"]["environment"]
     expected["services"]["keycloak"]["environment"]["JAVA_OPTS_KC_HEAP"] = (
         "-XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=65"
+    )
+    gateway_environment = expected["services"]["gateway"]["environment"]
+    assert "GATEWAY_OBSERVE_CLIENT_IP" not in gateway_environment
+    gateway_environment["GATEWAY_OBSERVE_CLIENT_IP"] = (
+        "true" if interpolated else "${GATEWAY_OBSERVE_CLIENT_IP:-true}"
     )
     if not interpolated:
         apply_foundation_reference_representation(expected)
