@@ -65,6 +65,19 @@ fn validate_saved(
     approved_images: &BTreeSet<String>,
 ) -> Result<()> {
     let receipt = &saved.receipt;
+    #[cfg(feature = "installer-development")]
+    if let Some(image) = &saved.inputs.development_image {
+        image.require_inputs(&saved.inputs)?;
+        let services = saved.model["services"].as_object().ok_or(REFUSED)?;
+        require(
+            services.contains_key(crate::installer_development_image::ROLE)
+                && services.iter().all(|(role, service)| {
+                    service["image"]
+                        .as_str()
+                        .is_some_and(|reference| saved.inputs.permits_image(role, reference))
+                }),
+        )?;
+    }
     require(
         [
             "elevenid.installer-compose-session/v1",
@@ -112,7 +125,7 @@ fn validate_saved(
                     && container.service == *role
                     && identifier(&container.id)
                     && identifier(&container.config_hash)
-                    && approved_images.contains(&container.image)
+                    && saved.inputs.permits_image(role, &container.image)
             })
             && resources.networks.values().all(|id| identifier(id)),
     )?;
@@ -157,7 +170,18 @@ pub(crate) fn load_session(state: &LockedInspection, installation: &Path) -> Res
     )?;
     let binding = journal.runtime().ok_or(REFUSED)?;
     binding.validate()?;
-    let approved_images = inventory.images.values().cloned().collect();
+    let approved_images = inventory.images.values().cloned().collect::<BTreeSet<_>>();
+    #[cfg(feature = "installer-development")]
+    let approved_images = {
+        let mut images = approved_images;
+        let development = crate::installer_development_image::load(state)?;
+        require(development == saved.inputs.development_image)?;
+        if let Some(image) = development {
+            image.require_inputs(&saved.inputs)?;
+            images.insert(image.image_id);
+        }
+        images
+    };
     validate_saved(
         &saved,
         installation,
@@ -542,6 +566,8 @@ mod tests {
                 .values()
                 .map(|c| c.image.clone())
                 .collect(),
+            #[cfg(feature = "installer-development")]
+            development_image: None,
             writable_bind_roots: BTreeSet::new(),
             readonly_bind_roots: BTreeSet::new(),
             allowed_loopback_ports: BTreeSet::new(),
@@ -626,5 +652,87 @@ mod tests {
         let mut value = serde_json::to_value(saved).unwrap();
         value["receipt"]["unreviewed_create_id"] = json!("a".repeat(64));
         assert!(serde_json::from_value::<SavedSession>(value).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "installer-development")]
+    fn development_saved_session_keeps_exact_layer_role_and_native_identity() {
+        let (mut saved, binding) = saved_fixture();
+        let image = crate::installer_development_image::test_fixture();
+        image.bind_inputs(&mut saved.inputs).unwrap();
+        saved.model["services"]["signing-keys"] = json!({"image":image.image_id});
+        let mut resource = saved.receipt.resources.as_ref().unwrap().containers["worker"].clone();
+        resource.id = "f".repeat(64);
+        resource.service = "signing-keys".into();
+        resource.image = image.image_id.clone();
+        saved
+            .receipt
+            .resources
+            .as_mut()
+            .unwrap()
+            .containers
+            .insert("signing-keys".into(), resource);
+        for file in saved.inputs.files.iter().chain(&saved.inputs.bound_inputs) {
+            saved
+                .receipt
+                .input_files
+                .insert(file.path.clone(), file.sha256.clone());
+        }
+        let seal = |candidate: &mut SavedSession| {
+            candidate.configuration_sha256 =
+                installer_compose::model_sha256(&candidate.model).unwrap();
+            candidate.receipt.configuration_sha256 = candidate.configuration_sha256.clone();
+            candidate.inputs.prior = Some(candidate.receipt.clone());
+        };
+        seal(&mut saved);
+        let approved = saved.inputs.approved_images.clone();
+        let check = |candidate: &SavedSession| {
+            validate_saved(
+                candidate,
+                Path::new("/private/install"),
+                "installation",
+                "marty-install-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                &binding,
+                &approved,
+            )
+        };
+        check(&saved).unwrap();
+        for mutation in 0..4 {
+            let mut changed = saved.clone();
+            match mutation {
+                0 => {
+                    changed.inputs.files.pop();
+                }
+                1 => changed.model["services"]["worker"]["image"] = json!(image.image_id),
+                2 => {
+                    changed.model["services"]["signing-keys"]["image"] =
+                        saved.model["services"]["worker"]["image"].clone()
+                }
+                _ => {
+                    changed
+                        .receipt
+                        .resources
+                        .as_mut()
+                        .unwrap()
+                        .containers
+                        .get_mut("worker")
+                        .unwrap()
+                        .image = image.image_id.clone()
+                }
+            }
+            seal(&mut changed);
+            assert!(check(&changed).is_err(), "mutation {mutation}");
+        }
+        // A finite partial start retains exactly the same binding; missing
+        // containers do not turn its planned development role into another image.
+        saved
+            .receipt
+            .resources
+            .as_mut()
+            .unwrap()
+            .containers
+            .remove("signing-keys");
+        seal(&mut saved);
+        check(&saved).unwrap();
     }
 }

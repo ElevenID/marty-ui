@@ -2270,6 +2270,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
         "rust/services/event-stream/Dockerfile": ".dockerignore",
         "rust/services/revocation-profile/Dockerfile": ".dockerignore",
+        "rust/services/signing-keys/Dockerfile": ".dockerignore",
     }
     assert copying_contracts == set(image_contexts), (
         "Review every image context that copies contracts before narrowing this gate"
@@ -2301,6 +2302,31 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
                 line.startswith("!contracts")
                 for line in lines[lines.index(exclusion) + 1 :]
             ), f"Later rule re-includes {exclusion} in {ignore_path}"
+    # Embedded production contracts retain the existing Signing Keys image
+    # owner; reviewing another COPY context must not select unrelated gates.
+    images = workflow["jobs"]["test-rust-service-images"]
+    assert images["if"] == "needs.changes.outputs.rust_runtime == 'true'"
+    signing_image = next(
+        step for step in images["steps"] if step.get("name") == "Build signing-keys image"
+    )
+    assert signing_image["with"]["target"] == "signing_keys"
+    compiler_inputs = [
+        "rust/services/signing-keys/Dockerfile",
+        "contracts/python-text-semantics.json",
+        "contracts/issuer-identity-capabilities-response.json",
+        "contracts/issuer-identity-inspection-response.json",
+    ]
+    assert all((ROOT / path).is_file() for path in compiler_inputs)
+    for selected in _classify_changed_paths(
+        compiler_inputs, tmp_path, include_rust_plan=True
+    ):
+        assert selected == {
+            "all": "false", "ui": "false", "python": "false",
+            "rust": "true", "rust_runtime": "true",
+            "rust_matrix": '["canvas","contracts","selfhost"]',
+            "openbao": "false", "release": "false",
+            "verification": "false", "security": "false",
+        }
     python_only_input_records = {
         "contracts/canvas-worker-provider-recovery-current-inputs.json",
     }

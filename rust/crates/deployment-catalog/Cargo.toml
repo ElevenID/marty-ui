@@ -7,6 +7,11 @@ rust-version.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = []
+# Only the opted-in fresh installer harness can create this unsigned scope.
+installer-development = []
+
 [dependencies]
 marty-managed-key-reference = { path = "../managed-key-reference" }
 marty-selfhost-identity = { path = "../selfhost-identity" }

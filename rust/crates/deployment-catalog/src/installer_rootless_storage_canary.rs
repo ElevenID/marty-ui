@@ -1499,6 +1499,15 @@ fn require_verified_scope(view: &LockedInspection, operator_sha: &str) -> Result
                 && scope.build_run_id == inventory.build_run_id
                 && scope.build_run_attempt == inventory.build_run_attempt,
         ),
+        #[cfg(feature = "installer-development")]
+        ExecutionScope::UnsignedDevelopment(scope) => {
+            require(
+                scope.fixture.inventory_sha256 == sha(&bytes)
+                    && scope.fixture.build_run_id == inventory.build_run_id
+                    && scope.fixture.build_run_attempt == inventory.build_run_attempt,
+            )?;
+            require(crate::installer_development_image::load(view)?.is_some())
+        }
         ExecutionScope::Unclassified => {
             let admission = crate::installer_release::parse_admission(
                 &view.read_evidence("installer-admission.json")?,
@@ -1523,10 +1532,17 @@ pub(crate) fn qualify_candidate(
     inventory: &crate::installer_release::Inventory,
     operator_sha: &str,
 ) -> Result<()> {
-    require(matches!(
+    let allowed = matches!(
         state.journal().execution_scope(),
         ExecutionScope::CandidateTest(_)
-    ))?;
+    );
+    #[cfg(feature = "installer-development")]
+    let allowed = allowed
+        || matches!(
+            state.journal().execution_scope(),
+            ExecutionScope::UnsignedDevelopment(_)
+        );
+    require(allowed)?;
     qualify_installation(dockerpath, installation, state, inventory, operator_sha)
 }
 

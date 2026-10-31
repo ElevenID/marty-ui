@@ -172,6 +172,8 @@ impl Fixture {
             profiles: profiles.iter().map(|s| (*s).into()).collect(),
             services: services.iter().map(|s| (*s).into()).collect(),
             approved_images: BTreeSet::from([self.image.clone()]),
+            #[cfg(feature = "installer-development")]
+            development_image: None,
             writable_bind_roots: BTreeSet::from([self.path.join("state")]),
             readonly_bind_roots: BTreeSet::new(),
             allowed_loopback_ports: BTreeSet::new(),

@@ -315,6 +315,48 @@ fn actual_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart
     let bootstrap = layer_root.join("compose.bootstrap.yml");
     let installer = layer_root.join("compose.installer.yml");
     let runtime = layer_root.join("compose.runtime.yml");
+    #[cfg(feature = "installer-development")]
+    let development = std::env::var_os("MARTY_INSTALLER_DEVELOPMENT_IMAGE_LAYER").map(|path| {
+        let path = PathBuf::from(path);
+        assert!(path.is_absolute());
+        let image = std::env::var("MARTY_INSTALLER_DEVELOPMENT_IMAGE_ID")
+            .expect("bound development image ID");
+        assert!(image
+            .strip_prefix("sha256:")
+            .is_some_and(|value| value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))));
+        let layer: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            layer,
+            serde_json::json!({"services":{"signing-keys":{"image":image,"pull_policy":"never"}}})
+        );
+        (path, image)
+    });
+    #[cfg(feature = "installer-development")]
+    let config = |executable: &OsString,
+                  root: &Path,
+                  files: &[PathBuf],
+                  env: &Path,
+                  profiles: &[&str],
+                  services: &[&str]| {
+        let original = config(executable, root, files, env, profiles, services);
+        let Some((layer, image)) = &development else {
+            return original;
+        };
+        let mut selected = files.to_vec();
+        selected.push(layer.clone());
+        let actual = config(executable, root, &selected, env, profiles, services);
+        let mut expected = original;
+        expected["services"]["signing-keys"]["image"] = Value::String(image.clone());
+        expected["services"]["signing-keys"]["pull_policy"] = Value::String("never".into());
+        assert_eq!(
+            actual, expected,
+            "the development layer may select only the Signing Keys image"
+        );
+        actual
+    };
     let install = config(
         &executable,
         &bundle,
@@ -346,13 +388,22 @@ fn actual_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart
             "{dependent} requires {dependency}"
         );
     }
-    for service in services.values() {
+    for (role, service) in services {
         assert_eq!(service["init"], true);
         assert_eq!(
             service["security_opt"],
             serde_json::json!(["no-new-privileges:true"])
         );
-        assert!(service["image"].as_str().unwrap().contains("@sha256:"));
+        #[cfg(feature = "installer-development")]
+        let development_role = development
+            .as_ref()
+            .is_some_and(|(_, image)| role == "signing-keys" && service["image"] == *image);
+        #[cfg(not(feature = "installer-development"))]
+        let development_role = {
+            let _ = role;
+            false
+        };
+        assert!(development_role || service["image"].as_str().unwrap().contains("@sha256:"));
         for mount in service["volumes"]
             .as_array()
             .into_iter()
@@ -497,4 +548,8 @@ fn actual_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart
         restarted["canvas-sync-worker"]["depends_on"]["signing-keys"]["condition"],
         "service_healthy"
     );
+    #[cfg(feature = "installer-development")]
+    if let Some((_, image)) = development {
+        println!("\nUNSIGNED_SIGNING_IMAGE_PARSED={image}");
+    }
 }
