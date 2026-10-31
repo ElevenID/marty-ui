@@ -386,8 +386,13 @@ async fn register(api: &mut impl RegistryApi, plan: &RegistrationPlan) -> Result
                 None,
             )
             .await?;
-        if result.document["ok"] != true {
-            return Err("KMS provider validation failed; the registry was not changed".into());
+        // Older validators could report success after a failed live probe with
+        // only warnings. Registration requires an explicit successful live result.
+        if result.document["ok"] != true || result.document["basis"] != "live" {
+            return Err(
+                "Successful live KMS provider validation is required; the registry was not changed"
+                    .into(),
+            );
         }
     }
     let changed = requested != writable_registry(&original.document)?;

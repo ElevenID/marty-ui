@@ -297,7 +297,7 @@ const KeyManagementServiceWizard = () => {
       live_probe: true,
     });
     setPreflightChecks(Array.isArray(validation?.checks) ? validation.checks : []);
-    if (validation?.ok !== true) {
+    if (validation?.ok !== true || validation?.basis !== 'live') {
       throw new Error('Key management service validation failed. Review the checks before registering.');
     }
     await signingKeysApi.updateKeyManagementConfig({

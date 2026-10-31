@@ -176,7 +176,7 @@ async fn registration_uses_public_console_paths_one_conditional_write_and_readba
         calls: Vec::new(),
         responses: VecDeque::from([
             response(existing, Some(REVISION)),
-            response(json!({"ok":true}), None),
+            response(json!({"ok":true,"basis":"live"}), None),
             response(saved.clone(), Some(NEW_REVISION)),
             response(saved.clone(), Some(NEW_REVISION)),
         ]),
@@ -212,7 +212,7 @@ async fn rerun_validates_and_reads_without_a_second_write() {
         calls: Vec::new(),
         responses: VecDeque::from([
             response(saved.clone(), Some(REVISION)),
-            response(json!({"ok":true}), None),
+            response(json!({"ok":true,"basis":"live"}), None),
             response(saved, Some(REVISION)),
         ]),
     };
@@ -240,7 +240,7 @@ async fn rerun_accepts_reordered_binding_purposes_without_writing_but_rejects_ch
         saved["key_reference_purposes"]["aws-a"][&plan.services[0].key_reference] = purposes;
         let mut responses = VecDeque::from([response(saved.clone(), Some(REVISION))]);
         if valid {
-            responses.push_back(response(json!({"ok":true}), None));
+            responses.push_back(response(json!({"ok":true,"basis":"live"}), None));
             responses.push_back(response(saved, Some(REVISION)));
         }
         let mut api = Api {
@@ -269,7 +269,7 @@ async fn rerun_validates_saved_runtime_settings_and_rejects_failed_endpoint_prob
         validation["live_probe"] = json!(true);
         let mut responses = VecDeque::from([
             response(saved.clone(), Some(REVISION)),
-            response(json!({"ok":valid}), None),
+            response(json!({"ok":valid,"basis":"live"}), None),
         ]);
         if valid {
             responses.push_back(response(saved, Some(REVISION)));
@@ -291,7 +291,7 @@ async fn validation_failure_or_revision_conflict_never_retries_a_write() {
     for conflict in [false, true] {
         let mut responses = VecDeque::from([
             response(registry(), Some(REVISION)),
-            response(json!({"ok":conflict}), None),
+            response(json!({"ok":conflict,"basis":"live"}), None),
         ]);
         if conflict {
             responses.push_back(Err("KMS registry changed".into()));
@@ -313,6 +313,65 @@ async fn validation_failure_or_revision_conflict_never_retries_a_write() {
 }
 
 #[tokio::test]
+async fn registration_and_rerun_require_explicit_successful_live_validation() {
+    let validation_results = [
+        (
+            "legacy warned failure",
+            json!({"ok":true,"checks":[{
+                "name":"Provider connectivity","status":"warning",
+                "detail":"Adapter live validation failed unexpectedly.","source":"adapter"
+            }]}),
+        ),
+        (
+            "configuration only",
+            json!({"ok":true,"basis":"configuration"}),
+        ),
+        ("unknown basis", json!({"ok":true,"basis":"unknown"})),
+        ("null basis", json!({"ok":true,"basis":null})),
+        ("boolean basis", json!({"ok":true,"basis":true})),
+        ("array basis", json!({"ok":true,"basis":["live"]})),
+        ("object basis", json!({"ok":true,"basis":{"live":true}})),
+        ("padded basis", json!({"ok":true,"basis":"live "})),
+        ("failed live probe", json!({"ok":false,"basis":"live"})),
+        ("nonboolean success", json!({"ok":"true","basis":"live"})),
+        ("missing success", json!({"basis":"live"})),
+    ];
+    let plan = plan();
+    for rerun in [false, true] {
+        let original = if rerun {
+            add_registrations(&registry(), &plan).unwrap().0
+        } else {
+            registry()
+        };
+        for (case, validation) in &validation_results {
+            let mut api = Api {
+                calls: Vec::new(),
+                responses: VecDeque::from([
+                    response(original.clone(), Some(REVISION)),
+                    response(validation.clone(), None),
+                ]),
+            };
+            assert!(
+                register(&mut api, &plan).await.is_err(),
+                "{case} must not complete registration (rerun={rerun})"
+            );
+            assert_eq!(
+                api.calls
+                    .iter()
+                    .map(|call| (call.method.as_str(), call.path))
+                    .collect::<Vec<_>>(),
+                [
+                    ("GET", CONFIG_PATH),
+                    ("POST", "/v1/signing-keys/config/validate")
+                ],
+                "{case} must stop before any registry mutation (rerun={rerun})"
+            );
+            assert!(api.responses.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
 async fn readback_rejects_revision_drift_or_loss_of_unrelated_service() {
     for drift in [false, true] {
         let plan = plan();
@@ -324,7 +383,7 @@ async fn readback_rejects_revision_drift_or_loss_of_unrelated_service() {
             calls: Vec::new(),
             responses: VecDeque::from([
                 response(registry(), Some(REVISION)),
-                response(json!({"ok":true}), None),
+                response(json!({"ok":true,"basis":"live"}), None),
                 response(saved.clone(), Some(NEW_REVISION)),
                 response(saved, Some(if drift { REVISION } else { NEW_REVISION })),
             ]),
@@ -358,7 +417,7 @@ async fn explicit_resolution_checks_use_existing_resolver_and_reject_wrong_key()
         }
         let mut responses = VecDeque::from([
             response(saved.clone(), Some(REVISION)),
-            response(json!({"ok":true}), None),
+            response(json!({"ok":true,"basis":"live"}), None),
             response(saved.clone(), Some(REVISION)),
             response(json!({"service":resolved}), None),
         ]);
