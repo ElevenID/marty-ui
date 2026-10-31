@@ -6,51 +6,17 @@ nonroot Linux amd64 process with no-new-privileges and an already-running,
 user-owned rootless Docker daemon. macOS, Windows and other architectures are
 not supported.
 
-Normal admitted installation remains held pending separate qualification.
-An exact signed nightly `--candidate-test` attempts an experimental rootless
-storage canary and, only if that succeeds on this host, stack provisioning and
-required read-only validation. An unsigned development harness has completed a
-rootless ownership transition and restoration on one disposable host; see
-[Installer development canary](installer-development-canary.md). These results
-do not qualify a signed release or admit normal installation. Complete
-application validation and signed release qualification remain separate gates.
-The current unsigned Compose development window records fresh application state,
-migration/schema checks, ordinary restart, and a bounded credential journey as
-separate results; see [Compose installer qualification](compose-installer.md#current-qualification-window).
-Native014's unsigned build passed **177 test executions / 27 invocations**, including the
-focused native Compose feature parser, with all four copied source hashes
-verified. All three synthetic tests also passed, preserving the original
-214 containers and 178 files; their completed result was recovered after the
-October 30, 2026, 4:51 PM MDT browser reconnection. Its separate
-authenticated-bundle parser, fresh application storage proof, actual startup,
-and required HTTPS validation passed at 5:04 PM MDT. Its initial migration audit
-also passed: 12 ledgers / 29 rows, four native verifiers, three migration jobs,
-stable schema catalog, and zero observed restarts/OOMs. Both ordinary restart
-cycles also passed, with unchanged setup executions and successful HTTPS checks
-after each cycle. The post-restart migration audit also passed with unchanged
-ledgers and catalog. Journey v3 passed UI assets, login/refresh, PKCE, seeded
-organization, and managed-profile checks, then received HTTP 422 because the
-pinned credential-template client supplied an unsupported `schema_uri` field.
-The v4 runner omitted that exact field and reused existing profiles, but the
-template request still received a definite HTTP 422. Complete contract review
-and a read-only observation found that its compliance profile remained DRAFT;
-creation requires an active discoverable profile. The bounded v5 setup adapter
-is implemented and passed 42 local guard tests, but has not been staged or run
-on AWS. It permits one activation of its exact new disposable profile through
-the supported API and reuses existing signing profiles without key creation.
-The complete credential journey and final migration comparison remain
-unqualified; all attempt failures are retained in the Compose guide.
-Native013's earlier fresh startup and
-initial migration audit passed, but its first restart recorded six Event Stream
-and six Notification restarts with no OOM. The new runtime readiness correction
-passed both restart cycles. Functional and final migration qualification remain
-incomplete; the platform is not yet qualified for use. Browser access was
-unavailable at the October 30, 2026, 6:04 PM MDT check; the last VM observation
-was the 5:52 PM MDT read-only profile check. No final platform or EC2 stop was
-observed. The existing automatic-stop deadline remains October 30, 2026,
-8:36:44 PM MDT. The Compose guide records the remaining gates and the
-development launcher's 4 GiB available-memory safety floor; the 8 GiB test host
-does not establish capacity for a 3 GiB deployment.
+Unsigned Compose development qualification passed on an 8 GiB rootless host:
+fresh installation, migrations, two ordinary restarts, the credential
+issue/present/revoke/deny journey, final audit, and normal shutdown with data and
+disk retained. Setup executions and existing signing identities were unchanged.
+This does not qualify a published signed installer or admit normal installation.
+Built-in read-only `validate` still reports the optional journey as `SKIP` and
+`installation_ready: false`; the separate disposable runner supplies the passing
+functional result. The results do not establish 3 GiB or production load capacity,
+rendered UI, or external wallet interoperability. See the
+[qualification summary](compose-installer.md#current-qualification-window) and
+[development canary](installer-development-canary.md).
 
 The bootstrap invocation puts the entire download-and-script pipeline under
 no-new-privileges and propagates download errors:
@@ -247,17 +213,11 @@ ports. The writable count excludes tmpfs and other writable paths absent from
 means that service was missing; a `null` top-level value means the inspection
 could not be held stable. It does not inspect kernel-effective UID or capabilities
 inside a running process and is not a container-hardening qualification.
-The credential journey is explicitly reported as `SKIP`: login and actual
-issue/present/verify/revoke/deny tests require isolated test fixtures and remain
-in a separate disposable qualification runner. The unsigned installed-platform
-supervisor is intended to exercise generated-operator login/refresh, PKCE access,
-issuance, presentation, revocation, and revoked-credential denial in the bound
-fresh scope. The currently completed checks are listed in the qualification guide;
-the full credential journey has not yet passed.
-Its result is recorded separately; a successful journey does not change this
-read-only command's `SKIP` or promote the installation to ready. Current outcomes
-and the public-origin/wallet-verification limits are recorded in the
-[Compose qualification guide](compose-installer.md#functional-readiness-and-qualification-boundaries).
+The credential journey remains `SKIP` in this read-only command because actual
+issue/present/verify/revoke/deny checks require isolated fixtures. The separate
+disposable runner passed that bounded sequence; its result does not change this
+command's `SKIP` or promote the installation to ready. See the
+[qualification limits](compose-installer.md#functional-readiness-and-qualification-boundaries).
 Authorization metadata checks alone do not establish that login or issuance works.
 
 A passing report means the listed read-only deployment checks passed at that
