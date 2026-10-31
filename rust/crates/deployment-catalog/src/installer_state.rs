@@ -820,7 +820,7 @@ impl LockedInspection {
     }
 }
 
-/// Exclusive cleanup access with append-only receipts. This deliberately has no
+/// Exclusive maintenance access with append-only receipts. This deliberately has no
 /// phase-advance or provisioning-resume API, including for uncertain journals.
 pub(crate) struct LockedMaintenance {
     inspection: LockedInspection,
@@ -903,7 +903,9 @@ impl LockedMaintenance {
     pub(crate) fn write_evidence_exclusive(&mut self, entry: &str, bytes: &[u8]) -> Result<()> {
         self.require_unchanged()?;
         let filename = Self::entry(entry)?;
-        if !(entry.starts_with("uninstall-") || entry.starts_with("rootless-canary-"))
+        if !(entry.starts_with("uninstall-")
+            || entry.starts_with("rootless-canary-")
+            || entry.starts_with("kms-registration-"))
             || bytes.is_empty()
             || bytes.len() > 4 * 1024 * 1024
         {

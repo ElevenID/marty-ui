@@ -3,6 +3,41 @@
 use marty_deployment_catalog::installer_state::{Identity, InstallerState, Phase, RuntimeBinding};
 use serde_json::Value;
 #[test]
+fn kms_registration_cli_is_discoverable_and_rejects_unsafe_arguments_without_echo() {
+    let help = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+        .args(["kms", "register", "--help"])
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--api-key-file"));
+    let sensitive = "never-echo-registration-input";
+    for args in [
+        vec!["kms"],
+        vec!["kms", "register", "--api-key", sensitive],
+        vec!["kms", "register", "--endpoint", sensitive],
+        vec![
+            "kms",
+            "register",
+            "--install-dir",
+            "/missing",
+            "--organization-id",
+            sensitive,
+            "--registration-file",
+            "/missing",
+            "--api-key-file",
+            "/missing",
+        ],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(sensitive));
+    }
+}
+#[test]
 fn trust_info_rejects_mutating_options_without_echoing_them() {
     for args in [
         vec!["trust-info"],

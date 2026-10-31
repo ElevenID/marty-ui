@@ -42,6 +42,7 @@ describe('KeyManagementServiceWizard', () => {
       activeOrgId: 'org-123',
     })
     mockGetKeyManagementConfig.mockResolvedValue({
+      config_revision: '"r-e4195bec-8a3a-43d5-828d-c7b5a0c4921c"',
       supports_native_key_management: false,
       default_service_id: 'managed-openbao-transit',
       services: [
@@ -181,6 +182,14 @@ describe('KeyManagementServiceWizard', () => {
       expect(screen.getByRole('heading', { name: 'Review' })).toBeInTheDocument()
     })
 
+    mockValidateKeyManagementService.mockResolvedValueOnce({
+      ok: false,
+      checks: [{ name: 'Signing key state', status: 'fail', detail: 'The key is disabled.' }],
+    })
+    await user.click(screen.getByRole('button', { name: 'Register service' }))
+    await screen.findByText('Key management service validation failed. Review the checks before registering.')
+    expect(mockUpdateKeyManagementConfig).not.toHaveBeenCalled()
+
     await user.click(screen.getByRole('button', { name: 'Register service' }))
 
     await waitFor(() => {
@@ -190,6 +199,11 @@ describe('KeyManagementServiceWizard', () => {
     const payload = mockUpdateKeyManagementConfig.mock.calls[0][0]
     expect(payload.organization_id).toBe('org-123')
     expect(payload.default_service_id).toBeTruthy()
+    expect(payload.config_revision).toBe('"r-e4195bec-8a3a-43d5-828d-c7b5a0c4921c"')
+    expect(mockValidateKeyManagementService).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: 'org-123', service_type: 'aws-kms', live_probe: true,
+      key_reference: 'arn:aws:kms:us-west-2:123456789012:key/abc',
+    }))
     expect(payload.services).toHaveLength(2)
     expect(payload.services[0].ca_cert_file).toBe('/run/secrets/existing-transit-ca')
     expect(payload.services[1]).toMatchObject({

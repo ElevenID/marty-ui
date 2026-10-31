@@ -56,6 +56,7 @@
     "expected_kept_kid": "keep"
   },
   "did": {
+    "organization_id": "org-a",
     "service_id": "svc-a",
     "request": {
       "jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
@@ -70,7 +71,7 @@
       "key_reference": "issuer key"
     },
     "expected_did": "did:web:issuer.example%3A8443:orgs:acme",
-    "expected_method_id": "did:web:issuer.example%3A8443:orgs:acme#issuer-key"
+    "expected_method_id": "did:web:issuer.example%3A8443:orgs:acme#vm-5d3ed95070765f9bb2a9bbbad4f36b28"
   },
   "invalid_did_requests": [
     {"jwk": {"kty": "EC"}, "public_domain": "https://issuer.example", "org_slug": "acme"},

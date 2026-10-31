@@ -247,7 +247,7 @@
       "service_config": { "service_type": "aws-kms", "endpoint": "$STUB", "region": "us-east-1", "key_reference": "arn:aws:kms:us-east-1:111122223333:key/test", "auth_mode": "access_key", "auth_reference": "{\"access_key_id\":\"test-access-key\",\"secret_access_key\":\"test-secret-key\"}" },
       "expected_request": { "method": "POST", "path_query": "/", "headers": { "x-amz-target": "TrentService.DescribeKey" }, "json": { "KeyId": "arn:aws:kms:us-east-1:111122223333:key/test" } },
       "provider_status": 200,
-      "provider_response": { "KeyMetadata": { "Arn": "arn:aws:kms:us-east-1:111122223333:key/test" } },
+      "provider_response": { "KeyMetadata": { "Arn": "arn:aws:kms:us-east-1:111122223333:key/test", "Enabled": true, "KeyState": "Enabled", "KeyUsage": "SIGN_VERIFY" } },
       "expected_response": { "ok": true, "checks": [{ "name": "Key exists", "status": "pass", "detail": "AWS KMS key 'arn:aws:kms:us-east-1:111122223333:key/test' is reachable.", "source": "adapter" }] }
     },
     {

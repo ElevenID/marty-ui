@@ -111,6 +111,37 @@ profile or manually restart retained setup containers. Public command wiring is
 implemented; repeated invocation is qualified separately with the retained
 operator, as recorded in the qualification summary below.
 
+## Registering existing AWS keys
+
+After organization and operator authentication are established, the retained
+operator can attach existing AWS keys through the same KMS registration API as
+the console:
+
+```sh
+marty-deploy kms register --install-dir /absolute/private/installation \
+  --organization-id ORGANIZATION_UUID \
+  --registration-file /absolute/private/aws-registration.json \
+  --api-key-file /absolute/private/operator-api-key
+```
+
+Both input files must be owned regular files with mode `0600` in owned
+directories with mode `0700`. The organization API key needs `keys:write`.
+The registration file contains a `services` array; each item has `id`, `name`, `service_type: "aws-kms"`,
+`region`, `auth_mode: "iam_role"`, an immutable `key_reference` ARN, `algorithms`
+and `key_purposes`. An optional `default_service_id` selects one of those entries.
+Optional `resolution_checks` entries specify `credential_format`, `key_purpose`,
+`algorithm`, `expected_service_id` and `expected_key_reference` for saved routing
+checks.
+Workload IAM credentials belong to the running Signing Keys service.
+
+The command validates each registration, preserves other providers and bindings,
+uses the registry revision to reject concurrent edits, and verifies the saved
+configuration. It does not replace a differently configured service with the
+same ID or retry an uncertain write. Provider keys are not created, rotated or
+deleted. The HTTPS certificate is pinned before the API key is sent.
+This command requires an existing installation and operator credential; it does
+not establish AWS-only installation readiness or remove the OpenBao dependency.
+
 ## Inspection, shutdown, and removal
 
 Use the retained installer helper with the installation's absolute private path:

@@ -438,6 +438,7 @@ pub async fn run<B: Backend>(config: &Config, backend: &mut B) -> Result<(), Run
         &org,
         &did,
         &url,
+        &did_doc,
     );
     backend.stamp(StampKind::SeededProfiles, &mut profiles);
     backend

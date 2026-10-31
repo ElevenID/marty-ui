@@ -133,6 +133,7 @@ export const PURPOSES_REQUIRING_CERTIFICATE = ['mdoc_dsc', 'x509_doc_signer', 'v
 export const PURPOSES_REQUIRING_AUTHORITY = ['vdsnc_signing', 'csca', 'mdoc_dsc']
 
 export const DEFAULT_KEY_MANAGEMENT_CONFIG = {
+  config_revision: null,
   provider_metadata: null,
   domain_config: null,
   supports_native_key_management: false,
@@ -287,9 +288,10 @@ export const normalizeKeyManagementConfig = (data) => {
 
   const defaultServiceId = typeof normalized.default_service_id === 'string' && services.some((service) => service.id === normalized.default_service_id)
     ? normalized.default_service_id
-    : services[0]?.id || null
+    : Object.hasOwn(normalized, 'default_service_id') ? null : services[0]?.id || null
 
   return {
+    config_revision: normalizeString(normalized.config_revision) || null,
     provider_metadata: normalized.provider_metadata && typeof normalized.provider_metadata === 'object'
       ? normalized.provider_metadata
       : null,
@@ -316,6 +318,7 @@ export const createKeyManagementConfigUpdate = (config, changes = {}) => {
     throw new Error('Default signing service must be registered')
   }
   return {
+    config_revision: current.config_revision,
     services,
     default_service_id: defaultServiceId,
     key_reference_purposes: current.key_reference_purposes,
@@ -356,7 +359,7 @@ export const createKeyManagementRegistrationPayload = (config, newService, makeD
   // Aliases and other services are never granted permissions by inference.
   const payload = createKeyManagementConfigUpdate(current, {
     services: [...current.services, newService],
-    default_service_id: makeDefault ? newService.id : (current.default_service_id || newService.id),
+    default_service_id: makeDefault || current.services.length === 0 ? newService.id : current.default_service_id,
   })
   if (reference && purposes.length) payload.key_reference_purposes[newService.id] = { [reference]: purposes }
   return payload

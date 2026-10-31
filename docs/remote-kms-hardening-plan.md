@@ -1317,6 +1317,28 @@ specific operational context; prepare a concrete reviewed operation first.
 
 ## Current source status and evidence retention
 
+### AWS and optional OpenBao deployment work
+
+Preserve the existing multi-service Signing Keys registry, provider dispatcher,
+issuer profiles and DID resolution. The installer registers existing AWS keys
+through the same authenticated configuration, validation and resolution APIs as
+the console, with revision-checked writes that retain unrelated registrations.
+Provider capability metadata describes implemented operations; registration
+preflight does not establish signing permission or installed qualification.
+New automatic DID verification-method identifiers hide provider coordinates;
+existing published methods and explicit identity bindings remain stable.
+
+The first installer operation attaches existing AWS IAM-role keys to a running,
+owned installation using an existing organization API key. It does not remove
+OpenBao, provision AWS keys, or complete first-boot authentication. Remaining
+work is the governed Organization bootstrap credential adapter, provider-aware
+grants/secrets/TLS/Keycloak prerequisites, and registered operation bindings for
+the existing DIDComm extension. Reuse those owners and the current extension;
+do not add another registry, crypto implementation or provider fallback.
+AWS-only readiness requires a fresh supported journey with no OpenBao runtime
+dependency. Hybrid readiness additionally qualifies the enabled extension
+operations; unavailable authcrypt must never downgrade to anoncrypt.
+
 The protected KMS consumer changes landed as UI #1192
 (`62607e860e3fe57abef39e29dfb59ae1c8bbd2a8`) and Credentials #313
 (`7ac622015a220992fbae84177a1518fec7b75849`). Core v0.2.2 is the

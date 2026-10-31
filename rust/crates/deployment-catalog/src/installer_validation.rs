@@ -9,7 +9,6 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    net::{Ipv4Addr, SocketAddr},
     path::Path,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -70,26 +69,10 @@ fn security_summary(v: &Value) -> Option<Value> {
     }
     Some(Value::Object(summary))
 }
-fn valid_origin(origin: &str) -> Option<u16> {
-    let port = origin.strip_prefix("https://localhost:")?;
-    let number = port.parse::<u16>().ok()?;
-    (number >= 1024 && port == number.to_string()).then_some(number)
-}
+#[cfg(test)]
+use crate::installer_transport::valid_origin;
 fn client(trust: &TrustInfo) -> Result<reqwest::Client> {
-    let port = valid_origin(&trust.origin).ok_or("invalid bound validation origin")?;
-    let ca = reqwest::Certificate::from_pem(trust.ca_certificate_pem.as_bytes())
-        .map_err(|_| "invalid bound validation CA")?;
-    reqwest::Client::builder()
-        .https_only(true)
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .tls_certs_only([ca])
-        .tls_info(true)
-        .resolve("localhost", SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
-        .connect_timeout(Duration::from_secs(2))
-        .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|_| "validation transport unavailable".into())
+    crate::installer_transport::client(trust, Duration::from_secs(5))
 }
 struct Probe {
     tls_verified: bool,
