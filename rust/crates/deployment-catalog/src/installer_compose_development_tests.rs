@@ -32,6 +32,10 @@ const TAG: &str = "v1.1.263-nightly.20261029.40946723707";
 const SOURCE: &str = "225818494f4ba716e75df7225d6c43d71b038879";
 const INVENTORY_SHA: &str = "972cf706ba3c98a5d8e76eb8df1cc29d6e48631895b1115302791399c284b319";
 const HOLD: &str = "Owned application startup observations recorded. Explicit local CA trust onboarding and installed journey qualification remain incomplete; preserve the reported state for recovery. Installation is not ready.";
+#[cfg(not(feature = "installer-development"))]
+const HELPER_IDENTITY: &str = "unknown:unreleased";
+#[cfg(feature = "installer-development")]
+const HELPER_IDENTITY: &str = crate::installer_development_image::HELPER_IDENTITY;
 const LAYERS: [(&str, &[u8]); 3] = [
     (
         "deploy-config/compose/selfhost-installer/compose.bootstrap.yml",
@@ -135,7 +139,7 @@ fn static_helper(path: &Path, expected: &str) -> Result<()> {
         .map_err(|_| "development build identity unavailable")?;
     need(
         output.status.success()
-            && output.stdout == b"unknown:unreleased\n"
+            && output.stdout == format!("{HELPER_IDENTITY}\n").as_bytes()
             && output.stderr.is_empty(),
         "development helper must explicitly identify as unreleased",
     )?;
@@ -161,6 +165,140 @@ fn exclusive(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     File::open(path.parent().ok_or("development evidence parent absent")?)
         .and_then(|p| p.sync_all())
         .map_err(|_| "development evidence sync failed".into())
+}
+
+#[cfg(feature = "installer-development")]
+fn import_signing_image(
+    state: &mut InstallerState,
+    installation: &Path,
+    docker: &DockerRunner,
+    artifact_bytes: &[u8],
+    archive_source: &Path,
+) -> Result<()> {
+    use crate::installer_development_image::{self as development, Artifact, DevelopmentImage};
+    let artifact = Artifact::parse(artifact_bytes)?;
+    artifact.verify_archive(archive_source)?;
+    let archive = installation.join("downloads").join(development::ARCHIVE);
+    let mut source = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(archive_source)
+        .map_err(|_| "development image archive unavailable")?;
+    let mut destination = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&archive)
+        .map_err(|_| "development image archive destination must be new")?;
+    let copied = std::io::copy(
+        &mut (&mut source).take(artifact.archive_size + 1),
+        &mut destination,
+    )
+    .map_err(|_| "development image archive staging failed")?;
+    destination
+        .sync_all()
+        .map_err(|_| "development image archive sync failed")?;
+    need(
+        copied == artifact.archive_size,
+        "development image archive size changed",
+    )?;
+    artifact.verify_archive(&archive)?;
+    artifact.verify_archive(archive_source)?;
+    state.write_evidence(development::ARTIFACT_RECORD, artifact_bytes)?;
+    for tag in [
+        format!("{}:latest", artifact.archive_tag),
+        format!(
+            "elevenid/marty-ui-installer-development:{}",
+            artifact.archive_tag
+        ),
+    ] {
+        let filter = format!("reference={tag}");
+        let existing = docker.run_checked(&[
+            "image",
+            "ls",
+            "--no-trunc",
+            "--format",
+            "{{json .}}",
+            "--filter",
+            &filter,
+        ])?;
+        let entries: Vec<_> = existing
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        need(
+            entries.len() <= 1,
+            "development archive tag has ambiguous existing ownership",
+        )?;
+        if !entries.is_empty() {
+            let observed = docker.run_checked(&["image", "inspect", &tag])?;
+            let values: Vec<Value> = serde_json::from_value(
+                crate::installer_json::decode(observed.as_bytes())
+                    .map_err(|_| "existing development tag inspection invalid")?,
+            )
+            .map_err(|_| "existing development tag inspection invalid")?;
+            need(
+                values.len() == 1,
+                "existing development tag inspection is ambiguous",
+            )?;
+            DevelopmentImage::from_inspected(artifact_bytes, &values[0])?;
+        }
+    }
+    state.write_evidence("development-signing-image-load-intent.json", &encoded(&json!({
+        "schema":"elevenid.installer-development-image-load/v1", "installation_id":state.journal().installation_id(),
+        "engine_id":state.journal().runtime().ok_or("development runtime absent")?.engine_id,
+        "artifact_sha256":release::sha256(artifact_bytes), "archive":archive,
+        "publisher_authenticated":false, "installation_ready":false
+    }))?)?;
+    let loaded = docker.run_checked_with_timeout(
+        &[
+            "image",
+            "load",
+            "--input",
+            archive.to_str().ok_or("development archive path invalid")?,
+        ],
+        std::time::Duration::from_secs(900),
+    );
+    state.write_evidence("development-signing-image-load-result.json", &encoded(&json!({
+        "succeeded":loaded.is_ok(), "output":loaded.as_ref().ok(), "error":loaded.as_ref().err(),
+        "automatic_retry":false, "publisher_authenticated":false
+    }))?)?;
+    loaded?;
+    artifact.verify_archive(&archive)?;
+    let mut selected = None;
+    for reference in [&artifact.manifest_digest, &artifact.config_digest] {
+        let Ok(output) = docker.run_checked(&["image", "inspect", reference]) else {
+            continue;
+        };
+        let values: Vec<Value> = serde_json::from_value(
+            crate::installer_json::decode(output.as_bytes())
+                .map_err(|_| "development image inspection invalid")?,
+        )
+        .map_err(|_| "development image inspection invalid")?;
+        need(
+            values.len() == 1,
+            "development image inspection is ambiguous",
+        )?;
+        selected = Some(DevelopmentImage::from_inspected(
+            artifact_bytes,
+            &values[0],
+        )?);
+        break;
+    }
+    let selected =
+        selected.ok_or("loaded development image cannot be bound to its OCI identity")?;
+    state.write_evidence(
+        development::BINDING_RECORD,
+        &serde_json::to_vec(&selected).map_err(|_| "development image binding encoding failed")?,
+    )?;
+    state.write_evidence(development::LAYER_RECORD, &selected.layer_bytes()?)?;
+    state.with_inspection(|view| {
+        need(
+            development::load(view)?.as_ref() == Some(&selected),
+            "development image readback differs",
+        )
+    })
 }
 
 fn encoded(value: &Value) -> Result<Vec<u8>> {
@@ -311,7 +449,8 @@ fn actual_layer_parser_gate(
     }
     state.write_evidence("development-parser.env", &environment)?;
     let test = "actual_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart";
-    let output = std::process::Command::new(&tests)
+    let mut command = std::process::Command::new(&tests);
+    command
         .args([test, "--exact", "--ignored", "--test-threads=1"])
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
@@ -324,9 +463,30 @@ fn actual_layer_parser_gate(
             installation.join("evidence/development-parser.env"),
         )
         .env("MARTY_INSTALLER_SOURCE_ROOT", bundle)
-        .stdin(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null());
+    #[cfg(feature = "installer-development")]
+    let development_image = state.with_inspection(crate::installer_development_image::load)?;
+    #[cfg(feature = "installer-development")]
+    if let Some(image) = &development_image {
+        command
+            .arg("--nocapture")
+            .env(
+                "MARTY_INSTALLER_DEVELOPMENT_IMAGE_LAYER",
+                image.layer_file(installation)?.path,
+            )
+            .env("MARTY_INSTALLER_DEVELOPMENT_IMAGE_ID", &image.image_id);
+    }
+    let output = command
         .output()
         .map_err(|_| "native parser test could not start")?;
+    #[cfg(not(feature = "installer-development"))]
+    let development_parsed = true;
+    #[cfg(feature = "installer-development")]
+    let development_parsed = development_image.as_ref().is_none_or(|image| {
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line == format!("UNSIGNED_SIGNING_IMAGE_PARSED={}", image.image_id))
+    });
     need(
         output.stdout.len() <= 1048576 && output.stderr.len() <= 1048576,
         "native parser evidence exceeds bounds",
@@ -342,7 +502,7 @@ fn actual_layer_parser_gate(
         &encoded(&json!({
         "schema":"elevenid.unsigned-compose-development-parser/v1", "test":test,
         "native_tests_sha256":tests_sha, "compose_sha256":compose_sha,
-        "exit_code":output.status.code(), "passed":output.status.success(),
+        "exit_code":output.status.code(), "passed":output.status.success() && development_parsed,
         "stdout_bytes":output.stdout.len(), "stderr_bytes":output.stderr.len(),
         "config_only":true, "application_resources_started":false,
         "local_package_publisher_authenticated":false}))?,
@@ -355,7 +515,7 @@ fn actual_layer_parser_gate(
         "parser executable changed during config-only gate",
     )?;
     need(
-        output.status.success(),
+        output.status.success() && development_parsed,
         "actual installer-layer native parser gate failed; inspect private parser evidence",
     )
 }
@@ -592,6 +752,21 @@ fn actual_pinned_marty_components_with_unsigned_compose_layers() -> Result<()> {
         parent(directory)?;
     }
     static_helper(&helper, &helper_sha)?;
+    #[cfg(feature = "installer-development")]
+    let (development_artifact, development_archive) = {
+        let bytes = installer_verify::read_private_record(&PathBuf::from(input(
+            "MARTY_DEV_COMPOSE_SIGNING_IMAGE_ARTIFACT",
+        )?))?;
+        let artifact = crate::installer_development_image::Artifact::parse(&bytes)?;
+        need(
+            release::sha256(&bytes) == input("MARTY_DEV_COMPOSE_SIGNING_IMAGE_ARTIFACT_SHA256")?
+                && artifact.source_sha == input("MARTY_DEV_COMPOSE_SIGNING_IMAGE_SOURCE")?,
+            "development image artifact or selected source differs",
+        )?;
+        let archive = PathBuf::from(input("MARTY_DEV_COMPOSE_SIGNING_IMAGE_ARCHIVE")?);
+        artifact.verify_archive(&archive)?;
+        (bytes, archive)
+    };
     let inventory_path = fixtures.join("installer-inventory.json");
     let inventory_bytes = installer_verify::read_private_record(&inventory_path)?;
     need(
@@ -675,18 +850,27 @@ fn actual_pinned_marty_components_with_unsigned_compose_layers() -> Result<()> {
         "UNSIGNED DEVELOPMENT Compose evidence: {}",
         installation.display()
     );
-    let mut state = InstallerState::create_test_with_runtime(
+    let identity = Identity {
+        source_sha: inventory.source_sha.clone(),
+        release_tag: inventory.release_tag.clone(),
+        inventory_sha256: format!("sha256:{INVENTORY_SHA}"),
+    };
+    let fixture_scope = CandidateTestScope {
+        inventory_sha256: INVENTORY_SHA.into(),
+        build_run_id: inventory.build_run_id,
+        build_run_attempt: inventory.build_run_attempt,
+    };
+    #[cfg(not(feature = "installer-development"))]
+    let mut state =
+        InstallerState::create_test_with_runtime(&installation, identity, binding, fixture_scope)?;
+    #[cfg(feature = "installer-development")]
+    let mut state = InstallerState::create_development_with_runtime(
         &installation,
-        Identity {
-            source_sha: inventory.source_sha.clone(),
-            release_tag: inventory.release_tag.clone(),
-            inventory_sha256: format!("sha256:{INVENTORY_SHA}"),
-        },
+        identity,
         binding,
-        CandidateTestScope {
-            inventory_sha256: INVENTORY_SHA.into(),
-            build_run_id: inventory.build_run_id,
-            build_run_attempt: inventory.build_run_attempt,
+        crate::installer_state::UnsignedDevelopmentScope {
+            fixture: fixture_scope,
+            artifact_sha256: release::sha256(&development_artifact),
         },
     )?;
     let started = Instant::now();
@@ -696,7 +880,7 @@ fn actual_pinned_marty_components_with_unsigned_compose_layers() -> Result<()> {
         state.create_private_directory("evidence")?;
         state.create_private_directory("downloads")?;
         state.write_evidence("development-scope.json", &encoded(&json!({"schema":"elevenid.unsigned-compose-development/v1",
-            "classification":"UNSIGNED DEVELOPMENT ONLY","helper_sha256":helper_sha,"helper_build_identity":"unknown:unreleased",
+            "classification":"UNSIGNED DEVELOPMENT ONLY","helper_sha256":helper_sha,"helper_build_identity":HELPER_IDENTITY,
             "helper_publisher_authenticated":false,"fixture_inventory_sha256":INVENTORY_SHA,"fixture_release":TAG,"fixture_source":SOURCE,
             "journal_identity_identifies_published_fixtures_only":true,"fixture_inventory_authenticates_local_operator":false,
             "runtime_provisioning_authorized":true,"release_admission":false,"installation_ready":false,"automatic_failure_cleanup":false}))?)?;
@@ -706,6 +890,18 @@ fn actual_pinned_marty_components_with_unsigned_compose_layers() -> Result<()> {
         state.write_evidence("prepared-selfhost-images.json", &lock)?;
         for (name, bytes) in sidecars {
             state.write_evidence(&name, &bytes)?;
+        }
+        #[cfg(feature = "installer-development")]
+        {
+            stage = "bind unsigned Signing Keys artifact to the native image";
+            eprintln!("UNSIGNED DEVELOPMENT Compose stage: {stage}");
+            import_signing_image(
+                &mut state,
+                &installation,
+                &observer,
+                &development_artifact,
+                &development_archive,
+            )?;
         }
         state.write_evidence(
             "docker-preflight.json",
@@ -796,7 +992,7 @@ fn actual_pinned_marty_components_with_unsigned_compose_layers() -> Result<()> {
             "installation_device":metadata.dev(),"installation_inode":metadata.ino(),
             "installation_uid":metadata.uid(),"installation_gid":metadata.gid(),
             "installation_mode":metadata.mode() & 0o7777,
-            "helper_sha256":helper_sha,"helper_build_identity":"unknown:unreleased",
+            "helper_sha256":helper_sha,"helper_build_identity":HELPER_IDENTITY,
             "fixture_inventory_sha256":INVENTORY_SHA,"fixture_source":SOURCE,
             "absent_storage_paths":absent_storage_paths,
             "application_storage_absent_before_provisioning":true,

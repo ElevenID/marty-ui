@@ -39,6 +39,9 @@ OCI_INDEX = "application/vnd.oci.image.index.v1+json"
 OCI_CONFIG = "application/vnd.oci.image.config.v1+json"
 OCI_GZIP_LAYER = "application/vnd.oci.image.layer.v1.tar+gzip"
 OCI_PLATFORM_QUALIFIER_KEYS = frozenset({"variant", "os.version", "os.features"})
+VERIFICATION_PROFILE = "verification"
+SIGNING_KEYS_DEVELOPMENT_PROFILE = "signing-keys-development"
+SIGNING_KEYS_DEVELOPMENT_REPOSITORY = "docker.io/elevenid/marty-ui-installer-development"
 # Calibrated against the immutable v1.1.208 amd64 services image at
 # sha256:ec38eda3dacb3e2f86238f6dd35e3485dd3689a5c76ec13fe896136826db3ff5:
 # 176 MiB archive, 23 layers, 173 MiB compressed / 484 MiB expanded, 33 outer
@@ -276,7 +279,74 @@ def _scan_tar_headers(
     raise ValueError(f"{label} is missing the canonical tar end-of-archive")
 
 
-def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, Any]:
+def inspect_oci_archive(
+    path: Path,
+    *,
+    commit: str,
+    version: str,
+    profile: str = VERIFICATION_PROFILE,
+) -> dict[str, Any]:
+    """Inspect one bounded archive, with a closed runtime identity profile.
+
+    The verification profile retains its existing contract. The development
+    profile describes the standalone Signing Keys Dockerfile; it does not turn
+    the archive into a published services image or release evidence.
+    """
+    require(
+        profile in {VERIFICATION_PROFILE, SIGNING_KEYS_DEVELOPMENT_PROFILE},
+        "OCI runtime profile is unsupported",
+    )
+    signing_development = profile == SIGNING_KEYS_DEVELOPMENT_PROFILE
+    archive_tag = (
+        f"installer-development-signing-keys-{commit}"
+        if signing_development
+        else f"candidate-{commit}"
+    )
+    annotated_config_digests: list[str] = []
+    if signing_development:
+        require(bool(COMMIT.fullmatch(commit)), "development source SHA is invalid")
+        require(
+            version == f"unsigned-installer-development-{commit}",
+            "development image version changed",
+        )
+
+    def development_annotations(value: dict[str, Any]) -> None:
+        if not signing_development or "annotations" not in value:
+            return
+        annotations = value["annotations"]
+        require(
+            isinstance(annotations, dict)
+            and set(annotations)
+            <= {
+                "org.opencontainers.image.ref.name",
+                "io.containerd.image.name",
+                "org.opencontainers.image.created",
+                "config.digest",
+            }
+            and annotations.get("org.opencontainers.image.ref.name", archive_tag)
+            == archive_tag
+            and annotations.get(
+                "io.containerd.image.name",
+                f"{SIGNING_KEYS_DEVELOPMENT_REPOSITORY}:{archive_tag}",
+            )
+            in {
+                f"{SIGNING_KEYS_DEVELOPMENT_REPOSITORY}:{archive_tag}",
+                f"{SIGNING_KEYS_DEVELOPMENT_REPOSITORY.removeprefix('docker.io/')}:{archive_tag}",
+            },
+            "development archive contains an unapproved image-name annotation",
+        )
+        if "org.opencontainers.image.created" in annotations:
+            created = annotations["org.opencontainers.image.created"]
+            require(
+                isinstance(created, str)
+                and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z", created)
+                is not None,
+                "development archive creation annotation changed",
+            )
+        if "config.digest" in annotations:
+            value = annotations["config.digest"]
+            require(isinstance(value, str) and bool(SHA256.fullmatch(value)), "development archive config annotation changed")
+            annotated_config_digests.append(value)
     metadata = path.lstat()
     require(stat.S_ISREG(metadata.st_mode), "candidate archive is not a regular file")
     require(
@@ -427,6 +497,7 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
             index.get("mediaType", OCI_INDEX) == OCI_INDEX,
             "OCI index media type changed",
         )
+        development_annotations(index)
         descriptors = index.get("manifests")
         require(
             isinstance(descriptors, list) and len(descriptors) == 1,
@@ -434,7 +505,7 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
         )
         descriptor = descriptors[0]
         require(isinstance(descriptor, dict), "OCI image descriptor changed")
-        archive_tag = f"candidate-{commit}"
+        development_annotations(descriptor)
         annotations = descriptor.get("annotations")
         require(
             isinstance(annotations, dict)
@@ -442,6 +513,8 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
             "OCI archive tag changed",
         )
         manifest_digest, value = descriptor_json(archive, members, descriptor)
+        development_annotations(value)
+        export_digest = manifest_digest
         if descriptor.get("mediaType") == OCI_INDEX:
             require(
                 "platform" not in descriptor,
@@ -462,11 +535,13 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
             )
             descriptor = nested[0]
             require(isinstance(descriptor, dict), "OCI platform descriptor changed")
+            development_annotations(descriptor)
             require(
                 descriptor.get("platform") == {"architecture": "amd64", "os": "linux"},
                 "OCI candidate platform changed",
             )
             manifest_digest, value = descriptor_json(archive, members, descriptor)
+            development_annotations(value)
         else:
             require(
                 descriptor.get("platform") == {"architecture": "amd64", "os": "linux"},
@@ -489,6 +564,12 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
             "OCI config media type changed",
         )
         config_digest, config = descriptor_json(archive, members, config_descriptor)
+        development_annotations(config_descriptor)
+        development_annotations(config)
+        require(
+            all(value == config_digest for value in annotated_config_digests),
+            "development archive config annotation differs from its image",
+        )
         require(
             config.get("architecture") == "amd64"
             and config.get("os") == "linux"
@@ -499,11 +580,36 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
         require(isinstance(runtime_config, dict), "OCI runtime config is missing")
         environment = runtime_config.get("Env")
         require(isinstance(environment, list), "OCI image environment is missing")
-        for name, expected in {
-            "SERVICE_NAME": "verification",
+        expected_environment = {
             "MARTY_RELEASE_VERSION": version,
             "MARTY_UI_SHA": commit,
-        }.items():
+        }
+        if signing_development:
+            expected_environment.update(
+                {
+                    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "SIGNING_KEYS_SERVICE_PORT": "8017",
+                    "RUST_LOG": "info",
+                }
+            )
+            require(
+                all(isinstance(item, str) and "=" in item for item in environment)
+                and {item.split("=", 1)[0] for item in environment}
+                == set(expected_environment),
+                "development image environment contains unsupported bindings",
+            )
+            require(
+                runtime_config.get("Entrypoint")
+                == ["/usr/local/bin/marty-signing-keys"]
+                and runtime_config.get("User") == "10001:10001"
+                and runtime_config.get("Cmd") in (None, [])
+                and runtime_config.get("Volumes") in (None, {})
+                and runtime_config.get("WorkingDir") in (None, ""),
+                "development image runtime identity changed",
+            )
+        else:
+            expected_environment["SERVICE_NAME"] = "verification"
+        for name, expected in expected_environment.items():
             bindings = [
                 item
                 for item in environment
@@ -515,6 +621,16 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
             )
         labels = runtime_config.get("Labels")
         require(isinstance(labels, dict), "OCI image labels are missing")
+        if signing_development:
+            require(
+                set(labels)
+                == {
+                    "org.opencontainers.image.source",
+                    "org.opencontainers.image.revision",
+                    "org.opencontainers.image.version",
+                },
+                "development image labels contain unsupported bindings",
+            )
         require(
             {
                 "org.opencontainers.image.source": labels.get(
@@ -571,6 +687,11 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
         total_layer_members = 0
         for layer, diff_id in zip(layers, diff_ids, strict=True):
             require(isinstance(layer, dict), "OCI layer descriptor changed")
+            development_annotations(layer)
+            require(
+                all(value == config_digest for value in annotated_config_digests),
+                "development archive config annotation differs from its image",
+            )
             require(
                 layer.get("mediaType") == OCI_GZIP_LAYER,
                 "OCI layer media type changed",
@@ -650,12 +771,16 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
             directories <= reachable_directories,
             "OCI archive contains an unreferenced directory member",
         )
-        return {
-            "uri": IMAGE_URI,
+        image = {
             "digest": manifest_digest,
             "config_digest": config_digest,
             "archive_tag": archive_tag,
         }
+        if signing_development:
+            # Buildx metadata can identify the enclosing single-platform index;
+            # the runtime binding still records the actual image manifest.
+            return {**image, "export_digest": export_digest}
+        return {"uri": IMAGE_URI, **image}
 
 
 def normalize_sbom(

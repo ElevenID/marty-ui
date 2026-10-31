@@ -2236,6 +2236,9 @@ jobs:
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Test the opt-in unsigned installer development boundary
+        working-directory: rust
+        run: cargo test --locked --offline -p marty-deployment-catalog --features installer-development --lib
       - name: Lint frozen Rust feature-regression probe
         shell: bash
         run: |

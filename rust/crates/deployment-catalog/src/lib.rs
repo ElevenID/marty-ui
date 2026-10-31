@@ -27,6 +27,8 @@ mod installer_compose_plugin;
 mod installer_container;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_creation_identity;
+#[cfg(all(target_os = "linux", feature = "installer-development"))]
+pub(crate) mod installer_development_image;
 pub mod installer_doctor;
 pub mod installer_fetch;
 pub mod installer_generation;

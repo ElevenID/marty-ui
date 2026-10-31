@@ -152,6 +152,8 @@ pub(crate) fn bootstrap_inputs(
         profiles: vec!["setup".into()],
         services: vec![],
         approved_images: images.values().cloned().collect(),
+        #[cfg(feature = "installer-development")]
+        development_image: None,
         writable_bind_roots,
         readonly_bind_roots,
         allowed_loopback_ports: BTreeSet::from([port]),
@@ -292,6 +294,10 @@ pub fn start(
         bundle_bound(bundle, "docker-compose.yml")?,
         bundle_bound(bundle, &format!("{LAYERS}/compose.installer.yml"))?,
     ];
+    #[cfg(feature = "installer-development")]
+    if let Some(image) = state.with_inspection(crate::installer_development_image::load)? {
+        image.bind_inputs(&mut inputs)?;
+    }
     inputs.environment = bound(installation.join("evidence/application-source.env"))?;
     let source = ComposeSession::new(docker_path, &binding, inputs.clone())?;
     let generation = crate::installer_generation_binding::stage(
@@ -328,6 +334,12 @@ pub fn start(
         bundle_bound(bundle, &format!("{LAYERS}/compose.installer.yml"))?,
         bundle_bound(bundle, &format!("{LAYERS}/compose.runtime.yml"))?,
     ];
+    #[cfg(feature = "installer-development")]
+    if let Some(image) = &maintenance_inputs.development_image {
+        maintenance_inputs
+            .files
+            .push(image.layer_file(installation)?);
+    }
     let planned = ComposeSession::new(docker_path, &binding, maintenance_inputs.clone())?;
     let cleanup_plan = RuntimeCleanupPlan {
         schema: "elevenid.installer-runtime-cleanup-plan/v1".into(),
@@ -341,9 +353,19 @@ pub fn start(
         RUNTIME_CLEANUP_PLAN,
         &serde_json::to_vec(&cleanup_plan).map_err(|_| "cannot record runtime cleanup plan")?,
     )?;
-    inputs
-        .bound_inputs
-        .extend(maintenance_inputs.files.iter().cloned());
+    for file in &maintenance_inputs.files {
+        #[cfg(feature = "installer-development")]
+        if inputs.development_image.is_some()
+            && inputs
+                .files
+                .iter()
+                .chain(&inputs.bound_inputs)
+                .any(|bound| bound.path == file.path)
+        {
+            continue;
+        }
+        inputs.bound_inputs.push(file.clone());
+    }
     inputs.bound_inputs.push(bound(
         installation.join("evidence").join(RUNTIME_CLEANUP_PLAN),
     )?);

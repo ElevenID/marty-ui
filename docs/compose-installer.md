@@ -334,6 +334,33 @@ readiness. Run only after the focused and synthetic gates pass, with the existin
 VM safeguards intact, sufficient disk/memory, and time reserved for observation
 and safe shutdown.
 
+### Current Signing Keys image in a fresh development run
+
+The default-off `installer-development` Cargo feature enables one local
+`signing-keys` image in this harness. Build the operator, library tests, and native
+parser tests with that feature and without `MARTY_DEPLOY_SOURCE_SHA` or
+`MARTY_DEPLOY_RELEASE_TAG`. The operator must report
+`unknown:unsigned-installer-development`. An isolated workspace must also retain
+the canonical `rust/services/signing-keys/Dockerfile` for its compiled hash check.
+
+Build that Dockerfile from a clean pinned checkout for `linux/amd64`, with
+`CARGO_BUILD_JOBS=1`, `MARTY_UI_SHA=<commit>` and
+`MARTY_RELEASE_VERSION=unsigned-installer-development-<commit>`. Use the local
+tag `docker.io/elevenid/marty-ui-installer-development:installer-development-signing-keys-<commit>`,
+gzip OCI output, `--provenance=false --sbom=false`, and a metadata file with
+`BUILDX_METADATA_PROVENANCE=max`. Keep all outputs outside the checkout.
+`scripts/prepare_installer_development_signing_image.py` binds the clean source,
+native build metadata and archive using the existing bounded OCI inspector.
+
+Set `MARTY_DEV_COMPOSE_SIGNING_IMAGE_ARTIFACT`,
+`MARTY_DEV_COMPOSE_SIGNING_IMAGE_ARTIFACT_SHA256`,
+`MARTY_DEV_COMPOSE_SIGNING_IMAGE_SOURCE` and
+`MARTY_DEV_COMPOSE_SIGNING_IMAGE_ARCHIVE` to the resulting receipt, its SHA-256,
+the pinned commit and that exact archive. The fresh harness imports the archive
+and binds its native image ID for subsequent lifecycle and KMS commands.
+Bootstrap images and the authenticated fixture inventory retain their original
+bindings. Default release builds reject this unsigned scope.
+
 Native Compose behavior references: [startup ordering](https://docs.docker.com/compose/how-tos/startup-order/),
 [profiles](https://docs.docker.com/compose/how-tos/profiles/),
 [merge rules](https://docs.docker.com/reference/compose-file/merge/),

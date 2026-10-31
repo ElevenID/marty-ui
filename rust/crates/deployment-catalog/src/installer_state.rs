@@ -157,6 +157,23 @@ pub struct CandidateTestScope {
     pub build_run_id: u64,
     pub build_run_attempt: u64,
 }
+#[cfg(feature = "installer-development")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnsignedDevelopmentScope {
+    pub fixture: CandidateTestScope,
+    pub artifact_sha256: String,
+}
+#[cfg(feature = "installer-development")]
+impl UnsignedDevelopmentScope {
+    fn validate(&self) -> Result<()> {
+        self.fixture.validate()?;
+        if !crate::installer_development_image::digest(&self.artifact_sha256, 64) {
+            return Err("invalid unsigned development image scope".into());
+        }
+        Ok(())
+    }
+}
 impl CandidateTestScope {
     fn validate(&self) -> Result<()> {
         if self.inventory_sha256.len() != 64
@@ -200,6 +217,8 @@ pub enum ExecutionScope {
     Unclassified,
     AcceptanceOnly(AcceptanceScope),
     CandidateTest(CandidateTestScope),
+    #[cfg(feature = "installer-development")]
+    UnsignedDevelopment(UnsignedDevelopmentScope),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -245,6 +264,19 @@ impl Journal {
                 scope.validate()?;
                 if self.identity.inventory_sha256 != format!("sha256:{}", scope.inventory_sha256) {
                     return Err("candidate test inventory identity differs".into());
+                }
+            }
+            #[cfg(feature = "installer-development")]
+            ExecutionScope::UnsignedDevelopment(scope) => {
+                scope.validate()?;
+                if self.identity.inventory_sha256
+                    != format!("sha256:{}", scope.fixture.inventory_sha256)
+                    || self
+                        .runtime
+                        .as_ref()
+                        .is_none_or(|runtime| runtime.profile != RuntimeProfile::Rootless)
+                {
+                    return Err("unsigned development fixture or runtime identity differs".into());
                 }
             }
             ExecutionScope::Unclassified => {}
@@ -1985,6 +2017,30 @@ impl InstallerState {
             uuid::Uuid::new_v4(),
         )
     }
+    /// Only the opted-in fresh test harness can create this unsigned scope.
+    /// Released CLI entry points cannot select or resume it.
+    #[cfg(all(test, feature = "installer-development"))]
+    pub(crate) fn create_development_with_runtime(
+        path: &Path,
+        identity: Identity,
+        runtime: RuntimeBinding,
+        scope: UnsignedDevelopmentScope,
+    ) -> Result<Self> {
+        runtime.validate()?;
+        scope.validate()?;
+        if runtime.profile != RuntimeProfile::Rootless
+            || identity.inventory_sha256 != format!("sha256:{}", scope.fixture.inventory_sha256)
+        {
+            return Err("unsigned development fixture or runtime identity differs".into());
+        }
+        Self::create_internal(
+            path,
+            identity,
+            Some(runtime),
+            ExecutionScope::UnsignedDevelopment(scope),
+            uuid::Uuid::new_v4(),
+        )
+    }
     fn create_internal(
         path: &Path,
         identity: Identity,
@@ -2397,6 +2453,43 @@ mod tests {
             InstallerState::inspect(&path).unwrap().execution_scope(),
             &ExecutionScope::CandidateTest(scope)
         );
+    }
+
+    #[test]
+    #[cfg(not(feature = "installer-development"))]
+    fn released_journal_rejects_unsigned_development_scope() {
+        let scope = serde_json::json!({"kind":"unsigned-development",
+            "fixture":{"inventory_sha256":"b".repeat(64),"build_run_id":42,"build_run_attempt":1},
+            "artifact_sha256":"c".repeat(64)});
+        assert!(serde_json::from_value::<ExecutionScope>(scope).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "installer-development")]
+    fn unsigned_scope_cannot_create_rootful_or_mismatched_fixture_installations() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let scope = UnsignedDevelopmentScope {
+            fixture: CandidateTestScope {
+                inventory_sha256: "b".repeat(64),
+                build_run_id: 42,
+                build_run_attempt: 1,
+            },
+            artifact_sha256: "c".repeat(64),
+        };
+        scope.validate().unwrap();
+        let directory = root.path().join("unsigned");
+        assert!(InstallerState::create_development_with_runtime(
+            &directory,
+            identity(),
+            acceptance_runtime(),
+            scope.clone()
+        )
+        .is_err());
+        assert!(!directory.exists());
+        let mut malformed = scope;
+        malformed.artifact_sha256 = "not-a-digest".into();
+        assert!(malformed.validate().is_err());
     }
     #[test]
     fn acceptance_scope_rejects_invalid_hashes_before_directory_creation() {

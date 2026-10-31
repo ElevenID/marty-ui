@@ -61,6 +61,8 @@ mod tests {
                 "example.invalid/runtime@sha256:{}",
                 "c".repeat(64)
             )]),
+            #[cfg(feature = "installer-development")]
+            development_image: None,
             writable_bind_roots: BTreeSet::from([root.join("state")]),
             readonly_bind_roots: BTreeSet::from([root.join("inputs")]),
             allowed_loopback_ports: BTreeSet::from([18443]),
@@ -301,6 +303,47 @@ mod tests {
             &approved
         )
         .is_err());
+    }
+
+    #[test]
+    #[cfg(not(feature = "installer-development"))]
+    fn released_compose_inputs_reject_unsigned_image_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let mut value = serde_json::to_value(inputs(root.path())).unwrap();
+        value["development_image"] = Value::Null;
+        assert!(serde_json::from_value::<ComposeInputs>(value).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "installer-development")]
+    fn development_image_cannot_move_to_gateway_helpers_or_another_role() {
+        let root = tempfile::tempdir().unwrap();
+        let mut p = inputs(root.path());
+        let image = crate::installer_development_image::test_fixture();
+        assert!(!p.valid_image_reference(&image.image_id));
+        let mut selected = model(&p);
+        let mut service = selected["services"]
+            .as_object_mut()
+            .unwrap()
+            .remove("app")
+            .unwrap();
+        service["image"] = json!(image.image_id);
+        selected["services"]["signing-keys"] = service.clone();
+        image.bind_inputs(&mut p).unwrap();
+        image.require_inputs(&p).unwrap();
+        assert!(p.valid_image_reference(&image.image_id));
+        admit_model(&selected, &p).unwrap();
+        for role in ["gateway", "installer-tls", "app"] {
+            let mut wrong = selected.clone();
+            wrong["services"][role] = service.clone();
+            assert!(admit_model(&wrong, &p).is_err(), "{role}");
+        }
+        let mut fallback = selected.clone();
+        fallback["services"]["signing-keys"]["image"] =
+            json!("example.invalid/runtime@sha256:".to_owned() + &"c".repeat(64));
+        assert!(admit_model(&fallback, &p).is_err());
+        p.files.pop();
+        assert!(image.require_inputs(&p).is_err());
     }
 
     #[test]
@@ -703,12 +746,39 @@ pub struct ComposeInputs {
     pub profiles: Vec<String>,
     pub services: Vec<String>,
     pub approved_images: BTreeSet<String>,
+    #[cfg(feature = "installer-development")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) development_image: Option<crate::installer_development_image::DevelopmentImage>,
     pub writable_bind_roots: BTreeSet<PathBuf>,
     pub readonly_bind_roots: BTreeSet<PathBuf>,
     pub allowed_loopback_ports: BTreeSet<u16>,
     /// Only a successful, observed prior phase can authorize the next phase.
     /// Provisional create IDs and uncertain operation results are not admission.
     pub prior: Option<ComposeReceipt>,
+}
+
+impl ComposeInputs {
+    pub(crate) fn permits_image(&self, role: &str, reference: &str) -> bool {
+        #[cfg(feature = "installer-development")]
+        if let Some(image) = &self.development_image {
+            if role == crate::installer_development_image::ROLE || reference == image.image_id {
+                return image.permits(role, reference);
+            }
+        }
+        let _ = role;
+        self.approved_images.contains(reference)
+    }
+    fn valid_image_reference(&self, reference: &str) -> bool {
+        #[cfg(feature = "installer-development")]
+        if self
+            .development_image
+            .as_ref()
+            .is_some_and(|image| image.image_id == reference)
+        {
+            return true;
+        }
+        image(reference)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1412,7 +1482,7 @@ fn admit_model(model: &Value, p: &ComposeInputs) -> Result<()> {
     let services = model["services"].as_object().ok_or(REFUSED)?;
     require(!services.is_empty() && services.len() <= 96)?;
     for (role, service) in services {
-        require(name(role) && p.approved_images.contains(text(&service["image"])?))?;
+        require(name(role) && p.permits_image(role, text(&service["image"])?))?;
         for field in [
             "build",
             "provider",
@@ -1550,8 +1620,20 @@ impl ComposeSession {
                 && inputs.services.len() <= 96
                 && inputs.services.iter().all(|v| name(v))
                 && !inputs.approved_images.is_empty()
-                && inputs.approved_images.iter().all(|v| image(v)),
+                && inputs
+                    .approved_images
+                    .iter()
+                    .all(|v| inputs.valid_image_reference(v)),
         )?;
+        #[cfg(feature = "installer-development")]
+        if let Some(image) = &inputs.development_image {
+            image.require_inputs(&inputs)?;
+            let journal = crate::installer_state::InstallerState::inspect(&inputs.installation)?;
+            image.require_scope(&journal)?;
+            require(
+                inputs.project == journal.compose_project() && journal.runtime() == Some(binding),
+            )?;
+        }
         for root in inputs
             .writable_bind_roots
             .iter()
@@ -1602,6 +1684,10 @@ impl ComposeSession {
         }
         let observation = docker.preflight()?;
         require_version(&observation.compose_version)?;
+        #[cfg(feature = "installer-development")]
+        if let Some(image) = &inputs.development_image {
+            image.inspect(&docker)?;
+        }
         let mut session = Self {
             docker,
             binding: binding.clone(),
@@ -1650,7 +1736,18 @@ impl ComposeSession {
         self.observe(false)
     }
     fn recheck(&self) -> Result<()> {
-        verify_input_files(&self.inputs.installation, &self.bindings)
+        verify_input_files(&self.inputs.installation, &self.bindings)?;
+        #[cfg(feature = "installer-development")]
+        if let Some(image) = &self.inputs.development_image {
+            let journal =
+                crate::installer_state::InstallerState::inspect(&self.inputs.installation)?;
+            image.require_scope(&journal)?;
+            require(
+                self.inputs.project == journal.compose_project()
+                    && journal.runtime() == Some(&self.binding),
+            )?;
+        }
+        Ok(())
     }
     fn arguments(&self, operation: &[&str], selection: bool) -> Result<Vec<String>> {
         let mut args = vec![
@@ -1737,6 +1834,28 @@ impl ComposeSession {
     /// Pull only verified immutable references selected by the native model.
     pub fn pull(&self) -> Result<()> {
         require(!self.cleanup_only)?;
+        #[cfg(feature = "installer-development")]
+        if let Some(image) = &self.inputs.development_image {
+            image.inspect(&self.docker)?;
+            let services: Vec<_> = self.model["services"]
+                .as_object()
+                .ok_or(REFUSED)?
+                .keys()
+                .filter(|role| {
+                    role.as_str() != crate::installer_development_image::ROLE
+                        && (self.inputs.services.is_empty() || self.inputs.services.contains(role))
+                })
+                .map(String::as_str)
+                .collect();
+            if services.is_empty() {
+                return Ok(());
+            }
+            let mut args = vec!["pull", "--policy", "missing"];
+            args.extend(services);
+            return self
+                .compose(&args, false, Duration::from_secs(MAX_WAIT))
+                .map(|_| ());
+        }
         self.compose(
             &["pull", "--policy", "missing"],
             true,
@@ -1832,7 +1951,7 @@ impl ComposeSession {
                         && labels["com.docker.compose.project"] == self.inputs.project
                         && labels["com.docker.compose.oneoff"] == "False"
                         && labels["com.docker.compose.container-number"] == "1"
-                        && self.inputs.approved_images.contains(&identity.image),
+                        && self.inputs.permits_image(role, &identity.image),
                 )?;
                 if !images.contains_key(&identity.image) {
                     let observed: Vec<Value> =
@@ -1843,6 +1962,19 @@ impl ComposeSession {
                         ])?)
                         .map_err(|_| REFUSED)?;
                     require(observed.len() == 1)?;
+                    #[cfg(feature = "installer-development")]
+                    let development = self
+                        .inputs
+                        .development_image
+                        .as_ref()
+                        .filter(|image| image.permits(role, &identity.image));
+                    #[cfg(feature = "installer-development")]
+                    if let Some(image) = development {
+                        image.validate_inspected(&observed[0])?;
+                    } else {
+                        validate_image_digest(&observed[0], &identity.image)?;
+                    }
+                    #[cfg(not(feature = "installer-development"))]
                     validate_image_digest(&observed[0], &identity.image)?;
                     let image_id = text(&observed[0]["Id"])?;
                     require(image_id.strip_prefix("sha256:").is_some_and(digest))?;

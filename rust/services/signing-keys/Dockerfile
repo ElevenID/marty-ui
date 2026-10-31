@@ -3,7 +3,8 @@ FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92e
 WORKDIR /build/rust
 COPY rust /build/rust
 COPY proto /build/proto
-RUN cargo build --locked --release -p marty-signing-keys --bin marty-signing-keys
+ARG CARGO_BUILD_JOBS=1
+RUN CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" cargo build --locked --release -p marty-signing-keys --bin marty-signing-keys
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 ARG MARTY_RELEASE_VERSION=development
