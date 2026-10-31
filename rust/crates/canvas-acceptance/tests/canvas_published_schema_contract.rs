@@ -356,7 +356,19 @@ async fn didcomm_renewal_canvas_preserves_real_association_and_delivery_phases()
     let owned = canvas_published_database::PublishedDatabase::start()
         .await
         .unwrap();
-    didcomm_composed_delivery::run_renewal_canvas(&owned.url).await;
+    didcomm_composed_delivery::run_renewal_canvas(&owned.url)
+        .with_subscriber(
+            tracing_subscriber::fmt()
+                .with_test_writer()
+                .with_ansi(false)
+                // These two owners log only bounded denial/outcome codes and
+                // the synthetic transaction ID, never keys or credential bodies.
+                .with_env_filter(
+                    "off,marty_issuance_service::canvas_issuance_guard=warn,marty_issuance_service::initiation_response=warn",
+                )
+                .finish(),
+        )
+        .await;
     owned.close_verified().unwrap();
 }
 

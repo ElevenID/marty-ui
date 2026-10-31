@@ -119,6 +119,18 @@ def test_source_guard_rejects_config_drift(fault):
 def modeled(tmp_path):
     # This deliberately small input tests the closed comparator, not rendering.
     # The separate mandatory Compose script supplies actual complete models.
+    plugin_image = "synthetic.invalid/openbao-didcomm@sha256:" + "d" * 64
+    issuer_key = "synthetic-registered-didcomm-issuer-authority"
+
+    def volume(source, target, *, read_only=True):
+        return {
+            "type": "volume",
+            "source": source,
+            "target": target,
+            "read_only": read_only,
+            "volume": {},
+        }
+
     (tmp_path / "didcomm-encryption-policy.json").write_text(
         '{"version":1,"issuers":{}}', encoding="utf-8"
     )
@@ -127,23 +139,61 @@ def modeled(tmp_path):
             name: {"environment": {}} for name in GATE["NATIVE"]["TOKEN_CONSUMERS"]
         },
         "networks": {"marty-network": {}},
-        "volumes": {"preserved": {}},
+        "volumes": {"preserved": {}, "openbao_didcomm_issuance_token": {}},
     }
     baseline["services"]["openbao"] = {
-        "image": "synthetic.invalid/openbao-base",
+        "image": plugin_image,
         "command": ["server", "-dev"],
         "volumes": [],
     }
     baseline["services"]["openbao-init"] = {
-        "image": "synthetic.invalid/openbao-base",
-        "environment": {},
-        "volumes": [],
+        "image": plugin_image,
+        "environment": {
+            "DIDCOMM_KMS_PLUGIN_REQUIRED": "true",
+            "BAO_DIDCOMM_ISSUANCE_TOKEN_FILE": "/bao/didcomm-issuance-token/token",
+        },
+        "volumes": [
+            volume(
+                "openbao_didcomm_issuance_token",
+                "/bao/didcomm-issuance-token",
+                read_only=False,
+            ),
+        ],
+    }
+    baseline["services"]["signing-keys"] = {
+        "environment": {
+            "BAO_ADDR": "https://openbao:8200",
+            "BAO_CACERT": "/bao/public-ca/ca.crt",
+            "DIDCOMM_KMS_TOKEN_FILE": "/bao/didcomm-issuance-token/token",
+            "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE": "/bao/verify-grant/token",
+            "SIGNING_KEYS_ISSUER_SIGN_KEY": issuer_key,
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE": (
+                "/run/secrets/dev_integration_secret_server_cert"
+            ),
+        },
+        "volumes": [
+            volume("openbao_public_ca", "/bao/public-ca"),
+            volume("openbao_verify_grant", "/bao/verify-grant"),
+            volume("openbao_didcomm_issuance_token", "/bao/didcomm-issuance-token"),
+        ],
+        "depends_on": {
+            "openbao-init": {
+                "condition": "service_completed_successfully",
+                "required": True,
+            },
+        },
     }
     baseline["services"]["issuance"]["environment"] = {
         "ALLOWED_REDIRECT_URIS": "",
         "DIDCOMM_ALLOW_PRIVATE_IPS": "false",
         "ISSUANCE_AUTH_SESSION_TTL_MINUTES": "60",
         "TOKEN_RATE_LIMIT": "30",
+        "BAO_ADDR": "https://openbao:8200",
+        "BAO_CACERT": "/bao/public-ca/ca.crt",
+        "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE": (
+            "/bao/issuance-credential-grant/token"
+        ),
+        "SIGNING_KEYS_ISSUER_SIGN_KEY": issuer_key,
     }
     baseline["services"]["issuance"]["ports"] = [
         {"host_ip": "127.0.0.1", "published": "8005", "target": 8005}
@@ -163,8 +213,7 @@ def modeled(tmp_path):
         "local": True,
         "authcrypt": True,
         "inputs": {
-            "MARTY_OPENBAO_DIDCOMM_IMAGE": "synthetic.invalid/openbao-didcomm@sha256:"
-            + "d" * 64,
+            "MARTY_OPENBAO_DIDCOMM_IMAGE": plugin_image,
             "ISSUANCE_TLS_KMS_ADDR": "https://openbao:8200",
             "ISSUANCE_TLS_KMS_KEY_NAME": "synthetic-issuance-server",
             "ISSUANCE_TLS_KMS_KEY_VERSION": "1",

@@ -615,6 +615,14 @@ def test_flow_inventory_binds_exact_crate_and_shared_roster(monkeypatch) -> None
     assert all(
         entry["sha256"] == INVENTORY.digest(ROOT / entry["path"]) for entry in subgraph
     )
+    assert INVENTORY.FLOW_RENDERER_RUNPY_EDGES[
+        "scripts/test_selfhost_native_owner_compose.py"
+    ] == (
+        "scripts/test_canvas_worker_compose_render.py",
+        "scripts/test_beta_application_image_compose.py",
+        "scripts/test_conformance_native_compose.py",
+        "scripts/test_base_native_issuance_compose.py",
+    )
     imports = INVENTORY.flow_renderer_python_imports()
     assert {entry["path"] for entry in imports} == set(
         INVENTORY.FLOW_RENDERER_RUNPY_EDGES
@@ -744,6 +752,34 @@ def test_flow_renderer_subgraph_fails_closed_on_edge_and_compose_drift(
     with pytest.raises(ValueError, match="flow_renderer_subgraph_drift"):
         INVENTORY.flow_renderer_subgraph_inputs()
     helper.write_text(original, encoding="utf-8")
+
+    selfhost = tmp_path / "scripts/test_selfhost_native_owner_compose.py"
+    original = selfhost.read_text(encoding="utf-8")
+    selfhost.write_text(
+        original.replace(
+            'runpy.run_path(str(ROOT / "scripts/test_conformance_native_compose.py"))',
+            'runpy.run_path(str(ROOT / "scripts/test_base_native_issuance_compose.py"))',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_subgraph_drift"):
+        INVENTORY.flow_renderer_subgraph_inputs()
+    selfhost.write_text(original, encoding="utf-8")
+
+    configuration = tmp_path / "scripts/test_conformance_native_compose.py"
+    original = configuration.read_text(encoding="utf-8")
+    configuration.write_text(
+        original.replace(
+            '"rust/services/issuance/src/config.rs"',
+            '"rust/services/issuance/src/other_config.rs"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_subgraph_drift"):
+        INVENTORY.flow_renderer_subgraph_inputs()
+    configuration.write_text(original, encoding="utf-8")
 
     owner = tmp_path / "scripts/test_base_native_issuance_compose.py"
     original = owner.read_text(encoding="utf-8")

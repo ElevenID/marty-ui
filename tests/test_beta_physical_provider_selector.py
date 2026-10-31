@@ -97,8 +97,7 @@ def model(tmp_path: Path) -> dict:
         }},
         "issuance-native": {"networks": {"marty-network": {}},
             "volumes": grant_volumes("issuance_credential", "issuance_canvas",
-                                     "issuance_readiness", "issuance_passport",
-                                     token="didcomm_issuance"),
+                                     "issuance_readiness", "issuance_passport"),
             "environment": {
             "PASSPORT_NATIVE_HTTP_ENABLED": "true",
             "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
@@ -172,6 +171,13 @@ def model(tmp_path: Path) -> dict:
             }, "secrets": ["passport_callback_signer_api_key",
                             "marty_db_password"]},
     }}
+    result["services"]["signing-keys"]["volumes"].append({
+        "type": "volume",
+        "source": "openbao_didcomm_issuance_token",
+        "target": "/bao/didcomm-issuance-token",
+        "read_only": True,
+        "volume": {},
+    })
     for name in ("openbao_public_ca", "openbao_didcomm_issuance_token",
                  "openbao_signing_keys_token"):
         result["volumes"][name] = {"name": f"elevenid-beta_{name}"}
@@ -254,6 +260,25 @@ def test_physical_mode_requires_its_scoped_grant_mounts(
 ) -> None:
     candidate = model(tmp_path)
     candidate["services"][service]["volumes"] = []
+    with pytest.raises(VALIDATOR["PassportConfigurationError"],
+                       match="escaped isolation"):
+        validate(candidate)
+
+
+@pytest.mark.parametrize("mutation", ["copy-to-issuance", "move-to-issuance", "missing"])
+def test_physical_mode_keeps_didcomm_custody_exclusively_on_signing_keys(
+    tmp_path: Path, mutation: str,
+) -> None:
+    candidate = model(tmp_path)
+    signing_mounts = candidate["services"]["signing-keys"]["volumes"]
+    token_mount = next(mount for mount in signing_mounts
+                       if mount["source"] == "openbao_didcomm_issuance_token")
+    if mutation != "copy-to-issuance":
+        signing_mounts.remove(token_mount)
+    if mutation != "missing":
+        candidate["services"]["issuance-native"]["volumes"].append(
+            deepcopy(token_mount)
+        )
     with pytest.raises(VALIDATOR["PassportConfigurationError"],
                        match="escaped isolation"):
         validate(candidate)

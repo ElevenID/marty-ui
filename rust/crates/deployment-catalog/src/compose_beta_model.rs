@@ -677,10 +677,6 @@ pub(super) fn physical_before_registry(i: &Value) -> PolicyResult {
             vec![
                 ("openbao_public_ca", "/bao/public-ca"),
                 (
-                    "openbao_didcomm_issuance_token",
-                    "/bao/didcomm-issuance-token",
-                ),
-                (
                     "openbao_issuance_credential_grant",
                     "/bao/issuance-credential-grant",
                 ),
@@ -705,6 +701,10 @@ pub(super) fn physical_before_registry(i: &Value) -> PolicyResult {
                 ("openbao_public_ca", "/bao/public-ca"),
                 ("openbao_signing_keys_token", "/bao/signing-keys-token"),
                 ("openbao_verify_grant", "/bao/verify-grant"),
+                (
+                    "openbao_didcomm_issuance_token",
+                    "/bao/didcomm-issuance-token",
+                ),
             ],
         ),
         (

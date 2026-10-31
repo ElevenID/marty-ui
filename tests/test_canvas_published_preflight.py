@@ -231,6 +231,7 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
         'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '
         'MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" '
+        'BAO_ADDR="$kms_url" BAO_CACERT="$kms_ca_file" '
     )
     assert (
         sum(
