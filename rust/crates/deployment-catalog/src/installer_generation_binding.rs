@@ -1,9 +1,6 @@
 //! Immutable application credential selection. Originals and orphan producer evidence remain intact.
 #![cfg(target_os = "linux")]
-use crate::{
-    installer_application_model::ApplicationModelPlan,
-    installer_state::{InstallerState, Phase},
-};
+use crate::installer_state::{InstallerState, Phase};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -197,35 +194,12 @@ fn read(dir: &File, name: &str, record: bool) -> Result<(Vec<u8>, u32)> {
     Ok((bytes, mode))
 }
 fn decode(path: &str) -> Result<PathBuf> {
-    let raw = path.replace("$$", "$");
-    require(raw.replace('$', "$$") == path)?;
-    let path = PathBuf::from(raw);
-    require(
-        path.is_absolute()
-            && path
-                .components()
-                .all(|c| matches!(c, Component::RootDir | Component::Normal(_))),
-    )?;
-    Ok(path)
+    crate::installer_compose::config_path(&json!(path))
 }
-fn encode(path: &Path) -> Result<String> {
-    Ok(path.to_str().ok_or(REFUSED)?.replace('$', "$$"))
-}
-fn roles(plan: &ApplicationModelPlan) -> Result<BTreeSet<String>> {
-    crate::installer_application_graph::startup_order(&plan.model, &plan.selected_services)?;
-    let mut roles: BTreeSet<_> = plan.selected_services.iter().cloned().collect();
-    roles.insert("kms-initialize".into());
-    Ok(roles)
-}
-fn closure(
-    installation: &Path,
-    plan: &ApplicationModelPlan,
-    root: &str,
-) -> Result<BTreeSet<String>> {
+fn closure(installation: &Path, model: &serde_json::Value, root: &str) -> Result<BTreeSet<String>> {
     let mut result = BTreeSet::new();
     let base = installation.join(root);
-    for role in roles(plan)? {
-        let service = &plan.model["services"][&role];
+    for service in model["services"].as_object().ok_or(REFUSED)?.values() {
         for reference in service["secrets"]
             .as_array()
             .map(Vec::as_slice)
@@ -234,11 +208,7 @@ fn closure(
             let name = reference["source"].as_str().ok_or(REFUSED)?;
             safe_name(name)?;
             require(
-                decode(
-                    plan.model["secrets"][name]["file"]
-                        .as_str()
-                        .ok_or(REFUSED)?,
-                )? == base.join(name),
+                decode(model["secrets"][name]["file"].as_str().ok_or(REFUSED)?)? == base.join(name),
             )?;
             result.insert(name.into());
         }
@@ -337,19 +307,24 @@ struct Receipt {
     candidate_sha256: BTreeMap<String, String>,
     outputs: Vec<String>,
     container_removed: bool,
+    compose_receipt_sha256: String,
+    job_completed_successfully: bool,
     installation_ready: bool,
 }
 fn candidate(installation: &Path, id: &str, engine: &str) -> Result<(Vec<u8>, CandidateFiles)> {
     let evidence = directory(&installation.join("evidence"))?;
-    let bytes = read(&evidence, "generation-container-removed.json", true)?.0;
+    let bytes = read(&evidence, "generation-observation.json", true)?.0;
     let r: Receipt = serde_json::from_slice(&bytes).map_err(|_| REFUSED)?;
     require(
-        r.schema == "elevenid.installer-generation-host/v1"
+        r.schema == "elevenid.installer-generation-host/v2"
             && r.installation_id == id
             && r.engine_id == engine
             && hex(&r.container_id)
             && r.container_name
-                == format!("marty-install-{}-generation-inputs", id.replace('-', ""))
+                == format!(
+                    "marty-install-{}-installer-generation-1",
+                    id.replace('-', "")
+                )
             && hex(&r.network_id)
             && r.image
                 .strip_prefix("ghcr.io/elevenid/marty-ui-oss/services@sha256:")
@@ -358,8 +333,40 @@ fn candidate(installation: &Path, id: &str, engine: &str) -> Result<(Vec<u8>, Ca
             && !r.ingress_renewal
             && r.candidate_validated
             && !r.activated
-            && r.container_removed
+            && !r.container_removed
+            && r.job_completed_successfully
+            && hex(&r.compose_receipt_sha256)
             && !r.installation_ready,
+    )?;
+    let operation = read(
+        &evidence,
+        "compose-setup-installer-generation-result.json",
+        true,
+    )?
+    .0;
+    require(digest(&operation) == r.compose_receipt_sha256)?;
+    let proof: crate::installer_compose::ComposeReceipt =
+        serde_json::from_slice(&operation).map_err(|_| REFUSED)?;
+    let resources = proof.resources.as_ref().ok_or(REFUSED)?;
+    let helper = resources
+        .containers
+        .get("installer-generation")
+        .ok_or(REFUSED)?;
+    require(
+        proof.schema == "elevenid.installer-compose-operation/v1"
+            && proof.project == format!("marty-install-{}", id.replace('-', ""))
+            && proof.engine_id == engine
+            && proof.command_succeeded
+            && proof.observation_validated
+            && helper.id == r.container_id
+            && helper.image == r.image
+            && helper.setup
+            && resources.networks.values().any(|n| n == &r.network_id)
+            && proof.status.iter().any(|v| {
+                v["Service"] == "installer-generation"
+                    && v["State"] == "exited"
+                    && v["ExitCode"] == 0
+            }),
     )?;
     let transfer = directory(&installation.join("generation-transfer"))?;
     let delivered = child(&transfer, "delivered")?;
@@ -412,17 +419,18 @@ fn candidate(installation: &Path, id: &str, engine: &str) -> Result<(Vec<u8>, Ca
 pub fn stage(
     installation: &Path,
     state: &mut InstallerState,
-    plan: &ApplicationModelPlan,
+    model: &serde_json::Value,
+    network_id: &str,
 ) -> Result<GenerationBinding> {
     state.require_live_phase(Phase::Provisioning)?;
     let id = state.journal().installation_id().to_string();
     let engine = state.journal().runtime().ok_or(REFUSED)?.engine_id.clone();
-    let wanted = closure(installation, plan, "secrets")?;
+    let wanted = closure(installation, model, "secrets")?;
     let (receipt, candidates) = candidate(installation, &id, &engine)?;
     let candidate_record: Receipt = serde_json::from_slice(&receipt).map_err(|_| REFUSED)?;
     require(
-        candidate_record.network_id == plan.expected_network_id
-            && plan.model["name"] == format!("marty-install-{}", id.replace('-', "")),
+        candidate_record.network_id == network_id
+            && model["name"] == format!("marty-install-{}", id.replace('-', "")),
     )?;
     let source = directory(&installation.join("secrets"))?;
     let mut values = BTreeMap::new();
@@ -508,59 +516,34 @@ pub fn verify(installation: &Path, b: &GenerationBinding) -> Result<()> {
     Ok(())
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct Selection {
     schema: String,
     installation_id: String,
     engine_id: String,
     binding_sha256: String,
-    plan_sha256: String,
-    compose_sha256: String,
+    native_model_sha256: String,
     env_sha256: String,
     activated: bool,
-    installation_ready: bool,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RecordedPlan {
-    model: serde_json::Value,
-    selected_services: Vec<String>,
-    expected_network_id: String,
     installation_ready: bool,
 }
 fn selection_bytes(installation: &Path, b: &GenerationBinding) -> Result<Selection> {
     let evidence = directory(&installation.join("evidence"))?;
     let binding = read(&evidence, RECORD, true)?.0;
     require(serde_json::from_slice::<GenerationBinding>(&binding).map_err(|_| REFUSED)? == *b)?;
-    let plan = read(&evidence, "application-plan.json", true)?.0;
-    let compose = read(&evidence, "application-compose.json", true)?.0;
+    let model_bytes = read(&evidence, "application-native-model.json", true)?.0;
+    let model: serde_json::Value = serde_json::from_slice(&model_bytes).map_err(|_| REFUSED)?;
     let env = read(&evidence, "application.env", true)?.0;
     let source = read(&evidence, "application-source.env", true)?.0;
     require(crate::installer_application_env::select_generation(&source, installation)? == env)?;
-    let recorded: RecordedPlan = serde_json::from_slice(&plan).map_err(|_| REFUSED)?;
-    require(
-        serde_json::from_slice::<serde_json::Value>(&compose).map_err(|_| REFUSED)?
-            == recorded.model
-            && !recorded.installation_ready,
-    )?;
-    verify_model(
-        installation,
-        b,
-        &ApplicationModelPlan {
-            model: recorded.model,
-            selected_services: recorded.selected_services,
-            expected_network_id: recorded.expected_network_id,
-            installation_ready: false,
-        },
-    )?;
+    verify_model(installation, b, &model, &b.network_id)?;
     Ok(Selection {
-        schema: "elevenid.installer-application-generation-selection/v1".into(),
+        schema: "elevenid.installer-application-generation-selection/v2".into(),
         installation_id: b.installation_id.clone(),
         engine_id: b.engine_id.clone(),
         binding_sha256: digest(&binding),
-        plan_sha256: digest(&plan),
-        compose_sha256: digest(&compose),
+        native_model_sha256: digest(&model_bytes),
         env_sha256: digest(&env),
         activated: false,
         installation_ready: false,
@@ -573,8 +556,10 @@ pub fn publish_selection(
 ) -> Result<()> {
     state.require_live_phase(Phase::Provisioning)?;
     verify(installation, b)?;
-    let bytes = serde_json::to_vec(&selection_bytes(installation, b)?).map_err(|_| REFUSED)?;
-    state.write_evidence("application-generation-selection.json", &bytes)
+    state.write_evidence(
+        "application-generation-selection.json",
+        &serde_json::to_vec(&selection_bytes(installation, b)?).map_err(|_| REFUSED)?,
+    )
 }
 pub fn load_verified(
     installation: &Path,
@@ -613,74 +598,20 @@ pub fn load_verified(
     )?;
     Ok(Some(value))
 }
-pub fn apply_model(
-    installation: &Path,
-    b: &GenerationBinding,
-    plan: &mut ApplicationModelPlan,
-) -> Result<()> {
-    require(closure(installation, plan, "secrets")? == b.files.keys().cloned().collect())?;
-    let roles = roles(plan)?;
-    plan.model["services"]
-        .as_object_mut()
-        .ok_or(REFUSED)?
-        .retain(|name, _| roles.contains(name));
-    let declarations = plan.model["secrets"].as_object_mut().ok_or(REFUSED)?;
-    declarations.retain(|name, _| b.files.contains_key(name));
-    for (name, declaration) in declarations {
-        declaration["file"] = json!(encode(&installation.join(ROOT).join(name))?);
-    }
-    for service in plan.model["services"]
-        .as_object_mut()
-        .ok_or(REFUSED)?
-        .values_mut()
-    {
-        for mount in service
-            .get_mut("volumes")
-            .and_then(serde_json::Value::as_array_mut)
-            .map(Vec::as_mut_slice)
-            .unwrap_or(&mut [])
-        {
-            if mount["type"] == "bind" {
-                let path = decode(mount["source"].as_str().ok_or(REFUSED)?)?;
-                if path.parent() == Some(installation.join("secrets").as_path()) {
-                    let name = path.file_name().and_then(|n| n.to_str()).ok_or(REFUSED)?;
-                    require(b.files.contains_key(name))?;
-                    mount["source"] = json!(encode(&installation.join(ROOT).join(name))?);
-                }
-            }
-        }
-    }
-    verify_model(installation, b, plan)
-}
+/// Read-only check of the native Compose result. Runtime configuration is
+/// selected by a dotenv path; no service definition is rewritten in Rust.
 pub fn verify_model(
     installation: &Path,
     b: &GenerationBinding,
-    plan: &ApplicationModelPlan,
+    model: &serde_json::Value,
+    network_id: &str,
 ) -> Result<()> {
     b.validate()?;
     require(
-        !plan.installation_ready
-            && plan.expected_network_id == b.network_id
-            && plan.model["name"]
-                == format!("marty-install-{}", b.installation_id.replace('-', "")),
+        network_id == b.network_id
+            && model["name"] == format!("marty-install-{}", b.installation_id.replace('-', "")),
     )?;
-    require(
-        plan.model["services"]
-            .as_object()
-            .ok_or(REFUSED)?
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            == roles(plan)?,
-    )?;
-    for (name, declaration) in plan.model["secrets"].as_object().ok_or(REFUSED)? {
-        require(
-            b.files.contains_key(name)
-                && decode(declaration["file"].as_str().ok_or(REFUSED)?)?
-                    == installation.join(ROOT).join(name),
-        )?;
-    }
-    require(closure(installation, plan, ROOT)? == b.files.keys().cloned().collect())
+    require(closure(installation, model, ROOT)? == b.files.keys().cloned().collect())
 }
 
 #[cfg(test)]
@@ -688,33 +619,7 @@ mod tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
     const ID: &str = "2e052c77-efe8-44c6-9421-9ef15fe8ee7c";
-    fn fixture() -> (GenerationBinding, ApplicationModelPlan) {
-        let mut services = serde_json::Map::new();
-        for role in [
-            "gateway",
-            "postgres",
-            "redis",
-            "revocation-profile-migrate",
-            "db-migrate",
-            "kms-initialize",
-            "keycloak-configurator",
-            "issuance-migrations",
-            "cloudflared",
-            "cloudflared-beta",
-            "tunnel-nginx-proxy",
-        ] {
-            services.insert(
-                role.into(),
-                json!({"restart":"no","healthcheck":{"test":["CMD","true"]}}),
-            );
-        }
-        for i in 0..22 {
-            services.insert(
-                format!("synthetic-{i}"),
-                json!({"restart":"no","healthcheck":{"test":["CMD","true"]}}),
-            );
-        }
-        services["kms-initialize"]["depends_on"] = json!({"postgres":{"condition":"service_healthy"},"redis":{"condition":"service_healthy"},"db-migrate":{"condition":"service_completed_successfully"},"revocation-profile-migrate":{"condition":"service_completed_successfully"}});
+    fn fixture() -> (GenerationBinding, serde_json::Value) {
         let renewable = crate::installer_renewal_bootstrap::current_inputs();
         let mut files = BTreeMap::new();
         let mut declarations = serde_json::Map::new();
@@ -725,7 +630,7 @@ mod tests {
             .chain(["smtp_password", "operator_bootstrap_password"])
         {
             files.insert(
-                name.to_owned(),
+                name.into(),
                 GenerationFile {
                     source: if renewable.contains(name) {
                         GenerationSource::Candidate
@@ -740,29 +645,12 @@ mod tests {
             );
             declarations.insert(
                 name.into(),
-                json!({"file":format!("/private/install $$path/secrets/{name}"),"name":name}),
+                json!({"file":format!("/private/install $$path/application-generation/{name}")}),
             );
             references.push(json!({"source":name,"target":format!("/run/secrets/{name}")}));
         }
-        services["gateway"]["secrets"] = json!(references);
-        services["cloudflared"]["secrets"] = json!([{"source":"cloudflare_tunnel_token"}]);
-        declarations.insert(
-            "cloudflare_tunnel_token".into(),
-            json!({"file":"/private/install $$path/secrets/cloudflare_tunnel_token"}),
-        );
-        let selected_services = services
-            .keys()
-            .filter(|n| {
-                ![
-                    "cloudflared",
-                    "cloudflared-beta",
-                    "tunnel-nginx-proxy",
-                    "kms-initialize",
-                ]
-                .contains(&n.as_str())
-            })
-            .cloned()
-            .collect();
+        let model = json!({"name":format!("marty-install-{}", ID.replace('-', "")),
+            "services":{"synthetic":{"secrets":references}},"secrets":declarations});
         (
             GenerationBinding {
                 schema: "elevenid.installer-application-generation/v1".into(),
@@ -775,58 +663,25 @@ mod tests {
                 root_retired: false,
                 installation_ready: false,
             },
-            ApplicationModelPlan {
-                model: json!({"name":format!("marty-install-{}",ID.replace('-',"")),"services":services,"secrets":declarations}),
-                selected_services,
-                expected_network_id: "a".repeat(64),
-                installation_ready: false,
-            },
+            model,
         )
     }
     #[test]
-    fn exact_selection_prunes_only_unused_tunnels_and_refuses_old_or_external_sources() {
+    fn native_secret_selection_rejects_external_or_original_paths_without_rewriting() {
         let root = Path::new("/private/install $path");
-        let (binding, mut plan) = fixture();
-        apply_model(root, &binding, &mut plan).unwrap();
-        verify_model(root, &binding, &plan).unwrap();
-        assert_eq!(plan.model["services"].as_object().unwrap().len(), 30);
-        assert!(plan.model["services"]
-            .as_object()
-            .unwrap()
-            .values()
-            .all(|service| service.get("volumes").is_none()));
-        plan.model["services"]["cloudflared"] = json!({"restart":"no"});
-        assert!(verify_model(root, &binding, &plan).is_err());
-        plan.model["services"]
-            .as_object_mut()
-            .unwrap()
-            .remove("cloudflared");
-        plan.model["secrets"]["unexpected"] =
-            json!({"file":"/private/install $$path/secrets/unexpected"});
-        assert!(verify_model(root, &binding, &plan).is_err());
-        plan.model["secrets"]
-            .as_object_mut()
-            .unwrap()
-            .remove("unexpected");
-        assert!(plan.model["services"].get("kms-initialize").is_some());
-        assert!(plan.model["secrets"]
-            .get("cloudflare_tunnel_token")
-            .is_none());
-        for name in binding.files.keys() {
-            assert_eq!(
-                plan.model["secrets"][name]["file"],
-                format!("/private/install $$path/application-generation/{name}")
-            );
+        let (binding, model) = fixture();
+        verify_model(root, &binding, &model, &"a".repeat(64)).unwrap();
+        let saved = model.clone();
+        assert_eq!(model, saved);
+        for path in [
+            "/etc/shadow",
+            "/private/install $$path/secrets/smtp_password",
+        ] {
+            let mut changed = model.clone();
+            changed["secrets"]["smtp_password"]["file"] = json!(path);
+            assert!(verify_model(root, &binding, &changed, &binding.network_id).is_err());
         }
-        plan.model["secrets"]["smtp_password"]["file"] =
-            json!("/private/install $$path/secrets/smtp_password");
-        assert!(verify_model(root, &binding, &plan).is_err());
-        let (_, mut bad) = fixture();
-        bad.model["secrets"]["smtp_password"]["file"] = json!("/etc/shadow");
-        assert!(apply_model(root, &binding, &mut bad).is_err());
-        let (_, mut bad) = fixture();
-        bad.expected_network_id = "c".repeat(64);
-        assert!(apply_model(root, &binding, &mut bad).is_err());
+        assert!(verify_model(root, &binding, &model, &"c".repeat(64)).is_err());
     }
     #[test]
     fn closed_binding_forbids_source_downgrade_missing_candidates_and_ready_claims() {

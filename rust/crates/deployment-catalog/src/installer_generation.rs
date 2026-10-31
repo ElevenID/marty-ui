@@ -59,6 +59,8 @@ struct InitialKeycloak {
     nonce: String,
     outputs: Vec<String>,
     container_removed: bool,
+    compose_receipt_sha256: String,
+    job_completed_successfully: bool,
     installation_ready: bool,
 }
 fn hex(value: &str, length: usize) -> bool {
@@ -70,9 +72,11 @@ fn hex(value: &str, length: usize) -> bool {
 pub(crate) fn original_nonce(bytes: &[u8], owner: &str) -> Result<String> {
     let receipt: InitialKeycloak = serde_json::from_slice(bytes).map_err(|_| REFUSED)?;
     require(
-        receipt.schema == "elevenid.installer-keycloak/v1"
+        receipt.schema == "elevenid.installer-keycloak/v2"
             && receipt.installation_id == owner
-            && receipt.container_removed
+            && !receipt.container_removed
+            && receipt.job_completed_successfully
+            && hex(&receipt.compose_receipt_sha256, 64)
             && !receipt.installation_ready
             && hex(&receipt.nonce, 12)
             && hex(&receipt.container_id, 64)
@@ -80,7 +84,10 @@ pub(crate) fn original_nonce(bytes: &[u8], owner: &str) -> Result<String> {
             && !receipt.engine_id.is_empty()
             && receipt.engine_id.len() <= 128
             && receipt.container_name
-                == format!("marty-install-{}-keycloak-inputs", owner.replace('-', ""))
+                == format!(
+                    "marty-install-{}-installer-keycloak-1",
+                    owner.replace('-', "")
+                )
             && receipt
                 .image
                 .strip_prefix("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:")
@@ -654,13 +661,13 @@ mod tests {
         temp
     }
     fn receipt() -> Value {
-        json!({"schema":"elevenid.installer-keycloak/v1","installation_id":OWNER,
-        "engine_id":"engine","container_id":"a".repeat(64),"container_name":format!("marty-install-{}-keycloak-inputs",OWNER.replace('-',"")),
+        json!({"schema":"elevenid.installer-keycloak/v2","installation_id":OWNER,
+        "engine_id":"engine","container_id":"a".repeat(64),"container_name":format!("marty-install-{}-installer-keycloak-1",OWNER.replace('-',"")),
         "network_id":"b".repeat(64),"image":format!("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:{}","c".repeat(64)),
-        "nonce":"0123456789ab","outputs":crate::installer_keycloak_bridge::OUTPUTS,"container_removed":true,"installation_ready":false})
+        "nonce":"0123456789ab","outputs":crate::installer_keycloak_bridge::OUTPUTS,"container_removed":false,"job_completed_successfully":true,"compose_receipt_sha256":"d".repeat(64),"installation_ready":false})
     }
     #[test]
-    fn nonce_requires_original_closed_owned_removed_receipt() {
+    fn nonce_requires_original_closed_compose_job_receipt() {
         assert_eq!(
             original_nonce(&serde_json::to_vec(&receipt()).unwrap(), OWNER).unwrap(),
             "0123456789ab"
@@ -668,7 +675,9 @@ mod tests {
         for (field, value) in [
             ("nonce", json!("new-nonce")),
             ("installation_id", json!(uuid::Uuid::new_v4().to_string())),
-            ("container_removed", json!(false)),
+            ("container_removed", json!(true)),
+            ("job_completed_successfully", json!(false)),
+            ("compose_receipt_sha256", json!("unvalidated")),
             ("installation_ready", json!(true)),
             ("extra", json!(1)),
             ("outputs", json!([])),

@@ -6,14 +6,17 @@ nonroot Linux amd64 process with no-new-privileges and an already-running,
 user-owned rootless Docker daemon. macOS, Windows and other architectures are
 not supported.
 
-Normal admitted installation remains held pending separate qualification.
-An exact signed nightly `--candidate-test` attempts an experimental rootless
-storage canary and, only if that succeeds on this host, stack provisioning and
-required read-only validation. An unsigned development harness has completed a
-rootless ownership transition and restoration on one disposable host; see
-[Installer development canary](installer-development-canary.md). These results
-do not qualify a signed release or admit normal installation. Complete
-application validation and signed release qualification remain separate gates.
+Unsigned Compose development qualification passed on an 8 GiB rootless host:
+fresh installation, migrations, two ordinary restarts, the credential
+issue/present/revoke/deny journey, final audit, and normal shutdown with data and
+disk retained. Setup executions and existing signing identities were unchanged.
+This does not qualify a published signed installer or admit normal installation.
+Built-in read-only `validate` still reports the optional journey as `SKIP` and
+`installation_ready: false`; the separate disposable runner supplies the passing
+functional result. The results do not establish 3 GiB or production load capacity,
+rendered UI, or external wallet interoperability. See the
+[qualification summary](compose-installer.md#current-qualification-window) and
+[development canary](installer-development-canary.md).
 
 The bootstrap invocation puts the entire download-and-script pipeline under
 no-new-privileges and propagates download errors:
@@ -210,10 +213,12 @@ ports. The writable count excludes tmpfs and other writable paths absent from
 means that service was missing; a `null` top-level value means the inspection
 could not be held stable. It does not inspect kernel-effective UID or capabilities
 inside a running process and is not a container-hardening qualification.
-The credential journey is explicitly reported as `SKIP`: login and actual
-issue/present/verify/revoke/deny tests require isolated test fixtures and remain
-in the separate disposable qualification runner. Authorization metadata checks
-do not establish that user login or credential issuance works.
+The credential journey remains `SKIP` in this read-only command because actual
+issue/present/verify/revoke/deny checks require isolated fixtures. The separate
+disposable runner passed that bounded sequence; its result does not change this
+command's `SKIP` or promote the installation to ready. See the
+[qualification limits](compose-installer.md#functional-readiness-and-qualification-boundaries).
+Authorization metadata checks alone do not establish that login or issuance works.
 
 A passing report means the listed read-only deployment checks passed at that
 time; it is not an atomic snapshot or a release qualification. The current

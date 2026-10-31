@@ -1,14 +1,11 @@
-//! Read-only, bounded diagnostics of recorded application containers. Filtering
-//! known credentials is defense in depth, not a guarantee that logs are public.
+//! Read-only, bounded native Compose diagnostics. Known-credential filtering is
+//! defense in depth; even filtered logs remain private installation information.
 #![cfg(target_os = "linux")]
 use crate::{
-    installer_application_model::ApplicationModelPlan,
-    installer_application_observation::validate_container_for_logs,
-    installer_runtime::DockerRunner,
+    installer_doctor,
     installer_state::{LockedInspection, SCALAR_SECRETS},
 };
 use base64::{engine::general_purpose, Engine};
-use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -16,13 +13,6 @@ use std::{
 };
 type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "Installer logs refused; ownership, evidence, credential filtering, or bounded capture could not be verified";
-const HELPERS: [&str; 5] = [
-    "revocation-profile-migrate",
-    "db-migrate",
-    "kms-initialize",
-    "keycloak-configurator",
-    "issuance-migrations",
-];
 fn require(ok: bool) -> Result<()> {
     if ok {
         Ok(())
@@ -32,11 +22,6 @@ fn require(ok: bool) -> Result<()> {
 }
 fn text(v: &Value) -> Result<&str> {
     v.as_str().ok_or_else(|| REFUSED.into())
-}
-fn identifier(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 fn name(s: &str) -> bool {
     !s.is_empty()
@@ -71,7 +56,6 @@ fn arguments(args: &[String]) -> Result<Arguments> {
         installation.is_absolute()
             && docker.is_absolute()
             && name(&service)
-            && !HELPERS.contains(&service.as_str())
             && (1..=1000).contains(&tail),
     )?;
     Ok(Arguments {
@@ -81,31 +65,11 @@ fn arguments(args: &[String]) -> Result<Arguments> {
         docker,
     })
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SavedPlan {
-    model: Value,
-    selected_services: Vec<String>,
-    expected_network_id: String,
-    installation_ready: bool,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Created {
-    containers: BTreeMap<String, String>,
-    redis_volume: String,
-    network_id: String,
-}
-fn one(output: &str) -> Result<Value> {
-    let v: Value = serde_json::from_str(output).map_err(|_| REFUSED)?;
-    let a = v.as_array().ok_or(REFUSED)?;
-    require(a.len() == 1 && a[0].is_object())?;
-    Ok(a[0].clone())
-}
-// Model paths are Compose-escaped; never interpolate an environment variable.
-fn decoded_path(s: &str) -> Result<PathBuf> {
-    require(!s.replace("$$", "").contains('$'))?;
-    Ok(PathBuf::from(s.replace("$$", "$")))
+// Compose 5.6.1 escapes every dollar in rendered JSON for round-tripping.
+// Decode only that representation for path checks, never interpolation or an
+// executable replacement model.
+fn decoded_path(source: &str) -> Result<PathBuf> {
+    crate::installer_compose::config_path(&json!(source))
 }
 fn secret_entry(source: &str, secret_dir: &Path) -> Result<String> {
     let path = decoded_path(source)?;
@@ -114,28 +78,38 @@ fn secret_entry(source: &str, secret_dir: &Path) -> Result<String> {
     require(name(entry))?;
     Ok(entry.to_owned())
 }
-fn credential_names(plan: &ApplicationModelPlan, installation: &Path) -> Result<BTreeSet<String>> {
-    credential_names_at(plan, &installation.join("secrets"))
-}
-fn credential_names_at(plan: &ApplicationModelPlan, secret_dir: &Path) -> Result<BTreeSet<String>> {
+fn credential_names(
+    model: &Value,
+    installation: &Path,
+    generation_root: Option<&Path>,
+) -> Result<BTreeSet<String>> {
+    let original = installation.join("secrets");
+    let roots: Vec<&Path> = std::iter::once(original.as_path())
+        .chain(generation_root)
+        .collect();
     let mut entries: BTreeSet<String> = SCALAR_SECRETS.iter().map(|s| s.to_string()).collect();
-    for role in &plan.selected_services {
-        let service = &plan.model["services"][role];
+    let mut insert = |source: &str| -> Result<()> {
+        let decoded = decoded_path(source)?;
+        let root = roots
+            .iter()
+            .find(|root| decoded.starts_with(root))
+            .ok_or(REFUSED)?;
+        entries.insert(secret_entry(source, root)?);
+        Ok(())
+    };
+    for service in model["services"].as_object().ok_or(REFUSED)?.values() {
         if let Some(secrets) = service.get("secrets") {
             for secret in secrets.as_array().ok_or(REFUSED)? {
-                let source = text(&secret["source"])?;
-                entries.insert(secret_entry(
-                    text(&plan.model["secrets"][source]["file"])?,
-                    secret_dir,
-                )?);
+                insert(text(&model["secrets"][text(&secret["source"])?]["file"])?)?;
             }
         }
         if let Some(volumes) = service.get("volumes") {
             for mount in volumes.as_array().ok_or(REFUSED)? {
                 if mount["type"] == "bind" {
                     let source = text(&mount["source"])?;
-                    if decoded_path(source)?.starts_with(secret_dir) {
-                        entries.insert(secret_entry(source, secret_dir)?);
+                    let decoded = decoded_path(source)?;
+                    if roots.iter().any(|root| decoded.starts_with(root)) {
+                        insert(source)?;
                     }
                 }
             }
@@ -228,314 +202,63 @@ fn redact(input: &str, patterns: &[String]) -> Result<String> {
         })
         .collect())
 }
-fn observe(
-    docker: &DockerRunner,
-    plan: &ApplicationModelPlan,
-    service: &str,
-    id: &str,
-    project: &str,
-) -> Result<()> {
-    let network = one(&docker.run_checked(&["network", "inspect", &plan.expected_network_id])?)?;
-    require(
-        network["Id"] == plan.expected_network_id
-            && network["Name"] == plan.model["networks"]["default"]["name"]
-            && network["Labels"]["com.docker.compose.project"] == format!("{project}-bao")
-            && network["Labels"]["com.docker.compose.network"] == "default",
-    )?;
-    let image = one(&docker.run_checked(&[
-        "image",
-        "inspect",
-        text(&plan.model["services"][service]["image"])?,
-    ])?)?;
-    let container = one(&docker.run_checked(&["inspect", "--type", "container", id])?)?;
-    validate_container_for_logs(&container, id, service, plan, &image)
-}
-/// Returns bounded JSON only after both observations and credential snapshots
-/// agree. Treat even filtered diagnostics as private installation information.
+/// Captures only ordinary recorded services through native Compose. Setup jobs
+/// are excluded by their admitted phase label, never a duplicate role-name list.
 pub fn logs(args: &[String]) -> Result<String> {
     logs_inner(args).map_err(|_| REFUSED.to_owned())
 }
 fn logs_inner(args: &[String]) -> Result<String> {
     let args = arguments(args)?;
     let state = LockedInspection::open(&args.installation)?;
-    let binding = state.journal().runtime().ok_or(REFUSED)?;
-    let project = state.journal().compose_project();
-    let saved = state.read_evidence("application-plan.json")?;
-    let created_bytes = state.read_evidence("application-created-resources.json")?;
-    let decoded: SavedPlan = serde_json::from_slice(&saved).map_err(|_| REFUSED)?;
-    let plan = ApplicationModelPlan {
-        model: decoded.model,
-        selected_services: decoded.selected_services,
-        expected_network_id: decoded.expected_network_id,
-        installation_ready: decoded.installation_ready,
-    };
-    let created: Created = serde_json::from_slice(&created_bytes).map_err(|_| REFUSED)?;
-    require(
-        !plan.installation_ready
-            && plan.model["name"] == project
-            && identifier(&plan.expected_network_id)
-            && created.network_id == plan.expected_network_id
-            && created.redis_volume == format!("{project}_redis-socket")
-            && plan.selected_services.contains(&args.service),
-    )?;
-    let roles =
-        crate::installer_application_graph::startup_order(&plan.model, &plan.selected_services)?;
-    require(
-        created.containers.keys().cloned().collect::<BTreeSet<_>>() == roles.into_iter().collect()
-            && created.containers.values().all(|s| identifier(s))
-            && created.containers.values().collect::<BTreeSet<_>>().len()
-                == created.containers.len(),
-    )?;
-    let id = created.containers.get(&args.service).ok_or(REFUSED)?;
-    let compose_bytes = state.read_evidence("application-compose.json")?;
-    require(compose_bytes == crate::installer_application::compose_document(&plan.model)?)?;
-    let generation = crate::installer_generation_binding::load_verified(
-        &args.installation,
-        &state.journal().installation_id().to_string(),
-        &binding.engine_id,
-    )?;
-    let names = if let Some(generation) = &generation {
-        crate::installer_generation_binding::verify_model(&args.installation, generation, &plan)?;
-        credential_names_at(&plan, &generation.secret_dir(&args.installation)?)?
-    } else {
-        credential_names(&plan, &args.installation)?
-    };
+    let (saved, session) =
+        installer_doctor::open_session(&state, &args.installation, &args.docker)?;
+    let resources = session.observe_resources()?;
+    let identity = resources.containers.get(&args.service).ok_or(REFUSED)?;
+    require(!identity.setup && saved.model["services"][&args.service].is_object())?;
+    let id = state.journal().installation_id().to_string();
+    let engine = &state.journal().runtime().ok_or(REFUSED)?.engine_id;
+    let generation =
+        crate::installer_generation_binding::load_verified(&args.installation, &id, engine)?;
+    let generation_root = generation
+        .as_ref()
+        .map(|g| g.secret_dir(&args.installation))
+        .transpose()?;
+    let mut names = credential_names(&saved.model, &args.installation, generation_root.as_deref())?;
+    if let Some(generation) = &generation {
+        names.extend(generation.files.keys().cloned());
+    }
+    require(names.len() <= 128)?;
     let credentials = selected_corpus(&state, &names, &args.installation, generation.as_ref())?;
     let patterns = patterns(&credentials)?;
-    let docker = DockerRunner::from_binding(&args.docker, binding, &args.installation)?;
-    docker.preflight()?;
-    observe(&docker, &plan, &args.service, id, &project)?;
-    let (stdout, stderr) = docker.capture_logs(id, args.tail)?;
-    observe(&docker, &plan, &args.service, id, &project)?;
+    let output = session.logs(std::slice::from_ref(&args.service), args.tail)?;
     require(
-        credentials == selected_corpus(&state, &names, &args.installation, generation.as_ref())?
-            && saved == state.read_evidence("application-plan.json")?
-            && created_bytes == state.read_evidence("application-created-resources.json")?
-            && compose_bytes == state.read_evidence("application-compose.json")?,
-    )?;
-    let current_generation = crate::installer_generation_binding::load_verified(
-        &args.installation,
-        &state.journal().installation_id().to_string(),
-        &binding.engine_id,
-    )?;
-    require(
-        serde_json::to_vec(&generation).map_err(|_| REFUSED)?
-            == serde_json::to_vec(&current_generation).map_err(|_| REFUSED)?,
+        resources == session.observe_resources()?
+            && credentials
+                == selected_corpus(&state, &names, &args.installation, generation.as_ref())?
+            && serde_json::to_value(&saved).map_err(|_| REFUSED)?
+                == serde_json::to_value(installer_doctor::load_session(
+                    &state,
+                    &args.installation,
+                )?)
+                .map_err(|_| REFUSED)?
+            && generation
+                == crate::installer_generation_binding::load_verified(
+                    &args.installation,
+                    &id,
+                    engine,
+                )?,
     )?;
     state.require_unchanged()?;
-    serde_json::to_string(&json!({"schema":"marty.installer.logs.v1","installation_id":state.journal().installation_id(),"service":args.service,"container_id":id,"tail":args.tail,"stdout":redact(&stdout,&patterns)?,"stderr":redact(&stderr,&patterns)?,"filtering":"Known credential literals and common encodings, private-key blocks, and conventional sensitive lines are suppressed. Unknown, fragmented, or differently encoded secrets may remain; keep these diagnostics private.","installation_ready":false})).map_err(|_| REFUSED.into())
+    serde_json::to_string(&json!({"schema":"marty.installer.logs.v2","installation_id":id,
+        "service":args.service,"container_id":identity.id,"tail":args.tail,
+        "source":"docker_compose_logs","stdout":redact(&output,&patterns)?,
+        "filtering":"Known credential literals and common encodings, private-key blocks, and conventional sensitive lines are suppressed. Unknown, fragmented, or differently encoded secrets may remain; keep these diagnostics private.",
+        "installation_ready":false})).map_err(|_| REFUSED.into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::installer_state::{Identity, InstallerState, RuntimeBinding};
-    use std::{fs, os::unix::fs::PermissionsExt};
-
-    fn mocked_installation(mode: &str) -> (tempfile::TempDir, Vec<String>) {
-        let root = tempfile::tempdir().unwrap();
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let installation = root.path().join("install");
-        let mut state = InstallerState::create_with_runtime(
-            &installation,
-            Identity {
-                source_sha: "a".repeat(40),
-                release_tag: "v1.2.3".into(),
-                inventory_sha256: format!("sha256:{}", "b".repeat(64)),
-            },
-            RuntimeBinding {
-                docker_host: "unix:///var/run/docker.sock".into(),
-                engine_id: "test-engine".into(),
-                openbao_port: 18200,
-                profile: crate::installer_state::RuntimeProfile::Rootful,
-            },
-        )
-        .unwrap();
-        state.create_private_directory("evidence").unwrap();
-        let project = state.journal().compose_project();
-        let network = format!("{project}-bao_default");
-        let digest = format!("example.test/services@sha256:{}", "a".repeat(64));
-        let mut services = serde_json::Map::new();
-        for role in [
-            "gateway",
-            "postgres",
-            "redis",
-            "revocation-profile-migrate",
-            "db-migrate",
-            "kms-initialize",
-            "keycloak-configurator",
-            "issuance-migrations",
-            "cloudflared",
-            "cloudflared-beta",
-            "tunnel-nginx-proxy",
-        ] {
-            services.insert(
-                role.into(),
-                json!({"image":digest,"restart":"no","healthcheck":{"test":["CMD","true"]}}),
-            );
-        }
-        for i in 0..22 {
-            services.insert(
-                format!("synthetic-{i}"),
-                json!({"image":digest,"restart":"no","healthcheck":{"test":["CMD","true"]}}),
-            );
-        }
-        services["kms-initialize"]["depends_on"] = json!({"postgres":{"condition":"service_healthy"},"redis":{"condition":"service_healthy"},"db-migrate":{"condition":"service_completed_successfully"},"revocation-profile-migrate":{"condition":"service_completed_successfully"}});
-        services["gateway"]["secrets"] = json!([
-            {"source":"openbao_tls_ca_cert","target":"/run/secrets/openbao_tls_ca_cert"},
-            {"source":"gateway_scoped_token","target":"/run/secrets/gateway_scoped_token"},
-            {"source":"smtp_password","target":"/run/secrets/smtp_password"}
-        ]);
-        let selected: Vec<String> = services
-            .keys()
-            .filter(|s| {
-                ![
-                    "kms-initialize",
-                    "cloudflared",
-                    "cloudflared-beta",
-                    "tunnel-nginx-proxy",
-                ]
-                .contains(&s.as_str())
-            })
-            .cloned()
-            .collect();
-        let plan = ApplicationModelPlan {
-            model: json!({"name":project,"services":services,"networks":{"default":{"name":network}},"volumes":{"redis-socket":{"name":format!("{project}_redis-socket")}},"secrets":{
-                "openbao_tls_ca_cert":{"file":installation.join("secrets/openbao_tls_ca_cert")},
-                "gateway_scoped_token":{"file":installation.join("secrets/gateway_scoped_token")},
-                "smtp_password":{"file":installation.join("secrets/smtp_password")}
-            }}),
-            selected_services: selected,
-            expected_network_id: "c".repeat(64),
-            installation_ready: false,
-        };
-        let roles =
-            crate::installer_application_graph::startup_order(&plan.model, &plan.selected_services)
-                .unwrap();
-        let containers: BTreeMap<String, String> = roles
-            .into_iter()
-            .enumerate()
-            .map(|(i, r)| (r, format!("{:064x}", i + 1)))
-            .collect();
-        let id = containers["gateway"].clone();
-        state
-            .write_evidence("application-plan.json", &serde_json::to_vec(&plan).unwrap())
-            .unwrap();
-        state
-            .write_evidence(
-                "application-compose.json",
-                &crate::installer_application::compose_document(&plan.model).unwrap(),
-            )
-            .unwrap();
-        state.write_evidence("application-created-resources.json",&serde_json::to_vec(&json!({"containers":containers,"redis_volume":format!("{project}_redis-socket"),"network_id":plan.expected_network_id})).unwrap()).unwrap();
-        fs::create_dir(installation.join("secrets")).unwrap();
-        fs::set_permissions(
-            installation.join("secrets"),
-            fs::Permissions::from_mode(0o700),
-        )
-        .unwrap();
-        for name in SCALAR_SECRETS {
-            let path = installation.join("secrets").join(name);
-            fs::write(&path, "credential-sensitive-123").unwrap();
-            fs::set_permissions(path, fs::Permissions::from_mode(0o444)).unwrap();
-        }
-        let ca = installation.join("secrets/openbao_tls_ca_cert");
-        fs::write(
-            &ca,
-            include_bytes!("../tests/fixtures/installer-log-public-ca.txt"),
-        )
-        .unwrap();
-        if mode == "misclassified-ca" {
-            fs::write(&ca, b"-----BEGIN CERTIFICATE-----\nnot-a-certificate credential-sensitive-123\n-----END CERTIFICATE-----\n").unwrap();
-        }
-        fs::set_permissions(&ca, fs::Permissions::from_mode(0o644)).unwrap();
-        let scoped = installation.join("secrets/gateway_scoped_token");
-        fs::write(&scoped, "scoped-sensitive-789").unwrap();
-        fs::set_permissions(&scoped, fs::Permissions::from_mode(0o444)).unwrap();
-        let smtp = installation.join("secrets/smtp_password");
-        fs::write(&smtp, b"").unwrap();
-        fs::set_permissions(&smtp, fs::Permissions::from_mode(0o444)).unwrap();
-        fs::write(
-            installation.join("operator-password"),
-            "operator-sensitive-456",
-        )
-        .unwrap();
-        fs::set_permissions(
-            installation.join("operator-password"),
-            fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
-        drop(state);
-        let image_id = format!("sha256:{}", "b".repeat(64));
-        let image = json!([{"Id":image_id,"RepoDigests":[digest],"Config":{"Env":[],"Entrypoint":[],"Cmd":[],"User":"","WorkingDir":""}}]);
-        let observed = json!([{"Id":id,"Image":image_id,"Name":format!("/{project}-gateway-1"),
-            "Config":{"Image":digest,"Labels":{"com.docker.compose.project":project,"com.docker.compose.service":"gateway","com.docker.compose.container-number":"1","com.docker.compose.oneoff":"False"},"Env":[],"Entrypoint":[],"Cmd":[],"User":"","WorkingDir":"","Healthcheck":{"Test":["CMD","true"]}},
-            "HostConfig":{"Privileged":false,"ReadonlyRootfs":false,"AutoRemove":false,"RestartPolicy":{"Name":"no"},"IpcMode":"private","NetworkMode":network},
-            "NetworkSettings":{"Networks":{network.clone():{"NetworkID":plan.expected_network_id,"Aliases":[format!("{project}-gateway-1"),"gateway"]}},"Ports":{}},"Mounts":[
-                {"Type":"bind","Source":ca,"Destination":"/run/secrets/openbao_tls_ca_cert","RW":false,"Propagation":"rprivate"},
-                {"Type":"bind","Source":scoped,"Destination":"/run/secrets/gateway_scoped_token","RW":false,"Propagation":"rprivate"},
-                {"Type":"bind","Source":smtp,"Destination":"/run/secrets/smtp_password","RW":false,"Propagation":"rprivate"}
-            ],"State":{"Status":"exited","ExitCode":17,"Running":false,"Paused":false,"Restarting":false,"OOMKilled":true}}]);
-        let mut replacement = observed.clone();
-        replacement[0]["Id"] = json!("f".repeat(64));
-        for (name, value) in [
-            ("image.json", image),
-            ("container.json", observed),
-            ("replacement.json", replacement),
-            (
-                "network.json",
-                json!([{"Id":plan.expected_network_id,"Name":network,"Labels":{"com.docker.compose.project":format!("{project}-bao"),"com.docker.compose.network":"default"}}]),
-            ),
-            (
-                "info.json",
-                json!({"id":"test-engine","os":"linux","architecture":"x86_64","server_version":"28.0.0","security_options":["name=seccomp,profile=builtin"]}),
-            ),
-            (
-                "foreign-info.json",
-                json!({"id":"foreign-engine","os":"linux","architecture":"x86_64","server_version":"28.0.0","security_options":["name=seccomp,profile=builtin"]}),
-            ),
-        ] {
-            fs::write(root.path().join(name), serde_json::to_vec(&value).unwrap()).unwrap();
-        }
-        let mutation = match mode {
-            "engine" => "cp \"$fixture/foreign-info.json\" \"$fixture/info.json\"",
-            "container" => "cp \"$fixture/replacement.json\" \"$fixture/container.json\"",
-            "rotation" => {
-                "chmod 600 \"$fixture/install/secrets/token_hmac_key\"; printf rotated-credential > \"$fixture/install/secrets/token_hmac_key\"; chmod 444 \"$fixture/install/secrets/token_hmac_key\""
-            }
-            "success" | "misclassified-ca" => ":",
-            _ => panic!("invalid fixture mode"),
-        };
-        let script = format!(
-            "#!/bin/sh\nfixture='{}'\ncase \"$1\" in\ninfo) cat \"$fixture/info.json\";;\ncompose) printf '2.40.3';;\nnetwork) cat \"$fixture/network.json\";;\nimage) cat \"$fixture/image.json\";;\ninspect) cat \"$fixture/container.json\";;\nlogs) printf 'out credential-sensitive-123\\n'; printf 'err operator-sensitive-456\\n' >&2; {mutation};;\n*) exit 97;;\nesac\n",
-            root.path().display()
-        );
-        let executable = root.path().join("docker-stub");
-        fs::write(&executable, script).unwrap();
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-        let args = vec![
-            "--install-dir".into(),
-            installation.to_str().unwrap().into(),
-            "--service".into(),
-            "gateway".into(),
-            "--docker-bin".into(),
-            executable.to_str().unwrap().into(),
-        ];
-        (root, args)
-    }
-    #[test]
-    fn complete_mocked_pipeline_filters_failed_container_logs_and_refuses_races() {
-        let (_root, args) = mocked_installation("success");
-        let result = logs(&args).unwrap();
-        let result: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(result["stdout"], "out [REDACTED]\n");
-        assert_eq!(result["stderr"], "err [REDACTED]\n");
-        assert_eq!(result["installation_ready"], false);
-        for mode in ["engine", "container", "rotation", "misclassified-ca"] {
-            let (_root, args) = mocked_installation(mode);
-            assert_eq!(logs(&args).unwrap_err(), REFUSED, "{mode}");
-        }
-    }
     fn args(extra: &[&str]) -> Vec<String> {
         [
             vec!["--install-dir", "/private/install", "--service", "gateway"],
@@ -547,7 +270,7 @@ mod tests {
         .collect()
     }
     #[test]
-    fn closed_arguments_and_helper_refusal() {
+    fn closed_arguments_do_not_enable_unbounded_capture() {
         assert_eq!(arguments(&args(&[])).unwrap().tail, 100);
         for extra in [
             vec!["--tail", "0"],
@@ -557,11 +280,6 @@ mod tests {
             vec!["--unknown", "x"],
         ] {
             assert!(arguments(&args(&extra)).is_err());
-        }
-        for role in HELPERS {
-            let mut a = args(&[]);
-            a[3] = role.into();
-            assert!(arguments(&a).is_err());
         }
     }
     #[test]
@@ -587,8 +305,9 @@ mod tests {
             .unwrap()
             .contains("pass@"));
     }
+
     #[test]
-    fn secret_paths_are_literal_and_confined() {
+    fn native_secret_paths_are_literal_and_confined() {
         let root = Path::new("/private/dollar$install/secrets");
         assert_eq!(
             secret_entry("/private/dollar$$install/secrets/token_name", root).unwrap(),
@@ -604,26 +323,22 @@ mod tests {
         assert!(patterns(&[b"-----BEGIN PRIVATE KEY-----".to_vec()]).is_err());
     }
     #[test]
-    fn corpus_covers_other_roles_and_direct_tokens_without_optional_declarations() {
-        let mut plan = ApplicationModelPlan {
-            model: json!({"services": {
-                "gateway": {"secrets":[{"source":"gateway_token"}]},
-                "keycloak-configurator": {"secrets":[{"source":"operator_bootstrap_password"}]},
-                "installer-ingress": {"volumes":[{"type":"bind","source":"/private/install/secrets/installer_ingress_tls_kms_token"}]}
-            },"secrets": {
-                "gateway_token":{"file":"/private/install/secrets/gateway_token"},
-                "operator_bootstrap_password":{"file":"/private/install/secrets/operator_bootstrap_password"},
-                "cloudflare_tunnel_token":{"file":"/missing/optional"}
-            }}),
-            selected_services: vec![
-                "gateway".into(),
-                "keycloak-configurator".into(),
-                "installer-ingress".into(),
-            ],
-            expected_network_id: "a".repeat(64),
-            installation_ready: false,
-        };
-        let names = credential_names(&plan, Path::new("/private/install")).unwrap();
+    fn corpus_covers_native_secrets_and_direct_generation_mounts() {
+        let mut model = json!({"services": {
+            "gateway": {"secrets":[{"source":"gateway_token"}]},
+            "initializer": {"secrets":[{"source":"operator_bootstrap_password"}]},
+            "installer-ingress": {"volumes":[{"type":"bind","source":"/private/install/application-generation/installer_ingress_tls_kms_token"}]}
+        },"secrets": {
+            "gateway_token":{"file":"/private/install/secrets/gateway_token"},
+            "operator_bootstrap_password":{"file":"/private/install/secrets/operator_bootstrap_password"},
+            "unused_optional_token":{"file":"/missing/optional"}
+        }});
+        let names = credential_names(
+            &model,
+            Path::new("/private/install"),
+            Some(Path::new("/private/install/application-generation")),
+        )
+        .unwrap();
         for entry in [
             "gateway_token",
             "operator_bootstrap_password",
@@ -631,8 +346,8 @@ mod tests {
         ] {
             assert!(names.contains(entry));
         }
-        assert!(!names.contains("cloudflare_tunnel_token"));
-        plan.model["secrets"]["gateway_token"]["file"] = json!("/outside/token");
-        assert!(credential_names(&plan, Path::new("/private/install")).is_err());
+        assert!(!names.contains("unused_optional_token"));
+        model["secrets"]["gateway_token"]["file"] = json!("/outside/token");
+        assert!(credential_names(&model, Path::new("/private/install"), None).is_err());
     }
 }

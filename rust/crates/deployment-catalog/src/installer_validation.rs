@@ -2,7 +2,6 @@
 #![cfg(target_os = "linux")]
 use crate::{
     installer_doctor,
-    installer_runtime::DockerRunner,
     installer_state::LockedInspection,
     installer_trust::{self, TrustInfo},
 };
@@ -171,11 +170,10 @@ fn authorization_valid(v: &Value, issuer: &Value, origin: &str) -> bool {
         && v["token_endpoint"] == format!("{origin}/v1/issuance/token")
         && v["authorization_endpoint"] == format!("{origin}/v1/issuance/authorize")
 }
-fn required_services(state: &LockedInspection) -> Result<Vec<String>> {
-    let plan: Value = serde_json::from_slice(&state.read_evidence("application-plan.json")?)
-        .map_err(|_| "invalid application readiness configuration")?;
+fn required_services(state: &LockedInspection, installation: &Path) -> Result<Vec<String>> {
+    let saved = installer_doctor::load_session(state, installation)?;
     parse_required_services(
-        plan["model"]["services"]["gateway"]["environment"]["GATEWAY_REQUIRED_READY_SERVICES"]
+        saved.model["services"]["gateway"]["environment"]["GATEWAY_REQUIRED_READY_SERVICES"]
             .as_str()
             .unwrap_or(""),
     )
@@ -249,15 +247,8 @@ pub(crate) fn run_locked(
     let deadline = started + DEADLINE;
     let journal = state.journal();
     let runtime = journal.runtime();
-    let runner = runtime
-        .ok_or_else(|| "missing recorded Docker binding".to_owned())
-        .and_then(|r| DockerRunner::from_binding(docker, r, installation))
-        .map(|r| r.with_deadline(deadline));
-    let before = runner.as_ref().ok().and_then(|d| {
-        d.preflight()
-            .ok()
-            .and_then(|_| installer_doctor::services(state, installation, d).ok())
-    });
+    let before =
+        installer_doctor::services_with_deadline(state, installation, docker, deadline).ok();
     let owned = before.as_ref().is_some_and(services_passed);
     let trust = if owned {
         installer_trust::inspect_locked(installation, state).ok()
@@ -265,7 +256,7 @@ pub(crate) fn run_locked(
         None
     };
     let mut observed = vec![false; 5];
-    let required = required_services(state).ok();
+    let required = required_services(state, installation).ok();
     if let (Some(trust), Some(required)) = (&trust, &required) {
         if let (Ok(rt), Some(remaining)) = (
             tokio::runtime::Builder::new_current_thread()
@@ -281,10 +272,8 @@ pub(crate) fn run_locked(
         }
     }
     // A changed configuration or service identity invalidates this observation.
-    let after = runner
-        .as_ref()
-        .ok()
-        .and_then(|d| installer_doctor::services(state, installation, d).ok());
+    let after =
+        installer_doctor::services_with_deadline(state, installation, docker, deadline).ok();
     let stable_inspection = before
         .as_ref()
         .is_some_and(|v| v["services_observed"] == true)

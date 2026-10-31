@@ -12,7 +12,6 @@ use crate::installer_openbao_owner_transition::{self, Evidence as OpenBaoOwnerEv
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
     ffi::CString,
     fs::File,
     io::{Read, Write},
@@ -311,9 +310,9 @@ fn private(file: &File, directory: bool) -> Result<()> {
     Ok(())
 }
 
-/// The applicant image runs as 10001:10001. A rootless installer shares only
-/// its nonzero effective group with that service; a root installer provisions
-/// the dedicated image group instead of granting the container group zero.
+/// Host ownership for the applicant directory. A nonroot installer shares its
+/// nonzero effective host group; a root installer provisions image group 10001.
+/// Container supplemental groups must use the runtime projection below.
 pub fn applicant_state_gid() -> Result<u32> {
     let uid = unsafe { libc::geteuid() };
     let gid = if uid == 0 {
@@ -325,6 +324,41 @@ pub fn applicant_state_gid() -> Result<u32> {
         return Err("applicant state requires a nonroot group".into());
     }
     Ok(gid)
+}
+
+/// A validated namespace projection, not an arbitrary numeric group override.
+/// Host ownership and the container's supplemental group are distinct values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ApplicantContainerGroup {
+    host_gid: u32,
+    container_gid: u32,
+}
+
+impl ApplicantContainerGroup {
+    pub fn host_gid(self) -> u32 {
+        self.host_gid
+    }
+
+    pub fn container_gid(self) -> u32 {
+        self.container_gid
+    }
+}
+
+/// Project the reviewed host group into a previously observed local runtime.
+/// Rootless qualification proves namespace group zero maps to the ordinary
+/// installer group. The image retains its nonroot user and primary group;
+/// supplemental group zero here is not host group zero. Rootful behavior keeps
+/// the existing host group, including ordinary callers of a rootful daemon.
+pub fn applicant_container_group(binding: &RuntimeBinding) -> Result<ApplicantContainerGroup> {
+    binding.validate()?;
+    let host_gid = applicant_state_gid()?;
+    Ok(ApplicantContainerGroup {
+        host_gid,
+        container_gid: match binding.profile {
+            RuntimeProfile::Rootful => host_gid,
+            RuntimeProfile::Rootless => 0,
+        },
+    })
 }
 
 fn require_applicant_storage(directory: &File, gid: u32) -> Result<()> {
@@ -476,60 +510,6 @@ pub struct LockedInspection {
     journal: Journal,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum CleanupState {
-    NotStarted,
-    InProgress,
-    Completed,
-}
-/// Summary of durable cleanup records, never an observation of current Docker
-/// resources. The installation journal remains historical and unchanged.
-#[derive(Debug, Serialize)]
-pub struct CleanupStatus {
-    pub state: CleanupState,
-    pub runtime_observed: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data_retained: Option<bool>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CleanupResource {
-    role: String,
-    container_id: String,
-    bao: bool,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CleanupPlanRecord {
-    schema: String,
-    installation_id: String,
-    engine_id: String,
-    project: String,
-    network_id: String,
-    network_name: String,
-    retained_redis_volume: Option<String>,
-    #[serde(default)]
-    absent_redis_volume: Option<String>,
-    resources: Vec<CleanupResource>,
-    source_hashes: BTreeMap<String, String>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CleanupResultRecord {
-    schema: String,
-    installation_id: String,
-    engine_id: String,
-    containers_removed: u32,
-    network_removed: bool,
-    host_data_retained: bool,
-    credentials_retained: bool,
-    images_retained: bool,
-    redis_volume_retained: Option<String>,
-    #[serde(default)]
-    redis_volume_absent: Option<String>,
-    installation_ready: bool,
-}
 fn cleanup_open_optional(
     directory: &File,
     entry: &str,
@@ -557,215 +537,31 @@ fn cleanup_open_optional(
         reopen_regular(&file)?
     }))
 }
-type CleanupRecords = (Option<Vec<u8>>, Option<Vec<u8>>);
-fn cleanup_records(directory: &File) -> Result<CleanupRecords> {
+// Presence alone blocks provisioning replay. Old cleanup markers remain a
+// refusal boundary, without preserving their obsolete service/resource catalog.
+fn maintenance_started(directory: &File) -> Result<bool> {
     let Some(evidence) = cleanup_open_optional(directory, "evidence", true)? else {
-        return Ok((None, None));
+        return Ok(false);
     };
-    let mut records = Vec::new();
-    for entry in ["uninstall-plan.json", "uninstall-result.json"] {
-        let bytes = if let Some(file) = cleanup_open_optional(&evidence, entry, false)? {
-            let mut bytes = Vec::new();
-            file.take(LIMIT + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| "cleanup evidence cannot be read")?;
-            if bytes.is_empty() || bytes.len() as u64 > LIMIT {
-                return Err("cleanup evidence exceeds bounds".into());
-            }
-            Some(bytes)
-        } else {
-            None
-        };
-        records.push(bytes);
-    }
-    let result = records.pop().unwrap();
-    let plan = records.pop().unwrap();
-    Ok((plan, result))
-}
-fn cleanup_hex(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-fn cleanup_summary(
-    journal: &Journal,
-    plan: Option<&[u8]>,
-    result: Option<&[u8]>,
-) -> Result<CleanupStatus> {
-    const INVALID: &str = "cleanup evidence is invalid or differs from installation identity";
-    let Some(plan) = plan else {
-        if result.is_some() {
-            return Err(INVALID.into());
-        }
-        return Ok(CleanupStatus {
-            state: CleanupState::NotStarted,
-            runtime_observed: false,
-            data_retained: None,
-        });
-    };
-    let plan: CleanupPlanRecord = serde_json::from_slice(plan).map_err(|_| INVALID)?;
-    let pre_application = plan.schema == "elevenid.installer-uninstall-pre-application-plan/v1";
-    let count = if pre_application { 4 } else { 34 };
-    let binding = journal.runtime().ok_or(INVALID)?;
-    let project = journal.compose_project();
-    let roles: BTreeSet<_> = plan.resources.iter().map(|r| r.role.as_str()).collect();
-    let identifiers: BTreeSet<_> = plan
-        .resources
-        .iter()
-        .map(|r| r.container_id.as_str())
-        .collect();
-    let bao: BTreeSet<_> = plan
-        .resources
-        .iter()
-        .filter(|r| r.bao)
-        .map(|r| r.role.as_str())
-        .collect();
-    let mut expected_sources = BTreeSet::from([
-        "evidence/application-plan.json",
-        "evidence/application-compose.json",
-        "evidence/application-created-resources.json",
-        "root/openbao-created.json",
-        "root/openbao-compose-model.json",
-        "evidence/keycloak-container-removed.json",
-        "evidence/tls-container-removed.json",
-        "evidence/ingress-container-removed.json",
-    ]);
-    if plan
-        .source_hashes
-        .contains_key("evidence/renewal-container-removed.json")
-    {
-        expected_sources.insert("evidence/renewal-container-removed.json");
-    }
-    if plan
-        .source_hashes
-        .contains_key("evidence/generation-container-removed.json")
-    {
-        if !expected_sources.contains("evidence/renewal-container-removed.json") {
-            return Err("generation cleanup lacks renewal authority evidence".into());
-        }
-        expected_sources.insert("evidence/generation-container-removed.json");
-    }
-    if plan
-        .source_hashes
-        .contains_key("evidence/application-generation.json")
-    {
-        if !expected_sources.contains("evidence/generation-container-removed.json") {
-            return Err("application generation cleanup lacks candidate evidence".into());
-        }
-        expected_sources.insert("evidence/application-generation.json");
-        expected_sources.insert("evidence/application-generation-pending.json");
-        expected_sources.insert("evidence/application-generation-selection.json");
-    }
-    if pre_application {
-        expected_sources.remove("evidence/application-created-resources.json");
-        expected_sources.insert("evidence/application-start-intent.json");
-        for (removed, completed) in [
-            (
-                "evidence/keycloak-container-removed.json",
-                "evidence/keycloak-result.json",
-            ),
-            (
-                "evidence/tls-container-removed.json",
-                "evidence/tls-result.json",
-            ),
-            (
-                "evidence/ingress-container-removed.json",
-                "evidence/ingress-result.json",
-            ),
-            (
-                "evidence/renewal-container-removed.json",
-                "evidence/renewal-result.json",
-            ),
-            (
-                "evidence/generation-container-removed.json",
-                "evidence/generation-result.json",
-            ),
-        ] {
-            if expected_sources.contains(removed) {
-                expected_sources.insert(completed);
-            }
+    for entry in [
+        "uninstall-plan.json",
+        "uninstall-result.json",
+        "uninstall-compose-stop-intent.json",
+        "uninstall-compose-stop-result.json",
+        "uninstall-compose-down-intent.json",
+        "uninstall-compose-down-result.json",
+        "uninstall-compose-start-0001-intent.json",
+        "uninstall-compose-start-0001-result.json",
+        "uninstall-compose-stop-0001-intent.json",
+        "uninstall-compose-stop-0001-result.json",
+        "uninstall-compose-down-0001-intent.json",
+        "uninstall-compose-down-0001-result.json",
+    ] {
+        if cleanup_open_optional(&evidence, entry, false)?.is_some() {
+            return Ok(true);
         }
     }
-    let redis = format!("{project}_redis-socket");
-    let volume_valid = if pre_application {
-        plan.retained_redis_volume.is_none()
-            && plan.absent_redis_volume.as_deref() == Some(redis.as_str())
-    } else {
-        plan.retained_redis_volume.as_deref() == Some(redis.as_str())
-            && plan.absent_redis_volume.is_none()
-    };
-    if (!pre_application && plan.schema != "elevenid.installer-uninstall-plan/v1")
-        || (pre_application && journal.phase() != Phase::Provisioning)
-        || plan.installation_id != journal.installation_id().to_string()
-        || plan.engine_id != binding.engine_id
-        || plan.project != project
-        || !cleanup_hex(&plan.network_id)
-        || plan.network_name != format!("{project}-bao_default")
-        || !volume_valid
-        || plan.resources.len() != count
-        || roles.len() != count
-        || identifiers.len() != count
-        || !identifiers.iter().all(|s| cleanup_hex(s))
-        || bao
-            != BTreeSet::from([
-                "openbao",
-                "openbao-bootstrap",
-                "openbao-tls-init",
-                "openbao-unseal",
-            ])
-        || plan.resources.iter().any(|r| {
-            r.role.is_empty()
-                || r.role.len() > 128
-                || !r
-                    .role
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        })
-        || plan
-            .source_hashes
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>()
-            != expected_sources
-        || !plan.source_hashes.values().all(|s| cleanup_hex(s))
-    {
-        return Err(INVALID.into());
-    }
-    let state = if let Some(bytes) = result {
-        let result: CleanupResultRecord = serde_json::from_slice(bytes).map_err(|_| INVALID)?;
-        if result.schema
-            != if pre_application {
-                "elevenid.installer-uninstall-pre-application-result/v1"
-            } else {
-                "elevenid.installer-uninstall-result/v1"
-            }
-            || result.installation_id != plan.installation_id
-            || result.engine_id != plan.engine_id
-            || result.containers_removed as usize != plan.resources.len()
-            || !result.network_removed
-            || !result.host_data_retained
-            || !result.credentials_retained
-            || !result.images_retained
-            || result.redis_volume_retained != plan.retained_redis_volume
-            || result.redis_volume_absent != plan.absent_redis_volume
-            || result.installation_ready
-        {
-            return Err(INVALID.into());
-        }
-        CleanupState::Completed
-    } else {
-        CleanupState::InProgress
-    };
-    let retained = if state == CleanupState::Completed {
-        Some(true)
-    } else {
-        None
-    };
-    Ok(CleanupStatus {
-        state,
-        runtime_observed: false,
-        data_retained: retained,
-    })
+    Ok(false)
 }
 impl LockedInspection {
     /// Append one bounded private diagnostic report; never replace lifecycle evidence.
@@ -867,13 +663,6 @@ impl LockedInspection {
     /// The held descriptor keeps read-only inventory walks inside this installation.
     pub(crate) fn installation_directory(&self) -> &File {
         &self.directory
-    }
-    pub fn cleanup_status(&self) -> Result<CleanupStatus> {
-        self.require_unchanged()?;
-        let (plan, result) = cleanup_records(&self.directory)?;
-        let summary = cleanup_summary(&self.journal, plan.as_deref(), result.as_deref())?;
-        self.require_unchanged()?;
-        Ok(summary)
     }
     /// Read credentials for diagnostic filtering without following user paths.
     /// Root-created scoped outputs may be readable immutable files; private
@@ -1107,9 +896,6 @@ impl LockedMaintenance {
         }
         self.require_unchanged()?;
         Ok(Some(bytes))
-    }
-    pub(crate) fn read_record(&self, entry: &str) -> Result<Option<Vec<u8>>> {
-        self.read_optional(&self.inspection.directory, entry)
     }
     pub(crate) fn read_evidence(&self, entry: &str) -> Result<Option<Vec<u8>>> {
         self.read_optional(&self.evidence()?, entry)
@@ -2271,8 +2057,7 @@ impl InstallerState {
         }
         // Cleanup and provisioning are separate lifecycles. Even a historical
         // Ready journal must never authorize recreation after cleanup begins.
-        let (cleanup_plan, cleanup_result) = cleanup_records(&directory)?;
-        if cleanup_plan.is_some() || cleanup_result.is_some() {
+        if maintenance_started(&directory)? {
             return Err("cleanup has begun; provisioning resume is refused".into());
         }
         if journal.phase == Phase::Provisioning {
@@ -2397,12 +2182,11 @@ mod tests {
         assert!(view.read_evidence("uninstall-plan.json").is_err());
         assert!(view.diagnostic_record("uninstall-plan.json", true).is_err());
         assert!(view.diagnostic_record("root-record.json", false).is_err());
-        assert!(view.cleanup_status().is_err());
+        assert!(maintenance_started(&view.directory).is_err());
         assert!(view.read_operator_password().is_err());
         drop(view);
         let maintenance = LockedMaintenance::open(&path).unwrap();
         assert!(maintenance.read_evidence("uninstall-plan.json").is_err());
-        assert!(maintenance.read_record("root-record.json").is_err());
         drop(maintenance);
         std::fs::remove_file(path.join(JOURNAL)).unwrap();
         fifo(&path.join(JOURNAL));
@@ -2792,238 +2576,65 @@ mod tests {
         drop(state);
         assert!(InstallerState::resume(&installation, &identity()).is_err());
     }
-    fn cleanup_test_records(journal: &Journal) -> (serde_json::Value, serde_json::Value) {
-        use serde_json::json;
-        let project = journal.compose_project();
-        let mut resources:Vec<_>=(0..30).map(|i|json!({"role":format!("app-{i}"),"container_id":format!("{:064x}",i+1),"bao":false})).collect();
-        for (i, role) in [
-            "openbao",
-            "openbao-unseal",
-            "openbao-bootstrap",
-            "openbao-tls-init",
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            resources.push(json!({"role":role,"container_id":format!("{:064x}",i+40),"bao":true}));
-        }
-        let sources: BTreeMap<_, _> = [
-            "evidence/application-plan.json",
-            "evidence/application-compose.json",
-            "evidence/application-created-resources.json",
-            "root/openbao-created.json",
-            "root/openbao-compose-model.json",
-            "evidence/keycloak-container-removed.json",
-            "evidence/tls-container-removed.json",
-            "evidence/ingress-container-removed.json",
-        ]
-        .into_iter()
-        .map(|s| (s, "a".repeat(64)))
-        .collect();
-        let plan = json!({"schema":"elevenid.installer-uninstall-plan/v1","installation_id":journal.installation_id(),"engine_id":journal.runtime().unwrap().engine_id,"project":project,"network_id":"b".repeat(64),"network_name":format!("{project}-bao_default"),"retained_redis_volume":format!("{project}_redis-socket"),"resources":resources,"source_hashes":sources});
-        let result = json!({"schema":"elevenid.installer-uninstall-result/v1","installation_id":journal.installation_id(),"engine_id":journal.runtime().unwrap().engine_id,"containers_removed":34,"network_removed":true,"host_data_retained":true,"credentials_retained":true,"images_retained":true,"redis_volume_retained":format!("{project}_redis-socket"),"installation_ready":false});
-        (plan, result)
-    }
-    fn cleanup_test_state(path: &Path) -> InstallerState {
-        InstallerState::create_with_runtime(
-            path,
-            identity(),
-            RuntimeBinding {
-                docker_host: "unix:///var/run/docker.sock".into(),
-                engine_id: "test-engine".into(),
-                openbao_port: 18200,
-                profile: crate::installer_state::RuntimeProfile::Rootful,
-            },
-        )
-        .unwrap()
-    }
     #[test]
-    fn cleanup_summary_accepts_exact_renewal_receipt_hash_but_no_unknown_sources() {
-        let root = tempfile::tempdir().unwrap();
-        let state = cleanup_test_state(&root.path().join("install"));
-        let (mut plan, result) = cleanup_test_records(state.journal());
-        plan["source_hashes"]["evidence/renewal-container-removed.json"] =
-            serde_json::json!("b".repeat(64));
-        let summary = cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&plan).unwrap()),
-            Some(&serde_json::to_vec(&result).unwrap()),
-        )
-        .unwrap();
-        assert_eq!(summary.state, CleanupState::Completed);
-        plan["source_hashes"]["evidence/generation-container-removed.json"] =
-            serde_json::json!("d".repeat(64));
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&plan).unwrap()),
-            None
-        )
-        .is_ok());
-        plan["source_hashes"]["evidence/application-generation.json"] =
-            serde_json::json!("e".repeat(64));
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&plan).unwrap()),
-            None
-        )
-        .is_err());
-        plan["source_hashes"]["evidence/application-generation-pending.json"] =
-            serde_json::json!("f".repeat(64));
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&plan).unwrap()),
-            None
-        )
-        .is_err());
-        plan["source_hashes"]["evidence/application-generation-selection.json"] =
-            serde_json::json!("a".repeat(64));
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&plan).unwrap()),
-            None
-        )
-        .is_ok());
-        let mut missing_candidate = plan.clone();
-        missing_candidate["source_hashes"]
-            .as_object_mut()
-            .unwrap()
-            .remove("evidence/generation-container-removed.json");
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&missing_candidate).unwrap()),
-            None
-        )
-        .is_err());
-        let mut missing_renewal = plan.clone();
-        missing_renewal["source_hashes"]
-            .as_object_mut()
-            .unwrap()
-            .remove("evidence/renewal-container-removed.json");
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&missing_renewal).unwrap()),
-            None
-        )
-        .is_err());
-        plan["source_hashes"]["evidence/unknown-container-removed.json"] =
-            serde_json::json!("c".repeat(64));
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&plan).unwrap()),
-            None
-        )
-        .is_err());
-    }
-    #[test]
-    fn cleanup_summary_tracks_records_without_changing_historical_ready_journal() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("install");
-        let mut state = cleanup_test_state(&path);
-        for phase in [
-            Phase::Verified,
-            Phase::Provisioning,
-            Phase::Provisioned,
-            Phase::Ready,
+    fn old_and_native_maintenance_markers_block_provisioning_replay() {
+        for entry in [
+            "uninstall-plan.json",
+            "uninstall-result.json",
+            "uninstall-compose-stop-intent.json",
+            "uninstall-compose-stop-result.json",
+            "uninstall-compose-down-intent.json",
+            "uninstall-compose-down-result.json",
+            "uninstall-compose-start-0001-intent.json",
+            "uninstall-compose-start-0001-result.json",
+            "uninstall-compose-stop-0001-intent.json",
+            "uninstall-compose-stop-0001-result.json",
+            "uninstall-compose-down-0001-intent.json",
+            "uninstall-compose-down-0001-result.json",
         ] {
-            state.advance(phase).unwrap();
-        }
-        state.create_private_directory("evidence").unwrap();
-        let (plan, result) = cleanup_test_records(state.journal());
-        state
-            .write_evidence("uninstall-plan.json", &serde_json::to_vec(&plan).unwrap())
-            .unwrap();
-        drop(state);
-        let before = std::fs::read(path.join(JOURNAL)).unwrap();
-        assert!(InstallerState::resume(&path, &identity()).is_err());
-        let inspection = LockedInspection::open(&path).unwrap();
-        let status = inspection.cleanup_status().unwrap();
-        assert_eq!(status.state, CleanupState::InProgress);
-        assert!(!status.runtime_observed);
-        assert!(status.data_retained.is_none());
-        drop(inspection);
-        let mut maintenance = LockedMaintenance::open(&path).unwrap();
-        maintenance
-            .write_evidence_exclusive(
-                "uninstall-result.json",
-                &serde_json::to_vec(&result).unwrap(),
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("install");
+            let mut state = InstallerState::create(&path, identity()).unwrap();
+            state.create_private_directory("evidence").unwrap();
+            drop(state);
+            drop(InstallerState::resume(&path, &identity()).unwrap());
+            let journal = std::fs::read(path.join(JOURNAL)).unwrap();
+            std::fs::write(
+                path.join("evidence").join(entry),
+                b"unparsed uncertain operation",
             )
             .unwrap();
-        drop(maintenance);
-        let inspection = LockedInspection::open(&path).unwrap();
-        let status = inspection.cleanup_status().unwrap();
-        assert_eq!(status.state, CleanupState::Completed);
-        assert_eq!(status.data_retained, Some(true));
-        assert_eq!(inspection.journal().phase(), Phase::Ready);
-        drop(inspection);
-        assert!(InstallerState::resume(&path, &identity()).is_err());
-        assert_eq!(std::fs::read(path.join(JOURNAL)).unwrap(), before);
-    }
-    #[test]
-    fn cleanup_absence_allows_initialized_resume_but_uncertain_records_refuse() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("install");
-        drop(cleanup_test_state(&path));
-        let inspection = LockedInspection::open(&path).unwrap();
-        assert_eq!(
-            inspection.cleanup_status().unwrap().state,
-            CleanupState::NotStarted
-        );
-        drop(inspection);
-        let mut resumed = InstallerState::resume(&path, &identity()).unwrap();
-        resumed.create_private_directory("evidence").unwrap();
-        drop(resumed);
-        let target = path.join("evidence/uninstall-plan.json");
-        std::fs::write(&target, b"malformed").unwrap();
-        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(InstallerState::resume(&path, &identity()).is_err());
-        assert!(LockedInspection::open(&path)
-            .unwrap()
-            .cleanup_status()
-            .is_err());
-        std::fs::remove_file(&target).unwrap();
-        symlink("absent.json", &target).unwrap();
-        assert!(InstallerState::resume(&path, &identity()).is_err());
-        assert!(LockedInspection::open(&path)
-            .unwrap()
-            .cleanup_status()
-            .is_err());
-        std::fs::remove_file(&target).unwrap();
-        std::fs::write(&target, b"{}").unwrap();
-        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(InstallerState::resume(&path, &identity()).is_err());
-    }
-    #[test]
-    fn cleanup_summary_refuses_orphan_result_and_identity_or_binding_changes() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("install");
-        let state = cleanup_test_state(&path);
-        let (plan, result) = cleanup_test_records(state.journal());
-        let encode = |v: &serde_json::Value| serde_json::to_vec(v).unwrap();
-        let valid_plan = encode(&plan);
-        let valid_result = encode(&result);
-        assert!(cleanup_summary(state.journal(), None, Some(&valid_result)).is_err());
-        for (field, value) in [
-            ("installation_id", serde_json::json!(uuid::Uuid::new_v4())),
-            ("engine_id", serde_json::json!("other")),
-            ("project", serde_json::json!("other")),
-            ("network_name", serde_json::json!("other")),
-        ] {
-            let mut bad = plan.clone();
-            bad[field] = value;
-            assert!(cleanup_summary(state.journal(), Some(&encode(&bad)), None).is_err());
-        }
-        for (field, value) in [
-            ("installation_id", serde_json::json!(uuid::Uuid::new_v4())),
-            ("engine_id", serde_json::json!("other")),
-            ("redis_volume_retained", serde_json::json!("other")),
-            ("containers_removed", serde_json::json!(33)),
-            ("host_data_retained", serde_json::json!(false)),
-        ] {
-            let mut bad = result.clone();
-            bad[field] = value;
+            std::fs::set_permissions(
+                path.join("evidence").join(entry),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
             assert!(
-                cleanup_summary(state.journal(), Some(&valid_plan), Some(&encode(&bad))).is_err()
+                InstallerState::resume(&path, &identity()).is_err(),
+                "{entry}"
             );
+            assert_eq!(std::fs::read(path.join(JOURNAL)).unwrap(), journal);
+        }
+    }
+    #[test]
+    fn absent_maintenance_is_distinct_from_link_directory_and_permission_failure() {
+        for kind in ["link", "directory", "permissions"] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("install");
+            let mut state = InstallerState::create(&path, identity()).unwrap();
+            state.create_private_directory("evidence").unwrap();
+            drop(state);
+            let target = path.join("evidence/uninstall-compose-down-intent.json");
+            match kind {
+                "link" => symlink("absent.json", &target).unwrap(),
+                "directory" => std::fs::create_dir(&target).unwrap(),
+                _ => {
+                    std::fs::write(&target, b"{}").unwrap();
+                    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))
+                        .unwrap();
+                }
+            }
+            assert!(InstallerState::resume(&path, &identity()).is_err());
         }
     }
     #[test]
@@ -3082,23 +2693,24 @@ mod tests {
         state.create_private_directory("evidence").unwrap();
         drop(state);
         let maintenance = LockedMaintenance::open(&path).unwrap();
-        assert!(maintenance.read_record("absent.json").unwrap().is_none());
-        assert!(maintenance.read_record("../outside").is_err());
-        symlink("absent.json", path.join("linked.json")).unwrap();
-        assert!(maintenance.read_record("linked.json").is_err());
-        let record = path.join("record.json");
+        assert!(maintenance.read_evidence("absent.json").unwrap().is_none());
+        assert!(maintenance.read_evidence("../outside").is_err());
+        let evidence = path.join("evidence");
+        symlink("absent.json", evidence.join("linked.json")).unwrap();
+        assert!(maintenance.read_evidence("linked.json").is_err());
+        let record = evidence.join("record.json");
         std::fs::write(&record, b"{}").unwrap();
         std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(maintenance.read_record("record.json").is_err());
+        assert!(maintenance.read_evidence("record.json").is_err());
         std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(
-            maintenance.read_record("record.json").unwrap().unwrap(),
+            maintenance.read_evidence("record.json").unwrap().unwrap(),
             b"{}"
         );
-        std::fs::hard_link(&record, path.join("hard.json")).unwrap();
-        assert!(maintenance.read_record("record.json").is_err());
+        std::fs::hard_link(&record, evidence.join("hard.json")).unwrap();
+        assert!(maintenance.read_evidence("record.json").is_err());
         std::fs::write(path.join(JOURNAL), b"{}").unwrap();
-        assert!(maintenance.read_record("absent.json").is_err());
+        assert!(maintenance.read_evidence("absent.json").is_err());
     }
     #[test]
     fn diagnostic_credentials_are_bounded_nofollow_and_protected() {
@@ -3599,6 +3211,41 @@ mod tests {
         assert!(state.prepare_application_storage().is_err());
         assert!(state.advance(Phase::Provisioned).is_err());
     }
+    #[test]
+    fn applicant_container_group_projects_only_a_validated_runtime() {
+        let host_gid = applicant_state_gid().unwrap();
+        let mut binding = RuntimeBinding {
+            docker_host: "unix:///var/run/docker.sock".into(),
+            engine_id: "fixture-engine".into(),
+            openbao_port: 18200,
+            profile: RuntimeProfile::Rootful,
+        };
+        let rootful = applicant_container_group(&binding).unwrap();
+        assert_eq!(rootful.host_gid(), host_gid);
+        assert_eq!(rootful.container_gid(), host_gid);
+        assert_ne!(rootful.container_gid(), 0);
+        if unsafe { libc::geteuid() } == 0 {
+            assert_eq!(rootful.container_gid(), 10001);
+        }
+        binding.profile = RuntimeProfile::Rootless;
+        binding.docker_host = format!("unix:///run/user/{}/docker.sock", unsafe {
+            libc::geteuid()
+        });
+        if unsafe { libc::geteuid() } == 0 {
+            assert!(applicant_container_group(&binding).is_err());
+        } else {
+            let rootless = applicant_container_group(&binding).unwrap();
+            assert_eq!(rootless.host_gid(), host_gid);
+            assert_ne!(rootless.host_gid(), 0);
+            assert_eq!(rootless.container_gid(), 0);
+        }
+        binding.docker_host = "unix:///var/run/docker.sock".into();
+        assert!(applicant_container_group(&binding).is_err());
+        binding.profile = RuntimeProfile::Rootful;
+        binding.engine_id = "bad".into();
+        assert!(applicant_container_group(&binding).is_err());
+    }
+
     #[test]
     fn applicant_state_group_is_nonroot_and_legacy_directory_is_not_adopted() {
         let expected = if unsafe { libc::geteuid() } == 0 {

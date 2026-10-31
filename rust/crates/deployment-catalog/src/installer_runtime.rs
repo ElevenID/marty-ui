@@ -186,7 +186,10 @@ impl OwnedChild {
             .map_err(|_| "runtime process wait failed")?;
         self.reaped = true;
         if !status.success() {
-            return Err("Docker command failed; inspect owned runtime separately".into());
+            return Err(format!(
+                "Docker command failed (exit={:?}); inspect owned runtime separately",
+                status.code()
+            ));
         }
         Ok(())
     }
@@ -227,6 +230,28 @@ fn drain(stream: &mut impl Read, output: &mut Vec<u8>, limit: usize) -> Result<b
     Ok(false)
 }
 
+fn drain_setup(mut stream: impl Read) -> Result<(Vec<u8>, bool)> {
+    let mut result = Vec::new();
+    let mut truncated = false;
+    let mut block = [0u8; 8192];
+    loop {
+        match stream.read(&mut block) {
+            Ok(0) => return Ok((result, truncated)),
+            Ok(n) => {
+                let keep = n.min(MAX_OUTPUT.saturating_sub(result.len()));
+                result.extend_from_slice(&block[..keep]);
+                truncated |= keep < n;
+            }
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => {
+                return Err(
+                    "supervised Compose output unavailable; inspect retained project".into(),
+                )
+            }
+        }
+    }
+}
+
 struct BoundedRunner {
     executable: PathBuf,
     staging: tempfile::TempDir,
@@ -252,6 +277,64 @@ impl BoundedRunner {
     fn run(&self, args: &[&str], timeout: Duration, limit: usize) -> Result<String> {
         let (output, _) = self.capture(args, timeout, limit)?;
         String::from_utf8(output).map_err(|_| "Docker command returned non-UTF8 output".into())
+    }
+    /// Setup may transfer ownership or mint credentials. The supervising caller
+    /// reserves recovery time; this path never cancels a running Compose client.
+    /// Output remains bounded in memory while excess bytes are drained to EOF.
+    fn run_setup(&self, args: &[&str]) -> Result<String> {
+        executable(&self.executable)?;
+        private_parent(self.staging.path())?;
+        if args.len() > 256 || args.iter().any(|a| a.len() > 16384 || a.contains('\0')) {
+            return Err("runtime arguments exceed bounds".into());
+        }
+        let mut command = Command::new(&self.executable);
+        command
+            .args(args)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", self.staging.path())
+            .env("DOCKER_CONFIG", self.staging.path())
+            .env("XDG_CONFIG_HOME", self.staging.path())
+            .env("XDG_CACHE_HOME", self.staging.path())
+            .env("LANG", "C")
+            .env("LC_ALL", "C")
+            .env(
+                "DOCKER_HOST",
+                self.docker_host
+                    .as_deref()
+                    .ok_or("Docker endpoint unavailable")?,
+            )
+            .current_dir(self.staging.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        let mut child = command
+            .spawn()
+            .map_err(|_| "cannot start supervised Compose job")?;
+        // No OwnedChild: its cancellation-on-drop contract is intentionally
+        // unsuitable for a non-idempotent, possibly in-flight setup operation.
+        let stdout = child.stdout.take().ok_or("setup stdout unavailable")?;
+        let stderr = child.stderr.take().ok_or("setup stderr unavailable")?;
+        let out = std::thread::spawn(move || drain_setup(stdout));
+        let err = std::thread::spawn(move || drain_setup(stderr));
+        let status = loop {
+            match child.wait() {
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                other => break other,
+            }
+        };
+        let output = out.join().map_err(|_| "setup output reader failed")??;
+        let diagnostic = err.join().map_err(|_| "setup diagnostic reader failed")??;
+        let status =
+            status.map_err(|_| "setup client outcome is uncertain; inspect retained evidence")?;
+        if !status.success() {
+            return Err(format!("Compose setup failed (exit={:?}); inspect private project evidence; no retry was performed", status.code()));
+        }
+        if output.1 || diagnostic.1 {
+            return Err("Compose setup completed but diagnostic output exceeded the capture bound; inspect retained project before continuing".into());
+        }
+        String::from_utf8(output.0).map_err(|_| "Compose setup returned non-UTF8 output".into())
     }
     fn capture(
         &self,
@@ -529,28 +612,6 @@ impl DockerRunner {
             None => Ok(limit),
         }
     }
-    /// Bounded application diagnostics for an already validated exact container.
-    /// Callers must scrub both streams and re-observe ownership before output.
-    pub(crate) fn capture_logs(&self, container: &str, tail: u16) -> Result<(String, String)> {
-        if container.len() != 64
-            || !container
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            || !(1..=1000).contains(&tail)
-        {
-            return Err("invalid bounded log request".into());
-        }
-        self.info()?;
-        let (stdout, stderr) = self.runner.capture(
-            &["logs", "--tail", &tail.to_string(), container],
-            Duration::from_secs(30),
-            MAX_OUTPUT,
-        )?;
-        let stdout = String::from_utf8(stdout).map_err(|_| "non-UTF8 application logs refused")?;
-        let stderr = String::from_utf8(stderr).map_err(|_| "non-UTF8 application logs refused")?;
-        self.info()?;
-        Ok((stdout, stderr))
-    }
     pub fn new(
         docker_executable: &Path,
         docker_host: &str,
@@ -628,6 +689,29 @@ impl DockerRunner {
     pub fn run_checked(&self, args: &[&str]) -> Result<String> {
         self.run_checked_with_timeout(args, COMMAND_TIMEOUT)
     }
+    /// Exclusive installer setup entry point. There is no client timeout,
+    /// automatic signal escalation, or retry for these non-idempotent jobs.
+    pub(crate) fn run_setup_checked(&self, args: &[&str]) -> Result<String> {
+        if args.first() != Some(&"compose")
+            || !args.contains(&"--no-deps")
+            || !args.contains(&"--no-recreate")
+            || !args.contains(&"--exit-code-from")
+            || args.iter().any(|arg| {
+                ["--host", "--context", "--config", "--tls", "--tlsverify"]
+                    .iter()
+                    .any(|key| *arg == *key || arg.starts_with(&format!("{key}=")))
+                    || arg.starts_with("-H")
+                    || arg.starts_with("-c")
+            })
+        {
+            return Err("unapproved supervised Compose setup command".into());
+        }
+        self.info()?;
+        self.recheck_endpoint()?;
+        let result = self.runner.run_setup(args);
+        self.recheck_endpoint()?;
+        result
+    }
     /// Internal stage-specific budgets remain finite; never inherit a user's
     /// timeout or let image downloads remove the subprocess cancellation bound.
     pub(crate) fn run_checked_with_timeout(
@@ -676,6 +760,15 @@ impl DockerRunner {
 mod tests {
     use std::os::unix::fs::symlink;
     use std::os::unix::net::UnixListener;
+    #[test]
+    fn supervised_output_is_drained_after_capture_limit_without_cancellation() {
+        let bytes = vec![b'x'; super::MAX_OUTPUT + 8193];
+        let mut cursor = std::io::Cursor::new(bytes);
+        let (prefix, truncated) = super::drain_setup(&mut cursor).unwrap();
+        assert!(truncated);
+        assert_eq!(prefix.len(), super::MAX_OUTPUT);
+        assert_eq!(cursor.position() as usize, super::MAX_OUTPUT + 8193);
+    }
     #[test]
     fn distribution_compose_versions_remain_bounded_metadata() {
         assert!(super::compose_version_valid("2.40.3+ds1-0ubuntu1~24.04.1"));
@@ -900,34 +993,6 @@ esac"#,
         );
         drop(docker);
         assert_eq!(unsafe { libc::fcntl(held_fd, libc::F_GETFD) }, -1);
-    }
-    #[test]
-    fn diagnostic_capture_bounds_arguments_and_keeps_both_streams_private() {
-        let parent = private_temp();
-        let binary = script(parent.path(), &format!(
-            "if [ \"$1\" = info ]; then printf '%s' '{}'; else printf 'stdout-secret'; printf 'stderr-secret' >&2; fi", info()));
-        let docker = DockerRunner::new(
-            &binary,
-            "unix:///var/run/docker.sock",
-            "test-engine",
-            parent.path(),
-        )
-        .unwrap();
-        let id = "a".repeat(64);
-        assert_eq!(
-            docker.capture_logs(&id, 10).unwrap(),
-            ("stdout-secret".into(), "stderr-secret".into())
-        );
-        for tail in [0, 1001] {
-            assert!(docker.capture_logs(&id, tail).is_err());
-        }
-        for bad in ["--follow", "name", "../../foreign"] {
-            assert!(docker.capture_logs(bad, 10).is_err());
-        }
-        script(parent.path(), &format!(
-            "if [ \"$1\" = info ]; then printf '%s' '{}'; else printf 'stdout-secret'; printf 'stderr-secret' >&2; exit 9; fi", info()));
-        let error = docker.capture_logs(&id, 10).unwrap_err();
-        assert!(!error.contains("secret"));
     }
     #[test]
     fn refuses_replaceable_executable_and_private_staging_ancestors() {

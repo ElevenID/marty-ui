@@ -255,9 +255,6 @@ pub(crate) fn require_rootless_process() -> Result<()> {
     }
     Ok(())
 }
-fn require_rootless_storage_qualification() -> Result<()> {
-    Err("rootless Docker observed; host-output ownership and storage mappings are not yet qualified, so no installation state or Docker resource was created".into())
-}
 fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Result<()> {
     let o = match mode {
         InstallMode::Admitted => options(args)?,
@@ -344,9 +341,7 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     let observed =
         crate::installer_runtime::DockerRunner::from_binding(docker, &runtime, &o.tools)?
             .preflight()?;
-    if mode == InstallMode::Admitted {
-        require_rootless_storage_qualification()?;
-    }
+    crate::installer_compose::require_version(&observed.compose_version)?;
     report_host_impact();
     if !o.yes {
         confirm(&directory)?;
@@ -459,16 +454,14 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         &serde_json::to_vec(&bundle).map_err(|_| "cannot encode bundle validation")?,
     )?;
     state.advance(Phase::Verified)?;
-    if mode == InstallMode::CandidateTest {
-        eprintln!("Marty runtime stage: rootless storage canary");
-        crate::installer_rootless_storage_canary::qualify_candidate(
-            docker,
-            &directory,
-            &mut state,
-            &prepared.inventory,
-            &operator_sha,
-        )?;
-    }
+    eprintln!("Marty runtime stage: rootless storage canary");
+    crate::installer_rootless_storage_canary::qualify_installation(
+        docker,
+        &directory,
+        &mut state,
+        &prepared.inventory,
+        &operator_sha,
+    )?;
     provision_runtime(
         docker,
         &directory,
@@ -518,26 +511,6 @@ pub(crate) fn provision_runtime(
         .images
         .get("openbao_didcomm_image")
         .ok_or("admitted OpenBao image missing")?;
-    eprintln!("Marty runtime stage: OpenBao");
-    let infrastructure =
-        crate::installer_openbao::start_openbao(docker, installation, bundle, state, plugin)?;
-    state.write_evidence(
-        "openbao-observation.json",
-        &serde_json::to_vec(&infrastructure).map_err(|_| "cannot encode OpenBao observation")?,
-    )?;
-    eprintln!("Marty runtime stage: Keycloak");
-    let keycloak = crate::installer_keycloak::provision(
-        docker,
-        installation,
-        bundle,
-        state,
-        &infrastructure,
-        invocation.operator_sha,
-    )?;
-    state.write_evidence(
-        "keycloak-observation.json",
-        &serde_json::to_vec(&keycloak).map_err(|_| "cannot encode Keycloak observation")?,
-    )?;
     let services_image = inventory
         .images
         .get("gateway")
@@ -547,79 +520,120 @@ pub(crate) fn provision_runtime(
             "TLS bootstrap requires identical admitted gateway and signing-keys images".into(),
         );
     }
-    eprintln!("Marty runtime stage: workload TLS");
-    let tls = crate::installer_tls::provision(
+    let nonce = uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
+    let bootstrap = crate::installer_application::bootstrap_inputs(
+        installation,
+        bundle,
+        state,
+        &inventory.images,
+        &nonce,
+    )?;
+    eprintln!("Marty runtime stage: OpenBao through Compose");
+    let (infrastructure, mut receipt) = crate::installer_openbao::start_openbao(
+        docker,
+        installation,
+        state,
+        plugin,
+        bootstrap.clone(),
+    )?;
+    state.write_evidence(
+        "openbao-observation.json",
+        &serde_json::to_vec(&infrastructure).map_err(|_| "cannot encode OpenBao observation")?,
+    )?;
+    eprintln!("Marty runtime stage: Keycloak inputs through Compose");
+    let (next, keycloak) = crate::installer_keycloak::provision(
+        docker,
+        installation,
+        bundle,
+        state,
+        &infrastructure,
+        crate::installer_application::job_inputs(&bootstrap, receipt, "installer-keycloak"),
+        &nonce,
+        invocation.operator_sha,
+    )?;
+    receipt = next;
+    state.write_evidence(
+        "keycloak-observation.json",
+        &serde_json::to_vec(&keycloak).map_err(|_| "cannot encode Keycloak observation")?,
+    )?;
+    eprintln!("Marty runtime stage: workload TLS through Compose");
+    let (next, tls) = crate::installer_tls::provision(
         docker,
         installation,
         bundle,
         state,
         &infrastructure,
         services_image,
+        crate::installer_application::job_inputs(&bootstrap, receipt, "installer-tls"),
         invocation.operator_sha,
     )?;
+    receipt = next;
     state.write_evidence(
         "tls-observation.json",
         &serde_json::to_vec(&tls).map_err(|_| "cannot encode TLS observation")?,
     )?;
-    eprintln!("Marty runtime stage: ingress");
-    let ingress = crate::installer_ingress::provision(
+    eprintln!("Marty runtime stage: ingress inputs through Compose");
+    let (next, ingress) = crate::installer_ingress::provision(
         docker,
         installation,
         bundle,
         state,
         &infrastructure,
         services_image,
+        crate::installer_application::job_inputs(
+            &bootstrap,
+            receipt,
+            "installer-ingress-provision",
+        ),
         invocation.operator_sha,
     )?;
+    receipt = next;
     state.write_evidence(
         "ingress-observation.json",
         &serde_json::to_vec(&ingress).map_err(|_| "cannot encode ingress observation")?,
     )?;
-    eprintln!("Marty runtime stage: renewal");
-    let renewal = crate::installer_renewal::provision(
+    eprintln!("Marty runtime stage: renewal inputs through Compose");
+    let (next, renewal) = crate::installer_renewal::provision(
         docker,
         installation,
         bundle,
         state,
         &infrastructure,
         services_image,
+        crate::installer_application::job_inputs(&bootstrap, receipt, "installer-renewal"),
         invocation.operator_sha,
     )?;
+    receipt = next;
     state.write_evidence(
         "renewal-observation.json",
         &serde_json::to_vec(&renewal).map_err(|_| "cannot encode renewal observation")?,
     )?;
-    eprintln!("Marty runtime stage: generation");
-    let generation = crate::installer_generation_host::provision(
+    eprintln!("Marty runtime stage: immutable credential generation through Compose");
+    let (next, generation) = crate::installer_generation_host::provision(
         docker,
         installation,
         bundle,
         state,
         &infrastructure,
         services_image,
+        crate::installer_application::job_inputs(&bootstrap, receipt, "installer-generation"),
         invocation.operator_sha,
     )?;
+    receipt = next;
     state.write_evidence(
         "generation-observation.json",
         &serde_json::to_vec(&generation).map_err(|_| "cannot encode generation observation")?,
     )?;
-    eprintln!("Marty runtime stage: application preparation");
-    let application = crate::installer_application::prepare_with_generation(
+    eprintln!("Marty runtime stage: native Compose application startup");
+    crate::installer_application::start(
         docker,
         installation,
         bundle,
         state,
         &infrastructure,
         &inventory.images,
-    )?;
-    eprintln!("Marty runtime stage: application startup");
-    crate::installer_application_start::start(
-        docker,
-        installation,
-        bundle,
-        state,
-        &infrastructure,
-        application,
+        &bootstrap,
+        receipt,
     )?;
     eprintln!("Marty runtime stage: read-only deployment validation");
     state.with_inspection(|inspection| {

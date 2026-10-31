@@ -2,6 +2,7 @@
 //! bootstrap. Never creates private keys, retries remote mutations, or removes
 //! partial output. The caller retains the installation lock and container proof.
 #![cfg(target_os = "linux")]
+use crate::installer_helper_output::HelperOutputOwner;
 use marty_selfhost_identity::SELFHOST_ROLES;
 use serde::{Deserialize, Serialize};
 use spki::der::DecodePem;
@@ -283,18 +284,20 @@ fn payloads(
     Ok(result)
 }
 /// Host acceptance: only the stopped, inspected helper's public/scoped output.
+/// Caller derives the exact host owner from the already checked runtime binding.
 /// Original output stays intact. A partial transfer requires recovery, not retry.
-pub fn validate_and_transfer(
+pub(crate) fn validate_and_transfer(
     output: &File,
     secrets: &File,
     bundle: &Path,
+    expected_host_uid: HelperOutputOwner,
 ) -> Result<ValidatedTlsOutputs> {
     private_directory(output, true)?;
     preflight(secrets, bundle)?;
     let a = output.metadata().map_err(|_| REFUSED)?;
     let b = secrets.metadata().map_err(|_| REFUSED)?;
     require((a.dev(), a.ino()) != (b.dev(), b.ino()))?;
-    let values = payloads(output, 0, 0o444, None)?;
+    let values = payloads(output, expected_host_uid.uid(), 0o444, None)?;
     let env_fragment = render(bundle)?;
     transfer(secrets, &values)?;
     Ok(ValidatedTlsOutputs {
@@ -372,6 +375,10 @@ pub fn finalize() -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        installer_helper_output::expected_host_uid,
+        installer_state::{RuntimeBinding, RuntimeProfile},
+    };
     use serde_json::json;
     use std::os::unix::fs::{symlink, PermissionsExt};
     fn metadata_fixture() -> Vec<u8> {
@@ -401,6 +408,115 @@ mod tests {
             std::fs::Permissions::from_mode(0o600),
         )
         .unwrap();
+    }
+    fn host_runtime(profile: RuntimeProfile) -> RuntimeBinding {
+        RuntimeBinding {
+            docker_host: match profile {
+                RuntimeProfile::Rootful => "unix:///var/run/docker.sock".into(),
+                RuntimeProfile::Rootless => format!("unix:///run/user/{}/docker.sock", unsafe {
+                    libc::geteuid()
+                }),
+            },
+            engine_id: "01234567-89ab-cdef".into(),
+            openbao_port: 18200,
+            profile,
+        }
+    }
+    #[test]
+    fn host_transfer_binds_output_ownership_and_preserves_source_bytes_and_modes() {
+        let source = root();
+        fixture(source.path());
+        let mut originals = BTreeMap::new();
+        for entry in std::fs::read_dir(source.path()).unwrap() {
+            let path = entry.unwrap().path();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+            let metadata = std::fs::metadata(&path).unwrap();
+            originals.insert(
+                path.file_name().unwrap().to_str().unwrap().to_owned(),
+                (
+                    std::fs::read(&path).unwrap(),
+                    metadata.uid(),
+                    metadata.gid(),
+                    metadata.mode(),
+                    metadata.nlink(),
+                ),
+            );
+        }
+        assert_eq!(originals.len(), 34);
+        let bundle = root();
+        for (name, bytes) in [
+            (
+                ".env.selfhost.production.example",
+                include_bytes!("../../../../.env.selfhost.production.example").as_slice(),
+            ),
+            (
+                "docker-compose.yml",
+                include_bytes!("../../../../docker-compose.selfhost.prod.yml").as_slice(),
+            ),
+        ] {
+            std::fs::write(bundle.path().join(name), bytes).unwrap();
+            std::fs::set_permissions(
+                bundle.path().join(name),
+                std::fs::Permissions::from_mode(0o644),
+            )
+            .unwrap();
+        }
+        let target = root();
+        let output = File::open(source.path()).unwrap();
+        let secrets = File::open(target.path()).unwrap();
+        let uid = unsafe { libc::geteuid() };
+        assert!(payloads(&output, uid ^ 1, 0o444, None).is_err());
+        let (accepted, rejected) = if uid == 0 {
+            (RuntimeProfile::Rootful, RuntimeProfile::Rootless)
+        } else {
+            (RuntimeProfile::Rootless, RuntimeProfile::Rootful)
+        };
+        match expected_host_uid(&host_runtime(rejected)) {
+            Ok(owner) => {
+                assert!(validate_and_transfer(&output, &secrets, bundle.path(), owner).is_err());
+            }
+            // A root test process cannot obtain a rootless host-owner token.
+            Err(_) => assert_eq!(uid, 0),
+        }
+        assert_eq!(std::fs::read_dir(target.path()).unwrap().count(), 0);
+        let validated = validate_and_transfer(
+            &output,
+            &secrets,
+            bundle.path(),
+            expected_host_uid(&host_runtime(accepted)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            validated.outputnames,
+            inventory().into_iter().collect::<Vec<_>>()
+        );
+        assert_eq!(validated.metadata_bytes, originals[METADATA_FILE].0);
+        assert_eq!(
+            std::fs::read_dir(source.path()).unwrap().count(),
+            originals.len()
+        );
+        for (name, expected) in &originals {
+            let path = source.path().join(name);
+            let metadata = std::fs::metadata(&path).unwrap();
+            assert_eq!(
+                (
+                    std::fs::read(&path).unwrap(),
+                    metadata.uid(),
+                    metadata.gid(),
+                    metadata.mode(),
+                    metadata.nlink(),
+                ),
+                *expected,
+            );
+        }
+        for name in inventory() {
+            let path = target.path().join(&name);
+            let metadata = std::fs::metadata(&path).unwrap();
+            assert_eq!(std::fs::read(path).unwrap(), originals[&name].0);
+            assert_eq!(metadata.uid(), uid);
+            assert_eq!(metadata.mode() & 0o7777, 0o444);
+            assert_eq!(metadata.nlink(), 1);
+        }
     }
     #[test]
     fn metadata_refuses_duplicates_missing_roles_and_wrong_custody_version() {

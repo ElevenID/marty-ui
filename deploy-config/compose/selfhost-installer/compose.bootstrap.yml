@@ -1,0 +1,235 @@
+# Authenticated installer setup jobs. The host selects one job deliberately;
+# completed jobs remain in the project and ordinary restart never selects them.
+x-installer-job: &installer-job
+  profiles: [setup]
+  mem_limit: 1g
+  init: true
+  user: "0:0"
+  read_only: true
+  restart: "no"
+  cap_drop: [ALL]
+  cap_add: [DAC_OVERRIDE]
+  security_opt: ["no-new-privileges:true"]
+  networks: [default]
+  labels:
+    com.elevenid.installer.id: ${MARTY_INSTALLATION_ID:?installation identity required}
+    com.elevenid.installer.phase: setup
+
+x-installer-operator: &installer-operator
+  type: bind
+  source: ${MARTY_INSTALLATION_DIR:?private installation directory required}/marty-deploy
+  target: /input/marty-deploy
+  read_only: true
+  bind: {create_host_path: false}
+
+x-installer-bao-root: &installer-bao-root
+  type: bind
+  source: ${MARTY_INSTALLATION_DIR:?private installation directory required}/openbao-state/root.token
+  target: /input/root.token
+  read_only: true
+  bind: {create_host_path: false}
+
+x-installer-bao-ca: &installer-bao-ca
+  type: bind
+  source: ${MARTY_INSTALLATION_DIR:?private installation directory required}/openbao-state/tls/ca.crt
+  target: /input/ca.crt
+  read_only: true
+  bind: {create_host_path: false}
+
+services:
+  installer-keycloak:
+    <<: *installer-job
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?approved OpenBao image required}
+    entrypoint: [/input/marty-deploy]
+    command: [installer-keycloak-bridge, --nonce, "${MARTY_KEYCLOAK_NONCE:?private provisioning nonce required}"]
+    tmpfs:
+      - /openbao/file:rw,noexec,nosuid,nodev,size=1048576,mode=0700
+      - /openbao/logs:rw,noexec,nosuid,nodev,size=1048576,mode=0700
+    volumes:
+      - *installer-operator
+      - *installer-bao-root
+      - *installer-bao-ca
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/keycloak-output
+        target: /output
+        bind: {create_host_path: false}
+
+  installer-tls:
+    <<: *installer-job
+    image: ${MARTY_INSTALLER_SERVICES_IMAGE:?approved services image required}
+    entrypoint: [/bin/sh]
+    command: ["-ec", "/usr/local/bin/marty-passport-tls-bootstrap >/dev/null 2>&1 && exec /input/marty-deploy installer-tls-finalize"]
+    environment:
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /input/ca.crt
+      BAO_ROOT_TOKEN_FILE: /input/root.token
+      MARTY_TLS_BOOTSTRAP_PROFILE: selfhost-disposable
+      MARTY_SELFHOST_DISPOSABLE_OPENBAO: "1"
+      MARTY_SELFHOST_PROJECT: ${MARTY_SELFHOST_PROJECT:?bound bootstrap project required}
+      SELFHOST_TLS_OUTPUT_DIR: /output
+    tmpfs: ["/tmp:rw,mode=1777"]
+    volumes:
+      - *installer-operator
+      - *installer-bao-root
+      - *installer-bao-ca
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/tls-output
+        target: /output
+        bind: {create_host_path: false}
+
+  installer-ingress-provision:
+    <<: *installer-job
+    image: ${MARTY_INSTALLER_SERVICES_IMAGE:?approved services image required}
+    entrypoint: [/input/marty-deploy]
+    command: [installer-ingress-provision, --installation-id, "${MARTY_INSTALLATION_ID:?}"]
+    volumes:
+      - *installer-operator
+      - *installer-bao-root
+      - *installer-bao-ca
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/ingress-output
+        target: /output
+        bind: {create_host_path: false}
+
+  installer-renewal:
+    <<: *installer-job
+    image: ${MARTY_INSTALLER_SERVICES_IMAGE:?approved services image required}
+    entrypoint: [/input/marty-deploy]
+    command: [installer-renewal-bootstrap-transfer, --installation-id, "${MARTY_INSTALLATION_ID:?}"]
+    cap_add: [DAC_OVERRIDE, CHOWN]
+    volumes:
+      - *installer-operator
+      - *installer-bao-root
+      - *installer-bao-ca
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/renewal-transfer
+        target: /transfer
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/renewal-inputs
+        target: /input/current
+        read_only: true
+        bind: {create_host_path: false}
+
+  installer-generation:
+    <<: *installer-job
+    image: ${MARTY_INSTALLER_SERVICES_IMAGE:?approved services image required}
+    entrypoint: [/input/marty-deploy]
+    command: [installer-generation-provision-transfer, --installation-id, "${MARTY_INSTALLATION_ID:?}"]
+    cap_add: [DAC_OVERRIDE, CHOWN]
+    volumes:
+      - *installer-operator
+      - *installer-bao-ca
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/generation-transfer
+        target: /transfer
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/generation-inputs
+        target: /input/current
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/generation-identity
+        target: /input/identity
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/evidence/keycloak-observation.json
+        target: /input/keycloak-receipt.json
+        read_only: true
+        bind: {create_host_path: false}
+
+  # The API can be listening while sealed. This probe is a single status check,
+  # permitting the explicit initialization job to run; usable KMS readiness is
+  # represented by openbao-unseal's strict healthy status below.
+  openbao:
+    # TLS custody is established by the preceding exclusive setup job.
+    depends_on: !reset {}
+    init: true
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: &bao-scratch
+      - /openbao/file:rw,noexec,nosuid,nodev,size=1048576,mode=0700
+      - /openbao/logs:rw,noexec,nosuid,nodev,size=1048576,mode=0700
+    volumes: !override
+      - type: bind
+        source: ${SELFHOST_OPENBAO_STATE_DIR:?}
+        target: /bao/data
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./docker/openbao-selfhost.hcl
+        target: /bao/config/openbao.hcl
+        read_only: true
+        bind: {create_host_path: false}
+    healthcheck:
+      test: [CMD-SHELL, "bao status -address=https://127.0.0.1:8200 -ca-cert=/bao/data/tls/ca.crt >/dev/null 2>&1; result=$$?; test $$result -eq 0 -o $$result -eq 2"]
+
+  openbao-tls-init:
+    profiles: [setup]
+    init: true
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: *bao-scratch
+    labels:
+      com.elevenid.installer.id: ${MARTY_INSTALLATION_ID:?}
+      com.elevenid.installer.phase: setup
+    volumes: !override
+      - type: bind
+        source: ${SELFHOST_OPENBAO_STATE_DIR:?}
+        target: /bao/data
+        bind: {create_host_path: false}
+
+  openbao-unseal:
+    init: true
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: *bao-scratch
+    volumes: !override
+      - type: bind
+        source: ${SELFHOST_OPENBAO_STATE_DIR:?}
+        target: /bao/data
+        read_only: true
+        bind: {create_host_path: false}
+    depends_on:
+      openbao:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, "bao status -address=https://openbao:8200 -ca-cert=/bao/data/tls/ca.crt >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 5s
+
+  openbao-bootstrap:
+    profiles: !override [setup]
+    init: true
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: *bao-scratch
+    labels:
+      com.elevenid.installer.id: ${MARTY_INSTALLATION_ID:?}
+      com.elevenid.installer.phase: setup
+    depends_on:
+      openbao:
+        condition: service_healthy
+    volumes: !override
+      - type: bind
+        source: ${SELFHOST_OPENBAO_STATE_DIR:?}
+        target: /bao/data
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/secrets
+        target: /bao/runtime
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./docker/openbao-init.sh
+        target: /scripts/openbao-init.sh
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./docker/openbao-haip-workload-policy.hcl
+        target: /scripts/openbao-haip-workload-policy.hcl
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./docker/openbao-selfhost-init.sh
+        target: /scripts/openbao-selfhost-init.sh
+        read_only: true
+        bind: {create_host_path: false}
