@@ -26,12 +26,12 @@
     "report": "playwright show-report"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
-    "@types/node": "^26.2.0"
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^26.6.5"
   },
   "dependencies": {
     "axios": "^1.20.0",
-    "eventsource": "^4.1.1"
+    "eventsource": "^5.1.2"
   },
   "overrides": {
     "follow-redirects": "1.16.2"
