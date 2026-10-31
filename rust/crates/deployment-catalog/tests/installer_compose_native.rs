@@ -304,10 +304,155 @@ fn actual_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart
     let source = std::env::var_os("MARTY_INSTALLER_SOURCE_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."));
+    assert_actual_installer_layers(&executable, &bundle, &source, &supplied_env);
+}
+
+#[test]
+#[ignore = "requires pinned standalone Compose 5.6.1; packages source with synthetic digests, config only"]
+fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart() {
+    let executable = executable();
     let temp = PrivateFixture::new();
-    baseline(&executable, temp.path());
+    let root = temp.path();
+    baseline(&executable, root);
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(source.join("deploy-config/bundles/selfhost.json")).unwrap(),
+    )
+    .unwrap();
+    let render: marty_selfhost_bundle::Render =
+        serde_json::from_value(manifest["render"].clone()).unwrap();
+    let mut arguments = marty_selfhost_bundle::render_arguments(&render);
+    arguments.extend(["--format".into(), "json".into()]);
+    let model: Value =
+        serde_json::from_str(&invoke(&executable, &source, root, &arguments)).unwrap();
+    // These identities are intentionally synthetic. This gate checks the
+    // source package and native Compose semantics; it neither pulls images nor
+    // authenticates the separate release bundle or qualifies a running stack.
+    let image = format!(
+        "ghcr.io/elevenid/marty-ui-oss/services@sha256:{}",
+        "a".repeat(64)
+    );
+    let openbao = format!(
+        "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:{}",
+        "b".repeat(64)
+    );
+    let services: BTreeMap<_, _> = model["services"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|name| (name.clone(), image.clone()))
+        .collect();
+    assert!(services.len() >= 30);
+    let stack_lock: Value =
+        serde_json::from_slice(&fs::read(source.join("release/stack-lock.json")).unwrap()).unwrap();
+    let image_lock = root.join("synthetic-images.json");
+    private_write(
+        &image_lock,
+        &serde_json::to_vec(&serde_json::json!({
+            "schema": "marty.selfhost-image-lock/v1",
+            "release": stack_lock["release"],
+            "services": services,
+            "openbao_didcomm_image": openbao,
+        }))
+        .unwrap(),
+    );
+    let bundle = marty_selfhost_bundle::package_with_image_lock(
+        &marty_selfhost_bundle::Options {
+            repo: source.clone(),
+            output: root.join("source-package"),
+            archive: None,
+            replace: false,
+        },
+        |stage, arguments| Ok(invoke(&executable, stage, root, arguments)),
+        &image_lock,
+    )
+    .unwrap()
+    .output;
+    let mut values = BTreeMap::<String, String>::new();
+    for line in fs::read_to_string(bundle.join(".env.selfhost.production.example"))
+        .unwrap()
+        .lines()
+    {
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        let (name, value) = line.split_once('=').unwrap();
+        assert!(values.insert(name.into(), value.into()).is_none());
+    }
+    for (name, value) in [
+        ("SELFHOST_IMAGE_TAG", "source-config-fixture".into()),
+        (
+            "SELFHOST_SECRET_DIR",
+            root.join("secrets").to_str().unwrap().into(),
+        ),
+        (
+            "SELFHOST_STATE_DIR",
+            root.join("state").to_str().unwrap().into(),
+        ),
+        (
+            "SELFHOST_OPENBAO_STATE_DIR",
+            root.join("openbao-state").to_str().unwrap().into(),
+        ),
+        ("MARTY_INSTALLATION_DIR", root.to_str().unwrap().into()),
+        (
+            "MARTY_INSTALLATION_ID",
+            "2e052c77-efe8-44c6-9421-9ef15fe8ee7c".into(),
+        ),
+        (
+            "MARTY_INSTALLER_ID",
+            "2e052c77-efe8-44c6-9421-9ef15fe8ee7c".into(),
+        ),
+        ("MARTY_INSTALLER_APPLICANT_CONTAINER_GID", "0".into()),
+        (
+            "MARTY_INSTALLER_NGINX_CONFIG",
+            root.join("nginx.conf").to_str().unwrap().into(),
+        ),
+        ("MARTY_INSTALLER_HELPER_IMAGE", image.clone()),
+        ("MARTY_INSTALLER_SERVICES_IMAGE", image.clone()),
+        ("MARTY_ISSUANCE_IMAGE", image.clone()),
+        ("MARTY_KEYCLOAK_KMS_IMAGE", image),
+        ("MARTY_OPENBAO_DIDCOMM_IMAGE", openbao),
+        ("MARTY_KEYCLOAK_NONCE", "config-only-synthetic-nonce".into()),
+        (
+            "MARTY_SELFHOST_PROJECT",
+            "marty-selfhost-disposable-config-fixture".into(),
+        ),
+        ("MARTY_INSTALLER_HTTPS_PORT", "18443".into()),
+        (
+            "MARTY_INSTALLER_INGRESS_KEY_NAME",
+            "installer-ingress-fixture".into(),
+        ),
+        ("PUBLIC_API_URL", "https://localhost:18443".into()),
+        ("PUBLIC_DOMAIN", "localhost:18443".into()),
+    ] {
+        values.insert(name.into(), value);
+    }
+    let supplied_env = root.join("source-fixture.env");
+    let mut environment = String::new();
+    for (name, value) in values {
+        assert!(!value
+            .chars()
+            .any(|c| c.is_control() || c == '\'' || c == '\\'));
+        environment.push_str(&format!("{name}='{value}'\n"));
+    }
+    private_write(&supplied_env, environment.as_bytes());
+    // Use the packaged installer layers, including their real resource closure.
+    assert_actual_installer_layers(&executable, &bundle, &bundle, &supplied_env);
+}
+
+fn assert_actual_installer_layers(
+    executable: &OsString,
+    bundle: &Path,
+    source: &Path,
+    supplied_env: &Path,
+) {
+    let temp = PrivateFixture::new();
+    baseline(executable, temp.path());
     let env = temp.path().join("private.env");
-    fs::copy(&supplied_env, &env).unwrap();
+    fs::copy(supplied_env, &env).unwrap();
     fs::set_permissions(&env, fs::Permissions::from_mode(0o600)).unwrap();
     let layer_root = source.join("deploy-config/compose/selfhost-installer");
     let base = bundle.join("docker-compose.yml");
@@ -358,8 +503,8 @@ fn actual_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart
         actual
     };
     let install = config(
-        &executable,
-        &bundle,
+        executable,
+        bundle,
         &[base.clone(), installer.clone()],
         &env,
         &["installer-init"],
@@ -449,8 +594,8 @@ fn actual_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart
     // Ordinary start resolves the full retained maintenance union, including
     // OpenBao and its live unseal worker. App-only layers missed this ordering.
     let maintenance = config(
-        &executable,
-        &bundle,
+        executable,
+        bundle,
         &[
             base.clone(),
             openbao.clone(),
@@ -477,8 +622,8 @@ fn actual_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart
         .collect();
     assert!(kms_consumers.contains("event-stream") && kms_consumers.contains("notification"));
     let restarted = config(
-        &executable,
-        &bundle,
+        executable,
+        bundle,
         &[base, openbao, bootstrap, installer, runtime],
         &env,
         &[],
