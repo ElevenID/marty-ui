@@ -361,10 +361,10 @@ async fn didcomm_renewal_canvas_preserves_real_association_and_delivery_phases()
             tracing_subscriber::fmt()
                 .with_test_writer()
                 .with_ansi(false)
-                // These two owners log only bounded denial/outcome codes and
-                // the synthetic transaction ID, never keys or credential bodies.
+                // These owners log only static categories, counts and the
+                // synthetic transaction ID, never keys or credential bodies.
                 .with_env_filter(
-                    "off,marty_issuance_service::canvas_issuance_guard=warn,marty_issuance_service::initiation_response=warn",
+                    "off,marty_issuance_service::canvas_issuance_guard=debug,marty_issuance_service::initiation_response=warn",
                 )
                 .finish(),
         )

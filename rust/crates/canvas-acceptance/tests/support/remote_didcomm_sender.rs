@@ -83,7 +83,10 @@ impl RemoteSenderFixture {
             .await
             .unwrap();
         assert_eq!(observed, nonce);
-        let registered = RegisteredSenderFixture::create(SenderInputs {
+        // Keep provider registration's large future out of every enclosing
+        // delivery future, including paths that do not create a remote sender.
+        // The real registration and cleanup owners remain unchanged.
+        let registered = Box::pin(RegisteredSenderFixture::create(SenderInputs {
             client: &client,
             base: &base_url,
             root_token: &root,
@@ -94,7 +97,7 @@ impl RemoteSenderFixture {
             sender_did: issuer_did,
             issuer_api_key: super::issuance_named_peers::ISSUER_SIGN_KEY,
             integration_secret_api_key: Some(super::issuance_named_peers::ENVELOPE_KEY),
-        })
+        }))
         .await;
         let public_key = registered.sender_public.clone();
         assert_eq!(URL_SAFE_NO_PAD.decode(&public_key).unwrap().len(), 32);

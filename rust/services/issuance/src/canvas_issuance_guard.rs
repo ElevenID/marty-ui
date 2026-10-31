@@ -1016,11 +1016,69 @@ pub(crate) fn evaluate_canvas_evidence_policy(
         "facts": facts.iter().map(policy_fact_payload).collect::<Vec<_>>(),
         "policy_set": policy_set,
     });
-    let decision = marty_verification::evidence_policy::evaluate_application_evidence_policy_json(
-        &request.to_string(),
+    parse_canvas_evidence_policy_decision(
+        marty_verification::evidence_policy::evaluate_application_evidence_policy_json(
+            &request.to_string(),
+        ),
     )
-    .map_err(|_| "current_evidence_policy_denied")?;
-    serde_json::from_str(&decision).map_err(|_| "current_evidence_policy_denied")
+}
+
+fn parse_canvas_evidence_policy_decision(
+    response: Result<String, String>,
+) -> Result<Value, &'static str> {
+    let response = response.map_err(|error| {
+        let category = if error.starts_with("invalid evidence policy request:") {
+            "request_parse"
+        } else if error.ends_with("recursion limit reached") {
+            "stack_limit"
+        } else {
+            "engine_error"
+        };
+        trace_canvas_evidence_policy_failure(category, 1, 0);
+        "current_evidence_policy_denied"
+    })?;
+    let decision: Value = serde_json::from_str(&response).map_err(|_| {
+        trace_canvas_evidence_policy_failure("response_parse", 1, 0);
+        "current_evidence_policy_denied"
+    })?;
+    if decision.get("allowed").and_then(Value::as_bool) != Some(true) {
+        let errors = decision
+            .get("errors")
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        let reason_count = decision
+            .get("reasons")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        let category = if errors.iter().any(|error| {
+            error
+                .as_str()
+                .is_some_and(|error| error.ends_with("recursion limit reached"))
+        }) {
+            "stack_limit"
+        } else if errors.is_empty() {
+            "policy_deny"
+        } else {
+            "engine_error"
+        };
+        trace_canvas_evidence_policy_failure(category, errors.len(), reason_count);
+    }
+    Ok(decision)
+}
+
+fn trace_canvas_evidence_policy_failure(
+    category: &'static str,
+    error_count: usize,
+    reason_count: usize,
+) {
+    // Core error/reason text may contain policy or application data. Emit only
+    // a closed category and counts; never the request, response, or raw error.
+    tracing::debug!(
+        policy_failure_category = category,
+        policy_error_count = error_count,
+        policy_reason_count = reason_count,
+        "Canvas evidence policy evaluation failed"
+    );
 }
 
 pub(crate) fn fact_matches(
@@ -1112,6 +1170,59 @@ mod tests {
 
     use super::*;
     use crate::credential::{CredentialTransactionStatus, IssuerContext};
+
+    #[test]
+    fn evidence_policy_diagnostics_preserve_outcomes_without_logging_payloads() {
+        use std::io::{Read, Seek};
+
+        let mut output = tempfile::tempfile().unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(output.try_clone().unwrap())
+            .finish();
+        let secret = "synthetic-policy-application-and-credential-secret";
+        tracing::subscriber::with_default(subscriber, || {
+            for response in [
+                Err(format!("invalid evidence policy request: {secret}")),
+                Err(format!("engine failure: {secret}")),
+                Ok(format!("invalid response {secret}")),
+            ] {
+                assert_eq!(
+                    parse_canvas_evidence_policy_decision(response),
+                    Err("current_evidence_policy_denied")
+                );
+            }
+            for decision in [
+                json!({"allowed":false,"errors":[],"reasons":[secret]}),
+                json!({"allowed":false,"errors":[secret],"reasons":[]}),
+                json!({"allowed":false,"errors":[format!("while evaluating policy `{secret}`: recursion limit reached")],"reasons":[]}),
+                json!({"allowed":true,"errors":[],"reasons":[secret]}),
+            ] {
+                assert_eq!(
+                    parse_canvas_evidence_policy_decision(Ok(decision.to_string())).unwrap(),
+                    decision
+                );
+            }
+        });
+        output.rewind().unwrap();
+        let mut captured = String::new();
+        output.read_to_string(&mut captured).unwrap();
+        assert!(!captured.contains(secret));
+        assert_eq!(captured.lines().count(), 6);
+        for category in [
+            "request_parse",
+            "response_parse",
+            "policy_deny",
+            "engine_error",
+            "stack_limit",
+        ] {
+            assert!(captured.contains(&format!("policy_failure_category=\"{category}\"")));
+        }
+        assert!(captured.contains("policy_error_count=0 policy_reason_count=1"));
+        assert!(captured.contains("policy_error_count=1 policy_reason_count=0"));
+    }
 
     #[test]
     fn evidence_fact_snapshots_compare_complete_content_and_timestamp_instants() {

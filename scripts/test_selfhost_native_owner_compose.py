@@ -235,11 +235,13 @@ def apply_foundation_reference_representation(model):
     the model comparison continues to reject any unrelated environment change.
     """
     services = model["services"]
+    optional_inputs = set()
 
     def replace(mapping, field, variable):
         assert re.fullmatch(r"\$\{" + re.escape(variable) + r":\?[^}]*\}",
                             mapping[field]), (field, variable)
         mapping[field] = "${" + variable + ":-}"
+        optional_inputs.add(variable)
 
     for service, runtime_prefix, input_prefix in (
         ("signing-keys", "SIGNING_KEYS_INTEGRATION_SECRET_TLS", "SIGNING_KEYS"),
@@ -272,6 +274,7 @@ def apply_foundation_reference_representation(model):
     replace(services["keycloak-configurator"]["environment"],
             "KEYCLOAK_SOCIAL_LOGIN_ENABLED", "KEYCLOAK_SOCIAL_LOGIN_ENABLED")
     replace(model["x-issuance-application-env"], "BAO_ADDR", "BAO_ADDR")
+    return optional_inputs
 
 
 def assert_models(approved, actual, *, interpolated=False):
@@ -451,11 +454,22 @@ def assert_models(approved, actual, *, interpolated=False):
     assert_signing_binding(actual)
 
 
+def required_input_sets(approved, current):
+    required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", approved))
+    optional_inputs = apply_foundation_reference_representation(yaml.safe_load(approved))
+    current_required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", current))
+    assert current_required == required - optional_inputs, (
+        "Unreviewed required self-host inputs",
+        sorted(current_required - (required - optional_inputs)),
+        sorted((required - optional_inputs) - current_required),
+    )
+    return required, current_required
+
+
 def interpolated_models():
     approved = (ROOT / APPROVED).read_text(encoding="utf-8")
     current = (ROOT / GATE["BASE"]).read_text(encoding="utf-8")
-    required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", approved))
-    assert required == set(re.findall(r"\$\{([A-Z0-9_]+):\?", current))
+    required, current_required = required_input_sets(approved, current)
     assert "MARTY_ISSUANCE_IMAGE" not in required
     assert "BAO_ADDR" in required
     environment = yaml.safe_load(approved)["services"]["issuance"]["environment"]
@@ -526,14 +540,17 @@ def interpolated_models():
                 assert set(expected_publication.values()) == {"synthetic-custom"}
             assert_models(render(APPROVED, values), after, interpolated=True)
             print(f"PASS: self-host {mode} interpolated whole model")
-        for name in sorted(required):
-            for value in (None, ""):
-                values = dict(inputs)
-                if value is None:
-                    values.pop(name)
-                else:
-                    values[name] = value
-                for file in (APPROVED, GATE["BASE"]):
+        for file, source_required in (
+            (APPROVED, required),
+            (GATE["BASE"], current_required),
+        ):
+            for name in sorted(source_required):
+                for value in (None, ""):
+                    values = dict(inputs)
+                    if value is None:
+                        values.pop(name)
+                    else:
+                        values[name] = value
                     try:
                         render(file, values)
                     except subprocess.CalledProcessError as error:
@@ -543,7 +560,8 @@ def interpolated_models():
                             f"Required self-host input accepted: {name}"
                         )
         print(
-            f"PASS: {len(required)} current required inputs reject missing/empty; "
+            f"PASS: {len(required)} historical/{len(current_required)} current "
+            "required inputs reject missing/empty; "
             "retired Python image input is absent"
         )
 
