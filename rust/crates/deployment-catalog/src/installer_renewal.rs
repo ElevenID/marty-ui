@@ -86,7 +86,11 @@ fn read_entry(dir: &File, name: &str, mode: u32, allow_root: bool) -> Result<Vec
 }
 
 fn read_inputs(secrets: &File) -> Result<BTreeMap<String, Vec<u8>>> {
-    let values = installer_renewal_bootstrap::current_inputs()
+    let available = file_names(secrets)?;
+    let managed = crate::installer_ingress_provision::OUTPUTS[..3]
+        .iter()
+        .any(|name| available.contains(*name));
+    let values = installer_renewal_bootstrap::inventory(managed)
         .into_iter()
         .map(|name| {
             let value = read_entry(secrets, &name, 0o444, true)?;
@@ -133,6 +137,7 @@ fn validate_delivery(
     held: &File,
     owner: &str,
     expected_host_uid: HelperOutputOwner,
+    managed_ingress: bool,
 ) -> Result<Vec<String>> {
     require_directory_binding(parent, held)?;
     require(
@@ -147,12 +152,12 @@ fn validate_delivery(
     let delivered = open_child(held, "delivered", libc::O_RDONLY | libc::O_DIRECTORY)?;
     let m = delivered.metadata().map_err(|_| REFUSAL)?;
     require(m.is_dir() && m.uid() == unsafe { libc::geteuid() } && m.mode() & 0o7777 == 0o700)?;
-    let result = validate_delivered(&delivered, owner)?;
+    let result = validate_delivered(&delivered, owner, managed_ingress)?;
     require_directory_binding(parent, held)?;
     Ok(result)
 }
 
-fn validate_delivered(delivered: &File, owner: &str) -> Result<Vec<String>> {
+fn validate_delivered(delivered: &File, owner: &str, managed_ingress: bool) -> Result<Vec<String>> {
     let expected: BTreeSet<String> = IDENTITY_FILES
         .into_iter()
         .chain(["pending.json", "completed.json"])
@@ -163,23 +168,33 @@ fn validate_delivered(delivered: &File, owner: &str) -> Result<Vec<String>> {
         serde_json::from_slice(&read_entry(delivered, "pending.json", 0o600, false)?)
             .map_err(|_| REFUSAL)?;
     require(
-        pending.schema == "elevenid.installer-renewal-bootstrap-intent/v1"
+        pending.schema
+            == if managed_ingress {
+                "elevenid.installer-renewal-bootstrap-intent/v2"
+            } else {
+                "elevenid.installer-renewal-bootstrap-intent/v1"
+            }
             && pending.installation_id == owner
             && !pending.root_retired
-            && !pending.ingress_renewal,
+            && pending.ingress_renewal == managed_ingress,
     )?;
     let completed: Completed =
         serde_json::from_slice(&read_entry(delivered, "completed.json", 0o600, false)?)
             .map_err(|_| REFUSAL)?;
     require(
-        completed.schema == "elevenid.installer-renewal-bootstrap-result/v1"
+        completed.schema
+            == if managed_ingress {
+                "elevenid.installer-renewal-bootstrap-result/v2"
+            } else {
+                "elevenid.installer-renewal-bootstrap-result/v1"
+            }
             && completed.installation_id == owner
             && completed.identity_files == IDENTITY_FILES
-            && completed.policy_count == 21
+            && completed.policy_count == if managed_ingress { 22 } else { 21 }
             && completed.scoped_login_verified
             && completed.verification_token_revoked
             && !completed.root_retired
-            && !completed.ingress_renewal,
+            && completed.ingress_renewal == managed_ingress,
     )?;
     let mut credentials = BTreeSet::new();
     for name in ["renewal-role-id", "renewal-secret-id"] {
@@ -199,8 +214,8 @@ fn validate_delivered(delivered: &File, owner: &str) -> Result<Vec<String>> {
     )?)
     .map_err(|_| REFUSAL)?;
     require(
-        policies.len() == 21
-            && policies.iter().collect::<BTreeSet<_>>().len() == 21
+        policies.len() == if managed_ingress { 22 } else { 21 }
+            && policies.iter().collect::<BTreeSet<_>>().len() == policies.len()
             && policies.iter().all(|v| {
                 !v.is_empty()
                     && v.len() <= 160
@@ -208,6 +223,15 @@ fn validate_delivered(delivered: &File, owner: &str) -> Result<Vec<String>> {
                     && v.bytes()
                         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
             }),
+    )?;
+    let ingress = crate::installer_ingress_provision::resource_name(owner)?;
+    require(
+        policies.iter().any(|name| name == &ingress) == managed_ingress
+            && policies
+                .iter()
+                .filter(|name| name.starts_with("installer-ingress-"))
+                .count()
+                == usize::from(managed_ingress),
     )?;
     Ok(IDENTITY_FILES.map(String::from).to_vec())
 }
@@ -236,6 +260,10 @@ pub fn provision(
     state.create_private_directory("renewal-inputs")?;
     let staged = directory(&installation.join("renewal-inputs"))?;
     let source_snapshot = stage_inputs(&secrets, &staged)?;
+    let managed_ingress = installer_renewal_bootstrap::has_managed_ingress(&source_snapshot)?;
+    // This producer is for fresh managed OpenBao installations. Retained v1
+    // receipts remain readable, but may not downgrade a new provisioning run.
+    require(managed_ingress)?;
     let output_path = installation.join("renewal-transfer");
     let output = directory(&output_path)?;
     state.write_evidence(
@@ -249,7 +277,7 @@ pub fn provision(
     )?;
     require_directory_binding(&output_path, &output)?;
     require(
-        file_names(&staged)? == installer_renewal_bootstrap::current_inputs()
+        file_names(&staged)? == installer_renewal_bootstrap::inventory(managed_ingress)
             && read_inputs(&staged)? == source_snapshot
             && read_inputs(&secrets)? == source_snapshot,
     )?;
@@ -272,9 +300,10 @@ pub fn provision(
         &output,
         &owner,
         installer_helper_output::expected_host_uid(&binding)?,
+        managed_ingress,
     )?;
     let receipt = RenewalReceipt {
-        schema: "elevenid.installer-renewal-host/v2",
+        schema: "elevenid.installer-renewal-host/v3",
         installation_id: owner,
         engine_id: binding.engine_id,
         container_id: job.container_id,
@@ -282,7 +311,7 @@ pub fn provision(
         network_id: bao.network_id.clone(),
         image: job.image,
         root_retired: false,
-        ingress_renewal: false,
+        ingress_renewal: true,
         private_identity_validated: true,
         outputs: delivered,
         compose_receipt_sha256: installer_jobs::receipt_digest(&job.compose)?,
@@ -439,7 +468,10 @@ mod tests {
         std::fs::create_dir(&transfer).unwrap();
         std::fs::set_permissions(&transfer, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(require_directory_binding(&transfer, &held).is_err());
-        assert!(validate_delivery(&transfer, &held, OWNER, host_output_owner_for_test()).is_err());
+        assert!(
+            validate_delivery(&transfer, &held, OWNER, host_output_owner_for_test(), false)
+                .is_err()
+        );
         symlink(&transfer, temp.path().join("original/delivered")).unwrap();
         assert!(open_child(&held, "delivered", libc::O_RDONLY | libc::O_DIRECTORY).is_err());
     }
@@ -525,7 +557,7 @@ mod tests {
                 .unwrap(),
             0o600,
         );
-        assert_eq!(validate_delivered(&dir, OWNER).unwrap().len(), 3);
+        assert_eq!(validate_delivered(&dir, OWNER, false).unwrap().len(), 3);
         for (field, value) in [
             ("root_retired", json!(true)),
             ("verification_token_revoked", json!(false)),
@@ -540,7 +572,7 @@ mod tests {
                 &serde_json::to_vec(&bad).unwrap(),
                 0o600,
             );
-            assert!(validate_delivered(&dir, OWNER).is_err());
+            assert!(validate_delivered(&dir, OWNER, false).is_err());
         }
         put(
             temp.path(),
@@ -553,14 +585,14 @@ mod tests {
             std::fs::Permissions::from_mode(0o444),
         )
         .unwrap();
-        assert!(validate_delivered(&dir, OWNER).is_err());
+        assert!(validate_delivered(&dir, OWNER, false).is_err());
         std::fs::set_permissions(
             temp.path().join("renewal-secret-id"),
             std::fs::Permissions::from_mode(0o600),
         )
         .unwrap();
         put(temp.path(), "unexpected", b"extra", 0o600);
-        assert!(validate_delivered(&dir, OWNER).is_err());
+        assert!(validate_delivered(&dir, OWNER, false).is_err());
     }
 
     #[test]

@@ -41,13 +41,18 @@ fn artifact_limit(asset: &str) -> Option<u64> {
         "marty-deploy-linux-amd64" => Some(512 * 1024 * 1024),
         "prepared-selfhost-bundle.zip" => Some(256 * 1024 * 1024),
         "prepared-selfhost-images.json" => Some(65536),
+        "selfhost-cloudflare-addon.zip" => Some(1024 * 1024),
+        "cloudflared_wrapper.sbom.cdx.json" => Some(16 * 1024 * 1024),
         _ => None,
     }
 }
 fn record(asset: &str) -> bool {
     matches!(
         asset,
-        "installer-inventory.json" | "installer-admission.json" | "installer-channel.json"
+        "installer-inventory.json"
+            | "installer-admission.json"
+            | "installer-channel.json"
+            | "selfhost-cloudflare-images.json"
     )
 }
 fn base_asset(asset: &str) -> &str {
@@ -317,6 +322,23 @@ impl GitHubReleaseFetcher {
         self.download(tag, asset, destination, SIDECAR_LIMIT, None)
             .await
     }
+    /// This optional subject has a digest in its signed add-on manifest. Its
+    /// size is bounded before download; the caller verifies both its digest and
+    /// the same workflow/source/run provenance as the core release afterward.
+    pub(crate) async fn fetch_hosting_sbom(
+        &self,
+        tag: &str,
+        destination: &Path,
+    ) -> Result<DownloadReceipt> {
+        self.download(
+            tag,
+            "cloudflared_wrapper.sbom.cdx.json",
+            destination,
+            16 * 1024 * 1024,
+            None,
+        )
+        .await
+    }
     async fn download(
         &self,
         tag: &str,
@@ -401,6 +423,22 @@ mod tests {
             "installer-channel.json.sigstore.json"
         )
         .is_ok());
+        for asset in [
+            "selfhost-cloudflare-images.json",
+            "selfhost-cloudflare-addon.zip",
+            "cloudflared_wrapper.sbom.cdx.json",
+            "selfhost-cloudflare-addon.zip.sigstore.json",
+        ] {
+            assert!(asset_url("v1.2.3-nightly.20261031.42", asset).is_ok());
+        }
+        assert_eq!(
+            artifact_limit("selfhost-cloudflare-addon.zip"),
+            Some(1024 * 1024)
+        );
+        assert_eq!(
+            artifact_limit("cloudflared_wrapper.sbom.cdx.json"),
+            Some(16 * 1024 * 1024)
+        );
         for (tag, asset) in [
             ("../../other", "install.sh"),
             ("v1.2.3", "../install.sh"),
@@ -409,6 +447,12 @@ mod tests {
             ("installer-channel-nightly", "marty-deploy-linux-amd64"),
             ("v1.2.3", "installer-channel.json"),
             ("v1.2.3", "install.sh.sigstore.json.sigstore.json"),
+            ("v1.2.3", "selfhost-unknown-addon.zip"),
+            ("v1.2.3", "../selfhost-cloudflare-addon.zip"),
+            (
+                "installer-channel-nightly",
+                "selfhost-cloudflare-images.json",
+            ),
         ] {
             assert!(asset_url(tag, asset).is_err());
         }

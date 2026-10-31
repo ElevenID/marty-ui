@@ -345,7 +345,7 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
         .keys()
         .map(|name| (name.clone(), image.clone()))
         .collect();
-    assert!(services.len() >= 30);
+    assert!(services.len() >= 29);
     let stack_lock: Value =
         serde_json::from_slice(&fs::read(source.join("release/stack-lock.json")).unwrap()).unwrap();
     let image_lock = root.join("synthetic-images.json");
@@ -422,17 +422,22 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
         ),
         ("MARTY_INSTALLER_HTTPS_PORT", "18443".into()),
         (
+            "MARTY_INSTALLER_INGRESS_CONNECT_TO",
+            "localhost:18443:127.0.0.1:8443".into(),
+        ),
+        (
             "MARTY_INSTALLER_INGRESS_KEY_NAME",
             "installer-ingress-fixture".into(),
         ),
         ("PUBLIC_API_URL", "https://localhost:18443".into()),
+        ("GATEWAY_OBSERVE_CLIENT_IP", "false".into()),
         ("PUBLIC_DOMAIN", "localhost:18443".into()),
     ] {
         values.insert(name.into(), value);
     }
     let supplied_env = root.join("source-fixture.env");
     let mut environment = String::new();
-    for (name, value) in values {
+    for (name, value) in &values {
         assert!(!value
             .chars()
             .any(|c| c.is_control() || c == '\'' || c == '\\'));
@@ -441,6 +446,128 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
     private_write(&supplied_env, environment.as_bytes());
     // Use the packaged installer layers, including their real resource closure.
     assert_actual_installer_layers(&executable, &bundle, &bundle, &supplied_env);
+    for (case, public_origin, bind_address) in [
+        ("direct-dns", "https://marty.example.com", "0.0.0.0"),
+        ("direct-ip", "https://192.0.2.10:8443", "0.0.0.0"),
+        (
+            "direct-dns-ipv6-listener",
+            "https://marty.example.com",
+            "::",
+        ),
+        ("proxy", "https://marty.example.com", "127.0.0.1"),
+    ] {
+        let origin = marty_selfhost_identity::origin::PublicOrigin::parse(public_origin).unwrap();
+        let host = match origin.ip_address() {
+            Some(std::net::IpAddr::V6(ip)) => format!("[{ip}]"),
+            _ => origin.host().to_owned(),
+        };
+        let mut selected = values.clone();
+        selected.insert("PUBLIC_API_URL".into(), public_origin.into());
+        selected.insert("PUBLIC_DOMAIN".into(), origin.authority().into());
+        selected.insert(
+            "MARTY_INSTALLER_HTTPS_BIND_ADDRESS".into(),
+            bind_address.into(),
+        );
+        selected.insert("MARTY_INSTALLER_HTTPS_PORT".into(), "18443".into());
+        let connect_to = format!("{host}:{}:127.0.0.1:8443", origin.port());
+        selected.insert(
+            "MARTY_INSTALLER_INGRESS_CONNECT_TO".into(),
+            connect_to.clone(),
+        );
+        let env = root.join(format!("{case}.env"));
+        private_write(
+            &env,
+            selected
+                .iter()
+                .map(|(key, value)| format!("{key}='{value}'\n"))
+                .collect::<String>()
+                .as_bytes(),
+        );
+        let model = config(
+            &executable,
+            &bundle,
+            &[
+                bundle.join("docker-compose.yml"),
+                bundle.join("deploy-config/compose/selfhost-installer/compose.installer.yml"),
+            ],
+            &env,
+            &["installer-init"],
+            &[],
+        );
+        let services = model["services"].as_object().unwrap();
+        let ingress = &services["installer-ingress"];
+        assert_eq!(ingress["ports"][0]["host_ip"], bind_address);
+        assert_eq!(ingress["ports"][0]["published"], "18443");
+        assert_eq!(ingress["ports"][0]["target"], 8443);
+        assert_eq!(
+            ingress["environment"]["OIDF_EDGE_PUBLIC_ORIGIN"],
+            public_origin
+        );
+        let health = ingress["healthcheck"]["test"].as_array().unwrap();
+        assert!(health.contains(&Value::String(connect_to)));
+        assert!(health.contains(&Value::String(format!("{public_origin}/"))));
+        assert!(!services.contains_key("cloudflared"));
+        assert_eq!(
+            services["gateway"]["environment"]["GATEWAY_OBSERVE_CLIENT_IP"],
+            "false"
+        );
+        for role in ["gateway", "keycloak", "edge"] {
+            assert!(services[role]
+                .get("ports")
+                .is_none_or(|ports| ports.as_array().is_some_and(Vec::is_empty)));
+        }
+        if case == "proxy" {
+            let connector_image = format!(
+                "ghcr.io/elevenid/marty-ui-oss/cloudflared-wrapper@sha256:{}",
+                "d".repeat(64)
+            );
+            selected.insert("MARTY_CLOUDFLARED_IMAGE".into(), connector_image.clone());
+            selected.insert(
+                "MARTY_CLOUDFLARE_ADDON_DIR".into(),
+                root.to_str().unwrap().into(),
+            );
+            let addon_env = root.join("proxy-cloudflare.env");
+            private_write(
+                &addon_env,
+                selected
+                    .iter()
+                    .map(|(key, value)| format!("{key}='{value}'\n"))
+                    .collect::<String>()
+                    .as_bytes(),
+            );
+            // Config-only source fixture: cryptographic ZIP admission is tested
+            // separately; this never executes or authenticates an image.
+            let addon = config(
+                &executable,
+                &bundle,
+                &[
+                    bundle.join("docker-compose.yml"),
+                    bundle.join("deploy-config/compose/selfhost-installer/compose.installer.yml"),
+                    source.join("deploy-config/compose/selfhost-cloudflare/compose.cloudflare.yml"),
+                ],
+                &addon_env,
+                &["installer-init"],
+                &[],
+            );
+            let extended = addon["services"].as_object().unwrap();
+            assert_eq!(extended.len(), services.len() + 1);
+            for (role, service) in services {
+                assert_eq!(extended[role], *service);
+            }
+            let connector = &extended["cloudflared"];
+            assert_eq!(connector["image"], connector_image);
+            assert_eq!(connector["init"], true);
+            assert_eq!(
+                connector["depends_on"]["installer-ingress"]["condition"],
+                "service_healthy"
+            );
+            assert!(connector.get("ports").is_none());
+            assert_eq!(
+                connector["environment"]["CLOUDFLARE_TUNNEL_TOKEN_FILE"],
+                "/run/secrets/cloudflare_tunnel_token"
+            );
+        }
+    }
 }
 
 fn assert_actual_installer_layers(
@@ -763,6 +890,10 @@ fn actual_aws_foundation_removes_managed_providers_and_preserves_native_lifecycl
         ),
         ("MARTY_INSTALLER_HTTPS_PORT", "18443".into()),
         (
+            "MARTY_INSTALLER_INGRESS_CONNECT_TO",
+            "localhost:18443:127.0.0.1:8443".into(),
+        ),
+        (
             "MARTY_INSTALLER_INGRESS_KEY_NAME",
             "installer-ingress-fixture".into(),
         ),
@@ -772,6 +903,7 @@ fn actual_aws_foundation_removes_managed_providers_and_preserves_native_lifecycl
         ("MARTY_KEYCLOAK_KMS_IMAGE", image.clone()),
         ("MARTY_OPENBAO_DIDCOMM_IMAGE", image),
         ("PUBLIC_API_URL", "https://localhost:18443".into()),
+        ("GATEWAY_OBSERVE_CLIENT_IP", "false".into()),
         ("PUBLIC_DOMAIN", "localhost:18443".into()),
         (
             "MARTY_EXTERNAL_OIDC_ISSUER",
@@ -861,6 +993,10 @@ fn actual_aws_foundation_removes_managed_providers_and_preserves_native_lifecycl
     );
     let services = install["services"].as_object().unwrap();
     assert_eq!(services.len(), 27);
+    assert_eq!(
+        services["gateway"]["environment"]["GATEWAY_OBSERVE_CLIENT_IP"],
+        "false"
+    );
     for removed in [
         "openbao",
         "openbao-init",

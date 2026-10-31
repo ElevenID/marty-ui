@@ -7,12 +7,14 @@ use crate::{
     installer_ingress_provision as ingress,
     installer_state::{LockedInspection, Phase},
 };
+use marty_selfhost_identity::origin::PublicOrigin;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use spki::der::{Encode, EncodePem};
 use std::{
     collections::BTreeMap,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -33,6 +35,10 @@ pub struct TrustInfo {
     pub schema: &'static str,
     pub installation_id: String,
     pub origin: String,
+    /// Local transport target; HTTP authority and TLS identity remain `origin`.
+    pub local_probe_address: SocketAddr,
+    pub certificate_scope: &'static str,
+    pub public_endpoint_observed: bool,
     pub ca_certificate_pem: String,
     pub ca_der_sha256: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,10 +59,10 @@ fn origin(model: &Value) -> Result<String> {
     let value = model["services"]["installer-ingress"]["environment"]["OIDF_EDGE_PUBLIC_ORIGIN"]
         .as_str()
         .ok_or(REFUSED)?;
-    let port = value.strip_prefix("https://localhost:").ok_or(REFUSED)?;
-    let number = port.parse::<u16>().map_err(|_| REFUSED)?;
-    require(number >= 1024 && port == number.to_string())?;
-    Ok(value.to_owned())
+    Ok(PublicOrigin::parse(value)
+        .map_err(|_| REFUSED)?
+        .as_str()
+        .to_owned())
 }
 fn public_pem(bytes: &[u8]) -> Result<String> {
     let text = std::str::from_utf8(bytes).map_err(|_| REFUSED)?;
@@ -76,21 +82,21 @@ fn certificates(
     leaf: &[u8],
     id: &str,
     now: u64,
+    identity: &ingress::IngressIdentity,
 ) -> Result<(IngressMetadata, String, u64)> {
-    let m: IngressMetadata = serde_json::from_slice(metadata).map_err(|_| REFUSED)?;
+    let m = crate::installer_ingress_outputs::metadata_for_identity(metadata, id, now, identity)?;
     let name = ingress::resource_name(id)?;
     let expires = m
         .token_observed_at
         .checked_add(m.token_ttl_seconds)
         .ok_or(REFUSED)?;
     require(
-        m.schema == "elevenid.installer-ingress/v1"
-            && m.installation_id == id
+        m.installation_id == id
             && m.key_name == name
             && m.pki_mount == name
             && m.key_version == 1
-            && m.dns_names == ["localhost"]
-            && m.ip_addresses == ["127.0.0.1"]
+            && m.dns_names == identity.dns_names()
+            && m.ip_addresses == identity.ip_addresses()
             && !m.trust_installed
             && !m.installation_ready
             && (3600..=28800).contains(&m.token_ttl_seconds)
@@ -113,7 +119,7 @@ fn certificates(
         .to_pem(spki::der::pem::LineEnding::LF)
         .map_err(|_| REFUSED)?;
     require(
-        ingress::check_certificates(&ca_text, &leaf_text, &public, &name, now)?
+        ingress::check_certificates_for(&ca_text, &leaf_text, &public, &name, now, identity)?
             == (m.ca_expires_at, m.certificate_expires_at),
     )?;
     Ok((m, ca_text, expires))
@@ -137,7 +143,12 @@ fn public_chain(bytes: &[u8]) -> Result<Vec<x509_cert::Certificate>> {
     Ok(certificates)
 }
 
-fn imported_certificates(ca: &[u8], leaf: &[u8], now: u64) -> Result<ImportedCertificates> {
+fn imported_certificates(
+    ca: &[u8],
+    leaf: &[u8],
+    now: u64,
+    origin: &PublicOrigin,
+) -> Result<ImportedCertificates> {
     let roots = public_chain(ca)?;
     let chain = public_chain(leaf)?;
     let chain_der = chain
@@ -149,10 +160,11 @@ fn imported_certificates(ca: &[u8], leaf: &[u8], now: u64) -> Result<ImportedCer
         })
         .collect::<Result<Vec<_>>>()?;
     crate::operator_certificates::check_chain(leaf, ca).map_err(|_| REFUSED)?;
-    crate::installer_transport::validate_server_chain(
+    crate::installer_transport::validate_server_chain_for_origin(
         ca,
         &chain_der,
         rustls::pki_types::UnixTime::since_unix_epoch(std::time::Duration::from_secs(now)),
+        origin,
     )?;
     let mut ca_hashes = Vec::new();
     let mut ca_expiry = u64::MAX;
@@ -177,7 +189,11 @@ fn imported_certificates(ca: &[u8], leaf: &[u8], now: u64) -> Result<ImportedCer
     })
 }
 
-pub(crate) fn validate_imported_ingress(ca: &[u8], leaf: &[u8]) -> Result<()> {
+pub(crate) fn validate_imported_ingress_for_origin(
+    ca: &[u8],
+    leaf: &[u8],
+    origin: &PublicOrigin,
+) -> Result<()> {
     imported_certificates(
         ca,
         leaf,
@@ -185,6 +201,7 @@ pub(crate) fn validate_imported_ingress(ca: &[u8], leaf: &[u8]) -> Result<()> {
             .duration_since(UNIX_EPOCH)
             .map_err(|_| REFUSED)?
             .as_secs(),
+        origin,
     )
     .map(|_| ())
 }
@@ -224,7 +241,7 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
     let engine = &state.journal().runtime().ok_or(REFUSED)?.engine_id;
     let binding = generation::load_verified(path, &id, engine)?.ok_or(REFUSED)?;
     let imported = binding.imported_foundation();
-    let names = [
+    let mut names = vec![
         if imported {
             crate::installer_foundation::RECORD
         } else {
@@ -233,6 +250,15 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
         installer_doctor::SESSION_RECORD,
         "application-generation-selection.json",
     ];
+    if !imported {
+        names.push("generation-observation.json");
+    }
+    if state.journal().hosting_selection_sha256().is_some() {
+        names.extend([
+            crate::installer_hosting::RECORD,
+            crate::installer_hosting::SOURCE,
+        ]);
+    }
     let records = names
         .iter()
         .map(|name| Ok((*name, state.read_evidence(name)?)))
@@ -241,12 +267,21 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
         crate::installer_json::decode(bytes).map_err(|_| REFUSED)?;
     }
     let origin = origin(&saved.model)?;
-    let ca = state.read_secret("installer_ingress_ca_cert")?;
-    let leaf = state.read_secret("installer_ingress_tls_cert")?;
-    require(
-        binding.read(path, "installer_ingress_ca_cert")? == ca
-            && binding.read(path, "installer_ingress_tls_cert")? == leaf,
+    let public_origin = PublicOrigin::parse(&origin)?;
+    let hosting = crate::installer_hosting::resolve(state)?;
+    let listener = crate::installer_compose::bound_ingress_listener(&saved.model, &saved.inputs)?;
+    require(hosting.resolve_origin(listener.port)? == public_origin)?;
+    let identity = ingress::IngressIdentity::new(
+        hosting.certificate_dns_name(),
+        hosting.certificate_ip_address(),
     )?;
+    let probe_ip = match listener.bind_address {
+        IpAddr::V4(ip) if ip.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(ip) if ip.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        ip => ip,
+    };
+    let ca = binding.read(path, "installer_ingress_ca_cert")?;
+    let leaf = binding.read(path, "installer_ingress_tls_cert")?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| REFUSED)?
@@ -254,7 +289,7 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
     let (pem, ca_hash, ca_hashes, leaf_hash, ca_expiry, leaf_expiry, token_expiry) = if imported {
         let selection = crate::installer_foundation::load(state)?.ok_or(REFUSED)?;
         require(selection.configuration.public_origin == origin)?;
-        let c = imported_certificates(&ca, &leaf, now)?;
+        let c = imported_certificates(&ca, &leaf, now, &public_origin)?;
         (
             c.pem,
             c.ca_hashes[0].clone(),
@@ -265,8 +300,18 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
             None,
         )
     } else {
-        let (m, pem, expires) =
-            certificates(&records["installer-ingress.json"], &ca, &leaf, &id, now)?;
+        let selected_metadata = binding.ingress_metadata(path)?;
+        let metadata_bytes = match selected_metadata {
+            Some(metadata) => serde_json::to_vec(&metadata).map_err(|_| REFUSED)?,
+            None => {
+                require(
+                    state.read_secret("installer_ingress_ca_cert")? == ca
+                        && state.read_secret("installer_ingress_tls_cert")? == leaf,
+                )?;
+                records["installer-ingress.json"].clone()
+            }
+        };
+        let (m, pem, expires) = certificates(&metadata_bytes, &ca, &leaf, &id, now, &identity)?;
         (
             pem,
             m.ca_der_sha256,
@@ -282,21 +327,24 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
     }
     require(
         generation::load_verified(path, &id, engine)?.as_ref() == Some(&binding)
-            && state.read_secret("installer_ingress_ca_cert")? == ca
-            && state.read_secret("installer_ingress_tls_cert")? == leaf
+            && binding.read(path, "installer_ingress_ca_cert")? == ca
+            && binding.read(path, "installer_ingress_tls_cert")? == leaf
             && serde_json::to_value(&saved).map_err(|_| REFUSED)?
                 == serde_json::to_value(installer_doctor::load_session(state, path)?)
                     .map_err(|_| REFUSED)?,
     )?;
     state.require_path_binding(path)?;
     Ok(TrustInfo {
-        schema: if imported {
-            "elevenid.installer-trust-info/v3"
-        } else {
-            "elevenid.installer-trust-info/v2"
-        },
+        schema: "elevenid.installer-trust-info/v4",
         installation_id: id,
         origin,
+        local_probe_address: SocketAddr::new(probe_ip, listener.port),
+        certificate_scope: if hosting.external_tls_owned() {
+            "backend"
+        } else {
+            "public-ingress"
+        },
+        public_endpoint_observed: false,
         ca_certificate_pem: pem,
         ca_der_sha256: ca_hash,
         ca_der_sha256s: ca_hashes,
@@ -313,7 +361,13 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
         host_trust_observed: false,
         host_trust_modified: false,
         installation_ready: false,
-        pending: if imported {
+        pending: if hosting.external_tls_owned() {
+            vec![
+                "External proxy routing, public certificate and backend TLS verification",
+                "Browser OIDC login and installed issue/present/verify/revoke/deny journey",
+                "Live custody, renewal and recovery qualification",
+            ]
+        } else if imported {
             vec![
             "Explicit browser CA trust and external OIDC login",
             "Installed issue/present/verify/revoke/deny journey",
@@ -346,10 +400,9 @@ mod tests {
         assert!(public_pem(b"credential-value").is_err());
     }
     #[test]
-    fn origin_is_fixed_loopback_https_and_unprivileged() {
+    fn origin_requires_a_canonical_https_authority() {
         for value in [
             "http://localhost:8443",
-            "https://foreign:8443",
             "https://localhost:443",
             "https://localhost:08443",
             "https://localhost:8443/path",
@@ -357,6 +410,7 @@ mod tests {
             assert!(origin(&json!({"services":{"installer-ingress":{"environment":{"OIDF_EDGE_PUBLIC_ORIGIN":value}}}})).is_err());
         }
         assert_eq!(origin(&json!({"services":{"installer-ingress":{"environment":{"OIDF_EDGE_PUBLIC_ORIGIN":"https://localhost:18443"}}}})).unwrap(),"https://localhost:18443");
+        assert_eq!(origin(&json!({"services":{"installer-ingress":{"environment":{"OIDF_EDGE_PUBLIC_ORIGIN":"https://marty.example.com"}}}})).unwrap(),"https://marty.example.com");
     }
     #[test]
     fn trust_information_never_adopts_active_or_incomplete_installation() {

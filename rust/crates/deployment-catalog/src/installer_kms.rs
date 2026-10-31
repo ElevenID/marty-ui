@@ -188,7 +188,7 @@ impl<'a, Owner: RegistrationOwner> PublicRegistryApi<'a, Owner> {
         api_key.set_sensitive(true);
         Ok(Self {
             client: crate::installer_transport::client(&trust, Duration::from_secs(15))?,
-            origin: trust.origin,
+            origin: crate::installer_transport::endpoint(&trust)?,
             organization_id,
             api_key,
             installation,

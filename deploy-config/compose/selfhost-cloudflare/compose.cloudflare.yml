@@ -1,0 +1,49 @@
+# Optional signed connector. Merge only after selecting cloudflare-tunnel and
+# authenticating its separate add-on manifest, archive, and image provenance.
+# Configure the remote public hostname to https://installer-ingress:8443,
+# with canonical Host/originServerName and caPool=/run/installer/ca.crt.
+services:
+  cloudflared:
+    image: ${MARTY_CLOUDFLARED_IMAGE:?set the authenticated optional connector digest}
+    pull_policy: missing
+    init: true
+    user: "10001:10001"
+    mem_limit: ${MARTY_CLOUDFLARED_MEMORY_LIMIT:-256m}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    entrypoint: [/bin/sh, /scripts/cloudflared-selfhost.sh]
+    command: []
+    environment:
+      CLOUDFLARE_TUNNEL_TOKEN_FILE: /run/secrets/cloudflare_tunnel_token
+      TUNNEL_METRICS: 127.0.0.1:2000
+    labels:
+      com.elevenid.installer.id: ${MARTY_INSTALLER_ID:?set the installation identifier}
+      com.elevenid.installer.phase: runtime
+      com.elevenid.installer.stage: cloudflare-tunnel
+    depends_on:
+      installer-ingress:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: ${MARTY_CLOUDFLARE_ADDON_DIR:?set the authenticated add-on directory}/scripts/cloudflared-selfhost.sh
+        target: /scripts/cloudflared-selfhost.sh
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${SELFHOST_SECRET_DIR:?set the verified generation directory}/cloudflare_tunnel_token
+        target: /run/secrets/cloudflare_tunnel_token
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${SELFHOST_SECRET_DIR:?set the verified generation directory}/installer_ingress_ca_cert
+        target: /run/installer/ca.crt
+        read_only: true
+        bind: {create_host_path: false}
+    healthcheck:
+      test: [CMD, wget, -q, -T, "3", -O, /dev/null, http://127.0.0.1:2000/ready]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 12

@@ -1,5 +1,7 @@
 //! Reviewed public self-host workload identities shared by native KMS operators.
 
+pub mod origin;
+
 pub struct SelfhostRole {
     pub name: &'static str,
     pub key_name: &'static str,

@@ -33,11 +33,21 @@ fn lifetime(cert: &Certificate, now: Duration, minimum_ttl: Duration) -> Result<
 }
 
 pub fn check_lifetime(pem: &[u8], minimum_ttl: u64) -> Result<bool> {
-    Ok(lifetime(
-        &first_certificate(pem)?,
+    check_lifetime_at(
+        pem,
+        minimum_ttl,
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| REFUSAL)?,
+    )
+}
+
+/// Retained certificate evidence is validated at its bound observation time;
+/// live admission continues to use the current-time wrapper above.
+pub(crate) fn check_lifetime_at(pem: &[u8], minimum_ttl: u64, now: Duration) -> Result<bool> {
+    Ok(lifetime(
+        &first_certificate(pem)?,
+        now,
         Duration::from_secs(minimum_ttl),
     )
     .is_ok())
@@ -260,6 +270,16 @@ fn issuer_matches(child: &Certificate, parent: &Certificate) -> Result<()> {
 }
 
 pub fn check_chain(pem: &[u8], issuers: &[u8]) -> Result<()> {
+    check_chain_at(
+        pem,
+        issuers,
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| REFUSAL)?,
+    )
+}
+
+pub(crate) fn check_chain_at(pem: &[u8], issuers: &[u8], now: Duration) -> Result<()> {
     use rustls::pki_types::{CertificateDer, UnixTime};
     if !issuers.iter().any(|byte| !byte.is_ascii_whitespace())
         || issuers.len() > 64 * 1024
@@ -292,9 +312,6 @@ pub fn check_chain(pem: &[u8], issuers: &[u8]) -> Result<()> {
             intermediates.push(der.clone());
         }
     }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| REFUSAL)?;
     let verify_path = |path: &webpki::VerifiedPath<'_>| {
         let check = || -> Result<()> {
             let index = anchors

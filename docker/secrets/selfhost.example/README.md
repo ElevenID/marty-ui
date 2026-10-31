@@ -78,7 +78,6 @@ Required files:
 - `sign_grant_mint_issuance_canvas_token`
 - `sign_grant_mint_issuance_readiness_token`
 - `sign_grant_mint_issuance_passport_token`
-- `cloudflare_tunnel_token`
 
 `flow_webhook_secret` authenticates verification-completion callbacks between the flow and auth services. Generate a random value of at least 32 bytes and use the same secret for both services.
 
@@ -126,6 +125,8 @@ Optional files may be left empty when the related integration is disabled:
 Canvas Credentials API tokens are configured by organization administrators from the Canvas integration wizard. Issuance stores them in purpose-bound envelopes encrypted by the remote KMS through signing-keys; do not put institution-specific Canvas Credentials bearer tokens in self-host deployment secret files.
 
 The standalone read-only Canvas Credentials contract checker can still read `CANVAS_CREDENTIALS_API_TOKEN` or `CANVAS_CREDENTIALS_API_TOKEN_FILE` from an operator shell for one-off vendor sandbox validation.
+
+`cloudflare_tunnel_token` is required only for the explicitly selected Cloudflare integration; the core installer and direct hosting do not need it. The signed installer copies a separately supplied private token into its owned secret generation.
 
 `cloudflare_beta_tunnel_token` is only required when the optional self-host `beta-tunnel` compose profile is enabled to route a second Cloudflare tunnel, such as `beta.elevenidllc.com`, into the same self-host edge.
 

@@ -2,7 +2,9 @@
 //! Local validation does not replace the helper's remote custody and ACL proof.
 #![cfg(target_os = "linux")]
 use crate::installer_helper_output::HelperOutputOwner;
-use crate::installer_ingress_provision::{certificate, check_certificates, resource_name, OUTPUTS};
+use crate::installer_ingress_provision::{
+    certificate, check_certificates_for, resource_name, IngressIdentity, OUTPUTS,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use spki::der::{Encode, EncodePem};
@@ -19,7 +21,7 @@ use std::{
 };
 pub type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "Ingress output validation failed; preserve owned outputs for recovery";
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct IngressMetadata {
     pub schema: String,
@@ -137,18 +139,25 @@ fn write(dir: &File, name: &str, bytes: &[u8]) -> Result<()> {
         .and_then(|_| dir.sync_all())
         .map_err(|_| REFUSED.to_owned())
 }
-fn metadata(bytes: &[u8], id: &str, now: u64) -> Result<IngressMetadata> {
+pub(crate) fn metadata_for_identity(
+    bytes: &[u8],
+    id: &str,
+    now: u64,
+    identity: &IngressIdentity,
+) -> Result<IngressMetadata> {
     require(bytes.len() <= 8192)?;
     let m: IngressMetadata = serde_json::from_slice(bytes).map_err(|_| REFUSED)?;
     let name = resource_name(id)?;
     require(
-        m.schema == "elevenid.installer-ingress/v1"
+        (m.schema == "elevenid.installer-ingress/v2"
+            || (m.schema == "elevenid.installer-ingress/v1"
+                && *identity == IngressIdentity::localhost()))
             && m.installation_id == id
             && m.key_name == name
             && m.pki_mount == name
             && m.key_version == 1
-            && m.dns_names == ["localhost"]
-            && m.ip_addresses == ["127.0.0.1"]
+            && m.dns_names == identity.dns_names()
+            && m.ip_addresses == identity.ip_addresses()
             && !m.trust_installed
             && !m.installation_ready,
     )?;
@@ -185,11 +194,27 @@ fn token(bytes: &[u8]) -> Result<()> {
 }
 /// The caller holds the installation lock and proves the helper has stopped.
 /// All validation precedes exclusive transfers; failures preserve partial files.
+#[cfg(test)]
 pub(crate) fn validate_and_transfer(
     output: &File,
     secrets: &File,
     installation_id: &str,
     expected_host_uid: HelperOutputOwner,
+) -> Result<ValidatedIngressOutputs> {
+    validate_and_transfer_for(
+        output,
+        secrets,
+        installation_id,
+        expected_host_uid,
+        &IngressIdentity::localhost(),
+    )
+}
+pub(crate) fn validate_and_transfer_for(
+    output: &File,
+    secrets: &File,
+    installation_id: &str,
+    expected_host_uid: HelperOutputOwner,
+    identity: &IngressIdentity,
 ) -> Result<ValidatedIngressOutputs> {
     directory(output)?;
     preflight(secrets)?;
@@ -212,7 +237,8 @@ pub(crate) fn validate_and_transfer(
         .duration_since(UNIX_EPOCH)
         .map_err(|_| REFUSED)?
         .as_secs();
-    let m = metadata(&bytes[3], installation_id, now)?;
+    let m = metadata_for_identity(&bytes[3], installation_id, now, identity)?;
+    require(m.schema == "elevenid.installer-ingress/v2")?;
     token(&bytes[2])?;
     let ca = std::str::from_utf8(&bytes[0]).map_err(|_| REFUSED)?;
     let leaf = std::str::from_utf8(&bytes[1]).map_err(|_| REFUSED)?;
@@ -223,7 +249,7 @@ pub(crate) fn validate_and_transfer(
         .subject_public_key_info
         .to_pem(spki::der::pem::LineEnding::LF)
         .map_err(|_| REFUSED)?;
-    let expiry = check_certificates(ca, leaf, &public, &m.key_name, now)?;
+    let expiry = check_certificates_for(ca, leaf, &public, &m.key_name, now, identity)?;
     require(expiry == (m.ca_expires_at, m.certificate_expires_at))?;
     for (expected, actual) in [
         (&m.ca_pem_sha256, bytes[0].clone()),
@@ -251,6 +277,9 @@ mod tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
     const ID: &str = "12345678-1234-4234-8234-123456789abc";
+    fn metadata(bytes: &[u8], id: &str, now: u64) -> Result<IngressMetadata> {
+        metadata_for_identity(bytes, id, now, &IngressIdentity::localhost())
+    }
     fn record() -> serde_json::Value {
         serde_json::json!({"schema":"elevenid.installer-ingress/v1","installation_id":ID,
             "key_name":resource_name(ID).unwrap(),"key_version":1,"pki_mount":resource_name(ID).unwrap(),
@@ -293,6 +322,29 @@ mod tests {
         std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let file = File::open(temp.path()).unwrap();
         (temp, file)
+    }
+    #[test]
+    fn versioned_metadata_binds_selected_identity_and_keeps_legacy_local_reads() {
+        let mut value = record();
+        assert!(metadata(&serde_json::to_vec(&value).unwrap(), ID, 1100).is_ok());
+        let selected = IngressIdentity::new(Some("marty.example.com"), None).unwrap();
+        value["dns_names"] = serde_json::json!(["marty.example.com"]);
+        value["ip_addresses"] = serde_json::json!([]);
+        assert!(
+            metadata_for_identity(&serde_json::to_vec(&value).unwrap(), ID, 1100, &selected)
+                .is_err()
+        );
+        value["schema"] = serde_json::json!("elevenid.installer-ingress/v2");
+        assert!(
+            metadata_for_identity(&serde_json::to_vec(&value).unwrap(), ID, 1100, &selected)
+                .is_ok()
+        );
+        assert!(metadata(&serde_json::to_vec(&value).unwrap(), ID, 1100).is_err());
+        value["ip_addresses"] = serde_json::json!(["127.0.0.1"]);
+        assert!(
+            metadata_for_identity(&serde_json::to_vec(&value).unwrap(), ID, 1100, &selected)
+                .is_err()
+        );
     }
     #[test]
     fn output_files_are_bounded_ordinary_and_exclusive() {

@@ -1,0 +1,20 @@
+{
+  "schema": "elevenid.hosting-addons/v1",
+  "addons": {
+    "cloudflare-tunnel": {
+      "platform": "linux/amd64",
+      "image": "ghcr.io/elevenid/marty-ui-oss/cloudflared-wrapper",
+      "dockerfile": "docker/cloudflared-wrapper.Dockerfile",
+      "compose_source": "deploy-config/compose/selfhost-cloudflare/compose.cloudflare.yml",
+      "compose_entry": "compose.cloudflare.yml",
+      "source_files": {
+        "scripts/cloudflared-selfhost.sh": "scripts/cloudflared-selfhost.sh"
+      },
+      "assets": [
+        "selfhost-cloudflare-addon.zip",
+        "selfhost-cloudflare-images.json",
+        "cloudflared_wrapper.sbom.cdx.json"
+      ]
+    }
+  }
+}

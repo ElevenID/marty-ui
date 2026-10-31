@@ -151,6 +151,7 @@ fn session_fixture() -> (Vec<u8>, SavedSession, SessionExtension, Vec<u8>) {
             installation.join("evidence"),
         ]),
         allowed_loopback_ports: BTreeSet::from([8443]),
+        ingress_listener: None,
         prior: None,
     };
     let model = json!({"name":inputs.project,"services":{"organization":{"image":image}}});

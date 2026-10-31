@@ -3,22 +3,20 @@
 #![cfg(target_os = "linux")]
 
 use crate::installer_trust::TrustInfo;
+use marty_selfhost_identity::origin::PublicOrigin;
 use rustls::{
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     pki_types::{pem::PemObject, CertificateDer, ServerName, UnixTime},
     DigitallySignedStruct, Error, SignatureScheme,
 };
 use sha2::{Digest, Sha256};
-use std::{
-    net::{Ipv4Addr, SocketAddr},
-    sync::Arc,
-    time::Duration,
-};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 #[derive(Debug)]
 struct BoundCertificate {
     verifier: Arc<dyn ServerCertVerifier>,
     fingerprint: String,
+    name: ServerName<'static>,
 }
 
 impl ServerCertVerifier for BoundCertificate {
@@ -26,14 +24,14 @@ impl ServerCertVerifier for BoundCertificate {
         &self,
         certificate: &CertificateDer<'_>,
         intermediates: &[CertificateDer<'_>],
-        server_name: &ServerName<'_>,
+        _server_name: &ServerName<'_>,
         ocsp_response: &[u8],
         now: UnixTime,
     ) -> std::result::Result<ServerCertVerified, Error> {
         self.verifier.verify_server_cert(
             certificate,
             intermediates,
-            server_name,
+            &self.name,
             ocsp_response,
             now,
         )?;
@@ -70,14 +68,30 @@ impl ServerCertVerifier for BoundCertificate {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn valid_origin(origin: &str) -> Option<u16> {
-    let raw_port = origin.strip_prefix("https://localhost:")?;
-    let port = raw_port.parse::<u16>().ok()?;
-    (port >= 1024 && raw_port == port.to_string()).then_some(port)
+    PublicOrigin::parse(origin).ok().map(|origin| origin.port())
+}
+
+/// Probe the installation's bound local listener, while preserving the public
+/// authority in HTTP and the configured public certificate identity in TLS.
+/// DNS overrides alone are insufficient: IP URLs bypass DNS and an explicit
+/// URL port takes precedence over a resolver-provided port.
+pub(crate) fn endpoint(trust: &TrustInfo) -> Result<String, String> {
+    let origin = PublicOrigin::parse(&trust.origin)?;
+    let address = trust.local_probe_address;
+    if address.port() < 1024 || address.ip().is_unspecified() || address.ip().is_multicast() {
+        return Err("invalid bound HTTPS listener".into());
+    }
+    Ok(match origin.dns_name() {
+        Some(name) => format!("https://{name}:{}", address.port()),
+        None => format!("https://{address}"),
+    })
 }
 
 pub(crate) fn client(trust: &TrustInfo, timeout: Duration) -> Result<reqwest::Client, String> {
-    let port = valid_origin(&trust.origin).ok_or("invalid bound HTTPS origin")?;
+    let origin = PublicOrigin::parse(&trust.origin)?;
+    endpoint(trust)?;
     if trust.certificate_der_sha256.len() != 64
         || !trust
             .certificate_der_sha256
@@ -95,16 +109,37 @@ pub(crate) fn client(trust: &TrustInfo, timeout: Duration) -> Result<reqwest::Cl
         .with_custom_certificate_verifier(Arc::new(BoundCertificate {
             verifier,
             fingerprint: trust.certificate_der_sha256.clone(),
+            name: ServerName::try_from(origin.host().to_owned())
+                .map_err(|_| "invalid bound HTTPS name")?,
         }))
         .with_no_client_auth();
-    reqwest::Client::builder()
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::HOST,
+        origin
+            .authority()
+            .parse()
+            .map_err(|_| "invalid bound HTTPS authority")?,
+    );
+    let mut builder = reqwest::Client::builder()
         .https_only(true)
+        .http1_only()
+        .default_headers(headers)
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .use_preconfigured_tls(tls)
-        .tls_info(true)
-        .resolve("localhost", SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
+        .tls_info(true);
+    if let Some(name) = origin.dns_name() {
+        builder = builder.resolve(
+            name,
+            SocketAddr::new(
+                trust.local_probe_address.ip(),
+                trust.local_probe_address.port(),
+            ),
+        );
+    }
+    builder
         .connect_timeout(Duration::from_secs(2))
         .timeout(timeout)
         .build()
@@ -131,10 +166,11 @@ fn verifier(
 
 /// Admission uses exactly the public chain, name and usage checks that the
 /// authenticated HTTP transport will repeat before sending any credential.
-pub(crate) fn validate_server_chain(
+pub(crate) fn validate_server_chain_for_origin(
     ca: &[u8],
     chain: &[CertificateDer<'_>],
     now: UnixTime,
+    origin: &PublicOrigin,
 ) -> Result<(), String> {
     let (leaf, intermediates) = chain
         .split_first()
@@ -143,7 +179,8 @@ pub(crate) fn validate_server_chain(
         .verify_server_cert(
             leaf,
             intermediates,
-            &ServerName::try_from("localhost").map_err(|_| "invalid bound HTTPS name")?,
+            &ServerName::try_from(origin.host().to_owned())
+                .map_err(|_| "invalid bound HTTPS name")?,
             &[],
             now,
         )

@@ -35,6 +35,8 @@ pub struct GenerationReceipt {
     pub image: String,
     pub root_retired: bool,
     pub ingress_renewal: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingress: Option<crate::installer_ingress_outputs::IngressMetadata>,
     pub candidate_validated: bool,
     pub activated: bool,
     pub candidate_sha256: BTreeMap<String, String>,
@@ -99,7 +101,11 @@ fn read_entry(dir: &File, name: &str, mode: u32, allow_root: bool) -> Result<Vec
 }
 
 fn read_inputs(secrets: &File) -> Result<BTreeMap<String, Vec<u8>>> {
-    let values = installer_renewal_bootstrap::current_inputs()
+    let available = file_names(secrets)?;
+    let managed = crate::installer_ingress_provision::OUTPUTS[..3]
+        .iter()
+        .any(|name| available.contains(*name));
+    let values = installer_renewal_bootstrap::inventory(managed)
         .into_iter()
         .map(|name| {
             let value = read_entry(secrets, &name, 0o444, true)?;
@@ -141,8 +147,8 @@ fn read_identity(source: &File) -> Result<BTreeMap<String, Vec<u8>>> {
     let policies: Vec<String> =
         serde_json::from_slice(&values["renewal-leaf-policies.json"]).map_err(|_| REFUSAL)?;
     require(
-        policies.len() == 21
-            && policies.iter().collect::<BTreeSet<_>>().len() == 21
+        [21, 22].contains(&policies.len())
+            && policies.iter().collect::<BTreeSet<_>>().len() == policies.len()
             && policies.iter().all(|p| {
                 !p.is_empty()
                     && p.len() <= 160
@@ -192,12 +198,15 @@ fn validate_delivered(
     delivered: &File,
     proof: &crate::installer_generation::GenerationProof<'_>,
 ) -> Result<BTreeMap<String, String>> {
-    let mut expected = installer_renewal_bootstrap::current_inputs();
+    let inventory = installer_renewal_bootstrap::inventory(
+        installer_renewal_bootstrap::has_managed_ingress(proof.current)?,
+    );
+    let mut expected = inventory.clone();
     expected.extend(["pending.json", "validated.json", "completed.json"].map(String::from));
     require(file_names(delivered)? == expected)?;
     let outputs = read_inputs(delivered)?;
     // Every transferred file is owned by this installer, not merely root-readable.
-    for name in installer_renewal_bootstrap::current_inputs() {
+    for name in inventory {
         read_entry(delivered, &name, 0o444, false)?;
     }
     let mut records = BTreeMap::new();
@@ -298,7 +307,7 @@ pub fn provision(
     let renewal_receipt = read_entry(&evidence, "renewal-result.json", 0o600, false)?;
     let renewal: RenewalEvidence = serde_json::from_slice(&renewal_receipt).map_err(|_| REFUSAL)?;
     require(
-        renewal.schema == "elevenid.installer-renewal-host/v2"
+        renewal.schema == "elevenid.installer-renewal-host/v3"
             && renewal.installation_id == owner
             && renewal.engine_id == binding.engine_id
             && renewal.network_id == bao.network_id
@@ -310,7 +319,7 @@ pub fn provision(
             && renewal.job_completed_successfully
             && renewal.private_identity_validated
             && !renewal.root_retired
-            && !renewal.ingress_renewal
+            && renewal.ingress_renewal
             && !renewal.installation_ready
             && renewal.outputs == IDENTITY_FILES,
     )?;
@@ -325,6 +334,13 @@ pub fn provision(
     let identity_source_path = installation.join("renewal-transfer/delivered");
     let identity_source = directory(&identity_source_path)?;
     let identity_snapshot = read_identity(&identity_source)?;
+    let policies: Vec<String> =
+        serde_json::from_slice(&identity_snapshot["renewal-leaf-policies.json"])
+            .map_err(|_| REFUSAL)?;
+    require(
+        policies.len() == 22
+            && policies.contains(&crate::installer_ingress_provision::resource_name(&owner)?),
+    )?;
     state.create_private_directory("generation-transfer")?;
     state.create_private_directory("generation-inputs")?;
     state.create_private_directory("generation-identity")?;
@@ -332,6 +348,9 @@ pub fn provision(
     stage_identity(&identity_snapshot, &identity_staged)?;
     let staged = directory(&installation.join("generation-inputs"))?;
     let source_snapshot = stage_inputs(&secrets, &staged)?;
+    require(installer_renewal_bootstrap::has_managed_ingress(
+        &source_snapshot,
+    )?)?;
     let output_path = installation.join("generation-transfer");
     let output = directory(&output_path)?;
     state.write_evidence(
@@ -352,7 +371,7 @@ pub fn provision(
     require_directory_binding(&installation.join("generation-identity"), &identity_staged)?;
     require_directory_binding(&output_path, &output)?;
     require(
-        file_names(&staged)? == installer_renewal_bootstrap::current_inputs()
+        file_names(&staged)? == installer_renewal_bootstrap::managed_inputs()
             && read_inputs(&staged)? == source_snapshot
             && read_inputs(&secrets)? == source_snapshot
             && read_identity(&identity_source)? == identity_snapshot
@@ -398,8 +417,25 @@ pub fn provision(
         &proof,
         installer_helper_output::expected_host_uid(&binding)?,
     )?;
+    let delivered_dir = directory(&output_path.join("delivered"))?;
+    let records = ["pending.json", "validated.json", "completed.json"]
+        .into_iter()
+        .map(|name| Ok((name.into(), read_entry(&delivered_dir, name, 0o600, false)?)))
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let ingress = crate::installer_generation::recorded_ingress(&records)?.ok_or(REFUSAL)?;
+    let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
+    let identity = crate::installer_ingress_provision::IngressIdentity::new(
+        hosting.certificate_dns_name(),
+        hosting.certificate_ip_address(),
+    )?;
+    require(
+        crate::installer_ingress_provision::IngressIdentity::from_metadata(
+            &ingress.dns_names,
+            &ingress.ip_addresses,
+        )? == identity,
+    )?;
     let receipt = GenerationReceipt {
-        schema: "elevenid.installer-generation-host/v2",
+        schema: "elevenid.installer-generation-host/v3",
         installation_id: owner,
         engine_id: binding.engine_id,
         container_id: job.container_id,
@@ -407,7 +443,8 @@ pub fn provision(
         network_id: bao.network_id.clone(),
         image: job.image,
         root_retired: false,
-        ingress_renewal: false,
+        ingress_renewal: true,
+        ingress: Some(ingress),
         candidate_validated: true,
         activated: false,
         candidate_sha256: delivered.clone(),

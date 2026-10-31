@@ -15,6 +15,7 @@ use hyper_util::rt::TokioIo;
 use marty_passport_keyless_edge::{
     caller_forwarding_header as forwarded, hop_by_hop, keyless_tls_config, required,
 };
+use marty_selfhost_identity::origin::PublicOrigin;
 use tokio::{
     io::copy_bidirectional,
     net::TcpStream,
@@ -49,18 +50,12 @@ impl EdgeState {
         match (profile, origin) {
             (None, None) => Ok(Self::default()),
             (Some("installer"), Some(origin)) => {
-                let port_text = origin
-                    .strip_prefix("https://localhost:")
-                    .ok_or("invalid installer origin")?;
-                let port: u16 = port_text.parse().map_err(|_| "invalid installer origin")?;
-                if port < 1024 || port_text != port.to_string() {
-                    return Err("invalid installer origin");
-                }
+                let origin = PublicOrigin::parse(origin).map_err(|_| "invalid installer origin")?;
                 Ok(Self {
                     gateway: "edge:80".into(),
                     keycloak: "edge:80".into(),
                     ui: "edge:80".into(),
-                    installer_authority: Some((format!("localhost:{port}"), port)),
+                    installer_authority: Some((origin.authority().into(), origin.port())),
                 })
             }
             _ => Err("invalid edge profile or missing installer origin"),
@@ -187,9 +182,14 @@ async fn proxy(
         "x-forwarded-port",
         HeaderValue::from_str(&port.to_string()).expect("validated port"),
     );
-    let client_ip = HeaderValue::from_str(&peer.ip().to_string()).expect("socket IP");
-    headers.insert("x-real-ip", client_ip.clone());
-    headers.insert("x-forwarded-for", client_ip);
+    // Rootless forwarding and external proxies do not establish the original
+    // client's address. The installer deliberately leaves that identity absent
+    // until an explicit, qualified trusted-proxy policy exists.
+    if state.installer_authority.is_none() {
+        let client_ip = HeaderValue::from_str(&peer.ip().to_string()).expect("socket IP");
+        headers.insert("x-real-ip", client_ip.clone());
+        headers.insert("x-forwarded-for", client_ip);
+    }
     if let Some(value) = upgrade_value {
         headers.insert(header::CONNECTION, HeaderValue::from_static("upgrade"));
         headers.insert(header::UPGRADE, value);
@@ -279,7 +279,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     #[test]
-    fn installer_profile_requires_explicit_canonical_local_https_origin() {
+    fn installer_profile_requires_explicit_canonical_https_origin() {
         assert!(EdgeState::configured(None, None)
             .unwrap()
             .installer_authority
@@ -301,18 +301,29 @@ mod tests {
             "https://localhost:018443",
             "https://localhost:+18443",
             "https://LOCALHOST:18443",
-            "https://127.0.0.1:18443",
             "https://localhost:18443/",
             "https://localhost:18443?query",
             "https://localhost:18443#fragment",
             "https://user@localhost:18443",
             "https://localhost:18443\n",
-            "https://elsewhere:18443",
         ] {
             assert!(
                 EdgeState::configured(Some("installer"), Some(origin)).is_err(),
                 "accepted {origin:?}"
             );
+        }
+        for (origin, authority, port) in [
+            ("https://marty.example.com", "marty.example.com", 443),
+            ("https://203.0.113.10:8443", "203.0.113.10:8443", 8443),
+            ("https://[2001:db8::10]", "[2001:db8::10]", 443),
+        ] {
+            let state = EdgeState::configured(Some("installer"), Some(origin)).unwrap();
+            assert_eq!(state.installer_authority, Some((authority.into(), port)));
+            let mut headers = HeaderMap::new();
+            headers.insert(header::HOST, HeaderValue::from_str(authority).unwrap());
+            assert!(accepted_authority(&state, &headers, &"/health".parse().unwrap()).is_some());
+            headers.insert(header::HOST, HeaderValue::from_static("foreign.example"));
+            assert!(accepted_authority(&state, &headers, &"/health".parse().unwrap()).is_none());
         }
         for (mode, origin) in [
             (None, Some("https://localhost:18443")),
@@ -422,6 +433,8 @@ mod tests {
     async fn installer_proxy_forwards_login_assets_with_pinned_origin_headers() {
         async fn upstream(request: Request<Body>) -> String {
             let headers = request.headers();
+            assert!(headers.get("x-forwarded-for").is_none());
+            assert!(headers.get("x-real-ip").is_none());
             format!(
                 "{}|{}|{}|{}|{}|{}",
                 request.uri(),
@@ -476,6 +489,8 @@ mod tests {
             .header("x-forwarded-host", "foreign:443")
             .header("x-forwarded-proto", "http")
             .header("x-forwarded-port", "443")
+            .header("x-forwarded-for", "198.51.100.1")
+            .header("x-real-ip", "198.51.100.1")
             .header("forwarded", "host=foreign;proto=http")
             .send()
             .await

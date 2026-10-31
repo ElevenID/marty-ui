@@ -238,6 +238,10 @@ pub struct Journal {
     runtime: Option<RuntimeBinding>,
     #[serde(default)]
     scope: ExecutionScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hosting_selection_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hosting_addon_sha256: Option<String>,
 }
 impl Journal {
     pub fn installation_id(&self) -> uuid::Uuid {
@@ -258,11 +262,35 @@ impl Journal {
     pub fn execution_scope(&self) -> &ExecutionScope {
         &self.scope
     }
+    pub fn hosting_selection_sha256(&self) -> Option<&str> {
+        self.hosting_selection_sha256.as_deref()
+    }
+    pub fn hosting_addon_sha256(&self) -> Option<&str> {
+        self.hosting_addon_sha256.as_deref()
+    }
     pub fn compose_project(&self) -> String {
         format!("marty-install-{}", self.installation_id.simple())
     }
     fn validate(&self) -> Result<()> {
         self.identity.validate()?;
+        if self.hosting_selection_sha256.as_ref().is_some_and(|value| {
+            self.phase == Phase::Initialized
+                || value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        }) {
+            return Err("invalid hosting selection binding".into());
+        }
+        if self.hosting_addon_sha256.as_ref().is_some_and(|value| {
+            self.hosting_selection_sha256.is_none()
+                || value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        }) {
+            return Err("invalid hosting add-on binding".into());
+        }
         match &self.scope {
             ExecutionScope::AcceptanceOnly(scope) => scope.validate()?,
             ExecutionScope::CandidateTest(scope) => {
@@ -2168,6 +2196,8 @@ impl InstallerState {
             revision: 0,
             runtime,
             scope,
+            hosting_selection_sha256: None,
+            hosting_addon_sha256: None,
         };
         let mut state = Self {
             directory,
@@ -2239,6 +2269,44 @@ impl InstallerState {
         let mut journal = self.journal.clone();
         journal.phase = next;
         journal.revision += 1;
+        self.persist(&journal)?;
+        self.journal = journal;
+        Ok(())
+    }
+    /// Bind a fresh installation's hosting evidence before any ingress side
+    /// effects. The phase revision stays unchanged; absence remains meaningful
+    /// for journals created before hosting configuration was introduced.
+    pub(crate) fn bind_hosting_selection(&mut self, digest: &str) -> Result<()> {
+        self.require_live_phase(Phase::Verified)?;
+        if self.journal.hosting_selection_sha256.is_some()
+            || digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        {
+            return Err("hosting selection can be bound only once".into());
+        }
+        let mut journal = self.journal.clone();
+        journal.hosting_selection_sha256 = Some(digest.into());
+        self.persist(&journal)?;
+        self.journal = journal;
+        Ok(())
+    }
+    /// Optional connector artifacts are independently authenticated and bound
+    /// only after the hosting selection, before provisioning begins.
+    pub(crate) fn bind_hosting_addon(&mut self, digest: &str) -> Result<()> {
+        self.require_live_phase(Phase::Verified)?;
+        if self.journal.hosting_selection_sha256.is_none()
+            || self.journal.hosting_addon_sha256.is_some()
+            || digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        {
+            return Err("hosting add-on can be bound only once after hosting selection".into());
+        }
+        let mut journal = self.journal.clone();
+        journal.hosting_addon_sha256 = Some(digest.into());
         self.persist(&journal)?;
         self.journal = journal;
         Ok(())

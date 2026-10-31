@@ -69,6 +69,7 @@ pub(crate) fn bootstrap_inputs(
     nonce: &str,
 ) -> Result<ComposeInputs> {
     let foundation = state.with_inspection(crate::installer_foundation::load)?;
+    let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
     let binding = state
         .journal()
         .runtime()
@@ -95,6 +96,17 @@ pub(crate) fn bootstrap_inputs(
         (
             "SELFHOST_SECRET_DIR",
             path(&installation.join("secrets"))?.into(),
+        ),
+        (
+            "MARTY_INSTALLER_INGRESS_DNS_NAME",
+            hosting.certificate_dns_name().unwrap_or_default().into(),
+        ),
+        (
+            "MARTY_INSTALLER_INGRESS_IP_ADDRESS",
+            hosting
+                .certificate_ip_address()
+                .map(|ip| ip.to_string())
+                .unwrap_or_default(),
         ),
     ] {
         append(&mut env, name, &value)?;
@@ -180,6 +192,7 @@ pub(crate) fn bootstrap_inputs(
         } else {
             BTreeSet::from([port])
         },
+        ingress_listener: None,
         prior: None,
     };
     if let Some(foundation) = foundation {
@@ -190,6 +203,7 @@ pub(crate) fn bootstrap_inputs(
                 .join(crate::installer_foundation::RECORD),
         )?);
     }
+    hosting.bind_inputs(&mut inputs)?;
     Ok(inputs)
 }
 pub(crate) fn job_inputs(
@@ -265,6 +279,7 @@ fn start_inner(
 ) -> Result<()> {
     state.require_live_phase(Phase::Provisioning)?;
     let foundation = state.with_inspection(crate::installer_foundation::load)?;
+    let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
     match (bao, foundation.as_ref()) {
         (Some(bao), None) => crate::installer_openbao::require_binding(state, bao)?,
         (None, Some(_)) => {}
@@ -278,34 +293,44 @@ fn start_inner(
     let mut reservations = Vec::new();
     let mut ports = Vec::new();
     for ordinal in 0..4 {
-        let requested_port = if ordinal == 0 {
-            foundation
-                .as_ref()
-                .map(|v| installer_application_env::origin_port(&v.configuration.public_origin))
-                .transpose()?
-                .unwrap_or(0)
+        let selected_listener = if ordinal == 0 {
+            hosting.listener()
         } else {
-            0
+            crate::installer_hosting::Listener {
+                bind_address: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                port: 0,
+            }
         };
-        let listener = TcpListener::bind(("127.0.0.1", requested_port))
-            .map_err(|_| "cannot reserve the selected loopback port")?;
+        let listener = TcpListener::bind(selected_listener.socket_address())
+            .map_err(|_| "cannot reserve the selected hosting or private service port")?;
         let port = listener
             .local_addr()
-            .map_err(|_| "loopback reservation unavailable")?
+            .map_err(|_| "listener reservation unavailable")?
             .port();
-        if port < 1024 || (bao.is_some() && port == binding.openbao_port) {
-            return Err("loopback port conflicts with runtime".into());
+        if port < 1024 || port == binding.openbao_port || ports.contains(&port) {
+            return Err("listener port conflicts with runtime".into());
         }
         ports.push(port);
         reservations.push(listener);
     }
-    let origin = format!("https://localhost:{}", ports[0]);
+    let public_origin = hosting.resolve_origin(ports[0])?;
+    let origin = public_origin.to_string();
+    let healthcheck_host = if matches!(public_origin.ip_address(), Some(std::net::IpAddr::V6(_))) {
+        format!("[{}]", public_origin.host())
+    } else {
+        public_origin.host().to_owned()
+    };
+    let ingress_listener = crate::installer_hosting::Listener {
+        bind_address: hosting.listener().bind_address,
+        port: ports[0],
+    };
     let group = crate::installer_state::applicant_container_group(&binding)?;
     let parameters = ApplicationParameters {
         installation: installation.into(),
         applicant_container_group: group,
         version: state.journal().identity().release_tag.clone(),
         origin: origin.clone(),
+        https_listener_port: ports[0],
         gateway_port: ports[1],
         keycloak_port: ports[2],
         edge_port: ports[3],
@@ -374,6 +399,14 @@ fn start_inner(
             images.get("gateway").ok_or("gateway image absent")?.clone(),
         ),
         ("MARTY_INSTALLER_HTTPS_PORT", ports[0].to_string()),
+        (
+            "MARTY_INSTALLER_HTTPS_BIND_ADDRESS",
+            ingress_listener.bind_address.to_string(),
+        ),
+        (
+            "MARTY_INSTALLER_INGRESS_CONNECT_TO",
+            format!("{healthcheck_host}:{}:127.0.0.1:8443", public_origin.port()),
+        ),
     ] {
         append(&mut source_env, key, &value)?;
     }
@@ -386,12 +419,22 @@ fn start_inner(
             )?,
         )?;
     }
+    for (key, value) in state.with_inspection(crate::installer_hosting_addon::environment)? {
+        append(&mut source_env, &key, &value)?;
+    }
     state.write_evidence("application-source.env", &source_env)?;
     let mut inputs = bootstrap.clone();
     inputs.prior = prior;
     inputs.services.clear();
     inputs.profiles = vec!["installer-init".into()];
-    inputs.allowed_loopback_ports.extend(ports.iter().copied());
+    inputs
+        .allowed_loopback_ports
+        .extend(ports.iter().skip(1).copied());
+    if ingress_listener.bind_address.is_loopback() {
+        inputs.allowed_loopback_ports.insert(ingress_listener.port);
+    }
+    inputs.ingress_listener = hosting.is_recorded().then_some(ingress_listener);
+    hosting.bind_connector(&mut inputs)?;
     inputs.files = vec![
         bundle_bound(bundle, "docker-compose.yml")?,
         bundle_bound(bundle, &format!("{LAYERS}/compose.installer.yml"))?,
@@ -401,6 +444,7 @@ fn start_inner(
             .files
             .push(bundle_bound(bundle, crate::installer_foundation::LAYER)?);
     }
+    crate::installer_hosting_addon::bind_inputs(&mut inputs)?;
     #[cfg(feature = "installer-development")]
     if let Some(image) = state.with_inspection(crate::installer_development_image::load)? {
         image.bind_inputs(&mut inputs)?;
@@ -450,6 +494,7 @@ fn start_inner(
             bundle_bound(bundle, &format!("{LAYERS}/compose.runtime.yml"))?,
         ]
     };
+    crate::installer_hosting_addon::bind_inputs(&mut maintenance_inputs)?;
     #[cfg(feature = "installer-development")]
     if let Some(image) = &maintenance_inputs.development_image {
         maintenance_inputs

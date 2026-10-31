@@ -15,10 +15,11 @@ limitation.
 ### Nightly installer bootstrap
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ElevenID/marty-ui/main/install.sh | sh -s -- --channel nightly
+/usr/bin/setpriv --no-new-privs -- bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/ElevenID/marty-ui/main/install.sh | sh -s -- --channel nightly'
 ```
 
-Initially supports Linux amd64 with an accessible Docker Engine and Compose.
+Initially supports a regular Linux amd64 user with a pre-existing user-owned
+rootless Docker Engine and Compose.
 A published, signed admission for the selected release is required; unavailable
 or unqualified releases are refused. Use `--version TAG` instead of `--channel
 nightly` to select an exact admitted version.
@@ -28,6 +29,10 @@ diagnostics and never grants installer admission or Ready status.
 
 See [bootstrap usage and platform support](docs/installer-bootstrap.md) for
 requirements and the boundary between the bootstrap and deployment operations.
+Use the optional `--hosting-file ABSOLUTE_PATH` for direct VM hosting or an
+external proxy, including an explicitly selected Cloudflare Tunnel connector.
+Managed OpenBao and private localhost access remain the defaults. See
+[hosting configuration and browser trust](docs/installer-hosting.md).
 
 ### Local Development (Recommended)
 

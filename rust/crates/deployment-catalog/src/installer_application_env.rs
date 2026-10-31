@@ -3,6 +3,7 @@
 //! authenticates example/Compose bytes and persists parameters before execution.
 #![cfg(target_os = "linux")]
 use crate::installer_state::ApplicantContainerGroup;
+use marty_selfhost_identity::origin::PublicOrigin;
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -27,6 +28,7 @@ pub struct ApplicationParameters {
     pub applicant_container_group: ApplicantContainerGroup,
     pub version: String,
     pub origin: String,
+    pub https_listener_port: u16,
     pub gateway_port: u16,
     pub keycloak_port: u16,
     pub edge_port: u16,
@@ -83,12 +85,6 @@ fn safe_path(path: &std::path::Path) -> Result<String> {
     )?;
     Ok(value.into())
 }
-pub(crate) fn origin_port(origin: &str) -> Result<u16> {
-    let port = origin.strip_prefix("https://localhost:").ok_or(REFUSED)?;
-    let number = port.parse::<u16>().map_err(|_| REFUSED)?;
-    require(number >= 1024 && port == number.to_string())?;
-    Ok(number)
-}
 fn required_variables(compose: &str, values: &BTreeMap<String, String>) -> Result<()> {
     require(compose.len() <= 256 * 1024)?;
     let expression = regex::Regex::new(r"\$\{([A-Z][A-Z0-9_]*)(?::\?|\?)[^}]*\}").unwrap();
@@ -109,7 +105,8 @@ fn required_variables(compose: &str, values: &BTreeMap<String, String>) -> Resul
 /// `images` is the authenticated inventory map, including openbao_didcomm_image.
 /// Networking/ingress overlays must preserve this exact public authority and
 /// provide the already-owned OpenBao network alias. Nginx server_name needs the
-/// separate host-only literal localhost; PUBLIC_DOMAIN also feeds KC_HOSTNAME.
+/// separate host-only value; PUBLIC_DOMAIN also feeds KC_HOSTNAME. The public
+/// HTTPS authority is independent of the unprivileged host listener port.
 pub fn render(
     example: &str,
     compose: &str,
@@ -146,9 +143,9 @@ pub(crate) fn render_selected(
     )?;
     crate::installer_release::release_tier(&p.version)?;
     safe_path(&p.installation)?;
-    let https_port = origin_port(&p.origin)?;
+    let origin = PublicOrigin::parse(&p.origin)?;
     let ports = [
-        https_port,
+        p.https_listener_port,
         p.gateway_port,
         p.keycloak_port,
         p.edge_port,
@@ -203,7 +200,7 @@ pub(crate) fn render_selected(
         ("BAO_ADDR", "https://openbao:8200"),
         ("KEYCLOAK_KMS_ADDR", "https://openbao:8200"),
         ("GRPC_INSECURE_ALLOWED", "false"),
-        ("MARTY_ORG_DOMAIN", "localhost"),
+        ("MARTY_ORG_DOMAIN", origin.host()),
         ("MARTY_ORG_ADMIN_EMAIL", OPERATOR_EMAIL),
         ("KEYCLOAK_SMTP_FROM", "noreply@localhost"),
         ("MARTY_MIGRATION_PROFILE", "selfhost-production"),
@@ -219,7 +216,8 @@ pub(crate) fn render_selected(
             p.version.strip_prefix('v').ok_or(REFUSED)?.to_owned(),
         ),
         ("MARTY_ISSUANCE_IMAGE", issuance),
-        ("PUBLIC_DOMAIN", format!("localhost:{https_port}")),
+        ("PUBLIC_DOMAIN", origin.authority().into()),
+        ("GATEWAY_OBSERVE_CLIENT_IP", "false".into()),
         ("SELFHOST_GATEWAY_HOST_PORT", p.gateway_port.to_string()),
         ("SELFHOST_KEYCLOAK_HOST_PORT", p.keycloak_port.to_string()),
         ("SELFHOST_EDGE_HOST_PORT", p.edge_port.to_string()),
@@ -389,6 +387,7 @@ mod tests {
             applicant_container_group: rootful_applicant_group(),
             version: "v1.2.3".into(),
             origin: "https://localhost:18443".into(),
+            https_listener_port: 18443,
             gateway_port: 18000,
             keycloak_port: 18180,
             edge_port: 19080,
@@ -431,6 +430,7 @@ mod tests {
         let text = String::from_utf8(result.env_bytes).unwrap();
         for expected in [
             "PUBLIC_DOMAIN='localhost:18443'\n",
+            "GATEWAY_OBSERVE_CLIENT_IP='false'\n",
             "OIDC_ISSUER_URL_EXTERNAL='https://localhost:18443/realms/11id'\n",
             "SELFHOST_SECRET_DIR='/private/marty $literal #path/secrets'\n",
             "BAO_ADDR='https://openbao:8200'\n",
@@ -445,6 +445,29 @@ mod tests {
         assert!(!text.contains("_PASSWORD="));
         assert!(!result.operator_account_created);
         assert_eq!(result.optional_empty_secrets.len(), 6);
+    }
+    #[test]
+    fn public_origin_propagates_to_urls_oidc_and_cors_without_reusing_443_as_listener() {
+        let mut p = parameters();
+        p.origin = "https://marty.example.com".into();
+        p.https_listener_port = 8443;
+        let result = render(EXAMPLE, COMPOSE, &tls(), &p, &images()).unwrap();
+        let text = String::from_utf8(result.env_bytes).unwrap();
+        for expected in [
+            "PUBLIC_DOMAIN='marty.example.com'\n",
+            "MARTY_ORG_DOMAIN='marty.example.com'\n",
+            "PUBLIC_API_URL='https://marty.example.com'\n",
+            "UI_BASE_URL='https://marty.example.com'\n",
+            "ISSUER_BASE_URL='https://marty.example.com'\n",
+            "CORS_ORIGINS='https://marty.example.com'\n",
+            "OIDC_ISSUER_URL_EXTERNAL='https://marty.example.com/realms/11id'\n",
+            "OIDC_REDIRECT_URI='https://marty.example.com/v1/auth/callback'\n",
+            "OIDC_POST_LOGOUT_REDIRECT_URI='https://marty.example.com/'\n",
+        ] {
+            assert!(text.contains(expected), "missing {expected}");
+        }
+        p.https_listener_port = 443;
+        assert!(render(EXAMPLE, COMPOSE, &tls(), &p, &images()).is_err());
     }
     #[test]
     fn applicant_environment_uses_the_container_group_without_changing_other_inputs() {
@@ -493,7 +516,7 @@ mod tests {
             "https://localhost:18443/",
             "https://user@localhost:18443",
             "https://localhost:18443\nBAD=x",
-            "https://example.com:18443",
+            "https://example.com/path",
         ] {
             let mut p = parameters();
             p.origin = origin.into();

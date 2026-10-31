@@ -153,6 +153,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.issuance_api_key.clone(),
             config.release_identity.clone(),
         )?
+        .with_client_ip_observation(config.observe_client_ip)
         .with_service_token(config.grpc_service_token.clone())?
         .with_device_registration_gateway_key(config.device_registration_gateway_key.clone())?
         .with_service_sign_gateway_key(config.service_sign_gateway_key.clone())?

@@ -148,7 +148,7 @@ def test_signed_inventory_fails_closed(prepared, tmp_path, monkeypatch, fault):
         assert not commands
     else:
         assert publishing.verify_signed(assets, ROOT, value["tag"], RUN_ID, gh=tmp_path / "gh") == value
-        assert len(commands) == 19
+        assert len(commands) == 18
         assert all(args[:2] == ("cosign", "verify-blob") for args in commands)
 
 

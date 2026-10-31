@@ -108,6 +108,7 @@ pub struct GatewayRuntimeState {
     pub event_streams: Arc<dyn EventStreamProvider>,
     pub required_ready_services: Vec<String>,
     pub rate_limiter: Arc<GatewayRateLimiter>,
+    pub observe_client_ip: bool,
     pub idempotency: Arc<dyn IdempotencyStore>,
     pub policies: GatewayHttpPolicies,
     pub cors_origins: BTreeSet<String>,
@@ -224,6 +225,7 @@ impl GatewayRuntimeState {
             event_streams,
             required_ready_services,
             rate_limiter: Arc::new(rate_limiter),
+            observe_client_ip: true,
             idempotency,
             policies: GatewayHttpPolicies::new()?,
             cors_origins,
@@ -250,6 +252,14 @@ impl GatewayRuntimeState {
             release_identity,
             maximum_body_bytes: DEFAULT_MAXIMUM_BODY_BYTES,
         })
+    }
+
+    /// Use unknown client addresses when a hosting path does not preserve an
+    /// authenticated source address. Session and unknown-client rate limits
+    /// remain active; an internal proxy's socket address is not a client claim.
+    pub fn with_client_ip_observation(mut self, enabled: bool) -> Self {
+        self.observe_client_ip = enabled;
+        self
     }
 
     pub fn with_service_token(
@@ -482,27 +492,68 @@ async fn mip_version_middleware(
     response
 }
 
+struct ClientIpObservation<'a> {
+    forwarded_for: Option<&'a str>,
+    peer_ip: Option<String>,
+}
+
+const CLIENT_ADDRESS_HEADERS: &[&str] = &[
+    "forwarded",
+    "x-forwarded-for",
+    "x-real-ip",
+    "x-client-ip",
+    "true-client-ip",
+    "cf-connecting-ip",
+    "cf-connecting-ipv6",
+    "x-envoy-external-address",
+];
+
+fn client_ip_observation<'a>(
+    enabled: bool,
+    headers: &'a axum::http::HeaderMap,
+    extensions: &axum::http::Extensions,
+) -> ClientIpObservation<'a> {
+    if !enabled {
+        return ClientIpObservation {
+            forwarded_for: None,
+            peer_ip: None,
+        };
+    }
+    ClientIpObservation {
+        forwarded_for: headers
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok()),
+        peer_ip: extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|value| value.0.ip().to_string()),
+    }
+}
+
 async fn rate_limit_middleware(
     State(state): State<Arc<GatewayRuntimeState>>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
+    if !state.observe_client_ip {
+        // Enforce unknown attribution before authentication, owner lookups,
+        // and every upstream path. Canonical public host/proto/port remain.
+        for name in CLIENT_ADDRESS_HEADERS {
+            request.headers_mut().remove(*name);
+        }
+    }
     let cookies = cookies(request.headers());
     let session_id = cookies.get("sessionId").map(String::as_str);
-    let forwarded = request
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok());
-    let peer_ip = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|value| value.0.ip().to_string());
+    let client_ip = client_ip_observation(
+        state.observe_client_ip,
+        request.headers(),
+        request.extensions(),
+    );
     let result = match state
         .rate_limiter
         .check(
             session_id,
-            forwarded,
-            peer_ip.as_deref(),
+            client_ip.forwarded_for,
+            client_ip.peer_ip.as_deref(),
             request.uri().path(),
             now_ms(),
         )
@@ -1189,10 +1240,12 @@ async fn proxy_handler(
         .and_then(|identity| identity.session_organization_id.clone());
     let api_key_organization_id =
         api_key_organization_id(&identity, session_organization_id.as_deref());
-    let peer_ip = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|value| value.0.ip().to_string());
+    let peer_ip = client_ip_observation(
+        state.observe_client_ip,
+        request.headers(),
+        request.extensions(),
+    )
+    .peer_ip;
     let passport_auth = request.extensions().get::<PassportUpstreamAuth>().cloned();
     let (parts, body) = request.into_parts();
     let body = match to_bytes(body, state.maximum_body_bytes).await {
@@ -3185,10 +3238,8 @@ async fn vc_api_verify_handler(state: Arc<GatewayRuntimeState>, request: Request
         .headers
         .insert("content-type".into(), "application/json".into());
     upstream_request.body = Some(upstream_body);
-    upstream_request.client_ip = parts
-        .extensions
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|value| value.0.ip().to_string());
+    upstream_request.client_ip =
+        client_ip_observation(state.observe_client_ip, &parts.headers, &parts.extensions).peer_ip;
     let overrides = proxy_overrides(
         &state,
         &format!("/v1/presentation-policies/{policy_id}/evaluate"),
@@ -8907,6 +8958,137 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn unknown_client_ip_keeps_rate_limits_active_without_forwarded_or_proxy_identity() {
+        for observe in [false, true] {
+            let recorder = Arc::new(ClientIpRecordingUpstream::default());
+            let mut state = Arc::into_inner(runtime_state_with_upstream(
+                Arc::new(NoOwner),
+                recorder.clone(),
+            ))
+            .expect("unique test state")
+            .with_client_ip_observation(observe);
+            state.rate_limiter = Arc::new(
+                GatewayRateLimiter::new(Arc::new(InMemoryRateLimiter::default()), 2).unwrap(),
+            );
+            let router = gateway_router(Arc::new(state));
+            for index in 1..=3 {
+                let request = Request::builder()
+                    .uri("/v1/auth/session/validate")
+                    .header("x-forwarded-for", format!("203.0.113.{index}"))
+                    .header("x-real-ip", format!("198.51.100.{index}"))
+                    .header("forwarded", format!("for=203.0.113.{index}"))
+                    .header("x-client-ip", "192.0.2.1")
+                    .header("true-client-ip", "192.0.2.2")
+                    .header("cf-connecting-ip", "192.0.2.3")
+                    .header("cf-connecting-ipv6", "2001:db8::3")
+                    .header("x-envoy-external-address", "192.0.2.4")
+                    .header("x-forwarded-host", "issuer.example")
+                    .header("x-forwarded-proto", "https")
+                    .header("x-forwarded-port", "443")
+                    .extension(ConnectInfo(
+                        format!("10.0.0.{index}:30000")
+                            .parse::<SocketAddr>()
+                            .unwrap(),
+                    ))
+                    .body(Body::empty())
+                    .unwrap();
+                let response = router.clone().oneshot(request).await.unwrap();
+                if !observe && index == 3 {
+                    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+                } else {
+                    assert_eq!(response.status(), StatusCode::OK);
+                    assert_eq!(response.headers()["x-ratelimit-limit"], "2");
+                }
+            }
+            let requests = recorder.0.lock().unwrap();
+            let clients = requests
+                .iter()
+                .map(|request| request.client_ip.clone())
+                .collect::<Vec<_>>();
+            if observe {
+                assert_eq!(
+                    clients,
+                    vec![
+                        Some("10.0.0.1".into()),
+                        Some("10.0.0.2".into()),
+                        Some("10.0.0.3".into())
+                    ]
+                );
+            } else {
+                assert_eq!(clients, vec![None, None]);
+            }
+            for request in requests.iter() {
+                for header in CLIENT_ADDRESS_HEADERS {
+                    assert_eq!(request.header(header).is_some(), observe, "{header}");
+                }
+                for (header, value) in [
+                    ("x-forwarded-host", "issuer.example"),
+                    ("x-forwarded-proto", "https"),
+                    ("x-forwarded-port", "443"),
+                ] {
+                    assert_eq!(request.header(header), Some(value));
+                }
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct ClientIpRecordingUpstream(std::sync::Mutex<Vec<GatewayRequest>>);
+
+    #[async_trait]
+    impl UpstreamClient for ClientIpRecordingUpstream {
+        async fn send(
+            &self,
+            instance: &ServiceInstance,
+            request: GatewayRequest,
+        ) -> Result<GatewayResponse, PlatformError> {
+            self.0.lock().unwrap().push(request.clone());
+            SuccessfulUpstream.send(instance, request).await
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_client_ip_also_applies_to_vc_api_policy_handoff() {
+        for observe in [false, true] {
+            let recorder = Arc::new(ClientIpRecordingUpstream::default());
+            let state = Arc::into_inner(runtime_state_with_upstream(
+                Arc::new(NoOwner),
+                recorder.clone(),
+            ))
+            .expect("unique test state")
+            .with_client_ip_observation(observe);
+            let request = Request::builder()
+                .method("POST")
+                .uri("/v1/vc-api/credentials/verify?organization_id=org-1&presentation_policy_id=policy-1")
+                .header("cookie","sessionId=valid")
+                .header("content-type","application/json")
+                .header("x-forwarded-for","203.0.113.10")
+                .extension(ConnectInfo("10.0.0.10:30000".parse::<SocketAddr>().unwrap()))
+                .body(Body::from(br#"{"verifiableCredential":"header.payload.signature","options":{"challenge":"n","domain":"aud"}}"#.as_slice())).unwrap();
+            let response = gateway_router(Arc::new(state))
+                .oneshot(request)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let requests = recorder.0.lock().unwrap();
+            assert_eq!(
+                requests
+                    .iter()
+                    .map(|request| request.client_ip.clone())
+                    .collect::<Vec<_>>(),
+                vec![observe.then(|| "10.0.0.10".into())]
+            );
+            if !observe {
+                for request in requests.iter() {
+                    for header in CLIENT_ADDRESS_HEADERS {
+                        assert!(request.header(header).is_none());
+                    }
+                }
+            }
+        }
     }
 
     #[tokio::test]

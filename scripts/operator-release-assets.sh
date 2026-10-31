@@ -48,6 +48,38 @@ OPERATOR_PROVENANCE_INPUTS=(
 
 OPERATOR_RELEASE_ASSETS=("${OPERATOR_CHECKSUM_INPUTS[@]}" SHA256SUMS "${OPERATOR_PROVENANCE_INPUTS[@]}")
 
+# Optional assets never join the core checksums or binary verification closure.
+# They have a separate authenticated installer contract. Require the entire
+# selected core and ignore only known optional names, even during an interrupted
+# optional upload. Selecting the connector still requires its complete proofs.
+hosting_addon_release_assets() {
+  local subject
+  for subject in selfhost-cloudflare-addon.zip selfhost-cloudflare-images.json cloudflared_wrapper.sbom.cdx.json; do
+    printf '%s\n' "$subject" "$subject.sigstore.json" "$subject.provenance.jsonl"
+  done
+}
+
+release_require_core_or_hosting_assets() {
+  local response="$1" core="$2" allow_optional="${3:-true}" nightly="${4:-false}" optional=""
+  if [[ "$allow_optional" = true ]]; then optional="$(hosting_addon_release_assets)"; fi
+  jq -e --arg core "$core" --arg optional "$optional" --arg nightly "$nightly" '
+    ($core | split("\n")) as $core |
+    ($optional | split("\n") | map(select(length > 0))) as $optional |
+    .assets as $assets |
+    ($nightly != "true" or (.prerelease == true and .draft == false)) and
+    ($assets | type) == "array" and
+    all($assets[]; type == "object" and (.name | type) == "string") and
+    (($assets | map(.name)) as $names |
+      ($names | unique | length) == ($names | length) and
+      ($core - $names | length) == 0 and
+      ($names - $core - $optional | length) == 0 and
+      all($assets[]; .name as $name |
+        if ($core | index($name)) != null then
+          .state == "uploaded" and (.size | type) == "number" and .size > 0
+        else true end))
+  ' "$response" >/dev/null
+}
+
 # Only the existing operator-only consumer may explicitly select historical
 # releases. The publisher never calls this and remains strict about all 32 assets.
 # Validate the entire legacy response before changing any active policy arrays.
@@ -102,10 +134,10 @@ operator_release_require_checksum_names() {
 
 operator_release_require_remote_allowlist() {
   local response="$1"
-  local actual expected
-  actual="$(jq -er '.assets | if type == "array" and all(.[]; (.name | type) == "string" and .state == "uploaded" and (.size | type) == "number" and .size > 0) then map(.name) | sort | .[] else error("unqualified release asset") end' "$response")" || return 1
+  local expected optional=false
   expected="$(printf '%s\n' "${OPERATOR_RELEASE_ASSETS[@]}" | LC_ALL=C sort)"
-  if [[ "$actual" != "$expected" ]]; then
+  if [[ "${#OPERATOR_PROVENANCE_INPUTS[@]}" = 5 ]]; then optional=true; fi
+  if ! release_require_core_or_hosting_assets "$response" "$expected" "$optional"; then
     echo "Published release assets differ from the exact allowlist" >&2
     return 1
   fi

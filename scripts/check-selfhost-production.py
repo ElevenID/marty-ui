@@ -1303,7 +1303,6 @@ def validate_main_stack(env_file: Path, compose_file: Path, use_catalog: bool = 
             "gateway",
             "ui",
             "edge",
-            "cloudflared",
         )
     )
     missing_services = [service for service in required_services if service not in service_map]
@@ -1340,6 +1339,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file", default=str(REPO_ROOT / ".env.selfhost.production.local"))
     parser.add_argument("--prod-compose-file", default=str(REPO_ROOT / "docker-compose.selfhost.prod.yml"))
     parser.add_argument("--openbao-compose-file", default=str(REPO_ROOT / "docker-compose.selfhost.openbao.yml"))
+    parser.add_argument("--cloudflare-tunnel", action="store_true",
+                        help="Also validate credentials for an explicitly selected Cloudflare connector.")
     parser.add_argument("--required-secrets-only", action="store_true",
                         help="Check required self-host secret files before Docker Compose creates mounts.")
     return parser
@@ -1387,7 +1388,6 @@ def main() -> int:
         run_check("issuer-sign-credential", lambda: validate_issuer_sign_credential(secret_dir)),
         run_check("integration-secret-credential", lambda: validate_integration_secret_credential(secret_dir)),
         run_check("signing-grant-credentials", lambda: validate_signing_grant_credentials(secret_dir)),
-        run_check("cloudflare-tunnel-token", lambda: validate_tunnel_token(secret_dir)),
         run_check("migration-profile", lambda: validate_migration_profile(env_values)),
         run_check("google-social-login", lambda: validate_google_social_login(env_values, secret_dir)),
         run_check("credential-login-config", lambda: validate_credential_login_config(env_values)),
@@ -1411,6 +1411,9 @@ def main() -> int:
         run_check("openbao", lambda: validate_openbao(env_values, secret_dir, env_file, openbao_compose_file)),
         run_check("prod-compose-health", lambda: validate_main_stack(env_file, prod_compose_file, True)),
     ]
+
+    if args.cloudflare_tunnel:
+        validation_results.append(run_check("cloudflare-tunnel-token", lambda: validate_tunnel_token(secret_dir)))
 
     results = compose_config_results + validation_results
     for result in results:

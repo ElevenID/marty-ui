@@ -27,7 +27,13 @@ no-new-privileges and propagates download errors:
 
 Use `--channel stable` for stable releases, or `--version TAG` for an exact
 version. These selectors are mutually exclusive. `--install-dir ABSOLUTE_PATH`
-and `--yes` are forwarded to the verified operator. `--help` works without
+and `--yes` are forwarded to the verified operator. `--hosting-file ABSOLUTE_PATH`
+selects a versioned local, direct, or external-proxy hosting configuration;
+without it the default remains private localhost. Hosting does not require
+`--foundation-file`, and managed OpenBao remains the default. See
+[hosting, optional Cloudflare, and browser access](installer-hosting.md) for
+the strict schema, signed candidate command, and frontend/backend trust rules.
+`--help` works without
 Docker or platform detection.
 
 The exact-tag candidate command has the same boundary. Both tag placeholders

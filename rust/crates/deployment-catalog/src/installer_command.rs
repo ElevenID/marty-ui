@@ -27,6 +27,7 @@ struct Options {
     engine: String,
     directory: Option<PathBuf>,
     foundation_file: Option<PathBuf>,
+    hosting_file: Option<PathBuf>,
     channel: Option<(String, PathBuf)>,
     profile: RuntimeProfile,
     yes: bool,
@@ -45,8 +46,9 @@ pub(crate) struct RuntimeInvocation<'a> {
     pub(crate) operator_sha: &'a str,
     pub(crate) completion: RuntimeCompletion,
 }
-fn report_host_impact() {
-    eprintln!("Marty host impact: this experimental installation uses a pre-existing user-owned rootless Docker daemon. It may pull images; create private probe containers, workload containers, a network and a Redis volume; bind a loopback port; and write private credentials and retained state under the selected installation path. It does not invoke sudo, package installation, daemon setup, or a rootful Docker socket. Ordinary uninstall retains data, credentials, images and the Redis volume; purge is unsupported. Use a disposable VM snapshot.");
+fn report_host_impact(hosting: &crate::installer_hosting::Prepared) {
+    eprintln!("Marty host impact: this experimental installation uses a pre-existing user-owned rootless Docker daemon. It may pull images; create private probe containers, workload containers, a network and a Redis volume; bind the selected ingress listener and private loopback service ports; and write private credentials and retained state under the selected installation path. It does not invoke sudo, package installation, daemon setup, or a rootful Docker socket. Ordinary uninstall retains data, credentials, images and the Redis volume; purge is unsupported. Use a disposable VM snapshot.");
+    eprintln!("Marty hosting selection: {}. DNS, frontend certificates and firewall configuration remain with their selected owners.", hosting.host_impact());
     eprintln!("Marty trial feedback: retain the printed installation path and first failing stage; reply to your inviter with redacted facts or comment at https://github.com/ElevenID/marty-ui/issues/1350. No failed state is automatically purged.");
 }
 fn options(args: &[String]) -> Result<Options> {
@@ -76,6 +78,7 @@ fn options(args: &[String]) -> Result<Options> {
             "--verified-channel",
             "--runtime-profile",
             "--foundation-file",
+            "--hosting-file",
         ]
         .contains(&key)
         {
@@ -109,6 +112,7 @@ fn options(args: &[String]) -> Result<Options> {
     };
     let directory = values.remove("--install-dir").map(PathBuf::from);
     let foundation_file = values.remove("--foundation-file").map(PathBuf::from);
+    let hosting_file = values.remove("--hosting-file").map(PathBuf::from);
     let channel = match (
         values.remove("--channel"),
         values.remove("--verified-channel"),
@@ -124,6 +128,7 @@ fn options(args: &[String]) -> Result<Options> {
         .any(|p| !p.is_absolute())
         || directory.as_ref().is_some_and(|p| !p.is_absolute())
         || foundation_file.as_ref().is_some_and(|p| !p.is_absolute())
+        || hosting_file.as_ref().is_some_and(|p| !p.is_absolute())
         || channel.as_ref().is_some_and(|(_, p)| !p.is_absolute())
     {
         return Err("installer paths must be absolute".into());
@@ -145,6 +150,7 @@ fn options(args: &[String]) -> Result<Options> {
         engine,
         directory,
         foundation_file,
+        hosting_file,
         channel,
         profile,
         yes,
@@ -280,6 +286,12 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     {
         return Err("installer requires an exact release-built operator".into());
     }
+    let foundation_origin = o
+        .foundation_file
+        .as_deref()
+        .map(crate::installer_foundation::preflight_origin)
+        .transpose()?;
+    let hosting = crate::installer_hosting::prepare(o.hosting_file.as_deref(), foundation_origin)?;
     let tools = VerificationTools::new(&o.tools, &o.gh)?;
     let operator_sha = installer_verify::current_operator_digest()?;
     let admitted = if mode == InstallMode::Admitted {
@@ -347,7 +359,7 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         crate::installer_runtime::DockerRunner::from_binding(docker, &runtime, &o.tools)?
             .preflight()?;
     crate::installer_compose::require_version(&observed.compose_version)?;
-    report_host_impact();
+    report_host_impact(&hosting);
     if !o.yes {
         confirm(&directory)?;
     }
@@ -459,6 +471,16 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         &serde_json::to_vec(&bundle).map_err(|_| "cannot encode bundle validation")?,
     )?;
     state.advance(Phase::Verified)?;
+    if let Some(path) = &o.foundation_file {
+        crate::installer_foundation::select(path, &directory, &mut state)?;
+    }
+    crate::installer_hosting::select(hosting, &mut state)?;
+    executor.block_on(crate::installer_hosting_addon::prepare(
+        &directory,
+        &mut state,
+        &prepared.inventory,
+        &tools,
+    ))?;
     eprintln!("Marty runtime stage: rootless storage canary");
     crate::installer_rootless_storage_canary::qualify_installation(
         docker,
@@ -467,9 +489,6 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         &prepared.inventory,
         &operator_sha,
     )?;
-    if let Some(path) = &o.foundation_file {
-        crate::installer_foundation::select(path, &directory, &mut state)?;
-    }
     provision_runtime(
         docker,
         &directory,
@@ -504,12 +523,14 @@ pub(crate) fn provision_runtime(
     port_reservation: std::net::TcpListener,
 ) -> Result<()> {
     state.require_live_phase(Phase::Verified)?;
+    let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
     if let Some(foundation) = state.with_inspection(crate::installer_foundation::load)? {
         state.advance(Phase::Provisioning)?;
         eprintln!("Marty runtime stage: local credentials and preprovisioned AWS inputs");
         state.generate_external_auth_credentials()?;
         state.persist_credential_creation_receipt(installation)?;
         foundation.import_inputs(state)?;
+        hosting.import_connector(state)?;
         drop(port_reservation);
         let nonce = uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
         let bootstrap = crate::installer_application::bootstrap_inputs(
@@ -540,6 +561,7 @@ pub(crate) fn provision_runtime(
     eprintln!("Marty runtime stage: local credentials");
     state.generate_local_credentials(&realm)?;
     state.persist_credential_creation_receipt(installation)?;
+    hosting.import_connector(state)?;
     drop(port_reservation);
     let plugin = inventory
         .images
@@ -870,6 +892,17 @@ mod tests {
         });
         assert!(candidate_test_options(&args).is_ok());
         assert!(options(&args).is_err());
+        let mut hosting_args = args.clone();
+        hosting_args.extend(["--hosting-file".into(), "/private/hosting.json".into()]);
+        assert_eq!(
+            candidate_test_options(&hosting_args).unwrap().hosting_file,
+            Some(PathBuf::from("/private/hosting.json"))
+        );
+        *hosting_args.last_mut().unwrap() = "relative.json".into();
+        assert!(candidate_test_options(&hosting_args).is_err());
+        *hosting_args.last_mut().unwrap() = "/private/hosting.json".into();
+        hosting_args.extend(["--hosting-file".into(), "/private/second.json".into()]);
+        assert!(candidate_test_options(&hosting_args).is_err());
         args.truncate(args.len() - 2);
         assert!(candidate_test_options(&args).is_err());
         args.extend(["--runtime-profile".into(), "rootful".into()]);

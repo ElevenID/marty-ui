@@ -82,6 +82,9 @@ services:
     image: ${MARTY_INSTALLER_SERVICES_IMAGE:?approved services image required}
     entrypoint: [/input/marty-deploy]
     command: [installer-ingress-provision, --installation-id, "${MARTY_INSTALLATION_ID:?}"]
+    environment:
+      MARTY_INSTALLER_INGRESS_DNS_NAME: ${MARTY_INSTALLER_INGRESS_DNS_NAME-localhost}
+      MARTY_INSTALLER_INGRESS_IP_ADDRESS: ${MARTY_INSTALLER_INGRESS_IP_ADDRESS-127.0.0.1}
     volumes:
       - *installer-operator
       - *installer-bao-root
@@ -96,6 +99,9 @@ services:
     image: ${MARTY_INSTALLER_SERVICES_IMAGE:?approved services image required}
     entrypoint: [/input/marty-deploy]
     command: [installer-renewal-bootstrap-transfer, --installation-id, "${MARTY_INSTALLATION_ID:?}"]
+    environment:
+      MARTY_INSTALLER_INGRESS_DNS_NAME: ${MARTY_INSTALLER_INGRESS_DNS_NAME-localhost}
+      MARTY_INSTALLER_INGRESS_IP_ADDRESS: ${MARTY_INSTALLER_INGRESS_IP_ADDRESS-127.0.0.1}
     cap_add: [DAC_OVERRIDE, CHOWN]
     volumes:
       - *installer-operator
@@ -116,6 +122,9 @@ services:
     image: ${MARTY_INSTALLER_SERVICES_IMAGE:?approved services image required}
     entrypoint: [/input/marty-deploy]
     command: [installer-generation-provision-transfer, --installation-id, "${MARTY_INSTALLATION_ID:?}"]
+    environment:
+      MARTY_INSTALLER_INGRESS_DNS_NAME: ${MARTY_INSTALLER_INGRESS_DNS_NAME-localhost}
+      MARTY_INSTALLER_INGRESS_IP_ADDRESS: ${MARTY_INSTALLER_INGRESS_IP_ADDRESS-127.0.0.1}
     cap_add: [DAC_OVERRIDE, CHOWN]
     volumes:
       - *installer-operator

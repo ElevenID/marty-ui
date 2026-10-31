@@ -45,6 +45,7 @@ def test_help_does_not_require_docker_or_downloads():
     assert result.returncode == 0
     assert "--channel nightly|stable" in result.stdout
     assert "--foundation-file PATH" in result.stdout
+    assert "--hosting-file PATH" in result.stdout
 
 
 @pytest.mark.parametrize("args,reason", [
@@ -59,6 +60,9 @@ def test_help_does_not_require_docker_or_downloads():
     (["--foundation-file"], "Missing value"),
     (["--foundation-file", "--yes"], "Missing value"),
     (["--foundation-file", "/one", "--foundation-file", "/two"], "Repeated foundation"),
+    (["--hosting-file"], "Missing value"),
+    (["--hosting-file", "--yes"], "Missing value"),
+    (["--hosting-file", "/one", "--hosting-file", "/two"], "Repeated hosting"),
     (["--skip-verification"], "Unknown option"),
 ])
 def test_invalid_arguments_refused_before_host_mutation(args, reason):
@@ -192,6 +196,26 @@ def test_candidate_test_authenticates_inventory_and_operator_before_dispatch():
     dispatch = source.index('set -- candidate-test --version')
     assert first < inventory < operator < dispatch
     assert source.index('chmod 700 -- "$stage/marty-deploy"') < dispatch
+
+
+@pytest.mark.parametrize("verb", ["install", "candidate-test"])
+def test_native_handoff_preserves_hosting_path_as_one_opaque_argument(tmp_path, verb):
+    source = SCRIPT.read_text()
+    start = source.index(f"set -- {verb} --version")
+    end = source.index('"$stage/marty-deploy" "$@"', start)
+    handoff = source[start:end]
+    hosting = "/private/hosting file $(literal).json"
+    setup = dict(version="v1.2.3-nightly.20261027.42", stage=str(tmp_path), gh="/private/gh",
+                 docker_endpoint="unix:///run/user/1000/docker.sock", docker_engine_id="engine-1234",
+                 docker_bin="/usr/bin/docker", destination="", foundation_file="", hosting_file=hosting,
+                 yes="false", channel="nightly")
+    script = "\n".join(f"{key}={shlex.quote(value)}" for key, value in setup.items())
+    result = run(source=script + "\n" + handoff + "\nprintf '%s\\0' \"$@\"\n")
+    assert result.returncode == 0, result.stderr
+    arguments = result.stdout.rstrip("\0").split("\0")
+    assert arguments[0] == verb
+    assert arguments.count("--hosting-file") == 1
+    assert arguments[arguments.index("--hosting-file") + 1] == hosting
 
 
 @pytest.mark.parametrize("endpoint,security,reason", [

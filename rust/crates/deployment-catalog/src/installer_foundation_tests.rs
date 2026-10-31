@@ -117,6 +117,19 @@ fn foundation_configuration_is_closed_and_reuses_aws_reference_validation() {
     assert!(decode::<Configuration>(&serde_json::to_vec(&value).unwrap()).is_err());
 }
 
+#[test]
+fn foundation_public_origin_uses_the_shared_contract_without_changing_kms_selection() {
+    let mut config = configuration(Path::new("/private/inputs"));
+    let original_keys = serde_json::to_value(&config.tls).unwrap();
+    config.public_origin = "https://marty.example.com".into();
+    config.validate().unwrap();
+    assert_eq!(serde_json::to_value(&config.tls).unwrap(), original_keys);
+    assert_eq!(
+        PublicOrigin::parse(&config.public_origin).unwrap().port(),
+        443
+    );
+}
+
 fn openssl(root: &Path, args: &[&str]) {
     let output = Command::new("openssl")
         .current_dir(root)

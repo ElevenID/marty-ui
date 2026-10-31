@@ -7,7 +7,7 @@ main() (
     umask 077
     fail() { printf 'Marty installer: %s\n' "$*" >&2; exit 1; }
     usage() {
-        printf '%s\n' 'Usage: install.sh [--channel nightly|stable | --version TAG | --candidate-test NIGHTLY_TAG] [--install-dir PATH] [--foundation-file PATH] [--yes]'
+        printf '%s\n' 'Usage: install.sh [--channel nightly|stable | --version TAG | --candidate-test NIGHTLY_TAG] [--install-dir PATH] [--foundation-file PATH] [--hosting-file PATH] [--yes]'
     }
     # Candidate rootless entry must not execute even platform probes with
     # inherited root identity, capabilities, or privilege-gaining exec rights.
@@ -111,6 +111,7 @@ main() (
     selection=
     destination=
     foundation_file=
+    hosting_file=
     yes=false
     complete=false
     candidate_test=false
@@ -119,7 +120,7 @@ main() (
             --bootstrap-complete) [ "$#" -eq 1 ] || fail 'Invalid bootstrap terminator'; complete=true; shift ;;
             --help|-h) usage; exit 0 ;;
             --yes) yes=true; shift ;;
-            --channel|--version|--candidate-test|--install-dir|--foundation-file)
+            --channel|--version|--candidate-test|--install-dir|--foundation-file|--hosting-file)
                 [ "$#" -ge 2 ] && [ -n "$2" ] || fail "Missing value for $1"
                 case "$2" in --*) fail "Missing value for $1" ;; esac
                 case "$1" in
@@ -128,6 +129,7 @@ main() (
                     --candidate-test) [ -z "$selection" ] || fail 'Choose one release selector'; version=$2; selection=candidate; candidate_test=true ;;
                     --install-dir) [ -z "$destination" ] || fail 'Repeated installation directory'; destination=$2 ;;
                     --foundation-file) [ -z "$foundation_file" ] || fail 'Repeated foundation input'; foundation_file=$2 ;;
+                    --hosting-file) [ -z "$hosting_file" ] || fail 'Repeated hosting input'; hosting_file=$2 ;;
                 esac
                 shift 2 ;;
             *) fail "Unknown option: $1" ;;
@@ -238,6 +240,7 @@ main() (
             --runtime-profile rootless
         [ -z "$destination" ] || set -- "$@" --install-dir "$destination"
         [ -z "$foundation_file" ] || set -- "$@" --foundation-file "$foundation_file"
+        [ -z "$hosting_file" ] || set -- "$@" --hosting-file "$hosting_file"
         [ "$yes" = false ] || set -- "$@" --yes
         "$stage/marty-deploy" "$@"
         return
@@ -311,6 +314,7 @@ main() (
         --runtime-profile rootless
     [ -z "$destination" ] || set -- "$@" --install-dir "$destination"
     [ -z "$foundation_file" ] || set -- "$@" --foundation-file "$foundation_file"
+    [ -z "$hosting_file" ] || set -- "$@" --hosting-file "$hosting_file"
     if [ -f "$stage/channel.json" ]; then
         set -- "$@" --channel "$channel" --verified-channel "$stage/channel.json"
     fi

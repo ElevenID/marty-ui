@@ -176,11 +176,15 @@ require_kubernetes_services_release() {
     05b-revocation-profile-migrations.yaml 06-db-migrate.yaml \
     06a-issuance-migrations.yaml 07-microservices.yaml \
     07a-issuance-native.yaml 07b-signing-keys.yaml \
-    08-ui.yaml 09-cloudflared.yaml; do
+    08-ui.yaml; do
     [[ -f "$checked_manifests/$manifest_file" && ! -L "$checked_manifests/$manifest_file" ]] || { error "Kubernetes manifest is missing or not a regular reviewed file."; return 1; }
     relative_file="$relative_manifests/$manifest_file"
     git -C "$REPO_ROOT" ls-files --error-unmatch -- "$relative_file" >/dev/null 2>&1 || { error "Kubernetes manifest is not tracked by the reviewed checkout."; return 1; }
   done
+  if ! is_placeholder_secret "$(resolve_secret_input CLOUDFLARE_TUNNEL_TOKEN)"; then
+    [[ -f "$checked_manifests/09-cloudflared.yaml" && ! -L "$checked_manifests/09-cloudflared.yaml" ]] || { error "Selected Cloudflare manifest is missing or not a regular reviewed file."; return 1; }
+    git -C "$REPO_ROOT" ls-files --error-unmatch -- "$relative_manifests/09-cloudflared.yaml" >/dev/null 2>&1 || { error "Selected Cloudflare manifest is not tracked."; return 1; }
+  fi
   [[ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all)" ]] || { error "Kubernetes release checkout must be clean."; return 1; }
   K8S_DIR="$checked_manifests"
   source_sha="$(git -C "$REPO_ROOT" rev-parse --verify HEAD^{commit})" || return 1
@@ -372,8 +376,11 @@ cmd_update_images() {
   done <<< "$app_services"
   kubectl set image deployment/ui "ui=${IMAGE_REGISTRY}/marty-ui/ui-selfhost:${IMAGE_TAG}" \
     -n "$NAMESPACE" 2>/dev/null && success "Updated ui" || warn "Deployment 'ui' not found (skipped)"
-  kubectl set image deployment/cloudflared "cloudflared=${IMAGE_REGISTRY}/marty-ui/cloudflared-wrapper:${IMAGE_TAG}" \
-    -n "$NAMESPACE" 2>/dev/null && success "Updated cloudflared" || warn "Deployment 'cloudflared' not found (skipped)"
+  if ! is_placeholder_secret "$(resolve_secret_input CLOUDFLARE_TUNNEL_TOKEN)"; then
+    kubectl set image deployment/cloudflared "cloudflared=${IMAGE_REGISTRY}/marty-ui/cloudflared-wrapper:${IMAGE_TAG}" \
+      -n "$NAMESPACE" || return 1
+    success "Updated selected cloudflared"
+  fi
   kubectl rollout status deployment -n "$NAMESPACE" --timeout=300s || true
 }
 
