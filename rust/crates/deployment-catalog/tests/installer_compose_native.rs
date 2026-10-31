@@ -450,9 +450,9 @@ fn assert_actual_installer_layers(
     supplied_env: &Path,
 ) {
     let temp = PrivateFixture::new();
-    baseline(&executable, temp.path());
+    baseline(executable, temp.path());
     let env = temp.path().join("private.env");
-    fs::copy(&supplied_env, &env).unwrap();
+    fs::copy(supplied_env, &env).unwrap();
     fs::set_permissions(&env, fs::Permissions::from_mode(0o600)).unwrap();
     let layer_root = source.join("deploy-config/compose/selfhost-installer");
     let base = bundle.join("docker-compose.yml");
@@ -503,8 +503,8 @@ fn assert_actual_installer_layers(
         actual
     };
     let install = config(
-        &executable,
-        &bundle,
+        executable,
+        bundle,
         &[base.clone(), installer.clone()],
         &env,
         &["installer-init"],
@@ -594,8 +594,8 @@ fn assert_actual_installer_layers(
     // Ordinary start resolves the full retained maintenance union, including
     // OpenBao and its live unseal worker. App-only layers missed this ordering.
     let maintenance = config(
-        &executable,
-        &bundle,
+        executable,
+        bundle,
         &[
             base.clone(),
             openbao.clone(),
@@ -622,8 +622,8 @@ fn assert_actual_installer_layers(
         .collect();
     assert!(kms_consumers.contains("event-stream") && kms_consumers.contains("notification"));
     let restarted = config(
-        &executable,
-        &bundle,
+        executable,
+        bundle,
         &[base, openbao, bootstrap, installer, runtime],
         &env,
         &[],
