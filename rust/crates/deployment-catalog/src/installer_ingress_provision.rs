@@ -49,8 +49,9 @@ mod renewal;
 pub(crate) use renewal::{renew, renewal_inventory, validate_recorded_replacement};
 
 /// Validated certificate identity, independent of the host listener and port.
-/// A DNS host never gains an implicit IP SAN. Only the legacy local identity
-/// deliberately contains both localhost and 127.0.0.1.
+/// A DNS host never gains an implicit IP SAN. The journal-bound public entry
+/// alias can explicitly select one IP alongside DNS; local identity retains
+/// its existing localhost and 127.0.0.1 pair.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct IngressIdentity {
     dns: Option<String>,
@@ -72,11 +73,15 @@ impl IngressIdentity {
                 PublicOrigin::parse(&format!("https://{authority}")).map_err(|_| REFUSED)?;
             require(parsed.ip_address() == Some(ip))?;
         }
-        require(
-            dns.is_none()
-                || ip.is_none()
-                || (dns == Some("localhost") && ip == Some(IpAddr::from([127, 0, 0, 1]))),
-        )?;
+        if let (Some(dns), Some(ip)) = (dns, ip) {
+            let local = dns == "localhost" && ip == IpAddr::from([127, 0, 0, 1]);
+            let public_entry = dns != "localhost"
+                && !ip.is_loopback()
+                && PublicOrigin::parse(&format!("https://{dns}"))?
+                    .did_web_authority()
+                    .is_ok();
+            require(local || public_entry)?;
+        }
         Ok(Self {
             dns: dns.map(str::to_owned),
             ip,
@@ -122,8 +127,14 @@ impl IngressIdentity {
         // their values. Retain the exact IP literal as immutable role identity
         // metadata, alongside the native DNS constraint. The renewal AppRole
         // reconstructs this identity and binds every signing parameter in ACL.
+        let mut domains = vec![self.common_name()];
+        if self.dns.as_deref().is_some_and(|dns| dns != "localhost") {
+            if let Some(ip) = self.ip {
+                domains.push(ip.to_string());
+            }
+        }
         json!({"allow_any_name":false,"allow_localhost":self.dns.as_deref()==Some("localhost"),
-            "allowed_domains":[self.common_name()],"allow_bare_domains":true,"allow_subdomains":false,
+            "allowed_domains":domains,"allow_bare_domains":true,"allow_subdomains":false,
             "allow_glob_domains":false,"allow_wildcard_certificates":false,"allow_ip_sans":self.ip.is_some(),
             "server_flag":true,"client_flag":false,"key_type":"ec","key_bits":256,"max_ttl":"8h",
             "use_csr_common_name":false,"use_csr_sans":false,
@@ -846,11 +857,26 @@ mod tests {
             IngressIdentity::new(Some("localhost"), Some("127.0.0.1".parse().unwrap())).unwrap(),
             IngressIdentity::localhost()
         );
+        let entry = IngressIdentity::new(
+            Some("marty.example.com"),
+            Some("203.0.113.10".parse().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(entry.dns_names(), ["marty.example.com"]);
+        assert_eq!(entry.ip_addresses(), ["203.0.113.10"]);
+        assert_eq!(entry.signing_request("csr")["ip_sans"], "203.0.113.10");
+        assert_eq!(
+            IngressIdentity::from_metadata(&entry.dns_names(), &entry.ip_addresses()).unwrap(),
+            entry
+        );
         assert!(IngressIdentity::new(
             Some("marty.example.com"),
-            Some("203.0.113.10".parse().unwrap())
+            Some("127.0.0.1".parse().unwrap())
         )
         .is_err());
+        assert!(
+            IngressIdentity::new(Some("localhost"), Some("203.0.113.10".parse().unwrap())).is_err()
+        );
         assert!(IngressIdentity::new(None, None).is_err());
         for bad in [
             "marty.example.com:443",

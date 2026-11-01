@@ -1,0 +1,494 @@
+use super::*;
+use crate::installer_state::InstallerState;
+use std::os::unix::fs::{symlink, PermissionsExt};
+
+fn fixture() -> (tempfile::TempDir, PathBuf, InstallerState, Configuration) {
+    let parent = tempfile::tempdir().unwrap();
+    let path = parent.path().join("Marty %n $HOME workspace");
+    let identity = Identity {
+        source_sha: "a".repeat(40),
+        release_tag: "v0.0.0".into(),
+        inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+    };
+    let runtime = RuntimeBinding {
+        docker_host: "unix:///var/run/docker.sock".into(),
+        engine_id: "fixture-engine".into(),
+        openbao_port: 18443,
+        profile: RuntimeProfile::Rootful,
+    };
+    let mut state =
+        InstallerState::create_with_runtime(&path, identity.clone(), runtime.clone()).unwrap();
+    state.create_private_directory("evidence").unwrap();
+    let mut configuration = Configuration {
+        schema: CONFIGURATION_SCHEMA.into(),
+        installation_id: state.journal().installation_id(),
+        installation: path.clone(),
+        owner_uid: unsafe { libc::geteuid() },
+        release: identity,
+        runtime,
+        compose_project: state.journal().compose_project(),
+        compose_configuration_sha256: "c".repeat(64),
+        operator_sha256: "d".repeat(64),
+        docker: "/usr/bin/docker".into(),
+        units: BTreeMap::new(),
+    };
+    configuration.units = render_units(&configuration)
+        .unwrap()
+        .into_iter()
+        .map(|(name, text)| (name, installer_release::sha256(text.as_bytes())))
+        .collect();
+    (parent, path, state, configuration)
+}
+
+fn seed(state: &mut InstallerState, configuration: &Configuration) -> String {
+    let bytes = serde_json::to_vec(configuration).unwrap();
+    state.write_evidence(CONFIGURATION, &bytes).unwrap();
+    for (name, text) in render_units(configuration).unwrap() {
+        state.write_evidence(&name, text.as_bytes()).unwrap();
+    }
+    installer_release::sha256(&bytes)
+}
+
+fn load_intent(
+    state: &LockedMaintenance,
+    configuration: &Configuration,
+    digest: &str,
+) -> (Intent, String) {
+    intent_chain(
+        state.inspection(),
+        configuration,
+        digest,
+        &record_names(state.inspection()).unwrap(),
+    )
+    .unwrap()
+    .unwrap()
+}
+
+#[test]
+fn arguments_are_closed_and_paths_cannot_inject_unit_directives() {
+    let valid = vec![
+        "install".into(),
+        "--install-dir".into(),
+        "/private/Marty %n $HOME".into(),
+    ];
+    assert!(arguments(&valid).is_ok());
+    for extra in [
+        ["--force", "true"],
+        ["--enable", "true"],
+        ["--user-unit-dir", "/etc/systemd/system"],
+        ["--install-dir", "/another"],
+        ["--docker-bin", "relative"],
+    ] {
+        let mut args = valid.clone();
+        args.extend(extra.map(String::from));
+        assert!(arguments(&args).is_err(), "{extra:?}");
+    }
+    for path in [
+        "relative",
+        "/",
+        "/tmp/../other",
+        "/tmp/./other",
+        "/tmp//other",
+        "/tmp/other/",
+        "/tmp/a\nExecStart=evil",
+        "/tmp/a\r",
+        "/tmp/a\0b",
+        "/tmp/a'quoted",
+        "/tmp/a\"quoted",
+        "/tmp/a\\path",
+    ] {
+        assert!(
+            arguments(&["install".into(), "--install-dir".into(), path.into()]).is_err(),
+            "{path:?}"
+        );
+    }
+    assert!(arguments(&[
+        "renew".into(),
+        "--install-dir".into(),
+        "/private/install".into()
+    ])
+    .is_err());
+    assert!(arguments(&["install".into(), "--install-dir".into()]).is_err());
+}
+
+#[test]
+fn generated_units_bind_exact_retained_argv_and_escape_systemd_expansions() {
+    let (_parent, _path, _state, configuration) = fixture();
+    let units = render_units(&configuration).unwrap();
+    let [boot_name, check_name, timer_name] = unit_names(configuration.installation_id);
+    let boot = &units[&boot_name];
+    let check = &units[&check_name];
+    let timer = &units[&timer_name];
+    assert!(boot.contains(&format!(
+        "ExecStart={}\n",
+        command(&configuration, "boot").unwrap()
+    )));
+    assert!(boot.contains(&format!(
+        "ExecStop={}\n",
+        command(&configuration, "shutdown").unwrap()
+    )));
+    assert!(boot.contains("ExecStart=:\"/"));
+    assert!(boot.contains("Marty %%n $HOME workspace/marty-deploy\""));
+    assert!(boot.contains("\"lifecycle\" \"boot\" \"--install-dir\""));
+    assert!(boot.contains("Wants=docker.service\nAfter=docker.service\n"));
+    assert!(boot.contains("Type=oneshot\nRemainAfterExit=yes\nNoNewPrivileges=yes\nUMask=0077"));
+    assert!(boot.contains("Restart=on-failure\nRestartSec=15"));
+    assert!(!boot.contains("Requires=docker.service"));
+    assert!(!boot.contains("PartOf=docker.service"));
+    assert!(check.contains(&format!(
+        "ExecStart={}\n",
+        command(&configuration, "check").unwrap()
+    )));
+    assert!(check.contains(&format!("After=docker.service {boot_name}\n")));
+    assert!(!check.contains("Requires="));
+    assert!(!check.contains("PartOf="));
+    assert!(!check.contains("Restart="));
+    assert!(timer.contains("OnCalendar=*-*-* *:00/5:00\nPersistent=true\n"));
+    assert!(timer.contains(&format!("Unit={check_name}\n")));
+    for text in units.values() {
+        for absent in ["EnvironmentFile=", "TOKEN=", "PASSWORD="] {
+            assert!(!text.contains(absent), "unexpected {absent}");
+        }
+        for line in text.lines().filter(|line| line.starts_with("Exec")) {
+            for absent in [
+                "/bin/sh",
+                "\"sudo\"",
+                "\"compose\" \"up\"",
+                "\"init\"",
+                "\"renew\"",
+            ] {
+                assert!(!line.contains(absent), "unexpected command {absent}");
+            }
+        }
+    }
+    let mut foreign = configuration.clone();
+    foreign.installation_id = uuid::Uuid::new_v4();
+    assert!(render_units(&foreign)
+        .unwrap()
+        .keys()
+        .all(|name| !units.contains_key(name)));
+    let mut quoted_argument = configuration.clone();
+    quoted_argument.docker = "/private/docker \"quoted\" \\ tool".into();
+    assert!(command(&quoted_argument, "boot")
+        .unwrap()
+        .ends_with("\"/private/docker \\\"quoted\\\" \\\\ tool\""));
+    for path in [
+        "/private/quote\"",
+        "/private/apostrophe'",
+        "/private/back\\slash",
+    ] {
+        let mut invalid = configuration.clone();
+        invalid.installation = path.into();
+        assert!(render_units(&invalid).is_err());
+    }
+}
+
+#[test]
+fn systemd_argument_rejects_control_and_single_command_separator() {
+    assert_eq!(
+        systemd_argument("/a space/%n/${HOME}/\"quote\"/\\").unwrap(),
+        "\"/a space/%%n/${HOME}/\\\"quote\\\"/\\\\\""
+    );
+    for value in ["", ";", "line\nnext", "tab\tvalue", "nul\0", "\u{0085}"] {
+        assert!(systemd_argument(value).is_err());
+    }
+}
+
+#[test]
+fn customer_commands_link_check_unit_and_never_run_privileged_management() {
+    let (_parent, _path, _state, configuration) = fixture();
+    let actions = next_actions(&configuration);
+    assert_eq!(actions["commands_executed"], false);
+    assert_eq!(actions["commands"][0][1], "start");
+    assert_eq!(actions["commands"][1][2], "link");
+    let [boot, check, timer] = unit_names(configuration.installation_id);
+    for (index, name) in [boot.clone(), check, timer.clone()].iter().enumerate() {
+        assert_eq!(
+            actions["commands"][1][index + 3],
+            configuration
+                .installation
+                .join("evidence")
+                .join(name)
+                .to_str()
+                .unwrap()
+        );
+    }
+    assert_eq!(
+        actions["commands"][3],
+        json!(["systemctl", "--user", "enable", "--now", boot, timer])
+    );
+    assert!(!actions["commands"].to_string().contains("sudo"));
+    assert!(!actions["commands"].to_string().contains("loginctl"));
+}
+
+#[test]
+fn append_only_intent_survives_reopen_and_never_overwrites_pause() {
+    let (_parent, path, mut initial, configuration) = fixture();
+    let digest = seed(&mut initial, &configuration);
+    drop(initial);
+    let mut state = LockedMaintenance::open(&path).unwrap();
+    append_intent(
+        &mut state,
+        &configuration,
+        &digest,
+        None,
+        IntentReason::Installed,
+    )
+    .unwrap();
+    let (paused, hash) = load_intent(&state, &configuration, &digest);
+    assert_eq!(paused.desired_state, DesiredState::Paused);
+    append_intent(
+        &mut state,
+        &configuration,
+        &digest,
+        Some((&paused, &hash)),
+        IntentReason::ManualStart,
+    )
+    .unwrap();
+    let (running, hash) = load_intent(&state, &configuration, &digest);
+    assert_eq!(running.desired_state, DesiredState::Running);
+    append_intent(
+        &mut state,
+        &configuration,
+        &digest,
+        Some((&running, &hash)),
+        IntentReason::ManualStop,
+    )
+    .unwrap();
+    let stop_bytes = state.read_evidence(&intent_name(3)).unwrap().unwrap();
+    drop(state);
+    let mut state = LockedMaintenance::open(&path).unwrap();
+    let (paused, hash) = load_intent(&state, &configuration, &digest);
+    assert_eq!(paused.sequence, 3);
+    assert_eq!(paused.desired_state, DesiredState::Paused);
+    assert_eq!(paused.reason, IntentReason::ManualStop);
+    append_intent(
+        &mut state,
+        &configuration,
+        &digest,
+        Some((&paused, &hash)),
+        IntentReason::Uninstall,
+    )
+    .unwrap();
+    assert_eq!(
+        state.read_evidence(&intent_name(3)).unwrap().unwrap(),
+        stop_bytes
+    );
+    assert_eq!(
+        load_intent(&state, &configuration, &digest).0.reason,
+        IntentReason::Uninstall
+    );
+    assert!(state
+        .write_evidence_exclusive(&intent_name(3), b"overwrite")
+        .is_err());
+}
+
+#[test]
+fn paused_scheduled_commands_do_not_open_docker_or_append_intent() {
+    let (_parent, path, mut initial, configuration) = fixture();
+    let digest = seed(&mut initial, &configuration);
+    drop(initial);
+    let mut state = LockedMaintenance::open(&path).unwrap();
+    append_intent(
+        &mut state,
+        &configuration,
+        &digest,
+        None,
+        IntentReason::Installed,
+    )
+    .unwrap();
+    let (intent, intent_sha256) = load_intent(&state, &configuration, &digest);
+    let loaded = Loaded {
+        configuration,
+        configuration_sha256: digest,
+        intent,
+        intent_sha256,
+    };
+    let before = record_names(state.inspection()).unwrap();
+    for action in [Action::Boot, Action::Check, Action::Shutdown] {
+        let report = scheduled(
+            &mut state,
+            &path,
+            Path::new("/does/not/exist/docker"),
+            action,
+            &loaded,
+        )
+        .unwrap();
+        assert_eq!(
+            report,
+            json!({"outcome":"paused", "docker_invoked":false, "intent_preserved":true})
+        );
+        assert_eq!(record_names(state.inspection()).unwrap(), before);
+    }
+}
+
+#[test]
+fn shutdown_preserves_running_intent_even_when_native_operation_is_refused() {
+    let (_parent, path, mut initial, configuration) = fixture();
+    let digest = seed(&mut initial, &configuration);
+    drop(initial);
+    let mut state = LockedMaintenance::open(&path).unwrap();
+    append_intent(
+        &mut state,
+        &configuration,
+        &digest,
+        None,
+        IntentReason::Installed,
+    )
+    .unwrap();
+    let (paused, hash) = load_intent(&state, &configuration, &digest);
+    append_intent(
+        &mut state,
+        &configuration,
+        &digest,
+        Some((&paused, &hash)),
+        IntentReason::ManualStart,
+    )
+    .unwrap();
+    let (intent, intent_sha256) = load_intent(&state, &configuration, &digest);
+    let loaded = Loaded {
+        configuration,
+        configuration_sha256: digest,
+        intent,
+        intent_sha256,
+    };
+    assert_eq!(
+        scheduled_operation(Action::Boot, DesiredState::Running).unwrap(),
+        Some("start")
+    );
+    assert_eq!(
+        scheduled_operation(Action::Shutdown, DesiredState::Running).unwrap(),
+        Some("stop")
+    );
+    assert_eq!(
+        scheduled_operation(Action::Check, DesiredState::Running).unwrap(),
+        Some("validate")
+    );
+    let before = record_names(state.inspection()).unwrap();
+    // No authenticated saved Compose session exists: the actual native executor
+    // must refuse, leaving the boot intent intact rather than manufacturing pause.
+    assert!(scheduled(
+        &mut state,
+        &path,
+        Path::new("/does/not/exist/docker"),
+        Action::Shutdown,
+        &loaded
+    )
+    .is_err());
+    assert_eq!(record_names(state.inspection()).unwrap(), before);
+    assert_eq!(
+        load_intent(&state, &loaded.configuration, &loaded.configuration_sha256)
+            .0
+            .desired_state,
+        DesiredState::Running
+    );
+}
+
+#[test]
+fn missing_foreign_or_edited_intent_chain_fails_closed() {
+    for corruption in [
+        "gap",
+        "foreign",
+        "digest",
+        "reason",
+        "previous",
+        "unknown",
+        "duplicate",
+    ] {
+        let (_parent, path, mut initial, configuration) = fixture();
+        let digest = seed(&mut initial, &configuration);
+        drop(initial);
+        let mut state = LockedMaintenance::open(&path).unwrap();
+        let intent = append_intent(
+            &mut state,
+            &configuration,
+            &digest,
+            None,
+            IntentReason::Installed,
+        )
+        .unwrap();
+        let hash = installer_release::sha256(&serde_json::to_vec(&intent).unwrap());
+        append_intent(
+            &mut state,
+            &configuration,
+            &digest,
+            Some((&intent, &hash)),
+            IntentReason::ManualStart,
+        )
+        .unwrap();
+        let mut edited = serde_json::to_value(&intent).unwrap();
+        let evidence = path.join("evidence");
+        match corruption {
+            "gap" => std::fs::remove_file(evidence.join(intent_name(1))).unwrap(),
+            "foreign" => {
+                edited["installation_id"] = json!(uuid::Uuid::new_v4());
+            }
+            "digest" => {
+                edited["configuration_sha256"] = json!("0".repeat(64));
+            }
+            "reason" => {
+                edited["desired_state"] = json!("running");
+            }
+            "previous" => {
+                edited["previous_sha256"] = json!("0".repeat(64));
+            }
+            "unknown" => {
+                state
+                    .write_evidence_exclusive("lifecycle-unexpected.json", b"{}")
+                    .unwrap();
+            }
+            "duplicate" => {
+                std::fs::write(
+                    evidence.join(intent_name(1)),
+                    b"{\"schema\":\"x\",\"schema\":\"y\"}",
+                )
+                .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        if ["foreign", "digest", "reason", "previous"].contains(&corruption) {
+            std::fs::write(
+                evidence.join(intent_name(1)),
+                serde_json::to_vec(&edited).unwrap(),
+            )
+            .unwrap();
+        }
+        assert!(
+            intent_chain(
+                state.inspection(),
+                &configuration,
+                &digest,
+                &record_names(state.inspection()).unwrap()
+            )
+            .is_err(),
+            "{corruption}"
+        );
+    }
+}
+
+#[test]
+fn unit_artifacts_cannot_be_replaced_or_adopt_symlinks() {
+    let (_parent, path, mut initial, configuration) = fixture();
+    seed(&mut initial, &configuration);
+    drop(initial);
+    let mut state = LockedMaintenance::open(&path).unwrap();
+    let [boot, _, _] = unit_names(configuration.installation_id);
+    let exact = state.read_evidence(&boot).unwrap().unwrap();
+    persist_exact(&mut state, &boot, &exact).unwrap();
+    assert!(persist_exact(&mut state, &boot, b"replacement").is_err());
+    assert_eq!(state.read_evidence(&boot).unwrap().unwrap(), exact);
+    assert_eq!(
+        std::fs::metadata(path.join("evidence").join(&boot))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o600
+    );
+    let target = path.join("outside");
+    std::fs::write(&target, b"outside").unwrap();
+    std::fs::remove_file(path.join("evidence").join(&boot)).unwrap();
+    symlink(&target, path.join("evidence").join(&boot)).unwrap();
+    assert!(persist_exact(&mut state, &boot, b"replacement").is_err());
+    assert_eq!(std::fs::read(target).unwrap(), b"outside");
+}

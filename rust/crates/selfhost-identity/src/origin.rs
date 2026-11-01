@@ -99,6 +99,18 @@ impl PublicOrigin {
         self.address.is_none().then_some(self.host.as_str())
     }
 
+    /// Authority component of this origin's did:web identifier. The shared
+    /// transport parser accepts IPs, but the DID method requires a DNS name.
+    /// `localhost` remains available for the isolated local development profile.
+    pub fn did_web_authority(&self) -> Result<String, String> {
+        if self.address.is_some() || (self.host != "localhost" && !self.host.contains('.')) {
+            return Err(
+                "did:web requires a DNS authority, not an IP or unqualified host name".into(),
+            );
+        }
+        Ok(self.authority.replace(':', "%3A"))
+    }
+
     pub fn ip_address(&self) -> Option<IpAddr> {
         self.address
     }
@@ -185,6 +197,34 @@ mod tests {
         assert_eq!(ipv6.authority(), "[2001:db8::10]");
         assert_eq!(ipv6.host(), "2001:db8::10");
         assert_eq!(ipv6.port(), 443);
+    }
+
+    #[test]
+    fn did_web_authority_uses_dns_and_percent_encodes_a_nondefault_port() {
+        for (origin, expected) in [
+            ("https://marty.example.com", "marty.example.com"),
+            ("https://marty.example.com:8443", "marty.example.com%3A8443"),
+            ("https://localhost:18443", "localhost%3A18443"),
+            ("https://xn--bcher-kva.example", "xn--bcher-kva.example"),
+        ] {
+            assert_eq!(
+                PublicOrigin::parse(origin)
+                    .unwrap()
+                    .did_web_authority()
+                    .unwrap(),
+                expected
+            );
+        }
+        for origin in [
+            "https://203.0.113.10",
+            "https://[2001:db8::10]",
+            "https://marty",
+        ] {
+            assert!(PublicOrigin::parse(origin)
+                .unwrap()
+                .did_web_authority()
+                .is_err());
+        }
     }
 
     #[test]

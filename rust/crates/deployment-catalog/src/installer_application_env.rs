@@ -217,6 +217,10 @@ pub(crate) fn render_selected(
         ),
         ("MARTY_ISSUANCE_IMAGE", issuance),
         ("PUBLIC_DOMAIN", origin.authority().into()),
+        (
+            "MARTY_ISSUER_DID",
+            format!("did:web:{}:orgs:marty", origin.did_web_authority()?),
+        ),
         ("GATEWAY_OBSERVE_CLIENT_IP", "false".into()),
         ("SELFHOST_GATEWAY_HOST_PORT", p.gateway_port.to_string()),
         ("SELFHOST_KEYCLOAK_HOST_PORT", p.keycloak_port.to_string()),
@@ -430,6 +434,7 @@ mod tests {
         let text = String::from_utf8(result.env_bytes).unwrap();
         for expected in [
             "PUBLIC_DOMAIN='localhost:18443'\n",
+            "MARTY_ISSUER_DID='did:web:localhost%3A18443:orgs:marty'\n",
             "GATEWAY_OBSERVE_CLIENT_IP='false'\n",
             "OIDC_ISSUER_URL_EXTERNAL='https://localhost:18443/realms/11id'\n",
             "SELFHOST_SECRET_DIR='/private/marty $literal #path/secrets'\n",
@@ -455,6 +460,7 @@ mod tests {
         let text = String::from_utf8(result.env_bytes).unwrap();
         for expected in [
             "PUBLIC_DOMAIN='marty.example.com'\n",
+            "MARTY_ISSUER_DID='did:web:marty.example.com:orgs:marty'\n",
             "MARTY_ORG_DOMAIN='marty.example.com'\n",
             "PUBLIC_API_URL='https://marty.example.com'\n",
             "UI_BASE_URL='https://marty.example.com'\n",

@@ -562,6 +562,18 @@ fn run() -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         return Err("installer logs currently requires Linux".into());
     }
+    if args.first().is_some_and(|arg| arg == "lifecycle") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_lifecycle::run(&args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer lifecycle currently requires Linux".into());
+    }
     if args.first().is_some_and(|arg| arg == "start") {
         #[cfg(target_os = "linux")]
         {

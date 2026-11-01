@@ -8,6 +8,25 @@ from __future__ import annotations
 import installer_release as release
 from installer_host_probe import DEVTOOLS
 
+LEGACY_PROFILE = "qualification-32gib"
+STARTUP_PROFILE = "startup-8gib"
+ENGINEERING_PROFILE = "engineering-measured"
+# These are preflight resource policies, not proof of startup or product capacity.
+# The nominal 8 GiB target permits kernel-reserved RAM. The controller separately
+# records the advertised VM size; both real guest and Docker measurements remain
+# in the immutable host observation. The legacy release gate is unchanged.
+RESOURCE_PROFILES = {
+    LEGACY_PROFILE: release.acceptance.MIN_MEMORY_BYTES,
+    STARTUP_PROFILE: 7 * 1024**3,
+    ENGINEERING_PROFILE: 1,
+}
+
+
+def resource_profile(profile: str) -> int:
+    release.require(type(profile) is str and profile in RESOURCE_PROFILES,
+                    "host resource profile unsupported")
+    return RESOURCE_PROFILES[profile]
+
 
 def _host_state(raw: bytes, engine: str) -> dict:
     value = release.decode(raw)
@@ -44,12 +63,13 @@ def _host_state(raw: bytes, engine: str) -> dict:
     return value
 
 
-def host_admission(raw: bytes, engine: str) -> dict:
+def host_admission(raw: bytes, engine: str, *, profile: str = LEGACY_PROFILE) -> dict:
+    minimum = resource_profile(profile)
     value = _host_state(raw, engine)
     for key in ("docker_memory_bytes", "guest_memory_bytes"):
         release.require(
             type(value.get(key)) is int
-            and value[key] >= release.acceptance.MIN_MEMORY_BYTES,
+            and value[key] >= minimum,
             "qualification RAM unavailable",
         )
     disk = value.get("docker_data_filesystem", {})
@@ -58,7 +78,10 @@ def host_admission(raw: bytes, engine: str) -> dict:
         and disk["free_bytes"] >= release.acceptance.MIN_DISK_FREE_BYTES,
         "qualification disk unavailable",
     )
-    release.require(value["predicates"]["capacity"] is True,
+    # v1 observations report the historical 32 GiB predicate. Do not relabel that
+    # result when selecting another preflight policy, or trust a false assertion.
+    legacy_capacity = min(value["docker_memory_bytes"], value["guest_memory_bytes"]) >= release.acceptance.MIN_MEMORY_BYTES
+    release.require(value["predicates"]["capacity"] is legacy_capacity,
                     "guest pre-pull state differs")
     return value
 

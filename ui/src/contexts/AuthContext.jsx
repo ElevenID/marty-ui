@@ -9,6 +9,7 @@ import { createContext, useState, useEffect, useCallback, useMemo } from 'react'
 import { getCurrentUser, initiateLogin, initiateRegister, initiateLogout } from '../services/authApi';
 import { getMyOrganizations } from '../services/organizationsApi';
 import i18n from '../i18n';
+import { getPublicEntryCanonicalOrigin } from '../application/routing/publicEntry';
 import {
   createEnrichedUser,
   getAuthFlags,
@@ -86,10 +87,15 @@ function logAuthContextError(message, error) {
  */
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => !getPublicEntryCanonicalOrigin());
 
   // Fetch current user on mount
   const fetchUser = useCallback(async () => {
+    if (getPublicEntryCanonicalOrigin()) {
+      setUser(null);
+      setIsLoading(false);
+      return;
+    }
     try {
       setIsLoading(true);
       const result = await getCurrentUser();

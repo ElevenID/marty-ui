@@ -42,6 +42,32 @@ def test_qualification_capacity_still_admits_production():
     assert admission.host_admission(release.encode(value), ENGINE) == value
 
 
+def test_nominal_8gib_startup_profile_preserves_measured_memory_and_legacy_predicate():
+    value=host(8)
+    value['guest_memory_bytes']-=256*1024**2
+    raw=release.encode(value)
+    assert admission.host_admission(raw,ENGINE,profile=admission.STARTUP_PROFILE)==value
+    assert raw==release.encode(value)
+    assert value['predicates']['capacity'] is False
+    assert value['acceptance'] is False
+    with pytest.raises(ValueError,match='RAM unavailable'):
+        admission.host_admission(raw,ENGINE)
+
+
+@pytest.mark.parametrize('memory',[True,0,-1,'8589934592',7*1024**3-1])
+def test_startup_profile_requires_reviewed_guest_visible_floor(memory):
+    value=host(8)
+    value['guest_memory_bytes']=memory
+    with pytest.raises(ValueError,match='RAM unavailable'):
+        admission.host_admission(release.encode(value),ENGINE,profile=admission.STARTUP_PROFILE)
+
+
+@pytest.mark.parametrize('profile',['load','startup',None,{},'production-capacity'])
+def test_unreviewed_profile_cannot_bypass_preflight(profile):
+    with pytest.raises(ValueError,match='resource profile unsupported'):
+        admission.host_admission(release.encode(host(8)),ENGINE,profile=profile)
+
+
 @pytest.mark.parametrize("policy", [admission.host_admission,
                                    admission.engineering_host_admission])
 @pytest.mark.parametrize("change", ["engine", "dirty", "credential", "disk",

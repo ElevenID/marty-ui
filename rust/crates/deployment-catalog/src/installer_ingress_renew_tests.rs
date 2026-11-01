@@ -430,6 +430,16 @@ async fn official_openbao_renews_exact_dns_ipv4_ipv6_and_local_identity_without_
     // rejects public IPv6 literals until all application identity consumers do.
     for identity in [
         IngressIdentity::new(Some("marty.example.com"), None).unwrap(),
+        IngressIdentity::new(
+            Some("marty.example.com"),
+            Some("203.0.113.10".parse().unwrap()),
+        )
+        .unwrap(),
+        IngressIdentity::new(
+            Some("marty.example.com"),
+            Some("2001:db8::10".parse().unwrap()),
+        )
+        .unwrap(),
         IngressIdentity::new(None, Some("203.0.113.10".parse().unwrap())).unwrap(),
         IngressIdentity::new(None, Some("2001:db8::10".parse().unwrap())).unwrap(),
         IngressIdentity::localhost(),

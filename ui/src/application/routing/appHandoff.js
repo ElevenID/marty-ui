@@ -1,3 +1,5 @@
+import { publicEntryHref } from './publicEntry';
+
 const CONSOLE_PREFIX = '/console';
 
 export function isConsolePath(pathname = '') {
@@ -38,6 +40,7 @@ export function redirectBrowser(destination, { replace = true, location = window
   if (!destination) {
     return false;
   }
+  destination = publicEntryHref(destination);
 
   // Guard against no-op redirects that can cause hard-refresh loops.
   if (isSameLocationDestination(destination, location)) {

@@ -103,6 +103,28 @@ nightly inventory and authenticated operator; it grants no admission. Invalid
 required metadata refuses execution. Artifact publication alone does not
 establish deployment readiness or channel availability.
 
+## Controller observations and resource profiles
+
+The controller's incomplete checkpoint records its resource profile separately
+from functional qualification and load characterization. The default
+`startup-8gib` profile has a 7 GiB guest-visible preflight floor to allow kernel
+reservations on a nominal 8 GiB host. Both Docker and guest RAM measurements are
+retained; the controller must independently establish the nominal instance size.
+Passing this guard does not prove startup, throughput, or a supported load limit.
+The explicit `qualification-32gib` profile preserves the historical acceptance
+preflight, and the signed release gate still requires every functional and
+recovery case. Engineering measurements and startup checkpoints cannot replace
+that evidence.
+
+Current trust observations use the configured HTTPS origin, the separately
+bound local probe address, the certificate's public-ingress or backend scope,
+and the selected generation's evidence. A local probe verifies TLS and OIDC
+discovery using the configured authority while connecting to the recorded local
+listener. It does not observe the external proxy, public reachability, browser
+trust, or login. The checkpoint leaves installation readiness, functional
+qualification, and load characterization false. The formal acceptance-only
+installation entry remains held until its rootless dispatch path is qualified.
+
 ## Platform adapters
 
 `install.sh` keeps release selection and authentication shared. Its closed
@@ -119,6 +141,11 @@ bootstrap tests. A future native Windows entry point would need a PowerShell
 adapter; this POSIX shell script does not claim Windows support.
 
 ## Deployment operations
+
+For customer-managed unattended boot and read-only scheduled checks, see
+[systemd lifecycle controls](installer-lifecycle.md). The generated user units
+use the retained operator and preserve manual stop intent. Unit installation is
+not a claim of reboot, credential-expiry, or public-browser qualification.
 
 ### Applicant state ownership
 

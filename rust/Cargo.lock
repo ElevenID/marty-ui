@@ -4874,12 +4874,15 @@ dependencies = [
  "http 1.5.0",
  "hyper",
  "hyper-util",
+ "libc",
  "marty-openbao-http",
  "marty-selfhost-identity",
  "marty-service-runtime",
  "mmf-platform",
  "reqwest",
+ "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

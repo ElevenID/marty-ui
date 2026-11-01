@@ -1,5 +1,8 @@
 //! Shared remote TLS identity bootstrapping for Rust HTTPS edges.
 
+#[cfg(unix)]
+pub mod acme_http01;
+
 use http::HeaderName;
 use std::{collections::BTreeMap, env, error::Error, time::Duration};
 

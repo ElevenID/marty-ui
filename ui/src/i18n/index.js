@@ -3,6 +3,9 @@ import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 import HttpBackend from 'i18next-http-backend';
 import { I18N_NAMESPACES } from '@ui-public-config';
+import { getPublicEntryCanonicalOrigin } from '../application/routing/publicEntry';
+
+const publicEntry = Boolean(getPublicEntryCanonicalOrigin());
 
 i18n
   // Load translation files
@@ -29,7 +32,9 @@ i18n
     // Detection options
     detection: {
       // Order of detection methods
-      order: ['querystring', 'cookie', 'localStorage', 'navigator', 'htmlTag'],
+      order: publicEntry
+        ? ['querystring', 'navigator', 'htmlTag']
+        : ['querystring', 'cookie', 'localStorage', 'navigator', 'htmlTag'],
       
       // Keys to look for
       lookupQuerystring: 'lng',
@@ -37,7 +42,7 @@ i18n
       lookupLocalStorage: 'i18nextLng',
       
       // Cache user language
-      caches: ['localStorage', 'cookie'],
+      caches: publicEntry ? [] : ['localStorage', 'cookie'],
       
       // Only detect languages in supportedLngs
       checkWhitelist: true,

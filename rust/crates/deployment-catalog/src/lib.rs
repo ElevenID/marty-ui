@@ -57,6 +57,7 @@ pub mod installer_keycloak;
 pub mod installer_keycloak_bridge;
 #[cfg(target_os = "linux")]
 pub mod installer_kms;
+pub mod installer_lifecycle;
 pub mod installer_logs;
 pub mod installer_openbao;
 #[cfg(target_os = "linux")]

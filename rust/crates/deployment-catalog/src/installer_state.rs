@@ -609,6 +609,7 @@ fn maintenance_started(directory: &File) -> Result<bool> {
         return Ok(false);
     };
     for entry in [
+        "lifecycle-configuration.json",
         "uninstall-plan.json",
         "uninstall-result.json",
         "uninstall-compose-stop-intent.json",
@@ -969,6 +970,7 @@ impl LockedMaintenance {
         self.require_unchanged()?;
         let filename = Self::entry(entry)?;
         if !(entry.starts_with("uninstall-")
+            || entry.starts_with("lifecycle-")
             || entry.starts_with("rootless-canary-")
             || entry.starts_with("kms-registration-"))
             || bytes.is_empty()
@@ -2825,6 +2827,7 @@ mod tests {
     #[test]
     fn old_and_native_maintenance_markers_block_provisioning_replay() {
         for entry in [
+            "lifecycle-configuration.json",
             "uninstall-plan.json",
             "uninstall-result.json",
             "uninstall-compose-stop-intent.json",

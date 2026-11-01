@@ -228,6 +228,9 @@ services:
   ui:
     <<: *installer-runtime
     depends_on: *kms-complete
+    environment:
+      UI_CANONICAL_ORIGIN: ${PUBLIC_API_URL:?set the installation origin}
+      UI_PUBLIC_ENTRY_ORIGINS: ${MARTY_INSTALLER_PUBLIC_ENTRY_ORIGINS:-[]}
   edge:
     <<: *installer-runtime
     ports: !reset []
@@ -252,7 +255,7 @@ services:
     user: "10001:10001"
     read_only: true
     cap_drop: [ALL]
-    restart: "no"
+    restart: unless-stopped
     labels:
       com.elevenid.installer.id: ${MARTY_INSTALLER_ID:?set the installation identifier}
       com.elevenid.installer.phase: runtime
@@ -268,6 +271,7 @@ services:
     environment:
       OIDF_EDGE_PROFILE: installer
       OIDF_EDGE_PUBLIC_ORIGIN: ${PUBLIC_API_URL:?set the installation origin}
+      OIDF_EDGE_PUBLIC_ENTRY_ORIGIN: ${MARTY_INSTALLER_PUBLIC_ENTRY_ORIGIN:-}
       OIDF_EDGE_BIND: 0.0.0.0:8443
       OIDF_EDGE_TLS_CERT_FILE: /run/installer/tls.crt
       OIDF_EDGE_TLS_KMS_CA_CERT_FILE: /run/installer/openbao-ca.crt

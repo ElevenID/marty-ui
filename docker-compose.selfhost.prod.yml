@@ -13,6 +13,7 @@ x-runtime-env: &runtime-env
   UI_BASE_URL: ${UI_BASE_URL:-https://localhost}
   ISSUER_BASE_URL: ${ISSUER_BASE_URL:-https://localhost}
   MARTY_ISSUER_BASE_URL: ${MARTY_ISSUER_BASE_URL:-https://localhost}
+  MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:-}
   ORGANIZATION_CREATION_ENABLED: ${ORGANIZATION_CREATION_ENABLED:-false}
   ES_GRPC_TARGET: https://event-stream:9015
 
@@ -526,7 +527,7 @@ services:
       MARTY_API_CLIENT_ID: ${MARTY_API_CLIENT_ID:-marty-api}
       MARTY_API_CLIENT_SECRET_FILE: /run/secrets/marty_api_client_secret
       CREDENTIAL_LOGIN_POLICY_ID: ${CREDENTIAL_LOGIN_POLICY_ID:-}
-      CREDENTIAL_LOGIN_ISSUER_DID: did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:${MARTY_ORG_SLUG:-marty}
+      CREDENTIAL_LOGIN_ISSUER_DID: ${MARTY_ISSUER_DID:-did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:${MARTY_ORG_SLUG:-marty}}
       CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: ${CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER:-true}
       CREDENTIAL_LOGIN_CREATE_USERS: ${CREDENTIAL_LOGIN_CREATE_USERS:-false}
       AUTH_SERVICE_INTERNAL_URL: http://auth:8001
@@ -1226,7 +1227,7 @@ services:
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
-      OID4VP_ISSUER_DID: did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:${MARTY_ORG_SLUG:-marty}
+      OID4VP_ISSUER_DID: ${MARTY_ISSUER_DID:-did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:${MARTY_ORG_SLUG:-marty}}
       ORG_GRPC_TARGET: https://organization:9002
       PP_GRPC_TARGET: https://presentation-policy:9009
       CT_GRPC_TARGET: https://credential-template:9003
