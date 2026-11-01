@@ -620,6 +620,8 @@ services:
         condition: service_healthy
       issuance-native:
         condition: service_healthy
+      applicant:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 10s
@@ -1058,6 +1060,10 @@ services:
         condition: service_healthy
       openbao-init:
         condition: service_completed_successfully
+      trust-profile:
+        condition: service_healthy
+      deployment-profile:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
       interval: 10s

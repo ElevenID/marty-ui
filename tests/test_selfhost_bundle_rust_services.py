@@ -396,3 +396,17 @@ def test_gate_rejects_invalid_shared_image_anchor(gate, models, field, value):
     bundle["x-selfhost-service-image"][field] = value
     with pytest.raises(AssertionError):
         gate["assert_shared_rust_services"](base, bundle)
+
+
+@pytest.mark.parametrize("model_name", ["docker-compose.base.yml", "docker-compose.selfhost.prod.yml"])
+@pytest.mark.parametrize(
+    ("consumer", "provider"),
+    [("flow", "trust-profile"), ("flow", "deployment-profile"), ("auth", "applicant")],
+)
+def test_eager_provider_startup_dependencies_are_healthy(model_name, consumer, provider):
+    # These providers are probed before the consumer binds its HTTP listener.
+    # Waiting for readiness avoids restart loops during a cold stack start.
+    root = Path(__file__).resolve().parents[1]
+    model = yaml.safe_load((root / model_name).read_text(encoding="utf-8"))
+    dependency = model["services"][consumer]["depends_on"][provider]
+    assert dependency == {"condition": "service_healthy"}
