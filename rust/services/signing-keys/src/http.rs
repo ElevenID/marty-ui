@@ -2329,7 +2329,6 @@ mod current_issuer_validation_tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use p256::ecdsa::signature::Signer;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
     use tower::ServiceExt;
 
     fn check(name: &str, status: &str) -> validation::ValidationCheck {
@@ -2359,7 +2358,7 @@ mod current_issuer_validation_tests {
         )]));
         let signer = p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into())
             .expect("fixed test-only signing key");
-        let point = signer.verifying_key().to_encoded_point(false);
+        let point = signer.verifying_key().to_sec1_point(false);
         let public = point.as_bytes();
         let jwk = json!({"kty":"EC", "crv":"P-256",
             "x": URL_SAFE_NO_PAD.encode(&public[1..33]),
@@ -2379,7 +2378,7 @@ mod current_issuer_validation_tests {
         ));
         let wrong_signer = p256::ecdsa::SigningKey::from_bytes((&[8u8; 32]).into())
             .expect("second fixed test-only signing key");
-        let wrong_point = wrong_signer.verifying_key().to_encoded_point(false);
+        let wrong_point = wrong_signer.verifying_key().to_sec1_point(false);
         let wrong_public = wrong_point.as_bytes();
         let wrong_jwk = json!({"kty":"EC", "crv":"P-256",
             "x": URL_SAFE_NO_PAD.encode(&wrong_public[1..33]),
