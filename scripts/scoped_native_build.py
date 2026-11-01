@@ -134,12 +134,16 @@ def verify(plan, git, profile=None):
                 "EXACT_REVIEWED_LOCK_GUARD_REQUIRED")
         verify_official_inputs(freeze, seed, source_script.read_text(), scope, tool.read_text())
     recipe = read_ref(plan["recipe"])
-    require(recipe.read_text() == render_recipe(profile), "THREE_ROLE_RECIPE_CHANGED")
+    exact_recipe_bytes(recipe, profile)
     require(re.fullmatch(r"sha256:[a-f0-9]{64}", plan.get("builderImage", "")), "PINNED_BUILDER_REQUIRED")
     require(re.fullmatch(r"[a-f0-9-]{36}", plan.get("runId", "")), "OWNED_BUILD_RUN_REQUIRED")
     output = Path(plan["outputDirectory"]).resolve()
     require(output.is_relative_to(private) and output.is_dir() and not output.is_symlink(), "OWNED_OUTPUT_REQUIRED")
     return private, output
+
+def exact_recipe_bytes(recipe, profile=None):
+    require(recipe.read_bytes() == render_recipe(profile).encode(), "THREE_ROLE_RECIPE_CHANGED")
+
 
 def render_recipe(profile=None):
     if profile in OFFICIAL_PROFILES:

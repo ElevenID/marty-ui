@@ -82,6 +82,16 @@ class CurrentIssuerProfileTests(unittest.TestCase):
         self.assertIn("--bin marty-signing-keys", build.render_recipe(PROFILE))
         self.assertIn("--bin marty-gateway", build.render_recipe(PROFILE))
 
+    def test_recipe_requires_exact_lf_bytes_for_linux_shell(self):
+        recipe = build.render_recipe("current-issuer-policy-signing-only")
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "build.sh"
+            path.write_bytes(recipe.encode())
+            build.exact_recipe_bytes(path, "current-issuer-policy-signing-only")
+            path.write_bytes(recipe.replace("\n", "\r\n").encode())
+            with self.assertRaisesRegex(ValueError, "THREE_ROLE_RECIPE_CHANGED"):
+                build.exact_recipe_bytes(path, "current-issuer-policy-signing-only")
+
     def test_policy_signing_profile_reuses_closed_builder_without_gateway(self):
         one = "current-issuer-policy-signing-only"
         scope = build.build_scope(one)
