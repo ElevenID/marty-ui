@@ -192,6 +192,56 @@ def test_core_hosting_separates_optional_connectors_from_the_frozen_model(render
     )
 
 
+def test_web_selection_changes_only_the_reviewed_ui_inputs(rendered_models):
+    approved, current = rendered_models
+    original = approved["services"]["ui"]
+    selected = current["services"]["ui"]
+    assert "UI_ENABLED_SECTIONS" not in original["environment"]
+    assert original["healthcheck"]["test"][-1] == "http://127.0.0.1:80/"
+    assert selected["environment"] == {
+        **original["environment"],
+        "UI_ENABLED_SECTIONS": "${UI_ENABLED_SECTIONS-public,console}",
+    }
+    assert selected["healthcheck"] == {
+        **original["healthcheck"],
+        "test": [*original["healthcheck"]["test"][:-1], "http://127.0.0.1:80/healthz"],
+    }
+
+
+@pytest.mark.parametrize("path,replacement", [
+    (("environment", "UI_ENABLED_SECTIONS"), None),
+    (("environment", "UI_ENABLED_SECTIONS"), "${UI_ENABLED_SECTIONS-none}"),
+    (("environment", "UI_ENABLED_SECTIONS"), "${UI_ENABLED_SECTIONS:-public,console}"),
+    (("environment", "UI_ENABLED_SECTIONS"), "public,console"),
+    (("environment", "UI_PRODUCTION_MARKETING"), "true"),
+    (("healthcheck", "test", -1), "http://127.0.0.1:80/"),
+    (("healthcheck", "test", -1), "http://127.0.0.1:80/console"),
+    (("healthcheck", "test"), ["CMD-SHELL", "true"]),
+    (("healthcheck", "disable"), True),
+    (("healthcheck", "interval"), "1h"),
+])
+def test_web_selection_gate_rejects_defaults_bypass_and_healthcheck_drift(
+    rendered_models, path, replacement,
+):
+    approved, current = deepcopy(rendered_models)
+    target = current["services"]["ui"]
+    for key in path[:-1]:
+        target = target[key]
+    if replacement is None:
+        del target[path[-1]]
+    else:
+        target[path[-1]] = replacement
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
+def test_web_selection_cannot_change_another_service_environment(rendered_models):
+    approved, current = deepcopy(rendered_models)
+    current["services"]["gateway"]["environment"]["UI_ENABLED_SECTIONS"] = "none"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
 @pytest.mark.parametrize("fault", ["connector", "token", "gateway-default", "gateway-missing"])
 def test_core_hosting_gate_rejects_optional_owner_or_gateway_default_drift(rendered_models, fault):
     approved, current = deepcopy(rendered_models)

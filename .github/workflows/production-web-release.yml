@@ -91,6 +91,14 @@ jobs:
             http://127.0.0.1:18080/ --output "$RUNNER_TEMP/production-homepage.html"
           grep --quiet 'ElevenID' "$RUNNER_TEMP/production-homepage.html"
           ! grep --quiet 'Welcome to nginx' "$RUNNER_TEMP/production-homepage.html"
+          grep --fixed-strings --quiet 'name="prerender-status-code" content="200"' "$RUNNER_TEMP/production-homepage.html"
+          grep --fixed-strings --quiet 'data-seo-jsonld="true"' "$RUNNER_TEMP/production-homepage.html"
+          curl --fail --silent --show-error http://127.0.0.1:18080/product/ \
+            --output "$RUNNER_TEMP/production-product.html"
+          grep --fixed-strings --quiet 'name="prerender-status-code" content="200"' "$RUNNER_TEMP/production-product.html"
+          grep --fixed-strings --quiet 'data-seo-jsonld="true"' "$RUNNER_TEMP/production-product.html"
+          grep --extended-regexp --quiet '<h1[[:space:]>]' "$RUNNER_TEMP/production-product.html"
+          grep --fixed-strings --quiet 'rel="canonical" href="https://elevenidllc.com/product"' "$RUNNER_TEMP/production-product.html"
           curl --fail --silent --show-error http://127.0.0.1:18080/marty-ui-release.json \
             --output production-web/image-metadata.json
           python scripts/ui_release.py check-image --audience production \

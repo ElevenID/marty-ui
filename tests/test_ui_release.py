@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import subprocess
 import sys
@@ -211,3 +212,68 @@ def test_all_customer_producers_check_the_image_audience():
         steps = workflow["jobs"][job]["steps"]
         assert any("check-image --audience customer" in step.get("run", "") for step in steps)
         assert not any(release.PUBLIC_IMAGE in str(step) for step in steps)
+
+
+@pytest.mark.parametrize("case", ["valid", "bare-spa", "customer-portal", "wrong-product-page",
+                                  "unrendered-product", "unprerendered-home"])
+def test_production_smoke_requires_rendered_marketing_pages(tmp_path, case):
+    workflow = yaml.safe_load((ROOT / release.WORKFLOW).read_text())
+    smoke = next(step["run"] for step in workflow["jobs"]["release"]["steps"]
+                 if step.get("name") == "Verify the production image and prerendered homepage")
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    marker = '<meta name="prerender-status-code" content="200" />'
+    schema = '<script type="application/ld+json" data-seo-jsonld="true">{}</script>'
+    homepage = ('<title>ElevenID</title>' + marker + schema
+                + '<link rel="canonical" href="https://elevenidllc.com/">')
+    product = (marker + schema + '<link rel="canonical" href="https://elevenidllc.com/product">'
+               + '<h1 class="heading">Product catalog</h1>')
+    if case == "bare-spa":
+        homepage = '<title>ElevenID</title><div id="root"></div>'
+    elif case == "customer-portal":
+        homepage = '<title>ElevenID Application Portal</title><h1>Application portal</h1>'
+    elif case == "wrong-product-page":
+        product = homepage + '<h1>Website</h1>'
+    elif case == "unrendered-product":
+        product = product.replace('<h1 class="heading">Product catalog</h1>', '')
+    elif case == "unprerendered-home":
+        homepage = homepage.replace(marker, '')
+    (fixtures / "homepage.html").write_text(homepage)
+    (fixtures / "product.html").write_text(product)
+    (fixtures / "metadata.json").write_bytes(release.canonical({
+        "component": "ui", "release_version": "1.2.3", "marty_ui_sha": SOURCE,
+        "audience": "production", "ui_variant": "public",
+    }))
+
+    # Execute the real workflow smoke step; replace only registry/container/HTTP
+    # access with deterministic fixture delivery. The image identity checker and
+    # content gates themselves run unchanged.
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    (binaries / "python").symlink_to(sys.executable)
+    mocks = {
+        "docker": "import sys\nif sys.argv[1] == 'inspect': print('production')\n",
+        "curl": """import os, sys
+from pathlib import Path
+from urllib.parse import urlsplit
+url = next(arg for arg in sys.argv if arg.startswith('http://'))
+name = {'/': 'homepage.html', '/product/': 'product.html',
+        '/marty-ui-release.json': 'metadata.json'}[urlsplit(url).path]
+output = sys.argv[sys.argv.index('--output') + 1]
+Path(output).write_bytes((Path(os.environ['SMOKE_FIXTURES']) / name).read_bytes())
+""",
+    }
+    for name, body in mocks.items():
+        executable = binaries / name
+        executable.write_text(f"#!{sys.executable}\n" + body)
+        executable.chmod(0o755)
+    (tmp_path / "scripts").symlink_to(ROOT / "scripts", target_is_directory=True)
+    (tmp_path / "production-web").mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    result = subprocess.run(["bash", "-c", smoke], cwd=tmp_path, text=True, capture_output=True,
+        env={"PATH": str(binaries) + os.pathsep + os.environ["PATH"],
+             "RUNNER_TEMP": str(runtime), "SMOKE_FIXTURES": str(fixtures),
+             "IMAGE": release.PUBLIC_IMAGE, "DIGEST": IMAGE_DIGEST,
+             "VERSION": "1.2.3", "GITHUB_SHA": SOURCE})
+    assert (result.returncode == 0) == (case == "valid"), result.stderr
