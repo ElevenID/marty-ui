@@ -2355,24 +2355,38 @@ mod current_issuer_validation_tests {
             "Signer capability",
             "pass"
         )]));
-        // Public verification vector; tests must not enable local KMS signing features.
-        let jwk = json!({"kty":"EC","crv":"P-256","x":"HhhTL9R1TALzBB2cdc6zO4P_2BrHzk_ogsyxyYvFiW4","y":"pGwxHE4v9A3ZajZT5uRURdMt_khuztdcepDGoYiBwKM"});
+        // Fixed public ECDSA vector for the server-owned challenge; tests never sign.
+        let jwk = json!({"kty":"EC", "crv":"P-256",
+            "x":"jlM7b6C_e0YluzBmfAH7YH75-LioD-9bMAYocDGHsqM",
+            "y":"c-sdveAzGDZtBp-DpvWQAFPHNjPLBBshxV4ahsH0ALQ"});
         let payload = b"marty-current-issuer-service-readiness-v1";
-        let signature = URL_SAFE_NO_PAD.decode("MEUCIFojx0dIIdujGRXkFISJ6YcREqD3_TJvdnxNi8a2HC-VAiEAsK0nYAwAKGNW01NJIBUUw1EMHU5BnS0vSIIAVXcxMl4").unwrap();
-        assert!(verify_current_issuer_signature(&jwk, payload, &signature));
+        let signature = hex::decode(concat!(
+            "3045022018c28b956d1557b85154a8e9bd077adb21f4df0f9876f12f97fd9373a4d72f0f",
+            "022100bbab5fba0e276f3026e344c0b16aebd56db96fd1d756375cac3086745f52e6f5"
+        ))
+        .expect("fixed public DER signature");
+        assert!(verify_current_issuer_signature(
+            &jwk,
+            payload,
+            signature.as_slice()
+        ));
         assert!(!verify_current_issuer_signature(
             &jwk,
             payload,
             b"not-a-signature"
         ));
-        let wrong_jwk = json!({"kty":"EC","crv":"P-256","x":"OtqxXWYla_Fc1xYDWz8EFETlEv7R3WTUunVZfSDjZvE","y":"VG0skKg-uroBWVCZ5fP_u9M4THSU3mdZ_dXmXvrpzGc"});
+        let wrong_jwk = json!({"kty":"EC", "crv":"P-256",
+            "x":"Ytl3nb7psFNAQnQtOrVMrcHSOJgPzpfbtN2dwdtvs5M",
+            "y":"rVrMvZHp2CRP8V13EWfO4KLtUfa752p42lQKag8JlX4"});
         assert!(!verify_current_issuer_signature(
-            &wrong_jwk, payload, &signature
+            &wrong_jwk,
+            payload,
+            signature.as_slice()
         ));
         assert!(!verify_current_issuer_signature(
             &json!({"kty":"EC","crv":"P-256","x":"AA","y":"AA"}),
             payload,
-            &signature
+            signature.as_slice()
         ));
     }
 
@@ -7952,7 +7966,6 @@ mod public_contract_tests {
                     .is_some_and(|path| path.starts_with("/v1/signing-keys"))
             })
             .collect::<Vec<_>>();
-        // Stored-service readiness adds the reviewed validate-current route.
         assert_eq!(declared.len(), 42, "review route additions explicitly");
         let app = router_with_internal_api_key("test-only".into())
             .route_layer(middleware::from_fn(mark_matched_route));
