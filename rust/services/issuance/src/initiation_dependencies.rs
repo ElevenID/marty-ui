@@ -39,7 +39,6 @@ use crate::{
     token_postgres::PostgresTokenExchangeRepository,
 };
 
-const SERVICE_TOKEN_HEADER: &str = "x-service-token";
 const DEFAULT_VALIDITY_DAYS: i64 = 365;
 const DEFAULT_RENEWAL_WINDOW_DAYS: i64 = 30;
 

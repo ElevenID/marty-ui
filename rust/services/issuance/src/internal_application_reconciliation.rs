@@ -1135,15 +1135,6 @@ fn approval_template_json(template: &ApplicationTemplateRecord) -> Map<String, V
     template_policy_json(template)
 }
 
-fn project(source: &Map<String, Value>, fields: &[&str]) -> Map<String, Value> {
-    Map::from_iter(fields.iter().filter_map(|field| {
-        source
-            .get(*field)
-            .cloned()
-            .map(|value| ((*field).to_owned(), value))
-    }))
-}
-
 fn python_falsy(value: &Value) -> bool {
     !crate::python_value::python_truthy(value)
 }
