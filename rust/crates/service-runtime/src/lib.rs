@@ -3,11 +3,14 @@
 #[cfg(feature = "workload-identity")]
 pub mod workload;
 
+pub mod config;
 mod secret_kms;
 mod tls;
 pub use secret_kms::{SecretKmsNames, SecretKmsSelection};
 pub use tls::RemoteTlsIdentityFiles as GrpcServerTls;
-pub use tls::{RemoteTlsIdentityFiles, TlsIdentityNames, WorkloadTlsFiles};
+pub use tls::{
+    RemoteTlsIdentityFiles, TlsConfigError, TlsConfigErrorKind, TlsIdentityNames, WorkloadTlsFiles,
+};
 
 use mmf_platform::KeylessGrpcTlsAcceptor;
 use std::io;

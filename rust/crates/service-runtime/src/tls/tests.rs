@@ -217,3 +217,46 @@ async fn unavailable_public_certificate_never_falls_back_to_plaintext_or_other_p
         assert!(parse(&values).unwrap().unwrap().connect().await.is_err());
     }
 }
+
+#[test]
+fn structured_tls_errors_distinguish_missing_version_from_invalid_without_changing_text() {
+    for (raw, kind, message) in [
+        (
+            None,
+            TlsConfigErrorKind::Missing,
+            "TEST_TLS_KMS_KEY_VERSION is required",
+        ),
+        (
+            Some("0"),
+            TlsConfigErrorKind::Invalid,
+            "TEST_TLS_KMS_KEY_VERSION must be positive",
+        ),
+        (
+            Some("4294967296"),
+            TlsConfigErrorKind::Invalid,
+            "TEST_TLS_KMS_KEY_VERSION must be positive",
+        ),
+        (
+            Some("1\n"),
+            TlsConfigErrorKind::Invalid,
+            "TEST_TLS_KMS_KEY_VERSION must be a single-line value",
+        ),
+    ] {
+        let mut values = openbao();
+        values.remove("TEST_TLS_KMS_KEY_VERSION");
+        if let Some(raw) = raw {
+            values.insert("TEST_TLS_KMS_KEY_VERSION".into(), raw.into());
+        }
+        let error = RemoteTlsIdentityFiles::from_values_typed(
+            |name| values.get(name).map(String::as_str),
+            TlsIdentityNames::new("TEST_TLS"),
+            Duration::from_secs(10),
+            64,
+        )
+        .unwrap_err();
+        assert_eq!(error.field, "TEST_TLS_KMS_KEY_VERSION");
+        assert_eq!(error.kind, kind);
+        assert_eq!(error.to_string(), message);
+        assert_eq!(parse(&values).unwrap_err(), message);
+    }
+}

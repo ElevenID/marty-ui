@@ -426,32 +426,7 @@ async fn update_profile(
     let object = object(raw)?;
     reject_unknown(
         &object,
-        &[
-            "name",
-            "description",
-            "profile_type",
-            "compliance_status",
-            "trust_purposes",
-            "trust_sources",
-            "validation_rules",
-            "allowed_algorithms",
-            "min_key_size_rsa",
-            "min_key_size_ec",
-            "require_key_usage",
-            "max_chain_depth",
-            "allow_self_signed",
-            "revocation_policy",
-            "revocation_profile_id",
-            "time_policy",
-            "supported_formats",
-            "trusted_assertion_formats",
-            "allowed_issuers",
-            "denied_issuers",
-            "system_issuer_overrides",
-            "compatible_compliance_codes",
-            "verification_policy_set_id",
-            "auto_generated",
-        ],
+        marty_service_contracts::trust_profile::UPDATE_FIELDS,
     )?;
     if object.is_empty() {
         return Err(unprocessable(

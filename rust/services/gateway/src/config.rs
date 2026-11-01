@@ -1,5 +1,6 @@
 //! Fail-closed runtime configuration for the Rust gateway executable.
 
+use marty_service_runtime::config;
 use std::{
     collections::BTreeMap,
     env, fmt, fs,
@@ -734,10 +735,7 @@ impl GatewayConfig {
 }
 
 fn value(values: &BTreeMap<String, String>, name: &str) -> Option<String> {
-    values
-        .get(name)
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+    config::trimmed_nonempty(values.get(name).map(String::as_str)).map(str::to_owned)
 }
 
 fn secret(
@@ -895,12 +893,10 @@ fn boolean(
     name: &str,
     default: bool,
 ) -> Result<bool, GatewayConfigError> {
-    match value(values, name).as_deref() {
-        None => Ok(default),
-        Some("1" | "true" | "yes" | "on") => Ok(true),
-        Some("0" | "false" | "no" | "off") => Ok(false),
-        Some(_) => Err(error(format!("{name} must be a boolean"))),
-    }
+    value(values, name).map_or(Ok(default), |raw| {
+        config::boolean(raw.as_str(), config::BooleanVocabulary::ExactWithOnOff)
+            .map_err(|_| error(format!("{name} must be a boolean")))
+    })
 }
 
 fn image_digests(values: &BTreeMap<String, String>) -> BTreeMap<String, String> {

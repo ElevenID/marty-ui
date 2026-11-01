@@ -54,6 +54,44 @@ impl TlsIdentityNames {
     }
 }
 
+/// Structured configuration failures keep public text stable for existing callers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TlsConfigErrorKind {
+    AbsentIdentity,
+    Missing,
+    Invalid,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TlsConfigError {
+    pub field: String,
+    pub kind: TlsConfigErrorKind,
+    message: String,
+}
+
+impl TlsConfigError {
+    fn invalid(field: &str, message: String) -> Self {
+        Self {
+            field: field.into(),
+            kind: TlsConfigErrorKind::Invalid,
+            message,
+        }
+    }
+    fn missing(field: &str, message: String) -> Self {
+        Self {
+            field: field.into(),
+            kind: TlsConfigErrorKind::Missing,
+            message,
+        }
+    }
+}
+impl std::fmt::Display for TlsConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for TlsConfigError {}
+
 impl RemoteTlsIdentityFiles {
     /// Parse one identity only. Callers retain deployment requirements and peer
     /// CA policy; configured but incomplete identities always fail closed.
@@ -63,6 +101,16 @@ impl RemoteTlsIdentityFiles {
         request_timeout: Duration,
         max_concurrent_signs: usize,
     ) -> Result<Option<Self>, String> {
+        Self::from_values_typed(get, names, request_timeout, max_concurrent_signs)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn from_values_typed<'a>(
+        get: impl Fn(&str) -> Option<&'a str>,
+        names: TlsIdentityNames,
+        request_timeout: Duration,
+        max_concurrent_signs: usize,
+    ) -> Result<Option<Self>, TlsConfigError> {
         let prefix = &names.prefix;
         let private_names = [
             names.private_key.clone(),
@@ -72,13 +120,17 @@ impl RemoteTlsIdentityFiles {
             format!("{prefix}_PRIVATE_KEY_FILE"),
         ];
         if private_names.iter().any(|name| get(name).is_some()) {
-            return Err(format!("{prefix} private-key files are retired"));
+            return Err(TlsConfigError::invalid(
+                prefix,
+                format!("{prefix} private-key files are retired"),
+            ));
         }
-        let value = |name: &str| get(name).map(str::trim).filter(|value| !value.is_empty());
+        let value = |name: &str| crate::config::trimmed_nonempty(get(name));
         let provider_name = format!("{prefix}_KMS_PROVIDER");
         if get(&provider_name).is_some() && value(&provider_name).is_none() {
-            return Err(format!(
-                "{provider_name} must be openbao-transit or aws-kms"
+            return Err(TlsConfigError::invalid(
+                &provider_name,
+                format!("{provider_name} must be openbao-transit or aws-kms"),
             ));
         }
         let endpoint_name = format!("{prefix}_KMS_ADDR");
@@ -101,7 +153,10 @@ impl RemoteTlsIdentityFiles {
             .chain(aws_names.iter().copied())
         {
             if get(name).is_some_and(|value| value.contains(['\r', '\n'])) {
-                return Err(format!("{name} must be a single-line value"));
+                return Err(TlsConfigError::invalid(
+                    name,
+                    format!("{name} must be a single-line value"),
+                ));
             }
         }
         let configured = value(&names.certificate).is_some()
@@ -117,20 +172,27 @@ impl RemoteTlsIdentityFiles {
             || request_timeout > Duration::from_secs(30)
             || !(1..=512).contains(&max_concurrent_signs)
         {
-            return Err(format!("{prefix} remote TLS limits are invalid"));
+            return Err(TlsConfigError::invalid(
+                prefix,
+                format!("{prefix} remote TLS limits are invalid"),
+            ));
         }
-        let required = |name: &str| value(name).ok_or_else(|| format!("{name} is required"));
+        let required = |name: &str| {
+            value(name).ok_or_else(|| TlsConfigError::missing(name, format!("{name} is required")))
+        };
         let certificate_chain_file = PathBuf::from(required(&names.certificate)?);
         match value(&provider_name).unwrap_or("openbao-transit") {
             "openbao-transit" => {
                 if aws_names.iter().any(|name| value(name).is_some()) {
-                    return Err(format!(
-                        "{prefix} cannot mix OpenBao and AWS TLS identity settings"
+                    return Err(TlsConfigError::invalid(
+                        prefix,
+                        format!("{prefix} cannot mix OpenBao and AWS TLS identity settings"),
                     ));
                 }
                 let endpoint = required(&endpoint_name)?;
-                let parsed =
-                    url::Url::parse(endpoint).map_err(|_| format!("{endpoint_name} is invalid"))?;
+                let parsed = url::Url::parse(endpoint).map_err(|_| {
+                    TlsConfigError::invalid(&endpoint_name, format!("{endpoint_name} is invalid"))
+                })?;
                 if parsed.scheme() != "https"
                     || parsed.host_str().is_none()
                     || !parsed.username().is_empty()
@@ -139,15 +201,21 @@ impl RemoteTlsIdentityFiles {
                     || parsed.query().is_some()
                     || parsed.fragment().is_some()
                 {
-                    return Err(format!(
-                        "{endpoint_name} must be an uncredentialed HTTPS origin"
+                    return Err(TlsConfigError::invalid(
+                        &endpoint_name,
+                        format!("{endpoint_name} must be an uncredentialed HTTPS origin"),
                     ));
                 }
                 let kms_key_version = required(&version_name)?
                     .parse::<u32>()
                     .ok()
                     .filter(|version| *version > 0)
-                    .ok_or_else(|| format!("{version_name} must be positive"))?;
+                    .ok_or_else(|| {
+                        TlsConfigError::invalid(
+                            &version_name,
+                            format!("{version_name} must be positive"),
+                        )
+                    })?;
                 Ok(Some(Self::OpenBao(OpenBaoTlsIdentityFiles {
                     certificate_chain_file,
                     kms_endpoint: endpoint.into(),
@@ -161,14 +229,18 @@ impl RemoteTlsIdentityFiles {
             }
             "aws-kms" => {
                 if openbao_names.iter().any(|name| value(name).is_some()) {
-                    return Err(format!(
-                        "{prefix} cannot mix AWS and OpenBao TLS identity settings"
+                    return Err(TlsConfigError::invalid(
+                        prefix,
+                        format!("{prefix} cannot mix AWS and OpenBao TLS identity settings"),
                     ));
                 }
                 let region = required(&region_name)?;
                 let key_arn = required(&arn_name)?;
                 validate_key_arn(key_arn, region).map_err(|_| {
-                    format!("{arn_name} must be an immutable key ARN in {region_name}")
+                    TlsConfigError::invalid(
+                        &arn_name,
+                        format!("{arn_name} must be an immutable key ARN in {region_name}"),
+                    )
                 })?;
                 Ok(Some(Self::AwsKms(AwsKmsTlsIdentityFiles {
                     certificate_chain_file,
@@ -182,8 +254,9 @@ impl RemoteTlsIdentityFiles {
                     max_concurrent_signs,
                 })))
             }
-            _ => Err(format!(
-                "{provider_name} must be openbao-transit or aws-kms"
+            _ => Err(TlsConfigError::invalid(
+                &provider_name,
+                format!("{provider_name} must be openbao-transit or aws-kms"),
             )),
         }
     }
@@ -280,6 +353,44 @@ impl From<OpenBaoTlsIdentityFiles> for RemoteTlsIdentityFiles {
 }
 
 impl WorkloadTlsFiles {
+    /// Existing workload-client spelling and assembly shared by profile services.
+    /// Callers choose whether their deployment requires an identity.
+    pub fn from_client_values<'a>(
+        get: impl Fn(&str) -> Option<&'a str>,
+        required: bool,
+        request_timeout: Duration,
+        max_concurrent_signs: usize,
+    ) -> Result<Option<Self>, TlsConfigError> {
+        const CERT: &str = "GRPC_WORKLOAD_TLS_CLIENT_CERT";
+        const KEY: &str = "GRPC_WORKLOAD_TLS_CLIENT_KEY";
+        const CA: &str = "GRPC_WORKLOAD_TLS_CA_CERT";
+        if get(KEY).is_some() {
+            return Err(TlsConfigError::invalid(
+                KEY,
+                "GRPC_WORKLOAD_TLS private-key files are retired".into(),
+            ));
+        }
+        let mut names = TlsIdentityNames::new("GRPC_WORKLOAD_TLS");
+        names.certificate = CERT.into();
+        names.private_key = KEY.into();
+        let tls = Self::from_values_typed(
+            &get,
+            names,
+            CA,
+            crate::config::trimmed_nonempty(get(CA)).is_some(),
+            request_timeout,
+            max_concurrent_signs,
+        )?;
+        if tls.is_none() && required {
+            return Err(TlsConfigError {
+                field: CERT.into(),
+                kind: TlsConfigErrorKind::AbsentIdentity,
+                message: format!("{CERT} is required"),
+            });
+        }
+        Ok(tls)
+    }
+
     pub fn from_values<'a>(
         get: impl Fn(&str) -> Option<&'a str>,
         names: TlsIdentityNames,
@@ -288,7 +399,27 @@ impl WorkloadTlsFiles {
         request_timeout: Duration,
         max_concurrent_signs: usize,
     ) -> Result<Option<Self>, String> {
-        let identity = RemoteTlsIdentityFiles::from_values(
+        Self::from_values_typed(
+            get,
+            names,
+            ca_name,
+            required,
+            request_timeout,
+            max_concurrent_signs,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    pub fn from_values_typed<'a>(
+        get: impl Fn(&str) -> Option<&'a str>,
+        names: TlsIdentityNames,
+        ca_name: &str,
+        required: bool,
+        request_timeout: Duration,
+        max_concurrent_signs: usize,
+    ) -> Result<Option<Self>, TlsConfigError> {
+        let names_certificate = names.certificate.clone();
+        let identity = RemoteTlsIdentityFiles::from_values_typed(
             &get,
             names,
             request_timeout,
@@ -296,7 +427,10 @@ impl WorkloadTlsFiles {
         )?;
         let Some(identity) = identity else {
             return if required {
-                Err("workload TLS requires a remote identity".into())
+                Err(TlsConfigError::missing(
+                    &names_certificate,
+                    "workload TLS requires a remote identity".into(),
+                ))
             } else {
                 Ok(None)
             };
@@ -304,7 +438,9 @@ impl WorkloadTlsFiles {
         let ca_certificate = get(ca_name)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| format!("{ca_name} is required for workload TLS"))?
+            .ok_or_else(|| {
+                TlsConfigError::missing(ca_name, format!("{ca_name} is required for workload TLS"))
+            })?
             .into();
         Ok(Some(Self {
             ca_certificate,

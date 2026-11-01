@@ -99,7 +99,16 @@ pub struct RevokeApiKeyCommand {
 #[derive(Clone, Copy)]
 pub(crate) enum ApiKeyActor {
     User,
-    InstallerBootstrap { installation_id: Uuid },
+    #[cfg_attr(
+        all(not(target_os = "linux"), not(test)),
+        expect(
+            dead_code,
+            reason = "installer bootstrap constructs this actor only on Linux"
+        )
+    )]
+    InstallerBootstrap {
+        installation_id: Uuid,
+    },
 }
 
 pub(crate) const INSTALLER_KEY_LIFETIME_SECONDS: i64 = 15 * 60;

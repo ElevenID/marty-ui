@@ -1,3 +1,4 @@
+use marty_service_runtime::config;
 use std::{collections::BTreeMap, fmt, fs, net::SocketAddr, path::PathBuf};
 
 use marty_passport_auth::{PassportTenantCredentialSource, PassportTenantKeyring};
@@ -737,10 +738,7 @@ fn parse_environment(value: &str) -> Result<Environment, FlowConfigError> {
 }
 
 fn value<'a>(values: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
-    values
-        .get(name)
-        .map(String::as_str)
-        .filter(|value| !value.trim().is_empty())
+    config::nonblank(values.get(name).map(String::as_str))
 }
 
 fn required(

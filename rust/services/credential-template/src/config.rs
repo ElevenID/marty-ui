@@ -1,3 +1,4 @@
+use marty_service_runtime::config;
 use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf, time::Duration};
 
 use thiserror::Error;
@@ -259,11 +260,7 @@ fn parse_environment(value: &str) -> Result<RuntimeEnvironment, CredentialTempla
 }
 
 fn value<'a>(values: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
-    values
-        .get(name)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    config::trimmed_nonempty(values.get(name).map(String::as_str))
 }
 
 fn listener(
@@ -345,7 +342,7 @@ fn number<T>(
 where
     T: std::str::FromStr,
 {
-    value(values, name).map_or(Ok(default), |raw| raw.parse().map_err(|_| invalid(name)))
+    config::number_or(value(values, name), default).map_err(|_| invalid(name))
 }
 
 fn load_secret(
