@@ -368,39 +368,25 @@ pub(super) async fn generate_public_issuer_csr(
             "Issuer CSR algorithm is invalid.",
         );
     }
-    let resolved = match compatibility
-        .resolve_issuer_did(&ResolveIssuerDidRequest {
-            organization_id: scope.organization_id.clone(),
-            issuer_did: input.issuer_did.clone(),
-            verification_method_id: None,
-            credential_format: Some(input.credential_format.clone()),
-            key_purpose: Some(input.key_purpose.clone()),
-            algorithm: Some(algorithm.clone()),
-        })
-        .await
-    {
-        Ok(value) => value,
-        Err(error) => return error.into_response(),
+    let request = ResolveIssuerDidRequest {
+        organization_id: scope.organization_id.clone(),
+        issuer_did: input.issuer_did.clone(),
+        verification_method_id: None,
+        credential_format: Some(input.credential_format.clone()),
+        key_purpose: Some(input.key_purpose.clone()),
+        algorithm: Some(algorithm.clone()),
     };
-    if !same_managed_identity(&profile, &resolved) {
-        return public_error(
-            StatusCode::CONFLICT,
-            "Resolved issuer identity does not match its active managed profile.",
-        );
-    }
-    let current_jwk = match compatibility
-        .provider_public_key_for_profile(&scope.organization_id, &profile)
+    let CurrentManagedIssuerIdentity { current_jwk, .. } =
+        match resolve_current_managed_issuer_identity(
+            &profile,
+            compatibility.resolve_issuer_did(&request),
+            compatibility.provider_public_key_for_profile(&scope.organization_id, &profile),
+        )
         .await
-    {
-        Ok(jwk) => jwk,
-        Err(error) => return error.into_response(),
-    };
-    if !same_current_managed_key(&resolved, &current_jwk) {
-        return public_error(
-            StatusCode::CONFLICT,
-            "Published issuer identity does not match its current managed KMS key.",
-        );
-    }
+        {
+            Ok(identity) => identity,
+            Err(error) => return error,
+        };
     let subject = CsrSubject {
         country: &input.country,
         organization: &input.organization,
