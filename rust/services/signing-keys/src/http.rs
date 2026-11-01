@@ -2295,35 +2295,6 @@ fn supported_current_issuer_service(service: &Value) -> bool {
         )
 }
 
-// A service may host distinct VC and protected keys. The selected reference
-// must not itself have an explicit protected or mixed-purpose binding.
-fn current_issuer_key_is_vc_bound(
-    registry: &Value,
-    service: &Value,
-    service_id: &str,
-    key_reference: &str,
-) -> bool {
-    let service_purposes = service.get("key_purposes").and_then(Value::as_array);
-    let Some(service_purposes) = service_purposes else {
-        return false;
-    };
-    if !service_purposes
-        .iter()
-        .any(|purpose| purpose.as_str() == Some("vc_jwt_issuer"))
-    {
-        return false;
-    }
-    registry
-        .get("key_reference_purposes")
-        .and_then(|all| all.get(service_id))
-        .and_then(|keys| keys.get(key_reference))
-        .is_none_or(|bound| {
-            bound.as_array().is_some_and(|purposes| {
-                purposes.len() == 1 && purposes[0].as_str() == Some("vc_jwt_issuer")
-            })
-        })
-}
-
 #[cfg(test)]
 mod current_issuer_validation_tests {
     use super::*;
@@ -2424,43 +2395,85 @@ mod current_issuer_validation_tests {
     }
 
     #[test]
-    fn registry_binding_refuses_protected_key_before_provider_probe() {
+    fn selected_issuer_binding_reuses_service_and_ceremony_authority() {
         let service = json!({"id":"svc-a", "service_type":"openbao-transit",
-            "auth_mode":"token", "key_reference":"vc-key",
-            "key_purposes":["vc_jwt_issuer","mdoc_dsc"]});
-        let vc_only = json!({"key_reference_purposes": {
-            "svc-a": {"vc-key":["vc_jwt_issuer"], "mdoc-key":["mdoc_dsc"]}}});
-        assert!(current_issuer_key_is_vc_bound(
-            &vc_only, &service, "svc-a", "vc-key"
-        ));
-        assert!(current_issuer_key_is_vc_bound(
+            "auth_mode":"token", "key_reference":"vc-key", "algorithms":["ES256"],
+            "key_purposes":["vc_jwt_issuer","oid4vp_request_signing","jwks_signing",
+                "mdoc_iaca","lti_tool_signing"]});
+        let fields = service.as_object().unwrap();
+        let profile = json!({"organization_id":"org-a", "issuer_did":"did:web:issuer.example",
+            "credential_format":"SD_JWT_VC", "signing_service_id":"svc-a",
+            "signing_key_reference":"vc-key", "key_purpose":"vc_jwt_issuer", "algorithm":"ES256"});
+        let allowed = |registry: Value| {
+            crate::compat::authorize_current_issuer_binding(
+                &registry, fields, &profile, "org-a", "svc-a", "vc-key",
+            )
+            .is_ok()
+        };
+        assert!(allowed(json!({"key_reference_purposes": {}})));
+        for purposes in [
+            json!(["vc_jwt_issuer"]),
+            json!(["vc_jwt_issuer", "oid4vp_request_signing"]),
+            json!(["vc_jwt_issuer", "jwks_signing"]),
+        ] {
+            assert!(allowed(
+                json!({"key_reference_purposes": {"svc-a": {"vc-key": purposes}}})
+            ));
+        }
+        for purposes in [
+            json!([]),
+            json!(["oid4vp_request_signing"]),
+            json!(["vc_jwt_issuer", "mdoc_iaca"]),
+            json!(["vc_jwt_issuer", "lti_tool_signing"]),
+            json!(["vc_jwt_issuer", "vc_jwt_issuer"]),
+            json!(["vc_jwt_issuer", "unknown"]),
+            json!("malformed"),
+        ] {
+            assert!(!allowed(
+                json!({"key_reference_purposes": {"svc-a": {"vc-key": purposes}}})
+            ));
+        }
+        let managed_ref = crate::registry::managed_key_reference_for_fields(
+            "org-a",
+            "did:web:issuer.example",
+            "vc_jwt_issuer",
+            "SD_JWT_VC",
+            "ES256",
+        );
+        let mut managed_profile = profile.clone();
+        managed_profile["signing_service_id"] = json!("managed-openbao-transit");
+        managed_profile["signing_key_reference"] = json!(managed_ref);
+        let managed_service = json!({"id":"managed-openbao-transit",
+            "key_purposes":["vc_jwt_issuer"], "algorithms":["ES256"]});
+        assert!(crate::compat::authorize_current_issuer_binding(
             &json!({"key_reference_purposes": {}}),
-            &service,
+            managed_service.as_object().unwrap(),
+            &managed_profile,
+            "org-a",
+            "managed-openbao-transit",
+            &managed_ref,
+        )
+        .is_ok());
+        assert!(crate::compat::authorize_current_issuer_binding(
+            &json!({"key_reference_purposes": {}}),
+            managed_service.as_object().unwrap(),
+            &managed_profile,
+            "org-b",
+            "managed-openbao-transit",
+            &managed_ref,
+        )
+        .is_err());
+        let no_vc = json!({"id":"svc-a", "key_purposes":["oid4vp_request_signing"],
+            "algorithms":["ES256"]});
+        assert!(crate::compat::authorize_current_issuer_binding(
+            &json!({"key_reference_purposes": {}}),
+            no_vc.as_object().unwrap(),
+            &profile,
+            "org-a",
             "svc-a",
-            "vc-key"
-        ));
-        assert!(!current_issuer_key_is_vc_bound(
-            &vc_only, &service, "svc-a", "mdoc-key"
-        ));
-        let protected = json!({"key_reference_purposes": {
-            "svc-a": {"vc-key":["vc_jwt_issuer","mdoc_dsc"]}}});
-        assert!(!current_issuer_key_is_vc_bound(
-            &protected, &service, "svc-a", "vc-key"
-        ));
-        assert!(!current_issuer_key_is_vc_bound(
-            &json!({"key_reference_purposes": {"svc-a": {"vc-key": "malformed"}}}),
-            &service,
-            "svc-a",
-            "vc-key"
-        ));
-        let mut mdoc_only_service = service.clone();
-        mdoc_only_service["key_purposes"] = json!(["mdoc_dsc"]);
-        assert!(!current_issuer_key_is_vc_bound(
-            &vc_only,
-            &mdoc_only_service,
-            "svc-a",
-            "vc-key"
-        ));
+            "vc-key",
+        )
+        .is_err());
     }
 
     #[tokio::test]
@@ -2644,13 +2657,27 @@ async fn validate_current_issuer_service(
             Ok(pair) => pair,
             Err(error) => return error.into_response(),
         };
-    if !supported_current_issuer_service(&service)
-        || !current_issuer_key_is_vc_bound(&registry, &service, service_id, key_reference)
-    {
+    if !supported_current_issuer_service(&service) {
         return public_error(
             StatusCode::CONFLICT,
-            "Issuer service or key purpose is not supported by this probe.",
+            "Issuer service is not supported by this probe.",
         );
+    }
+    let Some(service_fields) = service.as_object() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is malformed.",
+        );
+    };
+    if let Err(error) = crate::compat::authorize_current_issuer_binding(
+        &registry,
+        service_fields,
+        profile,
+        &scope.organization_id,
+        service_id,
+        key_reference,
+    ) {
+        return error.into_response();
     }
     service["key_reference"] = json!(key_reference);
     let Some(service_config) = service.as_object().cloned() else {
