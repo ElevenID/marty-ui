@@ -44,6 +44,10 @@ without it the default remains private localhost. Hosting does not require
 `--foundation-file`, and managed OpenBao remains the default. See
 [hosting, optional Cloudflare, and browser access](installer-hosting.md) for
 the strict schema, signed candidate command, and frontend/backend trust rules.
+For an explicitly selected ACME staging environment, pass the public staging
+CA file with `--acme-staging-roots ABSOLUTE_PATH`. The verified operator validates
+and retains that trust input; production ACME refuses this override. See
+[ACME hosting setup](installer-acme-host.md) for the complete staging contract.
 `--help` works without
 Docker or platform detection.
 
