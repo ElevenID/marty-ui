@@ -2208,10 +2208,13 @@ fn current_issuer_service_readiness(checks: &[validation::ValidationCheck]) -> b
             .iter()
             .any(|check| check.name == name && check.status == "pass")
     };
+    // Adapter verification for the supported vault-transit protocol reads the
+    // existing key but intentionally does not sign or emit a Signer capability
+    // check. The caller performs the actual fixed-challenge sign and verifies
+    // it against that provider key after these read-only checks pass.
     passed("Key exists")
-        && passed("Signer capability")
-        // A sign-only token can receive 403 from lookup-self while both key
-        // read and signing succeed. Treat that lookup as diagnostic only.
+        // A sign-only token can receive 403 from lookup-self while key read and
+        // signing succeed. Treat that lookup as diagnostic only.
         && !checks.iter().any(|check| check.status == "fail" && check.name != "Provider auth")
 }
 
@@ -2321,6 +2324,14 @@ mod current_issuer_validation_tests {
             check("Key exists", "pass"),
             check("Provider auth", "pass"),
             check("Signer capability", "fail"),
+        ]));
+        assert!(current_issuer_service_readiness(&[
+            check("Key exists", "pass"),
+            check("Provider auth", "fail"),
+        ]));
+        assert!(!current_issuer_service_readiness(&[
+            check("Key exists", "pass"),
+            check("Provider connectivity", "fail"),
         ]));
         assert!(!current_issuer_service_readiness(&[check(
             "Signer capability",
@@ -2698,10 +2709,9 @@ async fn validate_current_issuer_service(
         .checks
         .iter()
         .any(|check| check.name == "Key exists" && check.status == "pass");
-    let signer_capable = result
-        .checks
-        .iter()
-        .any(|check| check.name == "Signer capability" && check.status == "pass");
+    // Report capability only after the actual provider signature verifies.
+    // The read-only vault-transit adapter does not emit a capability label.
+    let signer_capable = signature_verified;
     let auth_lookup = result
         .checks
         .iter()
