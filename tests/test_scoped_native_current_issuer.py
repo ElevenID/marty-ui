@@ -82,6 +82,21 @@ class CurrentIssuerProfileTests(unittest.TestCase):
         self.assertIn("--bin marty-signing-keys", build.render_recipe(PROFILE))
         self.assertIn("--bin marty-gateway", build.render_recipe(PROFILE))
 
+    def test_each_focused_test_receipt_requires_one_real_pass(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)
+            (out / "focused-rust-test.exit-code").write_text("0")
+            (out / "focused-rust-test.stdout.txt").write_text(
+                "test result: ok. 4 passed; 0 failed; 0 ignored; 278 filtered out;\n")
+            (out / "focused-rust-test.stderr.txt").write_text("")
+            row = build.focused_rust_test_receipt(
+                out, "focused-rust-test", "current_issuer_validation_tests::", 4)
+            self.assertEqual(row["exitCode"], 0)
+            (out / "focused-rust-test.stdout.txt").write_text(
+                "test result: ok. 0 passed; 0 failed; 282 filtered out;\n")
+            with self.assertRaisesRegex(ValueError, "FOCUSED_SIGNING_POLICY_TEST_REQUIRED"):
+                build.focused_rust_test_receipt(out, "focused-rust-test", row["name"], 4)
+
     def test_recipe_requires_exact_lf_bytes_for_linux_shell(self):
         recipe = build.render_recipe("current-issuer-policy-signing-only")
         with tempfile.TemporaryDirectory() as temporary:
@@ -95,15 +110,16 @@ class CurrentIssuerProfileTests(unittest.TestCase):
     def test_policy_signing_profile_reuses_closed_builder_without_gateway(self):
         one = "current-issuer-policy-signing-only"
         scope = build.build_scope(one)
-        self.assertEqual(scope["uiRevision"], "bdea3471667c6d413d74afc85c41573941682d5b")
+        self.assertEqual(scope["uiRevision"], "53138ba3cbddccd063e1d49ef8efa0f28d838a02")
         self.assertEqual(scope["coreRevision"], "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac")
         self.assertEqual(scope["roles"], {"signing-keys": "marty-signing-keys"})
         self.assertEqual(scope["owner"], "current-issuer-ready-native")
         recipe = build.render_recipe(one)
         self.assertIn("--bin marty-signing-keys", recipe)
         self.assertNotIn("--bin marty-gateway", recipe)
-        self.assertIn("cargo test -p marty-signing-keys --lib current_issuer_validation_tests::selected_issuer_binding_reuses_service_and_ceremony_authority --locked --offline -j1", recipe)
+        self.assertIn("cargo test -p marty-signing-keys --lib current_issuer_validation_tests:: --locked --offline -j1", recipe)
         self.assertIn("focused-rust-test.exit-code", recipe)
+        self.assertNotIn("signer-capability-rust-test.exit-code", recipe)
         self.assertNotIn("focused-rust-test.exit-code", build.render_recipe(PROFILE))
         p = plan()
         p.update(buildProfile=one, uiRevision=scope["uiRevision"],

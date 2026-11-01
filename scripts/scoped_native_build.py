@@ -209,12 +209,25 @@ for binary in """ + " ".join(binaries) + """; do
  ldd /out/$binary > /out/$binary.libraries.txt
 done
 """ + ("""set +e
-cargo test -p marty-signing-keys --lib current_issuer_validation_tests::selected_issuer_binding_reuses_service_and_ceremony_authority --locked --offline -j1 > /out/focused-rust-test.stdout.txt 2> /out/focused-rust-test.stderr.txt
+cargo test -p marty-signing-keys --lib current_issuer_validation_tests:: --locked --offline -j1 > /out/focused-rust-test.stdout.txt 2> /out/focused-rust-test.stderr.txt
 focused_status=$?
 set -e
 printf '%s\n' "$focused_status" > /out/focused-rust-test.exit-code
 test "$focused_status" -eq 0
 """ if profile == CURRENT_ISSUER_POLICY_PROFILE else "")
+
+
+def focused_rust_test_receipt(output, prefix, name, expected_passes):
+    stdout = output / (prefix + ".stdout.txt")
+    stderr = output / (prefix + ".stderr.txt")
+    exit_file = output / (prefix + ".exit-code")
+    require(exit_file.is_file() and stdout.is_file() and stderr.is_file()
+            and exit_file.read_text().strip() == "0"
+            and stdout.stat().st_size <= 1024 * 1024
+            and stderr.stat().st_size <= 1024 * 1024
+            and f"test result: ok. {expected_passes} passed; 0 failed;" in stdout.read_text(),
+            "FOCUSED_SIGNING_POLICY_TEST_REQUIRED")
+    return {"name": name, "exitCode": 0, "stdout": ref(stdout), "stderr": ref(stderr)}
 
 
 def render_official_recipe(profile=OFFICIAL_PROFILE):
@@ -556,20 +569,8 @@ def finish(prepared_ref, helper, git, profile=None):
             artifacts[binary] = ref(file)
         result.update(state="BUILD_SUCCEEDED", binaries=artifacts, runtimeUidLibrariesValidated=False)
         if profile == CURRENT_ISSUER_POLICY_PROFILE:
-            require((output / "focused-rust-test.exit-code").read_text().strip() == "0"
-                    and (output / "focused-rust-test.stdout.txt").is_file()
-                    and (output / "focused-rust-test.stderr.txt").is_file()
-                    and (output / "focused-rust-test.stdout.txt").stat().st_size <= 1024 * 1024
-                    and (output / "focused-rust-test.stderr.txt").stat().st_size <= 1024 * 1024
-                    and "test result: ok. 1 passed; 0 failed;" in
-                        (output / "focused-rust-test.stdout.txt").read_text(),
-                    "FOCUSED_SIGNING_POLICY_TEST_REQUIRED")
-            result["focusedRustTest"] = {
-                "name": "current_issuer_validation_tests::selected_issuer_binding_reuses_service_and_ceremony_authority",
-                "exitCode": 0,
-                "stdout": ref(output / "focused-rust-test.stdout.txt"),
-                "stderr": ref(output / "focused-rust-test.stderr.txt"),
-            }
+            result["focusedRustTest"] = focused_rust_test_receipt(
+                output, "focused-rust-test", "current_issuer_validation_tests::", 4)
         if profile in OFFICIAL_PROFILES:
             require(len(artifacts) == 29, "OFFICIAL_NATIVE_BINARY_COVERAGE_CHANGED")
             result.update(state="PASSED", source=scope["uiRevision"], canonicalAllServices=True,

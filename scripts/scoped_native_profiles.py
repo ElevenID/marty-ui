@@ -44,7 +44,7 @@ CURRENT_ISSUER_READY = BuildProfile(
 
 CURRENT_ISSUER_POLICY_SIGNING = BuildProfile(
     "current-issuer-policy-signing-only",
-    "bdea3471667c6d413d74afc85c41573941682d5b",
+    "53138ba3cbddccd063e1d49ef8efa0f28d838a02",
     (("signing-keys", "marty-signing-keys"),),
     ("marty-signing-keys",),
     "marty-current-issuer-policy-signing-",
