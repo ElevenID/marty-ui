@@ -11,6 +11,39 @@ const ROLES = Object.freeze(['applicant','auth','canvas-sync-worker','compliance
   'notification','organization','passport-beta-bureau','passport-callback-signer','presentation-policy',
   'revocation-profile','signing-keys','trust-profile','verification','ui-prod']);
 const HASH = /^[a-f0-9]{64}$/;
+const AUTH_OPERATOR_SHA = '02991b6b5f03c00d099eb33a00b68c5109ccdd65e2ce4d26f6eef46094fca500';
+function uniqueMounts(rows, key) {
+  assert(Array.isArray(rows));
+  const map = new Map(rows.map(row => {assert(typeof row[key] === 'string' && row[key]); return [row[key], row];}));
+  assert.equal(map.size, rows.length, 'Duplicate mount destination');
+  return Object.fromEntries([...map].sort());
+}
+function environment(record) {
+  const result = {};
+  for (const item of record.Config.Env) {const at = item.indexOf('='); assert(at > 0);
+    const key = item.slice(0, at); assert(!Object.hasOwn(result, key)); result[key] = item.slice(at + 1);}
+  return result;
+}
+function replacement(original, row, role, changes) {
+  assert.notEqual(row.Id, original.Id); assert(HASH.test(row.Id));
+  assert.equal(row.Name, original.Name); assert.equal(row.Image, original.Image);
+  const host = record => {const value = {...record.HostConfig};
+    if (Object.hasOwn(value, 'Mounts')) value.Mounts = uniqueMounts(value.Mounts, 'Target'); return value;};
+  assert.deepEqual(host(row), host(original));
+  assert.deepEqual(uniqueMounts(row.Mounts, 'Destination'), uniqueMounts(original.Mounts, 'Destination'));
+  const config = record => {const result = {...record.Config}; delete result.Hostname; delete result.Env; delete result.Labels; return result;};
+  assert.deepEqual(config(row), config(original));
+  assert.deepEqual(environment(row), {...environment(original), ...changes});
+  assert.equal(row.Config.Labels['com.docker.compose.service'], role);
+  assert.equal(row.Config.Labels['com.docker.compose.project'], 'elevenid-beta');
+  const networks = record => Object.fromEntries(Object.entries(record.NetworkSettings.Networks).map(([name, endpoint]) => [name, endpoint.NetworkID]));
+  assert.deepEqual(networks(row), networks(original));
+  assert.equal(row.State.Running, true); assert.equal(row.State.OOMKilled, false);
+  assert.equal(row.State.Health.Status, 'healthy');
+  assert(Date.parse(row.State.StartedAt) > Date.parse(original.State.StartedAt));
+  assert(Number.isSafeInteger(row.State.Pid) && row.State.Pid > 0);
+  return row;
+}
 function binary(role) {
   if (role === 'ui-prod') return null;
   return ['issuance','issuance-native'].includes(role) ? 'marty-issuance-service'
@@ -42,27 +75,56 @@ function organizationSuccessor(ref, original, restoreRef, engineId, tools) {
   }
   const rows = tools.boundJson(value.inspect); assert(Array.isArray(rows) && rows.length === 1);
   const row = rows[0]; assert.equal(row.Id, permission.newCid); assert.equal(row.Id, retired.newCid);
-  assert.notEqual(row.Id, original.Id); assert(HASH.test(row.Id));
-  assert.equal(row.Name, original.Name); assert.equal(row.Image, original.Image);
-  assert.deepEqual(row.HostConfig, original.HostConfig);
-  const mounts = record => {const map = new Map(record.Mounts.map(item => [item.Destination, item])); assert.equal(map.size, record.Mounts.length); return Object.fromEntries([...map].sort());};
-  assert.deepEqual(mounts(row), mounts(original));
-  const config = record => {const result = {...record.Config}; delete result.Hostname; delete result.Env; delete result.Labels; return result;};
-  assert.deepEqual(config(row), config(original));
-  const env = record => {const result = {}; for (const item of record.Config.Env) {const at = item.indexOf('='); assert(at > 0); const key = item.slice(0, at); assert(!Object.hasOwn(result, key)); result[key] = item.slice(at + 1);} return result;};
-  const expectedEnv = env(original); assert.equal(typeof input.newAdminEmail, 'string'); assert(input.newAdminEmail.includes('@'));
-  expectedEnv.MARTY_ORG_ADMIN_EMAIL = input.newAdminEmail; assert.deepEqual(env(row), expectedEnv);
-  assert.equal(row.Config.Labels['com.docker.compose.service'], 'organization');
-  assert.equal(row.Config.Labels['com.docker.compose.project'], 'elevenid-beta');
-  const networks = record => Object.fromEntries(Object.entries(record.NetworkSettings.Networks).map(([name, endpoint]) => [name, endpoint.NetworkID]));
-  assert.deepEqual(networks(row), networks(original));
-  assert.equal(row.State.Running, true); assert.equal(row.State.OOMKilled, false);
-  assert.equal(row.State.Health.Status, 'healthy');
-  assert(Date.parse(row.State.StartedAt) > Date.parse(original.State.StartedAt));
-  assert(Number.isSafeInteger(row.State.Pid) && row.State.Pid > 0);
-  return row;
+  assert.equal(typeof input.newAdminEmail, 'string'); assert(input.newAdminEmail.includes('@'));
+  return replacement(original, row, 'organization', {MARTY_ORG_ADMIN_EMAIL: input.newAdminEmail});
 }
-function authority(profile, {boundJson, verifyBoundFile}) {
+function authSuccessor(ref, original, restoreRef, engineId, tools) {
+  const value = tools.boundJson(ref);
+  assert.equal(value.schema, 'marty.functional-auth-login-successor/v1');
+  assert.equal(value.operator.sha256, AUTH_OPERATOR_SHA); tools.verifyBoundFile(value.operator, 1024 * 1024);
+  const input = tools.boundJson(value.input), intent = tools.boundJson(value.intent), result = tools.boundJson(value.result);
+  assert.equal(input.schema, 'marty.d05-auth-login-binding-input/v1');
+  assert.equal(input.sourceSha256, AUTH_OPERATOR_SHA); assert.equal(intent.sourceSha256, AUTH_OPERATOR_SHA);
+  assert.equal(input.executeAuthorized, true); assert.equal(input.engineId, engineId);
+  assert.equal(input.phase3Result.sha256, restoreRef.sha256);
+  assert.equal(input.organizationId, '00000000-0000-0000-0000-000000000001');
+  assert.equal(input.policyId, '2e87a728-3c3a-4ce8-bb1a-f0a38542f536');
+  assert.equal(input.issuerDid, 'did:web:beta.elevenidllc.com:orgs:marty-identity-platform');
+  assert.equal(intent.state, 'AUTH_CREATE_UNKNOWN_UNTIL_TERMINAL'); assert.equal(intent.oldCid, original.Id);
+  assert.equal(result.state, 'D05_AUTH_BINDING_UPDATED_HEALTHY'); assert.equal(result.qualified, false);
+  assert.equal(result.oldCid, original.Id); assert.equal(value.model.sha256, result.modelSha256);
+  const base = tools.boundJson(input.baseModel), model = tools.boundJson(value.model), expected = structuredClone(base);
+  assert.equal(base.name, 'elevenid-beta');
+  assert.equal(base.services.auth.environment.CREDENTIAL_LOGIN_POLICY_ID, '50000000-0000-0000-0000-000000000004');
+  assert.equal(base.services.auth.environment.CREDENTIAL_LOGIN_ISSUER_DID, 'did:web:beta.elevenidllc.com:orgs:marty');
+  const changes = {CREDENTIAL_LOGIN_POLICY_ID: input.policyId, CREDENTIAL_LOGIN_ISSUER_DID: input.issuerDid};
+  Object.assign(expected.services.auth.environment, changes); assert.deepEqual(model, expected);
+  const createIntent = tools.boundJson(value.createIntent), created = tools.boundJson(value.created);
+  assert.equal(createIntent.oldCid, original.Id); assert.equal(createIntent.role, 'auth');
+  assert.equal(createIntent.modelSha256, value.model.sha256);
+  for (const flag of ['noBuild','noPull','noDeps','noStart']) assert.equal(createIntent[flag], true);
+  assert.equal(created.cid, result.newCid); assert.equal(created.imageId, original.Image);
+  assert.equal(created.modelSha256, result.modelSha256);
+  for (const operation of [value.createTerminal, value.startTerminal]) {
+    const terminal = tools.boundJson(operation); assert.equal(terminal.exit, 0);
+    tools.verifyBoundFile(terminal.stdout, 1024 * 1024, 0); tools.verifyBoundFile(terminal.stderr, 1024 * 1024, 0);
+  }
+  const baseline = tools.boundJson(value.baseline); assert.equal(baseline.oldCid, original.Id);
+  assert(Array.isArray(baseline.allIds) && baseline.allIds.every(id => HASH.test(id)));
+  assert.equal(new Set(baseline.allIds).size, baseline.allIds.length); assert(baseline.allIds.includes(original.Id));
+  tools.verifyBoundFile(value.afterIds, 1024 * 1024);
+  const afterIds = tools.boundBytes(value.afterIds).toString('utf8').trim().split(/\r?\n/);
+  assert(afterIds.every(id => HASH.test(id))); assert.equal(new Set(afterIds).size, afterIds.length);
+  assert.deepEqual(afterIds.sort(), baseline.allIds.filter(id => id !== original.Id).concat(result.newCid).sort());
+  const rows = tools.boundJson(value.inspect); assert(Array.isArray(rows) && rows.length === 1);
+  const row = rows[0]; assert.equal(row.Id, result.newCid);
+  // Compose may change only these generated provenance labels for this model.
+  const labels = record => {const value = {...record.Config.Labels};
+    for (const key of ['com.docker.compose.config-hash','com.docker.compose.project.config_files','com.docker.compose.project.working_dir']) delete value[key]; return value;};
+  assert.deepEqual(labels(row), labels(original));
+  return replacement(original, row, 'auth', changes);
+}
+function authority(profile, {boundJson, verifyBoundFile, boundBytes}) {
   assert.equal(profile.schema, 'marty.functional-mixed-runtime/v2');
   assert.equal(profile.scope, 'FUNCTIONAL_ONLY');
   assert.equal(profile.releaseQualified, false); assert.equal(profile.recordingQualified, false);
@@ -89,10 +151,14 @@ function authority(profile, {boundJson, verifyBoundFile}) {
   const successor = refs.organizationSuccessor ? organizationSuccessor(refs.organizationSuccessor,
     byRole.get('organization'), refs.writerRestore, phase1.engineId, {boundJson, verifyBoundFile}) : null;
   if (successor) byRole.set('organization', successor);
+  assert.equal(byRole.get('auth').Id, deployed.newCids.auth, 'Original Auth lineage differs');
+  const auth = refs.authSuccessor ? authSuccessor(refs.authSuccessor, byRole.get('auth'),
+    refs.writerRestore, phase1.engineId, {boundJson, verifyBoundFile, boundBytes}) : null;
+  if (auth) byRole.set('auth', auth);
   const rows = ROLES.map(role => {
     const row = byRole.get(role), reference = role === 'ui-prod' ? UI : SERVICES;
     assert.equal(lock.services[role === 'ui-prod' ? 'ui' : role] || (role.startsWith('passport-') ? SERVICES : null), reference);
-    assert.equal(row.Config.Image, reference); assert.equal(row.Id, role === 'organization' && successor ? successor.Id : deployed.newCids[role]);
+    assert.equal(row.Config.Image, reference); assert.equal(row.Id, role === 'organization' && successor ? successor.Id : role === 'auth' && auth ? auth.Id : deployed.newCids[role]);
     assert(HASH.test(row.Id) && /^sha256:[a-f0-9]{64}$/.test(row.Image));
     assert.equal(row.State.Running, true); assert.equal(row.State.OOMKilled, false);
     const project = role === 'ui-prod' ? 'elevenid-beta-ui' : 'elevenid-beta';
@@ -122,6 +188,7 @@ function expected(profile, tools) {
   assert.equal(readback.deploymentSha256, refs.deployment.sha256);
   assert.equal(readback.writerRestoreSha256, refs.writerRestore.sha256);
   assert.equal(readback.organizationSuccessorSha256 ?? null, refs.organizationSuccessor?.sha256 ?? null);
+  assert.equal(readback.authSuccessorSha256 ?? null, refs.authSuccessor?.sha256 ?? null);
   assert.equal(readback.releaseQualified, false); assert.equal(readback.recordingQualified, false);
   validateImages(readback.images, rows);
   assert(Array.isArray(readback.roles) && readback.roles.length === 22);
@@ -142,9 +209,9 @@ function expected(profile, tools) {
     return expectation;
   });
 }
-function produce(profile, {readDocker, boundJson, verifyBoundFile, observeDocker, validateRuntimeObservation}) {
+function produce(profile, {readDocker, boundJson, verifyBoundFile, boundBytes, observeDocker, validateRuntimeObservation}) {
   assert.equal(typeof readDocker, 'function');
-  const {rows, engineId, refs} = authority(profile, {boundJson, verifyBoundFile});
+  const {rows, engineId, refs} = authority(profile, {boundJson, verifyBoundFile, boundBytes});
   const engine = () => JSON.parse(readDocker(['info', '--format', '{{json .}}'])).ID;
   assert.equal(engine(), engineId);
   const images = [SERVICES, UI].map(reference => {
@@ -169,6 +236,7 @@ function produce(profile, {readDocker, boundJson, verifyBoundFile, observeDocker
   assert.equal(engine(), engineId);
   return {schema: 'marty.functional-signed-image-observation/v1', release: RELEASE, source: SOURCE,
     engineId, deploymentSha256: refs.deployment.sha256, writerRestoreSha256: refs.writerRestore.sha256,
-    images, roles, organizationSuccessorSha256: refs.organizationSuccessor?.sha256 ?? null, releaseQualified: false, recordingQualified: false};
+    images, roles, organizationSuccessorSha256: refs.organizationSuccessor?.sha256 ?? null,
+    authSuccessorSha256: refs.authSuccessor?.sha256 ?? null, releaseQualified: false, recordingQualified: false};
 }
 module.exports = {authority, expected, produce, ROLES, SOURCE, RELEASE, LOCK_SHA, SERVICES, UI};

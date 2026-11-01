@@ -37,7 +37,7 @@ function boundJson(ref){
 function binaryFor(role){return ({issuance:'marty-issuance-service','issuance-native':'marty-issuance-service',verification:'marty-verification-service'})[role]||'marty-'+role;}
 function expectedRuntime(profile){
  if(profile?.schema==='marty.functional-mixed-runtime/v2'){
-  if(profile.signedImageDeployment)return require('./nightly-functional-runtime').expected(profile,{boundJson,verifyBoundFile,validateRuntimeObservation});
+  if(profile.signedImageDeployment)return require('./nightly-functional-runtime').expected(profile,{boundJson,verifyBoundFile,boundBytes,validateRuntimeObservation});
   if(profile.nativeMaintenance)return require('./native-maintenance-runtime').expectedLatestRuntime(profile);
   if(profile.nativeOverlay)return expectedScopedNativeOverlay(profile);
   const expected=expectedIssuanceOverlay(profile);
@@ -634,4 +634,4 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
   releaseQualified:false,recordingQualified:false,mixedSourceStack:!profile.signedImageDeployment,...(profile.signedImageDeployment?{runtimeKind:'SIGNED_NIGHTLY_IMAGES'}:{}),roles,
   receiptDigests:receiptDigests(profile)};
 }
-module.exports={produceSignedImageObservation:(profile,{readDocker=defaultDockerRead}={})=>require('./nightly-functional-runtime').produce(profile,{readDocker,boundJson,verifyBoundFile,observeDocker,validateRuntimeObservation}),verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={produceSignedImageObservation:(profile,{readDocker=defaultDockerRead}={})=>require('./nightly-functional-runtime').produce(profile,{readDocker,boundJson,verifyBoundFile,boundBytes,observeDocker,validateRuntimeObservation}),verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
