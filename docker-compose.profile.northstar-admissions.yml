@@ -5,6 +5,7 @@
 
 services:
   northstar-admissions:
+    init: true
     build:
       context: ./demo-apps/northstar-admissions
       dockerfile: Dockerfile
