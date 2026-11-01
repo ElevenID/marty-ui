@@ -144,15 +144,26 @@ def test_rendered_mounts_and_cached_image_are_checked_before_up(tmp_path: Path, 
         calls.append(command)
         if command[1:3] == ["context", "inspect"]:
             return subprocess.CompletedProcess(command, 0, "npipe:////./pipe/docker_engine\n", "")
+        if command[-1] == "{{.Config.User}}":
+            return subprocess.CompletedProcess(command, 0, "10001:10001\n", "")
         return subprocess.CompletedProcess(command, 0, IMAGE_ID + "\n", "")
 
     monkeypatch.setattr(module.subprocess, "run", inspect)
     module.validate_local_functional_images_and_mounts({"services": services}, path)
-    assert len(calls) == 2 and calls[1][:3] == ["docker", "image", "inspect"]
+    assert len(calls) == 3 and calls[1][:3] == ["docker", "image", "inspect"]
+    services["unrelated"] = {"image": image, "volumes": [{"type": "bind", "source": str(tmp_path / "other"),
+                                                        "target": "/usr/local/bin/marty-other", "read_only": True}]}
+    with pytest.raises(ValueError, match="unreviewed native binary bind"):
+        module.validate_local_functional_images_and_mounts({"services": services}, path)
+    services.pop("unrelated")
+    services["auth"]["user"] = "0:0"
+    with pytest.raises(ValueError, match="effective service UID"):
+        module.validate_local_functional_images_and_mounts({"services": services}, path)
+    calls.clear()
     services["gateway"]["volumes"][0]["read_only"] = False
     with pytest.raises(ValueError, match="not read-only"):
         module.validate_local_functional_images_and_mounts({"services": services}, path)
-    assert len(calls) == 3  # Context read only; no image or service action after a changed mount.
+    assert len(calls) == 1  # Context read only; no image or service action after a changed mount.
 
     monkeypatch.setenv(module.LOCAL_NATIVE_FUNCTIONAL_ENV, str(path))
     assert module.runtime_up_arguments([], {}, "marty-conformance-test", resume=False) == [

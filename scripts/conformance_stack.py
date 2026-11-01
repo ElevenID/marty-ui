@@ -234,6 +234,19 @@ def validate_local_functional_images_and_mounts(config: dict[str, Any], binding_
         if source != binaries[role].resolve():
             raise ValueError(f"{role} native binary mount differs from binding")
         actual_sources.add(str(source))
+    closed_targets = {role: f"/usr/local/bin/{binary}" for role, binary in LOCAL_FUNCTIONAL_ROLES.items()}
+    for service_name, service in services.items():
+        if not isinstance(service, dict):
+            continue
+        for mount in service.get("volumes", []):
+            if isinstance(mount, str) and "/usr/local/bin/marty-" in mount:
+                raise ValueError("local functional stack contains an unreviewed native binary bind")
+            if not isinstance(mount, dict):
+                continue
+            target = mount.get("target")
+            if isinstance(target, str) and target.startswith("/usr/local/bin/marty-"):
+                if closed_targets.get(service_name) != target:
+                    raise ValueError("local functional stack contains an unreviewed native binary bind")
     if actual_sources != expected_sources:
         raise ValueError("native binary mount sources are not distinct and exact")
     image_refs = {service.get("image") for service in services.values() if isinstance(service, dict)}
@@ -252,6 +265,16 @@ def validate_local_functional_images_and_mounts(config: dict[str, Any], binding_
     service_images = {services[role]["image"] for role in LOCAL_FUNCTIONAL_ROLES}
     if len(service_images) != 1 or image_ids[next(iter(service_images))] != attested_image_id:
         raise ValueError("local native binaries lack the attested services image")
+    image_user = subprocess.run(
+        ["docker", "image", "inspect", next(iter(service_images)), "--format", "{{.Config.User}}"],
+        capture_output=True, text=True, check=False,
+    )
+    if image_user.returncode:
+        raise ValueError("local native services image user cannot be inspected")
+    for role in LOCAL_FUNCTIONAL_ROLES:
+        effective_user = str(services[role].get("user") or image_user.stdout.strip())
+        if effective_user.split(":", 1)[0] != "10001":
+            raise ValueError(f"{role} effective service UID differs from ABI")
 
 
 def public_service_targets(config: dict[str, Any]) -> dict[str, list[int]]:
@@ -878,7 +901,10 @@ def main() -> int:
                 )
                 if pulled.returncode:
                     return pulled.returncode
-            native["probe_image"](native_image, project, plan=native_plan)
+            native["probe_image"](
+                native_image, project, plan=native_plan,
+                cached_only=bool(local_binding),
+            )
         up_result = subprocess.run(
             [*command, *runtime_up_arguments(command, config, project, resume=args.resume)],
             cwd=ROOT, check=False
