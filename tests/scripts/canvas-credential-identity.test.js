@@ -43,3 +43,9 @@ test('SD-JWT keeps exact VCT binding', () => {
   requireSignedCredentialBinding({ vct }, sdTemplate);
   assert.throws(() => requireSignedCredentialBinding({ vct: 'https://other.example/badge' }, sdTemplate));
 });
+
+test('unsupported or unstated Canvas credential formats fail before wallet receipt matching', () => {
+  for (const format of [undefined, '', 'MDOC', 'W3C_VCDM_V2_SD_JWT']) {
+    assert.throws(() => walletExpectationForTemplate({ ...vcTemplate, credential_payload_format: format }));
+  }
+});

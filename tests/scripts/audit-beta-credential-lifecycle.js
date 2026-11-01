@@ -498,7 +498,7 @@ async function receiveCredential(walletPage, offerUri, expectedCredential) {
   return {
     ok: response.ok() && walletReceiptMatchesExpectation(body, inventory, expectedCredential),
     status: response.status(),
-    error: response.ok() ? null : body?.error || 'Wallet receipt failed',
+    error: response.ok() ? null : 'Wallet receive request failed',
     receipt: response.ok() ? {
       id: body?.id, vct: body?.vct, format: body?.format,
       credentialConfigurationId: body?.credential_configuration_id,

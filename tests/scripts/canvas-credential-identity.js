@@ -5,11 +5,13 @@ const assert = require('node:assert/strict');
 function walletExpectationForTemplate(template) {
   assert.ok(typeof template?.vct === 'string' && template.vct,
     'Canvas credential template requires its exact type URI');
-  if (String(template.credential_payload_format || '').toUpperCase() === 'VC_JWT') {
+  const format = String(template.credential_payload_format || '').toUpperCase();
+  if (format === 'VC_JWT') {
     assert.equal(template.credential_type, 'OpenBadgeCredential',
       'Canvas VC-JWT requires the selected Open Badge type');
     return { format: 'jwt_vc_json', credentialConfigurationId: template.credential_type };
   }
+  assert.equal(format, 'SD_JWT_VC', 'Canvas credential format must be an explicitly supported Open Badge format');
   return template.vct;
 }
 
