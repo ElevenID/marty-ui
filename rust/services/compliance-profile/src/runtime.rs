@@ -41,23 +41,21 @@ pub struct ComplianceRuntime {
 }
 impl ComplianceRuntime {
     pub fn new(c: &ComplianceServiceConfig) -> Result<Self, MmfError> {
-        let state = RuntimeState::new(BuildInfo {
-            service: "compliance-profile".into(),
-            version: c.release_version.clone(),
-            build_revision: c.build_revision.clone(),
-            enabled_features: vec![
-                "http".into(),
-                "postgres_migrations".into(),
-                "system_catalog".into(),
-                "tenant_authorization".into(),
-                "native_compliance_profiles".into(),
-            ],
-        });
-        for d in ComplianceDependency::all() {
-            state.register_required_component(d.name())?;
-        }
-        state.transition(LifecycleState::Initialized)?;
-        state.transition(LifecycleState::Starting)?;
+        let state = RuntimeState::starting(
+            BuildInfo {
+                service: "compliance-profile".into(),
+                version: c.release_version.clone(),
+                build_revision: c.build_revision.clone(),
+                enabled_features: vec![
+                    "http".into(),
+                    "postgres_migrations".into(),
+                    "system_catalog".into(),
+                    "tenant_authorization".into(),
+                    "native_compliance_profiles".into(),
+                ],
+            },
+            ComplianceDependency::all().map(|d| d.name()),
+        )?;
         Ok(Self { state })
     }
     pub fn mark_healthy(&self, d: ComplianceDependency) -> Result<(), MmfError> {

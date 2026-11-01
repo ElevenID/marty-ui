@@ -1,5 +1,5 @@
 use axum::Router;
-use mmf_core::{BuildInfo, ComponentHealth, HealthStatus, LifecycleState, MmfError};
+use mmf_core::{BuildInfo, LifecycleState, MmfError};
 use mmf_runtime::{system_router, NativeBackendDiagnostics, RuntimeState};
 
 use crate::PresentationPolicyServiceConfig;
@@ -47,36 +47,28 @@ pub struct PresentationPolicyRuntime {
 
 impl PresentationPolicyRuntime {
     pub fn new(config: &PresentationPolicyServiceConfig) -> Result<Self, MmfError> {
-        let state = RuntimeState::new(BuildInfo {
-            service: "presentation-policy".into(),
-            version: config.release_version.clone(),
-            build_revision: config.build_revision.clone(),
-            enabled_features: vec![
-                "native_policy_lifecycle".into(),
-                "native_credential_verification".into(),
-                "live_trust_and_status".into(),
-                "http".into(),
-                "grpc".into(),
-                "postgres".into(),
-                "workload_mtls".into(),
-            ],
-        });
-        for dependency in PresentationPolicyDependency::required() {
-            state.register_required_component(dependency.name())?;
-        }
-        state.transition(LifecycleState::Initialized)?;
-        state.transition(LifecycleState::Starting)?;
+        let state = RuntimeState::starting(
+            BuildInfo {
+                service: "presentation-policy".into(),
+                version: config.release_version.clone(),
+                build_revision: config.build_revision.clone(),
+                enabled_features: vec![
+                    "native_policy_lifecycle".into(),
+                    "native_credential_verification".into(),
+                    "live_trust_and_status".into(),
+                    "http".into(),
+                    "grpc".into(),
+                    "postgres".into(),
+                    "workload_mtls".into(),
+                ],
+            },
+            PresentationPolicyDependency::required().map(|dependency| dependency.name()),
+        )?;
         Ok(Self { state })
     }
 
     pub fn mark_healthy(&self, dependency: PresentationPolicyDependency) -> Result<(), MmfError> {
-        self.state.set_component_health(
-            dependency.name(),
-            ComponentHealth {
-                status: HealthStatus::Healthy,
-                message: None,
-            },
-        )
+        self.state.mark_component_healthy(dependency.name())
     }
 
     pub fn activate(&self) -> Result<(), MmfError> {

@@ -4411,6 +4411,7 @@ dependencies = [
  "marty-oid4vp-contract",
  "marty-passport-auth",
  "marty-schema-startup",
+ "marty-service-contracts",
  "marty-service-runtime",
  "marty-signing-grant",
  "marty-verification",
@@ -4513,6 +4514,7 @@ dependencies = [
  "marty-issuer-key-resolution",
  "marty-oid4vci",
  "marty-passport-auth",
+ "marty-service-contracts",
  "marty-service-runtime",
  "marty-signing-grant",
  "mmf-platform",
@@ -5098,6 +5100,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-service-contracts"
+version = "0.1.0"
+
+[[package]]
 name = "marty-service-runtime"
 version = "0.1.0"
 dependencies = [
@@ -5218,6 +5224,7 @@ dependencies = [
  "marty-didcomm",
  "marty-issuer-key-resolution",
  "marty-key-material-policy",
+ "marty-service-contracts",
  "marty-service-runtime",
  "marty-verification",
  "mmf-core",
@@ -5460,7 +5467,7 @@ dependencies = [
 [[package]]
 name = "mmf-aws-kms"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=63b447bd3f75cb27fdbb206db29920b9aa33784d#63b447bd3f75cb27fdbb206db29920b9aa33784d"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=0597beca65ad65f8cdb2362416a25019c735e812#0597beca65ad65f8cdb2362416a25019c735e812"
 dependencies = [
  "aws-config",
  "aws-credential-types",
@@ -5477,7 +5484,7 @@ dependencies = [
 [[package]]
 name = "mmf-config"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=63b447bd3f75cb27fdbb206db29920b9aa33784d#63b447bd3f75cb27fdbb206db29920b9aa33784d"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=0597beca65ad65f8cdb2362416a25019c735e812#0597beca65ad65f8cdb2362416a25019c735e812"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5490,7 +5497,7 @@ dependencies = [
 [[package]]
 name = "mmf-core"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=63b447bd3f75cb27fdbb206db29920b9aa33784d#63b447bd3f75cb27fdbb206db29920b9aa33784d"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=0597beca65ad65f8cdb2362416a25019c735e812#0597beca65ad65f8cdb2362416a25019c735e812"
 dependencies = [
  "serde",
  "serde_json",
@@ -5501,7 +5508,7 @@ dependencies = [
 [[package]]
 name = "mmf-data"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=63b447bd3f75cb27fdbb206db29920b9aa33784d#63b447bd3f75cb27fdbb206db29920b9aa33784d"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=0597beca65ad65f8cdb2362416a25019c735e812#0597beca65ad65f8cdb2362416a25019c735e812"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5516,7 +5523,7 @@ dependencies = [
 [[package]]
 name = "mmf-messaging"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=63b447bd3f75cb27fdbb206db29920b9aa33784d#63b447bd3f75cb27fdbb206db29920b9aa33784d"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=0597beca65ad65f8cdb2362416a25019c735e812#0597beca65ad65f8cdb2362416a25019c735e812"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5533,7 +5540,7 @@ dependencies = [
 [[package]]
 name = "mmf-observability"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=63b447bd3f75cb27fdbb206db29920b9aa33784d#63b447bd3f75cb27fdbb206db29920b9aa33784d"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=0597beca65ad65f8cdb2362416a25019c735e812#0597beca65ad65f8cdb2362416a25019c735e812"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5547,7 +5554,7 @@ dependencies = [
 [[package]]
 name = "mmf-platform"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=63b447bd3f75cb27fdbb206db29920b9aa33784d#63b447bd3f75cb27fdbb206db29920b9aa33784d"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=0597beca65ad65f8cdb2362416a25019c735e812#0597beca65ad65f8cdb2362416a25019c735e812"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -5579,7 +5586,7 @@ dependencies = [
 [[package]]
 name = "mmf-push"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=63b447bd3f75cb27fdbb206db29920b9aa33784d#63b447bd3f75cb27fdbb206db29920b9aa33784d"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=0597beca65ad65f8cdb2362416a25019c735e812#0597beca65ad65f8cdb2362416a25019c735e812"
 dependencies = [
  "async-trait",
  "hmac 0.13.0",
@@ -5598,7 +5605,7 @@ dependencies = [
 [[package]]
 name = "mmf-resilience"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=63b447bd3f75cb27fdbb206db29920b9aa33784d#63b447bd3f75cb27fdbb206db29920b9aa33784d"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=0597beca65ad65f8cdb2362416a25019c735e812#0597beca65ad65f8cdb2362416a25019c735e812"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5611,7 +5618,7 @@ dependencies = [
 [[package]]
 name = "mmf-runtime"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=63b447bd3f75cb27fdbb206db29920b9aa33784d#63b447bd3f75cb27fdbb206db29920b9aa33784d"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=0597beca65ad65f8cdb2362416a25019c735e812#0597beca65ad65f8cdb2362416a25019c735e812"
 dependencies = [
  "axum",
  "mmf-core",
@@ -5623,7 +5630,7 @@ dependencies = [
 [[package]]
 name = "mmf-security"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=63b447bd3f75cb27fdbb206db29920b9aa33784d#63b447bd3f75cb27fdbb206db29920b9aa33784d"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=0597beca65ad65f8cdb2362416a25019c735e812#0597beca65ad65f8cdb2362416a25019c735e812"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -5648,7 +5655,7 @@ dependencies = [
 [[package]]
 name = "mmf-security-contracts"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=63b447bd3f75cb27fdbb206db29920b9aa33784d#63b447bd3f75cb27fdbb206db29920b9aa33784d"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=0597beca65ad65f8cdb2362416a25019c735e812#0597beca65ad65f8cdb2362416a25019c735e812"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5659,7 +5666,7 @@ dependencies = [
 [[package]]
 name = "mmf-workflow"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=63b447bd3f75cb27fdbb206db29920b9aa33784d#63b447bd3f75cb27fdbb206db29920b9aa33784d"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=0597beca65ad65f8cdb2362416a25019c735e812#0597beca65ad65f8cdb2362416a25019c735e812"
 dependencies = [
  "async-trait",
  "serde",

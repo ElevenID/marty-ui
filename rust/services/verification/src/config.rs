@@ -1,3 +1,4 @@
+use marty_service_runtime::config;
 use std::{collections::BTreeMap, fmt, net::SocketAddr, time::Duration};
 
 use thiserror::Error;
@@ -414,11 +415,7 @@ fn address(
 }
 
 fn boolean(value: &str, name: &'static str) -> Result<bool, VerificationConfigError> {
-    match value.to_ascii_lowercase().as_str() {
-        "true" | "1" | "yes" => Ok(true),
-        "false" | "0" | "no" => Ok(false),
-        _ => Err(invalid(name)),
-    }
+    config::boolean(value, config::BooleanVocabulary::AsciiInsensitive).map_err(|_| invalid(name))
 }
 
 fn number(
@@ -427,11 +424,7 @@ fn number(
     minimum: u64,
     maximum: u64,
 ) -> Result<u64, VerificationConfigError> {
-    let value = value.parse().map_err(|_| invalid(name))?;
-    (minimum..=maximum)
-        .contains(&value)
-        .then_some(value)
-        .ok_or_else(|| invalid(name))
+    config::bounded_number(value, minimum..=maximum).map_err(|_| invalid(name))
 }
 
 fn valid_http_url(value: &str) -> bool {
@@ -481,10 +474,7 @@ fn normalize_postgres_url(value: &str) -> Result<String, VerificationConfigError
 }
 
 fn value<'a>(values: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
-    values
-        .get(name)
-        .map(String::as_str)
-        .filter(|v| !v.trim().is_empty())
+    config::nonblank(values.get(name).map(String::as_str))
 }
 
 const fn invalid(name: &'static str) -> VerificationConfigError {

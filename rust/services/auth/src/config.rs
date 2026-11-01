@@ -1,3 +1,4 @@
+use marty_service_runtime::config;
 use std::{collections::HashMap, net::SocketAddr};
 
 use thiserror::Error;
@@ -452,20 +453,14 @@ fn number<T: std::str::FromStr + Copy>(
     default: T,
     name: &str,
 ) -> Result<T, AuthConfigError> {
-    value.map_or(Ok(default), |value| {
-        value
-            .parse()
-            .map_err(|_| invalid(format!("{name} is invalid")))
-    })
+    config::number_or(value, default).map_err(|_| invalid(format!("{name} is invalid")))
 }
 
 fn boolean(value: Option<&str>, default: bool) -> Result<bool, AuthConfigError> {
-    match value.map(str::to_ascii_lowercase).as_deref() {
-        None => Ok(default),
-        Some("true" | "1" | "yes") => Ok(true),
-        Some("false" | "0" | "no") => Ok(false),
-        Some(_) => Err(invalid("boolean configuration is invalid")),
-    }
+    value.map_or(Ok(default), |raw| {
+        config::boolean(raw, config::BooleanVocabulary::AsciiInsensitive)
+            .map_err(|_| invalid("boolean configuration is invalid"))
+    })
 }
 
 fn listener(
