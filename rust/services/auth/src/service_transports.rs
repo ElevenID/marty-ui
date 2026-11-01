@@ -143,6 +143,7 @@ pub fn credential_verification_request(
 ) -> StartVerificationRequest {
     StartVerificationRequest {
         presentation_policy_id: request.presentation_policy_id.clone(),
+        trust_profile_id: request.trust_profile_id.clone().unwrap_or_default(),
         organization_id: request.organization_id.clone(),
         response_type: "vp_token".into(),
         callback_url: request.callback_url.clone(),

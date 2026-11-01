@@ -30,6 +30,7 @@ fn contract() -> Value {
 fn flow_request_and_fail_closed_response_match_the_shared_contract() {
     let request = credential_verification_request(&StartCredentialVerification {
         presentation_policy_id: "policy-1".into(),
+        trust_profile_id: Some("trust-1".into()),
         organization_id: "org-1".into(),
         issuer_did: "did:web:verifier.example".into(),
         callback_url: "https://auth.example/callback".into(),
@@ -39,6 +40,16 @@ fn flow_request_and_fail_closed_response_match_the_shared_contract() {
     assert_eq!(request.response_type, expected["response_type"]);
     assert_eq!(request.request_transport, expected["request_transport"]);
     assert_eq!(request.presentation_policy_id, "policy-1");
+    assert_eq!(request.trust_profile_id, "trust-1");
+    let unconfigured = credential_verification_request(&StartCredentialVerification {
+        presentation_policy_id: "policy-1".into(),
+        trust_profile_id: None,
+        organization_id: "org-1".into(),
+        issuer_did: "did:web:verifier.example".into(),
+        callback_url: "https://auth.example/callback".into(),
+        user_id: "auth-service".into(),
+    });
+    assert!(unconfigured.trust_profile_id.is_empty());
     assert_eq!(request.organization_id, "org-1");
     assert_eq!(request.issuer_did, "did:web:verifier.example");
     assert_eq!(request.callback_url, "https://auth.example/callback");
