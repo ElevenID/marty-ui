@@ -185,7 +185,7 @@ def _rootless_cloud_config(controller_public: str, host_public: str,
                 f"XDG_RUNTIME_DIR=/run/user/{ROOTLESS_UID}",
                 f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{ROOTLESS_UID}/bus"]
     config = dict(
-        users=[dict(name=GUEST_USER, uid=ROOTLESS_UID, lock_passwd=True, sudo=False,
+        users=[dict(name=GUEST_USER, uid=ROOTLESS_UID, lock_passwd=True, sudo=None,
                     # Cloud-init requires nonempty arrays; an empty string adds no groups.
                     groups="", homedir="/home/installer", shell="/bin/bash",
                     ssh_authorized_keys=[controller_public])],

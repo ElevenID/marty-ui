@@ -124,7 +124,7 @@ def test_rootless_seed_is_explicit_pinned_guest_code_only(profile):
     config = yaml.safe_load(rendered)
     assert len(rendered) < 65536
     [user] = config["users"]
-    assert user["uid"] == policy.ROOTLESS_UID and user["sudo"] is False
+    assert user["uid"] == policy.ROOTLESS_UID and user["sudo"] is None
     assert user["groups"] == ""  # Empty arrays fail cloud-init's groups schema.
     assert dict(config["packages"]) == policy.ROOTLESS_PACKAGES
     assert config["package_upgrade"] is False
