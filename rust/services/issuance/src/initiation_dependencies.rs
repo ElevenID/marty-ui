@@ -103,14 +103,11 @@ impl NativeInitiationControlPlane {
     }
 
     fn grpc_request<T>(&self, body: T) -> Request<T> {
-        let mut request = Request::new(body);
-        request.set_timeout(self.timeout);
-        if let Some(token) = &self.service_token {
-            request
-                .metadata_mut()
-                .insert(SERVICE_TOKEN_HEADER, token.clone());
-        }
-        request
+        marty_service_runtime::grpc_request::with_service_token(
+            body,
+            self.timeout,
+            self.service_token.as_ref(),
+        )
     }
 }
 
@@ -741,7 +738,7 @@ mod tests {
     async fn template_fallback(headers: HeaderMap) -> Json<Value> {
         assert_eq!(
             headers
-                .get(SERVICE_TOKEN_HEADER)
+                .get("x-service-token")
                 .and_then(|value| value.to_str().ok()),
             Some(TEST_SERVICE_TOKEN)
         );
