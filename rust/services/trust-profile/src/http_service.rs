@@ -792,12 +792,7 @@ async fn update_relationship(
     let object = object(raw)?;
     reject_unknown(
         &object,
-        &[
-            "trust_level",
-            "relationship_status",
-            "cascade_revocation_policy",
-            "metadata",
-        ],
+        marty_service_contracts::trust_profile::RELATIONSHIP_UPDATE_FIELDS,
     )?;
     if object.is_empty() {
         return Err(unprocessable(
@@ -921,21 +916,7 @@ async fn update_issuer_entity(
     let object = object(raw)?;
     reject_unknown(
         &object,
-        &[
-            "organization_id",
-            "display_name",
-            "description",
-            "issuer_type",
-            "compliance_status",
-            "accreditation_body",
-            "accreditations",
-            "accreditation_date",
-            "valid_from",
-            "valid_until",
-            "trust_anchor_id",
-            "metadata",
-            "revocation_reason",
-        ],
+        marty_service_contracts::trust_profile::ISSUER_UPDATE_FIELDS,
     )?;
     let organization_id = required_field::<String>(&object, "organization_id")?;
     if object.len() == 1 {

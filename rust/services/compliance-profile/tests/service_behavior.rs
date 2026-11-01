@@ -615,3 +615,67 @@ fn public_request_schema_inventory_tracks_every_native_dto_and_nested_field() {
         &schemas["runtime__compliance_profile_update_request"],
     );
 }
+
+#[tokio::test]
+async fn empty_and_invalid_machine_headers_never_fall_back_to_authorized_humans() {
+    use axum::http::HeaderValue;
+    let (service, repository) = harness();
+    let profile = ComplianceProfile::new(request(), Utc::now()).unwrap();
+    let id = profile.id.clone();
+    repository.save(profile).await.unwrap();
+    for configured in [false, true] {
+        let app = compliance_router(
+            ComplianceHttpState::new(service.clone())
+                .with_service_token(configured.then(|| "s".repeat(32)))
+                .unwrap(),
+        );
+        let human = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/compliance-profiles/{id}"))
+                    .header("x-user-id", "user-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(human.status(), StatusCode::OK);
+        for (name, value) in [
+            ("x-api-key-id", HeaderValue::from_static("")),
+            ("x-api-key-scopes", HeaderValue::from_static("")),
+            ("x-api-key-id", HeaderValue::from_bytes(&[0xff]).unwrap()),
+        ] {
+            for credential in [None, Some("wrong".to_owned()), Some("s".repeat(32))] {
+                let mut request = Request::builder()
+                    .uri(format!("/v1/compliance-profiles/{id}"))
+                    .header("x-user-id", "user-1")
+                    .header(name, value.clone());
+                if let Some(token) = credential.as_ref() {
+                    request = request.header("x-service-token", token);
+                }
+                let response = app
+                    .clone()
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+                let body: Value = serde_json::from_slice(&bytes).unwrap();
+                let expected = if configured
+                    && credential
+                        .as_deref()
+                        .is_some_and(|value| value == "s".repeat(32))
+                {
+                    "Invalid gateway principal"
+                } else {
+                    "Service authentication required"
+                };
+                assert_eq!(
+                    body["detail"],
+                    ComplianceError::Unauthorized(expected.into()).to_string()
+                );
+            }
+        }
+    }
+}

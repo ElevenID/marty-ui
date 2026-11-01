@@ -34,3 +34,27 @@ profile_fields![
     "verification_policy_set_id",
     "auto_generated",
 ];
+
+// Admission metadata only; organization scope, patch values and authority stay at callers.
+pub const ISSUER_UPDATE_FIELDS: &[&str] = &[
+    "organization_id",
+    "display_name",
+    "description",
+    "issuer_type",
+    "compliance_status",
+    "accreditation_body",
+    "accreditations",
+    "accreditation_date",
+    "valid_from",
+    "valid_until",
+    "trust_anchor_id",
+    "metadata",
+    "revocation_reason",
+];
+
+pub const RELATIONSHIP_UPDATE_FIELDS: &[&str] = &[
+    "trust_level",
+    "relationship_status",
+    "cascade_revocation_policy",
+    "metadata",
+];

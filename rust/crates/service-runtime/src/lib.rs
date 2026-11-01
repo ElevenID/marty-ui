@@ -3,6 +3,9 @@
 #[cfg(feature = "workload-identity")]
 pub mod workload;
 
+#[cfg(feature = "forwarded-principal")]
+pub mod forwarded_principal;
+
 pub mod config;
 mod secret_kms;
 mod tls;
