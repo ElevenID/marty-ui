@@ -5,31 +5,27 @@ afterEach(() => {
   vi.resetModules();
 });
 
-describe('self-host tester release profile', () => {
-  it('hides only the selected public destinations and actions', async () => {
-    vi.stubEnv('VITE_SELFHOST_PUBLIC_PROFILE', 'tester');
+describe('customer release profiles', () => {
+  it.each(['full', 'tester'])('excludes production marketing in the %s profile', async (profile) => {
+    vi.stubEnv('VITE_SELFHOST_PUBLIC_PROFILE', profile);
     vi.resetModules();
-
     const config = await import('../publicConfig.selfhost');
-    expect(config.SELFHOST_PUBLIC_PROFILE).toBe('tester');
+
+    expect(config.SELFHOST_PUBLIC_PROFILE).toBe(profile);
     expect(config.SHOW_PUBLIC_DEMOS).toBe(false);
-    expect(config.SHOW_PUBLIC_DOCUMENTATION_NAV).toBe(false);
     expect(config.SHOW_PUBLIC_CTA).toBe(false);
     expect(config.SHOW_PUBLIC_PRICING_BUTTONS).toBe(false);
-    expect(config.PUBLIC_TABS.map((tab) => tab.path)).toEqual([
-      '/', '/product', '/solutions', '/standards', '/resources',
-    ]);
     expect(config.SHOW_PUBLIC_LOGIN_BUTTON).toBe(true);
+    expect(config.I18N_NAMESPACES).not.toContain('marketing');
+    expect(config.PUBLIC_TABS.map((tab) => tab.path)).toEqual(
+      profile === 'tester' ? ['/', '/console', '/apply'] : ['/', '/console', '/apply', '/docs'],
+    );
+    expect(config.SHOW_PUBLIC_DOCUMENTATION_NAV).toBe(profile === 'full');
   });
 
-  it('retains the full profile for a future qualified release', async () => {
-    vi.stubEnv('VITE_SELFHOST_PUBLIC_PROFILE', 'full');
+  it('rejects unsupported build profiles', async () => {
+    vi.stubEnv('VITE_SELFHOST_PUBLIC_PROFILE', 'production-marketing');
     vi.resetModules();
-
-    const config = await import('../publicConfig.selfhost');
-    expect(config.SHOW_PUBLIC_DEMOS).toBe(true);
-    expect(config.SHOW_PUBLIC_DOCUMENTATION_NAV).toBe(true);
-    expect(config.SHOW_PUBLIC_CTA).toBe(true);
-    expect(config.PUBLIC_TABS.map((tab) => tab.path)).toContain('/pricing');
+    await expect(import('../publicConfig.selfhost')).rejects.toThrow('Unsupported self-host public profile');
   });
 });

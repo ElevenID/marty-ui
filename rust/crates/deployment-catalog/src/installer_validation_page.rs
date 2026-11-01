@@ -133,27 +133,46 @@ fn entry_assets(html: &[u8]) -> Option<Vec<Asset>> {
     Some(assets)
 }
 
-fn runtime_configuration(bytes: &[u8], canonical: &str, alias: Option<&str>) -> bool {
+fn runtime_configuration(
+    bytes: &[u8],
+    canonical: &str,
+    alias: Option<&str>,
+    enabled_sections: &str,
+) -> bool {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return false;
     };
     // Parse the closed emitted data wrapper. Never evaluate downloaded JavaScript.
     let pattern = regex::Regex::new(concat!(
         r"\A\s*window\.__MARTY_RUNTIME_CONFIG__ = Object\.assign\(\{\}, window\.__MARTY_RUNTIME_CONFIG__, \{\s*",
-        r"googleAnalyticsMeasurementId: '[A-Za-z0-9_-]*',\s*hosting: \{\s*",
-        r"canonicalOrigin: '([^'\r\n]*)',\s*publicEntryOrigins: (\[[^\r\n]*\])\s*\}\s*\}\);\s*\z"
+        r"googleAnalyticsMeasurementId: '[A-Za-z0-9_-]*',\s*",
+        r"(?:web: \{\s*enabled_sections: (?P<sections>\[[^\r\n]*\])\s*\},\s*)?hosting: \{\s*",
+        r"canonicalOrigin: '(?P<canonical>[^'\r\n]*)',\s*publicEntryOrigins: (?P<aliases>\[[^\r\n]*\])\s*\}\s*\}\);\s*\z"
     )).expect("fixed runtime configuration pattern");
     let Some(captures) = pattern.captures(text) else {
         return false;
     };
-    let Ok(value) = serde_json::from_str::<Value>(&captures[2]) else {
+    let Ok(value) = serde_json::from_str::<Value>(&captures["aliases"]) else {
         return false;
+    };
+    let sections_match = if let Some(sections) = captures.name("sections") {
+        let expected: Vec<&str> = if enabled_sections == "none" {
+            Vec::new()
+        } else {
+            enabled_sections.split(',').collect()
+        };
+        serde_json::from_str::<Vec<String>>(sections.as_str())
+            .is_ok_and(|actual| actual == expected)
+    } else {
+        // Authenticated historical images predate optional section selection.
+        enabled_sections == "public,console"
     };
     let expected: Vec<&str> = alias.into_iter().collect();
     captures
-        .get(1)
+        .name("canonical")
         .is_some_and(|value| value.as_str() == canonical)
         && value == serde_json::json!(expected)
+        && sections_match
 }
 
 fn content_type(response: &Response, types: &[&str]) -> bool {
@@ -193,15 +212,17 @@ async fn document(
     canonical: &str,
     alias: Option<&str>,
     is_alias: bool,
+    entry_path: &str,
+    enabled_sections: &str,
 ) -> Option<PageObservation> {
     let client = client(trust).ok()?;
-    let page = bound_get(&client, trust, "/").await?;
+    let page = bound_get(&client, trust, entry_path).await?;
     if !content_type(&page, &["text/html"]) {
         return None;
     }
     let bytes = body(page, HTML_LIMIT, is_alias).await?;
     let assets = entry_assets(&bytes)?;
-    let mut observed = vec![fingerprint("/", "text/html", &bytes)];
+    let mut observed = vec![fingerprint(entry_path, "text/html", &bytes)];
     let mut total = bytes.len();
     for path in ["/runtime-config.js", "/startup.js"] {
         let response = bound_get(&client, trust, path).await?;
@@ -209,7 +230,9 @@ async fn document(
             return None;
         }
         let bytes = body(response, HTML_LIMIT, is_alias).await?;
-        if path == "/runtime-config.js" && !runtime_configuration(&bytes, canonical, alias) {
+        if path == "/runtime-config.js"
+            && !runtime_configuration(&bytes, canonical, alias, enabled_sections)
+        {
             return None;
         }
         total += bytes.len();
@@ -302,21 +325,99 @@ async fn document(
 pub(super) async fn check(
     trust: &TrustInfo,
     alias: Option<&str>,
+    enabled_sections: &str,
 ) -> ([bool; 2], Option<PageObservation>) {
-    let canonical = document(trust, &trust.origin, alias, false).await;
+    let public = matches!(enabled_sections, "public,console" | "public");
+    let console = matches!(enabled_sections, "public,console" | "console");
+    if !matches!(
+        enabled_sections,
+        "public,console" | "public" | "console" | "none"
+    ) {
+        return ([false, false], None);
+    }
+    let entry_path = if public { "/" } else { "/console" };
+    let canonical = if public || console {
+        document(
+            trust,
+            &trust.origin,
+            alias,
+            false,
+            entry_path,
+            enabled_sections,
+        )
+        .await
+        .is_some()
+    } else {
+        true
+    };
+    let disabled_public =
+        public || excluded(trust, &["/", "/index.html", "/login", "/apply"]).await;
+    let disabled_console =
+        console || excluded(trust, &["/console", "/console/", "/console/index.html"]).await;
+    let disabled_assets = public
+        || console
+        || excluded(
+            trust,
+            &["/runtime-config.js", "/startup.js", "/config.json"],
+        )
+        .await;
     let entry = if let Some(alias) = alias {
         let mut entry = trust.clone();
         entry.origin = alias.into();
         // Transport keeps the same admitted leaf and bound local listener, but
         // verifies the exact IP SAN and sends the configured alias authority.
-        document(&entry, &trust.origin, Some(alias), true).await
+        if public {
+            document(
+                &entry,
+                &trust.origin,
+                Some(alias),
+                true,
+                "/",
+                enabled_sections,
+            )
+            .await
+        } else {
+            None
+        }
     } else {
         None
     };
+    let alias_passed = if let Some(alias) = alias {
+        if public {
+            entry.is_some()
+        } else {
+            let mut alias_trust = trust.clone();
+            alias_trust.origin = alias.into();
+            excluded(&alias_trust, &["/", "/console", "/v1/auth/session"]).await
+        }
+    } else {
+        true
+    };
     (
-        [canonical.is_some(), alias.is_none() || entry.is_some()],
+        [
+            canonical && disabled_public && disabled_console && disabled_assets,
+            alias_passed,
+        ],
         entry,
     )
+}
+
+async fn excluded(trust: &TrustInfo, paths: &[&str]) -> bool {
+    let Ok(client) = client(trust) else {
+        return false;
+    };
+    for path in paths {
+        let Some(response) = bound_get(&client, trust, path).await else {
+            return false;
+        };
+        if response.status() != StatusCode::NOT_FOUND
+            || response.headers().contains_key(header::LOCATION)
+            || response.headers().contains_key(header::SET_COOKIE)
+        {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]

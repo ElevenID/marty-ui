@@ -4,7 +4,7 @@ use std::sync::Arc;
 #[cfg(feature = "time")]
 use std::time::{Duration, SystemTime};
 
-use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
+use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD};
 use http::header::LOCATION;
 #[cfg(feature = "time")]
 use http::header::USER_AGENT;
@@ -13,26 +13,26 @@ use http::{Method, Request};
 #[cfg(feature = "hyper-rustls")]
 use rustls::RootCertStore;
 #[cfg(feature = "hyper-rustls")]
-use rustls_pki_types::CertificateDer;
-#[cfg(feature = "hyper-rustls")]
 use rustls_pki_types::pem::PemObject;
+#[cfg(feature = "hyper-rustls")]
+use rustls_pki_types::CertificateDer;
 use rustls_pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "hyper-rustls")]
-use crate::DefaultClient;
 use crate::crypto::KeyPair;
 use crate::order::Order;
 use crate::types::{
-    AccountCredentials, AuthorizationState, AuthorizationStatus, Empty, Header, JoseJson, Jwk, KeyOrKeyId, NewAccount,
-    NewAccountPayload, NewOrder, OrderState, Problem, ProfileMeta, RevocationRequest, Signer,
-    SigningAlgorithm,
+    AccountCredentials, AuthorizationState, AuthorizationStatus, Empty, Header, JoseJson, Jwk,
+    KeyOrKeyId, NewAccount, NewAccountPayload, NewOrder, OrderState, Problem, ProfileMeta,
+    RevocationRequest, Signer, SigningAlgorithm,
 };
 #[cfg(feature = "time")]
 use crate::types::{CertificateIdentifier, RenewalInfo};
+#[cfg(feature = "hyper-rustls")]
+use crate::DefaultClient;
+use crate::{crypto, nonce_from_response, BytesResponse, Client, Error, HttpClient};
 #[cfg(feature = "time")]
-use crate::{BodyWrapper, CRATE_USER_AGENT, retry_after};
-use crate::{BytesResponse, Client, Error, HttpClient, crypto, nonce_from_response};
+use crate::{retry_after, BodyWrapper, CRATE_USER_AGENT};
 
 /// An ACME account as described in RFC 8555 (section 7.1.2)
 ///
@@ -453,7 +453,9 @@ impl PreparedExternalAccount {
         if self.terms_of_service_url() != Some(terms_url)
             || !self.profiles().any(|offered| offered.name == profile)
         {
-            return Err(Error::Str("ACME directory terms or profile differs from recorded selection"));
+            return Err(Error::Str(
+                "ACME directory terms or profile differs from recorded selection",
+            ));
         }
         Ok(())
     }

@@ -78,7 +78,7 @@ alias IP SAN. Its explicit port can differ from the canonical origin's port
 when the customer supplies the required host routing. The alias is journal-bound
 with the hosting selection and cannot be changed by editing environment files.
 
-The alias loads the existing public page and its assets and branding. Sign-in
+The alias loads the customer application entry page and its assets and branding. Sign-in
 and console actions transfer to the configured DNS origin. It does not create
 an IP-origin session or expand the authenticated API's accepted origins.
 Loopback aliases, DNS aliases, additional alias arrays, `local` or
@@ -101,6 +101,43 @@ replacement; changing an environment file by hand is not a supported repair.
 Marty does not create a VM, paid upgrade, address reservation, load balancer,
 security-group rule, or DNS record. An existing 8 GiB test instance can retain
 its size for this work; that does not establish production capacity.
+
+## Select customer webpages at startup
+
+Customer release images exclude the production marketing website. The separate
+[production website pipeline](ui-release-audiences.md) publishes that website.
+For the signed installer, select the customer webpage sections in the hosting
+JSON before installation. For example, to serve only the console, add:
+
+```json
+"web": {"enabled_sections": ["console"]}
+```
+
+| `enabled_sections` | Result |
+| --- | --- |
+| `["public", "console"]` or omitted `web` | Customer application pages and console |
+| `["public"]` | Customer public entry, authentication, organization, invitation and wallet pages |
+| `["console"]` | Console, with its own login at `/console/login` |
+| `[]` | No customer webpages; API and protocol endpoints remain available |
+
+`public` refers to customer application pages, not marketing. The application
+flow that hands off to the console requires both sections. Unknown sections and
+duplicates are refused. The installer records this selection in its existing
+hosting evidence and passes it to the UI startup hook as `UI_ENABLED_SECTIONS`.
+Changing an inherited shell variable or editing generated environment files
+does not change that recorded selection.
+
+Excluded page routes return HTTP 404, and their entry documents are removed
+from the served directory. The UI container's `/healthz` liveness endpoint is
+independent of webpage availability. Installer validation checks the enabled
+entry document and assets, and checks that disabled sections return 404. A
+configured IP alias also returns 404 when the public section is disabled.
+Authentication and credential protocol endpoints retain their existing owners.
+
+For a Compose deployment outside the signed installer, set
+`UI_ENABLED_SECTIONS=public,console`, `public`, `console`, or `none` in its
+deployment environment before starting or recreating the UI container. The
+legacy API-only overlay continues to disable all UI at the edge.
 
 ## Existing reverse proxy, load balancer, or Cloudflare proxy
 

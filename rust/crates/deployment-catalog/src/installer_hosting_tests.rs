@@ -33,6 +33,55 @@ fn acme() -> Value {
     value
 }
 
+#[test]
+fn selected_web_sections_are_validated_and_retained_with_hosting_evidence() {
+    for (sections, expected) in [
+        (json!([]), "none"),
+        (json!(["public"]), "public"),
+        (json!(["console"]), "console"),
+        (json!(["public", "console"]), "public,console"),
+        (json!(["console", "public"]), "public,console"),
+    ] {
+        let root = private_root();
+        let mut configuration = direct();
+        configuration["web"] = json!({"enabled_sections": sections});
+        let mut state = state(root.path());
+        let selected = select(
+            prepare(Some(&input(root.path(), &configuration)), None).unwrap(),
+            &mut state,
+        )
+        .unwrap();
+        assert_eq!(selected.enabled_web_sections(), expected);
+        assert!(selected.has_web_selection());
+        let retained = state.with_inspection(resolve).unwrap();
+        assert_eq!(retained.enabled_web_sections(), expected);
+        assert!(retained.has_web_selection());
+    }
+    let root = private_root();
+    let prepared = prepare(Some(&input(root.path(), &direct())), None).unwrap();
+    let selected = select(prepared, &mut state(root.path())).unwrap();
+    assert_eq!(selected.enabled_web_sections(), "public,console");
+    assert!(!selected.has_web_selection());
+}
+
+#[test]
+fn invalid_web_selection_is_refused_before_recording_or_provisioning() {
+    for web in [
+        json!({}),
+        json!({"enabled_sections": "none"}),
+        json!({"enabled_sections": ["marketing"]}),
+        json!({"enabled_sections": ["console", "console"]}),
+        json!({"enabled_sections": [true]}),
+        json!({"enabled_sections": null}),
+        json!({"enabled_sections": [], "allow_marketing": true}),
+    ] {
+        let root = private_root();
+        let mut configuration = direct();
+        configuration["web"] = web;
+        assert!(prepare(Some(&input(root.path(), &configuration)), None).is_err());
+    }
+}
+
 fn input(root: &Path, value: &Value) -> PathBuf {
     let path = root.join("hosting.json");
     write(&path, &serde_json::to_vec(value).unwrap());
@@ -290,12 +339,25 @@ fn addon_journal_binding_requires_verified_hosting_and_cannot_be_replaced() {
 fn compose_public_entry_requires_bound_gateway_and_ui_authorities() {
     use crate::installer_compose::bound_ingress_listener;
     use std::collections::BTreeSet;
-    for alias in [None, Some("https://203.0.113.10:8443")] {
+    for (alias, web_sections) in [
+        (None, None),
+        (Some("https://203.0.113.10:8443"), None),
+        (None, Some(json!([]))),
+        (None, Some(json!(["public"]))),
+        (None, Some(json!(["console"]))),
+        (
+            Some("https://203.0.113.10:8443"),
+            Some(json!(["public", "console"])),
+        ),
+    ] {
         let root = private_root();
         let mut state = state(root.path());
         let mut configuration = direct();
         if let Some(alias) = alias {
             configuration["public_entry_origin"] = json!(alias);
+        }
+        if let Some(sections) = web_sections {
+            configuration["web"] = json!({"enabled_sections": sections});
         }
         let selected = select(
             prepare(Some(&input(root.path(), &configuration)), None).unwrap(),
@@ -324,18 +386,29 @@ fn compose_public_entry_requires_bound_gateway_and_ui_authorities() {
             prior: None,
         };
         selected.bind_inputs(&mut inputs).unwrap();
-        let model = json!({"services":{
+        let mut model = json!({"services":{
             "installer-ingress": {
                 "ports":[{"target":8443,"published":"8443","host_ip":"0.0.0.0","protocol":"tcp"}],
                 "environment": {"OIDF_EDGE_PUBLIC_ORIGIN":"https://marty.example.com", "OIDF_EDGE_PUBLIC_ENTRY_ORIGIN":alias.unwrap_or("")}
             },
             "ui":{"environment":{"UI_CANONICAL_ORIGIN":"https://marty.example.com", "UI_PUBLIC_ENTRY_ORIGINS":serde_json::to_string(&alias.into_iter().collect::<Vec<_>>()).unwrap()}}
         }});
+        if selected.has_web_selection() {
+            model["services"]["ui"]["environment"]["UI_ENABLED_SECTIONS"] =
+                json!(selected.enabled_web_sections());
+            let mut missing = model.clone();
+            missing["services"]["ui"]["environment"]
+                .as_object_mut()
+                .unwrap()
+                .remove("UI_ENABLED_SECTIONS");
+            assert!(bound_ingress_listener(&missing, &inputs).is_err());
+        }
         assert_eq!(
             bound_ingress_listener(&model, &inputs).unwrap(),
             selected.listener()
         );
         for (role, field, value) in [
+            ("ui", "UI_ENABLED_SECTIONS", json!("marketing")),
             (
                 "installer-ingress",
                 "OIDF_EDGE_PUBLIC_ENTRY_ORIGIN",

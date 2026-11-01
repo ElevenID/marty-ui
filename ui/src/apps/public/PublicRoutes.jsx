@@ -14,6 +14,7 @@ import JoinOrganizationPage from '../../components/pages/JoinOrganizationPage';
 import CanvasLtiExperiencePage from '../../components/pages/CanvasLtiExperiencePage';
 import BrowserRedirect from '../../components/BrowserRedirect';
 import { getPublicLoginFallback, renderPublicRoot, renderMarketingRoutes } from '@ui-public-routes';
+import { IS_SELFHOST_UI } from '@ui-public-config';
 import { PublicLayout } from '../../components/layouts';
 import {
   PreviewLayout,
@@ -24,6 +25,8 @@ import {
 } from '../../components/preview';
 import { NotificationPreferencesPage } from '../../components/console';
 import { getPublicEntryCanonicalOrigin, publicEntryHref } from '../../application/routing/publicEntry';
+import { isWebPathEnabled, isWebSectionEnabled } from '../../utils/runtimeConfig';
+import WebSectionUnavailable from '../../components/WebSectionUnavailable';
 
 function PublicRoutes() {
   const location = useLocation();
@@ -36,6 +39,17 @@ function PublicRoutes() {
     login = () => {},
   } = auth;
   const loginFallbackRedirect = getPublicLoginFallback({ isAuthenticated, isAdministrator, isVendor, isApplicant });
+
+  if (!isWebPathEnabled(location.pathname)) return <WebSectionUnavailable />;
+
+  if (!isWebSectionEnabled('public')) {
+    return (
+      <Routes>
+        <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="*" element={<WebSectionUnavailable />} />
+      </Routes>
+    );
+  }
 
   if (getPublicEntryCanonicalOrigin()) {
     return (
@@ -140,7 +154,7 @@ function PublicRoutes() {
           }
         />
 
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={IS_SELFHOST_UI ? <WebSectionUnavailable /> : <Navigate to="/" replace />} />
       </Route>
     </Routes>
   );

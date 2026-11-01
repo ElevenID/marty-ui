@@ -85,6 +85,44 @@ pub struct Connector {
     pub token_file: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum WebSection {
+    Public,
+    Console,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Web {
+    enabled_sections: Vec<WebSection>,
+}
+
+impl Web {
+    fn validate(&self) -> Result<()> {
+        require(
+            self.enabled_sections.len() <= 2
+                && self
+                    .enabled_sections
+                    .iter()
+                    .enumerate()
+                    .all(|(i, section)| !self.enabled_sections[..i].contains(section)),
+        )
+    }
+
+    fn environment_value(&self) -> &'static str {
+        match (
+            self.enabled_sections.contains(&WebSection::Public),
+            self.enabled_sections.contains(&WebSection::Console),
+        ) {
+            (true, true) => "public,console",
+            (true, false) => "public",
+            (false, true) => "console",
+            (false, false) => "none",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Configuration {
@@ -100,6 +138,8 @@ struct Configuration {
     tls: Tls,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     connector: Option<Connector>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    web: Option<Web>,
 }
 
 /// Private input bytes stay here until the authenticated installer records the
@@ -220,10 +260,14 @@ impl Configuration {
             public_origin: foundation_origin,
             public_entry_origin: None,
             connector: None,
+            web: None,
         })
     }
 
     fn validate(&self) -> Result<()> {
+        if let Some(web) = &self.web {
+            web.validate()?;
+        }
         // The transport/SAN parser supports IPv6, but the application's current
         // did:web authority contract does not. Refuse that public identity here
         // before provisioning rather than accepting an origin the gateway will
@@ -430,7 +474,7 @@ impl Prepared {
             .map(PublicOrigin::as_str)
             .unwrap_or("https://localhost:<selected-port>");
         format!(
-            "public origin {origin}; public entry origin {}; ingress listener {}; public TLS owner {}; connector {}",
+            "public origin {origin}; public entry origin {}; ingress listener {}; public TLS owner {}; connector {}; webpage sections {}",
             self.configuration
                 .public_entry_origin
                 .as_ref()
@@ -446,7 +490,8 @@ impl Prepared {
                 "Cloudflare Tunnel (explicit selection)"
             } else {
                 "none"
-            }
+            },
+            self.configuration.web.as_ref().map_or("public,console", Web::environment_value)
         )
     }
 }
@@ -607,6 +652,15 @@ impl Selection {
     }
     pub fn public_entry_origin(&self) -> Option<&PublicOrigin> {
         self.configuration.public_entry_origin.as_ref()
+    }
+    pub(crate) fn enabled_web_sections(&self) -> &'static str {
+        self.configuration
+            .web
+            .as_ref()
+            .map_or("public,console", Web::environment_value)
+    }
+    pub(crate) fn has_web_selection(&self) -> bool {
+        self.configuration.web.is_some()
     }
     pub fn listener(&self) -> Listener {
         self.configuration.listener

@@ -128,9 +128,15 @@ def validate(binding: dict) -> None:
 
 def from_bytes(raw: bytes, *, staging_roots: bytes | None = None) -> dict:
     value = exact(decode(raw), {"schema", "mode", "public_origin", "listener", "tls"},
-                  {"public_entry_origin", "connector"})
+                  {"public_entry_origin", "connector", "web"})
     require(value["schema"] == "elevenid.installation-hosting/v1" and value["mode"] == "direct"
             and value.get("connector") is None)
+    if value.get("web") is not None:
+        web = exact(value["web"], {"enabled_sections"})
+        sections = web["enabled_sections"]
+        require(type(sections) is list and len(sections) <= 2
+                and all(type(section) is str and section in ("public", "console") for section in sections)
+                and len(set(sections)) == len(sections))
     canonical = origin(value["public_origin"], address=False)
     alias = value.get("public_entry_origin")
     if alias is not None:

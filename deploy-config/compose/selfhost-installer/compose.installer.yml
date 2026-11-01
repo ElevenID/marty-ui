@@ -238,6 +238,7 @@ services:
     environment:
       UI_CANONICAL_ORIGIN: ${PUBLIC_API_URL:?set the installation origin}
       UI_PUBLIC_ENTRY_ORIGINS: ${MARTY_INSTALLER_PUBLIC_ENTRY_ORIGINS:-[]}
+      UI_ENABLED_SECTIONS: ${MARTY_INSTALLER_UI_ENABLED_SECTIONS-public,console}
   edge:
     <<: *installer-runtime
     ports: !reset []

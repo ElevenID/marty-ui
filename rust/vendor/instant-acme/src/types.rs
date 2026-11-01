@@ -4,7 +4,7 @@ use std::fmt::{self, Write};
 use std::net::IpAddr;
 use std::time::{Instant, SystemTime};
 
-use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
+use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD};
 use bytes::Bytes;
 use rustls_pki_types::{CertificateDer, Der, PrivatePkcs8KeyDer};
 use serde::de::{self, DeserializeOwned};
@@ -18,8 +18,8 @@ use x509_parser::extensions::ParsedExtension;
 #[cfg(feature = "x509-parser")]
 use x509_parser::parse_x509_certificate;
 
-use crate::BytesResponse;
 use crate::crypto;
+use crate::BytesResponse;
 
 /// Error type for instant-acme
 #[derive(Debug, Error)]
@@ -108,9 +108,9 @@ impl AccountCredentials {
 mod pkcs8_serde {
     use std::fmt;
 
-    use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
+    use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD};
     use rustls_pki_types::PrivatePkcs8KeyDer;
-    use serde::{Deserializer, Serializer, de};
+    use serde::{de, Deserializer, Serializer};
 
     pub(crate) fn serialize<S: Serializer>(
         key_pkcs8: &PrivatePkcs8KeyDer<'_>,
@@ -606,7 +606,11 @@ pub(crate) struct Directory {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(crate) struct Meta {
-    #[serde(rename = "termsOfService", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "termsOfService",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub(crate) terms_of_service: Option<String>,
     #[serde(default)]
     pub(crate) profiles: HashMap<String, String>,

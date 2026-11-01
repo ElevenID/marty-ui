@@ -417,21 +417,18 @@ fn select_staged(
     staged.file.sync_all().map_err(|_| REFUSED)?;
     let temporary = CString::new(temporary_name).map_err(|_| REFUSED)?;
     let target = CString::new(name).map_err(|_| REFUSED)?;
-    require(
-        unsafe {
-            libc::renameat2(
-                store.evidence.as_raw_fd(),
-                temporary.as_ptr(),
-                store.evidence.as_raw_fd(),
-                target.as_ptr(),
-                if old.is_some() {
-                    libc::RENAME_EXCHANGE
-                } else {
-                    libc::RENAME_NOREPLACE
-                },
-            )
-        } == 0,
-    )?;
+    crate::installer_host_fs::rename_at(
+        &store.evidence,
+        &temporary,
+        &store.evidence,
+        &target,
+        if old.is_some() {
+            crate::installer_host_fs::RenameMode::Exchange
+        } else {
+            crate::installer_host_fs::RenameMode::NoReplace
+        },
+    )
+    .map_err(|_| REFUSED)?;
     store.evidence.sync_all().map_err(|_| REFUSED)?;
     boundary()?;
     store.require_bound()?;

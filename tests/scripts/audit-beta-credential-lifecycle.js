@@ -12,7 +12,8 @@ const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness
 const { spawnSync } = require('child_process');
 const { chromium } = require('@playwright/test');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
-const { browserJson, cancelOwnedIssuanceTransaction, selectOrganization } = require('./beta-demo-resource-helpers');
+const { browserJson, cancelOwnedIssuanceTransaction, requireCurrentIssuerServiceReady,
+  selectOrganization } = require('./beta-demo-resource-helpers');
 const { requireVerificationDecision, responseForAction } = require('./beta-demo-review-ui');
 const {
   VIDEO_SIZE,
@@ -1111,6 +1112,9 @@ async function main() {
     }
     report.templateId = report.credentialTemplate.id;
 
+    await requireCurrentIssuerServiceReady(page, {
+      organizationId: ORG_ID, credentialTemplateId: report.templateId,
+    });
     const { offerUri, ...issuance } = await issueCredential(page, report.templateId, ownedResources, input.holder);
     report.issuance = issuance;
     const hasIssuanceTransaction = typeof issuance.transactionId === 'string' && issuance.transactionId.length > 0;
@@ -1158,6 +1162,9 @@ async function main() {
       throw new Error('Initial active credential did not receive an actual allowed verifier decision');
     }
 
+    await requireCurrentIssuerServiceReady(page, {
+      organizationId: ORG_ID, credentialTemplateId: report.templateId,
+    });
     const { offerUri: renewalOfferUri, ...renewalOffer } = await renewCredential(page, row, ownedResources, recording);
     report.renewalOffer = renewalOffer;
     const hasRenewalTransaction = typeof renewalOffer.transactionId === 'string' && renewalOffer.transactionId.length > 0;

@@ -8,6 +8,7 @@ import Sitemap from 'vite-plugin-sitemap'
 import { fileURLToPath, URL } from 'node:url'
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { selfhostBuildContractPlugin } from './scripts/selfhost-build-contract.mjs'
 
 const PRERENDERED_ROOT_STAGING_PATH = '__prerendered-root.html'
 const PRERENDER_RUNTIME_ASSET_ORIGIN = /https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=\/assets\/)/gi
@@ -292,6 +293,7 @@ export default defineConfig(async ({ mode }) => {
     },
     plugins: [
       muiIconMjsCompatibilityPlugin(),
+      ...(isSelfhostBuild ? [selfhostBuildContractPlugin()] : []),
       ...(!disablePrerender ? [prerenderLocaleAssetsPlugin()] : []),
       react(),
       consoleEntryRewritePlugin(),

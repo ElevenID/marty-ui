@@ -210,6 +210,7 @@ async fn public_checks(
     trust: &TrustInfo,
     required: &[String],
     alias: Option<&str>,
+    enabled_sections: &str,
 ) -> (Vec<bool>, Option<PageObservation>) {
     let Ok(client) = client(trust) else {
         return (vec![false; 7], None);
@@ -227,7 +228,7 @@ async fn public_checks(
         issuer.document,
         authorization.document,
     );
-    let (entry, page) = page::check(trust, alias).await;
+    let (entry, page) = page::check(trust, alias, enabled_sections).await;
     (
         vec![
             tls,
@@ -289,9 +290,12 @@ pub(crate) fn observe_locked(
             deadline.checked_duration_since(Instant::now()),
         ) {
             (observed, page) = rt.block_on(async {
-                tokio::time::timeout(remaining, public_checks(trust, required, alias))
-                    .await
-                    .unwrap_or_else(|_| (vec![false; 7], None))
+                tokio::time::timeout(
+                    remaining,
+                    public_checks(trust, required, alias, hosting.enabled_web_sections()),
+                )
+                .await
+                .unwrap_or_else(|_| (vec![false; 7], None))
             });
         }
     }

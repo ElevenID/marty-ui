@@ -22,13 +22,13 @@ use httpdate::HttpDate;
 #[cfg(feature = "hyper-rustls")]
 use hyper::body::Incoming;
 #[cfg(feature = "hyper-rustls")]
-use hyper_rustls::HttpsConnectorBuilder;
-#[cfg(feature = "hyper-rustls")]
 use hyper_rustls::builderstates::WantsSchemes;
 #[cfg(feature = "hyper-rustls")]
-use hyper_util::client::legacy::Client as HyperClient;
+use hyper_rustls::HttpsConnectorBuilder;
 #[cfg(feature = "hyper-rustls")]
 use hyper_util::client::legacy::connect::{Connect, HttpConnector};
+#[cfg(feature = "hyper-rustls")]
+use hyper_util::client::legacy::Client as HyperClient;
 #[cfg(feature = "hyper-rustls")]
 use hyper_util::rt::TokioExecutor;
 use serde::Serialize;
@@ -378,12 +378,12 @@ mod crypto {
     #[cfg(all(feature = "ring", not(feature = "aws-lc-rs")))]
     pub(crate) use ring as ring_like;
 
-    pub(crate) use ring_like::digest::{Digest, SHA256, digest};
+    pub(crate) use ring_like::digest::{digest, Digest, SHA256};
     pub(crate) use ring_like::hmac;
     pub(crate) use ring_like::rand::SystemRandom;
-    pub(crate) use ring_like::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair};
+    pub(crate) use ring_like::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
     // Local extension: verify every external signature against its pinned public key.
-    pub(crate) use ring_like::signature::{ECDSA_P256_SHA256_FIXED, KeyPair, UnparsedPublicKey};
+    pub(crate) use ring_like::signature::{KeyPair, UnparsedPublicKey, ECDSA_P256_SHA256_FIXED};
 
     use super::Error;
 

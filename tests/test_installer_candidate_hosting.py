@@ -30,6 +30,35 @@ def encoded(value):
     return (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
 
 
+@pytest.mark.parametrize("sections", [[], ["public"], ["console"], ["public", "console"], ["console", "public"]])
+def test_web_startup_selection_is_bound_to_exact_candidate_input(sections):
+    value = configuration()
+    original = hosting.from_bytes(encoded(value))
+    value["web"] = {"enabled_sections": sections}
+    raw = encoded(value)
+    binding = hosting.from_bytes(raw)
+    assert bootstrap._hosting_from_bytes(raw) == binding
+    assert binding["input_sha256"] != original["input_sha256"]
+    with pytest.raises(ValueError):
+        hosting.require_bytes(original, raw)
+
+
+@pytest.mark.parametrize("web", [
+    {}, {"enabled_sections": "none"}, {"enabled_sections": ["marketing"]},
+    {"enabled_sections": ["console", "console"]}, {"enabled_sections": [True]},
+    {"enabled_sections": [{}]}, {"enabled_sections": None},
+    {"enabled_sections": [], "allow_marketing": True},
+])
+def test_invalid_web_startup_selection_is_rejected_by_both_consumers(web):
+    value = configuration()
+    value["web"] = web
+    raw = encoded(value)
+    with pytest.raises(ValueError):
+        hosting.from_bytes(raw)
+    with pytest.raises(ValueError):
+        bootstrap._hosting_from_bytes(raw)
+
+
 def test_shared_python_native_hosting_context_and_exact_raw_binding():
     cases = json.loads((FIXTURES / "installer-candidate-hosting-v2.json").read_text())
     for case in cases:

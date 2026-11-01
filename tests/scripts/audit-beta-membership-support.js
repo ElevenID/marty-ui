@@ -12,7 +12,8 @@ const {
   browserJson, cancelOwnedIssuanceTransaction, cleanupApplicationCredential,
   createOwnedApplication, findCurrentCredential, issueOwnedApplication, listResources,
   prepareOwnedApplicationReissue, readApplicationTransaction,
-  requireJson, requireNoConflictingApplications, requireOwnedApplication, requireOwnedTransaction,
+  requireCurrentIssuerServiceReady, requireJson, requireNoConflictingApplications,
+  requireOwnedApplication, requireOwnedTransaction,
   selectCurrentCredential, submitOwnedApplication,
 } = require('./beta-demo-resource-helpers');
 const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet, walletOrigin } = require('./demo-wallet-session');
@@ -169,6 +170,11 @@ function createSupportController({ operator, applicantPage, fixture, lane, origi
     assert(offerTtlSeconds === undefined || [60, 120].includes(offerTtlSeconds));
     assert.ok(initialHash, 'Read-only fixture preflight must complete before issuance');
     await requireNoConflictingApplications(applicantPage, binding);
+    await requireCurrentIssuerServiceReady(operator, {
+      organizationId: binding.organizationId,
+      credentialTemplateId: binding.credentialTemplateId,
+      issuerDid: binding.issuerDid,
+    });
     const owned = { organizationId: binding.organizationId, credentialTemplateId: binding.credentialTemplateId,
       applicationTemplateId: binding.applicationTemplateId, applicantId: fixture.applicant.id,
       runId: `${runId}.${stage}`, applicationId: null, transactionId: null, credentialId: null, uncertainMutations: [] };
@@ -185,6 +191,11 @@ function createSupportController({ operator, applicantPage, fixture, lane, origi
   }
 
   async function completeIssue(owned, binding, { offerTtlSeconds } = {}) {
+    await requireCurrentIssuerServiceReady(operator, {
+      organizationId: binding.organizationId,
+      credentialTemplateId: binding.credentialTemplateId,
+      issuerDid: binding.issuerDid,
+    });
     assert(offerTtlSeconds === undefined || [60, 120].includes(offerTtlSeconds));
     const options = offerTtlSeconds === undefined ? {} : { requestIssue: endpoint => requireJson(operator,
       endpoint, { method: 'POST', body: JSON.stringify({ offer_ttl_seconds: offerTtlSeconds }) },
@@ -225,6 +236,11 @@ function createSupportController({ operator, applicantPage, fixture, lane, origi
       assert.equal(previous[key], binding[key], 'Reissue cannot change the owned issuer or template binding');
     }
     const owned = await prepareOwnedApplicationReissue(operator, previous);
+    await requireCurrentIssuerServiceReady(operator, {
+      organizationId: binding.organizationId,
+      credentialTemplateId: binding.credentialTemplateId,
+      issuerDid: binding.issuerDid,
+    });
     // Retain ownership before the next mutation. A lost /issue response keeps
     // its uncertainty and historical tuple available for exact cleanup.
     ownedApplications[index] = owned;

@@ -1131,20 +1131,19 @@ impl LockedMaintenance {
         publication_boundary();
         self.require_held_evidence(&directory)?;
         self.poisoned = true;
-        let flags = if expected.is_none() {
-            libc::RENAME_NOREPLACE
+        let mode = if expected.is_none() {
+            crate::installer_host_fs::RenameMode::NoReplace
         } else {
-            0
+            crate::installer_host_fs::RenameMode::Replace
         };
-        if unsafe {
-            libc::renameat2(
-                directory.as_raw_fd(),
-                name(NEXT).as_ptr(),
-                directory.as_raw_fd(),
-                name(CURRENT).as_ptr(),
-                flags,
-            )
-        } != 0
+        if crate::installer_host_fs::rename_at(
+            &directory,
+            &name(NEXT),
+            &directory,
+            &name(CURRENT),
+            mode,
+        )
+        .is_err()
         {
             return Err("health checkpoint publication uncertain".into());
         }
@@ -1303,22 +1302,14 @@ impl InstallerState {
         // Publish authenticated bytes while still non-executable. A crash before
         // chmod leaves a safe, non-executable final file requiring reconciliation.
         // NOREPLACE also rejects existing links and leaves partial mode 0600.
-        if unsafe {
-            // Call the Linux syscall directly: some musl versions do not export
-            // a renameat2 libc wrapper. Preserve atomic NOREPLACE semantics;
-            // unsupported kernels fail closed instead of falling back to rename.
-            libc::syscall(
-                libc::SYS_renameat2,
-                self.directory.as_raw_fd(),
-                partial.as_ptr(),
-                self.directory.as_raw_fd(),
-                target.as_ptr(),
-                libc::RENAME_NOREPLACE,
-            )
-        } != 0
-        {
-            return Err(error("publish operator without replacement"));
-        }
+        crate::installer_host_fs::rename_at(
+            &self.directory,
+            &partial,
+            &self.directory,
+            &target,
+            crate::installer_host_fs::RenameMode::NoReplace,
+        )
+        .map_err(|failure| format!("publish operator without replacement: {failure}"))?;
         self.directory
             .sync_all()
             .map_err(|_| "persist published operator name")?;

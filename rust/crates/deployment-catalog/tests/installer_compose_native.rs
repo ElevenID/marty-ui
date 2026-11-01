@@ -497,7 +497,7 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
     private_write(&supplied_env, environment.as_bytes());
     // Use the packaged installer layers, including their real resource closure.
     assert_actual_installer_layers(&executable, &bundle, &bundle, &supplied_env);
-    for (case, public_origin, bind_address, public_entry) in [
+    for (case_index, (case, public_origin, bind_address, public_entry)) in [
         ("direct-dns", "https://marty.example.com", "0.0.0.0", None),
         // Legacy Compose inputs remain readable; fresh hosting selection
         // separately rejects an IP as the canonical identity.
@@ -526,13 +526,21 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
             None,
         ),
         ("proxy", "https://marty.example.com", "127.0.0.1", None),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let origin = marty_selfhost_identity::origin::PublicOrigin::parse(public_origin).unwrap();
         let host = match origin.ip_address() {
             Some(std::net::IpAddr::V6(ip)) => format!("[{ip}]"),
             _ => origin.host().to_owned(),
         };
         let mut selected = values.clone();
+        let web_sections = ["public,console", "public", "console", "none"][case_index % 4];
+        selected.insert(
+            "MARTY_INSTALLER_UI_ENABLED_SECTIONS".into(),
+            web_sections.into(),
+        );
         selected.insert("PUBLIC_API_URL".into(), public_origin.into());
         selected.insert("PUBLIC_DOMAIN".into(), origin.authority().into());
         selected.remove("MARTY_ISSUER_DID");
@@ -597,6 +605,10 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
         assert_eq!(
             services["ui"]["environment"]["UI_CANONICAL_ORIGIN"],
             public_origin
+        );
+        assert_eq!(
+            services["ui"]["environment"]["UI_ENABLED_SECTIONS"],
+            web_sections
         );
         let aliases: Vec<String> = serde_json::from_str(
             services["ui"]["environment"]["UI_PUBLIC_ENTRY_ORIGINS"]

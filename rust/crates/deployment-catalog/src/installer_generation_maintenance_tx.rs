@@ -226,17 +226,14 @@ fn copy(directory: &File, name: &str, bytes: &[u8], mode: u32) -> Result<()> {
     require(unsafe { libc::fchmod(file.as_raw_fd(), mode) } == 0)?;
     file.sync_all().map_err(|_| REFUSED)?;
     let target = CString::new(name).map_err(|_| REFUSED)?;
-    require(
-        unsafe {
-            libc::renameat2(
-                directory.as_raw_fd(),
-                label.as_ptr(),
-                directory.as_raw_fd(),
-                target.as_ptr(),
-                libc::RENAME_NOREPLACE,
-            )
-        } == 0,
-    )?;
+    crate::installer_host_fs::rename_at(
+        directory,
+        &label,
+        directory,
+        &target,
+        crate::installer_host_fs::RenameMode::NoReplace,
+    )
+    .map_err(|_| REFUSED)?;
     directory.sync_all().map_err(|_| REFUSED.into())
 }
 fn work(installation: &Path, scope: Attempt) -> PathBuf {

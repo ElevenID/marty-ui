@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 462,
+  "route_count": 463,
   "routes": [
     {
       "include_in_schema": true,
@@ -2283,6 +2283,12 @@
       "include_in_schema": true,
       "method": "POST",
       "path": "/v1/signing-keys/config/validate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/config/validate-current",
       "status_code": 200
     },
     {

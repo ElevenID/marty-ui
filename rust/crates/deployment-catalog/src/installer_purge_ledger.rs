@@ -199,17 +199,14 @@ fn write_exact(parent: &File, entry: &str, bytes: &[u8], limit: usize) -> Result
         .map_err(|_| REFUSED)?;
     let pending_name = name(&pending)?;
     let final_name = name(entry)?;
-    let status = unsafe {
-        libc::syscall(
-            libc::SYS_renameat2,
-            parent.as_raw_fd(),
-            pending_name.as_ptr(),
-            parent.as_raw_fd(),
-            final_name.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    require(status == 0)?;
+    crate::installer_host_fs::rename_at(
+        parent,
+        &pending_name,
+        parent,
+        &final_name,
+        crate::installer_host_fs::RenameMode::NoReplace,
+    )
+    .map_err(|_| REFUSED)?;
     parent.sync_all().map_err(|_| REFUSED)?;
     require(read_record(parent, entry, limit)?.as_deref() == Some(bytes))?;
     Ok(true)

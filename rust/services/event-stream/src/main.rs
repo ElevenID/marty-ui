@@ -5,7 +5,7 @@ use marty_event_stream::{
 use std::{future::Future, pin::Pin, time::Duration};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
-use tokio_stream::{wrappers::TcpListenerStream, StreamExt};
+use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -67,15 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .add_service(EventStreamServiceServer::new(grpc_service));
         let grpc_server: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
             if let Some(acceptor) = tls_acceptor {
-                let incoming = TcpListenerStream::new(grpc_listener).then(move |connection| {
-                    let acceptor = acceptor.clone();
-                    async move {
-                        match connection {
-                            Ok(stream) => acceptor.accept(stream).await,
-                            Err(error) => Err(error),
-                        }
-                    }
-                });
+                let incoming = marty_service_runtime::keyless_incoming(grpc_listener, acceptor);
                 Box::pin(
                     grpc_router.serve_with_incoming_shutdown(incoming, async move {
                         let _ = grpc_shutdown.recv().await;

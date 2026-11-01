@@ -455,6 +455,7 @@ fn start_inner(
         &parameters,
         images,
         foundation.as_ref(),
+        Some(&hosting),
     )?;
     if public_acme {
         state.with_inspection(|view| require_acme_preparation(view, installation))?;
@@ -508,6 +509,10 @@ fn start_inner(
             images.get("gateway").ok_or("gateway image absent")?.clone(),
         ),
         ("MARTY_INSTALLER_HTTPS_PORT", ports[0].to_string()),
+        (
+            "MARTY_INSTALLER_UI_ENABLED_SECTIONS",
+            hosting.enabled_web_sections().to_owned(),
+        ),
         (
             "MARTY_INSTALLER_PUBLIC_ENTRY_ORIGIN",
             hosting

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use std::{fmt, slice};
 
-use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
+use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD};
 #[cfg(feature = "rcgen")]
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use serde::Serialize;
@@ -15,7 +15,7 @@ use crate::types::{
     Authorization, AuthorizationState, AuthorizationStatus, AuthorizedIdentifier, Challenge,
     ChallengeType, DeviceAttestation, Empty, FinalizeRequest, OrderState, OrderStatus, Problem,
 };
-use crate::{ChallengeStatus, Error, Key, crypto, nonce_from_response, retry_after};
+use crate::{crypto, nonce_from_response, retry_after, ChallengeStatus, Error, Key};
 
 /// An ACME order as described in RFC 8555 (section 7.1.3)
 ///

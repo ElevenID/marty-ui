@@ -1517,6 +1517,12 @@ pub(crate) fn bound_ingress_listener(
             service["environment"]["OIDF_EDGE_PUBLIC_ORIGIN"]
                 == selection.resolve_origin(listener.port)?.as_str(),
         )?;
+        // Startup exposure is part of the exact hosting selection, not an
+        // inherited process environment or an editable Compose override.
+        match model["services"]["ui"]["environment"].get("UI_ENABLED_SECTIONS") {
+            Some(value) => require(value.as_str() == Some(selection.enabled_web_sections()))?,
+            None => require(!selection.has_web_selection())?,
+        }
         let configured_entry = service["environment"]
             .get("OIDF_EDGE_PUBLIC_ENTRY_ORIGIN")
             .map(|entry| entry.as_str().ok_or(REFUSED))

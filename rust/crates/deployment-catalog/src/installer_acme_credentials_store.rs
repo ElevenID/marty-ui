@@ -198,21 +198,18 @@ fn publish(directory: &File, name: &str, bytes: &[u8], previous: Option<&[u8]>) 
             installer_host_fs::read_entry(directory, name, 0o600, false, REFUSED)? == previous,
         )?;
     }
-    require(
-        unsafe {
-            libc::renameat2(
-                directory.as_raw_fd(),
-                staging.as_ptr(),
-                directory.as_raw_fd(),
-                target.as_ptr(),
-                if previous.is_some() {
-                    0
-                } else {
-                    libc::RENAME_NOREPLACE
-                },
-            )
-        } == 0,
-    )?;
+    crate::installer_host_fs::rename_at(
+        directory,
+        &staging,
+        directory,
+        &target,
+        if previous.is_some() {
+            crate::installer_host_fs::RenameMode::Replace
+        } else {
+            crate::installer_host_fs::RenameMode::NoReplace
+        },
+    )
+    .map_err(|_| REFUSED)?;
     directory.sync_all().map_err(|_| REFUSED)?;
     require(installer_host_fs::read_entry(directory, name, 0o600, false, REFUSED)? == bytes)
 }

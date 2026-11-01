@@ -49,17 +49,14 @@ fn atomic_copy(parent: &File, name: &str, bytes: &[u8]) -> Result<()> {
     file.sync_all().map_err(|_| REFUSED)?;
     let source = CString::new(temporary).map_err(|_| REFUSED)?;
     let target = CString::new(name).map_err(|_| REFUSED)?;
-    require(
-        unsafe {
-            libc::renameat2(
-                parent.as_raw_fd(),
-                source.as_ptr(),
-                parent.as_raw_fd(),
-                target.as_ptr(),
-                libc::RENAME_NOREPLACE,
-            )
-        } == 0,
-    )?;
+    crate::installer_host_fs::rename_at(
+        parent,
+        &source,
+        parent,
+        &target,
+        crate::installer_host_fs::RenameMode::NoReplace,
+    )
+    .map_err(|_| REFUSED)?;
     parent.sync_all().map_err(|_| REFUSED.into())
 }
 
@@ -254,21 +251,18 @@ fn replace_selector(
     }
     let from = CString::new(temporary).map_err(|_| REFUSED)?;
     let to = CString::new(selector).map_err(|_| REFUSED)?;
-    require(
-        unsafe {
-            libc::renameat2(
-                evidence.as_raw_fd(),
-                from.as_ptr(),
-                evidence.as_raw_fd(),
-                to.as_ptr(),
-                if old.is_some() {
-                    libc::RENAME_EXCHANGE
-                } else {
-                    libc::RENAME_NOREPLACE
-                },
-            )
-        } == 0,
-    )?;
+    crate::installer_host_fs::rename_at(
+        &evidence,
+        &from,
+        &evidence,
+        &to,
+        if old.is_some() {
+            crate::installer_host_fs::RenameMode::Exchange
+        } else {
+            crate::installer_host_fs::RenameMode::NoReplace
+        },
+    )
+    .map_err(|_| REFUSED)?;
     evidence.sync_all().map_err(|_| REFUSED)?;
     boundary(2);
     binding(installation, &root)?;

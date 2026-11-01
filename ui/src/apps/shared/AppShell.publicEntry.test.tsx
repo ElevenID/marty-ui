@@ -38,6 +38,15 @@ afterEach(() => {
 });
 
 describe('shipped public-entry actions', () => {
+  it('hides the excluded console and signs back into the public application', async () => {
+    (window as any).__MARTY_RUNTIME_CONFIG__.web = { enabled_sections: ['public'] };
+    const navigate = vi.spyOn(handoff, 'redirectBrowser').mockReturnValue(true);
+    shell();
+    expect(screen.queryByTestId('public-entry-console')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('login-button'));
+    expect(new URL(navigate.mock.calls[0][0]).searchParams.get('redirect_uri')).toBe('/');
+  });
+
   it('renders a real canonical Console link and preserves the existing sign-in action without an IP session', async () => {
     const fetch = vi.spyOn(globalThis, 'fetch');
     const navigate = vi.spyOn(handoff, 'redirectBrowser').mockReturnValue(true);

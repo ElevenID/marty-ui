@@ -274,6 +274,12 @@ jobs:
                   ;;
                 *.md|docs/*|.github/ISSUE_TEMPLATE/*)
                   ;;
+                ui/index.html)
+                  # The native installer validation embeds the entry document.
+                  ui=true
+                  rust=true
+                  security=true
+                  ;;
                 ui/*|demo-apps/*)
                   ui=true
                   security=true
