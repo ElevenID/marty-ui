@@ -533,6 +533,8 @@ const MDOC_NAMES=Object.freeze(['mdoc_iaca_issue_gateway_key','mdoc_dsc_issue_ga
 const MDOC_PUBLIC='SIGNING_KEYS_MDOC_CERTIFICATE_AUTHORITIES_JSON';
 const MDOC_OPERATION='D03_MDOC_CONFIGURATION_SUCCESSOR';
 const privateEqual=(a,b,code)=>assert(isDeepStrictEqual(a,b),code);
+function runtimeClassification(profile){return profile.signedImageDeployment
+ ?{mixedSourceStack:false,runtimeKind:'SIGNED_NIGHTLY_IMAGES'}:{mixedSourceStack:true};}
 const mdocVariable=name=>'SIGNING_KEYS_'+name.toUpperCase();
 const canonicalJson=value=>JSON.stringify(value&&typeof value==='object'&&!Array.isArray(value)?Object.fromEntries(Object.keys(value).sort().map(key=>[key,JSON.parse(canonicalJson(value[key]))])):Array.isArray(value)?value.map(item=>JSON.parse(canonicalJson(item))):value).replace(/[\u007f-\uffff]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
 function mdocEnvironment(values){
@@ -675,11 +677,17 @@ function mdocConfigurationData(profile){
  }
  const evidence=boundJson(deployed.configurationEvidence);assert.equal(evidence.schema,'marty.mdoc-config-evidence/v1');assert.equal(evidence.baseProfileSha256,profile.baseProfile.sha256);assert.equal(evidence.authoritySha256,overlay.authority.sha256);
  const snapshot=boundJson(evidence.beforeRuntimeBinding);assert.equal(snapshot.baseProfileSha256,profile.baseProfile.sha256);assert.deepEqual(snapshot.binding.receiptDigests,receiptDigests(base));assert.equal(snapshot.binding.roles.length,22);
- assert.equal(snapshot.binding.schema,'marty.functional-mixed-runtime-binding/v2');assert.equal(snapshot.binding.scope,'FUNCTIONAL_ONLY');assert.equal(snapshot.binding.releaseQualified,false);assert.equal(snapshot.binding.recordingQualified,false);assert.equal(snapshot.binding.mixedSourceStack,true);
+ assert.equal(snapshot.binding.schema,'marty.functional-mixed-runtime-binding/v2');assert.equal(snapshot.binding.scope,'FUNCTIONAL_ONLY');assert.equal(snapshot.binding.releaseQualified,false);assert.equal(snapshot.binding.recordingQualified,false);
+ const classification=runtimeClassification(base);
+ privateEqual({mixedSourceStack:snapshot.binding.mixedSourceStack,runtimeKind:snapshot.binding.runtimeKind},
+  {mixedSourceStack:classification.mixedSourceStack,runtimeKind:classification.runtimeKind},'MDOC_BASE_RUNTIME_CLASSIFICATION_CHANGED');
  assert.equal(new Set(snapshot.binding.roles.map(r=>r.role)).size,22);assert.equal(new Set(snapshot.binding.roles.map(r=>r.containerId)).size,22);
  const known=validateMdocKnownOutcome(authority,deployed);assert.deepEqual(known.receipt.roles,deployed.roles);assert.deepEqual(Object.keys(deployed.roles).sort(),MDOC_ROLES);assert.deepEqual(Object.keys(evidence.roles).sort(),MDOC_ROLES);assert.deepEqual(Object.keys(known.state.new).sort(),MDOC_ROLES);assert.deepEqual(Object.keys(known.intent.beforeConfigs).sort(),MDOC_ROLES);
  const configs={};const ids=new Set();
- const anchored=applyNativeOverlayObservations(expected,snapshot.binding.roles,{roles:{}},{roles:[]});
+ // A verified binding retains lineage/identity, while live observations also
+ // carry these redundant flags and the executable hash under its input name.
+ const prior=snapshot.binding.roles.map(row=>({...row,service:row.role,running:true,status:'running',binarySha256:row.sha256}));
+ const anchored=applyNativeOverlayObservations(expected,prior,{roles:{}},{roles:[]});
  const rows=anchored.map(row=>{const old=snapshot.binding.roles.find(r=>r.role===row.role);assert(old);
   for(const field of ['binary','source','coreSource','sha256','kind','imageId','project'])assert.equal(old[field],row[field],'MDOC_PRIOR_LINEAGE_CHANGED');
   const required=Object.fromEntries(['containerId','imageId','health','executablePath','processExecutableSha256','binaryMounts','startedAt','hostPid','effectiveUid','configuredRuntimeUid'].map(field=>[field,old[field]]));
@@ -694,7 +702,7 @@ function mdocConfigurationData(profile){
    configs[row.role]={before,created,started};Object.assign(required,{containerId:actual.containerId,startedAt:actual.startedAt,hostPid:actual.hostPid});
   }
   return {...row,requiredContainerId:required.containerId,requiredStartedAt:required.startedAt,requiredHostPid:required.hostPid,requiredEffectiveUid:required.effectiveUid,requiredBinaryMounts:required.binaryMounts,requiredObservation:required};
- });return {base,authority,deployed,evidence,rows,configs};
+ });return {base,classification,authority,deployed,evidence,rows,configs};
 }
 function expectedConfigurationSuccessor(profile){return mdocConfigurationData(profile).rows;}
 function observeMdocConfiguration(profile,read){
@@ -809,7 +817,7 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
  observe=observe||(readDocker?(expected=>observeDocker(expected,readDocker)):observeDocker);
  assert.equal(qualification,'FUNCTIONAL_ONLY','Mixed/debug stack cannot qualify release or recording');
  const expected=expectedRuntime(profile),roles=[];
- if(profile.configurationOverlay)observeMdocConfiguration(profile,readDocker);
+ const configuration=profile.configurationOverlay?observeMdocConfiguration(profile,readDocker):null;
  const maintenance=profile.configurationOverlay?boundJson(profile.configurationOverlay.deploymentReceipt):profile.maintenanceRestart?boundJson(profile.maintenanceRestart):profile.nativeOverlay?boundJson(profile.nativeOverlay.deploymentReceipt):profile.nativeMaintenance?boundJson(profile.nativeMaintenance.outcome):profile.signedImageDeployment?{engineId:require('./nightly-functional-runtime').authority(profile,{boundJson,verifyBoundFile}).engineId}:null;
  if(maintenance)assert.equal(JSON.parse(readDocker(['info','--format','{{json .}}'])).ID,maintenance.engineId);
  for(const row of expected){
@@ -826,7 +834,7 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
  if(profile.configurationOverlay)observeMdocConfiguration(profile,readDocker);
  if(maintenance)assert.equal(JSON.parse(readDocker(['info','--format','{{json .}}'])).ID,maintenance.engineId);
  return {schema:profile.schema==='marty.functional-mixed-runtime/v2'?'marty.functional-mixed-runtime-binding/v2':'marty.functional-mixed-runtime-binding/v1',scope:'FUNCTIONAL_ONLY',
-  releaseQualified:false,recordingQualified:false,mixedSourceStack:!profile.signedImageDeployment,...(profile.signedImageDeployment?{runtimeKind:'SIGNED_NIGHTLY_IMAGES'}:{}),roles,
+  releaseQualified:false,recordingQualified:false,...(configuration?configuration.classification:runtimeClassification(profile)),roles,
   receiptDigests:receiptDigests(profile)};
 }
 module.exports={validateMdocJournalRead:mdocJournalRead,produceMdocConfigurationSuccessor,validateMdocConfigContainer,validateMdocKnownOutcome,produceSignedImageObservation:(profile,{readDocker=defaultDockerRead}={})=>require('./nightly-functional-runtime').produce(profile,{readDocker,boundJson,verifyBoundFile,observeDocker,validateRuntimeObservation}),verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};

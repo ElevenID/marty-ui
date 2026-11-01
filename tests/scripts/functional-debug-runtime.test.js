@@ -484,9 +484,28 @@ function dockerObservationFixture(expected,observe){
   assert.fail('Unknown synthetic Docker read');
  };return {readDocker,raw};
 }
-function mdocConfigurationFixture(t){
- const f=issuanceFixture(t,10001),helper=require('./functional-debug-runtime'),base=f.write('config-base.json',f.profile);
- const oldBinding=verifyFunctionalRuntime(f.profile,{observe:f.observe}),expected=expectedRuntime(f.profile),run='11111111-1111-4111-8111-111111111111';
+function signedImageFixture(t){
+ const f=fixture(t),helper=require('./functional-debug-runtime'),nightly=require('./nightly-functional-runtime');
+ const imageRows=[nightly.SERVICES,nightly.UI].map((reference,index)=>({reference,Id:'sha256:'+H(String(index+1)),RepoDigests:[reference],Config:{Labels:{'org.opencontainers.image.revision':nightly.SOURCE,'io.elevenid.selfhost.public-profile':'tester'}}}));
+ const ids={},restored=[...nightly.ROLES,'keycloak','nginx-proxy'].map((role,index)=>{
+  const id=(index+1).toString(16).padStart(64,'0');ids[role]=id;
+  return {Id:id,Image:imageRows[role==='ui-prod'?1:0].Id,Config:{Image:role==='ui-prod'?nightly.UI:nightly.SERVICES,Labels:{'com.docker.compose.service':role,'com.docker.compose.project':role==='ui-prod'?'elevenid-beta-ui':'elevenid-beta'}},State:{Running:true,OOMKilled:false,Pid:100+index,StartedAt:'2026-10-26T00:00:00Z'}};
+ });
+ const lockPath=path.join(path.dirname(f.profile.baselineDeployment.path),'signed-image-lock.json');fs.copyFileSync(path.join(__dirname,'../fixtures/nightly263-images.json'),lockPath);
+ const profile={schema:'marty.functional-mixed-runtime/v2',scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,signedImageDeployment:{
+  releaseLock:{path:lockPath,sha256:crypto.createHash('sha256').update(fs.readFileSync(lockPath)).digest('hex')},
+  deployment:f.write('signed-deployment.json',{state:'PHASE2_MIXED_INFRA_STARTED',release:nightly.RELEASE,fullNightlyQualified:false,newCids:ids}),
+  writerRestore:f.write('signed-restore.json',{state:'OPENBAO_NIGHTLY_IMAGE_AND_PLUGIN_RUNNING',fullNightlyQualified:false,keysGenerated:false,writersRemainQuiesced:false,restoredWriters:restored}),
+  phase1Input:f.write('signed-input.json',{release:nightly.RELEASE,betaOnly:true,engineId:'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341'})}};
+ const rows=nightly.authority(profile,helper).rows;
+ const observe=row=>({role:row.role,project:row.project,service:row.role,imageId:row.imageId,containerId:row.requiredContainerId,running:true,status:'running',health:row.role==='canvas-sync-worker'?null:'healthy',binarySha256:row.binary?H('2'):null,executablePath:row.binary?'/usr/local/bin/'+row.binary:null,processExecutableSha256:row.binary?H('2'):null,binaryMounts:[],hostPid:row.requiredHostPid,startedAt:row.requiredStartedAt,effectiveUid:row.binary?10001:101,configuredRuntimeUid:row.binary?10001:101});
+ const docker=dockerObservationFixture(rows,observe),readDocker=args=>args[0]==='info'?JSON.stringify({ID:'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341'}):args[0]==='image'?JSON.stringify([imageRows.find(row=>row.reference===args[2])]):docker.readDocker(args);
+ profile.signedImageDeployment.observation=f.write('signed-observation.json',helper.produceSignedImageObservation(profile,{readDocker}));
+ return {...f,profile,observe,readDocker};
+}
+function mdocConfigurationFixture(t,signed=false){
+ const f=signed?signedImageFixture(t):issuanceFixture(t,10001),helper=require('./functional-debug-runtime'),base=f.write('config-base.json',f.profile);
+ const oldBinding=verifyFunctionalRuntime(f.profile,f.readDocker?{readDocker:f.readDocker}:{observe:f.observe}),expected=expectedRuntime(f.profile),run='11111111-1111-4111-8111-111111111111';
  const files=['mdoc_iaca_issue_gateway_key','mdoc_dsc_issue_gateway_key'].map((name,index)=>{const filename=path.join(path.dirname(base.path),name);fs.writeFileSync(filename,Buffer.alloc(64,index+65));return {name,path:filename,bytes:64,sha256:crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex')};});
  const operator=f.write('config-operator.json',{sourceOnly:true}),rootProof={root:'/home/canvasrunner/.codex/private/d02-build-journal-'+run,device:1,inode:2,uid:1000,mode:448};
  const spec=f.write('config-journal.json',{schema:1,backend:'DOCKER_DESKTOP_PRIVATE_JOURNAL_V1',bootstrapParent:{supported:true,synced:true},rootProof,
@@ -500,13 +519,14 @@ function mdocConfigurationFixture(t){
   roles[role]={containerId:newId,hostPid:990+index,startedAt:'2026-10-27T01:00:00Z'};
   const labels={'com.docker.compose.project':'elevenid-beta','com.docker.compose.service':role,'com.docker.compose.config-hash':'old','com.docker.compose.project.config_files':'old.yml','com.docker.compose.version':'5.4.0','com.docker.compose.project.environment_file':'old.env','com.docker.compose.depends_on':'postgres'};
   const layout=structuredClone(layouts[role]),mounts=layout.Mounts,target='/usr/local/bin/'+beforeRole.binary;
-  const binary=beforeRole.binaryMounts.find(m=>m.destination===target);assert(binary,'Source fixture binary missing');
-  mounts.find(m=>m.Destination===target).Source=binary.source;
-  const binaryApi=layout.HostConfig.Mounts.find(m=>m.Target===target);
-  if(binaryApi)binaryApi.Source=binary.source;
-  else{const index=layout.HostConfig.Binds.findIndex(value=>value.match(/^(.*):([^:]+):([^:]+)$/)?.[2]===target);assert(index>=0);const mode=layout.HostConfig.Binds[index].match(/^(.*):([^:]+):([^:]+)$/)[3];layout.HostConfig.Binds[index]=binary.source+':'+target+':'+mode;}
+  const binary=beforeRole.binaryMounts.find(m=>m.destination===target);
+  if(signed){assert.equal(binary,undefined);layout.Mounts=mounts.filter(m=>m.Destination!==target);layout.HostConfig.Mounts=layout.HostConfig.Mounts.filter(m=>m.Target!==target);layout.HostConfig.Binds=layout.HostConfig.Binds.filter(value=>value.match(/^(.*):([^:]+):([^:]+)$/)?.[2]!==target);}
+  else{assert(binary,'Source fixture binary missing');mounts.find(m=>m.Destination===target).Source=binary.source;
+   const binaryApi=layout.HostConfig.Mounts.find(m=>m.Target===target);
+   if(binaryApi)binaryApi.Source=binary.source;
+   else{const index=layout.HostConfig.Binds.findIndex(value=>value.match(/^(.*):([^:]+):([^:]+)$/)?.[2]===target);assert(index>=0);const mode=layout.HostConfig.Binds[index].match(/^(.*):([^:]+):([^:]+)$/)[3];layout.HostConfig.Binds[index]=binary.source+':'+target+':'+mode;}}
   const before={Id:beforeRole.containerId,Name:'/beta-'+role,Image:beforeRole.imageId,Config:{Hostname:beforeRole.containerId.slice(0,12),Labels:labels,Env:['EXISTING=unchanged'],User:'10001:10001'},
-   HostConfig:{...layout.HostConfig,Dns:null,DnsOptions:[],DnsSearch:[],OomKillDisable:false,Privileged:false},Mounts:mounts,State:{Running:true,Status:'running',Pid:beforeRole.hostPid,StartedAt:beforeRole.startedAt}};
+   HostConfig:{...layout.HostConfig,Dns:null,DnsOptions:[],DnsSearch:[],OomKillDisable:false,Privileged:false},Mounts:layout.Mounts,State:{Running:true,Status:'running',Pid:beforeRole.hostPid,StartedAt:beforeRole.startedAt}};
   before.NetworkSettings={Networks:{beta:{NetworkID:H('8'),EndpointID:H('7'),Gateway:'172.19.0.1',IPAddress:'172.19.0.2',IPPrefixLen:16,IPv6Gateway:'',GlobalIPv6Address:'',GlobalIPv6PrefixLen:0,MacAddress:'02:00:00:00:00:01',DNSNames:['beta-'+role,before.Id.slice(0,12),role],Aliases:[role],IPAMConfig:null,Links:null,DriverOpts:null}}};
   const created=structuredClone(before);created.Id=newId;created.Config.Hostname=newId.slice(0,12);created.State={Status:'created',Running:false,Pid:0};
   Object.assign(created.NetworkSettings.Networks.beta,{NetworkID:'',EndpointID:'',Gateway:'',IPAddress:'',IPPrefixLen:0,MacAddress:'',DNSNames:['beta-'+role,newId.slice(0,12),role]});
@@ -544,6 +564,25 @@ test('mdoc configuration successor preserves all22 per-role binary lineage',t=>{
  assert.equal(result.binding.roles.length,22);assert.equal(result.binding.releaseQualified,false);assert.equal(result.binding.recordingQualified,false);
  for(const row of result.binding.roles){const old=f.oldBinding.roles.find(r=>r.role===row.role);for(const key of ['binary','source','coreSource','sha256','kind','imageId'])assert.equal(row[key],old[key]);
   if(!['gateway','signing-keys'].includes(row.role))for(const key of ['containerId','hostPid','startedAt'])assert.equal(row[key],old[key]);}
+});
+
+test('mdoc configuration successor inherits signed-image classification without executable overlays',t=>{
+ const f=mdocConfigurationFixture(t,true),helper=require('./functional-debug-runtime');
+ const result=helper.produceMdocConfigurationSuccessor(f.base,f.authorityRef,f.deployedRef,{readDocker:f.transport});
+ assert.equal(result.binding.mixedSourceStack,false);assert.equal(result.binding.runtimeKind,'SIGNED_NIGHTLY_IMAGES');
+ assert.equal(result.binding.roles.length,22);
+ for(const row of result.binding.roles){assert.equal(row.kind,'SIGNED_NIGHTLY_IMAGE');assert.deepEqual(row.binaryMounts,[]);const old=f.oldBinding.roles.find(value=>value.role===row.role);for(const key of ['binary','source','coreSource','sha256','kind','imageId'])assert.equal(row[key],old[key]);}
+});
+for(const signed of [false,true])test('mdoc configuration successor rejects base classification tampering '+(signed?'signed':'native'),t=>{
+ for(const field of ['mixedSourceStack','runtimeKind']){
+  const f=mdocConfigurationFixture(t,signed),snapshot=JSON.parse(fs.readFileSync(f.evidence.beforeRuntimeBinding.path));
+  if(field==='mixedSourceStack')snapshot.binding.mixedSourceStack=!snapshot.binding.mixedSourceStack;
+  else if(signed)delete snapshot.binding.runtimeKind;else snapshot.binding.runtimeKind='SIGNED_NIGHTLY_IMAGES';
+  f.evidence.beforeRuntimeBinding=f.write('bad-classification-snapshot.json',snapshot);
+  f.deployed.configurationEvidence=f.write('bad-classification-evidence.json',f.evidence);
+  f.profile.configurationOverlay.deploymentReceipt=f.write('bad-classification-deployed.json',f.deployed);
+  assert.throws(()=>verifyFunctionalRuntime(f.profile,{readDocker:f.transport}),/MDOC_BASE_RUNTIME_CLASSIFICATION_CHANGED/);
+ }
 });
 
 for(const fault of ['observeOnly','env','forgedConfigOnly','hostReadonly','mountReadonly','generation','nonselectedGeneration','extraNetwork','networkId','networkStatic','endpointReconnect','sourceStamp','thirdRole','knownPending','knownHash','durability','namedSource','namedReadonly','volumeName','volumeDriver','volumeSource','hostSource','hostType','hostOption','hostExtra','hostDuplicate','hostMissing','crossDuplicate','wrongRepresentation','daemonMode'])test('mdoc configuration successor rejects '+fault,t=>{
