@@ -92,6 +92,9 @@ class CurrentIssuerProfileTests(unittest.TestCase):
         recipe = build.render_recipe(one)
         self.assertIn("--bin marty-signing-keys", recipe)
         self.assertNotIn("--bin marty-gateway", recipe)
+        self.assertIn("cargo test -p marty-signing-keys --lib current_issuer_validation_tests::selected_issuer_binding_reuses_service_and_ceremony_authority --locked --offline -j1", recipe)
+        self.assertIn("focused-rust-test.exit-code", recipe)
+        self.assertNotIn("focused-rust-test.exit-code", build.render_recipe(PROFILE))
         p = plan()
         p.update(buildProfile=one, uiRevision=scope["uiRevision"],
                  coreRevision=scope["coreRevision"], roleBinaries=scope["roles"],

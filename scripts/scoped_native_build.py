@@ -22,7 +22,8 @@ VOLUMES = ("ui-canvas-cargo", "d05-rust-target-20261026")
 OFFICIAL_PROFILE = "oid4vc-all-services"
 LATEST_OFFICIAL_PROFILE = "oid4vc-latest-maintenance-all-services"
 CURRENT_ISSUER_READY_PROFILE = "current-issuer-ready-two-role"
-CURRENT_ISSUER_READY_PROFILES = (CURRENT_ISSUER_READY_PROFILE, "current-issuer-policy-signing-only")
+CURRENT_ISSUER_POLICY_PROFILE = "current-issuer-policy-signing-only"
+CURRENT_ISSUER_READY_PROFILES = (CURRENT_ISSUER_READY_PROFILE, CURRENT_ISSUER_POLICY_PROFILE)
 OFFICIAL_PROFILES = (OFFICIAL_PROFILE, LATEST_OFFICIAL_PROFILE)
 LATEST_FREEZE_SHA256 = "075a9bafaf27bd31acfe8372c3172e04cf584120882018ff327e71044b69a5c1"
 OFFICIAL_FREEZE_SHA256 = "b77d6883f51bc1d3cf19d6cfa76fe567477c7d27e32134e05007c9104e49c941"
@@ -203,7 +204,13 @@ for binary in """ + " ".join(binaries) + """; do
  readelf -h -d /out/$binary > /out/$binary.elf.txt
  ldd /out/$binary > /out/$binary.libraries.txt
 done
-"""
+""" + ("""set +e
+cargo test -p marty-signing-keys --lib current_issuer_validation_tests::selected_issuer_binding_reuses_service_and_ceremony_authority --locked --offline -j1 > /out/focused-rust-test.stdout.txt 2> /out/focused-rust-test.stderr.txt
+focused_status=$?
+set -e
+printf '%s\n' "$focused_status" > /out/focused-rust-test.exit-code
+test "$focused_status" -eq 0
+""" if profile == CURRENT_ISSUER_POLICY_PROFILE else "")
 
 
 def render_official_recipe(profile=OFFICIAL_PROFILE):
@@ -544,6 +551,21 @@ def finish(prepared_ref, helper, git, profile=None):
             require(len(matches) == 1, "EXACT_COMPILER_OUTPUT_REQUIRED")
             artifacts[binary] = ref(file)
         result.update(state="BUILD_SUCCEEDED", binaries=artifacts, runtimeUidLibrariesValidated=False)
+        if profile == CURRENT_ISSUER_POLICY_PROFILE:
+            require((output / "focused-rust-test.exit-code").read_text().strip() == "0"
+                    and (output / "focused-rust-test.stdout.txt").is_file()
+                    and (output / "focused-rust-test.stderr.txt").is_file()
+                    and (output / "focused-rust-test.stdout.txt").stat().st_size <= 1024 * 1024
+                    and (output / "focused-rust-test.stderr.txt").stat().st_size <= 1024 * 1024
+                    and "test result: ok. 1 passed; 0 failed;" in
+                        (output / "focused-rust-test.stdout.txt").read_text(),
+                    "FOCUSED_SIGNING_POLICY_TEST_REQUIRED")
+            result["focusedRustTest"] = {
+                "name": "current_issuer_validation_tests::selected_issuer_binding_reuses_service_and_ceremony_authority",
+                "exitCode": 0,
+                "stdout": ref(output / "focused-rust-test.stdout.txt"),
+                "stderr": ref(output / "focused-rust-test.stderr.txt"),
+            }
         if profile in OFFICIAL_PROFILES:
             require(len(artifacts) == 29, "OFFICIAL_NATIVE_BINARY_COVERAGE_CHANGED")
             result.update(state="PASSED", source=scope["uiRevision"], canonicalAllServices=True,
