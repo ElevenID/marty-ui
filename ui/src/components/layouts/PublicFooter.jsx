@@ -1,7 +1,8 @@
 import { publicEntryHref } from '../../application/routing/publicEntry';
 import { Box, Divider, Link as MuiLink, Stack, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router';
-import { SHOW_PUBLIC_DEMOS } from '@ui-public-config';
+import { IS_SELFHOST_UI, SHOW_PUBLIC_DEMOS } from '@ui-public-config';
+import { isWebSectionEnabled } from '../../utils/runtimeConfig';
 
 const footerLinks = [
   { label: 'Privacy Policy', to: '/privacy-policy', testId: 'public-footer-privacy-link' },
@@ -12,6 +13,8 @@ const footerLinks = [
 ];
 
 function PublicFooter() {
+  if (IS_SELFHOST_UI || !isWebSectionEnabled('public')) return null;
+
   return (
     <Box component="footer" data-testid="public-footer" sx={{ mt: 6, pb: 4 }}>
       <Divider sx={{ mb: 3 }} />

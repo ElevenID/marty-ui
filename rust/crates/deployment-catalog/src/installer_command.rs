@@ -28,6 +28,7 @@ struct Options {
     directory: Option<PathBuf>,
     foundation_file: Option<PathBuf>,
     hosting_file: Option<PathBuf>,
+    acme_staging_roots: Option<PathBuf>,
     channel: Option<(String, PathBuf)>,
     profile: RuntimeProfile,
     yes: bool,
@@ -41,10 +42,47 @@ enum InstallMode {
 pub(crate) enum RuntimeCompletion {
     HoldIncomplete,
     CandidateTrialObserved,
+    SignedStartupObserved,
 }
 pub(crate) struct RuntimeInvocation<'a> {
     pub(crate) operator_sha: &'a str,
     pub(crate) completion: RuntimeCompletion,
+}
+pub(crate) const STAGING_ROOTS: &str = "staging-acme-roots.pem";
+
+fn initial_staging_roots(
+    hosting: &crate::installer_hosting::Prepared,
+    path: Option<&Path>,
+) -> Result<Option<Vec<u8>>> {
+    use crate::installer_acme_configuration::AcmeEnvironment;
+    let staging = hosting
+        .acme_parameters()
+        .is_some_and(|parameters| parameters.environment() == AcmeEnvironment::Staging);
+    if staging != path.is_some() {
+        return Err("ACME staging requires explicit --acme-staging-roots; production and other certificate sources refuse that override".into());
+    }
+    path.map(|path| {
+        let bytes = installer_verify::read_private_bytes(path, 65536)?;
+        crate::installer_acme_certificates::validate_staging_roots(&bytes)?;
+        Ok(bytes)
+    })
+    .transpose()
+}
+
+fn retained_staging_roots(
+    view: &crate::installer_state::LockedInspection,
+) -> Result<Option<Vec<u8>>> {
+    use crate::installer_acme_configuration::AcmeEnvironment;
+    let configuration =
+        crate::installer_acme_configuration::BoundAcmeConfiguration::from_selection(view)?;
+    let bytes = view.diagnostic_record(STAGING_ROOTS, true)?;
+    if (configuration.parameters().environment() == AcmeEnvironment::Staging) != bytes.is_some() {
+        return Err("retained ACME environment and staging anchors differ".into());
+    }
+    if let Some(bytes) = &bytes {
+        crate::installer_acme_certificates::validate_staging_roots(bytes)?;
+    }
+    Ok(bytes)
 }
 fn report_host_impact(hosting: &crate::installer_hosting::Prepared) {
     eprintln!("Marty host impact: this experimental installation uses a pre-existing user-owned rootless Docker daemon. It may pull images; create private probe containers, workload containers, a network and a Redis volume; bind the selected ingress listener and private loopback service ports; and write private credentials and retained state under the selected installation path. It does not invoke sudo, package installation, daemon setup, or a rootful Docker socket. Ordinary uninstall retains data, credentials, images and the Redis volume; purge is unsupported. Use a disposable VM snapshot.");
@@ -79,6 +117,7 @@ fn options(args: &[String]) -> Result<Options> {
             "--runtime-profile",
             "--foundation-file",
             "--hosting-file",
+            "--acme-staging-roots",
         ]
         .contains(&key)
         {
@@ -113,6 +152,7 @@ fn options(args: &[String]) -> Result<Options> {
     let directory = values.remove("--install-dir").map(PathBuf::from);
     let foundation_file = values.remove("--foundation-file").map(PathBuf::from);
     let hosting_file = values.remove("--hosting-file").map(PathBuf::from);
+    let acme_staging_roots = values.remove("--acme-staging-roots").map(PathBuf::from);
     let channel = match (
         values.remove("--channel"),
         values.remove("--verified-channel"),
@@ -129,6 +169,9 @@ fn options(args: &[String]) -> Result<Options> {
         || directory.as_ref().is_some_and(|p| !p.is_absolute())
         || foundation_file.as_ref().is_some_and(|p| !p.is_absolute())
         || hosting_file.as_ref().is_some_and(|p| !p.is_absolute())
+        || acme_staging_roots
+            .as_ref()
+            .is_some_and(|p| !p.is_absolute())
         || channel.as_ref().is_some_and(|(_, p)| !p.is_absolute())
     {
         return Err("installer paths must be absolute".into());
@@ -151,6 +194,7 @@ fn options(args: &[String]) -> Result<Options> {
         directory,
         foundation_file,
         hosting_file,
+        acme_staging_roots,
         channel,
         profile,
         yes,
@@ -292,6 +336,7 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         .map(crate::installer_foundation::preflight_origin)
         .transpose()?;
     let hosting = crate::installer_hosting::prepare(o.hosting_file.as_deref(), foundation_origin)?;
+    let staging_roots = initial_staging_roots(&hosting, o.acme_staging_roots.as_deref())?;
     let tools = VerificationTools::new(&o.tools, &o.gh)?;
     let operator_sha = installer_verify::current_operator_digest()?;
     let admitted = if mode == InstallMode::Admitted {
@@ -475,6 +520,9 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         crate::installer_foundation::select(path, &directory, &mut state)?;
     }
     crate::installer_hosting::select(hosting, &mut state)?;
+    if let Some(roots) = &staging_roots {
+        state.write_evidence(STAGING_ROOTS, roots)?;
+    }
     executor.block_on(crate::installer_hosting_addon::prepare(
         &directory,
         &mut state,
@@ -648,6 +696,65 @@ pub(crate) fn provision_runtime(
         "ingress-observation.json",
         &serde_json::to_vec(&ingress).map_err(|_| "cannot encode ingress observation")?,
     )?;
+    if hosting.certificate_source() == crate::installer_hosting::CertificateSource::Acme {
+        eprintln!("Marty runtime stage: durable application and renewal preparation before ACME");
+        crate::installer_acme_preparation::prepare(state, installation)?;
+        let authority = state.with_inspection(|view| {
+            crate::installer_public_ingress::PublicRenewalAuthorityPlan::from_initial(
+                view,
+                installation,
+            )
+        })?;
+        let bootstrap = crate::installer_application::public_renewal_inputs(
+            installation,
+            bundle,
+            state,
+            &bootstrap,
+            &authority,
+        )?;
+        let (next, renewal) = crate::installer_renewal::provision_public(
+            docker,
+            installation,
+            bundle,
+            state,
+            &infrastructure,
+            services_image,
+            crate::installer_application::job_inputs(&bootstrap, receipt, "installer-renewal"),
+            invocation.operator_sha,
+            &authority,
+        )?;
+        receipt = next;
+        state.write_evidence(
+            "renewal-observation.json",
+            &serde_json::to_vec(&renewal).map_err(|_| "cannot encode renewal observation")?,
+        )?;
+        let roots = state.with_inspection(retained_staging_roots)?;
+        eprintln!("Marty runtime stage: bounded public certificate enrollment");
+        let outcome = crate::installer_acme_host::provision(
+            &crate::installer_acme_host::HostInputs {
+                docker,
+                installation,
+                bundle,
+                infrastructure: &infrastructure,
+                services_image,
+                operator_sha256: invocation.operator_sha,
+            },
+            state,
+            &bootstrap,
+            receipt,
+            roots.as_deref(),
+        )?;
+        return finish_acme_installation(
+            docker,
+            installation,
+            bundle,
+            state,
+            inventory,
+            invocation,
+            &infrastructure,
+            outcome,
+        );
+    }
     eprintln!("Marty runtime stage: renewal inputs through Compose");
     let (next, renewal) = crate::installer_renewal::provision(
         docker,
@@ -694,6 +801,226 @@ pub(crate) fn provision_runtime(
     validate_and_complete(docker, installation, bundle, state, inventory, invocation)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The authenticated runtime and separate admitted candidate remain explicit at the first activation boundary."
+)]
+fn finish_acme_installation(
+    docker: &Path,
+    installation: &Path,
+    bundle: &Path,
+    state: &mut InstallerState,
+    inventory: &release::Inventory,
+    invocation: RuntimeInvocation<'_>,
+    infrastructure: &crate::installer_openbao::OpenBaoInventory,
+    outcome: crate::installer_acme_host::AcmeHostOutcome,
+) -> Result<()> {
+    let Some(candidate) = outcome.enrolment.candidate else {
+        let pending = &outcome.enrolment.report;
+        let disposition = if pending["candidate_replacement_reason"].is_string() {
+            "certificate_replacement_pending"
+        } else if pending["stage"] == "order_pending" {
+            "order_reconciliation_required"
+        } else if pending["stage"] == "terminal" {
+            "enrollment_requires_review"
+        } else {
+            "enrollment_pending"
+        };
+        let report = serde_json::json!({
+            "schema":"elevenid.installer-acme-installation/v1",
+            "installation_id":state.journal().installation_id(),
+            "outcome":disposition, "enrollment":outcome.enrolment.report,
+            "application_started":false, "installation_ready":false,
+            "continuation":[installation.join("marty-deploy"), std::path::PathBuf::from("acme"),
+                std::path::PathBuf::from("continue"), std::path::PathBuf::from("--install-dir"),
+                installation.to_path_buf(), std::path::PathBuf::from("--docker-bin"), docker.to_path_buf()]
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&report).map_err(|_| "cannot encode ACME continuation")?
+        );
+        return Ok(());
+    };
+    if candidate.environment() == crate::installer_acme_configuration::AcmeEnvironment::Staging {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema":"elevenid.installer-acme-installation/v1",
+                "installation_id":state.journal().installation_id(),
+                "outcome":"staging_candidate_observed", "enrollment":outcome.enrolment.report,
+                "certificate_admission":candidate.metadata(),
+                "application_started":false,"installation_ready":false,
+                "production_selection_permitted":false
+            })
+        );
+        return Ok(());
+    }
+    let plan = state.with_inspection(|view| {
+        crate::installer_public_ingress::PublicIngressPlan::from_candidate(
+            view,
+            &candidate,
+            &outcome.ingress_key,
+        )
+    })?;
+    let bootstrap = crate::installer_application::public_ingress_inputs(
+        installation,
+        state,
+        &outcome.compose_inputs,
+        &plan,
+    )?;
+    eprintln!("Marty runtime stage: immutable public TLS and workload credential generation");
+    let (receipt, generation) = crate::installer_generation_host::provision_public(
+        docker,
+        installation,
+        bundle,
+        state,
+        infrastructure,
+        inventory
+            .images
+            .get("gateway")
+            .ok_or("admitted gateway image missing")?,
+        crate::installer_application::job_inputs(
+            &bootstrap,
+            outcome.compose_receipt,
+            "installer-generation",
+        ),
+        invocation.operator_sha,
+        &plan,
+    )?;
+    state.write_evidence(
+        "generation-observation.json",
+        &serde_json::to_vec(&generation).map_err(|_| "cannot encode generation observation")?,
+    )?;
+    crate::installer_application::start(
+        docker,
+        installation,
+        bundle,
+        state,
+        infrastructure,
+        &inventory.images,
+        &bootstrap,
+        receipt,
+    )?;
+    validate_and_complete(docker, installation, bundle, state, inventory, invocation)
+}
+
+/// The retained operator resumes only a completely prepared ACME order. Neither
+/// an alternate binary nor new install flags can replay initial setup here.
+pub fn acme(args: &[String], build_identity: &str) -> Result<()> {
+    let action = args.first().map(String::as_str);
+    if !matches!(action, Some("status" | "continue")) || !(args.len() - 1).is_multiple_of(2) {
+        return Err("usage: marty-deploy acme status|continue --install-dir ABSOLUTE_PATH [--docker-bin ABSOLUTE_PATH]".into());
+    }
+    let mut values = BTreeMap::new();
+    for pair in args[1..].chunks_exact(2) {
+        if !["--install-dir", "--docker-bin"].contains(&pair[0].as_str())
+            || values.insert(pair[0].as_str(), pair[1].as_str()).is_some()
+        {
+            return Err("unknown or repeated ACME command option".into());
+        }
+    }
+    let installation = Path::new(
+        values
+            .get("--install-dir")
+            .copied()
+            .ok_or("ACME installation path required")?,
+    );
+    let docker = Path::new(
+        values
+            .get("--docker-bin")
+            .copied()
+            .unwrap_or("/usr/bin/docker"),
+    );
+    if !installation.is_absolute()
+        || !docker.is_absolute()
+        || (action == Some("status") && values.contains_key("--docker-bin"))
+    {
+        return Err("ACME command paths must be absolute; status does not use Docker".into());
+    }
+    let view = crate::installer_state::LockedInspection::open(installation)?;
+    if action == Some("status") {
+        let report = crate::installer_acme::status(&view)?;
+        view.require_unchanged()?;
+        println!("{report}");
+        return Ok(());
+    }
+    require_rootless_process()?;
+    let retained = crate::installer_acme_host::continuation_context(&view)?;
+    let identity = view.journal().identity().clone();
+    let operator_sha = installer_verify::current_operator_digest()?;
+    if build_identity != format!("{}:{}", identity.source_sha, identity.release_tag)
+        || operator_sha != retained.operator_sha256
+    {
+        return Err("ACME continuation requires the exact retained release operator".into());
+    }
+    let bytes = view.read_evidence("installer-inventory.json")?;
+    if format!("sha256:{}", release::sha256(&bytes)) != identity.inventory_sha256 {
+        return Err("retained installer inventory differs".into());
+    }
+    let inventory = release::parse_inventory(&bytes)?;
+    if inventory.source_sha != identity.source_sha
+        || inventory.release_tag != identity.release_tag
+        || inventory.artifact("marty-deploy-linux-amd64")?.sha256 != operator_sha
+        || inventory.images.get("gateway") != Some(&retained.services_image)
+        || inventory
+            .images
+            .values()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            != retained.compose_inputs.approved_images
+    {
+        return Err("retained ACME release, operator or images differ".into());
+    }
+    let image_lock = installer_verify::read_private_record(
+        &installation.join("downloads/prepared-selfhost-images.json"),
+    )?;
+    let bundle =
+        crate::installer_bundle::validate_bundle(&retained.bundle, &inventory, &image_lock)?;
+    if serde_json::to_value(bundle).map_err(|_| "cannot encode bundle observation")?
+        != crate::installer_json::decode(&view.read_evidence("bundle-validation.json")?)
+            .map_err(|_| "retained bundle validation is malformed")?
+    {
+        return Err("retained ACME bundle differs".into());
+    }
+    let completion = if matches!(
+        view.journal().execution_scope(),
+        ExecutionScope::CandidateTest(_)
+    ) {
+        RuntimeCompletion::CandidateTrialObserved
+    } else if crate::installer_startup_observation::retained_signed_startup(&view, &operator_sha)? {
+        RuntimeCompletion::SignedStartupObserved
+    } else {
+        RuntimeCompletion::HoldIncomplete
+    };
+    let roots = retained_staging_roots(&view)?;
+    let mut state = InstallerState::continue_acme_enrolment(view, installation, &identity)?;
+    let outcome = crate::installer_acme_host::resume(
+        &crate::installer_acme_host::HostInputs {
+            docker,
+            installation,
+            bundle: &retained.bundle,
+            infrastructure: &retained.infrastructure,
+            services_image: &retained.services_image,
+            operator_sha256: &operator_sha,
+        },
+        &mut state,
+        roots.as_deref(),
+    )?;
+    finish_acme_installation(
+        docker,
+        installation,
+        &retained.bundle,
+        &mut state,
+        &inventory,
+        RuntimeInvocation {
+            operator_sha: &operator_sha,
+            completion,
+        },
+        &retained.infrastructure,
+        outcome,
+    )
+}
+
 fn validate_and_complete(
     docker: &Path,
     installation: &Path,
@@ -717,9 +1044,41 @@ fn validate_and_complete(
         )?;
     }
     eprintln!("Marty runtime stage: read-only deployment validation");
-    state.with_inspection(|inspection| {
-        crate::installer_validation::run_locked(installation, docker, inspection, false)
+    let startup = if invocation.completion == RuntimeCompletion::SignedStartupObserved {
+        Some(state.with_inspection(|inspection| {
+            crate::installer_startup_observation::observe_locked(
+                inspection,
+                installation,
+                docker,
+                crate::installer_startup_observation::StartupObservationRequest::fresh(),
+            )
+        })?)
+    } else {
+        state.with_inspection(|inspection| {
+            crate::installer_validation::run_locked(installation, docker, inspection, false)
+        })?;
+        None
+    };
+    let lifecycle = state.with_maintenance(|maintenance| {
+        crate::installer_lifecycle::install_locked(maintenance, installation, docker)
     })?;
+    if let Some(startup) = startup {
+        state.require_live_phase(Phase::Provisioning)?;
+        // The private native result can only be constructed by the real signed
+        // observer. Exit zero is observation-only, never admitted completion.
+        println!(
+            "{}",
+            std::str::from_utf8(&startup.bytes()?)
+                .map_err(|_| "cannot encode signed startup observation")?
+        );
+        eprintln!("SIGNED STARTUP OBSERVED: journal remains Provisioning; Ready, functional/recovery qualification and load characterization are false.");
+        return Ok(());
+    }
+    println!(
+        "{}",
+        serde_json::to_string(&lifecycle)
+            .map_err(|_| "cannot encode customer lifecycle commands")?
+    );
     completion_after_validation(state, invocation.completion, installation)
 }
 

@@ -7,6 +7,16 @@ mod compose_model;
 mod deployment_admission;
 mod deployment_environment;
 mod deployment_lifecycle;
+pub mod installer_acme;
+pub mod installer_acme_bootstrap;
+pub mod installer_acme_certificates;
+pub mod installer_acme_configuration;
+pub mod installer_acme_credentials;
+pub mod installer_acme_custody;
+pub mod installer_acme_host;
+pub(crate) mod installer_acme_preparation;
+pub mod installer_acme_renewal;
+pub(crate) mod installer_acme_state;
 pub mod installer_application;
 pub mod installer_application_env;
 pub mod installer_artifacts;
@@ -36,6 +46,8 @@ pub(crate) mod installer_foundation_registration;
 pub mod installer_generation;
 pub mod installer_generation_binding;
 pub mod installer_generation_host;
+pub(crate) mod installer_generation_maintenance;
+mod installer_health;
 mod installer_helper_output;
 #[cfg(target_os = "linux")]
 mod installer_host_fs;
@@ -59,21 +71,29 @@ pub mod installer_keycloak_bridge;
 pub mod installer_kms;
 pub mod installer_lifecycle;
 pub mod installer_logs;
+pub mod installer_managed_renewal;
 pub mod installer_openbao;
+pub(crate) mod installer_openbao_control;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_openbao_owner_transition;
+pub(crate) mod installer_openbao_recovery;
+pub(crate) mod installer_openbao_seal;
 pub mod installer_prepare;
+pub mod installer_public_ingress;
 pub(crate) mod installer_purge_host;
 #[allow(dead_code)] // No production caller until the purge coordinator is reviewed.
 pub(crate) mod installer_purge_ledger;
 pub mod installer_release;
 pub mod installer_renewal;
 pub mod installer_renewal_bootstrap;
+pub mod installer_root_retirement;
 #[cfg(target_os = "linux")]
 pub mod installer_rootless_canary_helper;
 #[cfg(target_os = "linux")]
 pub mod installer_rootless_storage_canary;
 pub mod installer_runtime;
+#[cfg(target_os = "linux")]
+pub mod installer_startup_observation;
 pub mod installer_state;
 pub mod installer_tls;
 pub mod installer_tls_outputs;

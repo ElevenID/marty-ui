@@ -61,6 +61,33 @@ def test_host_probe_uses_signed_source_and_pinned_loopback(pinned):
     assert set(options["env"]) == {"HOME", "PATH", "LANG", "LC_ALL"}
 
 
+@pytest.mark.parametrize("change", [None, "socket", "uid", "memory"])
+def test_rootless_host_probe_rebinds_observed_runtime_to_authenticated_vm(pinned, change):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_installer_candidate_vm_rootless import guest_facts, PROFILE
+    binding, _, _ = pinned
+    facts = guest_facts()
+    binding.update({key: facts[key] for key in host_probe.ROOTLESS_FACT_FIELDS})
+    binding["target"] = dict(engine_id=facts["docker_engine_id"])
+    observed = dict(schema="elevenid.installer-host-observation/v2", acceptance=False,
+                    engine_id=facts["docker_engine_id"],
+                    **{key: facts[key] for key in host_probe.ROOTLESS_FACT_FIELDS - {"resource_profile"}})
+    observed = release.decode(release.encode(observed))
+    if change == "socket":
+        observed["runtime"]["socket_inode"] += 1
+    elif change == "uid":
+        observed["runtime"]["uid"] = 0
+    elif change == "memory":
+        observed["docker_memory_bytes"] = 4 * 1024**3
+    raw = release.encode(observed)
+    if change:
+        with pytest.raises(ValueError):
+            host_probe.probe(binding, "a" * 40, run=lambda *_a, **_k: raw)
+    else:
+        assert host_probe.probe(binding, "a" * 40, run=lambda *_a, **_k: raw) == raw
+        assert binding["resource_profile"] == PROFILE
+
+
 @pytest.mark.parametrize("change", ["host", "user", "port", "key_hash"])
 def test_host_probe_refuses_changed_selection(pinned, change):
     binding, _, _ = pinned

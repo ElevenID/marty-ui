@@ -1,0 +1,8 @@
+{
+  "name": "marty-installer-startup-browser",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned controller-side startup browser; never installed in the customer guest",
+  "dependencies": { "playwright-core": "1.62.1" },
+  "engines": { "node": "24.22.1" }
+}

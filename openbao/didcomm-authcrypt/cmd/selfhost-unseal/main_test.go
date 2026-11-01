@@ -92,3 +92,53 @@ func TestUninitializedNodeWaitsOnlyWithCleanState(t *testing.T) {
 		t.Fatal("existing unseal material was accepted for an uninitialized node")
 	}
 }
+
+func TestHealthChecksSeparateListenerFromUnsealedReadinessWithoutMutation(t *testing.T) {
+	for _, state := range []struct {
+		name                string
+		initialized, sealed bool
+	}{
+		{"uninitialized", false, true},
+		{"sealed", true, true},
+		{"ready", true, false},
+	} {
+		t.Run(state.name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				requests++
+				if request.Method != http.MethodGet || request.URL.Path != "/v1/sys/seal-status" {
+					t.Error("read-only health check performed a mutation")
+					http.Error(w, "invalid", http.StatusBadRequest)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]bool{"initialized": state.initialized, "sealed": state.sealed})
+			}))
+			defer server.Close()
+			listener, err := check(context.Background(), server.Client(), server.URL, false)
+			if err != nil || !listener.ListenerAvailable || listener.Initialized != state.initialized ||
+				listener.Sealed != state.sealed || listener.InstallationReady {
+				t.Fatal("listener check claimed incorrect readiness")
+			}
+			ready := state.initialized && !state.sealed
+			observed, err := check(context.Background(), server.Client(), server.URL, true)
+			if (err == nil) != ready || observed.UnsealedReady != ready || !observed.ListenerAvailable || observed.InstallationReady || requests != 2 {
+				t.Fatal("unsealed check did not preserve health semantics")
+			}
+		})
+	}
+}
+
+func TestUnixOptInRejectsConflictingOrMalformedConfiguration(t *testing.T) {
+	for _, settings := range [][4]string{
+		{"0", "https://openbao:8200", "/bao/data/tls/ca.crt", "/bao/data/unseal.key"},
+		{"true", "https://openbao:8200", "/bao/data/tls/ca.crt", "/bao/data/unseal.key"},
+		{"1", "http://openbao:8200", "/bao/data/tls/ca.crt", "/bao/data/unseal.key"},
+		{"1", "https://elsewhere:8200", "/bao/data/tls/ca.crt", "/bao/data/unseal.key"},
+		{"1", "https://openbao:8200", "/other/ca.crt", "/bao/data/unseal.key"},
+		{"1", "https://openbao:8200", "/bao/data/tls/ca.crt", "/other/unseal.key"},
+	} {
+		if _, _, err := configuredClient(settings[0], settings[1], settings[2], settings[3]); err == nil {
+			t.Fatal("local control accepted an ambiguous configuration")
+		}
+	}
+}

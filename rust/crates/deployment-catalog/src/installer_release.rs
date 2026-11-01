@@ -1,7 +1,7 @@
 //! Strict installer record decoding and binding. No I/O or cryptography occurs
 //! here: callers authenticate the exact input bytes and invoke a pinned verifier
 //! successfully before applying the certificate-output checks below.
-use serde::{de, Deserialize};
+use serde::{de, Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,6 +13,7 @@ pub const ISSUER: &str = "https://token.actions.githubusercontent.com";
 pub const PROMOTION_WORKFLOW: &str = ".github/workflows/installer-promote.yml";
 pub const ACCEPTANCE_WORKFLOW: &str = ".github/workflows/installer-acceptance.yml";
 pub const MAX_RECORD: usize = 65536;
+pub const MAX_CANDIDATE_HOSTING: usize = 8192;
 const SAFE_INTEGER: u64 = 1 << 53;
 
 fn require(value: bool, error: &str) -> Result<()> {
@@ -140,6 +141,151 @@ pub enum CandidatePhase {
     Staged,
     Published,
 }
+
+/// Public configuration authority derived from exact customer-owned input.
+/// A v1 grant has no such authority, including when a caller adds a null field.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateHosting {
+    pub input_sha256: String,
+    pub input_size_bytes: u64,
+    pub public_origin: String,
+    pub public_entry_origin: Option<String>,
+    pub certificate_source: String,
+    pub acme_environment: Option<String>,
+    pub acme_terms_url: Option<String>,
+    pub staging_trust: Option<CandidateStagingTrust>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateStagingTrust {
+    pub sha256: String,
+    pub size_bytes: u64,
+}
+
+impl CandidateHosting {
+    pub fn validate(&self) -> Result<()> {
+        use marty_selfhost_identity::origin::PublicOrigin;
+        require(
+            sha(&self.input_sha256, 64)
+                && (1..=MAX_CANDIDATE_HOSTING as u64).contains(&self.input_size_bytes),
+            "candidate hosting input binding differs",
+        )?;
+        let origin = PublicOrigin::parse(&self.public_origin)?;
+        require(
+            origin.dns_name().is_some() && !origin.is_loopback(),
+            "candidate hosting identity differs",
+        )?;
+        origin.did_web_authority()?;
+        if let Some(alias) = &self.public_entry_origin {
+            let alias = PublicOrigin::parse(alias)?;
+            require(
+                alias.ip_address().is_some() && !alias.is_loopback(),
+                "candidate hosting entry differs",
+            )?;
+        }
+        require(
+            self.staging_trust.is_some()
+                == (self.certificate_source == "acme"
+                    && self.acme_environment.as_deref() == Some("staging")),
+            "candidate staging trust scope differs",
+        )?;
+        if let Some(trust) = &self.staging_trust {
+            require(
+                sha(&trust.sha256, 64) && (1..=65_536).contains(&trust.size_bytes),
+                "candidate staging trust binding differs",
+            )?;
+        }
+        match self.certificate_source.as_str() {
+            "managed-ca" => require(
+                self.acme_environment.is_none() && self.acme_terms_url.is_none(),
+                "candidate managed CA parameters differ",
+            ),
+            "acme" => {
+                require(
+                    matches!(
+                        self.acme_environment.as_deref(),
+                        Some("staging" | "production")
+                    ),
+                    "candidate ACME environment differs",
+                )?;
+                let raw = self
+                    .acme_terms_url
+                    .as_deref()
+                    .ok_or("candidate ACME terms missing")?;
+                require(
+                    raw.is_ascii() && raw.len() <= 2048,
+                    "candidate ACME terms differ",
+                )?;
+                let url = reqwest::Url::parse(raw).map_err(|_| "candidate ACME terms differ")?;
+                require(
+                    url.as_str() == raw
+                        && url.scheme() == "https"
+                        && url.host_str() == Some("letsencrypt.org")
+                        && url.port().is_none()
+                        && url.username().is_empty()
+                        && url.password().is_none()
+                        && url.query().is_none()
+                        && url.fragment().is_none()
+                        && url.path().starts_with("/documents/")
+                        && url.path().ends_with(".pdf"),
+                    "candidate ACME terms differ",
+                )
+            }
+            _ => Err("candidate certificate source differs".into()),
+        }
+    }
+
+    fn context_value(&self) -> Result<Value> {
+        self.validate()?;
+        // The cross-language context hash sorts nested keys as well as its
+        // outer map. Do not depend on serde struct declaration ordering.
+        let sorted: BTreeMap<String, Value> = serde_json::from_value(
+            serde_json::to_value(self).map_err(|_| "candidate hosting encoding failed")?,
+        )
+        .map_err(|_| "candidate hosting encoding failed")?;
+        serde_json::to_value(sorted).map_err(|_| "candidate hosting encoding failed".into())
+    }
+}
+
+fn candidate_version(value: &Value, family: &str) -> Result<()> {
+    let schema = value
+        .get("schema")
+        .and_then(Value::as_str)
+        .ok_or("candidate schema missing")?;
+    if schema == format!("elevenid.installer-{family}/v1") {
+        return require(
+            value.get("hosting").is_none(),
+            "legacy candidate cannot authorize hosting input",
+        );
+    }
+    require(
+        schema == format!("elevenid.installer-{family}/v2"),
+        "candidate schema differs",
+    )?;
+    let hosting = value
+        .get("hosting")
+        .and_then(Value::as_object)
+        .ok_or("candidate hosting binding missing")?;
+    let expected: BTreeSet<_> = [
+        "input_sha256",
+        "input_size_bytes",
+        "public_origin",
+        "public_entry_origin",
+        "certificate_source",
+        "acme_environment",
+        "acme_terms_url",
+        "staging_trust",
+    ]
+    .into_iter()
+    .collect();
+    require(
+        hosting.keys().map(String::as_str).collect::<BTreeSet<_>>() == expected,
+        "candidate hosting fields differ",
+    )?;
+    let binding: CandidateHosting = typed(Value::Object(hosting.clone()))?;
+    binding.validate()
+}
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CandidateAuthorization {
@@ -162,6 +308,8 @@ pub struct CandidateAuthorization {
     pub issued_at: u64,
     pub expires_at: u64,
     pub nonce: String,
+    #[serde(default)]
+    pub hosting: Option<CandidateHosting>,
 }
 /// Independently selected harness invocation and candidate, never populated by
 /// copying claims from the authorization under verification.
@@ -175,15 +323,17 @@ pub struct CandidateContext {
     pub harness_source_sha: String,
     pub run_id: u64,
     pub run_attempt: u64,
+    pub hosting: Option<CandidateHosting>,
 }
 
 /// Parse only. The caller must authenticate these exact bytes against the
 /// harness workflow/source/run certificate and enforce nonce consumption.
 pub fn parse_candidate_authorization(bytes: &[u8], now: u64) -> Result<CandidateAuthorization> {
-    let a: CandidateAuthorization = typed(decode(bytes, MAX_RECORD)?)?;
+    let value = decode(bytes, MAX_RECORD)?;
+    candidate_version(&value, "candidate-authorization")?;
+    let a: CandidateAuthorization = typed(value)?;
     require(
-        a.schema == "elevenid.installer-candidate-authorization/v1"
-            && a.repository == REPOSITORY
+        a.repository == REPOSITORY
             && a.scope == "acceptance-only"
             && a.source_ref == REF
             && a.platform == "linux/amd64"
@@ -246,6 +396,10 @@ pub fn bind_candidate_authorization(
             && a.operator_sha256 == expected.operator_sha,
         "candidate authorization bytes, phase or producer differ",
     )?;
+    require(
+        a.hosting == expected.hosting,
+        "candidate hosting authority differs",
+    )?;
     Ok((a, inv))
 }
 
@@ -266,7 +420,7 @@ pub fn candidate_context_sha256(expected: &CandidateContext) -> Result<String> {
         CandidatePhase::Staged => "staged",
         CandidatePhase::Published => "published",
     };
-    let values: BTreeMap<&str, Value> = [
+    let mut values: BTreeMap<&str, Value> = [
         ("source_sha", Value::from(expected.source_sha.clone())),
         ("release_tag", Value::from(expected.release_tag.clone())),
         (
@@ -284,6 +438,9 @@ pub fn candidate_context_sha256(expected: &CandidateContext) -> Result<String> {
     ]
     .into_iter()
     .collect();
+    if let Some(hosting) = &expected.hosting {
+        values.insert("hosting", hosting.context_value()?);
+    }
     Ok(sha256(
         &serde_json::to_vec(&values).map_err(|_| "cannot encode controller context")?,
     ))
@@ -315,6 +472,8 @@ pub struct ControllerConsumption {
     pub engine_id: String,
     pub installation_id: String,
     pub consumed_at: u64,
+    #[serde(default)]
+    pub hosting: Option<CandidateHosting>,
 }
 
 fn canonical_v4(value: &str) -> bool {
@@ -330,10 +489,11 @@ fn canonical_v4(value: &str) -> bool {
 /// consumed outside the guest; this module cannot prove persistence or global
 /// one-use semantics. Guest/disk identity must be established by the controller.
 pub fn parse_controller_consumption(bytes: &[u8], now: u64) -> Result<ControllerConsumption> {
-    let c: ControllerConsumption = typed(decode(bytes, MAX_RECORD)?)?;
+    let value = decode(bytes, MAX_RECORD)?;
+    candidate_version(&value, "controller-consumption")?;
+    let c: ControllerConsumption = typed(value)?;
     require(
-        c.schema == "elevenid.installer-controller-consumption/v1"
-            && c.repository == REPOSITORY
+        c.repository == REPOSITORY
             && c.scope == "controller-dispatch-consumed"
             && c.source_ref == REF
             && c.workflow == ACCEPTANCE_WORKFLOW,
@@ -398,6 +558,7 @@ pub fn bind_controller_consumption(
             && c.run_id == a.run_id
             && c.run_attempt == a.run_attempt
             && c.phase == a.phase
+            && c.hosting == a.hosting
             && c.engine_id == expected_engine
             && c.consumed_at >= a.issued_at
             && c.consumed_at < a.expires_at,
@@ -713,6 +874,85 @@ mod tests {
             harness_source_sha: "b".repeat(40),
             run_id: 90,
             run_attempt: 2,
+            hosting: None,
+        }
+    }
+    #[test]
+    fn python_candidate_v2_fixture_binds_hosting_trust_and_exact_context() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!(
+            "../tests/fixtures/installer-candidate-hosting-v2.json"
+        ))
+        .unwrap();
+        for case in cases {
+            let raw = case["hosting_input"].as_str().unwrap().as_bytes();
+            let roots = case["staging_roots"].as_str().map(str::as_bytes);
+            let binding = crate::installer_hosting::candidate_binding(raw, roots).unwrap();
+            let auth_bytes = case["authorization"].as_str().unwrap().as_bytes();
+            let inventory = case["inventory"].as_str().unwrap().as_bytes();
+            let receipt = case["controller"].as_str().unwrap().as_bytes();
+            let now = case["now"].as_u64().unwrap();
+            let authorization = parse_candidate_authorization(auth_bytes, now).unwrap();
+            assert_eq!(authorization.hosting.as_ref(), Some(&binding));
+            let context = CandidateContext {
+                operator_sha: authorization.operator_sha256.clone(),
+                source_sha: authorization.source_sha.clone(),
+                release_tag: authorization.release_tag.clone(),
+                phase: authorization.phase,
+                nonce: authorization.nonce.clone(),
+                harness_source_sha: authorization.harness_source_sha.clone(),
+                run_id: authorization.run_id,
+                run_attempt: authorization.run_attempt,
+                hosting: Some(binding.clone()),
+            };
+            assert_eq!(
+                candidate_context_sha256(&context).unwrap(),
+                case["context_sha256"].as_str().unwrap()
+            );
+            bind_controller_consumption(
+                receipt,
+                auth_bytes,
+                inventory,
+                &context,
+                "test-engine-12345678",
+                now,
+            )
+            .unwrap();
+            let mut changed = raw.to_vec();
+            changed.push(b' ');
+            assert_ne!(
+                crate::installer_hosting::candidate_binding(&changed, roots).unwrap(),
+                binding
+            );
+            for mutation in [
+                "v1-added", "v1-null", "missing", "summary", "extra", "trust",
+            ] {
+                let mut value: Value = serde_json::from_slice(auth_bytes).unwrap();
+                match mutation {
+                    "v1-added" => {
+                        value["schema"] = json!("elevenid.installer-candidate-authorization/v1")
+                    }
+                    "v1-null" => {
+                        value["schema"] = json!("elevenid.installer-candidate-authorization/v1");
+                        value["hosting"] = Value::Null;
+                    }
+                    "missing" => {
+                        value.as_object_mut().unwrap().remove("hosting");
+                    }
+                    "summary" => {
+                        value["hosting"]["public_entry_origin"] = json!("https://192.0.2.21")
+                    }
+                    "extra" => value["hosting"]["extra"] = json!(true),
+                    "trust" => {
+                        value["hosting"]["staging_trust"] =
+                            json!({"sha256":"e".repeat(64),"size_bytes":5})
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(
+                    bind_candidate_authorization(&bytes(&value), inventory, &context, now).is_err(),
+                    "accepted {mutation}"
+                );
+            }
         }
     }
     #[test]
@@ -732,6 +972,7 @@ mod tests {
             harness_source_sha: "c".repeat(40),
             run_id: 99,
             run_attempt: 3,
+            hosting: None,
         };
         assert_eq!(
             candidate_context_sha256(&expected).unwrap(),

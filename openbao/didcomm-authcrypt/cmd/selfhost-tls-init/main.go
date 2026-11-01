@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/ElevenID/marty-ui/openbao/didcomm-authcrypt/internal/openbaocontrol"
 )
 
 var names = []string{"ca.crt", "ca.key", "server.pem"}
@@ -31,6 +33,19 @@ func main() {
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fail(errors.New("unexpected arguments"))
+	}
+	switch os.Getenv("MARTY_OPENBAO_LOCAL_CONTROL") {
+	case "":
+		// Preserve the existing TLS-only initialization/rotation contract.
+	case "1":
+		if *dir != "/bao/data/tls" || *rotate {
+			fail(errors.New("local control requires fresh fixed-path TLS initialization"))
+		}
+		if err := openbaocontrol.InitializeDirectories(); err != nil {
+			fail(err)
+		}
+	default:
+		fail(errors.New("invalid local control setup selection"))
 	}
 	if err := ensure(*dir, *rotate); err != nil {
 		fail(err)

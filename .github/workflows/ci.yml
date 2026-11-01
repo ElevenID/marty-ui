@@ -274,6 +274,12 @@ jobs:
                   ;;
                 *.md|docs/*|.github/ISSUE_TEMPLATE/*)
                   ;;
+                ui/index.html)
+                  # The native installer validation embeds the entry document.
+                  ui=true
+                  rust=true
+                  security=true
+                  ;;
                 ui/*|demo-apps/*)
                   ui=true
                   security=true
@@ -1309,6 +1315,11 @@ jobs:
             rm -f "$stats_file.tmp"
             echo 'Optional compiler cache stats unavailable; Rust validation remains authoritative.'
           fi
+      - name: Require unprivileged installer recovery fixtures
+        if: matrix.lane == 'contracts'
+        timeout-minutes: 10
+        shell: bash
+        run: bash scripts/ci/qualify-installer-recovery-fixtures.sh "$RUNNER_TEMP/rust-test-artifacts.json"
       - name: Execute ordinary Issuance library obligations
         if: matrix.lane == 'renewal-unit'
         working-directory: rust
@@ -3099,6 +3110,7 @@ jobs:
             tests/test_installer_candidate_vm_host_probe.py \
             tests/test_installer_candidate_vm_host_preflight.py \
             tests/test_installer_candidate_vm_exchange.py \
+            tests/test_installer_candidate_vm_rootless.py \
             tests/test_installer_engineering_trial.py -p no:cacheprovider --junitxml="$report"
           python - "$report" <<'PY'
           import sys
@@ -3110,9 +3122,9 @@ jobs:
           if suite is None or suite.tag != "testsuite":
               raise SystemExit("root-owned VM creation test report is missing")
           cases = list(suite.iter("testcase"))
-          if len(cases) != 108 or any(
+          if len(cases) != 158 or any(
               int(suite.attrib.get(name, "-1")) != expected
-              for name, expected in (("tests", 108), ("skipped", 0),
+              for name, expected in (("tests", 158), ("skipped", 0),
                                      ("failures", 0), ("errors", 0))
           ):
               raise SystemExit("root-owned VM creation cases did not all execute and pass")

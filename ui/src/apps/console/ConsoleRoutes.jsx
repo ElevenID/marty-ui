@@ -1,3 +1,5 @@
+import { isWebSectionEnabled } from '../../utils/runtimeConfig';
+import WebSectionUnavailable from '../../components/WebSectionUnavailable';
 import { Navigate, Route, Routes } from 'react-router';
 import { Alert, Box, CircularProgress, Typography } from '@mui/material';
 
@@ -137,7 +139,7 @@ function ConsoleEntryRoute() {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" state={{ from: { pathname: '/console' } }} replace />;
+    return <Navigate to="/console/login" state={{ from: { pathname: '/console' } }} replace />;
   }
 
   if (membershipLoadError && isOrgBootstrapRequired) {
@@ -148,16 +150,19 @@ function ConsoleEntryRoute() {
 }
 
 function ConsoleRoutes() {
+  if (!isWebSectionEnabled('console')) return <WebSectionUnavailable />;
+
   return (
     <Routes>
       <Route path="/console" element={<ConsoleEntryRoute />} />
       <Route path="/console/login" element={<LoginPage fallbackRedirectTo="/console" />} />
       <Route path="/login" element={<LoginPage fallbackRedirectTo="/console" />} />
       <Route path="/console/auth/callback" element={<AuthCallback />} />
+      <Route path="/auth/callback" element={<AuthCallback />} />
       <Route
         path="/console/org"
         element={
-          <OrgConsoleRoute redirectTo="/login">
+          <OrgConsoleRoute redirectTo="/console/login">
             <AuthenticatedLayout />
           </OrgConsoleRoute>
         }
@@ -248,7 +253,7 @@ function ConsoleRoutes() {
       <Route
         path="/console/org/setup"
         element={
-          <ProtectedRoute redirectTo="/login">
+          <ProtectedRoute redirectTo="/console/login">
             <AuthenticatedLayout />
           </ProtectedRoute>
         }
@@ -259,7 +264,7 @@ function ConsoleRoutes() {
       <Route
         path="/console/applicant"
         element={
-          <ApplicantConsoleRoute redirectTo="/login">
+          <ApplicantConsoleRoute redirectTo="/console/login">
             <AuthenticatedLayout />
           </ApplicantConsoleRoute>
         }
@@ -279,7 +284,7 @@ function ConsoleRoutes() {
       <Route
         path="/console/organizations"
         element={
-          <ProtectedRoute redirectTo="/login">
+          <ProtectedRoute redirectTo="/console/login">
             <AuthenticatedLayout />
           </ProtectedRoute>
         }
@@ -305,7 +310,7 @@ function ConsoleRoutes() {
       <Route
         path="*"
         element={
-          <ProtectedRoute redirectTo="/login">
+          <ProtectedRoute redirectTo="/console/login">
             <Navigate to="/console" replace />
           </ProtectedRoute>
         }

@@ -27,6 +27,30 @@ fn old_identity(
     name: &str,
     identity: &IngressIdentity,
 ) -> Result<()> {
+    validate_retained_private_identity_at(
+        ca,
+        leaf,
+        public,
+        name,
+        identity,
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| REFUSED)?
+            .as_secs(),
+    )
+}
+
+/// Historical source authentication for a public generation transition. This
+/// keeps the private issuer/leaf profile checks intact and does not require an
+/// obsolete private CA to remain live when inspecting an immutable receipt.
+pub(crate) fn validate_retained_private_identity_at(
+    ca: &str,
+    leaf: &str,
+    public: &str,
+    name: &str,
+    identity: &IngressIdentity,
+    observed: u64,
+) -> Result<()> {
     let issuer = certificate(ca)?;
     let leaf = certificate(leaf)?;
     p256(&issuer)?;
@@ -42,7 +66,10 @@ fn old_identity(
     )?;
     let remote = spki::SubjectPublicKeyInfoOwned::from_pem(public).map_err(|_| REFUSED)?;
     require(leaf.tbs_certificate.subject_public_key_info == remote)?;
-    require(check_lifetime(ca.as_bytes(), TTL).map_err(|_| REFUSED)?)
+    require(
+        check_lifetime_at(ca.as_bytes(), TTL, Duration::from_secs(observed))
+            .map_err(|_| REFUSED)?,
+    )
 }
 
 async fn custody(
@@ -238,6 +265,137 @@ fn validate_at(
     Ok(())
 }
 
+pub(crate) struct MintedTlsSigner {
+    pub token: String,
+    pub ttl_seconds: u64,
+    pub observed_at: u64,
+}
+
+/// Shared exact TLS-token mint and proof. It has no CSR or issuer operation.
+pub(crate) async fn mint_tls_signer(
+    bao: &OpenBaoHttp,
+    authority: &str,
+    name: &str,
+    public: &str,
+    previous_token: &str,
+) -> Result<MintedTlsSigner> {
+    signer_policy(name)?;
+    let minted = request(bao, Method::POST, "auth/token/create/selfhost-renew-leaf", Some(&json!({
+        "policies":[name],"no_default_policy":true,"renewable":false,"ttl":"8h","explicit_max_ttl":"8h"
+    })), Some(authority)).await.map_err(|_| REFUSED)?;
+    let token = text(&minted["auth"], "client_token")?;
+    require(
+        (20..=4096).contains(&token.len())
+            && token
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+            && token != authority
+            && token != previous_token,
+    )?;
+    let looked_up = request(
+        bao,
+        Method::POST,
+        "auth/token/lookup",
+        Some(&json!({"token":token})),
+        Some(authority),
+    )
+    .await
+    .map_err(|_| REFUSED)?;
+    let data = &looked_up["data"];
+    let ttl = data["ttl"].as_u64().ok_or(REFUSED)?;
+    require(
+        data["policies"] == json!([name])
+            && data["orphan"] == true
+            && data["renewable"] == false
+            && data["path"] == "auth/token/create/selfhost-renew-leaf"
+            && data["explicit_max_ttl"] == TTL
+            && (3600..=TTL).contains(&ttl),
+    )?;
+    let signed = request(
+        bao,
+        Method::POST,
+        &format!("transit/sign/{name}"),
+        Some(&sign_body()),
+        Some(token),
+    )
+    .await
+    .map_err(|_| REFUSED)?;
+    verify_signing_proof(public, text(&signed["data"], "signature")?)?;
+    for path in [
+        format!("transit/keys/{name}/rotate"),
+        "auth/token/create".into(),
+        format!("{name}/root/generate/internal"),
+    ] {
+        denial(bao, token, Method::POST, &path, Some(sign_body()))
+            .await
+            .map_err(|_| REFUSED)?;
+    }
+    denial(
+        bao,
+        token,
+        Method::GET,
+        &format!("transit/export/signing-key/{name}"),
+        None,
+    )
+    .await
+    .map_err(|_| REFUSED)?;
+    Ok(MintedTlsSigner {
+        token: token.into(),
+        ttl_seconds: ttl,
+        observed_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| REFUSED)?
+            .as_secs(),
+    })
+}
+
+pub(crate) async fn prove_retained_tls_signer(
+    bao: &OpenBaoHttp,
+    authority: &str,
+    name: &str,
+    spki: &[u8],
+    token: &str,
+) -> Result<()> {
+    signer_policy(name)?;
+    let observed = request(
+        bao,
+        Method::POST,
+        "auth/token/lookup",
+        Some(&json!({"token":token})),
+        Some(authority),
+    )
+    .await
+    .map_err(|_| REFUSED)?;
+    let data = &observed["data"];
+    require(
+        data["policies"] == json!([name])
+            && data["orphan"] == true
+            && data["renewable"] == false
+            && data["explicit_max_ttl"] == TTL
+            && data["ttl"]
+                .as_u64()
+                .is_some_and(|ttl| (3600..=TTL).contains(&ttl))
+            && [
+                "auth/token/create-orphan",
+                "auth/token/create/selfhost-renew-leaf",
+            ]
+            .contains(&data["path"].as_str().ok_or(REFUSED)?),
+    )?;
+    let public = spki::SubjectPublicKeyInfoOwned::from_der(spki).map_err(|_| REFUSED)?;
+    let public = spki::der::EncodePem::to_pem(&public, spki::der::pem::LineEnding::LF)
+        .map_err(|_| REFUSED)?;
+    let signed = request(
+        bao,
+        Method::POST,
+        &format!("transit/sign/{name}"),
+        Some(&sign_body()),
+        Some(token),
+    )
+    .await
+    .map_err(|_| REFUSED)?;
+    verify_signing_proof(&public, text(&signed["data"], "signature")?)
+}
+
 /// Called once after the containing generation has persisted its pending
 /// receipt. A lost CSR/sign/token response remains an uncertain transaction.
 pub(crate) async fn renew(
@@ -278,65 +436,9 @@ pub(crate) async fn renew(
         .as_secs();
     let (ca_expires_at, certificate_expires_at) =
         check_certificates_for(ca, leaf, &public, &name, now, identity)?;
-    let minted = request(bao, Method::POST, "auth/token/create/selfhost-renew-leaf", Some(&json!({
-        "policies":[name],"no_default_policy":true,"renewable":false,"ttl":"8h","explicit_max_ttl":"8h"
-    })), Some(authority)).await.map_err(|_| REFUSED)?;
-    let token = text(&minted["auth"], "client_token")?;
-    require(
-        (20..=4096).contains(&token.len())
-            && token
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
-            && token != authority
-            && token != input(current, OUTPUTS[2])?,
-    )?;
-    let looked_up = request(
-        bao,
-        Method::POST,
-        "auth/token/lookup",
-        Some(&json!({"token":token})),
-        Some(authority),
-    )
-    .await
-    .map_err(|_| REFUSED)?;
-    let data = &looked_up["data"];
-    let ttl = data["ttl"].as_u64().ok_or(REFUSED)?;
-    require(
-        data["policies"] == json!([name])
-            && data["orphan"] == true
-            && data["renewable"] == false
-            && data["path"] == "auth/token/create/selfhost-renew-leaf"
-            && data["explicit_max_ttl"] == TTL
-            && (3600..=TTL).contains(&ttl),
-    )?;
-    let signed = request(
-        bao,
-        Method::POST,
-        &format!("transit/sign/{name}"),
-        Some(&sign_body()),
-        Some(token),
-    )
-    .await
-    .map_err(|_| REFUSED)?;
-    verify_signing_proof(&public, text(&signed["data"], "signature")?)?;
-    for path in [
-        format!("transit/keys/{name}/rotate"),
-        "auth/token/create".into(),
-        format!("{name}/root/generate/internal"),
-    ] {
-        denial(bao, token, Method::POST, &path, Some(sign_body()))
-            .await
-            .map_err(|_| REFUSED)?;
-    }
-    denial(
-        bao,
-        token,
-        Method::GET,
-        &format!("transit/export/signing-key/{name}"),
-        None,
-    )
-    .await
-    .map_err(|_| REFUSED)?;
+    let minted =
+        mint_tls_signer(bao, authority, &name, &public, input(current, OUTPUTS[2])?).await?;
+    let token = minted.token.as_str();
     let metadata = IngressMetadata {
         schema: "elevenid.installer-ingress/v2".into(),
         installation_id: owner.into(),
@@ -357,11 +459,8 @@ pub(crate) async fn renew(
         certificate_pem_sha256: format!("{:x}", Sha256::digest(leaf.as_bytes())),
         ca_expires_at,
         certificate_expires_at,
-        token_ttl_seconds: ttl,
-        token_observed_at: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| REFUSED)?
-            .as_secs(),
+        token_ttl_seconds: minted.ttl_seconds,
+        token_observed_at: minted.observed_at,
         trust_installed: false,
         installation_ready: false,
     };

@@ -25,6 +25,33 @@ FIRST_ID = "33333333-3333-4333-8333-333333333333"
 FINAL_ID = "44444444-4444-4444-8444-444444444444"
 
 
+def rootless_arrangement(arranged, profile):
+    from test_installer_candidate_vm_rootless import guest_facts
+    args, calls, _, monkeypatch = arranged
+    facts = {key: value for key, value in guest_facts().items()
+             if key in preflight.ROOTLESS_FACT_FIELDS}
+    facts["resource_profile"] = profile
+    original = preflight.bind_target
+    def bind(*a, **k):
+        result = original(*a, **k)
+        result.update(facts)
+        return result
+    monkeypatch.setattr(preflight, "bind_target", bind)
+    observed = host()
+    observed.update(schema="elevenid.installer-host-observation/v2",
+                    docker_version="29.1.3", compose_version="2.40.3",
+                    limitations=["synthetic read-only fixture; not deployment qualification"],
+                    **{key: value for key, value in facts.items() if key != "resource_profile"})
+    observed["predicates"]["capacity"] = False
+    observed["resources"] = dict(containers=[], images=[], volumes=[], networks=[
+        dict(id=str(index) * 64, name=name, driver=driver, attached_count=0)
+        for index, (name, driver) in enumerate((("bridge", "bridge"), ("host", "host"), ("none", "null")), 1)])
+    raw = release.encode(observed)
+    args["guest_probe"] = lambda *_a: raw
+    args["resource_profile"] = profile
+    return args, calls, raw, monkeypatch
+
+
 @pytest.fixture
 def arranged(tmp_path, monkeypatch):
     tmp_path.chmod(0o700)
@@ -94,6 +121,68 @@ def test_preflight_preserves_raw_host_bytes_without_consuming_nonce(arranged):
     assert raw_path.read_bytes() == raw
     assert calls == ["signed", "observe:" + FIRST_ID, "probe", "signed",
                      "observe:" + FINAL_ID, "signed"]
+    assert not (args["registry"] / (args["expected"]["nonce"] + ".json")).exists()
+
+
+@pytest.mark.parametrize("profile", ["rootless-startup-8gib", "rootless-functional-recovery-8gib"])
+def test_rootless_preflight_consumption_and_retained_verification_pin_exact_profile(arranged, profile):
+    args, _, raw, monkeypatch = rootless_arrangement(arranged, profile)
+    fixture = json.loads((Path(__file__).resolve().parents[1]
+                          / "rust/crates/deployment-catalog/tests/fixtures/installer-candidate-records.json").read_text())
+    authorization, inventory = fixture["authorization"].encode(), fixture["inventory"].encode()
+    grant = release.decode(authorization)
+    args["expected"] = {key: grant[key] for key in release.CONTEXT_FIELDS}
+    monkeypatch.setattr(preflight.uploader, "authenticate", lambda *_a, **_k: (authorization, inventory))
+    with ControllerLease(args["registry"]) as lease:
+        record = preflight.preflight(lease, **args)
+        assert record["schema"] == preflight.ROOTLESS_SCHEMA
+        assert record["resource_profile"] == profile
+        assert record["runtime"]["uid"] == 1001
+        assert record["docker_memory_bytes"] == record["guest_memory_bytes"] == 7 * 1024**3
+        assert record["host_observation_sha256"] == release.digest(raw)
+        assert record["qualified"] is record["nonce_consumed"] is record["dispatch_authorized"] is False
+        monkeypatch.setattr(release, "bind_candidate_authorization", REAL_BIND_CANDIDATE)
+        common = dict(vm_id=VM_ID, installation_id=INSTALLATION_ID,
+                      observation_id=FIRST_ID, preflight_record=record,
+                      authorization=args["authorization"], assets=args["assets"],
+                      expected=args["expected"], gh=args["gh"], cosign=args["cosign"],
+                      clock=args["clock"], resource_profile=profile)
+        wrong = ("rootless-functional-recovery-8gib" if profile == "rootless-startup-8gib"
+                 else "rootless-startup-8gib")
+        with pytest.raises(ValueError, match="profile differs"):
+            preflight.consume_preflight(lease, args["registry"], args["runtime_parent"],
+                                        consumption_observation_id="55555555-5555-4555-8555-555555555555",
+                                        **dict(common, resource_profile=wrong))
+        receipt = preflight.consume_preflight(
+            lease, args["registry"], args["runtime_parent"],
+            consumption_observation_id="55555555-5555-4555-8555-555555555555", **common)
+        verify = dict(authorization=args["authorization"], assets=args["assets"],
+                      expected=args["expected"], gh=args["gh"], cosign=args["cosign"],
+                      clock=args["clock"], resource_profile=profile)
+        checked = preflight.verify_consumed_intent(lease, args["registry"], **verify)
+        assert checked["receipt_sha256"] == release.digest(receipt)
+        assert checked["runtime"] == record["runtime"]
+        assert checked["resource_profile"] == profile
+        assert set(checked["target"]) == {"guest_id", "disk_id", "engine_id", "installation_id"}
+        with pytest.raises(ValueError, match="profile differs"):
+            preflight.verify_consumed_intent(lease, args["registry"],
+                                             **dict(verify, resource_profile=wrong))
+
+
+def test_rootless_preflight_refuses_socket_drift_or_implicit_profile_before_consumption(arranged):
+    args, _, raw, _ = rootless_arrangement(arranged, "rootless-startup-8gib")
+    with ControllerLease(args["registry"]) as lease:
+        with pytest.raises(ValueError, match="explicit"):
+            preflight.preflight(lease, **dict(args, resource_profile=None))
+    # Use fresh observation IDs because diagnostics remain immutable on failure.
+    args["observation_id"] = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    args["final_observation_id"] = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    changed = release.decode(raw)
+    changed["runtime"]["socket_inode"] += 1
+    args["guest_probe"] = lambda *_a: release.encode(changed)
+    with ControllerLease(args["registry"]) as lease:
+        with pytest.raises(ValueError, match="runtime or measured memory changed"):
+            preflight.preflight(lease, **args)
     assert not (args["registry"] / (args["expected"]["nonce"] + ".json")).exists()
 
 

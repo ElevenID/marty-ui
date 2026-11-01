@@ -86,7 +86,7 @@ class CurrentIssuerProfileTests(unittest.TestCase):
     def test_compact_signing_profile_preserves_spare_and_exact_caps(self):
         compact = build.CURRENT_ISSUER_POLICY_COMPACT_PROFILE
         scope = build.build_scope(compact)
-        self.assertEqual(scope["uiRevision"], "53138ba3cbddccd063e1d49ef8efa0f28d838a02")
+        self.assertEqual(scope["uiRevision"], "4c99781ca5807494826e0ee0f8d63ee0fc5ad91d")
         self.assertEqual(scope["roles"], {"signing-keys": "marty-signing-keys"})
         self.assertEqual(scope["volumes"], build.build_scope(PROFILE)["volumes"])
         self.assertEqual(build.current_issuer_limits(compact),
@@ -155,7 +155,7 @@ class CurrentIssuerProfileTests(unittest.TestCase):
     def test_policy_signing_profile_reuses_closed_builder_without_gateway(self):
         one = "current-issuer-policy-signing-only"
         scope = build.build_scope(one)
-        self.assertEqual(scope["uiRevision"], "53138ba3cbddccd063e1d49ef8efa0f28d838a02")
+        self.assertEqual(scope["uiRevision"], "4c99781ca5807494826e0ee0f8d63ee0fc5ad91d")
         self.assertEqual(scope["coreRevision"], "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac")
         self.assertEqual(scope["roles"], {"signing-keys": "marty-signing-keys"})
         self.assertEqual(scope["owner"], "current-issuer-ready-native")

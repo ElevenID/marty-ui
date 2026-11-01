@@ -110,6 +110,39 @@ vi.mock('../../components/console', () => ({
 }));
 
 describe('PublicRoutes', () => {
+  it.each(['/', '/apply', '/organizations', '/canvas/lti/experience'])('does not render excluded public page %s', (path) => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { web: { enabled_sections: ['console'] } };
+    mockUseAuth.mockReturnValue({ isAuthenticated: false });
+    renderWithoutRouter(<MemoryRouter initialEntries={[path]}><PublicRoutes /></MemoryRouter>);
+    expect(screen.getByTestId('web-section-unavailable')).toBeVisible();
+    expect(screen.queryByTestId('public-layout')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('browser-redirect')).not.toBeInTheDocument();
+  });
+
+  it('retains shared auth callback handling for a console-only installation', () => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { web: { enabled_sections: ['console'] } };
+    mockUseAuth.mockReturnValue({ isAuthenticated: false });
+    renderWithoutRouter(<MemoryRouter initialEntries={['/auth/callback?code=code-1']}><PublicRoutes /></MemoryRouter>);
+    expect(screen.getByTestId('auth-callback')).toBeVisible();
+    expect(screen.queryByTestId('public-layout')).not.toBeInTheDocument();
+  });
+
+  it.each(['/my-documents', '/console-handoff/org/setup', '/apply', '/apply/badge'])('does not hand off to an excluded console from %s', (path) => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { web: { enabled_sections: ['public'] } };
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    renderWithoutRouter(<MemoryRouter initialEntries={[path]}><PublicRoutes /></MemoryRouter>);
+    expect(screen.getByTestId('web-section-unavailable')).toBeVisible();
+    expect(screen.queryByTestId('browser-redirect')).not.toBeInTheDocument();
+  });
+
+  it('fails closed when all pages are disabled', () => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { web: { enabled_sections: [] } };
+    mockUseAuth.mockReturnValue({ isAuthenticated: false });
+    renderWithoutRouter(<MemoryRouter initialEntries={['/auth/callback']}><PublicRoutes /></MemoryRouter>);
+    expect(screen.getByTestId('web-section-unavailable')).toBeVisible();
+    expect(screen.queryByTestId('auth-callback')).not.toBeInTheDocument();
+  });
+
   it('keeps only the landing page local and hands interactive routes to the DNS origin', () => {
     const alias = 'https://203.0.113.10:8443';
     (globalThis as any).jsdom.reconfigure({ url: `${alias}/` });

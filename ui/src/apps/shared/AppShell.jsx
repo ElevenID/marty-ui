@@ -38,7 +38,8 @@ import {
 import { NotificationBell, LanguageSwitcher } from '../../components/common';
 import ImpersonationBanner from '../../components/ImpersonationBanner';
 import { initAnalytics, trackPageView, trackWebVitals } from '../../utils/analytics';
-import { isAdminImpersonationEnabled } from '../../utils/runtimeConfig';
+import { isAdminImpersonationEnabled, isWebSectionEnabled } from '../../utils/runtimeConfig';
+import { getPublicEntryCanonicalOrigin, publicEntryHref } from '../../application/routing/publicEntry';
 
 function createDynamicTheme(branding) {
   return createTheme({
@@ -96,6 +97,9 @@ function AppShell({ children, showAppBar = true }) {
   const theme = useMemo(() => createDynamicTheme(branding), [branding]);
   const compactHeader = useMediaQuery(theme.breakpoints.down('sm'));
   const adminImpersonationEnabled = isAdminImpersonationEnabled();
+  const publicEntry = Boolean(getPublicEntryCanonicalOrigin());
+  const publicEnabled = isWebSectionEnabled('public');
+  const consoleEnabled = isWebSectionEnabled('console');
 
   useEffect(() => {
     initAnalytics();
@@ -128,7 +132,7 @@ function AppShell({ children, showAppBar = true }) {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       {adminImpersonationEnabled && isAuthenticated && <ImpersonationBanner />}
-      {showAppBar && (
+      {showAppBar && publicEnabled && (
         <AppBar position="static">
           <Toolbar>
             {branding.logoUrl && (
@@ -168,6 +172,18 @@ function AppShell({ children, showAppBar = true }) {
             />
 
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              {publicEntry && consoleEnabled && !isAuthenticated && (
+                <Button
+                  component="a"
+                  href={publicEntryHref('/console')}
+                  variant="outlined"
+                  size="small"
+                  sx={{ color: 'white', borderColor: 'white' }}
+                  data-testid="public-entry-console"
+                >
+                  {t('common.openConsole', 'Console')}
+                </Button>
+              )}
               {isAuthenticated ? (
                 <>
                   {isVendor && organizationName && (
@@ -203,9 +219,9 @@ function AppShell({ children, showAppBar = true }) {
                     </Typography>
                   </Box>
 
-                  {isVendor && <NotificationBell />}
+                  {isVendor && consoleEnabled && <NotificationBell />}
 
-                  {isVendor && (
+                  {isVendor && consoleEnabled && (
                     <>
                       <Tooltip title={t('common.settings')}>
                         <IconButton
@@ -274,7 +290,7 @@ function AppShell({ children, showAppBar = true }) {
                       variant="contained"
                       size="small"
                       startIcon={<LoginIcon />}
-                      onClick={DISABLE_PUBLIC_LOGIN_BUTTON ? undefined : login}
+                      onClick={DISABLE_PUBLIC_LOGIN_BUTTON ? undefined : () => login(consoleEnabled ? '/console' : '/')}
                       disabled={DISABLE_PUBLIC_LOGIN_BUTTON}
                       sx={{
                         bgcolor: DISABLE_PUBLIC_LOGIN_BUTTON ? 'rgba(255, 255, 255, 0.16)' : 'white',

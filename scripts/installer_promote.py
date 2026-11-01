@@ -40,7 +40,7 @@ def snapshot(directory, names):
     result = {}
     for name in names:
         path = directory / name
-        maximum = release.ARTIFACT_MAX_BYTES.get(name, 65536 if name.endswith('.json')
+        maximum = release.ARTIFACT_MAX_BYTES.get(name, 256 * 1024 if name == 'installer-acceptance.json' else 65536 if name.endswith('.json')
                                                 and not name.endswith('.sigstore.json') else 1048576)
         provenance.local_file(path, private=True, maximum=maximum)
         with path.open('rb') as stream:

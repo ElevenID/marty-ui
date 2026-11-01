@@ -1,0 +1,14 @@
+# Customer-admin host bridge. Review the matching service's loopback port.
+[Unit]
+Description=Marty public HTTP-01 challenge socket
+
+[Socket]
+ListenStream=0.0.0.0:80
+ListenStream=[::]:80
+BindIPv6Only=ipv6-only
+Accept=no
+NoDelay=yes
+Service=marty-acme-http01.service
+
+[Install]
+WantedBy=sockets.target
