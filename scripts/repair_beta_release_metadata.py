@@ -493,7 +493,7 @@ class Operation:
         ]:
             request = urllib.request.Request(
                 "https://beta.elevenidllc.com" + route,
-                headers={"Accept-Encoding": "identity"},
+                headers={"Accept-Encoding": "identity", "User-Agent": "marty-demo-audit/1.0"},
             )
             with urllib.request.urlopen(request, timeout=20) as response:
                 require(

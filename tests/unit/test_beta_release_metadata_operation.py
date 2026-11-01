@@ -248,3 +248,42 @@ def test_wrong_nginx_witness_hash_refuses_before_any_docker_command(
     monkeypatch.setattr(operator, "acl_digest", lambda _: "a" * 64)
     with pytest.raises(ValueError, match="REVIEWED_NGINX_PRINCIPAL_REQUIRED"):
         op.readability(set())
+
+
+def test_public_metadata_uses_honest_audit_agent_and_preserves_byte_guards(tmp_path, monkeypatch):
+    import repair_beta_release_metadata as operator
+
+    marker = {"release": "actual"}
+    manifest = b'{"functional":true}'
+    calls = []
+
+    class Response:
+        status = 200
+
+        def __init__(self, request):
+            self.url = request.full_url
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self, limit):
+            assert limit == 4 * 1024 * 1024 + 1
+            return json.dumps(marker).encode() if self.url.endswith("marty-release") else manifest
+
+    def open_request(request, timeout):
+        assert request.get_header("User-agent") == "marty-demo-audit/1.0"
+        assert request.get_header("Accept-encoding") == "identity"
+        assert timeout == 20
+        calls.append(request.full_url)
+        return Response(request)
+
+    monkeypatch.setattr(operator.urllib.request, "urlopen", open_request)
+    op = operator.Operation.__new__(operator.Operation)
+    op.output = tmp_path
+    expected = {"sha256": operator.hashlib.sha256(manifest).hexdigest()}
+    result = op.public(marker, expected)
+    assert len(calls) == 2
+    assert result["manifest"]["sha256"] == expected["sha256"]
