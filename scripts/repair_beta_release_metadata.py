@@ -595,19 +595,12 @@ class Operation:
         )
         for role in ROLES:
             previous = load(preflight["before"][role])
-            current = before[role]
-            for field in [
-                "Id",
-                "Name",
-                "Image",
-                "Config",
-                "HostConfig",
-                "Mounts",
-                "NetworkSettings",
-            ]:
-                require(
-                    current[field] == previous[field], "PREVIEW_ROLE_CONFIG_CHANGED"
-                )
+            current = self.g.old_guard(previous, running=True)
+            require(
+                current["NetworkSettings"] == previous["NetworkSettings"],
+                "PREVIEW_ROLE_NETWORK_CHANGED",
+            )
+            before[role] = current
         self.save("before.json", before)
         self.state["before"] = ref(self.output / "before.json")
         self.persist()

@@ -287,3 +287,43 @@ def test_public_metadata_uses_honest_audit_agent_and_preserves_byte_guards(tmp_p
     result = op.public(marker, expected)
     assert len(calls) == 2
     assert result["manifest"]["sha256"] == expected["sha256"]
+
+
+@pytest.mark.parametrize("refuse", [False, True])
+def test_execute_delegates_preview_generation_to_existing_guard(tmp_path, refuse):
+    import repair_beta_release_metadata as operator
+    from types import SimpleNamespace
+
+    previous = {role: {"Id": role, "NetworkSettings": {"unchanged": True}} for role in operator.ROLES}
+    calls = []
+
+    def old_guard(row, *, running):
+        assert running is True
+        calls.append(row["Id"])
+        if refuse:
+            raise RuntimeError("OLD_MOUNTS_CHANGED")
+        return copy.deepcopy(row)
+
+    refs = {}
+    for role, row in previous.items():
+        file = tmp_path / (role + ".json")
+        file.write_text(json.dumps(row), encoding="utf8")
+        refs[role] = ref(file)
+    op = operator.Operation.__new__(operator.Operation)
+    op.g, op.output, op.state = SimpleNamespace(old_guard=old_guard), tmp_path, {}
+    op.baseline = lambda: (set(previous), copy.deepcopy(previous))
+    op.persist = lambda: None
+    op.models = {role: {} for role in previous}
+    op.c = {"oldCids": {role: role for role in previous}}
+    reached = []
+
+    def stop(*args):
+        reached.append(args)
+        raise RuntimeError("PRE_EFFECT_BOUNDARY_REACHED")
+
+    op.stop_generation = stop
+    with pytest.raises(RuntimeError, match="OLD_MOUNTS_CHANGED" if refuse else "PRE_EFFECT_BOUNDARY_REACHED"):
+        op.execute({"allIds": sorted(previous), "before": refs})
+    assert calls == ([operator.ROLES[0]] if refuse else list(operator.ROLES))
+    assert bool(reached) is not refuse
+    assert (tmp_path / "before.json").exists() is not refuse
