@@ -24,6 +24,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('@playwright/test');
 const {readBoundedSecretFile}=require('./canvas-secret-files');
+const {walletExpectationForTemplate, requireWalletReceiptBinding,
+  requireSignedCredentialBinding}=require('./canvas-credential-identity');
 const { retireOwnedCanvasFixtures, retireCanvasApplication, findCanvasInventoryRecord } = require('./canvas-owned-fixture-cleanup');
 
 const SCHEMA_VERSION = 1;
@@ -1959,14 +1961,15 @@ async function receiveAndVerifyCredential(offerUri, expectedTemplate, expectedIs
     'credential_template_vct_missing',
     'Credential verification requires the selected template\'s exact VCT before claiming its offer.',
   );
+  const walletExpectation = walletExpectationForTemplate(expectedTemplate);
   if(ownedEngineering){
     const {ownedWalletContext,recorderRepository,signal,walletPage}=ownedEngineering;
     const owned=require(path.join(recorderRepository,'src','ownedWalletRuntime.js'));
     owned.requireOwnedWalletContext(ownedWalletContext);
     await owned.requireOwnedCanvasHolderSigning(ownedWalletContext,signal);
-    const received=await require('./audit-beta-credential-lifecycle').receiveCredential(walletPage,offerUri,expectedTemplate.vct);
-    requireCondition(received.ok===true&&received.receipt?.vct===expectedTemplate.vct,
-      'owned_wallet_receipt_failed','The real Rust wallet did not store the expected credential.');
+    const received=await require('./audit-beta-credential-lifecycle').receiveCredential(walletPage,offerUri,walletExpectation);
+    requireCondition(received.ok===true,'owned_wallet_receipt_failed','The real Rust wallet did not store the expected credential.');
+    requireWalletReceiptBinding(received.receipt,walletExpectation);
     return {ownedReceipt:received.receipt,payload:null};
   }
   const offer = parseCredentialOfferUri(offerUri);
@@ -2024,11 +2027,11 @@ async function receiveAndVerifyCredential(offerUri, expectedTemplate, expectedIs
   requireCondition(didDocument?.id === predecoded.payload.iss, 'issuer_did_document_mismatch', 'The resolved DID document does not match the credential issuer.');
   const method = verificationMethodFromDidDocument(didDocument, predecoded.header.kid);
   const verified = verifyCompactJws(issuerJws, method.publicKeyJwk);
-  requireCondition(
-    verified.payload.vct === expectedTemplate.vct,
-    'open_badge_type_mismatch',
-    'The KMS-signed credential does not match the selected Open Badge template.',
-  );
+  try {
+    requireSignedCredentialBinding(verified.payload, expectedTemplate);
+  } catch (error) {
+    fail('open_badge_type_mismatch', `The KMS-signed credential does not match the selected Open Badge template: ${error.message}`);
+  }
   const cnf = verified.payload.cnf?.jwk || {};
   const holderJwkMatches = ['kty', 'crv', 'x', 'y'].every((key) => cnf[key] === holderJwk[key]);
   const holderBound = verified.payload.sub === proof.did || holderJwkMatches;

@@ -465,7 +465,22 @@ async function issueCredential(page, templateId, ownedResources, holder = lifecy
   return result;
 }
 
-async function receiveCredential(walletPage, offerUri, expectedVct) {
+function walletReceiptMatchesExpectation(receipt, inventory, expectation) {
+  if (typeof expectation === 'string' && expectation) {
+    return typeof inventory === 'string' && inventory.includes(expectation);
+  }
+  if (expectation?.format === 'jwt_vc_json'
+    && typeof expectation.credentialConfigurationId === 'string'
+    && expectation.credentialConfigurationId) {
+    return receipt?.format === 'jwt_vc_json'
+      && receipt?.credential_configuration_id === expectation.credentialConfigurationId
+      && typeof inventory === 'string'
+      && inventory.includes(expectation.credentialConfigurationId);
+  }
+  throw new TypeError('Expected wallet credential must identify a VCT or VC-JWT configuration');
+}
+
+async function receiveCredential(walletPage, offerUri, expectedCredential) {
   await openIsolatedWallet(walletPage, TEST_WALLET_ORIGIN);
   await resetIsolatedWallet(walletPage, TEST_WALLET_ORIGIN);
   await walletPage.reload({ waitUntil: 'domcontentloaded' });
@@ -481,7 +496,7 @@ async function receiveCredential(walletPage, offerUri, expectedVct) {
   }).catch(() => {});
   const inventory = await walletPage.locator('#credentials').innerText();
   return {
-    ok: response.ok() && inventory.includes(expectedVct),
+    ok: response.ok() && walletReceiptMatchesExpectation(body, inventory, expectedCredential),
     status: response.status(),
     error: response.ok() ? null : body?.error || 'Wallet receipt failed',
     receipt: response.ok() ? {
@@ -1372,6 +1387,7 @@ module.exports = {
   performLifecycleAction,
   prepareLiveInputs,
   receiveCredential,
+  walletReceiptMatchesExpectation,
   renewCredential,
   resolveUiCandidateDist,
   resolveVerificationIssuerDid,

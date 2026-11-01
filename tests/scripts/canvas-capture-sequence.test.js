@@ -48,7 +48,7 @@ test('receipt readback rejects wrong transaction, template, organization, duplic
   assert.equal(requireIssuedBinding([{ ...record, application_id: 'other' }], scope, 'tx'), null);
 });
 
-function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {}) {
+function harness({ scenario = 'external-evidence-to-credential', fail = '', credentialFormat = 'SD_JWT_VC' } = {}) {
   const state = { grade: 95, issued: false, approved: false, reserved: false, revision: 0, jobs: 0, mutations: [], checkpoints: [],
     claimObserved: false, claimClicked: false, walletReceipts: 0, rosterCalls: [] };
   const report = { behaviorAssertions: {} };
@@ -140,7 +140,8 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
   };
   const setup = { organizationId: 'org', binding: { id: 'binding' }, platformId: 'platform',
     martyOrigin: 'https://beta.elevenidllc.com', fixtures: { course: { id: 1 }, assignment: { id: 2 }, learner: { id: 3 } },
-    templates: { application: { id: 'application-template' }, credential: { id: 'template', vct: 'https://issuer.test/badge' }, policy: { id: 'policy' } },
+    templates: { application: { id: 'application-template' }, credential: { id: 'template', vct: 'https://issuer.test/badge',
+      credential_type: 'OpenBadgeCredential', credential_payload_format: credentialFormat }, policy: { id: 'policy' } },
     pinnedBinding: { evidence_requirements: [{ requirement_id: 'score', fact_type: 'canvas.assignment_score', source: 'canvas_rest' }] },
     marty, adminCanvas: { async putForm(url, body) {
       state.grade = body['submission[posted_grade]']; state.revision++;
@@ -191,13 +192,17 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
     async waitFor(fn) { const value = await fn(); assert.ok(value, 'Expected terminal result'); return value; },
   };
   const wallet = {
-    async receiveCredential(_page, offer, vct) {
+    async receiveCredential(_page, offer, expected) {
       assert.equal(state.claimClicked, true);
       assert.equal(offer, 'offer-in-memory-only');
-      assert.equal(vct, setup.templates.credential.vct);
+      if (credentialFormat === 'VC_JWT') assert.deepEqual(expected,
+        { format: 'jwt_vc_json', credentialConfigurationId: 'OpenBadgeCredential' });
+      else assert.equal(expected, setup.templates.credential.vct);
       state.walletReceipts++;
       state.issued = true;
-      return { ok: true, receipt: { id: 'wallet-record', vct: setup.templates.credential.vct } };
+      return { ok: true, receipt: credentialFormat === 'VC_JWT'
+        ? { id: 'wallet-record', format: 'jwt_vc_json', credentialConfigurationId: 'OpenBadgeCredential' }
+        : { id: 'wallet-record', vct: setup.templates.credential.vct } };
     },
     async verify() { if (fail === 'wallet-presentation-rejected') return {
       session: { ok: true, status: 200, requestUri: '[present]' },
@@ -227,6 +232,15 @@ test('D08 current operations bind one launch, approval, receipt, verifier and re
   assert.equal(h.state.checkpoints.includes('correction-review-open'), true);
   assert.equal(h.state.checkpoints.includes('correction-review-resolved'), true);
   assert.deepEqual(Object.values(h.report.behaviorAssertions), [true, true, true, true]);
+});
+
+test('D08 accepts the real VC-JWT Open Badge wallet receipt after the same scoped operations', async () => {
+  const h = harness({ credentialFormat: 'VC_JWT' });
+  await h.run();
+  assert.equal(h.state.walletReceipts, 1);
+  assert.equal(h.report.walletReceipt.receipt.format, 'jwt_vc_json');
+  assert.equal(h.report.credentialId, 'credential');
+  assert.doesNotThrow(() => requireCaptureMutationReconciliation(h.report));
 });
 
 test('D07 runs fresh pre-issuance denial/recovery and retired-ingest operation without inheriting D08', async () => {
