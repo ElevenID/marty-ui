@@ -1,6 +1,6 @@
 use crate::ComplianceServiceConfig;
 use axum::{routing::get, Json, Router};
-use mmf_core::{BuildInfo, ComponentHealth, HealthStatus, LifecycleState, MmfError};
+use mmf_core::{BuildInfo, LifecycleState, MmfError};
 use mmf_runtime::{system_router, RuntimeState};
 use serde_json::{json, Value};
 #[derive(Clone, Copy)]
@@ -59,13 +59,7 @@ impl ComplianceRuntime {
         Ok(Self { state })
     }
     pub fn mark_healthy(&self, d: ComplianceDependency) -> Result<(), MmfError> {
-        self.state.set_component_health(
-            d.name(),
-            ComponentHealth {
-                status: HealthStatus::Healthy,
-                message: None,
-            },
-        )
+        self.state.mark_component_healthy(d.name())
     }
     pub fn activate(&self) -> Result<(), MmfError> {
         self.state.transition(LifecycleState::Active)
@@ -84,4 +78,49 @@ async fn native() -> Json<Value> {
     Json(
         json!({"status":"ready","available":true,"backend":"marty-compliance-profile-rust","version":env!("CARGO_PKG_VERSION"),"authoritative":true,"python_fallback":false,"capabilities":["profile_lifecycle","policy_storage","system_catalog","tenant_authorization","postgres_migrations"]}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+
+    async fn readiness(runtime: &ComplianceRuntime) -> StatusCode {
+        runtime
+            .router()
+            .oneshot(Request::get("/ready").body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn required_listener_health_and_drain_control_operational_readiness() {
+        let config = ComplianceServiceConfig::from_values([
+            ("ENVIRONMENT".into(), "development".into()),
+            ("DATABASE_URL".into(), "postgresql://db/compliance".into()),
+        ])
+        .unwrap();
+        let runtime = ComplianceRuntime::new(&config).unwrap();
+        assert_eq!(readiness(&runtime).await, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(runtime.activate().is_err());
+        for dependency in ComplianceDependency::all().filter(|d| d.name() != "http_listener") {
+            runtime.mark_healthy(dependency).unwrap();
+        }
+        assert!(runtime.activate().is_err());
+        assert_eq!(readiness(&runtime).await, StatusCode::SERVICE_UNAVAILABLE);
+        runtime
+            .mark_healthy(ComplianceDependency::HttpListener)
+            .unwrap();
+        runtime.activate().unwrap();
+        assert_eq!(readiness(&runtime).await, StatusCode::OK);
+        runtime.drain().unwrap();
+        assert_eq!(readiness(&runtime).await, StatusCode::SERVICE_UNAVAILABLE);
+        runtime.stop().unwrap();
+        assert_eq!(readiness(&runtime).await, StatusCode::SERVICE_UNAVAILABLE);
+    }
 }
