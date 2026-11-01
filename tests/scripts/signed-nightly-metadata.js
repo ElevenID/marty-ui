@@ -6,7 +6,7 @@ const ROLES=['ui-prod','gateway'];
 const same=(a,b,reason)=>assert(isDeepStrictEqual(a,b),reason);
 const canonical=source=>require('./functional-debug-runtime').comparableBinaryMounts([{source}])[0].source;
 const json=value=>JSON.stringify(Object.fromEntries(Object.entries(value).sort()));
-function labels(row){
+function labels(row,keepCompose=false){
  const output={...row.Config.Labels},groups=new Map();
  for(const key of Object.keys(output)){
   if(key.startsWith('desktop.docker.io/')){
@@ -24,12 +24,17 @@ function labels(row){
   const mount=row.Mounts.filter(value=>value.Destination===group.Target);assert.equal(mount.length,1);assert.equal(mount[0].Type,'bind');
   assert.equal(canonical(group.Source),canonical(mount[0].Source));
  }
- for(const field of ['com.docker.compose.config-hash','com.docker.compose.project.config_files','com.docker.compose.project.working_dir'])delete output[field];
+ if(!keepCompose)for(const field of ['com.docker.compose.config-hash','com.docker.compose.project.config_files','com.docker.compose.project.working_dir'])delete output[field];
  return output;
 }
 function mounts(values,key){const output=Object.fromEntries(values.map(value=>[value[key],value.Type==='bind'?{...value,Source:canonical(value.Source)}:value]));assert.equal(Object.keys(output).length,values.length);return output;}
 function host(row){const output=structuredClone(row.HostConfig);if(output.Mounts)output.Mounts=mounts(output.Mounts,'Target');for(const field of ['Dns','DnsOptions','DnsSearch'])if(output[field]===null||(Array.isArray(output[field])&&!output[field].length))output[field]=[];return output;}
 function environment(row){const result={};for(const value of row.Config.Env){const at=value.indexOf('=');assert(at>0);const key=value.slice(0,at);assert(!Object.hasOwn(result,key));result[key]=value.slice(at+1);}return result;}
+function sameGenerationConfiguration(original,actual){
+ const before=structuredClone(original),after=structuredClone(actual);
+ before.Config.Labels=labels(before,true);after.Config.Labels=labels(after,true);
+ require('./signed-nightly-restart').configuration(before,after);
+}
 function generatedHostname(before,after){
  if(before.Config.Hostname!==after.Config.Hostname){
   assert.equal(before.Config.Hostname,before.Id.slice(0,12),'Unexpected original hostname');
@@ -88,7 +93,7 @@ function metadataSuccessor(ref, byRole, tools){
  assert.equal(new Set(result.allIds).size,result.allIds.length);same([...result.allIds].sort(),expectedIds.sort(),'Unrelated registration changed');
  const output=new Map(byRole);
  for(const role of ROLES){assert.equal(input.oldCids[role],byRole.get(role).Id);assert.equal(before[role].Id,input.oldCids[role]);assert.equal(after[role].Id,result.newCids[role]);
-  require('./signed-nightly-restart').configuration(byRole.get(role),before[role]);
+  sameGenerationConfiguration(byRole.get(role),before[role]);
   output.set(role,transition(before[role],after[role],role,input,marker));}
  return output;
 }
@@ -118,7 +123,7 @@ function metadataRecovery(ref,byRole,tools){
  same(Object.keys(operation.terminals).sort(),[...operation.operations].sort());
  for(const step of operation.operations){const terminal=tools.boundJson(operation.terminals[step]);assert.equal(terminal.exit,0);tools.verifyBoundFile(terminal.stdout,16*1024*1024,0);tools.verifyBoundFile(terminal.stderr,16*1024*1024,0);}
  const before=tools.boundJson(failed.before),recovered=tools.boundJson(result.recovered),preflight=tools.boundJson(input.preflightResult);same(Object.keys(recovered),['ui-prod']);
- for(const role of ROLES){assert.equal(before[role].Id,byRole.get(role).Id);require('./signed-nightly-restart').configuration(byRole.get(role),before[role]);}
+ for(const role of ROLES){assert.equal(before[role].Id,byRole.get(role).Id);sameGenerationConfiguration(byRole.get(role),before[role]);}
  const row=recovered['ui-prod'];assert.equal(row.Id,operation.newCids['ui-prod']);assert.notEqual(row.Id,before['ui-prod'].Id);assert.notEqual(row.Id,failed.newCids['ui-prod']);
  const original=structuredClone(before['ui-prod']),actual=structuredClone(row);generatedHostname(original,actual);original.Id=actual.Id;original.Config.Labels=labels(original);actual.Config.Labels=labels(actual);
  require('./signed-nightly-restart').configuration(original,actual);
@@ -129,4 +134,4 @@ function metadataRecovery(ref,byRole,tools){
  const output=new Map(byRole);output.set('ui-prod',row);return output;
 }
 
-module.exports={metadataSuccessor,metadataRecovery,transition,labels,generatedHostname,OPERATOR_SHA,RECOVERY_PINS};
+module.exports={metadataSuccessor,metadataRecovery,transition,labels,generatedHostname,sameGenerationConfiguration,OPERATOR_SHA,RECOVERY_PINS};

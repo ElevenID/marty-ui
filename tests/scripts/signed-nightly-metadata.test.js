@@ -49,3 +49,12 @@ test('actual reviewed recovery algorithm preserves original configuration and re
  const {metadataRecovery}=require('./signed-nightly-metadata');const f=recoveryFixture();assert.equal(metadataRecovery(f.value,f.before,f.tools).get('ui-prod').Id,'d'.repeat(64));
  for(const mutate of [f=>f.docs[f.value.path].result.sha256='0'.repeat(64),f=>f.docs[f.operation.path].pending='unknown',f=>f.docs[f.recovered.path]['ui-prod'].Config.Env.push('PRIVATE=changed'),f=>f.docs[f.recovered.path]['ui-prod'].Config.Hostname='unrelated',f=>f.docs[f.recovered.path]['ui-prod'].HostConfig.Memory++,f=>f.docs[f.result.path].allIds.push('extra')]){const n=recoveryFixture();mutate(n);assert.throws(()=>metadataRecovery(n.value,n.before,n.tools));}
 });
+
+test('same-generation preimages validate Desktop-derived labels while retaining Compose provenance',()=>{
+ const {sameGenerationConfiguration}=require('./signed-nightly-metadata');
+ const before=row('ui-prod');before.Config.Labels['com.docker.compose.config-hash']='same';before.NetworkSettings.Ports={'80/tcp':[{HostIp:'0.0.0.0',HostPort:'3000'}]};
+ before.Config.Labels['desktop.docker.io/ports.scheme']='v2';before.Config.Labels['desktop.docker.io/ports/80/tcp']=':3000';
+ const after=structuredClone(before);delete after.Config.Labels['desktop.docker.io/ports.scheme'];delete after.Config.Labels['desktop.docker.io/ports/80/tcp'];sameGenerationConfiguration(before,after);
+ for(const mutate of [value=>value.Config.Labels['com.docker.compose.config-hash']='changed',value=>value.Config.Labels['desktop.docker.io/unknown']='extra',value=>value.Config.Env.push('PRIVATE=changed')]){const changed=structuredClone(after);mutate(changed);assert.throws(()=>sameGenerationConfiguration(before,changed));}
+ const wrong=structuredClone(before);wrong.Config.Labels['desktop.docker.io/ports/80/tcp']=':9999';assert.throws(()=>sameGenerationConfiguration(wrong,after));
+});
