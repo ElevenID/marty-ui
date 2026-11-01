@@ -1,5 +1,5 @@
 use axum::Router;
-use mmf_core::{BuildInfo, ComponentHealth, HealthStatus, LifecycleState, MmfError};
+use mmf_core::{BuildInfo, LifecycleState, MmfError};
 use mmf_runtime::NativeBackendDiagnostics;
 use mmf_runtime::{system_router, RuntimeState};
 
@@ -51,38 +51,30 @@ pub struct TrustProfileRuntime {
 
 impl TrustProfileRuntime {
     pub fn new(config: &TrustProfileServiceConfig) -> Result<Self, MmfError> {
-        let state = RuntimeState::new(BuildInfo {
-            service: "trust-profile".into(),
-            version: config.release_version.clone(),
-            build_revision: config.build_revision.clone(),
-            enabled_features: vec![
-                "native_trust_profiles".into(),
-                "native_issuer_registry".into(),
-                "native_registry_sync_validation".into(),
-                "native_did_assertion_key_resolution".into(),
-                "organization_overlays".into(),
-                "postgres_migrations".into(),
-                "system_catalog_reconciliation".into(),
-                "fail_closed_control_plane".into(),
-                "http".into(),
-            ],
-        });
-        for dependency in TrustProfileDependency::required() {
-            state.register_required_component(dependency.name())?;
-        }
-        state.transition(LifecycleState::Initialized)?;
-        state.transition(LifecycleState::Starting)?;
+        let state = RuntimeState::starting(
+            BuildInfo {
+                service: "trust-profile".into(),
+                version: config.release_version.clone(),
+                build_revision: config.build_revision.clone(),
+                enabled_features: vec![
+                    "native_trust_profiles".into(),
+                    "native_issuer_registry".into(),
+                    "native_registry_sync_validation".into(),
+                    "native_did_assertion_key_resolution".into(),
+                    "organization_overlays".into(),
+                    "postgres_migrations".into(),
+                    "system_catalog_reconciliation".into(),
+                    "fail_closed_control_plane".into(),
+                    "http".into(),
+                ],
+            },
+            TrustProfileDependency::required().map(|dependency| dependency.name()),
+        )?;
         Ok(Self { state })
     }
 
     pub fn mark_healthy(&self, dependency: TrustProfileDependency) -> Result<(), MmfError> {
-        self.state.set_component_health(
-            dependency.name(),
-            ComponentHealth {
-                status: HealthStatus::Healthy,
-                message: None,
-            },
-        )
+        self.state.mark_component_healthy(dependency.name())
     }
 
     pub fn activate(&self) -> Result<(), MmfError> {

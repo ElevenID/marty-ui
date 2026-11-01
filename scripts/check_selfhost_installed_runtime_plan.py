@@ -33,7 +33,8 @@ H, C = "service_healthy", "service_completed_successfully"
 # must update this contract and its source-render test in the same review.
 EXPECTED_DEPENDENCIES = {
     "applicant": {"db-migrate": C},
-    "auth": {"db-migrate": C, "flow": H, "keycloak-configurator": C, "redis": H},
+    "auth": {"applicant": H, "db-migrate": C, "flow": H,
+             "keycloak-configurator": C, "redis": H},
     "canvas-sync-worker": {"db-migrate": C, "issuance-migrations": C},
     "compliance-profile": {"db-migrate": C},
     "credential-template": {"db-migrate": C},
@@ -41,9 +42,10 @@ EXPECTED_DEPENDENCIES = {
     "deployment-profile": {"db-migrate": C},
     "device-registration": {"db-migrate": C, "redis": H},
     "edge": {"flow": H, "gateway": H, "keycloak": H, "ui": H},
-    "flow": {"credential-template": H, "db-migrate": C, "issuance": H,
-             "issuance-native": H, "organization": H,
-             "presentation-policy": H, "redis": H},
+    "flow": {"credential-template": H, "db-migrate": C,
+             "deployment-profile": H, "issuance": H, "issuance-native": H,
+             "organization": H, "presentation-policy": H, "redis": H,
+             "trust-profile": H},
     "gateway": {"applicant": H, "auth": H, "compliance-profile": H,
                 "credential-template": H, "deployment-profile": H,
                 "event-stream": H, "flow": H, "issuance": H, "issuance-native": H,

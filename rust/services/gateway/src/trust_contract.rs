@@ -1,3 +1,6 @@
+use marty_service_contracts::trust_profile::{
+    CREATE_FIELDS as TRUST_PROFILE_FIELDS, UPDATE_FIELDS as TRUST_PROFILE_UPDATE_FIELDS,
+};
 use std::collections::BTreeSet;
 
 use serde_json::{json, Map, Value};
@@ -52,59 +55,6 @@ const ISSUER_CREATE_FIELDS: &[&str] = &[
     "valid_until",
     "trust_anchor_id",
     "metadata",
-];
-const TRUST_PROFILE_FIELDS: &[&str] = &[
-    "organization_id",
-    "name",
-    "description",
-    "profile_type",
-    "compliance_status",
-    "trust_purposes",
-    "trust_sources",
-    "validation_rules",
-    "allowed_algorithms",
-    "min_key_size_rsa",
-    "min_key_size_ec",
-    "require_key_usage",
-    "max_chain_depth",
-    "allow_self_signed",
-    "revocation_policy",
-    "revocation_profile_id",
-    "time_policy",
-    "supported_formats",
-    "trusted_assertion_formats",
-    "allowed_issuers",
-    "denied_issuers",
-    "system_issuer_overrides",
-    "compatible_compliance_codes",
-    "verification_policy_set_id",
-    "auto_generated",
-];
-const TRUST_PROFILE_UPDATE_FIELDS: &[&str] = &[
-    "name",
-    "description",
-    "profile_type",
-    "compliance_status",
-    "trust_purposes",
-    "trust_sources",
-    "validation_rules",
-    "allowed_algorithms",
-    "min_key_size_rsa",
-    "min_key_size_ec",
-    "require_key_usage",
-    "max_chain_depth",
-    "allow_self_signed",
-    "revocation_policy",
-    "revocation_profile_id",
-    "time_policy",
-    "supported_formats",
-    "trusted_assertion_formats",
-    "allowed_issuers",
-    "denied_issuers",
-    "system_issuer_overrides",
-    "compatible_compliance_codes",
-    "verification_policy_set_id",
-    "auto_generated",
 ];
 const ISSUER_UPDATE_FIELDS: &[&str] = &[
     "organization_id",
@@ -1350,6 +1300,30 @@ fn uuid_shape(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_profile_fields_preserve_patch_null_omission_and_organization_binding() {
+        let patch = json!({"description": null, "name": "Renamed"});
+        assert_eq!(
+            canonicalize_trust_profile(patch.clone(), true).unwrap(),
+            patch
+        );
+        assert_eq!(
+            canonicalize_trust_profile(json!({"name": "Renamed"}), true).unwrap(),
+            json!({"name": "Renamed"})
+        );
+        for invalid in [
+            json!({"organization_id": "other"}),
+            json!({"unexpected": null}),
+        ] {
+            assert!(canonicalize_trust_profile(invalid, true).is_err());
+        }
+        assert!(canonicalize_trust_profile(
+            json!({"organization_id": "org-1", "name": "Created"}),
+            false
+        )
+        .is_ok());
+    }
+
     #[test]
     fn did_trust_controls_are_preserved_and_invalid_nested_fields_fail_closed() {
         let source = serde_json::json!({

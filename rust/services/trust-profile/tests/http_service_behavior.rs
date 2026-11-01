@@ -268,15 +268,39 @@ async fn sparse_profile_edits_preserve_security_settings_and_reject_invalid_chan
     for changes in [
         json!({"name": "Renamed"}),
         json!({"description": "Changed description"}),
+        json!({"description": null}),
     ] {
         let before = body(request(service.clone(), "GET", &uri, None).await).await;
         let response = request(service.clone(), "PATCH", &uri, Some(changes.clone())).await;
         assert_eq!(response.status(), 200);
         let mut expected = before.as_object().unwrap().clone();
-        expected.extend(changes.as_object().unwrap().clone());
+        for (field, value) in changes.as_object().unwrap() {
+            if value.is_null() {
+                expected.remove(field);
+            } else {
+                expected.insert(field.clone(), value.clone());
+            }
+        }
         let after = body(request(service.clone(), "GET", &uri, None).await).await;
         expected.insert("updated_at".into(), after["updated_at"].clone());
         assert_eq!(after, Value::Object(expected));
+    }
+    for invalid in [
+        json!({}),
+        json!({"organization_id": "other"}),
+        json!({"unexpected": null}),
+    ] {
+        let before = body(request(service.clone(), "GET", &uri, None).await).await;
+        assert_eq!(
+            request(service.clone(), "PATCH", &uri, Some(invalid))
+                .await
+                .status(),
+            422
+        );
+        assert_eq!(
+            body(request(service.clone(), "GET", &uri, None).await).await,
+            before
+        );
     }
     let before = body(request(service.clone(), "GET", &uri, None).await).await;
     let rejected = request(

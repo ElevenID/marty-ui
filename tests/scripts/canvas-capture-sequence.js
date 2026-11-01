@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const stock = require('./run-canvas-oss-standard-contract');
 const { receiveCredential, verify } = require('./audit-beta-credential-lifecycle');
+const { walletExpectationForTemplate, requireWalletReceiptBinding } = require('./canvas-credential-identity');
 const { requireVerificationDecision } = require('./beta-demo-review-ui');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const headFingerprint = event => hash(event.headRevisions.map(({ requirementId, sourceRevision, payloadHash }) =>
@@ -267,11 +268,12 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   same(claim.organization_id, organizationId, 'Claim organization');
   same(claim.transaction_id, transactionId, 'Claim approval transaction');
   await page.getByTestId('credential-claim-dialog').waitFor({ state: 'visible' });
+  const expectedWalletCredential = walletExpectationForTemplate(templates.credential);
   const receipt = await wallet.receiveCredential(walletPage,
-    claim.credential_offer_uri || claim.offer_url, templates.credential.vct);
+    claim.credential_offer_uri || claim.offer_url, expectedWalletCredential);
   assert.equal(receipt.ok, true, 'Rust wallet receipt failed');
   assert.ok(receipt.receipt?.id, 'Wallet omitted the stored receipt ID');
-  same(receipt.receipt.vct, templates.credential.vct, 'Wallet stored the wrong credential type');
+  requireWalletReceiptBinding(receipt.receipt, expectedWalletCredential);
   report.walletReceipt = receipt;
   const issued = await operations.waitFor(async () => requireIssuedBinding(await inventory(), scope, transactionId));
   const credentialId = issued.credential_id || issued.id;
@@ -383,4 +385,5 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
 }
 
 module.exports = { requireJobBinding, requireIssuedBinding, requireCaptureMutationReconciliation,
+  walletExpectationForTemplate, requireWalletReceiptBinding,
   requireCaptureWindow, runCanvasCapture, readLearnerStatus };

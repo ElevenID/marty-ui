@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 GATE = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
 BIND = runpy.run_path(str(ROOT / "scripts/test_beta_application_image_compose.py"))
 APPROVED = "selfhost-kms-only-model.keyless-tls.snapshot.yml"
+APPROVED_SHA256 = (
+    "6b904f625a0d6ff156a47b84de8e72b341e1d7d357bb67d600415b9995c3bac7"
+)
 PUBLICATION_SETTINGS = {
     "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": "${CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE:-}",
     "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE": "${CANVAS_CREDENTIALS_ASSERTION_NARRATIVE:-}",
@@ -281,7 +284,8 @@ def assert_models(approved, actual, *, interpolated=False, issuer_did=""):
     """Check the complete current KMS-only model against its reviewed snapshot."""
     expected = deepcopy(approved)
     # Keep the approved snapshot and its hash frozen. Admit only the exact
-    # hosting separation, memory ceilings and Keycloak heap setting reviewed;
+    # hosting separation, memory ceilings, Keycloak heap setting and eager
+    # provider startup dependencies reviewed;
     # the whole-model comparison below still rejects every other drift.
     # Synthetic interpolation uses the default profile; Compose omits the two
     # beta-tunnel services and their unused secret before this comparison.
@@ -385,6 +389,14 @@ def assert_models(approved, actual, *, interpolated=False, issuer_did=""):
     envelope_path = f"/run/secrets/{envelope}"
     assert issuance["environment"]["SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE"] == envelope_path
     assert [item["source"] for item in issuance["secrets"]].count(envelope) == 1
+    for consumer, provider in (
+        ("flow", "trust-profile"),
+        ("flow", "deployment-profile"),
+        ("auth", "applicant"),
+    ):
+        dependencies = expected["services"][consumer]["depends_on"]
+        assert provider not in dependencies
+        dependencies[provider] = {"condition": "service_healthy", "required": True}
     assert expected == actual, "Unreviewed self-host model change:\n" + "".join(
         difflib.unified_diff(
             json.dumps(expected, sort_keys=True, indent=2).splitlines(keepends=True),
@@ -624,7 +636,7 @@ def run():
     data = (ROOT / APPROVED).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "b5d4dd978c59f424d90e8cefeb5f5da0fbd2146faf40f28355dc4355a3de0122"
+        == APPROVED_SHA256
     )
     before = GATE["render"](APPROVED)
     after = GATE["render"](GATE["BASE"])

@@ -1,3 +1,4 @@
+use marty_service_runtime::config;
 use std::{
     collections::HashMap,
     env, fs,
@@ -187,10 +188,7 @@ pub fn migration_only_from_env() -> Result<bool, String> {
 }
 
 fn value(values: &HashMap<String, String>, name: &str) -> Option<String> {
-    values
-        .get(name)
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    config::trimmed_nonempty(values.get(name).map(String::as_str)).map(str::to_owned)
 }
 
 fn required(values: &HashMap<String, String>, name: &str) -> Result<String, String> {

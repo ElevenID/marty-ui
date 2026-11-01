@@ -1,3 +1,4 @@
+use marty_service_runtime::config;
 use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf};
 
 use mmf_messaging::OutboxDispatcherConfig;
@@ -174,11 +175,7 @@ impl OrganizationServiceConfig {
 }
 
 fn value<'a>(values: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
-    values
-        .get(name)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
+    config::trimmed_nonempty(values.get(name).map(String::as_str))
 }
 
 fn invalid(name: &'static str) -> OrganizationConfigError {
@@ -250,7 +247,7 @@ fn number<T>(
 where
     T: std::str::FromStr,
 {
-    optional_number(values, name).map(|value| value.unwrap_or(default))
+    config::number_or(value(values, name), default).map_err(|_| invalid(name))
 }
 
 fn optional_number<T>(
@@ -260,9 +257,7 @@ fn optional_number<T>(
 where
     T: std::str::FromStr,
 {
-    value(values, name)
-        .map(|value| value.parse().map_err(|_| invalid(name)))
-        .transpose()
+    config::optional_number(value(values, name)).map_err(|_| invalid(name))
 }
 
 fn boolean(
@@ -270,12 +265,8 @@ fn boolean(
     name: &'static str,
     default: bool,
 ) -> Result<bool, OrganizationConfigError> {
-    value(values, name).map_or(Ok(default), |value| {
-        match value.to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" => Ok(true),
-            "false" | "0" | "no" => Ok(false),
-            _ => Err(invalid(name)),
-        }
+    value(values, name).map_or(Ok(default), |raw| {
+        config::boolean(raw, config::BooleanVocabulary::AsciiInsensitive).map_err(|_| invalid(name))
     })
 }
 

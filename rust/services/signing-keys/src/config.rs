@@ -1,3 +1,4 @@
+use marty_service_runtime::config;
 use std::{collections::HashMap, env, fs, net::SocketAddr, path::PathBuf};
 
 const DEFAULT_HTTP_PORT: u16 = 8017;
@@ -376,10 +377,7 @@ fn secret_value(values: &HashMap<String, String>, name: &str) -> Result<Option<S
 }
 
 fn value(values: &HashMap<String, String>, name: &str) -> Option<String> {
-    values
-        .get(name)
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    config::trimmed_nonempty(values.get(name).map(String::as_str)).map(str::to_owned)
 }
 
 #[cfg(test)]

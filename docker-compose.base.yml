@@ -585,6 +585,7 @@ services:
       MARTY_API_CLIENT_ID: ${MARTY_API_CLIENT_ID:-marty-api}
       MARTY_API_CLIENT_SECRET: ${MARTY_API_CLIENT_SECRET:-marty-api-secret-change-in-production}
       CREDENTIAL_LOGIN_POLICY_ID: ${CREDENTIAL_LOGIN_POLICY_ID:-}
+      CREDENTIAL_LOGIN_TRUST_PROFILE_ID: ${CREDENTIAL_LOGIN_TRUST_PROFILE_ID:-}
       CREDENTIAL_LOGIN_ORGANIZATION_ID: ${CREDENTIAL_LOGIN_ORGANIZATION_ID:-${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}}
       CREDENTIAL_LOGIN_ISSUER_DID: ${CREDENTIAL_LOGIN_ISSUER_DID:-${OID4VP_ISSUER_DID:-${MARTY_ISSUER_DID:-}}}
       CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: ${CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER:-false}
@@ -619,6 +620,8 @@ services:
       flow:
         condition: service_healthy
       issuance-native:
+        condition: service_healthy
+      applicant:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
@@ -1058,6 +1061,10 @@ services:
         condition: service_healthy
       openbao-init:
         condition: service_completed_successfully
+      trust-profile:
+        condition: service_healthy
+      deployment-profile:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
       interval: 10s

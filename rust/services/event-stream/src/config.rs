@@ -1,3 +1,4 @@
+use marty_service_runtime::config;
 use std::{collections::HashMap, env, fs, net::SocketAddr};
 use tonic::metadata::AsciiMetadataValue;
 
@@ -82,11 +83,7 @@ impl Config {
 }
 
 fn value<'a>(values: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
-    values
-        .get(name)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    config::trimmed_nonempty(values.get(name).map(String::as_str))
 }
 
 fn parse_bool(values: &HashMap<String, String>, name: &str, default: bool) -> Result<bool, String> {
