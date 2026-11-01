@@ -18,6 +18,17 @@ rendered UI, or external wallet interoperability. See the
 [qualification summary](compose-installer.md#current-qualification-window) and
 [development canary](installer-development-canary.md).
 
+The read-only validator checks the application entry document, its local entry
+module, declared module preloads and stylesheets, and the emitted runtime origins as well as API
+readiness and issuer metadata. If an IP entry alias is configured, it repeats
+the page checks with that exact IP authority and certificate identity, rejects
+session cookies, and requires the alias to reject session, issuer and console
+API routes. Requests use the retained ingress leaf, verified trust source and
+bound local listener; redirects, proxy placeholders, source-tree HTML, and
+HTML returned in place of JavaScript do not pass. These bounded HTTP checks do
+not execute JavaScript, establish public network reachability, or replace the
+required fresh-browser test. The report states both limitations explicitly.
+
 The bootstrap invocation puts the entire download-and-script pipeline under
 no-new-privileges and propagates download errors:
 

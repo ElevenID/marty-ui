@@ -17,6 +17,9 @@ type Result<T> = std::result::Result<T, String>;
 const DEADLINE: Duration = Duration::from_secs(90);
 const MAX_BODY: usize = 65536;
 
+#[path = "installer_validation_page.rs"]
+mod page;
+
 #[derive(Serialize)]
 struct Check {
     name: &'static str,
@@ -97,27 +100,29 @@ async fn bounded_json(mut response: reqwest::Response) -> Option<Value> {
     }
     serde_json::from_slice(&bytes).ok()
 }
-async fn get(client: &reqwest::Client, trust: &TrustInfo, path: &str) -> Probe {
-    let failed = || Probe {
-        tls_verified: false,
-        document: None,
-    };
-    let Ok(endpoint) = crate::installer_transport::endpoint(trust) else {
-        return failed();
-    };
-    let Ok(response) = client.get(format!("{endpoint}{path}")).send().await else {
-        return failed();
-    };
-    let Some(peer) = response
+async fn bound_get(
+    client: &reqwest::Client,
+    trust: &TrustInfo,
+    path: &str,
+) -> Option<reqwest::Response> {
+    let endpoint = crate::installer_transport::endpoint(trust).ok()?;
+    let response = client.get(format!("{endpoint}{path}")).send().await.ok()?;
+    let peer = response
         .extensions()
         .get::<reqwest::tls::TlsInfo>()
-        .and_then(|v| v.peer_certificate())
-    else {
-        return failed();
-    };
+        .and_then(|v| v.peer_certificate())?;
     if format!("{:x}", Sha256::digest(peer)) != trust.certificate_der_sha256 {
-        return failed();
+        return None;
     }
+    Some(response)
+}
+async fn get(client: &reqwest::Client, trust: &TrustInfo, path: &str) -> Probe {
+    let Some(response) = bound_get(client, trust, path).await else {
+        return Probe {
+            tls_verified: false,
+            document: None,
+        };
+    };
     Probe {
         tls_verified: true,
         document: bounded_json(response).await,
@@ -190,9 +195,9 @@ fn readiness_valid(value: &Value, required: &[String]) -> bool {
                     .all(|name| services.get(name).is_some_and(|v| v["status"] == "healthy"))
         })
 }
-async fn public_checks(trust: &TrustInfo, required: &[String]) -> Vec<bool> {
+async fn public_checks(trust: &TrustInfo, required: &[String], alias: Option<&str>) -> Vec<bool> {
     let Ok(client) = client(trust) else {
-        return vec![false; 5];
+        return vec![false; 7];
     };
     let health = get(&client, trust, "/health").await;
     let services = get(&client, trust, "/health/ready").await;
@@ -207,6 +212,7 @@ async fn public_checks(trust: &TrustInfo, required: &[String]) -> Vec<bool> {
         issuer.document,
         authorization.document,
     );
+    let entry = page::check(trust, alias).await;
     vec![
         tls,
         health.is_some_and(|v| v["status"] == "healthy" && v["service"] == "api-gateway"),
@@ -218,6 +224,8 @@ async fn public_checks(trust: &TrustInfo, required: &[String]) -> Vec<bool> {
             .as_ref()
             .zip(authorization.as_ref())
             .is_some_and(|(i, a)| authorization_valid(a, i, &trust.origin)),
+        entry[0],
+        entry[1],
     ]
 }
 
@@ -241,7 +249,9 @@ pub(crate) fn run_locked(
     } else {
         None
     };
-    let mut observed = vec![false; 5];
+    let hosting = crate::installer_hosting::resolve(state)?;
+    let alias = hosting.public_entry_origin().map(|origin| origin.as_str());
+    let mut observed = vec![false; 7];
     let required = required_services(state, installation).ok();
     if let (Some(trust), Some(required)) = (&trust, &required) {
         if let (Ok(rt), Some(remaining)) = (
@@ -251,9 +261,9 @@ pub(crate) fn run_locked(
             deadline.checked_duration_since(Instant::now()),
         ) {
             observed = rt.block_on(async {
-                tokio::time::timeout(remaining, public_checks(trust, required))
+                tokio::time::timeout(remaining, public_checks(trust, required, alias))
                     .await
-                    .unwrap_or_else(|_| vec![false; 5])
+                    .unwrap_or_else(|_| vec![false; 7])
             });
         }
     }
@@ -292,6 +302,7 @@ pub(crate) fn run_locked(
         "Required public services",
         "Credential issuer metadata",
         "Authorization metadata",
+        "Application entry document and main assets",
     ]
     .into_iter()
     .enumerate()
@@ -302,6 +313,22 @@ pub(crate) fn run_locked(
             "public_check_failed_or_unavailable",
         ));
     }
+    checks.push(Check {
+        name: "Configured IP entry and API isolation",
+        required: alias.is_some(),
+        status: if alias.is_none() {
+            "skip"
+        } else if stable_services && stable_trust && within_deadline && observed[6] {
+            "pass"
+        } else {
+            "fail"
+        },
+        code: if alias.is_none() {
+            "no_ip_alias_configured"
+        } else {
+            "local_listener_observation"
+        },
+    });
     checks.push(Check {
         name: "Credential journey",
         required: false,
@@ -322,6 +349,7 @@ pub(crate) fn run_locked(
         "elapsed_ms":started.elapsed().as_millis() as u64, "status":if passed {"passed"} else {"failed"},
         "checks":checks, "not_atomic_snapshot":true, "installation_ready":false,
         "host_trust_observed":false, "qualification":"not_assessed",
+        "browser_rendering_observed":false, "public_network_reachability_observed":false,
         "container_security_posture":container_security_posture,
         "trust_evidence_sha256":trust.as_ref().map(|t| &t.evidence_sha256)});
     let bytes =

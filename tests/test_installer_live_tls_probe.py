@@ -21,6 +21,38 @@ INSTALLATION = '22345678-1234-4234-8234-123456789abc'
 ENGINE = 'test-engine-12345678'
 
 
+def test_public_mode_refuses_private_ca_override_before_network(monkeypatch):
+    def forbidden():raise AssertionError('no trust-store read before refusing override')
+    monkeypatch.setattr(probe,'system_public_roots',forbidden)
+    with pytest.raises(ValueError):
+        probe.probe('https://marty.example.test','127.0.0.1:18443','public-ingress',
+            'private-ca',INSTALLATION,ENGINE,public_roots=True,expected_leaf='a'*64)
+
+
+def test_public_mode_uses_fixed_system_bundle_and_pins_selected_leaf(monkeypatch):
+    monkeypatch.setenv('SSL_CERT_FILE','/does/not/exist/private.pem')
+    monkeypatch.setenv('SSL_CERT_DIR','/does/not/exist')
+    origin='https://marty.example.test'
+    issuer=origin+probe.ISSUER_PATH
+    metadata=dict(issuer=issuer,authorization_endpoint=issuer+'/protocol/openid-connect/auth',
+        token_endpoint=issuer+'/protocol/openid-connect/token',jwks_uri=issuer+'/protocol/openid-connect/certs')
+    contexts=[]
+    def fetcher(context,address,identity,path):
+        contexts.append(context)
+        body=json.dumps(metadata).encode() if path==probe.DISCOVERY_PATH else b'OK'
+        return ('a'*64,'TLSv1.3',200,body)
+    result=probe.probe(origin,'127.0.0.1:18443','public-ingress','',INSTALLATION,ENGINE,
+        public_roots=True,expected_leaf='a'*64,fetcher=fetcher)
+    assert result['schema']=='elevenid.installer-live-tls-observation/v3'
+    assert result['probe_trust_source']=='ubuntu-system-ca-bundle'
+    assert len(result['probe_trust_bundle_sha256'])==64 and 'ca_der_sha256' not in result
+    assert result['public_endpoint_observed'] is False and result['browser_login_observed'] is False
+    assert all(c.check_hostname and c.verify_mode==ssl.CERT_REQUIRED and c.get_ca_certs() for c in contexts)
+    with pytest.raises(ValueError):
+        probe.probe(origin,'127.0.0.1:18443','public-ingress','',INSTALLATION,ENGINE,
+            public_roots=True,expected_leaf='b'*64,fetcher=fetcher)
+
+
 def cert(tmp_path, name, common):
     if shutil.which('openssl') is None:
         pytest.skip('openssl is required for the local TLS fixture')

@@ -316,6 +316,13 @@ pub(crate) fn record_enrollment(
         serde_json::from_value(installer_json::decode(&result_bytes).map_err(|_| REFUSED)?)
             .map_err(|_| REFUSED)?;
     result.validate(&owner, attempt)?;
+    state.with_inspection(|view| {
+        crate::installer_openbao_seal::require_initialized_cluster(
+            view,
+            installation,
+            &result.cluster_id,
+        )
+    })?;
     let intent_bytes = read_public_enrollment(&identity, "enrollment-pending.json")?;
     require_intent(&intent_bytes, &result)?;
     let secrets = fs::directory(&installation.join("secrets"), REFUSED)?;

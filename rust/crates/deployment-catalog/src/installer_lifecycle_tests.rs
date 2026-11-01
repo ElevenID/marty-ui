@@ -115,10 +115,13 @@ fn arguments_are_closed_and_paths_cannot_inject_unit_directives() {
 fn generated_units_bind_exact_retained_argv_and_escape_systemd_expansions() {
     let (_parent, _path, _state, configuration) = fixture();
     let units = render_units(&configuration).unwrap();
-    let [boot_name, check_name, timer_name] = unit_names(configuration.installation_id);
+    let [boot_name, check_name, timer_name, maintenance_name, maintenance_timer_name] =
+        unit_names(configuration.installation_id);
     let boot = &units[&boot_name];
     let check = &units[&check_name];
     let timer = &units[&timer_name];
+    let maintenance = &units[&maintenance_name];
+    let maintenance_timer = &units[&maintenance_timer_name];
     assert!(boot.contains(&format!(
         "ExecStart={}\n",
         command(&configuration, "boot").unwrap()
@@ -145,6 +148,18 @@ fn generated_units_bind_exact_retained_argv_and_escape_systemd_expansions() {
     assert!(!check.contains("Restart="));
     assert!(timer.contains("OnCalendar=*-*-* *:00/5:00\nPersistent=true\n"));
     assert!(timer.contains(&format!("Unit={check_name}\n")));
+    assert!(maintenance.contains(&format!(
+        "ExecStart={}\n",
+        command(&configuration, "maintain").unwrap()
+    )));
+    assert!(maintenance.contains(&format!("After=docker.service {boot_name}\n")));
+    assert!(
+        maintenance.contains("Type=oneshot\nNoNewPrivileges=yes\nUMask=0077\nTimeoutStartSec=1800")
+    );
+    assert!(!maintenance.contains("RemainAfterExit="));
+    assert!(!maintenance.contains("Restart="));
+    assert!(maintenance_timer.contains("OnCalendar=*-*-* *:00/5:00\nPersistent=true\n"));
+    assert!(maintenance_timer.contains(&format!("Unit={maintenance_name}\n")));
     for text in units.values() {
         for absent in ["EnvironmentFile=", "TOKEN=", "PASSWORD="] {
             assert!(!text.contains(absent), "unexpected {absent}");
@@ -196,13 +211,28 @@ fn systemd_argument_rejects_control_and_single_command_separator() {
 
 #[test]
 fn customer_commands_link_check_unit_and_never_run_privileged_management() {
-    let (_parent, _path, _state, configuration) = fixture();
-    let actions = next_actions(&configuration);
+    let (_parent, _path, _state, mut configuration) = fixture();
+    configuration.owner_uid = 1000;
+    let actions = next_actions(&configuration, &observed_prerequisites());
+    assert_eq!(actions["unattended_eligible"], true);
     assert_eq!(actions["commands_executed"], false);
-    assert_eq!(actions["commands"][0][1], "start");
+    assert_eq!(actions["prerequisite_remediation"], json!([]));
+    assert_eq!(actions["manual_recovery_command"], actions["commands"][0]);
+    assert_eq!(actions["commands"][0][1], "lifecycle");
+    assert_eq!(actions["commands"][0][2], "resume");
     assert_eq!(actions["commands"][1][2], "link");
-    let [boot, check, timer] = unit_names(configuration.installation_id);
-    for (index, name) in [boot.clone(), check, timer.clone()].iter().enumerate() {
+    let [boot, check, timer, maintenance, maintenance_timer] =
+        unit_names(configuration.installation_id);
+    for (index, name) in [
+        boot.clone(),
+        check,
+        timer.clone(),
+        maintenance,
+        maintenance_timer.clone(),
+    ]
+    .iter()
+    .enumerate()
+    {
         assert_eq!(
             actions["commands"][1][index + 3],
             configuration
@@ -215,10 +245,150 @@ fn customer_commands_link_check_unit_and_never_run_privileged_management() {
     }
     assert_eq!(
         actions["commands"][3],
-        json!(["systemctl", "--user", "enable", "--now", boot, timer])
+        json!([
+            "systemctl",
+            "--user",
+            "enable",
+            "--now",
+            boot,
+            timer,
+            maintenance_timer
+        ])
     );
     assert!(!actions["commands"].to_string().contains("sudo"));
     assert!(!actions["commands"].to_string().contains("loginctl"));
+}
+
+fn observed_prerequisites() -> installer_runtime::UserSystemdPrerequisites {
+    installer_runtime::UserSystemdPrerequisites {
+        schema: "elevenid.installer-user-systemd-prerequisites/v1",
+        uid: 1000,
+        linger_enabled: Some(true),
+        docker_unit_loaded: Some(true),
+        docker_unit_enabled: Some(true),
+        docker_unit_active: Some(true),
+        automatically_startable: true,
+    }
+}
+
+#[test]
+fn unattended_commands_require_every_known_prerequisite_but_keep_manual_recovery() {
+    let (_parent, _path, _state, mut configuration) = fixture();
+    configuration.owner_uid = 1000;
+    for (index, name) in [
+        "linger_enabled",
+        "docker_unit_loaded",
+        "docker_unit_enabled",
+        "docker_unit_active",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for observed in [Some(false), None] {
+            let mut prerequisites = observed_prerequisites();
+            match index {
+                0 => prerequisites.linger_enabled = observed,
+                1 => prerequisites.docker_unit_loaded = observed,
+                2 => prerequisites.docker_unit_enabled = observed,
+                3 => prerequisites.docker_unit_active = observed,
+                _ => unreachable!(),
+            }
+            prerequisites.automatically_startable = false;
+            let actions = next_actions(&configuration, &prerequisites);
+            assert_eq!(actions["unattended_eligible"], json!(observed), "{name}");
+            assert_eq!(actions["commands"], json!([]), "{name}");
+            assert_eq!(actions["commands_executed"], false);
+            assert_eq!(
+                actions["prerequisite_remediation"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(actions["prerequisite_remediation"][0]["prerequisite"], name);
+            assert_eq!(
+                actions["prerequisite_remediation"][0]["observed"],
+                json!(observed)
+            );
+            assert!(!actions["prerequisite_remediation"][0]["customer_action"]
+                .as_str()
+                .unwrap()
+                .is_empty());
+            assert_eq!(
+                actions["manual_recovery_command"],
+                json!([
+                    configuration.installation.join("marty-deploy"),
+                    "lifecycle",
+                    "resume",
+                    "--install-dir",
+                    configuration.installation,
+                    "--docker-bin",
+                    configuration.docker
+                ])
+            );
+        }
+    }
+}
+
+#[test]
+fn unavailable_user_manager_is_unknown_and_known_failures_are_false() {
+    let (_parent, _path, _state, mut configuration) = fixture();
+    configuration.owner_uid = 1000;
+    let mut prerequisites = observed_prerequisites();
+    prerequisites.linger_enabled = None;
+    prerequisites.docker_unit_loaded = None;
+    prerequisites.docker_unit_enabled = None;
+    prerequisites.docker_unit_active = None;
+    prerequisites.automatically_startable = false;
+    let actions = next_actions(&configuration, &prerequisites);
+    assert!(actions["unattended_eligible"].is_null());
+    assert_eq!(
+        actions["prerequisite_remediation"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert_eq!(actions["commands"], json!([]));
+    assert_eq!(
+        actions["prerequisite_verification_commands"][0],
+        json!([
+            "/usr/bin/loginctl",
+            "show-user",
+            "1000",
+            "--property=Linger",
+            "--value"
+        ])
+    );
+    prerequisites.linger_enabled = Some(false);
+    assert_eq!(
+        next_actions(&configuration, &prerequisites)["unattended_eligible"],
+        false
+    );
+    prerequisites.linger_enabled = None;
+    prerequisites.docker_unit_enabled = Some(false);
+    assert_eq!(
+        next_actions(&configuration, &prerequisites)["unattended_eligible"],
+        false
+    );
+}
+
+#[test]
+fn root_or_another_users_observation_cannot_authorize_unit_enablement() {
+    let (_parent, _path, _state, mut configuration) = fixture();
+    for (owner_uid, observed_uid) in [(0, 0), (1000, 1001), (1000, 0)] {
+        configuration.owner_uid = owner_uid;
+        let mut prerequisites = observed_prerequisites();
+        prerequisites.uid = observed_uid;
+        let actions = next_actions(&configuration, &prerequisites);
+        assert_eq!(actions["unattended_eligible"], false);
+        assert_eq!(actions["commands"], json!([]));
+        assert_eq!(
+            actions["prerequisite_remediation"][0]["prerequisite"],
+            "installation_owner_user_manager"
+        );
+        assert_eq!(actions["commands_executed"], false);
+    }
 }
 
 #[test]
@@ -305,7 +475,12 @@ fn paused_scheduled_commands_do_not_open_docker_or_append_intent() {
         intent_sha256,
     };
     let before = record_names(state.inspection()).unwrap();
-    for action in [Action::Boot, Action::Check, Action::Shutdown] {
+    for action in [
+        Action::Boot,
+        Action::Check,
+        Action::Shutdown,
+        Action::Maintain,
+    ] {
         let report = scheduled(
             &mut state,
             &path,
@@ -472,7 +647,7 @@ fn unit_artifacts_cannot_be_replaced_or_adopt_symlinks() {
     seed(&mut initial, &configuration);
     drop(initial);
     let mut state = LockedMaintenance::open(&path).unwrap();
-    let [boot, _, _] = unit_names(configuration.installation_id);
+    let [boot, _, _, _, _] = unit_names(configuration.installation_id);
     let exact = state.read_evidence(&boot).unwrap().unwrap();
     persist_exact(&mut state, &boot, &exact).unwrap();
     assert!(persist_exact(&mut state, &boot, b"replacement").is_err());
@@ -491,4 +666,305 @@ fn unit_artifacts_cannot_be_replaced_or_adopt_symlinks() {
     symlink(&target, path.join("evidence").join(&boot)).unwrap();
     assert!(persist_exact(&mut state, &boot, b"replacement").is_err());
     assert_eq!(std::fs::read(target).unwrap(), b"outside");
+}
+
+#[test]
+fn security_seal_survives_reopen_and_only_explicit_resume_clears_it() {
+    let (_parent, path, mut initial, configuration) = fixture();
+    let digest = seed(&mut initial, &configuration);
+    drop(initial);
+    let mut state = LockedMaintenance::open(&path).unwrap();
+    append_intent(
+        &mut state,
+        &configuration,
+        &digest,
+        None,
+        IntentReason::Installed,
+    )
+    .unwrap();
+    let (paused, hash) = load_intent(&state, &configuration, &digest);
+    append_intent(
+        &mut state,
+        &configuration,
+        &digest,
+        Some((&paused, &hash)),
+        IntentReason::SecuritySeal,
+    )
+    .unwrap();
+    drop(state);
+    let mut state = LockedMaintenance::open(&path).unwrap();
+    let (sealed, hash) = load_intent(&state, &configuration, &digest);
+    assert_eq!(sealed.desired_state, DesiredState::SecuritySealed);
+    let before = record_names(state.inspection()).unwrap();
+    for reason in [
+        IntentReason::ManualStart,
+        IntentReason::ManualStop,
+        IntentReason::Pause,
+        IntentReason::Uninstall,
+    ] {
+        assert!(append_intent(
+            &mut state,
+            &configuration,
+            &digest,
+            Some((&sealed, &hash)),
+            reason
+        )
+        .is_err());
+        assert_eq!(record_names(state.inspection()).unwrap(), before);
+    }
+    for action in [
+        Action::Boot,
+        Action::Check,
+        Action::Maintain,
+        Action::Shutdown,
+    ] {
+        assert_eq!(
+            scheduled_operation(action, DesiredState::SecuritySealed).unwrap(),
+            None
+        );
+    }
+    let loaded = Loaded {
+        configuration: configuration.clone(),
+        configuration_sha256: digest.clone(),
+        intent: sealed.clone(),
+        intent_sha256: hash.clone(),
+    };
+    let report = scheduled(
+        &mut state,
+        &path,
+        Path::new("/does/not/exist/docker"),
+        Action::Check,
+        &loaded,
+    )
+    .unwrap();
+    assert_eq!(report["outcome"], "security_sealed");
+    assert_eq!(report["docker_invoked"], false);
+    // A failed attempt to converge the stopped runtime preserves the seal.
+    assert!(scheduled(
+        &mut state,
+        &path,
+        Path::new("/does/not/exist/docker"),
+        Action::Maintain,
+        &loaded
+    )
+    .is_err());
+    assert_eq!(record_names(state.inspection()).unwrap(), before);
+    append_intent(
+        &mut state,
+        &configuration,
+        &digest,
+        Some((&sealed, &hash)),
+        IntentReason::Resume,
+    )
+    .unwrap();
+    assert_eq!(
+        load_intent(&state, &configuration, &digest).0.desired_state,
+        DesiredState::Running
+    );
+}
+
+#[test]
+fn a_failed_manual_pause_is_durable_before_the_first_docker_mutation() {
+    let (_parent, path, mut initial, configuration) = fixture();
+    let digest = seed(&mut initial, &configuration);
+    drop(initial);
+    let mut state = LockedMaintenance::open(&path).unwrap();
+    append_intent(
+        &mut state,
+        &configuration,
+        &digest,
+        None,
+        IntentReason::Installed,
+    )
+    .unwrap();
+    let (paused, hash) = load_intent(&state, &configuration, &digest);
+    append_intent(
+        &mut state,
+        &configuration,
+        &digest,
+        Some((&paused, &hash)),
+        IntentReason::Resume,
+    )
+    .unwrap();
+    let (running, hash) = load_intent(&state, &configuration, &digest);
+    let loaded = Loaded {
+        configuration: configuration.clone(),
+        configuration_sha256: digest.clone(),
+        intent: running,
+        intent_sha256: hash,
+    };
+    assert!(manual_control(
+        &mut state,
+        &path,
+        Path::new("/does/not/exist/docker"),
+        Action::Pause,
+        &loaded
+    )
+    .is_err());
+    let (paused, _) = load_intent(&state, &configuration, &digest);
+    assert_eq!(paused.reason, IntentReason::Pause);
+    assert_eq!(paused.desired_state, DesiredState::Paused);
+    assert_eq!(paused.sequence, 3);
+}
+
+#[test]
+fn usable_retained_runtime_serves_before_provider_failure_and_errors_remain_errors() {
+    for failure in ["provider unavailable", "maintenance evidence differs"] {
+        let mut serving = false;
+        let mut repairs = 0;
+        let mut validations = 0;
+        let mut operations = Vec::new();
+        let result = recover_application_in_order(true, |step| {
+            operations.push(step);
+            match step {
+                ApplicationRecoveryStep::RepairHealth => repairs += 1,
+                ApplicationRecoveryStep::StartRetained => serving = true,
+                ApplicationRecoveryStep::ValidateSelected => {
+                    assert!(serving);
+                    validations += 1;
+                }
+                ApplicationRecoveryStep::MaintainGeneration => {
+                    assert!(serving, "provider work must not gate a usable cold start");
+                    assert_eq!(validations, 1);
+                    return Err(failure.into());
+                }
+            }
+            Ok(Value::Null)
+        });
+        assert_eq!(result.err().unwrap(), failure);
+        assert!(serving);
+        assert_eq!(repairs, 1);
+        assert_eq!(validations, 1);
+        assert_eq!(
+            operations,
+            [
+                ApplicationRecoveryStep::RepairHealth,
+                ApplicationRecoveryStep::StartRetained,
+                ApplicationRecoveryStep::ValidateSelected,
+                ApplicationRecoveryStep::MaintainGeneration,
+            ]
+        );
+    }
+}
+
+#[test]
+fn required_generation_failure_cannot_start_or_repair_a_stale_selected_runtime() {
+    let mut operations = Vec::new();
+    let result = recover_application_in_order(false, |step| {
+        operations.push(step);
+        if step == ApplicationRecoveryStep::MaintainGeneration {
+            Err("replacement authority unavailable".into())
+        } else {
+            panic!("application recovery ran before the required replacement")
+        }
+    });
+    assert_eq!(result.err().unwrap(), "replacement authority unavailable");
+    assert_eq!(operations, [ApplicationRecoveryStep::MaintainGeneration]);
+}
+
+#[test]
+fn failed_early_health_start_or_validation_stops_before_optional_maintenance() {
+    for failure in [
+        ApplicationRecoveryStep::RepairHealth,
+        ApplicationRecoveryStep::StartRetained,
+        ApplicationRecoveryStep::ValidateSelected,
+    ] {
+        let mut operations = Vec::new();
+        let result = recover_application_in_order(true, |step| {
+            operations.push(step);
+            if step == failure {
+                Err("retained runtime did not validate".into())
+            } else {
+                Ok(Value::Null)
+            }
+        });
+        assert_eq!(result.err().unwrap(), "retained runtime did not validate");
+        assert_eq!(operations.last(), Some(&failure));
+        assert!(!operations.contains(&ApplicationRecoveryStep::MaintainGeneration));
+        assert_eq!(
+            operations
+                .iter()
+                .filter(|step| **step == ApplicationRecoveryStep::RepairHealth)
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn successful_maintenance_revalidates_the_successor_without_a_second_health_or_start_pass() {
+    for fail_final_validation in [false, true] {
+        let mut selected = "parent";
+        let mut repairs = 0;
+        let mut starts = 0;
+        let mut validated = Vec::new();
+        let result = recover_application_in_order(true, |step| {
+            match step {
+                ApplicationRecoveryStep::RepairHealth => {
+                    repairs += 1;
+                    return Ok(json!({"repair":"bounded"}));
+                }
+                ApplicationRecoveryStep::StartRetained => {
+                    starts += 1;
+                    return Ok(json!({"started_generation":selected}));
+                }
+                ApplicationRecoveryStep::MaintainGeneration => {
+                    selected = "successor";
+                    return Ok(json!({"activation_performed":true}));
+                }
+                ApplicationRecoveryStep::ValidateSelected => {
+                    validated.push(selected);
+                    if selected == "successor" && fail_final_validation {
+                        return Err("successor validation failed".into());
+                    }
+                }
+            }
+            Ok(Value::Null)
+        });
+        assert_eq!(repairs, 1);
+        assert_eq!(starts, 1);
+        assert_eq!(validated, ["parent", "successor"]);
+        if fail_final_validation {
+            assert_eq!(result.err().unwrap(), "successor validation failed");
+        } else {
+            let report = result.unwrap();
+            assert_eq!(report.health, json!({"repair":"bounded"}));
+            assert_eq!(report.application["started_generation"], "parent");
+            assert_eq!(report.generation["activation_performed"], true);
+        }
+    }
+}
+
+#[test]
+fn stale_runtime_recovery_starts_the_replacement_after_required_maintenance() {
+    let mut replaced = false;
+    let mut serving = false;
+    let mut repairs = 0;
+    let mut validations = 0;
+    let report = recover_application_in_order(false, |step| {
+        match step {
+            ApplicationRecoveryStep::MaintainGeneration => {
+                replaced = true;
+                return Ok(json!({"activation_performed":true}));
+            }
+            ApplicationRecoveryStep::RepairHealth => {
+                assert!(replaced);
+                repairs += 1;
+            }
+            ApplicationRecoveryStep::StartRetained => {
+                assert!(replaced);
+                serving = true;
+            }
+            ApplicationRecoveryStep::ValidateSelected => {
+                assert!(serving);
+                validations += 1;
+            }
+        }
+        Ok(Value::Null)
+    })
+    .unwrap();
+    assert!(serving);
+    assert_eq!(repairs, 1);
+    assert_eq!(validations, 1);
+    assert_eq!(report.generation["activation_performed"], true);
 }

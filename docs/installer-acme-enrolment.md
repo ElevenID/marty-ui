@@ -48,8 +48,23 @@ sequence starts at `acme-staging-000000.json` or
 binding and observed state. Sequence gaps, partial or linked records, changed
 bindings, unexpected transitions and unsupported receipt shapes hold execution
 before another CA request. Receipts are `0600`, bounded to 128 KiB each and 512
-per environment. Reaching the limit holds the operation; this initial ledger
-is not yet a recurring-renewal history format.
+per order cycle. Cycle zero keeps the original filenames. Positive cycles use
+`acme-<environment>-order-<20-digit-cycle>-<6-digit-sequence>.json` and retain
+the completed predecessor, exact account/CSR/key/configuration, and the typed
+generation or expired-initial-candidate permit. An unknown `newOrder` outcome
+never permits a replacement cycle.
+
+Polling uses a separate, bounded `acme-poll-<environment>-<20-digit-cycle>.json`
+checkpoint. It contains only timing and an exact immutable phase anchor. It
+cannot supply an account URL, order status, CSR, challenge, certificate, or
+terminal decision. Its current and complete `.next` files are validated against
+the whole phase history; applicable delays are combined conservatively. Only a
+real change of phase or authority can obsolete an older timing anchor. An
+identical phase receipt or timing-only legacy receipt cannot erase a delay.
+A one-time immutable required marker makes loss of the current checkpoint a
+recovery hold, including when an older staged file survives. A complete
+checkpoint left before marker completion is validated and the marker is
+completed before further CA requests.
 
 | Operation | Durable boundary | Recovery behavior |
 | --- | --- | --- |
@@ -73,6 +88,11 @@ certificate's actual validity. RFC 8555 section 7.1.3 explicitly makes order
 identifiers and authorizations immutable and does not impose the same rule on
 expiry. A valid authorization may likewise report a new expiry after challenge
 completion; that observation never changes the target of a readiness POST.
+Authorization status is classified only after checking the exact identifier
+and authorization URL. Terminal authorizations do not need `expires`. Pending
+authorizations may omit it: the retained order deadline bounds them, and any
+earlier authorization bound remains effective. Valid authorizations must supply
+an expiry, as required by RFC 8555 section 7.1.4.
 
 ## Publication and retry behavior
 
@@ -90,16 +110,47 @@ key authorization with the published record. A changed target is refused.
 Publication lifetime cannot exceed the retained order/authorization deadline
 or the responder's maximum lifetime. A terminal result or admitted candidate
 withdraws challenges using an atomically published empty snapshot. Interrupted
-withdrawal is replayable.
+withdrawal is replayable. Identical live projections are reused; a renewed
+timestamp is published only when an extension is needed near the responder's
+maximum lifetime, or when the actual authorized challenges/bounds change.
 
 Retry state records the failure count and one chosen next-attempt timestamp.
 Backoff is bounded and includes persisted jitter; HTTP `Retry-After` can delay
 the next attempt further. Restarting neither redraws the deadline nor resets
 repeated challenge failures. Calls made before the deadline do no CA work.
-The retry limit moves to a terminal state and withdraws the public projection.
+The failure counter saturates at 32 while bounded backoff continues. Temporary
+network failure never fabricates a terminal order; old `retry_limit` terminal
+receipts remain explicit holds. A successful order or authorization hint is
+included if a later fetch or readiness request fails in the same invocation.
+Successful polling of an unchanged phase conservatively retains retry history;
+actual phase or authority progress resets it. This keeps complete checkpoint
+predecessors ordered across interruption.
+
+Before remote work the owner publishes a same-phase attempt checkpoint, keeping
+the failure count and retained lower bounds. Checkpoint storage requires Linux
+`O_TMPFILE`: complete private bytes are flushed before a fixed staging name is
+linked. First publication uses no-replace; replacement verifies the exchanged
+predecessor inode and bytes. A stronger staged checkpoint is first promoted and
+flushed; cleanup removes only a complete predecessor whose applicable timing is
+already retained durably. The held installation/evidence directories are
+checked before and after publication. Any uncertain operation poisons the
+current writer, which retains its lock until reopened for reconciliation. A
+filesystem that cannot safely create/link/flush the checkpoint refuses before
+the next CA request.
+
+Unchanged Pending or Processing polls consume no new phase receipts. Ordinary
+work requires room for at most eight phase writes plus 64 reserved receipts.
+At the reserve boundary, ordinary challenge work defers to the retained order
+expiry or a later CA deadline; finalization, certificate reconciliation,
+certain terminal observations, and challenge withdrawal retain capacity.
+Repeated real account/order mutations are separately bounded and hold before
+using that reserve. A known Processing order remains queryable after the old
+order deadline. Regressing Pending/Ready responses cannot erase a retained
+finalization stage or cycle it repeatedly through the reserved phase budget.
+
 The transport and signing operations have their own shorter deadlines inside
-the worker's 90-second invocation limit. A backwards wall-clock jump greater
-than two minutes holds the operation.
+the worker's 90-second invocation limit. Timing publication refuses a backward
+observation; entry also retains the two-minute wall-clock skew guard.
 
 ## Verification and remaining integration
 
@@ -108,22 +159,30 @@ validate a signed CSR and a certificate chain, exercise the actual snapshot
 parser and private ledger, and reopen the installation between invocations.
 The CA and test keys exist only in the fixture. Tests cover lost registration,
 lost order and finalization responses; publication interrupted before/after
-rename; exact retained CSR recovery; persisted backoff and retry limits;
+rename; exact retained CSR recovery; persisted backoff and saturated retries;
 changed/processing/valid challenge targets; changed valid-order expiry;
 staging-root isolation; and malformed evidence or projection permissions.
+Polling regressions cover more than 512 unchanged observations, more than 32
+temporary failures, current/staged checkpoint interruption, invented anchors,
+required-checkpoint disappearance, preserved CA lower bounds, and completion or
+withdrawal after entering the phase reserve.
 
 These tests are component and interruption evidence. They do not prove public
 CA issuance, a publicly reachable port 80 responder, shipped-image behavior,
 an activated keyless leaf, reboot recovery or AWS load characteristics.
-Activation still needs an authenticated generation handoff, runtime reload and
-live verification. Recurring renewal still needs an active-certificate owner,
-persisted ARI selection and refresh deadlines, expiry fallback, credential
-recovery and installed lifecycle tests. The worker deliberately stops before
-those claims.
+The connected generation owner supplies the authenticated handoff and retains
+separate token/certificate schedules; deployed runtime reload and lifecycle
+qualification still need their own evidence. Candidate completion
+records an actual-lifetime fallback through the separate
+[renewal schedule owner](installer-acme-renewal.md); its anonymous ARI refresh
+API retains selected times and refresh deadlines without creating an order.
+This worker returns a candidate; activation and qualification belong to those
+separate owners. See [hosting continuation and recurring issuance](installer-acme-host.md).
 
 Protocol references:
 
 - <https://www.rfc-editor.org/rfc/rfc8555.html#section-7.1.3>
+- <https://www.rfc-editor.org/rfc/rfc8555.html#section-7.1.4>
 - <https://www.rfc-editor.org/rfc/rfc8555.html#section-7.3.1>
 - <https://www.rfc-editor.org/rfc/rfc8555.html#section-7.5.1>
 - <https://www.rfc-editor.org/rfc/rfc9773.html>

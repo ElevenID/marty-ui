@@ -5,6 +5,13 @@ ui = true
 disable_mlock = true
 plugin_directory = "/plugins"
 
+# Fresh installer deployments use their own customer-protected static key.
+# This projection is mounted read-only into OpenBao alone, outside Raft data.
+seal "static" {
+  current_key_id = "marty-selfhost-static-v1"
+  current_key = "file:///bao/seal/static.key"
+}
+
 listener "tcp" {
   address = "0.0.0.0:8200"
   cluster_address = "0.0.0.0:8201"

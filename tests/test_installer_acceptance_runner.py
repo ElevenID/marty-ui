@@ -34,6 +34,24 @@ def trust(installation_id='22345678-1234-4234-8234-123456789abc'):
         host_trust_modified=False,installation_ready=False,pending=['browser trust','business journey','recovery'])
 
 
+def public_trust():
+    value=trust()
+    value.update(schema='elevenid.installer-trust-info/v5',trust_source='mozilla-public-roots')
+    for key in ('ca_certificate_pem','ca_der_sha256','ca_expires_at'):value.pop(key)
+    value['evidence_sha256'].pop('installer-ingress.json')
+    value['public_certificate_admission']=dict(
+        schema='elevenid.installer-external-certificate/v1',installation_id=value['installation_id'],
+        transit_key_name='installer-ingress-'+value['installation_id'].replace('-',''),transit_key_version=1,
+        public_spki_sha256='a'*64,dns_names=['marty.example.test'],ip_addresses=[],
+        private_key_exported=False,activation_performed=False,installation_ready=False,
+        trust_class='production_public',trust_store='mozilla_webpki_roots',trust_store_sha256='e'*64,
+        trust_anchor_spki_value_sha256='f'*64,public_chain_validated=True,observed_at=90000,
+        not_before=80000,not_after=200000,minimum_remaining_seconds=3600,maximum_validity_seconds=8640000,
+        leaf_der_sha256='c'*64,fullchain_pem_sha256='d'*64,intermediate_count=1,
+        revocation_status='not_checked',browser_acceptance='not_assessed')
+    return value
+
+
 def status(context,target,auth,inv):
     claim=dict(nonce=context['nonce'],authorization_sha256=r.digest(auth),
         context_sha256=r.candidate_context_sha256(context),installation_id=target['installation_id'],
@@ -165,6 +183,67 @@ def test_legacy_rootful_status_is_historical_observation_only(candidate):
     value['journal']['runtime']['docker_host']='unix:///var/run/docker.sock'
     assert a.status_observation(r.encode(value),context,target,auth,inv)==value
     assert value['runtime_observed'] is False
+
+
+def test_public_v5_trust_keeps_native_roots_and_no_fabricated_ca(candidate):
+    _,_,context,target,auth,_,inv=candidate
+    journal=status(context,target,auth,inv)['journal']
+    value=public_trust()
+    assert a.trust_observation(r.encode(value),target,100000,journal=journal)==value
+    for key,wrong in [('trust_class','staging_test'),('public_chain_validated',False),
+                      ('leaf_der_sha256','0'*64),('not_after',100000),('transit_key_version',2),
+                      ('installation_id','32345678-1234-4234-8234-123456789abc'),
+                      ('private_key_exported',True),('browser_acceptance','passed')]:
+        changed=copy.deepcopy(value);changed['public_certificate_admission'][key]=wrong
+        with pytest.raises(ValueError):a.trust_observation(r.encode(changed),target,100000,journal=journal)
+    for key in ('ca_certificate_pem','ca_der_sha256','ca_expires_at'):
+        changed=copy.deepcopy(value);changed[key]=trust()[key]
+        with pytest.raises(ValueError):a.trust_observation(r.encode(changed),target,100000,journal=journal)
+
+
+def test_v5_configured_ca_and_current_cleanup_schema_remain_observational(candidate):
+    _,_,context,target,auth,_,inv=candidate
+    observed=status(context,target,auth,inv)
+    observed['cleanup']['pending_operations']={}
+    assert a.status_observation(r.encode(observed),context,target,auth,inv)==observed
+    value=trust();value.update(schema='elevenid.installer-trust-info/v5',trust_source='configured-ca')
+    assert a.trust_observation(r.encode(value),target,100000,journal=observed['journal'])==value
+    observed['cleanup']['pending_operations']['start']='start-0001'
+    with pytest.raises(ValueError):a.status_observation(r.encode(observed),context,target,auth,inv)
+
+
+def test_selected_generation_requires_exact_common_sequence_and_selector(candidate):
+    _,_,context,target,auth,_,inv=candidate
+    value=public_trust()
+    kinds=('intent','public-ingress-plan','helper','candidate','binding','activation-intent',
+           'activation','session','selection')
+    evidence={f'generation-{1:020}-{kind}.json':'d'*64 for kind in kinds}
+    evidence['application-generation-current.json']='e'*64
+    value['selected_generation']=evidence
+    journal=status(context,target,auth,inv)['journal']
+    assert a.trust_observation(r.encode(value),target,100000,journal=journal)==value
+    for change in ('missing_selector','mixed_sequence','unknown','bad_digest'):
+        changed=copy.deepcopy(value)
+        evidence=changed['selected_generation']
+        if change=='missing_selector':evidence.pop('application-generation-current.json')
+        elif change=='mixed_sequence':evidence[f'generation-{2:020}-binding.json']=evidence.pop(f'generation-{1:020}-binding.json')
+        elif change=='unknown':evidence[f'generation-{1:020}-unreviewed.json']=evidence.pop(f'generation-{1:020}-binding.json')
+        else:evidence['application-generation-current.json']='invalid'
+        with pytest.raises(ValueError):a.trust_observation(r.encode(changed),target,100000,journal=journal)
+
+
+def test_public_probe_records_its_own_store_and_exact_selected_leaf(candidate):
+    _,_,_,target,_,_,_=candidate
+    native=public_trust()
+    observed=tls(target,trust())
+    observed.pop('ca_der_sha256')
+    observed.update(schema='elevenid.installer-live-tls-observation/v3',
+        probe_trust_source='ubuntu-system-ca-bundle',probe_trust_bundle_sha256='a'*64)
+    assert a.tls_observation(r.encode(observed),native,target,100000)==observed
+    for key,wrong in [('probe_trust_source','explicit_staging_roots'),('peer_der_sha256','f'*64),
+                      ('public_endpoint_observed',True),('browser_login_observed',True)]:
+        changed=copy.deepcopy(observed);changed[key]=wrong
+        with pytest.raises(ValueError):a.tls_observation(r.encode(changed),native,target,100000)
 
 
 @pytest.mark.parametrize('field,value', [('host_preflight', 'failed'),

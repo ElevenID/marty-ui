@@ -250,6 +250,7 @@ fn assert_no_maintenance_history(report: &Value) {
                 "stop": "stop-0001",
                 "down": "down-0001"
             },
+            "pending_operations": {},
             "historical_evidence_only": true,
             "automatic_retry": false,
             "host_data_credentials_images_and_named_volumes_retained": true

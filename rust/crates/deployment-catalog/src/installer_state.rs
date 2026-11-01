@@ -919,6 +919,21 @@ impl LockedMaintenance {
         }
         self.inspection.require_unchanged()
     }
+    /// The owning component performs one authenticated atomic publication.
+    /// An error or panic after entering this boundary keeps the writer poisoned
+    /// and its lock held, so an uncertain rename cannot be followed by another
+    /// mutation in the same invocation. Reopening requires reconciliation.
+    pub(crate) fn with_atomic_publication<T>(
+        &mut self,
+        operation: impl FnOnce(&LockedInspection) -> Result<T>,
+    ) -> Result<T> {
+        self.require_unchanged()?;
+        self.poisoned = true;
+        let result = operation(&self.inspection)?;
+        self.inspection.require_unchanged()?;
+        self.poisoned = false;
+        Ok(result)
+    }
     fn entry(entry: &str) -> Result<CString> {
         if !regex::Regex::new(r"\A[a-z0-9][a-z0-9._-]{0,127}\z")
             .unwrap()
@@ -978,6 +993,10 @@ impl LockedMaintenance {
         if !(entry.starts_with("uninstall-")
             || entry.starts_with("lifecycle-")
             || entry.starts_with("acme-")
+            || entry.starts_with("generation-")
+            || entry.starts_with("health-")
+            || entry.starts_with("openbao-tls-recovery-")
+            || entry.starts_with("openbao-root-retirement-")
             || entry.starts_with("rootless-canary-")
             || entry.starts_with("kms-registration-"))
             || bytes.is_empty()
@@ -1001,6 +1020,108 @@ impl LockedMaintenance {
             .map_err(|_| "cannot persist maintenance evidence")?;
         self.inspection.require_unchanged()?;
         self.poisoned = false;
+        Ok(())
+    }
+
+    /// The health observer has one bounded checkpoint and one recoverable
+    /// pending publication. This is deliberately not a generic evidence
+    /// overwrite facility. The policy reader authenticates the checkpoint's
+    /// installation, sequence and predecessor before calling this method.
+    pub(crate) fn publish_health_checkpoint(
+        &mut self,
+        expected: Option<&[u8]>,
+        bytes: &[u8],
+    ) -> Result<()> {
+        self.publish_health_checkpoint_observed(expected, bytes, || {})
+    }
+
+    fn require_held_evidence(&self, held: &File) -> Result<()> {
+        self.inspection.require_unchanged()?;
+        let current = open_at(
+            &self.inspection.directory,
+            &name("evidence"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&current, true)?;
+        private(held, true)?;
+        let current = current
+            .metadata()
+            .map_err(|_| "cannot observe evidence directory")?;
+        let held = held
+            .metadata()
+            .map_err(|_| "cannot observe held evidence directory")?;
+        if (
+            current.dev(),
+            current.ino(),
+            current.uid(),
+            current.gid(),
+            current.mode(),
+        ) != (held.dev(), held.ino(), held.uid(), held.gid(), held.mode())
+        {
+            return Err("evidence directory binding changed".into());
+        }
+        Ok(())
+    }
+
+    fn publish_health_checkpoint_observed(
+        &mut self,
+        expected: Option<&[u8]>,
+        bytes: &[u8],
+        mut publication_boundary: impl FnMut(),
+    ) -> Result<()> {
+        const CURRENT: &str = "health-checkpoint.json";
+        const NEXT: &str = "health-checkpoint-next.json";
+        if bytes.is_empty() || bytes.len() > 262144 {
+            return Err("health checkpoint exceeds its bound".into());
+        }
+        let directory = self.evidence()?;
+        if self.read_optional(&directory, CURRENT)?.as_deref() != expected {
+            return Err("health checkpoint changed".into());
+        }
+        if let Some(pending) = self.read_optional(&directory, NEXT)? {
+            if pending != bytes {
+                return Err("pending health checkpoint requires reconciliation".into());
+            }
+        } else {
+            self.write_evidence_exclusive(NEXT, bytes)?;
+        }
+        if self.read_optional(&directory, CURRENT)?.as_deref() != expected
+            || self.read_optional(&directory, NEXT)?.as_deref() != Some(bytes)
+        {
+            return Err("health checkpoint publication changed".into());
+        }
+        publication_boundary();
+        self.require_held_evidence(&directory)?;
+        self.poisoned = true;
+        let flags = if expected.is_none() {
+            libc::RENAME_NOREPLACE
+        } else {
+            0
+        };
+        if unsafe {
+            libc::renameat2(
+                directory.as_raw_fd(),
+                name(NEXT).as_ptr(),
+                directory.as_raw_fd(),
+                name(CURRENT).as_ptr(),
+                flags,
+            )
+        } != 0
+        {
+            return Err("health checkpoint publication uncertain".into());
+        }
+        directory
+            .sync_all()
+            .map_err(|_| "health checkpoint durability uncertain")?;
+        publication_boundary();
+        self.require_held_evidence(&directory)?;
+        self.inspection.require_unchanged()?;
+        self.poisoned = false;
+        if self.read_optional(&directory, CURRENT)?.as_deref() != Some(bytes) {
+            self.poisoned = true;
+            return Err("published health checkpoint changed".into());
+        }
         Ok(())
     }
 }
@@ -1190,6 +1311,9 @@ impl InstallerState {
                 "evidence",
                 "openbao-state",
                 "openbao-control",
+                "openbao-seal",
+                "acme-custody-transfer",
+                "acme-credentials-transfer",
                 "keycloak-output",
                 "tls-output",
                 "ingress-output",
@@ -2344,6 +2468,66 @@ impl InstallerState {
             openbao_creation: None,
         })
     }
+
+    /// Continue only the completed pre-ACME boundary while retaining the same
+    /// installation lock. This is not ordinary provisioning replay: the host
+    /// bridge must prove both setup jobs and its immutable prepared receipt,
+    /// and application creation must already have been completed by the
+    /// original writer. No fresh-creation capability is reconstructed.
+    pub(crate) fn continue_acme_enrolment(
+        inspection: LockedInspection,
+        installation: &Path,
+        identity: &Identity,
+    ) -> Result<Self> {
+        const REFUSED: &str = "ACME continuation requires its complete prepared boundary before application generation; preserve partial state for reconciliation";
+        identity.validate()?;
+        inspection.require_path_binding(installation)?;
+        crate::installer_acme_preparation::require_supported_scope(&inspection)?;
+        if inspection.journal.identity() != identity
+            || inspection.journal.phase() != Phase::Provisioning
+            || !inspection
+                .journal
+                .runtime()
+                .is_some_and(|runtime| runtime.profile == RuntimeProfile::Rootless)
+            || !crate::installer_acme_host::continuation_available(&inspection)?
+        {
+            return Err(REFUSED.into());
+        }
+        crate::installer_application::require_acme_preparation(&inspection, installation)?;
+        let evidence = open_at(
+            &inspection.directory,
+            &name("evidence"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&evidence, true)?;
+        for entry in crate::installer_host_fs::file_names(&evidence, REFUSED)? {
+            // Renewal-authority enrollment is part of preparation. Generation,
+            // application activation and lifecycle operations are separate
+            // owners whose uncertain outcomes cannot be replayed here.
+            if entry.starts_with("generation-")
+                || (entry.starts_with("application-") && entry != APPLICATION_RECEIPT)
+                || entry.starts_with("compose-generation-")
+                || entry.starts_with("compose-application-")
+                || entry.starts_with("lifecycle-")
+                || entry.starts_with("uninstall-")
+                || entry == "compose-session.json"
+                || entry == "installer-nginx.conf"
+            {
+                return Err(REFUSED.into());
+            }
+        }
+        inspection.require_path_binding(installation)?;
+        Ok(Self {
+            directory: inspection.directory,
+            journal: inspection.journal,
+            poisoned: false,
+            creation: None,
+            credential_creation: None,
+            application_creation: None,
+            openbao_creation: None,
+        })
+    }
     pub fn journal(&self) -> &Journal {
         &self.journal
     }
@@ -2575,6 +2759,48 @@ mod tests {
         assert!(state.advance(Phase::Verified).is_err());
         drop(state);
         assert!(LockedInspection::open(&path).is_ok());
+    }
+    #[test]
+    fn uncertain_generation_publication_cannot_continue_or_release_the_writer_lock() {
+        for panic_after_publication in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("installation");
+            let mut writer = InstallerState::create(&path, identity()).unwrap();
+            writer.create_private_directory("evidence").unwrap();
+            drop(writer);
+            let mut state = LockedMaintenance::open(&path).unwrap();
+            state
+                .with_atomic_publication(|view| view.require_path_binding(&path))
+                .unwrap();
+            assert!(state.require_unchanged().is_ok());
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                state.with_atomic_publication(|view| {
+                    view.require_path_binding(&path)?;
+                    std::fs::write(path.join("evidence/publication-observed"), b"retained")
+                        .map_err(|error| error.to_string())?;
+                    if panic_after_publication {
+                        panic!("interrupted after publication");
+                    }
+                    Err::<(), _>("lost publication response".to_owned())
+                })
+            }));
+            if panic_after_publication {
+                assert!(outcome.is_err());
+            } else {
+                assert!(outcome.unwrap().is_err());
+            }
+            assert!(state.require_unchanged().is_err());
+            assert!(state
+                .write_evidence_exclusive("generation-followup.json", b"{}")
+                .is_err());
+            assert!(LockedInspection::open(&path).is_err());
+            assert_eq!(
+                std::fs::read(path.join("evidence/publication-observed")).unwrap(),
+                b"retained"
+            );
+            drop(state);
+            assert!(LockedInspection::open(&path).is_ok());
+        }
     }
     #[test]
     fn validation_reports_are_private_append_only_and_reject_replaced_paths() {
@@ -3857,6 +4083,73 @@ mod tests {
             match self {
                 Err(e) => e,
                 Ok(_) => panic!("expected refusal"),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod health_checkpoint_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn detached_evidence_never_reports_a_successful_health_publication() {
+        for exchange_at in [1, 2] {
+            let parent = tempfile::tempdir().unwrap();
+            let path = parent.path().join("installation");
+            let mut initial = InstallerState::create_with_runtime(
+                &path,
+                Identity {
+                    source_sha: "a".repeat(40),
+                    release_tag: "v1.2.3".into(),
+                    inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+                },
+                RuntimeBinding {
+                    docker_host: "unix:///var/run/docker.sock".into(),
+                    engine_id: "fixture-engine".into(),
+                    openbao_port: 18443,
+                    profile: RuntimeProfile::Rootful,
+                },
+            )
+            .unwrap();
+            initial.create_private_directory("evidence").unwrap();
+            initial
+                .write_evidence("health-checkpoint.json", b"current")
+                .unwrap();
+            drop(initial);
+            let mut state = LockedMaintenance::open(&path).unwrap();
+            let mut count = 0;
+            let result =
+                state.publish_health_checkpoint_observed(Some(b"current"), b"next", || {
+                    count += 1;
+                    if count == exchange_at {
+                        std::fs::rename(path.join("evidence"), path.join("detached-evidence"))
+                            .unwrap();
+                        std::fs::create_dir(path.join("evidence")).unwrap();
+                        std::fs::set_permissions(
+                            path.join("evidence"),
+                            std::fs::Permissions::from_mode(0o700),
+                        )
+                        .unwrap();
+                        std::fs::write(path.join("evidence/health-checkpoint.json"), b"current")
+                            .unwrap();
+                        std::fs::set_permissions(
+                            path.join("evidence/health-checkpoint.json"),
+                            std::fs::Permissions::from_mode(0o600),
+                        )
+                        .unwrap();
+                    }
+                });
+            assert_eq!(result.unwrap_err(), "evidence directory binding changed");
+            assert_eq!(
+                std::fs::read(path.join("evidence/health-checkpoint.json")).unwrap(),
+                b"current"
+            );
+            // An uncertain publication poisons this writer before any caller
+            // can treat the unchanged live budget as a successful debit.
+            if exchange_at == 2 {
+                assert!(state.require_unchanged().is_err());
             }
         }
     }

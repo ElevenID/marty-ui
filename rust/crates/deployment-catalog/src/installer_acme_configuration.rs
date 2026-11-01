@@ -1,5 +1,5 @@
 //! Explicit public ACME inputs bound to the authenticated hosting selection.
-//! This module selects no live certificate source and performs no CA request.
+//! Selection records exact customer agreement and performs no CA request.
 #![cfg(target_os = "linux")]
 
 use crate::{
@@ -64,7 +64,7 @@ impl AcmeParameters {
         parameters.validate()?;
         Ok(parameters)
     }
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         require(
             self.directory_url == self.environment.directory_url()
                 && self.profile == "shortlived"
@@ -140,6 +140,10 @@ pub struct BoundAcmeConfiguration {
     parameters: AcmeParameters,
 }
 impl BoundAcmeConfiguration {
+    pub fn from_selection(state: &LockedInspection) -> Result<Self> {
+        let hosting = installer_hosting::load(state)?.ok_or(REFUSED)?;
+        Self::bind(state, hosting.acme_parameters().cloned().ok_or(REFUSED)?)
+    }
     pub fn bind(state: &LockedInspection, parameters: AcmeParameters) -> Result<Self> {
         state.require_unchanged()?;
         parameters.validate()?;
@@ -147,7 +151,9 @@ impl BoundAcmeConfiguration {
         require(
             hosting.is_recorded()
                 && hosting.mode() == Mode::Direct
-                && hosting.certificate_source() == CertificateSource::ManagedCa
+                && hosting.certificate_source() == CertificateSource::Acme
+                && hosting.acme_parameters() == Some(&parameters)
+                && hosting.http01_host_port().is_some()
                 && hosting.connector().is_none(),
         )?;
         let origin = hosting.requested_origin().ok_or(REFUSED)?;

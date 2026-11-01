@@ -18,9 +18,10 @@ use std::{
 };
 type Result<T> = std::result::Result<T, String>;
 const REFUSAL: &str = "Renewal provisioning refused; preserve installation state for recovery";
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RenewalReceipt {
-    pub schema: &'static str,
+    pub schema: String,
     pub installation_id: String,
     pub engine_id: String,
     pub container_id: String,
@@ -29,6 +30,10 @@ pub struct RenewalReceipt {
     pub image: String,
     pub root_retired: bool,
     pub ingress_renewal: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_renewal_authority_plan_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_identity_sha256: Option<BTreeMap<String, String>>,
     pub private_identity_validated: bool,
     pub outputs: Vec<String>,
     pub compose_receipt_sha256: String,
@@ -44,6 +49,8 @@ struct Pending {
     installation_id: String,
     root_retired: bool,
     ingress_renewal: bool,
+    #[serde(default)]
+    public_renewal_authority_plan_sha256: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -57,6 +64,8 @@ struct Completed {
     verification_token_revoked: bool,
     root_retired: bool,
     ingress_renewal: bool,
+    #[serde(default)]
+    public_renewal_authority_plan_sha256: Option<String>,
 }
 
 const IDENTITY_FILES: [&str; 3] = [
@@ -138,6 +147,7 @@ fn validate_delivery(
     owner: &str,
     expected_host_uid: HelperOutputOwner,
     managed_ingress: bool,
+    public_plan_sha256: Option<&str>,
 ) -> Result<Vec<String>> {
     require_directory_binding(parent, held)?;
     require(
@@ -152,12 +162,17 @@ fn validate_delivery(
     let delivered = open_child(held, "delivered", libc::O_RDONLY | libc::O_DIRECTORY)?;
     let m = delivered.metadata().map_err(|_| REFUSAL)?;
     require(m.is_dir() && m.uid() == unsafe { libc::geteuid() } && m.mode() & 0o7777 == 0o700)?;
-    let result = validate_delivered(&delivered, owner, managed_ingress)?;
+    let result = validate_delivered(&delivered, owner, managed_ingress, public_plan_sha256)?;
     require_directory_binding(parent, held)?;
     Ok(result)
 }
 
-fn validate_delivered(delivered: &File, owner: &str, managed_ingress: bool) -> Result<Vec<String>> {
+fn validate_delivered(
+    delivered: &File,
+    owner: &str,
+    managed_ingress: bool,
+    public_plan_sha256: Option<&str>,
+) -> Result<Vec<String>> {
     let expected: BTreeSet<String> = IDENTITY_FILES
         .into_iter()
         .chain(["pending.json", "completed.json"])
@@ -169,21 +184,26 @@ fn validate_delivered(delivered: &File, owner: &str, managed_ingress: bool) -> R
             .map_err(|_| REFUSAL)?;
     require(
         pending.schema
-            == if managed_ingress {
+            == if public_plan_sha256.is_some() {
+                "elevenid.installer-renewal-bootstrap-intent/v3"
+            } else if managed_ingress {
                 "elevenid.installer-renewal-bootstrap-intent/v2"
             } else {
                 "elevenid.installer-renewal-bootstrap-intent/v1"
             }
             && pending.installation_id == owner
             && !pending.root_retired
-            && pending.ingress_renewal == managed_ingress,
+            && pending.ingress_renewal == managed_ingress
+            && pending.public_renewal_authority_plan_sha256.as_deref() == public_plan_sha256,
     )?;
     let completed: Completed =
         serde_json::from_slice(&read_entry(delivered, "completed.json", 0o600, false)?)
             .map_err(|_| REFUSAL)?;
     require(
         completed.schema
-            == if managed_ingress {
+            == if public_plan_sha256.is_some() {
+                "elevenid.installer-renewal-bootstrap-result/v3"
+            } else if managed_ingress {
                 "elevenid.installer-renewal-bootstrap-result/v2"
             } else {
                 "elevenid.installer-renewal-bootstrap-result/v1"
@@ -194,7 +214,8 @@ fn validate_delivered(delivered: &File, owner: &str, managed_ingress: bool) -> R
             && completed.scoped_login_verified
             && completed.verification_token_revoked
             && !completed.root_retired
-            && completed.ingress_renewal == managed_ingress,
+            && completed.ingress_renewal == managed_ingress
+            && completed.public_renewal_authority_plan_sha256.as_deref() == public_plan_sha256,
     )?;
     let mut credentials = BTreeSet::new();
     for name in ["renewal-role-id", "renewal-secret-id"] {
@@ -236,6 +257,118 @@ fn validate_delivered(delivered: &File, owner: &str, managed_ingress: bool) -> R
     Ok(IDENTITY_FILES.map(String::from).to_vec())
 }
 
+fn identity_hashes(delivered: &File) -> Result<BTreeMap<String, String>> {
+    IDENTITY_FILES
+        .into_iter()
+        .map(|name| {
+            Ok((
+                name.into(),
+                crate::installer_release::sha256(&read_entry(delivered, name, 0o600, false)?),
+            ))
+        })
+        .collect()
+}
+
+/// Revalidate completed pre-CA enrollment without logging in or requiring
+/// original leaf credentials to remain live after a certificate order wait.
+pub(crate) fn require_public_enrolment(
+    state: &crate::installer_state::LockedInspection,
+    plan: &crate::installer_public_ingress::PublicRenewalAuthorityPlan,
+) -> Result<String> {
+    plan.require_saved(state)?;
+    let bytes = state.read_evidence("renewal-result.json")?;
+    let result: RenewalReceipt =
+        serde_json::from_value(crate::installer_json::decode(&bytes).map_err(|_| REFUSAL)?)
+            .map_err(|_| REFUSAL)?;
+    require(state.read_evidence("renewal-observation.json")? == bytes)?;
+    let runtime = state.journal().runtime().ok_or(REFUSAL)?;
+    let owner = state.journal().installation_id().to_string();
+    let digest = plan.sha256()?;
+    let hex = |value: &str| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    };
+    require(
+        result.schema == "elevenid.installer-renewal-host/v4"
+            && result.installation_id == owner
+            && result.engine_id == runtime.engine_id
+            && result.container_name
+                == format!("{}-installer-renewal-1", state.journal().compose_project())
+            && hex(&result.container_id)
+            && hex(&result.network_id)
+            && result
+                .image
+                .strip_prefix("ghcr.io/elevenid/marty-ui-oss/services@sha256:")
+                .is_some_and(hex)
+            && result.ingress_renewal
+            && !result.root_retired
+            && result.private_identity_validated
+            && result.public_renewal_authority_plan_sha256.as_deref() == Some(digest.as_str())
+            && result.outputs == IDENTITY_FILES
+            && result.job_completed_successfully
+            && !result.container_removed
+            && !result.installation_ready,
+    )?;
+    let operation = state.read_evidence("compose-setup-installer-renewal-result.json")?;
+    require(crate::installer_release::sha256(&operation) == result.compose_receipt_sha256)?;
+    let operation: ComposeReceipt =
+        serde_json::from_value(crate::installer_json::decode(&operation).map_err(|_| REFUSAL)?)
+            .map_err(|_| REFUSAL)?;
+    let resources = operation.resources.as_ref().ok_or(REFUSAL)?;
+    let helper = resources
+        .containers
+        .get("installer-renewal")
+        .ok_or(REFUSAL)?;
+    require(
+        operation.schema == "elevenid.installer-compose-operation/v1"
+            && operation.operation == "setup-installer-renewal"
+            && operation.project == state.journal().compose_project()
+            && operation.engine_id == runtime.engine_id
+            && operation.command_succeeded
+            && operation.client_exit_code == Some(0)
+            && operation.failure_class.is_none()
+            && !operation.installation_ready
+            && operation.observation_validated
+            && helper.setup
+            && helper
+                .setup_execution
+                .as_ref()
+                .is_some_and(|execution| execution.completed_without_restart)
+            && helper.id == result.container_id
+            && helper.image == result.image
+            && resources
+                .networks
+                .values()
+                .any(|id| id == &result.network_id)
+            && operation.status.iter().any(|row| {
+                row["Service"] == "installer-renewal"
+                    && row["ID"] == helper.id
+                    && row["State"] == "exited"
+                    && row["ExitCode"] == 0
+            }),
+    )?;
+    let parent = open_child(
+        state.installation_directory(),
+        "renewal-transfer",
+        libc::O_RDONLY | libc::O_DIRECTORY,
+    )?;
+    let delivered = open_child(&parent, "delivered", libc::O_RDONLY | libc::O_DIRECTORY)?;
+    for directory in [&parent, &delivered] {
+        let metadata = directory.metadata().map_err(|_| REFUSAL)?;
+        require(
+            metadata.is_dir()
+                && metadata.uid() == unsafe { libc::geteuid() }
+                && metadata.mode() & 0o7777 == 0o700,
+        )?;
+    }
+    require(validate_delivered(&delivered, &owner, true, Some(&digest))? == IDENTITY_FILES)?;
+    require(result.public_identity_sha256.as_ref() == Some(&identity_hashes(&delivered)?))?;
+    state.require_unchanged()?;
+    Ok(crate::installer_release::sha256(&bytes))
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "Keep independently bound provisioning inputs explicit at this boundary."
@@ -250,7 +383,67 @@ pub fn provision(
     inputs: ComposeInputs,
     expected_operator_sha: &str,
 ) -> Result<(ComposeReceipt, RenewalReceipt)> {
+    provision_selected(
+        dockerpath,
+        installation,
+        bundle,
+        state,
+        bao,
+        services_image,
+        inputs,
+        expected_operator_sha,
+        None,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently bound provisioning inputs explicit."
+)]
+pub fn provision_public(
+    dockerpath: &Path,
+    installation: &Path,
+    bundle: &Path,
+    state: &mut InstallerState,
+    bao: &OpenBaoInventory,
+    services_image: &str,
+    inputs: ComposeInputs,
+    expected_operator_sha: &str,
+    plan: &crate::installer_public_ingress::PublicRenewalAuthorityPlan,
+) -> Result<(ComposeReceipt, RenewalReceipt)> {
+    provision_selected(
+        dockerpath,
+        installation,
+        bundle,
+        state,
+        bao,
+        services_image,
+        inputs,
+        expected_operator_sha,
+        Some(plan),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Both sources use the existing owned provisioning transaction."
+)]
+fn provision_selected(
+    dockerpath: &Path,
+    installation: &Path,
+    bundle: &Path,
+    state: &mut InstallerState,
+    bao: &OpenBaoInventory,
+    services_image: &str,
+    inputs: ComposeInputs,
+    expected_operator_sha: &str,
+    public_plan: Option<&crate::installer_public_ingress::PublicRenewalAuthorityPlan>,
+) -> Result<(ComposeReceipt, RenewalReceipt)> {
     state.require_live_phase(Phase::Provisioning)?;
+    let public_digest = public_plan.map(|plan| plan.sha256()).transpose()?;
+    if let Some(plan) = public_plan {
+        state.with_inspection(|view| plan.require_saved(view))?;
+    }
     require(InstallerState::inspect(installation)? == *state.journal())?;
     let binding = state.journal().runtime().ok_or(REFUSAL)?.clone();
     let owner = state.journal().installation_id().to_string();
@@ -266,14 +459,18 @@ pub fn provision(
     require(managed_ingress)?;
     let output_path = installation.join("renewal-transfer");
     let output = directory(&output_path)?;
+    let mut pending = json!({
+        "schema":"elevenid.installer-renewal-intent/v2", "installation_id":owner,
+        "engine_id":binding.engine_id,"operator_sha256":expected_operator_sha,
+        "input_sha256":crate::installer_generation::hashes(&source_snapshot)
+    });
+    if let Some(digest) = &public_digest {
+        pending["schema"] = json!("elevenid.installer-renewal-intent/v3");
+        pending["public_renewal_authority_plan_sha256"] = json!(digest);
+    }
     state.write_evidence(
         "renewal-pending.json",
-        &serde_json::to_vec(&json!({
-            "schema":"elevenid.installer-renewal-intent/v2", "installation_id":owner,
-            "engine_id":binding.engine_id,"operator_sha256":expected_operator_sha,
-            "input_sha256":crate::installer_generation::hashes(&source_snapshot)
-        }))
-        .map_err(|_| REFUSAL)?,
+        &serde_json::to_vec(&pending).map_err(|_| REFUSAL)?,
     )?;
     require_directory_binding(&output_path, &output)?;
     require(
@@ -281,6 +478,9 @@ pub fn provision(
             && read_inputs(&staged)? == source_snapshot
             && read_inputs(&secrets)? == source_snapshot,
     )?;
+    if let Some(plan) = public_plan {
+        plan.require_job_inputs(dockerpath, &binding, &inputs, "installer-renewal")?;
+    }
     let job = installer_jobs::run(
         dockerpath,
         installation,
@@ -301,9 +501,18 @@ pub fn provision(
         &owner,
         installer_helper_output::expected_host_uid(&binding)?,
         managed_ingress,
+        public_digest.as_deref(),
     )?;
+    if let Some(plan) = public_plan {
+        state.with_inspection(|view| plan.require_saved(view))?;
+    }
     let receipt = RenewalReceipt {
-        schema: "elevenid.installer-renewal-host/v3",
+        schema: if public_plan.is_some() {
+            "elevenid.installer-renewal-host/v4"
+        } else {
+            "elevenid.installer-renewal-host/v3"
+        }
+        .into(),
         installation_id: owner,
         engine_id: binding.engine_id,
         container_id: job.container_id,
@@ -312,6 +521,10 @@ pub fn provision(
         image: job.image,
         root_retired: false,
         ingress_renewal: true,
+        public_renewal_authority_plan_sha256: public_digest,
+        public_identity_sha256: public_plan
+            .map(|_| identity_hashes(&directory(&output_path.join("delivered"))?))
+            .transpose()?,
         private_identity_validated: true,
         outputs: delivered,
         compose_receipt_sha256: installer_jobs::receipt_digest(&job.compose)?,
@@ -468,10 +681,15 @@ mod tests {
         std::fs::create_dir(&transfer).unwrap();
         std::fs::set_permissions(&transfer, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(require_directory_binding(&transfer, &held).is_err());
-        assert!(
-            validate_delivery(&transfer, &held, OWNER, host_output_owner_for_test(), false)
-                .is_err()
-        );
+        assert!(validate_delivery(
+            &transfer,
+            &held,
+            OWNER,
+            host_output_owner_for_test(),
+            false,
+            None
+        )
+        .is_err());
         symlink(&transfer, temp.path().join("original/delivered")).unwrap();
         assert!(open_child(&held, "delivered", libc::O_RDONLY | libc::O_DIRECTORY).is_err());
     }
@@ -557,7 +775,10 @@ mod tests {
                 .unwrap(),
             0o600,
         );
-        assert_eq!(validate_delivered(&dir, OWNER, false).unwrap().len(), 3);
+        assert_eq!(
+            validate_delivered(&dir, OWNER, false, None).unwrap().len(),
+            3
+        );
         for (field, value) in [
             ("root_retired", json!(true)),
             ("verification_token_revoked", json!(false)),
@@ -572,7 +793,7 @@ mod tests {
                 &serde_json::to_vec(&bad).unwrap(),
                 0o600,
             );
-            assert!(validate_delivered(&dir, OWNER, false).is_err());
+            assert!(validate_delivered(&dir, OWNER, false, None).is_err());
         }
         put(
             temp.path(),
@@ -585,14 +806,14 @@ mod tests {
             std::fs::Permissions::from_mode(0o444),
         )
         .unwrap();
-        assert!(validate_delivered(&dir, OWNER, false).is_err());
+        assert!(validate_delivered(&dir, OWNER, false, None).is_err());
         std::fs::set_permissions(
             temp.path().join("renewal-secret-id"),
             std::fs::Permissions::from_mode(0o600),
         )
         .unwrap();
         put(temp.path(), "unexpected", b"extra", 0o600);
-        assert!(validate_delivered(&dir, OWNER, false).is_err());
+        assert!(validate_delivered(&dir, OWNER, false, None).is_err());
     }
 
     #[test]

@@ -20,6 +20,15 @@ type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "ACME custody refused; preserve the environment-scoped key, policy and installation evidence. No private key export or credential issuance was attempted";
 const RECOVERY: &str = "ACME custody setup is incomplete; preserve its intent and owned OpenBao resources for explicit recovery. Key creation must not be retried automatically";
 
+#[path = "installer_acme_custody_resources.rs"]
+mod resources;
+pub use resources::{
+    admit_for_install, prepare_for_install, provision_resources, CustodyResourcePlan,
+    PublicCustodyOutput,
+};
+#[cfg(test)]
+pub(crate) use resources::{admit_locked, prepare_locked};
+
 fn require(value: bool) -> Result<()> {
     if value {
         Ok(())
@@ -169,7 +178,14 @@ pub fn ingress_csr_policy(
             )?
             && ingress.key_version() == 1,
     )?;
-    let template = csr_template(&configuration.certificate_identity()?, ingress)?;
+    ingress_csr_policy_for(&configuration.certificate_identity()?, ingress)
+}
+
+pub(crate) fn ingress_csr_policy_for(
+    identity: &crate::installer_acme_certificates::CertificateIdentity,
+    ingress: &RetainedIngressKey,
+) -> Result<String> {
+    let template = csr_template(identity, ingress)?;
     let quoted = serde_json::to_string(&template).map_err(|_| REFUSED)?;
     let name = ingress.transit_key_name();
     Ok(format!(

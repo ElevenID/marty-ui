@@ -2,8 +2,7 @@
 //! parser and CSR/chain admission. The CA and private keys exist only in memory.
 use super::*;
 use crate::{
-    installer_acme_configuration::AcmeParameters, installer_acme_custody::account_resource_name,
-    installer_hosting, installer_state::Identity,
+    installer_acme_custody::account_resource_name, installer_hosting, installer_state::Identity,
 };
 use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -18,6 +17,7 @@ use ring::{
         ECDSA_P256_SHA256_FIXED, ECDSA_P256_SHA256_FIXED_SIGNING,
     },
 };
+use sha2::Digest;
 use spki::der::{
     asn1::{BitString, Ia5String, OctetString},
     pem::LineEnding,
@@ -34,8 +34,8 @@ use std::{
 use x509_cert::{
     ext::{
         pkix::{
-            name::GeneralName, BasicConstraints, ExtendedKeyUsage, KeyUsage, KeyUsages,
-            SubjectAltName,
+            name::GeneralName, AuthorityKeyIdentifier, BasicConstraints, ExtendedKeyUsage,
+            KeyUsage, KeyUsages, SubjectAltName, SubjectKeyIdentifier,
         },
         AsExtension,
     },
@@ -43,6 +43,10 @@ use x509_cert::{
     request::CertReq,
     Certificate,
 };
+
+mod recurring {
+    include!("installer_acme_recurrent_tests.rs");
+}
 
 const CA: &str = "https://acme-staging-v02.api.letsencrypt.org";
 const TERMS: &str = "https://letsencrypt.org/documents/LE-SA-v1.6-August-18-2025.pdf";
@@ -131,7 +135,8 @@ fn signed_fixture(
     key: &RetainedIngressKey,
     leaf_key: &EcdsaKeyPair,
     observed: u64,
-) -> (ValidatedCsr, String, String) {
+    lifetime_hours: u64,
+) -> (ValidatedCsr, String, String, EcdsaKeyPair) {
     let mut csr = CertReq::from_pem(
         certificates::csr_template(identity, key)
             .unwrap()
@@ -152,6 +157,8 @@ fn signed_fixture(
     )
     .unwrap();
     let ca_key = private_fixture_key();
+    let issuer_key_identifier =
+        OctetString::new(&sha2::Sha256::digest(ca_key.public_key().as_ref())[..20]).unwrap();
     let mut root = Certificate::from_pem(ROOT_TEMPLATE).unwrap();
     root.tbs_certificate.subject = Name::from_str("CN=Marty in-memory ACME root").unwrap();
     root.tbs_certificate.issuer = root.tbs_certificate.subject.clone();
@@ -160,7 +167,7 @@ fn signed_fixture(
         .try_into()
         .unwrap();
     root.tbs_certificate.validity.not_after = (UNIX_EPOCH
-        + Duration::from_secs(observed + 24 * 3600))
+        + Duration::from_secs(observed + (lifetime_hours + 24) * 3600))
     .try_into()
     .unwrap();
     root.tbs_certificate.extensions = Some(vec![
@@ -173,16 +180,26 @@ fn signed_fixture(
         KeyUsage(KeyUsages::KeyCertSign.into())
             .to_extension(&root.tbs_certificate.subject, &[])
             .unwrap(),
+        SubjectKeyIdentifier(issuer_key_identifier.clone())
+            .to_extension(&root.tbs_certificate.subject, &[])
+            .unwrap(),
     ]);
     let root = sign_certificate(root, &ca_key);
     let mut leaf = root.clone();
     leaf.tbs_certificate.subject = Name::from_str(&format!("CN={DNS}")).unwrap();
     leaf.tbs_certificate.subject_public_key_info = spki(leaf_key.public_key().as_ref());
     leaf.tbs_certificate.validity.not_after = (UNIX_EPOCH
-        + Duration::from_secs(observed + 8 * 3600))
+        + Duration::from_secs(observed + lifetime_hours * 3600))
     .try_into()
     .unwrap();
     leaf.tbs_certificate.extensions = Some(vec![
+        AuthorityKeyIdentifier {
+            key_identifier: Some(issuer_key_identifier),
+            authority_cert_issuer: None,
+            authority_cert_serial_number: None,
+        }
+        .to_extension(&leaf.tbs_certificate.subject, &[])
+        .unwrap(),
         BasicConstraints {
             ca: false,
             path_len_constraint: None,
@@ -207,6 +224,7 @@ fn signed_fixture(
         csr,
         root.to_pem(LineEnding::LF).unwrap(),
         leaf.to_pem(LineEnding::LF).unwrap(),
+        ca_key,
     )
 }
 
@@ -219,12 +237,32 @@ enum TargetChange {
     Invalid,
     Processing,
     Valid,
+    OmittedExpiry,
+    TerminalWithoutExpiry,
+    ValidWithoutExpiry,
+    TerminalOtherIdentifier,
+    ExpiredOnRefresh,
 }
 
 #[derive(Default)]
 struct CaState {
     account_exists: bool,
     order_exists: bool,
+    order_invalid: bool,
+    hold_pending: bool,
+    hold_processing: bool,
+    authorization_expiry_omitted: bool,
+    authorization_terminal: bool,
+    directory_failures_remaining: u32,
+    regressed_order_status: Option<&'static str>,
+    authorization_retry_after: Option<u64>,
+    authorization_retry_after_first_only: bool,
+    authorization_terminal_index: Option<usize>,
+    authorization_terminal_after_reads: usize,
+    authorization_read_failure: bool,
+    terminal_retry_after: Option<u64>,
+    finalize_retry_after: Option<u64>,
+    certificate_failures_remaining: u32,
     ready: [bool; 2],
     finalized: bool,
     lose_registration: bool,
@@ -264,22 +302,39 @@ impl MockCa {
         } else {
             &original_expiry
         };
-        json!({"status":if state.finalized {"valid"} else if state.ready.iter().all(|ready|*ready) {"ready"} else {"pending"},
+        json!({"status":if state.order_invalid {"invalid"} else if let Some(status)=state.regressed_order_status {status} else if state.finalized {if state.hold_processing {"processing"} else {"valid"}} else if !state.hold_pending && state.ready.iter().all(|ready|*ready) {"ready"} else {"pending"},
             "expires":expires,
             "identifiers":[{"type":"dns","value":DNS},{"type":"ip","value":IP}],
             "authorizations":[format!("{CA}/authorization/0"),format!("{CA}/authorization/1")],
-            "finalize":format!("{CA}/finalize/1"),"profile":"shortlived",
-            "certificate":if state.finalized {Some(format!("{CA}/certificate/1"))} else {None}})
+            "finalize":format!("{CA}/finalize/{}",state.new_orders),"profile":"shortlived",
+            "certificate":if state.finalized {Some(format!("{CA}/certificate/{}",state.new_orders))} else {None}})
     }
     fn challenge(index: usize, status: &str) -> Value {
         json!({"type":"http-01","url":format!("{CA}/challenge/{index}"),"token":format!("public-http01-fixture-token-{index}"),"status":status})
     }
     fn response(status: u16, value: Vec<u8>, location: Option<String>) -> BytesResponse {
+        Self::response_with_retry(status, value, location, None)
+    }
+    fn response_with_retry(
+        status: u16,
+        value: Vec<u8>,
+        location: Option<String>,
+        retry_after: Option<u64>,
+    ) -> BytesResponse {
         let mut response = Response::builder()
             .status(status)
             .header("Replay-Nonce", "marty-fixture-nonce");
         if let Some(location) = location {
             response = response.header("Location", location);
+        }
+        if let Some(at) = retry_after {
+            response = response.header(
+                "Retry-After",
+                chrono::DateTime::from_timestamp(at.try_into().unwrap(), 0)
+                    .unwrap()
+                    .format("%a, %d %b %Y %H:%M:%S GMT")
+                    .to_string(),
+            );
         }
         BytesResponse::from(response.body(BodyWrapper::from(value)).unwrap())
     }
@@ -342,6 +397,12 @@ impl HttpClient for MockCa {
             let mut location = None;
             let value = match (parts.method.as_str(), path.as_str()) {
                 ("GET", "/directory") => {
+                    if state.directory_failures_remaining > 0 {
+                        state.directory_failures_remaining -= 1;
+                        return Err(ProtocolError::Str(
+                            "fixture directory temporarily unavailable",
+                        ));
+                    }
                     json!({"newNonce":format!("{CA}/nonce"),"newAccount":format!("{CA}/new-account"),"newOrder":format!("{CA}/new-order"),
                     "meta":{"termsOfService":TERMS,"profiles":{"shortlived":"fixture"}}})
                 }
@@ -385,10 +446,11 @@ impl HttpClient for MockCa {
                         ));
                     }
                     status = 201;
-                    location = Some(format!("{CA}/order/1"));
+                    location = Some(format!("{CA}/order/{}", state.new_orders));
                     mock.order(&state)
                 }
-                ("POST", "/order/1") => {
+                ("POST", path) if path.starts_with("/order/") => {
+                    assert_eq!(path, format!("/order/{}", state.new_orders));
                     assert!(state.order_exists);
                     assert!(payload.is_null());
                     mock.order(&state)
@@ -397,10 +459,27 @@ impl HttpClient for MockCa {
                     assert!(payload.is_null());
                     let index = path.rsplit('/').next().unwrap().parse::<usize>().unwrap();
                     state.authorization_reads[index] += 1;
+                    if index == 1 && state.authorization_read_failure {
+                        state.authorization_read_failure = false;
+                        return Err(ProtocolError::Str(
+                            "fixture later authorization unavailable",
+                        ));
+                    }
                     let mut authorization = json!({"status":if state.ready[index]{"valid"}else{"pending"},
                         "identifier":if index==0{json!({"type":"dns","value":DNS})}else{json!({"type":"ip","value":IP})},
                         "expires":chrono::DateTime::from_timestamp((mock.created_at+3600)as i64,0).unwrap().to_rfc3339(),
                         "challenges":[Self::challenge(index,if state.ready[index]{"valid"}else{"pending"})]});
+                    if state.authorization_expiry_omitted && !state.ready[index] {
+                        authorization.as_object_mut().unwrap().remove("expires");
+                    }
+                    if state.authorization_terminal
+                        || (state.authorization_terminal_index == Some(index)
+                            && state.authorization_reads[index]
+                                >= state.authorization_terminal_after_reads)
+                    {
+                        authorization["status"] = json!("invalid");
+                        authorization.as_object_mut().unwrap().remove("expires");
+                    }
                     if index == 1 && state.authorization_reads[index] >= 2 {
                         match state.target_change {
                             Some(TargetChange::Identifier) => {
@@ -439,7 +518,34 @@ impl HttpClient for MockCa {
                                 authorization["challenges"][0]["status"] = json!("valid");
                                 state.ready[index] = true;
                             }
-                            None => {}
+                            Some(TargetChange::OmittedExpiry) => {
+                                authorization.as_object_mut().unwrap().remove("expires");
+                            }
+                            Some(TargetChange::TerminalWithoutExpiry) => {
+                                authorization["status"] = json!("invalid");
+                                authorization.as_object_mut().unwrap().remove("expires");
+                            }
+                            Some(TargetChange::ValidWithoutExpiry) => {
+                                authorization["status"] = json!("valid");
+                                authorization["challenges"][0]["status"] = json!("valid");
+                                authorization.as_object_mut().unwrap().remove("expires");
+                            }
+                            Some(TargetChange::TerminalOtherIdentifier) => {
+                                authorization["identifier"] = json!({"type":"dns","value":DNS});
+                                authorization["status"] = json!("invalid");
+                                authorization.as_object_mut().unwrap().remove("expires");
+                            }
+                            Some(TargetChange::ExpiredOnRefresh)
+                                if state.authorization_reads[index] >= 3 =>
+                            {
+                                authorization["expires"] = json!(chrono::DateTime::from_timestamp(
+                                    (mock.created_at - 1) as i64,
+                                    0
+                                )
+                                .unwrap()
+                                .to_rfc3339());
+                            }
+                            Some(TargetChange::ExpiredOnRefresh) | None => {}
                         }
                     }
                     authorization
@@ -475,7 +581,8 @@ impl HttpClient for MockCa {
                     state.ready[index] = true;
                     Self::challenge(index, "processing")
                 }
-                ("POST", "/finalize/1") => {
+                ("POST", path) if path.starts_with("/finalize/") => {
+                    assert_eq!(path, format!("/finalize/{}", state.new_orders));
                     assert!(state.ready.iter().all(|value| *value));
                     assert_eq!(
                         URL_SAFE_NO_PAD
@@ -493,8 +600,15 @@ impl HttpClient for MockCa {
                     }
                     mock.order(&state)
                 }
-                ("POST", "/certificate/1") => {
+                ("POST", path) if path.starts_with("/certificate/") => {
+                    assert_eq!(path, format!("/certificate/{}", state.new_orders));
                     assert!(state.finalized);
+                    if state.certificate_failures_remaining > 0 {
+                        state.certificate_failures_remaining -= 1;
+                        return Err(ProtocolError::Str(
+                            "fixture certificate temporarily unavailable",
+                        ));
+                    }
                     return Ok(Self::response(
                         200,
                         mock.certificate.as_bytes().to_vec(),
@@ -503,23 +617,47 @@ impl HttpClient for MockCa {
                 }
                 _ => panic!("unexpected mock CA request: {} {path}", parts.method),
             };
-            Ok(Self::response(
+            let retry_after = if path.starts_with("/finalize/") {
+                state.finalize_retry_after
+            } else if path.starts_with("/authorization/")
+                && state.authorization_retry_after_first_only
+            {
+                if path.ends_with("/0") {
+                    state.authorization_retry_after
+                } else {
+                    None
+                }
+            } else if path.starts_with("/authorization/")
+                && state.authorization_retry_after.is_some()
+            {
+                state.authorization_retry_after
+            } else if path == "/new-order"
+                || path.starts_with("/order/")
+                || path.starts_with("/authorization/")
+            {
+                state.terminal_retry_after
+            } else {
+                None
+            };
+            Ok(Self::response_with_retry(
                 status,
                 serde_json::to_vec(&value).unwrap(),
                 location,
+                retry_after,
             ))
         })
     }
 }
 
-struct Fixture {
-    _root: tempfile::TempDir,
+pub(crate) struct Fixture {
+    _root: Option<tempfile::TempDir>,
     installation: std::path::PathBuf,
     configuration: BoundAcmeConfiguration,
     account_key: AccountKeyBinding,
     ingress_key: RetainedIngressKey,
     csr: ValidatedCsr,
     root_pem: String,
+    ca_key: EcdsaKeyPair,
     signer: Arc<TestSigner>,
     ca: MockCa,
 }
@@ -529,12 +667,11 @@ impl Drop for Fixture {
     }
 }
 impl Fixture {
-    fn new() -> Self {
-        let observed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        TEST_TIME.with(|value| value.set(Some(observed)));
+    pub(crate) fn new() -> Self {
+        Self::with_certificate_lifetime(8)
+    }
+    pub(crate) fn with_certificate_lifetime(lifetime_hours: u64) -> Self {
+        assert!((1..160).contains(&lifetime_hours));
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let installation = root.path().join("installation");
@@ -552,23 +689,57 @@ impl Fixture {
         let hosting = root.path().join("hosting.json");
         std::fs::write(&hosting,serde_json::to_vec(&json!({"schema":"elevenid.installation-hosting/v1","mode":"direct",
             "public_origin":format!("https://{DNS}"),"public_entry_origin":format!("https://{IP}"),
-            "listener":{"bind_address":"0.0.0.0","port":18443},"tls":{"termination":"marty-keyless","certificate_source":"managed-ca"}})).unwrap()).unwrap();
+            "listener":{"bind_address":"0.0.0.0","port":18443},"tls":{"termination":"marty-keyless","certificate_source":"acme",
+            "acme":{"environment":"staging","directory_url":AcmeEnvironment::Staging.directory_url(),"profile":"shortlived","terms_url":TERMS,"terms_agreed":true},"http01_host_port":18080}})).unwrap()).unwrap();
         std::fs::set_permissions(&hosting, std::fs::Permissions::from_mode(0o600)).unwrap();
         installer_hosting::select(
             installer_hosting::prepare(Some(&hosting), None).unwrap(),
             &mut writer,
         )
         .unwrap();
-        let parameters=AcmeParameters::parse(&serde_json::to_vec(&json!({"environment":"staging","directory_url":AcmeEnvironment::Staging.directory_url(),"profile":"shortlived","terms_url":TERMS,"terms_agreed":true})).unwrap()).unwrap();
-        let configuration = writer
-            .with_inspection(|state| BoundAcmeConfiguration::bind(state, parameters))
-            .unwrap();
-        let id = writer.journal().installation_id().to_string();
         writer.advance(Phase::Provisioning).unwrap();
-        drop(writer);
+        let mut fixture = Self::from_prepared(
+            &mut writer,
+            installation,
+            private_fixture_key(),
+            lifetime_hours,
+            true,
+        );
+        fixture._root = Some(root);
+        fixture
+    }
+    pub(crate) fn attach_prepared(
+        writer: &mut InstallerState,
+        installation: &Path,
+        leaf: EcdsaKeyPair,
+    ) -> Self {
+        Self::from_prepared(writer, installation.to_owned(), leaf, 8, false)
+    }
+    fn from_prepared(
+        writer: &mut InstallerState,
+        installation: std::path::PathBuf,
+        leaf: EcdsaKeyPair,
+        lifetime_hours: u64,
+        create_projection: bool,
+    ) -> Self {
+        let observed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        TEST_TIME.with(|value| value.set(Some(observed)));
+        let configuration = writer
+            .with_inspection(BoundAcmeConfiguration::from_selection)
+            .unwrap();
+        assert_eq!(
+            configuration.parameters().environment(),
+            AcmeEnvironment::Staging
+        );
+        let id = writer.journal().installation_id().to_string();
         let projection = installation.join(HTTP01_DIRECTORY);
-        std::fs::create_dir(&projection).unwrap();
-        std::fs::set_permissions(&projection, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if create_projection {
+            std::fs::create_dir(&projection).unwrap();
+            std::fs::set_permissions(&projection, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let signer = TestSigner::new();
         let account_spki = spki(signer.public_key());
         let account_key = AccountKeyBinding::bind(
@@ -582,7 +753,6 @@ impl Fixture {
             ),
         )
         .unwrap();
-        let leaf = private_fixture_key();
         let leaf_spki = spki(leaf.public_key().as_ref());
         let ingress_key = RetainedIngressKey::bind(
             &id,
@@ -594,12 +764,16 @@ impl Fixture {
             ),
         )
         .unwrap();
-        let (csr, root_pem, certificate) = signed_fixture(
+        let (csr, root_pem, certificate, ca_key) = signed_fixture(
             &configuration.certificate_identity().unwrap(),
             &ingress_key,
             &leaf,
             observed,
+            lifetime_hours,
         );
+        writer
+            .write_evidence("staging-acme-roots.pem", root_pem.as_bytes())
+            .unwrap();
         let ca = MockCa {
             state: Arc::new(Mutex::new(CaState::default())),
             public: signer.public_key().to_vec(),
@@ -609,18 +783,19 @@ impl Fixture {
             created_at: observed,
         };
         Self {
-            _root: root,
+            _root: None,
             installation,
             configuration,
             account_key,
             ingress_key,
             csr,
             root_pem,
+            ca_key,
             signer,
             ca,
         }
     }
-    fn inputs(&self) -> EnrolmentInputs<'_> {
+    pub(crate) fn inputs(&self) -> EnrolmentInputs<'_> {
         EnrolmentInputs {
             installation: &self.installation,
             configuration: &self.configuration,
@@ -630,7 +805,7 @@ impl Fixture {
             staging_roots_pem: Some(self.root_pem.as_bytes()),
         }
     }
-    fn advance(&self, seconds: u64) {
+    pub(crate) fn advance(&self, seconds: u64) {
         TEST_TIME.with(|value| value.set(Some(value.get().unwrap() + seconds)));
     }
     fn run(&self) -> Result<EnrolmentOutcome> {
@@ -649,7 +824,7 @@ impl Fixture {
                 Box::new(self.ca.clone()),
             ))
     }
-    fn finish(&self) -> EnrolmentOutcome {
+    pub(crate) fn finish(&self) -> EnrolmentOutcome {
         for _ in 0..8 {
             let outcome = self.run().unwrap();
             if outcome.candidate.is_some() {
@@ -658,6 +833,31 @@ impl Fixture {
             self.advance(20);
         }
         panic!("fixture failed to produce a candidate")
+    }
+    pub(crate) fn finish_locked(&self, state: &mut LockedMaintenance) -> Result<EnrolmentOutcome> {
+        for _ in 0..8 {
+            let inputs = self.inputs();
+            let binding = bind_inputs(state.inspection(), &inputs)?;
+            let outcome = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(drive(
+                    state,
+                    &inputs,
+                    binding,
+                    self.signer.clone(),
+                    Box::new(self.ca.clone()),
+                ))?;
+            if outcome.candidate.is_some() {
+                return Ok(outcome);
+            }
+            self.advance(20);
+        }
+        panic!("fixture failed to produce a locked candidate")
+    }
+    pub(crate) fn installation(&self) -> &Path {
+        &self.installation
     }
 }
 
@@ -887,7 +1087,7 @@ fn completed_order_still_refuses_malformed_expiry() {
 }
 
 #[test]
-fn challenge_retries_keep_count_and_withdraw_projection_at_limit() {
+fn challenge_retries_keep_count_and_saturate_without_terminal_failure() {
     let fixture = Fixture::new();
     fixture
         .ca
@@ -903,31 +1103,52 @@ fn challenge_retries_keep_count_and_withdraw_projection_at_limit() {
         let saved = Ledger::load(&state, AcmeEnvironment::Staging)
             .unwrap()
             .unwrap();
-        assert_eq!(saved.state.retry.unwrap().failures, count);
+        assert_eq!(saved.retry().unwrap().failures, count);
         drop(state);
         fixture.advance(deadline - now().unwrap() + 1);
     }
     {
-        // Reopen the real ledger at the final permitted retry, as after a long
-        // interruption test. Earlier iterations prove counts survive reopen.
+        // Saturation is a backoff bound, not a lifetime authentication limit.
         let mut state = LockedMaintenance::open(&fixture.installation).unwrap();
         let mut saved = Ledger::load(state.inspection(), AcmeEnvironment::Staging)
             .unwrap()
             .unwrap();
-        let mut next = saved.state.clone();
-        next.retry.as_mut().unwrap().failures = 32;
-        saved.append(&mut state, next, now().unwrap()).unwrap();
+        let mut retry = saved.retry().unwrap().clone();
+        retry.failures = 32;
+        retry.next_attempt_at = now().unwrap();
+        polling::record(&mut state, &mut saved, Some(retry), None, now().unwrap()).unwrap();
     }
     let outcome = fixture.run().unwrap();
-    assert_eq!(outcome.report["stage"], "terminal");
-    assert_eq!(outcome.report["failure"], "retry_limit");
-    let snapshot: Snapshot =
-        serde_json::from_slice(&std::fs::read(&fixture.ca.projection).unwrap()).unwrap();
-    assert!(snapshot.challenges.is_empty());
+    assert_eq!(outcome.report["stage"], "challenge_ready_pending");
+    assert!(outcome.report["failure"].is_null());
+    let deadline = outcome.report["next_attempt_at"].as_u64().unwrap();
+    {
+        let state = LockedInspection::open(&fixture.installation).unwrap();
+        assert_eq!(
+            Ledger::load(&state, AcmeEnvironment::Staging)
+                .unwrap()
+                .unwrap()
+                .retry()
+                .unwrap()
+                .failures,
+            32
+        );
+    }
     let requests = fixture.ca.state.lock().unwrap().requests.len();
-    assert_eq!(fixture.run().unwrap().report["stage"], "terminal");
+    assert_eq!(
+        fixture.run().unwrap().report["stage"],
+        "challenge_ready_pending"
+    );
     assert_eq!(fixture.ca.state.lock().unwrap().requests.len(), requests);
+    fixture.advance(deadline - now().unwrap());
+    assert!(fixture.finish().candidate.is_some());
 }
+
+#[path = "installer_acme_polling_tests.rs"]
+mod polling_tests;
+
+#[path = "installer_acme_polling_state_tests.rs"]
+mod polling_state_tests;
 
 #[test]
 fn retained_csr_recovers_the_original_signature_without_contacting_ca() {
@@ -972,7 +1193,12 @@ fn nested_runtime_is_rejected_before_borrowing_or_poisoning_installer_lock() {
         }
     }
     let fixture = Fixture::new();
-    let installation = fixture._root.path().join("untouched-installation");
+    let installation = fixture
+        ._root
+        .as_ref()
+        .expect("standalone fixture owns its directory")
+        .path()
+        .join("untouched-installation");
     let mut state = InstallerState::create(
         &installation,
         Identity {

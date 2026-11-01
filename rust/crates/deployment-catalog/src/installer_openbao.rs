@@ -1,5 +1,5 @@
 //! Explicit credential barriers around native Compose-managed OpenBao phases.
-//! Existing authenticated OpenBao initialization remains unchanged. There is no
+//! Fresh installations retain a separate static seal and initialize once. There is no
 //! per-service scheduler or host health-polling loop here.
 #![cfg(target_os = "linux")]
 use crate::{
@@ -112,6 +112,7 @@ pub fn start_openbao(
     state.create_private_directory("openbao-state")?;
     state.persist_openbao_state_creation_receipt(installation)?;
     state.prepare_openbao_control()?;
+    crate::installer_openbao_seal::prepare_for_install(state, installation)?;
     let state_before = fs::symlink_metadata(installation.join("openbao-state"))
         .map_err(|_| "OpenBao initial directory identity unavailable")?;
     let pending = installation.join("openbao-pending.json");
@@ -161,12 +162,19 @@ pub fn start_openbao(
         )?);
     inputs.prior = Some(receipt);
     inputs.services = vec!["openbao".into()];
+    state.with_inspection(|view| crate::installer_openbao_seal::verify(view, installation))?;
     let api = ComposeSession::new(docker_path, binding, inputs.clone())?;
     receipt = api.up_wait(state, "openbao-api", Duration::from_secs(180))?;
     inputs.prior = Some(receipt);
     inputs.services = vec!["openbao-bootstrap".into()];
     let bootstrap = ComposeSession::new(docker_path, binding, inputs.clone())?;
     receipt = bootstrap.run_setup_job(state, "openbao-bootstrap")?;
+    crate::installer_openbao_seal::record_initialization(
+        installation,
+        state,
+        &bootstrap,
+        &receipt,
+    )?;
     inputs.prior = Some(receipt);
     inputs.services = vec!["openbao-unseal".into()];
     let ready = ComposeSession::new(docker_path, binding, inputs.clone())?;

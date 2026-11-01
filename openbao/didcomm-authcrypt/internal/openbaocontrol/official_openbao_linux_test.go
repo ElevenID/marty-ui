@@ -280,6 +280,16 @@ func TestOfficialOpenBao255RecoveryCoreAfterNaturalTCPExpiry(t *testing.T) {
 	recorder := &recordingTransport{base: client.Transport}
 	recoveryClient := *client
 	recoveryClient.Transport = recorder
+	paths.checkpoint = func(point string) error {
+		if point == "candidate-durable" {
+			return errRecovery
+		}
+		return nil
+	}
+	if _, err := recoverAt(ctx, testInstallation, testAttempt, paths, currentOwner(), &recoveryClient, time.Now()); err == nil {
+		t.Fatal("expected interruption after durable public candidate, before publication")
+	}
+	paths.checkpoint = nil
 	receipt, err := recoverAt(ctx, testInstallation, testAttempt, paths, currentOwner(), &recoveryClient, time.Now())
 	if err != nil {
 		t.Fatalf("actual recovery core refused official OpenBao responses after %v", recorder.operations)
@@ -291,6 +301,10 @@ func TestOfficialOpenBao255RecoveryCoreAfterNaturalTCPExpiry(t *testing.T) {
 	}
 	if !slices.Equal(recorder.operations, expectedOperations) {
 		t.Fatal("recovery performed an unexpected initialization, unseal or authority operation")
+	}
+	repeated, err := recoverAt(ctx, testInstallation, testAttempt, paths, currentOwner(), &recoveryClient, time.Now())
+	if err != nil || repeated != receipt || !slices.Equal(recorder.operations, expectedOperations) {
+		t.Fatal("completed recovery did not return retained result without additional API work")
 	}
 	expired() // Atomic file publication alone must not be mistaken for reload.
 	pid := process.Process.Pid
@@ -325,6 +339,7 @@ func TestOfficialOpenBao255RecoveryCoreAfterNaturalTCPExpiry(t *testing.T) {
 		"schema": "elevenid.openbao-go-recovery-proof/v1", "binary_version": strings.TrimSpace(string(version)),
 		"binary_sha256": fmt.Sprintf("%x", hash.Sum(nil)), "root_revocation_verified": true, "actual_recovery_core": true, "actual_enrollment_core": true,
 		"natural_leaf_expiry": true, "tcp_verified_after_owned_sighup": true, "scoped_signing_policy_denials": true,
+		"candidate_resume_without_additional_api": true, "completed_attempt_reobserved": true,
 		"node_key_preserved": true, "existing_file_ca_key_preserved": true, "imported_ca_key_nonexportable": false,
 		"tls_verification_disabled": false, "initialization_replayed": false, "same_process": true,
 		"production_mount_and_image_uid_qualified": false, "container_image_qualified": false, "reboot_qualified": false,

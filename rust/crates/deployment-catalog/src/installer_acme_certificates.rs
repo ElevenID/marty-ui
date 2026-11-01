@@ -46,7 +46,7 @@ const MAX_CHAIN: usize = 8;
 const MAX_PEM_BYTES: usize = 128 * 1024;
 // Release policy, independent of any CA's current default profile. Short-lived
 // DNS/IP certificates fit this window; nearly expired results are not activated.
-const MINIMUM_REMAINING: Duration = Duration::from_secs(3600);
+pub(crate) const MINIMUM_REMAINING: Duration = Duration::from_secs(3600);
 const MAXIMUM_VALIDITY: Duration = Duration::from_secs(100 * 86400);
 
 fn require(ok: bool) -> Result<()> {
@@ -142,12 +142,25 @@ impl RetainedIngressKey {
             .ok_or(REFUSED)?;
         let spki = operator::public_spki(public.as_bytes(), false).map_err(|_| REFUSED)?;
         require(spki == retained_spki)?;
-        p256_spki(&spki)?;
+        Self::from_recorded_public_key(installation_id, version, &spki)
+    }
+    /// Reconstruct only a previously authenticated public-key binding. This
+    /// validates its identity and encoding, not current OpenBao key custody.
+    /// A caller performing a signing operation must also require_metadata on
+    /// an authenticated live response before using this retained binding.
+    pub(crate) fn from_recorded_public_key(
+        installation_id: &str,
+        version: u64,
+        spki: &[u8],
+    ) -> Result<Self> {
+        let name = crate::installer_ingress_provision::resource_name(installation_id)?;
+        require(version == 1)?;
+        p256_spki(spki)?;
         Ok(Self {
             installation_id: uuid::Uuid::parse_str(installation_id).map_err(|_| REFUSED)?,
             name,
             version,
-            spki,
+            spki: spki.to_vec(),
         })
     }
     pub fn transit_key_name(&self) -> &str {
@@ -396,14 +409,24 @@ fn check_lifetime(cert: &Certificate, now: Duration, minimum_remaining: Duration
             && after > before,
     )
 }
+#[cfg(test)]
 fn check_leaf(
     cert: &Certificate,
     identity: &CertificateIdentity,
     key: &RetainedIngressKey,
     now: Duration,
 ) -> Result<()> {
+    check_leaf_with_minimum(cert, identity, key, now, MINIMUM_REMAINING)
+}
+fn check_leaf_with_minimum(
+    cert: &Certificate,
+    identity: &CertificateIdentity,
+    key: &RetainedIngressKey,
+    now: Duration,
+    minimum_remaining: Duration,
+) -> Result<()> {
     check_extensions(cert)?;
-    check_lifetime(cert, now, MINIMUM_REMAINING)?;
+    check_lifetime(cert, now, minimum_remaining)?;
     let tbs = &cert.tbs_certificate;
     require(
         tbs.validity
@@ -502,7 +525,36 @@ pub fn admit_production(
     identity: &CertificateIdentity,
     key: &RetainedIngressKey,
 ) -> Result<ValidatedCertificate> {
-    admit_at(pem, identity, key, TrustSelection::Production, now()?)
+    admit_production_at(pem, identity, key, now()?)
+}
+/// Recheck an immutable generation receipt at its recorded observation time.
+/// This is historical new-candidate validation; activation must still use the
+/// actual current clock through admit_production.
+pub(crate) fn admit_production_at(
+    pem: &[u8],
+    identity: &CertificateIdentity,
+    key: &RetainedIngressKey,
+    observed: Duration,
+) -> Result<ValidatedCertificate> {
+    admit_at(pem, identity, key, TrustSelection::Production, observed)
+}
+/// Validate a serving chain through its actual expiry, independently of the
+/// advance margin required when admitting a new candidate. Callers supply the
+/// current clock for runtime checks or the recorded clock for receipt checks.
+pub(crate) fn validate_selected_production_at(
+    pem: &[u8],
+    identity: &CertificateIdentity,
+    key: &RetainedIngressKey,
+    observed: Duration,
+) -> Result<ValidatedCertificate> {
+    admit_with_minimum_at(
+        pem,
+        identity,
+        key,
+        TrustSelection::Production,
+        observed,
+        Duration::ZERO,
+    )
 }
 /// Explicit test-only trust remains staging even if its chain also happens to
 /// validate publicly. This result never claims activation or browser readiness.
@@ -512,13 +564,37 @@ pub fn admit_staging_test(
     identity: &CertificateIdentity,
     key: &RetainedIngressKey,
 ) -> Result<ValidatedCertificate> {
+    admit_staging_test_at(pem, staging_roots_pem, identity, key, now()?)
+}
+/// Historical staging admission is only for retained candidate receipts. It
+/// never substitutes caller anchors for the compiled production trust store.
+pub(crate) fn admit_staging_test_at(
+    pem: &[u8],
+    staging_roots_pem: &[u8],
+    identity: &CertificateIdentity,
+    key: &RetainedIngressKey,
+    observed: Duration,
+) -> Result<ValidatedCertificate> {
     admit_at(
         pem,
         identity,
         key,
         TrustSelection::StagingTest(staging_roots_pem),
-        now()?,
+        observed,
     )
+}
+/// Reject malformed or unusable explicit staging anchors before setup starts.
+/// This validates only the staging input and grants no production trust.
+pub(crate) fn validate_staging_roots(pem: &[u8]) -> Result<()> {
+    staging_root_certificates(pem, now()?).map(|_| ())
+}
+fn staging_root_certificates(pem: &[u8], observed: Duration) -> Result<Vec<Certificate>> {
+    let roots = parse_chain(pem)?;
+    require(roots.len() <= 4)?;
+    for root in &roots {
+        check_ca(root, observed, true)?;
+    }
+    Ok(roots)
 }
 fn now() -> Result<Duration> {
     SystemTime::now()
@@ -550,8 +626,18 @@ fn admit_at(
     trust: TrustSelection<'_>,
     now: Duration,
 ) -> Result<ValidatedCertificate> {
+    admit_with_minimum_at(pem, identity, key, trust, now, MINIMUM_REMAINING)
+}
+fn admit_with_minimum_at(
+    pem: &[u8],
+    identity: &CertificateIdentity,
+    key: &RetainedIngressKey,
+    trust: TrustSelection<'_>,
+    now: Duration,
+    minimum_remaining: Duration,
+) -> Result<ValidatedCertificate> {
     let certificates = parse_chain(pem)?;
-    check_leaf(&certificates[0], identity, key, now)?;
+    check_leaf_with_minimum(&certificates[0], identity, key, now, minimum_remaining)?;
     let ders = certificates
         .iter()
         .map(|cert| cert.to_der().map(CertificateDer::from).map_err(|_| REFUSED))
@@ -571,11 +657,7 @@ fn admit_at(
         None
     };
     let staging_roots = if let TrustSelection::StagingTest(roots) = &trust {
-        let roots = parse_chain(roots)?;
-        require(roots.len() <= 4)?;
-        for root in &roots {
-            check_ca(root, now, true)?;
-        }
+        let roots = staging_root_certificates(roots, now)?;
         roots
             .iter()
             .map(|root| root.to_der().map(CertificateDer::from).map_err(|_| REFUSED))
@@ -671,7 +753,7 @@ fn admit_at(
         .not_after
         .to_unix_duration()
         .as_secs());
-    metadata["minimum_remaining_seconds"] = json!(MINIMUM_REMAINING.as_secs());
+    metadata["minimum_remaining_seconds"] = json!(minimum_remaining.as_secs());
     metadata["maximum_validity_seconds"] = json!(MAXIMUM_VALIDITY.as_secs());
     metadata["leaf_der_sha256"] = json!(installer_release::sha256(ders[0].as_ref()));
     metadata["fullchain_pem_sha256"] = json!(installer_release::sha256(fullchain_pem.as_bytes()));

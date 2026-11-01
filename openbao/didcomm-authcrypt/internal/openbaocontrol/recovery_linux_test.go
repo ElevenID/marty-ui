@@ -227,14 +227,20 @@ func newRecoveryFixture(t *testing.T, fault string) *recoveryFixture {
 				http.Error(w, "invalid", http.StatusBadRequest)
 				return
 			}
-			fixture.signed.Add(1)
+			count := fixture.signed.Add(1)
+			if fault == "sign-response-lost-once" && count == 1 {
+				// The server performed signing but the client received an
+				// incomplete response and cannot retain the resulting leaf.
+				_, _ = w.Write([]byte(`{"data":`))
+				return
+			}
 			result := map[string]any{"certificate": string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: fixture.issued.Raw}))}
 			if fault == "private-key" {
 				result["private_key"] = "private material must never be admitted"
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": result})
 		case "auth/token/revoke-self":
-			fixture.revoked.Add(1)
+			count := fixture.revoked.Add(1)
 			current, _ := os.ReadFile(filepath.Join(fixture.paths.tls, "server.pem"))
 			if !bytes.Equal(current, fixture.old) {
 				t.Error("certificate changed before transient-token retirement")
@@ -242,7 +248,7 @@ func newRecoveryFixture(t *testing.T, fault string) *recoveryFixture {
 			if fault == "changed-file" {
 				_ = os.WriteFile(filepath.Join(fixture.paths.tls, "server.pem"), []byte("operator changed the source"), 0600)
 			}
-			if fault == "revoke-uncertain" {
+			if fault == "revoke-uncertain" || (fault == "revoke-uncertain-once" && count == 1) {
 				http.Error(w, "uncertain", http.StatusServiceUnavailable)
 				return
 			}
@@ -312,8 +318,8 @@ func TestRecoveryPreservesRetainedKeyAndPublishesOnlyValidatedCertificate(t *tes
 		}
 	}
 	entries, _ := os.ReadDir(fixture.paths.tls)
-	if len(entries) != 2 {
-		t.Fatal("successful publication left an unexpected stage or private key file")
+	if len(entries) != 5 {
+		t.Fatal("successful publication must retain only CA, node PEM, lock, public journal and public completed receipt")
 	}
 }
 

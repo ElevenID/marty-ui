@@ -4,6 +4,7 @@
 #![cfg(target_os = "linux")]
 
 use crate::{
+    installer_acme_configuration::AcmeParameters,
     installer_compose::{BoundFile, ComposeInputs},
     installer_host_fs as fs,
     installer_state::{InstallerState, LockedInspection, Phase},
@@ -51,6 +52,7 @@ impl Listener {
 pub enum CertificateSource {
     ManagedCa,
     FoundationImport,
+    Acme,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +66,10 @@ enum Termination {
 struct Tls {
     termination: Termination,
     certificate_source: CertificateSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    acme: Option<AcmeParameters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    http01_host_port: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,6 +214,8 @@ impl Configuration {
                 } else {
                     CertificateSource::ManagedCa
                 },
+                acme: None,
+                http01_host_port: None,
             },
             public_origin: foundation_origin,
             public_entry_origin: None,
@@ -269,9 +277,28 @@ impl Configuration {
         if let Some(connector) = &self.connector {
             require(self.mode == Mode::ExternalProxy && path_is_safe(&connector.token_file))?;
         }
+        match self.tls.certificate_source {
+            CertificateSource::Acme => {
+                let parameters = self.tls.acme.as_ref().ok_or(REFUSED)?;
+                parameters.validate()?;
+                let http01 = self.tls.http01_host_port.ok_or(REFUSED)?;
+                require(
+                    self.mode == Mode::Direct
+                        && self.connector.is_none()
+                        && self.public_origin.as_ref().is_some_and(|origin| {
+                            origin.dns_name().is_some() && !origin.is_loopback()
+                        })
+                        && http01 >= 1024
+                        && http01 != self.listener.port,
+                )?;
+            }
+            CertificateSource::ManagedCa | CertificateSource::FoundationImport => {
+                require(self.tls.acme.is_none() && self.tls.http01_host_port.is_none())?;
+            }
+        }
         if let Some(alias) = &self.public_entry_origin {
-            if self.tls.certificate_source != CertificateSource::ManagedCa {
-                return Err("public_entry_origin requires managed-ca certificate issuance with DNS and IP SAN coverage; foundation-import does not support an IP entry alias".into());
+            if self.tls.certificate_source == CertificateSource::FoundationImport {
+                return Err("public_entry_origin requires managed-ca or acme certificate issuance with exact DNS and IP SAN coverage; foundation-import does not support an IP entry alias".into());
             }
             require(
                 self.mode == Mode::Direct
@@ -300,11 +327,11 @@ impl Configuration {
 
     fn require_foundation(&self, foundation_origin: Option<&PublicOrigin>) -> Result<()> {
         match (self.tls.certificate_source, foundation_origin) {
-            (CertificateSource::ManagedCa, None) => Ok(()),
+            (CertificateSource::ManagedCa | CertificateSource::Acme, None) => Ok(()),
             (CertificateSource::FoundationImport, Some(origin)) => {
                 require(self.public_origin.as_ref() == Some(origin))
             }
-            _ => Err("hosting certificate source must match the selected managed OpenBao or imported foundation".into()),
+            _ => Err("hosting certificate source must match the selected managed OpenBao or imported foundation; ACME requires the managed OpenBao setup".into()),
         }
     }
 }
@@ -339,6 +366,9 @@ pub(crate) fn prepare(
 }
 
 impl Prepared {
+    pub(crate) fn acme_parameters(&self) -> Option<&AcmeParameters> {
+        self.configuration.tls.acme.as_ref()
+    }
     pub(crate) fn host_impact(&self) -> String {
         let origin = self
             .configuration
@@ -527,6 +557,14 @@ impl Selection {
     }
     pub fn certificate_source(&self) -> CertificateSource {
         self.configuration.tls.certificate_source
+    }
+    pub fn acme_parameters(&self) -> Option<&AcmeParameters> {
+        self.configuration.tls.acme.as_ref()
+    }
+    /// The challenge responder binds only to 127.0.0.1. The customer routes
+    /// public HTTP port 80 to this explicit, unprivileged local port.
+    pub fn http01_host_port(&self) -> Option<u16> {
+        self.configuration.tls.http01_host_port
     }
     pub fn connector(&self) -> Option<&Connector> {
         self.configuration.connector.as_ref()

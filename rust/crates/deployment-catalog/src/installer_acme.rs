@@ -10,11 +10,11 @@ use crate::{
     installer_acme_configuration::{AcmeEnvironment, BoundAcmeConfiguration},
     installer_acme_custody::AccountKeyBinding,
     installer_acme_state::{
-        self as ledger, require, AuthorizationRecord, Binding, CertificateRecord, Ledger,
+        self as ledger, polling, require, AuthorizationRecord, Binding, CertificateRecord, Ledger,
         OrderRecord, Projection, Retry, Stage, REFUSED,
     },
     installer_host_fs,
-    installer_state::{ExecutionScope, InstallerState, LockedInspection, LockedMaintenance, Phase},
+    installer_state::{InstallerState, LockedInspection, LockedMaintenance, Phase},
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use marty_acme_client::{
@@ -51,6 +51,18 @@ const HTTP01_DIRECTORY: &str = "acme-http01";
 const WORK_DEADLINE: Duration = Duration::from_secs(90);
 const SHORTLIVED_MAXIMUM_SECONDS: u64 = 160 * 3600;
 
+#[path = "installer_acme_recurrent.rs"]
+mod recurrent;
+pub use recurrent::retained_candidate;
+pub(crate) use recurrent::{
+    retained_csr_for_renewal, run_initial_rollover_locked, run_renewal_locked,
+};
+#[path = "installer_acme_terminal.rs"]
+mod terminal;
+pub(crate) use terminal::{
+    require_terminal_retry_evidence, terminal_retry_decision, TerminalRetryEvidence,
+};
+
 /// Every value is validated against the held installation before network work.
 /// The CSR is already signed remotely and admitted by the certificate boundary.
 pub struct EnrolmentInputs<'a> {
@@ -68,6 +80,8 @@ pub struct EnrolmentInputs<'a> {
 #[derive(Clone, Debug, Serialize)]
 pub struct AcmeCandidate {
     environment: AcmeEnvironment,
+    #[serde(skip_serializing_if = "ledger::initial_cycle")]
+    cycle: u64,
     installation_id: uuid::Uuid,
     enrolment_receipt_sha256: String,
     order_url: String,
@@ -78,6 +92,9 @@ pub struct AcmeCandidate {
 impl AcmeCandidate {
     pub fn environment(&self) -> AcmeEnvironment {
         self.environment
+    }
+    pub fn cycle(&self) -> u64 {
+        self.cycle
     }
     pub fn fullchain_pem(&self) -> &str {
         &self.fullchain_pem
@@ -97,7 +114,7 @@ pub struct EnrolmentOutcome {
     pub candidate: Option<AcmeCandidate>,
 }
 
-fn now() -> Result<u64> {
+pub(crate) fn now() -> Result<u64> {
     #[cfg(test)]
     if let Some(value) = TEST_TIME.with(std::cell::Cell::get) {
         return Ok(value);
@@ -133,17 +150,26 @@ pub(crate) fn run_locked(
     bao: OpenBaoHttp,
     credentials: Arc<dyn WorkloadCredentials>,
 ) -> Result<EnrolmentOutcome> {
+    crate::installer_acme_preparation::require_supported_scope(state.inspection())?;
     require(
-        matches!(
-            state.journal().execution_scope(),
-            ExecutionScope::Unclassified
-        ) && state.journal().phase() == Phase::Provisioning
+        state.journal().phase() == Phase::Provisioning
             && state.journal().runtime().is_some_and(|runtime| {
                 runtime.profile == crate::installer_state::RuntimeProfile::Rootless
             }),
     )?;
     state.journal().runtime().ok_or(REFUSED)?.validate()?;
     let binding = bind_inputs(state.inspection(), inputs)?;
+    run_with_binding(state, inputs, binding, bao, credentials)
+}
+
+fn run_with_binding(
+    state: &mut LockedMaintenance,
+    inputs: &EnrolmentInputs<'_>,
+    binding: Binding,
+    bao: OpenBaoHttp,
+    credentials: Arc<dyn WorkloadCredentials>,
+) -> Result<EnrolmentOutcome> {
+    require(tokio::runtime::Handle::try_current().is_err())?;
     let signer = Arc::new(
         OpenBaoAccountSigner::new(
             bao,
@@ -181,8 +207,10 @@ pub(crate) fn run_locked(
 pub fn status(state: &LockedInspection) -> Result<Value> {
     let mut environments = Vec::new();
     for environment in [AcmeEnvironment::Staging, AcmeEnvironment::Production] {
-        if let Some(ledger) = Ledger::load(state, environment)? {
-            environments.push(ledger.report());
+        for cycle in Ledger::cycles(state, environment)? {
+            if let Some(ledger) = Ledger::load_cycle(state, environment, cycle)? {
+                environments.push(ledger.report());
+            }
         }
     }
     Ok(
@@ -203,6 +231,14 @@ pub fn retained_csr(
     let Some(saved) = Ledger::load(state, configuration.parameters().environment())? else {
         return Ok(None);
     };
+    retained_csr_from_ledger(&saved, configuration, ingress_key).map(Some)
+}
+
+fn retained_csr_from_ledger(
+    saved: &Ledger,
+    configuration: &BoundAcmeConfiguration,
+    ingress_key: &RetainedIngressKey,
+) -> Result<ValidatedCsr> {
     require(
         saved.binding.configuration == serde_json::to_value(configuration).map_err(|_| REFUSED)?
             && saved.binding.ingress_key_name == ingress_key.transit_key_name()
@@ -219,7 +255,7 @@ pub fn retained_csr(
             && ledger::hash(csr.der()) == saved.binding.csr_sha256
             && *csr.metadata() == saved.binding.csr_metadata,
     )?;
-    Ok(Some(csr))
+    Ok(csr)
 }
 
 fn bind_inputs(state: &LockedInspection, inputs: &EnrolmentInputs<'_>) -> Result<Binding> {
@@ -249,6 +285,8 @@ fn bind_inputs(state: &LockedInspection, inputs: &EnrolmentInputs<'_>) -> Result
     let binding = Binding {
         installation_id: state.journal().installation_id(),
         environment: expected.parameters().environment(),
+        cycle: 0,
+        renewal: None,
         configuration: serde_json::to_value(&expected).map_err(|_| REFUSED)?,
         release: serde_json::to_value(state.journal().identity()).map_err(|_| REFUSED)?,
         runtime: serde_json::to_value(state.journal().runtime()).map_err(|_| REFUSED)?,
@@ -372,6 +410,7 @@ fn observe_order(
 fn outcome(saved: &Ledger, candidate: Option<ValidatedCertificate>) -> EnrolmentOutcome {
     let candidate = candidate.map(|certificate| AcmeCandidate {
         environment: saved.binding.environment,
+        cycle: saved.binding.cycle,
         installation_id: saved.binding.installation_id,
         enrolment_receipt_sha256: saved.digest.clone(),
         order_url: saved
@@ -383,12 +422,49 @@ fn outcome(saved: &Ledger, candidate: Option<ValidatedCertificate>) -> Enrolment
             .clone(),
         csr_sha256: saved.binding.csr_sha256.clone(),
         fullchain_pem: certificate.fullchain_pem().into(),
-        metadata: certificate.metadata().clone(),
+        // The retained admission timestamp identifies this immutable receipt.
+        // Callers separately validate current freshness before activation.
+        metadata: saved
+            .state
+            .certificate
+            .as_ref()
+            .expect("admitted certificate")
+            .metadata
+            .clone(),
     });
     EnrolmentOutcome {
         report: saved.report(),
         candidate,
     }
+}
+
+fn candidate_outcome(
+    state: &mut LockedMaintenance,
+    saved: &Ledger,
+    certificate: ValidatedCertificate,
+) -> Result<EnrolmentOutcome> {
+    let original = saved.state.certificate.as_ref().ok_or(REFUSED)?;
+    let mut current_metadata = certificate.metadata().clone();
+    let mut recorded_metadata = original.metadata.clone();
+    current_metadata
+        .as_object_mut()
+        .ok_or(REFUSED)?
+        .remove("observed_at");
+    recorded_metadata
+        .as_object_mut()
+        .ok_or(REFUSED)?
+        .remove("observed_at");
+    require(
+        original.fullchain_pem == certificate.fullchain_pem()
+            && current_metadata == recorded_metadata,
+    )?;
+    let mut result = outcome(saved, Some(certificate));
+    let schedule = crate::installer_acme_renewal::ensure_for_candidate(
+        state,
+        result.candidate.as_ref().ok_or(REFUSED)?,
+    )?;
+    result.report["renewal_schedule"] = schedule.report()?;
+    Ok(result)
 }
 
 fn admitted(inputs: &EnrolmentInputs<'_>, pem: &[u8]) -> Result<ValidatedCertificate> {
@@ -423,19 +499,27 @@ fn admitted(inputs: &EnrolmentInputs<'_>, pem: &[u8]) -> Result<ValidatedCertifi
 
 fn retry(
     state: &mut LockedMaintenance,
-    inputs: &EnrolmentInputs<'_>,
+    _inputs: &EnrolmentInputs<'_>,
     saved: &mut Ledger,
     error: &ProtocolError,
     observed: u64,
 ) -> Result<()> {
+    retry_with_floor(state, saved, error, observed, 0)
+}
+
+fn retry_with_floor(
+    state: &mut LockedMaintenance,
+    saved: &mut Ledger,
+    error: &ProtocolError,
+    observed: u64,
+    not_before: u64,
+) -> Result<()> {
+    // Network outages do not make a known order terminal. Storage is bounded
+    // independently, so failure count/backoff can saturate without a lifetime
+    // retry cap. Legacy retry_limit terminal receipts remain held unchanged.
     let failures = saved
-        .state
-        .retry
-        .as_ref()
-        .map_or(1, |retry| retry.failures + 1);
-    if failures > 32 {
-        return terminal(state, inputs, saved, "retry_limit").map(|_| ());
-    }
+        .retry()
+        .map_or(1, |retry| retry.failures.saturating_add(1).min(32));
     let (category, metadata) = match error {
         ProtocolError::Api(problem) => {
             let category = match problem.r#type.as_deref() {
@@ -451,15 +535,20 @@ fn retry(
     // Draw once and persist. Restarting a worker never redraws this deadline.
     let jitter = u64::from(uuid::Uuid::new_v4().as_bytes()[0]) % (exponential / 4 + 1);
     let next_attempt_at = deadline(metadata, observed, exponential + jitter)
-        .max(observed.saturating_add(exponential + jitter));
-    let mut next = saved.state.clone();
-    next.retry = Some(Retry {
-        failures,
-        next_attempt_at,
-        category: category.into(),
-        http_status: metadata.map(|value| value.status),
-    });
-    saved.append(state, next, observed)
+        .max(observed.saturating_add(exponential + jitter))
+        .max(not_before);
+    polling::record(
+        state,
+        saved,
+        Some(Retry {
+            failures,
+            next_attempt_at,
+            category: category.into(),
+            http_status: metadata.map(|value| value.status),
+        }),
+        None,
+        observed,
+    )
 }
 
 fn terminal(
@@ -468,15 +557,44 @@ fn terminal(
     saved: &mut Ledger,
     code: &str,
 ) -> Result<EnrolmentOutcome> {
+    terminal_with_response(state, inputs, saved, code, None)
+}
+
+fn terminal_with_response(
+    state: &mut LockedMaintenance,
+    inputs: &EnrolmentInputs<'_>,
+    saved: &mut Ledger,
+    code: &str,
+    hints: Option<ResponseMetadata>,
+) -> Result<EnrolmentOutcome> {
+    let observed = now()?;
     let mut next = saved.state.clone();
     next.stage = Stage::Terminal;
     next.failure = Some(code.into());
     next.retry = None;
     next.next_poll_at = None;
     next.pending_challenge = None;
-    saved.append(state, next, now()?)?;
+    next.terminal_retry = terminal::observation(state.inspection(), saved, code, hints, observed)?;
+    saved.append(state, next, observed)?;
     withdraw(state, inputs, saved)?;
+    terminal::confirm_withdrawal(state, inputs, saved)?;
     Ok(outcome(saved, None))
+}
+
+fn terminal_with_floor(
+    state: &mut LockedMaintenance,
+    inputs: &EnrolmentInputs<'_>,
+    saved: &mut Ledger,
+    code: &str,
+    hints: Option<ResponseMetadata>,
+    not_before: u64,
+) -> Result<EnrolmentOutcome> {
+    // Earlier successful responses can impose a later bound than the final
+    // terminal response. Retain it before terminal proof consumes effective
+    // timing, including if terminal publication or withdrawal is interrupted.
+    let observed = now()?;
+    polling::record(state, saved, None, Some(not_before.max(observed)), observed)?;
+    terminal_with_response(state, inputs, saved, code, hints)
 }
 
 async fn drive(
@@ -487,15 +605,16 @@ async fn drive(
     http: Box<dyn HttpClient>,
 ) -> Result<EnrolmentOutcome> {
     let observed = now()?;
-    let mut saved = match Ledger::load(state.inspection(), binding.environment)? {
-        Some(value) => {
-            require(value.binding == binding)?;
-            value
-        }
-        None => Ledger::begin(state, binding, observed)?,
-    };
+    let mut saved =
+        match Ledger::load_cycle(state.inspection(), binding.environment, binding.cycle)? {
+            Some(value) => {
+                require(value.binding == binding)?;
+                value
+            }
+            None => Ledger::begin(state, binding, observed)?,
+        };
     require(signer.public_key() == inputs.account_key.public_sec1())?;
-    require(observed.saturating_add(120) >= saved.observed_at)?;
+    require(observed.saturating_add(120) >= saved.timing_observed_at())?;
     let other_environment = if saved.binding.environment == AcmeEnvironment::Staging {
         AcmeEnvironment::Production
     } else {
@@ -513,12 +632,38 @@ async fn drive(
     }
     if saved.state.stage == Stage::Terminal {
         withdraw(state, inputs, &mut saved)?;
+        terminal::confirm_withdrawal(state, inputs, &mut saved)?;
         return Ok(outcome(&saved, None));
     }
     if matches!(
         saved.state.stage,
         Stage::CertificateAdmitted | Stage::Complete
     ) {
+        let expiry = saved.state.certificate.as_ref().ok_or(REFUSED)?.metadata["not_after"]
+            .as_u64()
+            .ok_or(REFUSED)?;
+        if observed
+            .checked_add(certificates::MINIMUM_REMAINING.as_secs())
+            .ok_or(REFUSED)?
+            > expiry
+        {
+            recurrent::retained_certificate(state.inspection(), &saved)?;
+            withdraw(state, inputs, &mut saved)?;
+            if saved.state.stage != Stage::Complete {
+                let mut next = saved.state.clone();
+                next.stage = Stage::Complete;
+                saved.append(state, next, now()?)?;
+            }
+            let mut result = outcome(&saved, None);
+            result.report["candidate_currently_activatable"] = json!(false);
+            result.report["candidate_replacement_reason"] = json!(if observed >= expiry {
+                "expired"
+            } else {
+                "admission_margin_elapsed"
+            });
+            result.report["replacement_eligible_at"] = json!(expiry);
+            return Ok(result);
+        }
         let certificate = admitted(
             inputs,
             saved
@@ -535,16 +680,13 @@ async fn drive(
             next.stage = Stage::Complete;
             saved.append(state, next, now()?)?;
         }
-        return Ok(outcome(&saved, Some(certificate)));
+        return candidate_outcome(state, &saved, certificate);
     }
     if saved
-        .state
-        .retry
-        .as_ref()
+        .retry()
         .is_some_and(|retry| retry.next_attempt_at > observed)
         || saved
-            .state
-            .next_poll_at
+            .next_poll_at()
             .is_some_and(|deadline| deadline > observed)
     {
         if saved
@@ -552,12 +694,41 @@ async fn drive(
             .order
             .as_ref()
             .is_some_and(|order| order.expires_at <= observed)
-            && saved.state.stage != Stage::CertificatePending
+            && !matches!(
+                saved.state.stage,
+                Stage::FinalizePending | Stage::CertificatePending
+            )
         {
+            // A lost finalize response may already have issued the certificate.
+            // Keep its known URL through backoff; only an authoritative later
+            // Pending/Ready observation can classify an unfinalized order as
+            // expired. Processing can still finish and is not terminal proof.
             return terminal(state, inputs, &mut saved, "order_expired");
         }
         return Ok(outcome(&saved, None));
     }
+    if saved.state.order.is_none() && !saved.ordinary_phase_available() {
+        // Repeated certainly rejected account/newOrder mutations consume real
+        // authority receipts. Never sacrifice the reconciliation reserve or
+        // manufacture an order URL when that distinct budget is exhausted.
+        let mut result = outcome(&saved, None);
+        result.report["blocking_dependency"] = json!("acme_preorder_phase_budget");
+        return Ok(result);
+    }
+    // Prove complete private checkpoint publication before any next CA call.
+    // A crash retains a short timing floor; unsupported/full filesystems fail
+    // before remote work and cannot cause repeated unrecorded CA requests.
+    let mut attempt_retry = saved.retry().cloned();
+    if let Some(retry) = &mut attempt_retry {
+        retry.next_attempt_at = retry.next_attempt_at.max(observed.saturating_add(5));
+    }
+    polling::record(
+        state,
+        &mut saved,
+        attempt_retry,
+        Some(observed.saturating_add(5)),
+        observed,
+    )?;
     if saved.state.stage == Stage::PublicationPending {
         // Complete exactly the retained publication before constructing another
         // projection. A lost rename result may already have published these bytes.
@@ -669,6 +840,19 @@ async fn drive(
         {
             Ok(mut value) => {
                 let retained = observe_order(&mut value, inputs, None)?;
+                if let Some(renewal) = &saved.binding.renewal {
+                    let prior = Ledger::load_cycle(
+                        state.inspection(),
+                        saved.binding.environment,
+                        renewal.prior_cycle,
+                    )?
+                    .ok_or(REFUSED)?;
+                    require(
+                        prior.digest == renewal.prior_enrolment_receipt_sha256
+                            && prior.state.stage == Stage::Complete
+                            && prior.state.order.as_ref().ok_or(REFUSED)?.url != retained.url,
+                    )?;
+                }
                 let mut next = saved.state.clone();
                 next.stage = Stage::OrderBound;
                 next.order = Some(retained);
@@ -697,30 +881,89 @@ async fn drive(
     observe_order(&mut order, inputs, saved.state.order.as_ref())?;
     let observed = now()?;
     let status = order.state().status;
+    // finalize_csr can replace the order state/response metadata. Keep every
+    // successful observation's floor through subsequent requests in this drive.
+    let mut order_not_before = deadline(order.state().response_metadata, observed, 5);
     if status == OrderStatus::Invalid {
-        return terminal(state, inputs, &mut saved, "order_invalid");
+        return terminal_with_response(
+            state,
+            inputs,
+            &mut saved,
+            "order_invalid",
+            order.state().response_metadata,
+        );
     }
-    if status != OrderStatus::Valid
+    if (status == OrderStatus::Pending
+        && matches!(
+            saved.state.stage,
+            Stage::FinalizePending | Stage::CertificatePending
+        ))
+        || (status == OrderStatus::Ready && saved.state.stage == Stage::CertificatePending)
+    {
+        // A regressing response cannot erase the retained finalize intent or
+        // consume the completion reserve by cycling through ordinary phases.
+        polling::record(
+            state,
+            &mut saved,
+            None,
+            Some(deadline(order.state().response_metadata, observed, 300)),
+            observed,
+        )?;
+        let mut result = outcome(&saved, None);
+        result.report["blocking_dependency"] = json!("acme_finalize_status_regression");
+        return Ok(result);
+    }
+    if !matches!(status, OrderStatus::Valid | OrderStatus::Processing)
         && saved.state.order.as_ref().ok_or(REFUSED)?.expires_at <= observed
     {
-        return terminal(state, inputs, &mut saved, "order_expired");
+        return terminal_with_response(
+            state,
+            inputs,
+            &mut saved,
+            "order_expired",
+            order.state().response_metadata,
+        );
     }
     if status == OrderStatus::Pending {
+        if !saved.ordinary_phase_available() {
+            // Preserve all remaining phase capacity for a known URL's terminal
+            // observation, finalize/certificate reconciliation and withdrawal.
+            // No readiness POST or projection rewrite occurs in this branch.
+            let next = deadline(order.state().response_metadata, observed, 5)
+                .max(saved.state.order.as_ref().ok_or(REFUSED)?.expires_at);
+            polling::record(state, &mut saved, None, Some(next), observed)?;
+            let mut result = outcome(&saved, None);
+            result.report["blocking_dependency"] =
+                json!("acme_phase_budget_waiting_for_order_expiry");
+            return Ok(result);
+        }
         return pending_authorizations(state, inputs, &mut saved, &mut order).await;
     }
     if status == OrderStatus::Ready {
-        let mut next = saved.state.clone();
-        next.stage = Stage::FinalizePending;
-        next.next_poll_at = None;
-        saved.append(state, next, now()?)?;
+        if saved.state.stage != Stage::FinalizePending {
+            let mut next = saved.state.clone();
+            next.stage = Stage::FinalizePending;
+            next.retry = None;
+            next.next_poll_at = None;
+            saved.append(state, next, now()?)?;
+        }
         if let Err(error) = order.finalize_csr(inputs.csr.der()).await {
-            retry(state, inputs, &mut saved, &error, now()?)?;
+            retry_with_floor(state, &mut saved, &error, now()?, order_not_before)?;
             return Ok(outcome(&saved, None));
         }
         observe_order(&mut order, inputs, saved.state.order.as_ref())?;
+        order_not_before =
+            order_not_before.max(deadline(order.state().response_metadata, now()?, 5));
     }
     if order.state().status == OrderStatus::Invalid {
-        return terminal(state, inputs, &mut saved, "order_invalid");
+        return terminal_with_floor(
+            state,
+            inputs,
+            &mut saved,
+            "order_invalid",
+            order.state().response_metadata,
+            order_not_before,
+        );
     }
     if saved.state.stage != Stage::CertificatePending {
         let mut next = saved.state.clone();
@@ -730,16 +973,29 @@ async fn drive(
         saved.append(state, next, now()?)?;
     }
     if order.state().status != OrderStatus::Valid {
-        let mut next = saved.state.clone();
-        next.next_poll_at = Some(deadline(order.state().response_metadata, now()?, 5));
-        saved.append(state, next, now()?)?;
+        polling::record(
+            state,
+            &mut saved,
+            None,
+            Some(order_not_before.max(deadline(order.state().response_metadata, now()?, 5))),
+            now()?,
+        )?;
         return Ok(outcome(&saved, None));
     }
     let pem = match order.certificate().await {
         Ok(Some(value)) => value,
-        Ok(None) => return Ok(outcome(&saved, None)),
+        Ok(None) => {
+            polling::record(
+                state,
+                &mut saved,
+                None,
+                Some(order_not_before.max(deadline(order.state().response_metadata, now()?, 5))),
+                now()?,
+            )?;
+            return Ok(outcome(&saved, None));
+        }
         Err(error) => {
-            retry(state, inputs, &mut saved, &error, now()?)?;
+            retry_with_floor(state, &mut saved, &error, now()?, order_not_before)?;
             return Ok(outcome(&saved, None));
         }
     };
@@ -747,6 +1003,27 @@ async fn drive(
         Ok(value) => value,
         Err(_) => return terminal(state, inputs, &mut saved, "certificate_refused"),
     };
+    if let Some(renewal) = &saved.binding.renewal {
+        let prior = Ledger::load_cycle(
+            state.inspection(),
+            saved.binding.environment,
+            renewal.prior_cycle,
+        )?
+        .ok_or(REFUSED)?;
+        require(
+            prior.digest == renewal.prior_enrolment_receipt_sha256
+                && prior.state.stage == Stage::Complete,
+        )?;
+        let previous = &prior.state.certificate.as_ref().ok_or(REFUSED)?.metadata;
+        if certificate.metadata()["leaf_der_sha256"] == previous["leaf_der_sha256"]
+            || certificate.metadata()["not_after"]
+                .as_u64()
+                .ok_or(REFUSED)?
+                <= previous["not_after"].as_u64().ok_or(REFUSED)?
+        {
+            return terminal(state, inputs, &mut saved, "certificate_refused");
+        }
+    }
     let mut next = saved.state.clone();
     next.stage = Stage::CertificateAdmitted;
     next.retry = None;
@@ -760,7 +1037,34 @@ async fn drive(
     let mut next = saved.state.clone();
     next.stage = Stage::Complete;
     saved.append(state, next, now()?)?;
-    Ok(outcome(&saved, Some(certificate)))
+    candidate_outcome(state, &saved, certificate)
+}
+
+/// RFC 8555 section 7.1.4 requires expires for Valid, not Pending. A missing
+/// pending expiry is bounded by the retained order, and can never extend an
+/// earlier authorization bound. Explicit pending expiry extensions are refused.
+fn authorization_expiry(
+    status: AuthorizationStatus,
+    supplied: Option<&str>,
+    order_expiry: u64,
+    prior: Option<&AuthorizationRecord>,
+) -> Result<u64> {
+    if status == AuthorizationStatus::Valid {
+        return expires(supplied);
+    }
+    require(status == AuthorizationStatus::Pending)?;
+    let current = match supplied {
+        Some(value) => expires(Some(value))?.min(order_expiry),
+        None => order_expiry,
+    };
+    if let Some(prior) = prior {
+        if supplied.is_some() {
+            require(current <= prior.expires_at)?;
+        }
+        Ok(current.min(prior.expires_at))
+    } else {
+        Ok(current)
+    }
 }
 
 async fn pending_authorizations(
@@ -771,35 +1075,58 @@ async fn pending_authorizations(
 ) -> Result<EnrolmentOutcome> {
     let mut records = Vec::new();
     let mut terminal_reason = None;
+    let mut poll_not_before = deadline(order.state().response_metadata, now()?, 5);
     {
         let mut authorizations = order.authorizations();
         while let Some(result) = authorizations.next().await {
             let mut authorization = match result {
                 Ok(value) => value,
                 Err(error) => {
-                    retry(state, inputs, saved, &error, now()?)?;
+                    retry_with_floor(state, saved, &error, now()?, poll_not_before)?;
                     return Ok(outcome(saved, None));
                 }
             };
             let identifier = authorization.identifier().to_string();
             let url = authorization.url().to_owned();
-            let expires_at = expires(authorization.expires.as_deref())?;
-            if expires_at <= now()? {
-                terminal_reason = Some("authorization_expired");
-                break;
-            }
-            if !matches!(
-                authorization.status,
-                AuthorizationStatus::Pending | AuthorizationStatus::Valid
-            ) {
-                terminal_reason = Some("authorization_invalid");
-                break;
-            }
+            let identity = inputs.configuration.certificate_identity()?;
+            require(
+                saved
+                    .state
+                    .order
+                    .as_ref()
+                    .ok_or(REFUSED)?
+                    .authorization_urls
+                    .contains(&url)
+                    && (identifier == identity.dns_name()
+                        || identity
+                            .ip_address()
+                            .is_some_and(|ip| identifier == ip.to_string())),
+            )?;
             let prior = saved
                 .state
                 .authorizations
                 .iter()
                 .find(|prior| prior.url == url);
+            require(prior.is_none_or(|prior| prior.identifier == identifier))?;
+            poll_not_before =
+                poll_not_before.max(deadline(authorization.response_metadata, now()?, 5));
+            if !matches!(
+                authorization.status,
+                AuthorizationStatus::Pending | AuthorizationStatus::Valid
+            ) {
+                terminal_reason = Some(("authorization_invalid", authorization.response_metadata));
+                break;
+            }
+            let expires_at = authorization_expiry(
+                authorization.status,
+                authorization.expires.as_deref(),
+                saved.state.order.as_ref().ok_or(REFUSED)?.expires_at,
+                prior,
+            )?;
+            if expires_at <= now()? {
+                terminal_reason = Some(("authorization_expired", authorization.response_metadata));
+                break;
+            }
             let mut record = AuthorizationRecord {
                 identifier,
                 url,
@@ -832,7 +1159,6 @@ async fn pending_authorizations(
                 if let Some(prior) = prior {
                     require(
                         prior.identifier == record.identifier
-                            && prior.expires_at == record.expires_at
                             && prior.challenge_url == record.challenge_url
                             && prior.token == record.token
                             && prior.key_authorization == record.key_authorization,
@@ -842,8 +1168,8 @@ async fn pending_authorizations(
             records.push(record);
         }
     }
-    if let Some(reason) = terminal_reason {
-        return terminal(state, inputs, saved, reason);
+    if let Some((reason, hints)) = terminal_reason {
+        return terminal_with_floor(state, inputs, saved, reason, hints, poll_not_before);
     }
     records.sort_by(|left, right| left.identifier.cmp(&right.identifier));
     let identity = inputs.configuration.certificate_identity()?;
@@ -858,28 +1184,41 @@ async fn pending_authorizations(
                 .collect::<BTreeSet<_>>()
                 == expected,
     )?;
-    let projection = projection_for(
+    let projection = pending_projection(
         inputs,
         &records,
         saved.state.order.as_ref().ok_or(REFUSED)?.expires_at,
         saved.state.projection.as_ref(),
-        false,
     )?;
-    let mut next = saved.state.clone();
-    next.authorizations = records;
-    next.stage = Stage::PublicationPending;
-    next.projection = Some(projection);
-    next.pending_challenge = None;
-    next.next_poll_at = None;
-    saved.append(state, next, now()?)?;
-    publish(
-        state.inspection(),
-        inputs.installation,
-        saved.state.projection.as_ref().ok_or(REFUSED)?,
-    )?;
-    let mut next = saved.state.clone();
-    next.stage = Stage::ChallengesPublished;
-    saved.append(state, next, now()?)?;
+    if saved.state.projection.as_ref() != Some(&projection) {
+        let mut next = saved.state.clone();
+        next.authorizations = records;
+        next.stage = Stage::PublicationPending;
+        next.projection = Some(projection);
+        next.pending_challenge = None;
+        next.retry = None;
+        next.next_poll_at = None;
+        saved.append(state, next, now()?)?;
+        publish(
+            state.inspection(),
+            inputs.installation,
+            saved.state.projection.as_ref().ok_or(REFUSED)?,
+        )?;
+        let mut next = saved.state.clone();
+        next.stage = Stage::ChallengesPublished;
+        saved.append(state, next, now()?)?;
+    } else {
+        // Read back the same owned public bytes before signaling readiness.
+        // The fixed projection has its original bounds, not a new poll time.
+        publish(state.inspection(), inputs.installation, &projection)?;
+        if saved.state.authorizations != records {
+            let mut next = saved.state.clone();
+            next.authorizations = records;
+            next.retry = None;
+            next.next_poll_at = None;
+            saved.append(state, next, now()?)?;
+        }
+    }
     let pending = saved
         .state
         .authorizations
@@ -887,13 +1226,25 @@ async fn pending_authorizations(
         .find(|record| record.status == "pending" && !record.ready_observed)
         .map(|record| record.url.clone());
     if let Some(pending) = pending {
-        let mut next = saved.state.clone();
-        next.stage = Stage::ChallengeReadyPending;
-        next.pending_challenge = Some(pending.clone());
-        saved.append(state, next, now()?)?;
+        if saved.state.stage != Stage::ChallengeReadyPending
+            || saved.state.pending_challenge.as_deref() != Some(pending.as_str())
+        {
+            let mut next = saved.state.clone();
+            next.stage = Stage::ChallengeReadyPending;
+            next.pending_challenge = Some(pending.clone());
+            next.retry = None;
+            next.next_poll_at = None;
+            saved.append(state, next, now()?)?;
+        }
         let mut authorizations = order.authorizations();
         while let Some(result) = authorizations.next().await {
-            let mut authorization = result.map_err(|_| REFUSED)?;
+            let mut authorization = match result {
+                Ok(value) => value,
+                Err(error) => {
+                    retry_with_floor(state, saved, &error, now()?, poll_not_before)?;
+                    return Ok(outcome(saved, None));
+                }
+            };
             if authorization.url() != pending {
                 continue;
             }
@@ -902,7 +1253,7 @@ async fn pending_authorizations(
             // and challenge. Never post readiness for a changed or completed
             // challenge merely because its authorization URL still matches.
             if let Err(error) = authorization.refresh().await {
-                retry(state, inputs, saved, &error, now()?)?;
+                retry_with_floor(state, saved, &error, now()?, poll_not_before)?;
                 return Ok(outcome(saved, None));
             }
             let retained = saved
@@ -912,20 +1263,46 @@ async fn pending_authorizations(
                 .find(|record| record.url == pending)
                 .ok_or(REFUSED)?;
             let observed = now()?;
-            let current_expiry = expires(authorization.expires.as_deref())?;
             require(
                 authorization.url() == retained.url
-                    && authorization.identifier().to_string() == retained.identifier
-                    && current_expiry > observed
-                    && matches!(
-                        authorization.status,
-                        AuthorizationStatus::Pending | AuthorizationStatus::Valid
-                    )
-                    && (authorization.status == AuthorizationStatus::Valid
-                        || current_expiry == retained.expires_at),
+                    && authorization.identifier().to_string() == retained.identifier,
+            )?;
+            if !matches!(
+                authorization.status,
+                AuthorizationStatus::Pending | AuthorizationStatus::Valid
+            ) {
+                return terminal_with_floor(
+                    state,
+                    inputs,
+                    saved,
+                    "authorization_invalid",
+                    authorization.response_metadata,
+                    poll_not_before,
+                );
+            }
+            let current_expiry = authorization_expiry(
+                authorization.status,
+                authorization.expires.as_deref(),
+                saved.state.order.as_ref().ok_or(REFUSED)?.expires_at,
+                Some(retained),
+            )?;
+            if current_expiry <= observed {
+                return terminal_with_floor(
+                    state,
+                    inputs,
+                    saved,
+                    "authorization_expired",
+                    authorization.response_metadata,
+                    poll_not_before,
+                );
+            }
+            require(
+                authorization.status == AuthorizationStatus::Valid
+                    || current_expiry == retained.expires_at,
             )?;
             let authorization_valid = authorization.status == AuthorizationStatus::Valid;
             let observed_hints = authorization.response_metadata;
+            poll_not_before = poll_not_before.max(deadline(observed_hints, observed, 5));
             let mut challenge = authorization
                 .challenge(ChallengeType::Http01)
                 .ok_or(REFUSED)?;
@@ -958,10 +1335,17 @@ async fn pending_authorizations(
                     next.stage = Stage::AwaitingOrder;
                     next.pending_challenge = None;
                     next.retry = None;
-                    next.next_poll_at = Some(deadline(hints, now()?, 5));
+                    next.next_poll_at = None;
                     saved.append(state, next, now()?)?;
+                    polling::record(
+                        state,
+                        saved,
+                        None,
+                        Some(poll_not_before.max(deadline(hints, now()?, 5))),
+                        now()?,
+                    )?;
                 }
-                Err(error) => retry(state, inputs, saved, &error, now()?)?,
+                Err(error) => retry_with_floor(state, saved, &error, now()?, poll_not_before)?,
             }
             return Ok(outcome(saved, None));
         }
@@ -969,9 +1353,52 @@ async fn pending_authorizations(
     }
     let mut next = saved.state.clone();
     next.stage = Stage::AwaitingOrder;
-    next.next_poll_at = Some(deadline(order.state().response_metadata, now()?, 5));
-    saved.append(state, next, now()?)?;
+    next.pending_challenge = None;
+    next.retry = None;
+    next.next_poll_at = None;
+    if saved.state.stage != next.stage || saved.state.pending_challenge != next.pending_challenge {
+        saved.append(state, next, now()?)?;
+    }
+    polling::record(state, saved, None, Some(poll_not_before), now()?)?;
     Ok(outcome(saved, None))
+}
+
+/// Preserve an identical projection until it needs a meaningful extension.
+/// Rewriting timestamps on each poll would consume immutable phase receipts
+/// without changing HTTP-01 authority. A CA/order bound is never extended here.
+fn pending_projection(
+    inputs: &EnrolmentInputs<'_>,
+    authorizations: &[AuthorizationRecord],
+    order_expiry: u64,
+    previous: Option<&Projection>,
+) -> Result<Projection> {
+    let next = projection_for(inputs, authorizations, order_expiry, previous, false)?;
+    if let Some(previous) = previous {
+        let old: Snapshot =
+            serde_json::from_slice(previous.snapshot.as_bytes()).map_err(|_| REFUSED)?;
+        let proposed: Snapshot =
+            serde_json::from_slice(next.snapshot.as_bytes()).map_err(|_| REFUSED)?;
+        let observed = now()?;
+        if old.challenges.len() == proposed.challenges.len()
+            && old
+                .challenges
+                .iter()
+                .zip(&proposed.challenges)
+                .all(|(left, right)| {
+                    left.identifier == right.identifier
+                        && left.token == right.token
+                        && left.key_authorization == right.key_authorization
+                })
+            && old.created_at <= observed
+            && old.expires_at > observed
+            && old.expires_at <= proposed.expires_at
+            && (old.expires_at > observed.saturating_add(300)
+                || proposed.expires_at == old.expires_at)
+        {
+            return Ok(previous.clone());
+        }
+    }
+    Ok(next)
 }
 
 fn projection_for(
@@ -1145,20 +1572,22 @@ fn publish(state: &LockedInspection, installation: &Path, projection: &Projectio
             return Ok(());
         }
         if projection.previous_sha256.as_deref() != Some(digest.as_str()) {
-            // The other environment may have completed and withdrawn its projection.
+            // A previous order may have completed and withdrawn its projection.
             let mut withdrawn_owner = false;
             for environment in [AcmeEnvironment::Staging, AcmeEnvironment::Production] {
-                if let Some(other) = Ledger::load(state, environment)? {
-                    if matches!(other.state.stage, Stage::Complete | Stage::Terminal)
-                        && other
-                            .state
-                            .projection
-                            .as_ref()
-                            .is_some_and(|value| value.sha256 == digest)
-                    {
-                        let snapshot: Snapshot =
-                            serde_json::from_slice(&existing).map_err(|_| REFUSED)?;
-                        withdrawn_owner = snapshot.challenges.is_empty();
+                for cycle in Ledger::cycles(state, environment)? {
+                    if let Some(other) = Ledger::load_cycle(state, environment, cycle)? {
+                        if matches!(other.state.stage, Stage::Complete | Stage::Terminal)
+                            && other
+                                .state
+                                .projection
+                                .as_ref()
+                                .is_some_and(|value| value.sha256 == digest)
+                        {
+                            let snapshot: Snapshot =
+                                serde_json::from_slice(&existing).map_err(|_| REFUSED)?;
+                            withdrawn_owner = snapshot.challenges.is_empty();
+                        }
                     }
                 }
             }
@@ -1203,4 +1632,4 @@ fn publish(state: &LockedInspection, installation: &Path, projection: &Projectio
 
 #[cfg(test)]
 #[path = "installer_acme_tests.rs"]
-mod tests;
+pub(crate) mod tests;

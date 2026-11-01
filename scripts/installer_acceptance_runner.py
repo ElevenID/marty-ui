@@ -41,30 +41,50 @@ def trust_observation(raw, target, observed_at, *, journal):
         'trust journal installation differs')
     value = r.decode(raw)
     r.require(isinstance(value,dict), 'trust observation shape differs')
+    version=value.get('schema')
+    modern=version=='elevenid.installer-trust-info/v5'
+    public=modern and value.get('trust_source')=='mozilla-public-roots'
     fields = {'schema','installation_id','origin','local_probe_address','certificate_scope',
-        'public_endpoint_observed','ca_certificate_pem','ca_der_sha256',
+        'public_endpoint_observed',
         'certificate_der_sha256',
-        'ca_expires_at','certificate_expires_at','recorded_token_expires_at','evidence_sha256',
+        'certificate_expires_at','recorded_token_expires_at','evidence_sha256',
         'recorded_startup_containers','runtime_observed','host_trust_observed',
         'host_trust_modified','installation_ready','pending'}
-    if 'ca_der_sha256s' in value:fields.add('ca_der_sha256s')
+    if modern:fields.add('trust_source')
+    if modern and 'selected_generation' in value:fields.add('selected_generation')
+    if public:fields.add('public_certificate_admission')
+    else:
+        fields.update(('ca_certificate_pem','ca_der_sha256','ca_expires_at'))
+        if 'ca_der_sha256s' in value:fields.add('ca_der_sha256s')
     r.exact(value, fields, 'trust observation')
-    r.require(value['schema']=='elevenid.installer-trust-info/v4'
+    r.require(version in ('elevenid.installer-trust-info/v4','elevenid.installer-trust-info/v5')
         and value['installation_id']==target['installation_id'], 'trust installation differs')
+    r.require(not modern or value['trust_source'] in ('configured-ca','mozilla-public-roots'),
+        'trust source differs')
+    if 'selected_generation' in value:
+        selected_generation_evidence(value['selected_generation'])
     live_tls.public_origin(value['origin'])
     live_tls.local_address(value['local_probe_address'])
     r.require(value['certificate_scope'] in ('public-ingress','backend')
         and value['public_endpoint_observed'] is False, 'trust transport scope differs')
-    hashes=live_tls.certificate_hashes(value['ca_certificate_pem'])
-    r.sha(value['ca_der_sha256'],64)
     r.sha(value['certificate_der_sha256'],64)
-    r.require(hashes[0]==value['ca_der_sha256'], 'public CA hash differs')
     imported='ca_der_sha256s' in value
+    if public:
+        admission=value['public_certificate_admission']
+        public_certificate_admission(admission,value,target,observed_at)
+        evidence=set(TRUST_EVIDENCE)-{'installer-ingress.json'}
+        r.require(value['certificate_scope']=='public-ingress'
+            and type(value['recorded_token_expires_at']) is int
+            and value['recorded_token_expires_at']>observed_at, 'public trust token expiry differs')
+    else:
+        hashes=live_tls.certificate_hashes(value['ca_certificate_pem'])
+        r.sha(value['ca_der_sha256'],64)
+        r.require(hashes[0]==value['ca_der_sha256'], 'public CA hash differs')
     if imported:
         r.require(value['ca_der_sha256s']==hashes
             and value['recorded_token_expires_at'] is None, 'imported trust roots differ')
         evidence={'foundation-selection.json','compose-session.json','application-generation-selection.json'}
-    else:
+    elif not public:
         r.require(len(hashes)==1 and type(value['recorded_token_expires_at']) is int
             and value['recorded_token_expires_at']>observed_at, 'trust token expiry differs')
         evidence=set(TRUST_EVIDENCE)
@@ -75,7 +95,7 @@ def trust_observation(raw, target, observed_at, *, journal):
     if 'hosting_selection_sha256' in journal:
         r.require(value['evidence_sha256']['hosting-selection.json']==journal['hosting_selection_sha256'],
             'trust hosting selection differs')
-    for key in ('ca_expires_at','certificate_expires_at'):
+    for key in (('certificate_expires_at',) if public else ('ca_expires_at','certificate_expires_at')):
         r.require(type(value[key]) is int and value[key]>observed_at,'trust expiry differs')
     r.require(type(value['recorded_startup_containers']) is int
         and value['recorded_startup_containers']>0
@@ -85,6 +105,61 @@ def trust_observation(raw, target, observed_at, *, journal):
         and all(isinstance(item,str) and 0<len(item)<=128 for item in value['pending']),
         'trust observation claimed readiness')
     return value
+
+
+def selected_generation_evidence(value):
+    r.require(isinstance(value,dict) and len(value)==10,'selected generation evidence differs')
+    kinds={'intent','public-ingress-plan','helper','candidate','binding','activation-intent',
+           'activation','session','selection'}
+    r.require('application-generation-current.json' in value,'generation selector missing')
+    sequences=set()
+    observed=set()
+    for name,digest in value.items():
+        r.sha(digest,64)
+        if name=='application-generation-current.json':continue
+        match=re.fullmatch(r'generation-([0-9]{20})-([a-z-]+)\.json',name)
+        r.require(match is not None and int(match[1])>0 and match[2] in kinds,
+            'selected generation record differs')
+        sequences.add(match[1]);observed.add(match[2])
+    r.require(len(sequences)==1 and observed==kinds,'selected generation lineage differs')
+
+
+def public_certificate_admission(admission, trust, target, observed_at):
+    """A production native admission is distinct from a live TLS observation."""
+    fields={'schema','installation_id','transit_key_name','transit_key_version','public_spki_sha256',
+        'dns_names','ip_addresses','private_key_exported','activation_performed','installation_ready',
+        'trust_class','trust_store','trust_store_sha256','trust_anchor_spki_value_sha256',
+        'public_chain_validated','observed_at','not_before','not_after','minimum_remaining_seconds',
+        'maximum_validity_seconds','leaf_der_sha256','fullchain_pem_sha256','intermediate_count',
+        'revocation_status','browser_acceptance'}
+    r.exact(admission,fields,'public certificate admission')
+    origin=live_tls.public_origin(trust['origin'])
+    r.require(admission['schema']=='elevenid.installer-external-certificate/v1'
+        and admission['installation_id']==target['installation_id']
+        and admission['transit_key_name']=='installer-ingress-'+target['installation_id'].replace('-','')
+        and admission['transit_key_version']==1
+        and admission['dns_names']==[origin.hostname]
+        and admission['trust_class']=='production_public'
+        and admission['trust_store']=='mozilla_webpki_roots'
+        and admission['public_chain_validated'] is True
+        and all(admission[key] is False for key in ('private_key_exported','activation_performed','installation_ready'))
+        and admission['leaf_der_sha256']==trust['certificate_der_sha256']
+        and admission['not_after']==trust['certificate_expires_at']
+        and admission['revocation_status']=='not_checked'
+        and admission['browser_acceptance']=='not_assessed', 'public certificate provenance differs')
+    for key in ('public_spki_sha256','trust_store_sha256','trust_anchor_spki_value_sha256',
+                'leaf_der_sha256','fullchain_pem_sha256'):r.sha(admission[key],64)
+    for key in ('observed_at','not_before','not_after','minimum_remaining_seconds',
+                'maximum_validity_seconds','intermediate_count'):
+        r.require(type(admission[key]) is int and admission[key]>=0,'public certificate bound differs')
+    r.require(admission['not_before']<=admission['observed_at']<=observed_at<admission['not_after']
+        and 0<=admission['intermediate_count']<=7
+        and admission['not_after']-admission['not_before']<=admission['maximum_validity_seconds']<=100*86400
+        and isinstance(admission['ip_addresses'],list) and len(admission['ip_addresses'])<=1,
+        'public certificate validity differs')
+    for address in admission['ip_addresses']:
+        parsed=live_tls.ipaddress.ip_address(address)
+        r.require(str(parsed)==address and parsed.is_global,'public certificate IP differs')
 
 
 def status_observation(raw, context, target, authorization, inventory):
@@ -138,30 +213,40 @@ def status_observation(raw, context, target, authorization, inventory):
     consumed=json.dumps(dict(schema='elevenid.installer-candidate-consumption/v1',scope='guest-local',
         claim=claim),separators=(',',':'),ensure_ascii=True).encode('ascii')
     r.require(scope['consumption_id']==r.digest(consumed),'candidate nonce consumption differs')
-    cleanup=r.exact(value['cleanup'],{'operations','next_operations','historical_evidence_only',
-        'automatic_retry','host_data_credentials_images_and_named_volumes_retained'},'candidate cleanup')
-    r.require(cleanup==dict(operations=dict.fromkeys(('start','stop','down'),'not_started'),
+    cleanup_fields={'operations','next_operations','historical_evidence_only',
+        'automatic_retry','host_data_credentials_images_and_named_volumes_retained'}
+    if 'pending_operations' in value['cleanup']:cleanup_fields.add('pending_operations')
+    cleanup=r.exact(value['cleanup'],cleanup_fields,'candidate cleanup')
+    expected_cleanup=dict(operations=dict.fromkeys(('start','stop','down'),'not_started'),
         next_operations={action:action+'-0001' for action in ('start','stop','down')},
         historical_evidence_only=True,automatic_retry=False,
-        host_data_credentials_images_and_named_volumes_retained=True),'candidate cleanup started')
+        host_data_credentials_images_and_named_volumes_retained=True)
+    if 'pending_operations' in cleanup:expected_cleanup['pending_operations']={}
+    r.require(cleanup==expected_cleanup,'candidate cleanup started')
     return value
 
 
 def tls_observation(raw, trust, target, observed_at):
     r.require(isinstance(raw,bytes) and 0<len(raw)<=65536,'TLS observation exceeds bound')
     value=r.decode(raw)
-    r.exact(value,{'schema','installation_id','engine_id','origin','local_probe_address',
-        'certificate_scope','public_endpoint_observed','ca_der_sha256',
+    public=trust.get('trust_source')=='mozilla-public-roots'
+    fields={'schema','installation_id','engine_id','origin','local_probe_address',
+        'certificate_scope','public_endpoint_observed',
         'peer_der_sha256','tls_version','root_status','discovery_status','discovery_sha256',
-        'issuer','observed_at','browser_login_observed','host_trust_modified'},'live TLS observation')
-    r.require(value['schema']=='elevenid.installer-live-tls-observation/v2'
+        'issuer','observed_at','browser_login_observed','host_trust_modified'}
+    fields.update(('probe_trust_source','probe_trust_bundle_sha256') if public else ('ca_der_sha256',))
+    r.exact(value,fields,'live TLS observation')
+    if public:
+        r.require(value['probe_trust_source']=='ubuntu-system-ca-bundle','public probe trust source differs')
+        r.sha(value['probe_trust_bundle_sha256'],64)
+    else:r.require(value['ca_der_sha256']==trust['ca_der_sha256'],'TLS CA differs')
+    r.require(value['schema']==('elevenid.installer-live-tls-observation/v3' if public else 'elevenid.installer-live-tls-observation/v2')
         and value['installation_id']==target['installation_id']
         and value['engine_id']==target['engine_id']
         and value['origin']==trust['origin']
         and value['local_probe_address']==trust['local_probe_address']
         and value['certificate_scope']==trust['certificate_scope']
         and value['public_endpoint_observed'] is False
-        and value['ca_der_sha256']==trust['ca_der_sha256']
         and value['peer_der_sha256']==trust['certificate_der_sha256']
         and value['issuer']==trust['origin']+'/realms/11id'
         and value['tls_version'] in ('TLSv1.2','TLSv1.3')
@@ -328,11 +413,14 @@ def observe_after_dispatch(*, checkpoint, output, context, target, authorization
             code=("import base64;exec(compile(base64.b64decode("+
                 repr(base64.b64encode(tls_source.encode('utf-8')).decode())+
                 "),'installer-live-tls-probe','exec'))")
-            ca_encoded=base64.b64encode(trust_value['ca_certificate_pem'].encode('ascii')).decode('ascii')
+            public=trust_value.get('trust_source')=='mozilla-public-roots'
+            ca_encoded=base64.b64encode(trust_value.get('ca_certificate_pem','').encode('ascii')).decode('ascii')
+            probe_args=[code,trust_value['origin'],trust_value['local_probe_address'],
+                trust_value['certificate_scope'],ca_encoded,target['installation_id'],target['engine_id']]
+            if public:probe_args.extend(('--public-roots',trust_value['certificate_der_sha256']))
             tls_remote=('set -eu; test "$(id -un)" = '+shlex.quote(user)+'; exec env -i HOME='+
                 shlex.quote(home)+' PATH=/usr/bin:/bin /usr/bin/python3 -I -c '+
-                shlex.join([code,trust_value['origin'],trust_value['local_probe_address'],
-                    trust_value['certificate_scope'],ca_encoded,target['installation_id'],target['engine_id']]))
+                shlex.join(probe_args))
             with tempfile.TemporaryDirectory(prefix='installer-tls-controller-') as private:
                 args=[str(ssh),*dispatch.ssh_options(key,known_hosts,port),'-T',user+'@'+host]
                 tls_raw=guarded_execute([*args,tls_remote],

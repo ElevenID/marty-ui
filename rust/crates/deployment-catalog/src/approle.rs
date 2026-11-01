@@ -275,11 +275,17 @@ async fn renewal_context(
     context: &Value,
 ) -> Result<Value> {
     let mut context = context.clone();
+    let public_ingress = public_ingress_context(role, policy_names, &context)?;
     if role == Role::Renewal {
         if let Some(name) = policy_names
             .iter()
             .find(|name| name.starts_with("installer-ingress-"))
         {
+            if public_ingress {
+                // The public source carries an already admitted certificate.
+                // Its TLS token owner never needs a private-CA role or CSR.
+                return Ok(context);
+            }
             let response = request(
                 bao,
                 Method::GET,
@@ -295,7 +301,31 @@ async fn renewal_context(
     Ok(context)
 }
 
-fn renewal_acl(names: &[String], rotate: bool, ingress_role: &Value) -> Result<String> {
+fn public_ingress_context(role: Role, names: &[String], context: &Value) -> Result<bool> {
+    match context.get("ingress_certificate_source") {
+        None => Ok(false),
+        Some(value)
+            if value == "acme"
+                && role == Role::Renewal
+                && names.len() == 22
+                && names
+                    .iter()
+                    .filter(|name| name.starts_with("installer-ingress-"))
+                    .count()
+                    == 1 =>
+        {
+            Ok(true)
+        }
+        _ => Err(REFUSAL),
+    }
+}
+
+fn renewal_acl(
+    names: &[String],
+    rotate: bool,
+    ingress_role: &Value,
+    public_ingress: bool,
+) -> Result<String> {
     let mut paths: BTreeMap<String, Vec<&str>> = BTreeMap::new();
     let mut ingress = None;
     for (path, caps) in [
@@ -329,6 +359,10 @@ fn renewal_acl(names: &[String], rotate: bool, ingress_role: &Value) -> Result<S
         }
         paths.insert(format!("sys/policies/acl/{name}"), vec!["read"]);
         if name.starts_with("installer-ingress-") {
+            if public_ingress {
+                paths.insert(format!("transit/keys/{name}"), vec!["read"]);
+                continue;
+            }
             // Reuse the reviewed leaf-policy inventory as the installation
             // scope. This grants CSR issuance for its retained version-one
             // key and CA, never creation, export, rotation, or policy mutation.
@@ -395,6 +429,7 @@ pub fn policy(role: Role, context: &Value) -> Result<String> {
                 &names,
                 role == Role::Renewal && context["allow_secret_id_rotation"] != false,
                 &context["ingress_role"],
+                public_ingress_context(role, &names, context)?,
             )?;
             if role == Role::Renewal {
                 // Renewal operators must retire their own short-lived login
@@ -1389,6 +1424,46 @@ mod ingress_renewal_policy_tests {
         assert!(policy(Role::CaRotation, &json!({"names":inventory})).is_err());
         inventory.push("installer-ingress-aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa".into());
         assert!(names(&json!(inventory)).is_err());
+    }
+
+    #[test]
+    fn public_renewal_keeps_tls_custody_readback_without_certificate_issuance() {
+        let name = "installer-ingress-12345678123442348234123456789abc";
+        let mut inventory = workload_names();
+        inventory.push(name.into());
+        let context = json!({"names":inventory, "ingress_certificate_source":"acme"});
+        let acl = policy(Role::Renewal, &context).unwrap();
+        assert!(acl.contains(&line(&format!("transit/keys/{name}"), &["read"])));
+        assert!(acl.contains(&line(&format!("sys/policies/acl/{name}"), &["read"])));
+        assert!(acl.contains(&line("auth/token/create/selfhost-renew-leaf", &["update"])));
+        for path in [
+            format!("transit/keys/{name}/csr"),
+            format!("transit/sign/{name}"),
+            format!("{name}/cert/ca"),
+            format!("{name}/roles/localhost"),
+            format!("{name}/sign/localhost"),
+            format!("transit/keys/{name}/rotate"),
+            format!("transit/export/signing-key/{name}"),
+        ] {
+            assert!(!acl.contains(&format!("path {path:?}")), "{path}");
+        }
+        for marker in [
+            json!("staging"),
+            json!("managed-ca"),
+            json!(true),
+            json!(null),
+        ] {
+            let mut bad = context.clone();
+            bad["ingress_certificate_source"] = marker;
+            assert!(policy(Role::Renewal, &bad).is_err());
+        }
+        assert!(policy(Role::CaRotation, &context).is_err());
+        assert!(policy(
+            Role::Renewal,
+            &json!({"names":workload_names(),
+            "ingress_certificate_source":"acme"})
+        )
+        .is_err());
     }
 
     #[test]

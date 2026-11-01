@@ -39,7 +39,12 @@ fn parameters(environment: AcmeEnvironment) -> AcmeParameters {
         "terms_url":"https://letsencrypt.org/documents/LE-SA-v1.6-August-18-2025.pdf","terms_agreed":true
     })).unwrap()).unwrap()
 }
-fn fixture() -> (tempfile::TempDir, LockedMaintenance, BoundAcmeConfiguration) {
+pub(super) fn fixture() -> (tempfile::TempDir, LockedMaintenance, BoundAcmeConfiguration) {
+    fixture_for(AcmeEnvironment::Staging)
+}
+fn fixture_for(
+    environment: AcmeEnvironment,
+) -> (tempfile::TempDir, LockedMaintenance, BoundAcmeConfiguration) {
     let root = tempfile::tempdir().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let installation = root.path().join("installation");
@@ -61,7 +66,8 @@ fn fixture() -> (tempfile::TempDir, LockedMaintenance, BoundAcmeConfiguration) {
             &json!({"schema":"elevenid.installation-hosting/v1","mode":"direct",
         "public_origin":"https://login.example.com","public_entry_origin":"https://198.51.100.7",
         "listener":{"bind_address":"0.0.0.0","port":8443},
-        "tls":{"termination":"marty-keyless","certificate_source":"managed-ca"}}),
+        "tls":{"termination":"marty-keyless","certificate_source":"acme",
+            "acme":parameters(environment),"http01_host_port":18080}}),
         )
         .unwrap(),
     );
@@ -72,12 +78,10 @@ fn fixture() -> (tempfile::TempDir, LockedMaintenance, BoundAcmeConfiguration) {
     .unwrap();
     drop(state);
     let state = LockedMaintenance::open(&installation).unwrap();
-    let config =
-        BoundAcmeConfiguration::bind(state.inspection(), parameters(AcmeEnvironment::Staging))
-            .unwrap();
+    let config = BoundAcmeConfiguration::from_selection(state.inspection()).unwrap();
     (root, state, config)
 }
-fn fixture_ingress(configuration: &BoundAcmeConfiguration) -> RetainedIngressKey {
+pub(super) fn fixture_ingress(configuration: &BoundAcmeConfiguration) -> RetainedIngressKey {
     let owner = configuration.installation_id().to_string();
     let name = crate::installer_ingress_provision::resource_name(&owner).unwrap();
     RetainedIngressKey::bind(&owner, 1, &public(), &key_metadata(&name, &public())).unwrap()
@@ -502,12 +506,23 @@ async fn official_openbao_proves_environment_scoped_custody_and_three_separate_a
             .await
             .unwrap();
     }
-    let production =
-        BoundAcmeConfiguration::bind(state.inspection(), parameters(AcmeEnvironment::Production))
-            .unwrap();
-    let second = provision_initial(&mut state, &production, &leaf, &bao, &root)
-        .await
-        .unwrap();
+    assert!(BoundAcmeConfiguration::bind(
+        state.inspection(),
+        parameters(AcmeEnvironment::Production)
+    )
+    .is_err());
+    let (_production_files, mut production_state, production) =
+        fixture_for(AcmeEnvironment::Production);
+    let production_leaf = create_leaf(&bao, &root, &production).await;
+    let second = provision_initial(
+        &mut production_state,
+        &production,
+        &production_leaf,
+        &bao,
+        &root,
+    )
+    .await
+    .unwrap();
     assert_ne!(
         second.account_key().transit_key_name(),
         held.account_key().transit_key_name()

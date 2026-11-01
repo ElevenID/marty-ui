@@ -24,6 +24,15 @@ fn direct() -> Value {
     })
 }
 
+fn acme() -> Value {
+    let mut value = direct();
+    value["tls"] = json!({"termination":"marty-keyless","certificate_source":"acme",
+        "http01_host_port":18080,
+        "acme":{"environment":"production","directory_url":"https://acme-v02.api.letsencrypt.org/directory",
+        "profile":"shortlived","terms_url":"https://letsencrypt.org/documents/LE-SA-v1.6-August-18-2025.pdf","terms_agreed":true}});
+    value
+}
+
 fn input(root: &Path, value: &Value) -> PathBuf {
     let path = root.join("hosting.json");
     write(&path, &serde_json::to_vec(value).unwrap());
@@ -74,6 +83,100 @@ fn direct_public_443_uses_an_independent_unprivileged_listener() {
     assert_eq!(state.journal().phase(), Phase::Verified);
     assert_eq!(state.journal().revision(), 1);
     assert!(state.journal().hosting_selection_sha256().is_some());
+}
+
+#[test]
+fn acme_selection_binds_exact_agreement_dns_ip_and_loopback_challenge_port() {
+    let root = private_root();
+    let mut value = acme();
+    value["public_entry_origin"] = json!("https://198.51.100.7:9443");
+    let prepared = prepare(Some(&input(root.path(), &value)), None).unwrap();
+    let mut state = state(root.path());
+    let selected = select(prepared, &mut state).unwrap();
+    assert_eq!(selected.certificate_source(), CertificateSource::Acme);
+    assert_eq!(selected.http01_host_port(), Some(18080));
+    assert_eq!(selected.listener().port, 8443);
+    assert_eq!(selected.acme_parameters().unwrap().profile(), "shortlived");
+    assert_eq!(selected.certificate_dns_name(), Some("marty.example.com"));
+    assert_eq!(
+        selected.certificate_ip_address(),
+        Some("198.51.100.7".parse().unwrap())
+    );
+    let binding = state
+        .with_inspection(
+            crate::installer_acme_configuration::BoundAcmeConfiguration::from_selection,
+        )
+        .unwrap();
+    assert_eq!(binding.parameters(), selected.acme_parameters().unwrap());
+    assert_eq!(
+        binding.certificate_identity().unwrap().dns_name(),
+        "marty.example.com"
+    );
+    assert!(state.with_inspection(resolve).unwrap().is_recorded());
+}
+
+#[test]
+fn acme_rejects_missing_agreement_unsupported_modes_and_conflicting_ports() {
+    let root = private_root();
+    for port in [0, 80, 1023, 8443] {
+        let mut value = acme();
+        value["tls"]["http01_host_port"] = json!(port);
+        assert!(prepare(Some(&input(root.path(), &value)), None).is_err());
+    }
+    for field in ["acme", "http01_host_port"] {
+        let mut value = acme();
+        value["tls"].as_object_mut().unwrap().remove(field);
+        assert!(prepare(Some(&input(root.path(), &value)), None).is_err());
+    }
+    for (field, wrong) in [
+        ("terms_agreed", json!(false)),
+        ("environment", json!("staging")),
+        ("profile", json!("classic")),
+        ("directory_url", json!("https://foreign.example/directory")),
+        ("terms_url", json!("https://foreign.example/terms.pdf")),
+        ("accept_all_terms", json!(true)),
+    ] {
+        let mut value = acme();
+        value["tls"]["acme"][field] = wrong;
+        assert!(
+            prepare(Some(&input(root.path(), &value)), None).is_err(),
+            "{field}"
+        );
+    }
+    for mode in ["local", "external-proxy"] {
+        let mut value = acme();
+        value["mode"] = json!(mode);
+        value["listener"]["bind_address"] = json!("127.0.0.1");
+        if mode == "local" {
+            value["public_origin"] = json!("https://localhost:8443");
+        }
+        assert!(prepare(Some(&input(root.path(), &value)), None).is_err());
+    }
+    assert!(prepare(
+        Some(&input(root.path(), &acme())),
+        Some(PublicOrigin::parse("https://marty.example.com").unwrap())
+    )
+    .is_err());
+    for source in ["managed-ca", "foundation-import"] {
+        let mut value = acme();
+        value["tls"]["certificate_source"] = json!(source);
+        assert!(prepare(Some(&input(root.path(), &value)), None).is_err());
+    }
+}
+
+#[test]
+fn added_acme_fields_preserve_legacy_configuration_serialized_bytes() {
+    for source in ["managed-ca", "foundation-import"] {
+        let original = format!("{{\"schema\":\"{SCHEMA}\",\"mode\":\"direct\",\"public_origin\":\"https://marty.example.com\",\"listener\":{{\"bind_address\":\"0.0.0.0\",\"port\":8443}},\"tls\":{{\"termination\":\"marty-keyless\",\"certificate_source\":\"{source}\"}}}}");
+        let configuration: Configuration = decode(original.as_bytes()).unwrap();
+        configuration.validate().unwrap();
+        assert_eq!(
+            serde_json::to_vec(&configuration).unwrap(),
+            original.as_bytes()
+        );
+        assert!(configuration.tls.acme.is_none());
+        assert!(configuration.tls.http01_host_port.is_none());
+    }
 }
 
 #[test]

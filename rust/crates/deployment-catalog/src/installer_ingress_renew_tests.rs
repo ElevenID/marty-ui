@@ -581,3 +581,167 @@ async fn official_openbao_renews_exact_dns_ipv4_ipv6_and_local_identity_without_
             .starts_with("vault:v1:"));
     }
 }
+
+#[tokio::test]
+#[ignore = "explicit local OpenBao 2.5.5 TLS qualification; no Docker, cloud or public CA"]
+async fn official_openbao_public_renewal_mints_tls_token_without_csr_or_issuer_authority() {
+    // This proves the public source's narrower token primitive and ACL only.
+    // The seed certificate is private test material, never a public CA claim.
+    let (_server, bao, root) = server().await;
+    let owner = uuid::Uuid::new_v4().to_string();
+    let identity = IngressIdentity::new(Some("marty.example.com"), None).unwrap();
+    let before = seed(&bao, &root, &owner, &identity).await;
+    let ingress = resource_name(&owner).unwrap();
+    let retained = request(
+        &bao,
+        Method::GET,
+        &format!("transit/keys/{ingress}"),
+        None,
+        Some(&root),
+    )
+    .await
+    .unwrap();
+    let public = text(&retained["data"]["keys"]["1"], "public_key").unwrap();
+    let spki = spki::SubjectPublicKeyInfoOwned::from_pem(public.as_bytes())
+        .unwrap()
+        .to_der()
+        .unwrap();
+    prove_retained_tls_signer(
+        &bao,
+        &root,
+        &ingress,
+        &spki,
+        input(&before, OUTPUTS[2]).unwrap(),
+    )
+    .await
+    .unwrap();
+    let mut names = (0..21)
+        .map(|i| format!("qualification-leaf-{i:02}"))
+        .collect::<Vec<_>>();
+    names.push(ingress.clone());
+    let private = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(private.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    crate::approle::bootstrap(
+        &bao,
+        crate::approle::Role::Renewal,
+        private.path(),
+        &json!({"root_token":root,"names":names,"ingress_certificate_source":"acme"}),
+    )
+    .await
+    .unwrap();
+    let context = json!({"ingress_certificate_source":"acme"});
+    let login = crate::approle::login(
+        &bao,
+        crate::approle::Role::Renewal,
+        private.path(),
+        &context,
+    )
+    .await
+    .unwrap();
+    let authority = text(&login, "token").unwrap();
+    request(
+        &bao,
+        Method::POST,
+        "auth/token/revoke",
+        Some(&json!({"token":input(&before,OUTPUTS[2]).unwrap()})),
+        Some(&root),
+    )
+    .await
+    .unwrap();
+    request(
+        &bao,
+        Method::POST,
+        "auth/token/revoke-self",
+        None,
+        Some(&root),
+    )
+    .await
+    .unwrap();
+    crate::activation_preflight::authority(&bao, authority, false)
+        .await
+        .unwrap();
+    let minted = mint_tls_signer(
+        &bao,
+        authority,
+        &ingress,
+        public,
+        input(&before, OUTPUTS[2]).unwrap(),
+    )
+    .await
+    .unwrap();
+    prove_retained_tls_signer(&bao, authority, &ingress, &spki, &minted.token)
+        .await
+        .unwrap();
+    for path in [
+        format!("transit/keys/{ingress}/csr"),
+        format!("{ingress}/sign/localhost"),
+        format!("transit/keys/{ingress}/rotate"),
+        format!("{ingress}/root/generate/internal"),
+    ] {
+        denial(&bao, authority, Method::POST, &path, Some(json!({})))
+            .await
+            .unwrap();
+    }
+    // PKI's CA certificate endpoint is intentionally unauthenticated public
+    // data. The narrower policy grants no CA capability; issuer role metadata
+    // and all certificate-issuing/key-changing operations remain forbidden.
+    assert!(
+        request(&bao, Method::GET, &format!("{ingress}/cert/ca"), None, None)
+            .await
+            .is_ok()
+    );
+    for path in [
+        format!("{ingress}/roles/localhost"),
+        format!("transit/export/signing-key/{ingress}"),
+    ] {
+        denial(&bao, authority, Method::GET, &path, None)
+            .await
+            .unwrap();
+    }
+    denial(
+        &bao,
+        authority,
+        Method::POST,
+        &format!("transit/sign/{ingress}"),
+        Some(sign_body()),
+    )
+    .await
+    .unwrap();
+    request(
+        &bao,
+        Method::POST,
+        "auth/token/revoke-self",
+        None,
+        Some(authority),
+    )
+    .await
+    .unwrap();
+    let signed = request(
+        &bao,
+        Method::POST,
+        &format!("transit/sign/{ingress}"),
+        Some(&sign_body()),
+        Some(&minted.token),
+    )
+    .await
+    .unwrap();
+    verify_signing_proof(public, text(&signed["data"], "signature").unwrap()).unwrap();
+    let second = crate::approle::login(
+        &bao,
+        crate::approle::Role::Renewal,
+        private.path(),
+        &context,
+    )
+    .await
+    .unwrap();
+    let next = mint_tls_signer(
+        &bao,
+        text(&second, "token").unwrap(),
+        &ingress,
+        public,
+        &minted.token,
+    )
+    .await
+    .unwrap();
+    assert_ne!(next.token, minted.token);
+}

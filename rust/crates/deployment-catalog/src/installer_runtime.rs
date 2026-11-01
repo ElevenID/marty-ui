@@ -247,7 +247,7 @@ fn drain_setup(mut stream: impl Read) -> Result<(Vec<u8>, bool)> {
             Err(_) => {
                 return Err(
                     "supervised Compose output unavailable; inspect retained project".into(),
-                )
+                );
             }
         }
     }
@@ -257,6 +257,7 @@ struct BoundedRunner {
     executable: PathBuf,
     staging: tempfile::TempDir,
     docker_host: Option<String>,
+    user_session_uid: Option<u32>,
 }
 impl BoundedRunner {
     fn new(binary: &Path, host: &str, parent: &Path) -> Result<Self> {
@@ -273,6 +274,7 @@ impl BoundedRunner {
             executable: binary.to_path_buf(),
             staging,
             docker_host: Some(host.into()),
+            user_session_uid: None,
         })
     }
     fn run(&self, args: &[&str], timeout: Duration, limit: usize) -> Result<String> {
@@ -330,7 +332,10 @@ impl BoundedRunner {
         let status =
             status.map_err(|_| "setup client outcome is uncertain; inspect retained evidence")?;
         if !status.success() {
-            return Err(format!("Compose setup failed (exit={:?}); inspect private project evidence; no retry was performed", status.code()));
+            return Err(format!(
+                "Compose setup failed (exit={:?}); inspect private project evidence; no retry was performed",
+                status.code()
+            ));
         }
         if output.1 || diagnostic.1 {
             return Err("Compose setup completed but diagnostic output exceeded the capture bound; inspect retained project before continuing".into());
@@ -364,7 +369,14 @@ impl BoundedRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
-        if let Some(host) = &self.docker_host {
+        if let Some(uid) = self.user_session_uid {
+            command
+                .env("XDG_RUNTIME_DIR", format!("/run/user/{uid}"))
+                .env(
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    format!("unix:path=/run/user/{uid}/bus"),
+                );
+        } else if let Some(host) = &self.docker_host {
             command.env("DOCKER_HOST", host);
         } else {
             command
@@ -421,6 +433,129 @@ impl BoundedRunner {
         owned.finish()?;
         Ok((output, diagnostic))
     }
+}
+
+/// Read-only observations of the prerequisites for reboot-capable rootless
+/// lifecycle units. `None` means unavailable/unparseable, not observed false.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct UserSystemdPrerequisites {
+    pub schema: &'static str,
+    pub uid: u32,
+    pub linger_enabled: Option<bool>,
+    pub docker_unit_loaded: Option<bool>,
+    pub docker_unit_enabled: Option<bool>,
+    pub docker_unit_active: Option<bool>,
+    pub automatically_startable: bool,
+}
+impl UserSystemdPrerequisites {
+    fn unavailable(uid: u32) -> Self {
+        Self {
+            schema: "elevenid.installer-user-systemd-prerequisites/v1",
+            uid,
+            linger_enabled: None,
+            docker_unit_loaded: None,
+            docker_unit_enabled: None,
+            docker_unit_active: None,
+            automatically_startable: false,
+        }
+    }
+}
+
+fn parse_user_docker_unit(output: &str) -> Option<(bool, bool, bool)> {
+    let mut properties = std::collections::BTreeMap::new();
+    for line in output.lines() {
+        let (name, value) = line.split_once('=')?;
+        if !["LoadState", "UnitFileState", "ActiveState"].contains(&name)
+            || properties.insert(name, value).is_some()
+        {
+            return None;
+        }
+    }
+    if properties.len() != 3 {
+        return None;
+    }
+    let loaded = match properties["LoadState"] {
+        "loaded" => true,
+        "not-found" | "error" | "bad-setting" | "masked" | "stub" | "merged" => false,
+        _ => return None,
+    };
+    // An enabled-runtime unit disappears on reboot and is not sufficient.
+    let enabled = match properties["UnitFileState"] {
+        "enabled" => true,
+        "disabled" | "enabled-runtime" | "static" | "indirect" | "linked" | "linked-runtime"
+        | "masked" | "masked-runtime" | "alias" | "generated" | "transient" | "bad" => false,
+        _ => return None,
+    };
+    let active = match properties["ActiveState"] {
+        "active" => true,
+        "inactive" | "failed" | "activating" | "deactivating" | "maintenance" | "reloading"
+        | "refreshing" => false,
+        _ => return None,
+    };
+    Some((loaded, enabled, active))
+}
+
+fn observe_user_systemd_at(
+    uid: u32,
+    loginctl: &Path,
+    systemctl: &Path,
+    parent: &Path,
+) -> UserSystemdPrerequisites {
+    let mut result = UserSystemdPrerequisites::unavailable(uid);
+    if uid == 0 {
+        return result;
+    }
+    let run = |binary: &Path, args: &[&str]| -> Result<String> {
+        let mut runner = BoundedRunner::new(binary, "unix:///var/run/docker.sock", parent)?;
+        runner.docker_host = None;
+        runner.user_session_uid = Some(uid);
+        // Each stream is <=4KiB, bounding combined stdout/stderr to 8KiB.
+        runner.run(args, Duration::from_secs(10), 4096)
+    };
+    let user = uid.to_string();
+    if let Ok(output) = run(
+        loginctl,
+        &["show-user", &user, "--property=Linger", "--value"],
+    ) {
+        result.linger_enabled = match output.trim() {
+            "yes" => Some(true),
+            "no" => Some(false),
+            _ => None,
+        };
+    }
+    if let Ok(output) = run(
+        systemctl,
+        &[
+            "--user",
+            "show",
+            "docker.service",
+            "--property=LoadState",
+            "--property=UnitFileState",
+            "--property=ActiveState",
+        ],
+    ) {
+        if let Some((loaded, enabled, active)) = parse_user_docker_unit(&output) {
+            result.docker_unit_loaded = Some(loaded);
+            result.docker_unit_enabled = Some(enabled);
+            result.docker_unit_active = Some(active);
+        }
+    }
+    result.automatically_startable = result.linger_enabled == Some(true)
+        && result.docker_unit_loaded == Some(true)
+        && result.docker_unit_enabled == Some(true)
+        && result.docker_unit_active == Some(true);
+    result
+}
+
+/// Fixed tools, current euid and exact user-bus environment. This observer has
+/// no caller-supplied argv, environment, UID, executable or mutating operation.
+pub(crate) fn observe_user_systemd_prerequisites(parent: &Path) -> UserSystemdPrerequisites {
+    observe_user_systemd_at(
+        unsafe { libc::geteuid() },
+        Path::new("/usr/bin/loginctl"),
+        Path::new("/usr/bin/systemctl"),
+        parent,
+    )
 }
 
 /// Invoke an already hash-pinned installer verifier with bounded execution and
@@ -690,6 +825,117 @@ impl DockerRunner {
     pub fn run_checked(&self, args: &[&str]) -> Result<String> {
         self.run_checked_with_timeout(args, COMMAND_TIMEOUT)
     }
+    /// Fixed local-control operations only. The caller retains the installation
+    /// lock, checks the complete Compose resource receipt, and records intent
+    /// before recovery or HUP. A client timeout does not imply exec exited.
+    pub(crate) fn inspect_openbao_tls(
+        &self,
+        container: &str,
+        installation: &str,
+    ) -> Result<String> {
+        fixed_openbao_arguments(container, installation, None)?;
+        self.fixed_openbao_call(
+            &[
+                "exec",
+                "--user",
+                "0:0",
+                "--workdir",
+                "/",
+                container,
+                "/usr/local/bin/selfhost-tls-inspect",
+                "--installation-id",
+                installation,
+            ],
+            Duration::from_secs(30),
+            65_536,
+        )
+    }
+    pub(crate) fn recover_openbao_tls(
+        &self,
+        container: &str,
+        installation: &str,
+        attempt: &str,
+    ) -> Result<String> {
+        fixed_openbao_arguments(container, installation, Some(attempt))?;
+        self.fixed_openbao_call(
+            &[
+                "exec",
+                "--user",
+                "0:0",
+                "--workdir",
+                "/",
+                container,
+                "/usr/local/bin/selfhost-tls-recover",
+                "--installation-id",
+                installation,
+                "--attempt-id",
+                attempt,
+            ],
+            Duration::from_secs(95),
+            8192,
+        )
+    }
+    pub(crate) fn reload_openbao_tls(&self, container: &str) -> Result<()> {
+        if !fixed_container_id(container) {
+            return Err("OpenBao reload requires the exact retained container ID".into());
+        }
+        let output = self.fixed_openbao_call(
+            &["kill", "--signal=HUP", container],
+            Duration::from_secs(30),
+            1024,
+        )?;
+        if output.trim() != container {
+            return Err("OpenBao reload acknowledgement differs from the owned container".into());
+        }
+        Ok(())
+    }
+    /// Retire only the original bootstrap root for the host's immutable, already
+    /// qualified intent. The helper binds the private original-authority record;
+    /// no root material or arbitrary operation crosses this transport seam.
+    pub(crate) fn retire_openbao_initial_root(
+        &self,
+        container: &str,
+        installation: &str,
+        attempt: &str,
+        intent_sha256: &str,
+    ) -> Result<String> {
+        fixed_openbao_arguments(container, installation, Some(attempt))?;
+        if !fixed_container_id(intent_sha256) {
+            return Err("OpenBao root retirement requires the exact retained intent digest".into());
+        }
+        self.fixed_openbao_call(
+            &[
+                "exec",
+                "--user",
+                "0:0",
+                "--workdir",
+                "/",
+                container,
+                "/usr/local/bin/selfhost-root-retire",
+                "--installation-id",
+                installation,
+                "--attempt-id",
+                attempt,
+                "--intent-sha256",
+                intent_sha256,
+            ],
+            Duration::from_secs(95),
+            8192,
+        )
+    }
+    fn fixed_openbao_call(
+        &self,
+        args: &[&str],
+        timeout: Duration,
+        maximum: usize,
+    ) -> Result<String> {
+        self.info()?;
+        self.recheck_endpoint()?;
+        let result = self.runner.run(args, self.budget(timeout)?, maximum);
+        self.recheck_endpoint()?;
+        self.info()?;
+        result
+    }
     /// Exclusive installer setup entry point. There is no client timeout,
     /// automatic signal escalation, or retry for these non-idempotent jobs.
     pub(crate) fn run_setup_checked(&self, args: &[&str]) -> Result<String> {
@@ -757,6 +1003,30 @@ impl DockerRunner {
     }
 }
 
+fn fixed_container_id(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn fixed_openbao_arguments(
+    container: &str,
+    installation: &str,
+    attempt: Option<&str>,
+) -> Result<()> {
+    let uuid = |value: &str| uuid::Uuid::parse_str(value).is_ok_and(|id| id.to_string() == value);
+    if !fixed_container_id(container)
+        || !uuid(installation)
+        || attempt.is_some_and(|value| !uuid(value))
+    {
+        return Err(
+            "OpenBao helper requires exact retained container and operation identities".into(),
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::symlink;
@@ -804,6 +1074,143 @@ mod tests {
     }
     fn rootless_info() -> String {
         r#"{"id":"test-engine","os":"linux","architecture":"x86_64","server_version":"28.0.0","security_options":["name=rootless"],"cgroup_version":"2","cgroup_driver":"systemd","memory_limit":true}"#.into()
+    }
+    #[test]
+    fn user_systemd_observer_is_read_only_and_distinguishes_false_from_unknown() {
+        let d = private_temp();
+        let login = d.path().join("loginctl");
+        let system = d.path().join("systemctl");
+        let common="[ \"$XDG_RUNTIME_DIR\" = /run/user/1000 ] || exit 9\n[ \"$DBUS_SESSION_BUS_ADDRESS\" = unix:path=/run/user/1000/bus ] || exit 9\n[ -z \"$DOCKER_HOST$GH_HOST\" ] || exit 9\n";
+        fs::write(&login,format!("#!/bin/sh\n{common}[ \"$*\" = 'show-user 1000 --property=Linger --value' ] || exit 9\nprintf 'yes\\n'\n")).unwrap();
+        fs::write(&system,format!("#!/bin/sh\n{common}[ \"$*\" = '--user show docker.service --property=LoadState --property=UnitFileState --property=ActiveState' ] || exit 9\nprintf 'LoadState=loaded\\nUnitFileState=enabled\\nActiveState=active\\n'\n")).unwrap();
+        for path in [&login, &system] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let observed = observe_user_systemd_at(1000, &login, &system, d.path());
+        assert_eq!(observed.linger_enabled, Some(true));
+        assert_eq!(observed.docker_unit_enabled, Some(true));
+        assert!(observed.automatically_startable);
+        fs::write(&login, "#!/bin/sh\nprintf 'no\\n'\n").unwrap();
+        fs::write(&system,"#!/bin/sh\nprintf 'LoadState=loaded\\nUnitFileState=enabled-runtime\\nActiveState=inactive\\n'\n").unwrap();
+        let observed = observe_user_systemd_at(1000, &login, &system, d.path());
+        assert_eq!(observed.linger_enabled, Some(false));
+        assert_eq!(observed.docker_unit_enabled, Some(false));
+        assert_eq!(observed.docker_unit_active, Some(false));
+        assert!(!observed.automatically_startable);
+        fs::write(
+            &system,
+            "#!/bin/sh\nprintf 'sensitive stderr must not escape' >&2\nexit 1\n",
+        )
+        .unwrap();
+        let observed = observe_user_systemd_at(1000, &login, &system, d.path());
+        assert_eq!(observed.linger_enabled, Some(false));
+        assert_eq!(observed.docker_unit_loaded, None);
+        assert!(!serde_json::to_string(&observed)
+            .unwrap()
+            .contains("sensitive"));
+        fs::write(
+            &system,
+            "#!/bin/sh\nprintf '%5000s' 'oversized private diagnostic' >&2\n",
+        )
+        .unwrap();
+        let observed = observe_user_systemd_at(1000, &login, &system, d.path());
+        assert_eq!(observed.docker_unit_loaded, None);
+        assert!(!observed.automatically_startable);
+        assert!(!serde_json::to_string(&observed)
+            .unwrap()
+            .contains("private"));
+        let absent = d.path().join("unavailable-command");
+        let observed = observe_user_systemd_at(1000, &absent, &absent, d.path());
+        assert_eq!(observed.linger_enabled, None);
+        assert_eq!(observed.docker_unit_active, None);
+        assert!(!observed.automatically_startable);
+        for invalid in [
+            "LoadState=loaded\nUnitFileState=enabled\n",
+            "LoadState=loaded\nLoadState=loaded\nUnitFileState=enabled\nActiveState=active\n",
+            "LoadState=loaded\nUnitFileState=unknown\nActiveState=active\n",
+        ] {
+            assert!(parse_user_docker_unit(invalid).is_none());
+        }
+        assert_eq!(
+            observe_user_systemd_at(0, &login, &system, d.path()).linger_enabled,
+            None
+        );
+    }
+    #[test]
+    fn openbao_control_operations_have_fixed_argv_and_no_generic_exec_or_kill() {
+        let d = private_temp();
+        let log = d.path().join("args");
+        let container = "a".repeat(64);
+        let installation = "11111111-1111-4111-8111-111111111111";
+        let attempt = "22222222-2222-4222-8222-222222222222";
+        let path = script(
+            d.path(),
+            &format!(
+                "if [ \"$1\" = info ]; then printf '%s\\n' '{}'; exit 0; fi\nprintf '%s\\n' \"$@\" >> '{}'\nif [ \"$1\" = kill ]; then printf '%s\\n' \"$3\"; else printf '{{}}\\n'; fi",
+                info(),
+                log.display()
+            ),
+        );
+        let runner = DockerRunner::new(
+            &path,
+            "unix:///var/run/docker.sock",
+            "test-engine",
+            d.path(),
+        )
+        .unwrap();
+        runner
+            .inspect_openbao_tls(&container, installation)
+            .unwrap();
+        runner
+            .recover_openbao_tls(&container, installation, attempt)
+            .unwrap();
+        runner.reload_openbao_tls(&container).unwrap();
+        let intent = "b".repeat(64);
+        runner
+            .retire_openbao_initial_root(&container, installation, attempt, &intent)
+            .unwrap();
+        let expected = format!(
+            "exec\n--user\n0:0\n--workdir\n/\n{container}\n/usr/local/bin/selfhost-tls-inspect\n--installation-id\n{installation}\nexec\n--user\n0:0\n--workdir\n/\n{container}\n/usr/local/bin/selfhost-tls-recover\n--installation-id\n{installation}\n--attempt-id\n{attempt}\nkill\n--signal=HUP\n{container}\nexec\n--user\n0:0\n--workdir\n/\n{container}\n/usr/local/bin/selfhost-root-retire\n--installation-id\n{installation}\n--attempt-id\n{attempt}\n--intent-sha256\n{intent}\n"
+        );
+        assert_eq!(fs::read_to_string(&log).unwrap(), expected);
+        assert!(runner.run_checked(&["exec", &container, "sh"]).is_err());
+        assert!(runner
+            .run_checked(&["kill", "--signal=KILL", &container])
+            .is_err());
+        for invalid in [
+            "openbao",
+            "--privileged",
+            "abc",
+            &"A".repeat(64),
+            &format!("{container}\n"),
+        ] {
+            assert!(runner.inspect_openbao_tls(invalid, installation).is_err());
+            assert!(runner.reload_openbao_tls(invalid).is_err());
+            assert!(runner
+                .retire_openbao_initial_root(invalid, installation, attempt, &intent)
+                .is_err());
+            assert!(runner
+                .retire_openbao_initial_root(&container, installation, attempt, invalid)
+                .is_err());
+        }
+        for invalid in [
+            "--env",
+            "../../secret",
+            "11111111-1111-4111-8111-11111111111A",
+            "11111111111141118111111111111111",
+        ] {
+            assert!(runner
+                .recover_openbao_tls(&container, installation, invalid)
+                .is_err());
+            assert!(runner.inspect_openbao_tls(&container, invalid).is_err());
+            assert!(runner
+                .retire_openbao_initial_root(&container, installation, invalid, &intent)
+                .is_err());
+            assert!(runner
+                .retire_openbao_initial_root(&container, invalid, attempt, &intent)
+                .is_err());
+        }
+        assert_eq!(fs::read_to_string(&log).unwrap(), expected);
     }
     #[test]
     fn selected_profile_requires_positive_daemon_mode_and_exact_engine() {

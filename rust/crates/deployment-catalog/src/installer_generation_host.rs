@@ -37,6 +37,8 @@ pub struct GenerationReceipt {
     pub ingress_renewal: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ingress: Option<crate::installer_ingress_outputs::IngressMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_ingress: Option<crate::installer_public_ingress::PublicIngressMetadata>,
     pub candidate_validated: bool,
     pub activated: bool,
     pub candidate_sha256: BTreeMap<String, String>,
@@ -59,6 +61,10 @@ struct RenewalEvidence {
     image: String,
     root_retired: bool,
     ingress_renewal: bool,
+    #[serde(default)]
+    public_renewal_authority_plan_sha256: Option<String>,
+    #[serde(default)]
+    public_identity_sha256: Option<BTreeMap<String, String>>,
     private_identity_validated: bool,
     outputs: Vec<String>,
     compose_receipt_sha256: String,
@@ -101,18 +107,30 @@ fn read_entry(dir: &File, name: &str, mode: u32, allow_root: bool) -> Result<Vec
 }
 
 fn read_inputs(secrets: &File) -> Result<BTreeMap<String, Vec<u8>>> {
+    read_inputs_for_source(secrets, false)
+}
+
+pub(crate) fn read_inputs_for_source(
+    secrets: &File,
+    public: bool,
+) -> Result<BTreeMap<String, Vec<u8>>> {
     let available = file_names(secrets)?;
     let managed = crate::installer_ingress_provision::OUTPUTS[..3]
         .iter()
         .any(|name| available.contains(*name));
-    let values = installer_renewal_bootstrap::inventory(managed)
+    let inventory = if public && !available.contains("installer_ingress_ca_cert") {
+        installer_renewal_bootstrap::public_inputs()
+    } else {
+        installer_renewal_bootstrap::inventory(managed)
+    };
+    let values = inventory
         .into_iter()
         .map(|name| {
             let value = read_entry(secrets, &name, 0o444, true)?;
             Ok((name, value))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
-    installer_renewal_bootstrap::validate_current(&values).map_err(|_| REFUSAL)?;
+    installer_renewal_bootstrap::validate_source_current(&values, public).map_err(|_| REFUSAL)?;
     Ok(values)
 }
 
@@ -120,7 +138,7 @@ fn stage_inputs(secrets: &File, output: &File) -> Result<BTreeMap<String, Vec<u8
     crate::installer_host_fs::stage_inputs(secrets, output, read_inputs, REFUSAL)
 }
 
-fn read_identity(source: &File) -> Result<BTreeMap<String, Vec<u8>>> {
+pub(crate) fn read_identity(source: &File) -> Result<BTreeMap<String, Vec<u8>>> {
     require(
         file_names(source)?
             == IDENTITY_FILES
@@ -186,7 +204,7 @@ fn stage_identity(values: &BTreeMap<String, Vec<u8>>, output: &File) -> Result<(
     Ok(())
 }
 
-fn staged_identity(output: &File) -> Result<BTreeMap<String, Vec<u8>>> {
+pub(crate) fn staged_identity(output: &File) -> Result<BTreeMap<String, Vec<u8>>> {
     require(file_names(output)? == IDENTITY_FILES.map(String::from).into())?;
     IDENTITY_FILES
         .into_iter()
@@ -198,13 +216,12 @@ fn validate_delivered(
     delivered: &File,
     proof: &crate::installer_generation::GenerationProof<'_>,
 ) -> Result<BTreeMap<String, String>> {
-    let inventory = installer_renewal_bootstrap::inventory(
-        installer_renewal_bootstrap::has_managed_ingress(proof.current)?,
-    );
+    let inventory =
+        crate::installer_generation::output_inventory(proof.current, proof.public_ingress_plan)?;
     let mut expected = inventory.clone();
     expected.extend(["pending.json", "validated.json", "completed.json"].map(String::from));
     require(file_names(delivered)? == expected)?;
-    let outputs = read_inputs(delivered)?;
+    let outputs = read_inputs_for_source(delivered, proof.public_ingress_plan.is_some())?;
     // Every transferred file is owned by this installer, not merely root-readable.
     for name in inventory {
         read_entry(delivered, &name, 0o444, false)?;
@@ -243,7 +260,7 @@ fn validate_retained_entries(held: &File, expected_host_uid: HelperOutputOwner) 
     Ok(())
 }
 
-fn validate_delivery(
+pub(crate) fn validate_delivery(
     parent: &Path,
     held: &File,
     proof: &crate::installer_generation::GenerationProof<'_>,
@@ -281,7 +298,67 @@ pub fn provision(
     inputs: ComposeInputs,
     expected_operator_sha: &str,
 ) -> Result<(ComposeReceipt, GenerationReceipt)> {
+    provision_selected(
+        dockerpath,
+        installation,
+        bundle,
+        state,
+        bao,
+        services_image,
+        inputs,
+        expected_operator_sha,
+        None,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently bound provisioning inputs explicit."
+)]
+pub fn provision_public(
+    dockerpath: &Path,
+    installation: &Path,
+    bundle: &Path,
+    state: &mut InstallerState,
+    bao: &OpenBaoInventory,
+    services_image: &str,
+    inputs: ComposeInputs,
+    expected_operator_sha: &str,
+    plan: &crate::installer_public_ingress::PublicIngressPlan,
+) -> Result<(ComposeReceipt, GenerationReceipt)> {
+    provision_selected(
+        dockerpath,
+        installation,
+        bundle,
+        state,
+        bao,
+        services_image,
+        inputs,
+        expected_operator_sha,
+        Some(plan),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Both sources use the existing owned provisioning transaction."
+)]
+fn provision_selected(
+    dockerpath: &Path,
+    installation: &Path,
+    bundle: &Path,
+    state: &mut InstallerState,
+    bao: &OpenBaoInventory,
+    services_image: &str,
+    inputs: ComposeInputs,
+    expected_operator_sha: &str,
+    public_plan: Option<&crate::installer_public_ingress::PublicIngressPlan>,
+) -> Result<(ComposeReceipt, GenerationReceipt)> {
     state.require_live_phase(Phase::Provisioning)?;
+    let public_digest = public_plan.map(|plan| plan.sha256()).transpose()?;
+    if let Some(plan) = public_plan {
+        state.with_inspection(|view| plan.require_saved(view))?;
+    }
     require(InstallerState::inspect(installation)? == *state.journal())?;
     let binding = state.journal().runtime().ok_or(REFUSAL)?.clone();
     let owner = state.journal().installation_id().to_string();
@@ -307,7 +384,14 @@ pub fn provision(
     let renewal_receipt = read_entry(&evidence, "renewal-result.json", 0o600, false)?;
     let renewal: RenewalEvidence = serde_json::from_slice(&renewal_receipt).map_err(|_| REFUSAL)?;
     require(
-        renewal.schema == "elevenid.installer-renewal-host/v3"
+        renewal.schema
+            == if public_plan.is_some() {
+                "elevenid.installer-renewal-host/v4"
+            } else {
+                "elevenid.installer-renewal-host/v3"
+            }
+            && renewal.public_renewal_authority_plan_sha256.as_deref()
+                == public_plan.map(|plan| plan.renewal_authority_plan_sha256())
             && renewal.installation_id == owner
             && renewal.engine_id == binding.engine_id
             && renewal.network_id == bao.network_id
@@ -334,6 +418,22 @@ pub fn provision(
     let identity_source_path = installation.join("renewal-transfer/delivered");
     let identity_source = directory(&identity_source_path)?;
     let identity_snapshot = read_identity(&identity_source)?;
+    if let Some(plan) = public_plan {
+        require(
+            renewal.public_identity_sha256.as_ref()
+                == Some(&crate::installer_generation::hashes(&identity_snapshot)),
+        )?;
+        state.with_inspection(|view| {
+            let authority =
+                crate::installer_public_ingress::PublicRenewalAuthorityPlan::load(view)?;
+            require(
+                crate::installer_renewal::require_public_enrolment(view, &authority)?
+                    == plan.renewal_enrolment_receipt_sha256(),
+            )
+        })?;
+    } else {
+        require(renewal.public_identity_sha256.is_none())?;
+    }
     let policies: Vec<String> =
         serde_json::from_slice(&identity_snapshot["renewal-leaf-policies.json"])
             .map_err(|_| REFUSAL)?;
@@ -353,17 +453,21 @@ pub fn provision(
     )?)?;
     let output_path = installation.join("generation-transfer");
     let output = directory(&output_path)?;
+    let mut pending = json!({
+        "schema":"elevenid.installer-generation-host-intent/v2", "installation_id":owner,
+        "engine_id":binding.engine_id,"operator_sha256":expected_operator_sha,
+        "keycloak_receipt_sha256":format!("{:x}",Sha256::digest(&keycloak_receipt)),
+        "renewal_receipt_sha256":format!("{:x}",Sha256::digest(&renewal_receipt)),
+        "input_sha256":crate::installer_generation::hashes(&source_snapshot),
+        "identity_sha256":crate::installer_generation::hashes(&identity_snapshot)
+    });
+    if let Some(digest) = &public_digest {
+        pending["schema"] = json!("elevenid.installer-generation-host-intent/v3");
+        pending["public_ingress_plan_sha256"] = json!(digest);
+    }
     state.write_evidence(
         "generation-pending.json",
-        &serde_json::to_vec(&json!({
-            "schema":"elevenid.installer-generation-host-intent/v2", "installation_id":owner,
-            "engine_id":binding.engine_id,"operator_sha256":expected_operator_sha,
-            "keycloak_receipt_sha256":format!("{:x}",Sha256::digest(&keycloak_receipt)),
-            "renewal_receipt_sha256":format!("{:x}",Sha256::digest(&renewal_receipt)),
-            "input_sha256":crate::installer_generation::hashes(&source_snapshot),
-            "identity_sha256":crate::installer_generation::hashes(&identity_snapshot)
-        }))
-        .map_err(|_| REFUSAL)?,
+        &serde_json::to_vec(&pending).map_err(|_| REFUSAL)?,
     )?;
     require_directory_binding(&installation.join("secrets"), &secrets)?;
     require_directory_binding(&identity_source_path, &identity_source)?;
@@ -380,6 +484,9 @@ pub fn provision(
                 == keycloak_receipt
             && read_entry(&evidence, "renewal-result.json", 0o600, false)? == renewal_receipt,
     )?;
+    if let Some(plan) = public_plan {
+        plan.require_job_inputs(dockerpath, &binding, &inputs, "installer-generation")?;
+    }
     let job = installer_jobs::run(
         dockerpath,
         installation,
@@ -410,6 +517,7 @@ pub fn provision(
         current: &source_snapshot,
         identity: &identity_snapshot,
         keycloak_receipt: &keycloak_receipt,
+        public_ingress_plan: public_plan,
     };
     let delivered = validate_delivery(
         &output_path,
@@ -422,20 +530,39 @@ pub fn provision(
         .into_iter()
         .map(|name| Ok((name.into(), read_entry(&delivered_dir, name, 0o600, false)?)))
         .collect::<Result<BTreeMap<_, _>>>()?;
-    let ingress = crate::installer_generation::recorded_ingress(&records)?.ok_or(REFUSAL)?;
+    let ingress = crate::installer_generation::recorded_ingress(&records)?;
+    let public_ingress = crate::installer_generation::recorded_public_ingress(&records)?;
+    require(
+        ingress.is_some() == public_plan.is_none()
+            && public_ingress.is_some() == public_plan.is_some(),
+    )?;
     let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
     let identity = crate::installer_ingress_provision::IngressIdentity::new(
         hosting.certificate_dns_name(),
         hosting.certificate_ip_address(),
     )?;
-    require(
+    let observed_identity = if let Some(ingress) = &ingress {
         crate::installer_ingress_provision::IngressIdentity::from_metadata(
             &ingress.dns_names,
             &ingress.ip_addresses,
-        )? == identity,
-    )?;
+        )?
+    } else {
+        let ingress = public_ingress.as_ref().ok_or(REFUSAL)?;
+        crate::installer_ingress_provision::IngressIdentity::from_metadata(
+            &ingress.dns_names,
+            &ingress.ip_addresses,
+        )?
+    };
+    require(observed_identity == identity)?;
+    if let Some(plan) = public_plan {
+        state.with_inspection(|view| plan.require_saved(view))?;
+    }
     let receipt = GenerationReceipt {
-        schema: "elevenid.installer-generation-host/v3",
+        schema: if public_plan.is_some() {
+            "elevenid.installer-generation-host/v4"
+        } else {
+            "elevenid.installer-generation-host/v3"
+        },
         installation_id: owner,
         engine_id: binding.engine_id,
         container_id: job.container_id,
@@ -444,7 +571,8 @@ pub fn provision(
         image: job.image,
         root_retired: false,
         ingress_renewal: true,
-        ingress: Some(ingress),
+        ingress,
+        public_ingress,
         candidate_validated: true,
         activated: false,
         candidate_sha256: delivered.clone(),

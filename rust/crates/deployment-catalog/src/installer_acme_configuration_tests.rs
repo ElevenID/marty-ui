@@ -15,7 +15,8 @@ fn hosting() -> Value {
     json!({"schema":"elevenid.installation-hosting/v1", "mode":"direct",
         "public_origin":"https://login.example.com:9443", "public_entry_origin":"https://[2001:db8::7]:18443",
         "listener":{"bind_address":"0.0.0.0","port":8443},
-        "tls":{"termination":"marty-keyless","certificate_source":"managed-ca"}})
+        "tls":{"termination":"marty-keyless","certificate_source":"acme",
+            "acme":parameters(),"http01_host_port":18080}})
 }
 fn write(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();
@@ -163,13 +164,41 @@ fn bound_configuration_pins_actual_installation_and_exact_dns_ip_origins() {
         serde_json::to_vec(&config).unwrap(),
         serde_json::to_vec(&repeated).unwrap()
     );
+    assert_eq!(
+        state
+            .with_inspection(BoundAcmeConfiguration::from_selection)
+            .unwrap(),
+        config
+    );
     let mut production = parameters();
     production["environment"] = json!("production");
     production["directory_url"] = json!(AcmeEnvironment::Production.directory_url());
-    let different = state
+    assert!(state
+        .with_inspection(|view| BoundAcmeConfiguration::bind(view, parsed(&production)?))
+        .is_err());
+    let mut production_hosting = hosting();
+    production_hosting["tls"]["acme"] = production.clone();
+    let (_production_files, production_state) = fixture(Some(production_hosting));
+    let different = production_state
         .with_inspection(|view| BoundAcmeConfiguration::bind(view, parsed(&production)?))
         .unwrap();
-    assert_ne!(config, different);
+    assert_eq!(
+        different.parameters().environment(),
+        AcmeEnvironment::Production
+    );
+    for (field, value) in [
+        (
+            "terms_url",
+            json!("https://letsencrypt.org/documents/changed.pdf"),
+        ),
+        ("contact", json!("mailto:owner@example.com")),
+    ] {
+        let mut changed = parameters();
+        changed[field] = value;
+        assert!(state
+            .with_inspection(|view| BoundAcmeConfiguration::bind(view, parsed(&changed)?))
+            .is_err());
+    }
 }
 
 #[test]
@@ -193,9 +222,16 @@ fn changed_hosting_and_unrecorded_local_or_external_proxy_configs_are_refused() 
         .is_err());
     let mut proxy = hosting();
     proxy["mode"] = json!("external-proxy");
+    proxy["tls"] = json!({"termination":"marty-keyless","certificate_source":"managed-ca"});
     proxy.as_object_mut().unwrap().remove("public_entry_origin");
     let (_root, proxy) = fixture(Some(proxy));
     assert!(proxy
         .with_inspection(|view| BoundAcmeConfiguration::bind(view, parsed(&parameters())?))
+        .is_err());
+    let mut managed = hosting();
+    managed["tls"] = json!({"termination":"marty-keyless","certificate_source":"managed-ca"});
+    let (_root, managed) = fixture(Some(managed));
+    assert!(managed
+        .with_inspection(BoundAcmeConfiguration::from_selection)
         .is_err());
 }

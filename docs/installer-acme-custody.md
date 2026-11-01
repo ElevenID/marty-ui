@@ -1,9 +1,10 @@
 # ACME enrollment configuration and initial custody
 
 The configuration and custody modules provide the installation owner's inputs
-for ACME enrollment. They do not select an ACME source in the running ingress,
-issue workload credentials, activate certificates, change the installed origin,
-or migrate an existing key.
+for ACME enrollment. The [host transaction](installer-acme-host.md) connects them
+to an explicitly selected ACME hosting source and the separately scoped
+credential owner. Custody setup itself does not activate certificates, change
+the installed origin, or migrate an existing key.
 
 ## Explicit enrollment inputs
 
@@ -15,7 +16,7 @@ unknown-field rejection. A staging example is:
   "environment": "staging",
   "directory_url": "https://acme-staging-v02.api.letsencrypt.org/directory",
   "profile": "shortlived",
-  "terms_url": "https://letsencrypt.org/documents/LE-SA-v1.6-August-18-2025.pdf",
+  "terms_url": "https://letsencrypt.org/documents/LE-SA-v1.8-July-06-2026.pdf",
   "terms_agreed": true
 }
 ```
@@ -59,10 +60,11 @@ as `u`. Environment `E` is exactly `staging` or `production`.
 | Ingress CSR | Policy `installer-acme-E-csr-u` | Read the retained ingress public-key metadata and create a CSR using version 1 and the exact admitted public template. No arbitrary signing. |
 | Live TLS | Existing key and policy `installer-ingress-u` | Existing fixed-version TLS signing contract using a prehashed SHA-256 digest and ASN.1 signature encoding. No CSR or account signing. |
 
-Staging and production have distinct account keys and policies even within one
-installation. The retained ingress key can remain the same public identity
-across these separate qualification attempts. Account and ingress SPKI must
-differ. There is no account-key or certificate-key export path.
+Resource names distinguish staging from production even for the same
+installation identifier. The current host selection remains immutable: changing
+its recorded environment is not an admitted operation. Fresh staging and
+production trials therefore use separate installations. Account and ingress
+SPKI must differ. There is no account-key or certificate-key export path.
 
 `AccountKeyBinding::bind` requires the environment-specific resource name,
 original version 1, one retained public key, P-256 signing support, no derivation
@@ -93,12 +95,47 @@ record can be restored only through read-only verification of the same key,
 configuration and exact policies. Drift is refused rather than repaired.
 
 The custody operation returns `ProvisionedAcmeCustody` with public account
-binding and policy names. The next credential owner must issue separate,
-bounded credentials for the account and CSR policies. For a no-default
-AppRole, each role must contain only its corresponding reviewed policy;
-neither role receives the other's policy or root/provisioning authority. The
-existing live TLS credential remains separate. Credential obtainment, renewal,
-revocation and reboot recovery are not implemented by this setup operation.
+binding and policy names. The [separate credential owner](installer-acme-credentials.md)
+uses one narrow AppRole management policy per purpose and issues operation tokens
+containing only the corresponding account or CSR policy. The owner roles cannot
+sign or change custody, and the operation tokens cannot manage credentials. The
+existing live TLS credential remains separate. Credential refresh and recovery
+belong to that separate module, not this key/policy setup transaction.
+
+## Fixed-container custody transaction
+
+The rootless host never reads or chowns OpenBao state to obtain `root.token`.
+`installer_acme_custody` also exposes a split API for the authenticated setup job:
+
+1. `prepare_for_install(state, configuration, ingress, bao)` verifies the current
+   hosting binding and public cluster identity without root. It durably records
+   the original custody intent plus `acme-custody-E-plan.json` and returns a
+   `CustodyResourcePlan` with retained ingress SPKI and the exact intent digest.
+2. The fixed container helper admits those public bytes through
+   `CustodyResourcePlan::parse_authenticated(bytes, expected_plan_sha256)`.
+   The expected digest comes from the host's independent setup evidence. The
+   helper calls `provision_resources(plan, bao, root)` without acquiring the
+   host's flock. Resource names, versions, and exact policies are derived from
+   the admitted plan; there are no policy or resource-name overrides.
+3. `PublicCustodyOutput::write_public_transfer` writes exactly `plan.json` and
+   `custody.json` as public 0600 files in an empty 0700 output folder. The result
+   contains a strict whitelist of public Transit metadata and exact policy
+   readback. It contains no private key, root token, RoleID, SecretID or workload
+   token.
+4. After authenticating the completed fixed job, image and transfer ownership,
+   the host calls `admit_for_install(state, configuration, ingress, plan,
+   transferred_path)`. It compares the exact saved intent and plan, reconstructs
+   the admitted key binding, and records the public output plus the existing v1
+   custody completion. It needs no bootstrap root authority and does not advance
+   installer phase.
+
+This public admission records the authenticated helper's observations. The next
+credential transaction independently re-reads the actual account/ingress key
+metadata and exact ACLs using scoped owner logins before returning usable
+credentials. The two one-shot transactions therefore preserve the original
+ingress SPKI, establish the new account SPKI exactly once, and keep root authority
+inside the container throughout. Partial setup and unrecorded resources remain
+explicit recovery holds; neither helper transaction repairs or replays them.
 
 ## Verification boundary
 
@@ -114,3 +151,9 @@ proves real account signing, exact ingress CSR creation, and existing TLS
 signing with three separate tokens. It exercises cross-role, cross-environment,
 parameter, rotation and export denials, as well as policy drift and unrecorded
 key refusal. It never contacts a live ACME CA or creates cloud resources.
+
+The separate credential integration proof also exercises this complete helper
+split before credential provisioning: host intent, independently hash-admitted
+public plan, actual OpenBao resource creation, public-only output transfer, and
+host admission. Focused helper tests reject altered identities, environments,
+agreements, unknown overrides, and non-public metadata in transferred output.

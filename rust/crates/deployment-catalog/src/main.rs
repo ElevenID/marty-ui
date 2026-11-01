@@ -283,6 +283,38 @@ fn run() -> Result<(), String> {
     if args.first().is_some_and(|arg| {
         matches!(
             arg.as_str(),
+            "installer-acme-custody-provision" | "installer-acme-credentials-provision"
+        )
+    }) {
+        if args.len() != 5 || args[1] != "--installation-id" || args[3] != "--plan-sha256" {
+            return Err("internal ACME bootstrap requires an owned container invocation".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|_| "cannot start ACME bootstrap runtime")?;
+            let count = if args[0] == "installer-acme-custody-provision" {
+                runtime.block_on(
+                    marty_deployment_catalog::installer_acme_bootstrap::provision_custody(
+                        &args[2], &args[4],
+                    ),
+                )?
+            } else {
+                runtime.block_on(
+                    marty_deployment_catalog::installer_acme_bootstrap::provision_credentials(
+                        &args[2], &args[4],
+                    ),
+                )?
+            };
+            println!("{}", serde_json::json!({"outputs_written":count}));
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal ACME bootstrap requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| {
+        matches!(
+            arg.as_str(),
             "installer-generation-provision" | "installer-generation-provision-transfer"
         )
     }) {
@@ -466,19 +498,11 @@ fn run() -> Result<(), String> {
         return Err("installer trust information currently requires Linux".into());
     }
     if args.first().is_some_and(|arg| arg == "acme") {
-        if args.len() != 4 || args[1] != "status" || args[2] != "--install-dir" {
-            return Err("usage: marty-deploy acme status --install-dir ABSOLUTE_PATH".into());
-        }
         #[cfg(target_os = "linux")]
-        {
-            let inspection = marty_deployment_catalog::installer_state::LockedInspection::open(
-                std::path::Path::new(&args[3]),
-            )?;
-            let report = marty_deployment_catalog::installer_acme::status(&inspection)?;
-            inspection.require_unchanged()?;
-            println!("{report}");
-            return Ok(());
-        }
+        return marty_deployment_catalog::installer_command::acme(
+            &args[1..],
+            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+        );
         #[cfg(not(target_os = "linux"))]
         return Err("installer ACME status currently requires Linux".into());
     }
@@ -590,6 +614,18 @@ fn run() -> Result<(), String> {
         }
         #[cfg(not(target_os = "linux"))]
         return Err("installer lifecycle currently requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "root-retirement") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_root_retirement::run(&args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("initial OpenBao root retirement currently requires Linux".into());
     }
     if args.first().is_some_and(|arg| arg == "start") {
         #[cfg(target_os = "linux")]

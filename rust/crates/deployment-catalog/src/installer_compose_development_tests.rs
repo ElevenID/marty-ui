@@ -715,12 +715,17 @@ fn local_development_layers_preserve_authenticated_original_and_refuse_replaceme
             .map_err(|_| "development marker missing")?,
     )
     .map_err(|_| "development marker invalid")?;
+    let expected_files: BTreeSet<_> = std::iter::once("original.txt")
+        .chain(LAYERS.iter().map(|(name, _)| *name))
+        .collect();
+    let actual_files: BTreeSet<_> = marker["files"]
+        .as_object()
+        .ok_or("development marker files missing")?
+        .keys()
+        .map(String::as_str)
+        .collect();
     need(
-        marker["files"]
-            .as_object()
-            .ok_or("development marker files missing")?
-            .len()
-            == 4,
+        actual_files == expected_files,
         "development overlay added an unexpected file",
     )?;
     for (name, bytes) in LAYERS {

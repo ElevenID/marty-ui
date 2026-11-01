@@ -81,6 +81,9 @@ type recoveryPaths struct {
 	identity, tls string
 	root          owner
 	readOnly      bool
+	// Internal crash-boundary injection for focused tests; the command exposes
+	// no path, transport, state, or checkpoint overrides.
+	checkpoint func(string) error
 }
 
 // Recover has no caller-selected URL, filesystem path, signing role, identity,
@@ -270,11 +273,15 @@ func verifyNode(certificate, ca *x509.Certificate, spki []byte, now time.Time) e
 }
 
 func parseTLS(caBytes, combined []byte, identity recoveryIdentity, now time.Time) (retainedTLS, error) {
+	return parseTLSAt(caBytes, combined, identity, now, true)
+}
+
+func parseTLSAt(caBytes, combined []byte, identity recoveryIdentity, now time.Time, requireRenewalWindow bool) (retainedTLS, error) {
 	var result retainedTLS
 	ca, err := oneCertificate(caBytes)
 	if err != nil || fingerprint(ca.Raw) != identity.CASHA256 || !ca.IsCA || !ca.BasicConstraintsValid ||
 		ca.KeyUsage&x509.KeyUsageCertSign == 0 || ca.CheckSignatureFrom(ca) != nil || ca.NotBefore.After(now) ||
-		!ca.NotAfter.After(now.Add(31*24*time.Hour)) {
+		(requireRenewalWindow && !ca.NotAfter.After(now.Add(31*24*time.Hour))) {
 		return result, errRecovery
 	}
 	block, keyPEM := pem.Decode(combined)
@@ -446,9 +453,11 @@ func recoverAt(ctx context.Context, installationID, attemptID string, paths reco
 		return receipt, errRecovery
 	}
 	defer directory.Close()
-	if noPendingReplacement(directory) != nil {
+	lock, err := acquireRecoveryLock(directory, paths.root)
+	if err != nil {
 		return receipt, errRecovery
 	}
+	defer lock.Close()
 	caFile, err := readFile(directory, "ca.crt", expected, []uint32{0644}, 64*1024, false)
 	if err != nil {
 		return receipt, errRecovery
@@ -461,53 +470,106 @@ func recoverAt(ctx context.Context, installationID, attemptID string, paths reco
 	if err != nil {
 		return receipt, errRecovery
 	}
-	var health struct {
-		Initialized *bool  `json:"initialized"`
-		Sealed      *bool  `json:"sealed"`
-		ClusterID   string `json:"cluster_id"`
-	}
-	if apiRequest(ctx, client, http.MethodGet, "sys/health", "", nil, &health) != nil ||
-		health.Initialized == nil || health.Sealed == nil || !*health.Initialized || *health.Sealed || health.ClusterID != identity.ClusterID {
-		return receipt, errRecovery
-	}
-	token, err := scopedToken(ctx, client, identity)
-	if err != nil {
-		return receipt, errRecovery
-	}
-	revoked := false
-	defer func() {
-		if !revoked {
-			// A known transient credential is retired even if validation fails.
-			revokeKnownToken(client, token)
+	guard := func() error {
+		if boundDirectory(identityDir, paths.identity, paths.root) != nil ||
+			unchangedFile(identityDir, "recovery.json", identityFile, paths.root, []uint32{0400, 0600}, 8192, paths.readOnly) != nil ||
+			unchangedFile(identityDir, "enrollment-pending.json", enrollmentPending, paths.root, []uint32{0600}, 8192, paths.readOnly) != nil ||
+			unchangedFile(identityDir, "enrollment-result.json", enrollmentResult, paths.root, []uint32{0600}, 16384, paths.readOnly) != nil ||
+			boundDirectory(directory, paths.tls, expected) != nil || requireRecoveryLock(directory, lock, paths.root) != nil ||
+			unchangedFile(directory, "ca.crt", caFile, expected, []uint32{0644}, 64*1024, false) != nil {
+			return errRecovery
 		}
-	}()
-	certificate, err := issueCertificate(ctx, client, token, identity, retained, now)
+		return nil
+	}
+	if guard() != nil {
+		return receipt, errRecovery
+	}
+	transaction, journal, err := beginTransaction(directory, paths, expected, identity, retained, attemptID, now)
 	if err != nil {
 		return receipt, errRecovery
 	}
-	combined := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw}), retained.keyPEM...)
-	if _, err := tls.X509KeyPair(combined, combined); err != nil {
-		return receipt, errRecovery
+	unchangedJournal := func() error {
+		return unchangedFile(directory, recoveryJournalName, journal, paths.root, []uint32{0600}, recoveryJournalMax, false)
 	}
-	if apiRequest(ctx, client, http.MethodPost, "auth/token/revoke-self", token, nil, nil) != nil {
-		// Do not retry a token mutation with an uncertain response.
+	if transaction.Phase == "issuing" {
+		var health struct {
+			Initialized *bool  `json:"initialized"`
+			Sealed      *bool  `json:"sealed"`
+			ClusterID   string `json:"cluster_id"`
+		}
+		if apiRequest(ctx, client, http.MethodGet, "sys/health", "", nil, &health) != nil ||
+			health.Initialized == nil || health.Sealed == nil || !*health.Initialized || *health.Sealed || health.ClusterID != identity.ClusterID {
+			return receipt, errRecovery
+		}
+		token, err := scopedToken(ctx, client, identity)
+		if err != nil {
+			return receipt, errRecovery
+		}
+		revoked := false
+		defer func() {
+			if !revoked {
+				revokeKnownToken(client, token)
+			}
+		}()
+		certificate, err := issueCertificate(ctx, client, token, identity, retained, now)
+		if err != nil || checkpoint(paths, "signing-response") != nil {
+			return receipt, errRecovery
+		}
+		if apiRequest(ctx, client, http.MethodPost, "auth/token/revoke-self", token, nil, nil) != nil {
+			// An uncertain response leaves only a bounded scoped token, and the
+			// issuing journal remains resumable. A later invocation can log in
+			// afresh and repeat this local fixed-key leaf operation safely.
+			revoked = true
+			return receipt, errRecovery
+		}
 		revoked = true
+		if guard() != nil || unchangedJournal() != nil ||
+			unchangedFile(directory, "server.pem", serverFile, expected, []uint32{0600}, 128*1024, false) != nil {
+			return receipt, errRecovery
+		}
+		transaction = candidateFor(transaction, certificate)
+		journal, err = saveTransaction(directory, paths, expected, &journal, transaction)
+		if err != nil {
+			return receipt, errRecovery
+		}
+	}
+	certificate, err := oneCertificate([]byte(transaction.CertificatePEM))
+	if err != nil {
 		return receipt, errRecovery
 	}
-	revoked = true
-	if boundDirectory(identityDir, paths.identity, paths.root) != nil ||
-		unchangedFile(identityDir, "recovery.json", identityFile, paths.root, []uint32{0400, 0600}, 8192, paths.readOnly) != nil ||
-		unchangedFile(identityDir, "enrollment-pending.json", enrollmentPending, paths.root, []uint32{0600}, 8192, paths.readOnly) != nil ||
-		unchangedFile(identityDir, "enrollment-result.json", enrollmentResult, paths.root, []uint32{0600}, 16384, paths.readOnly) != nil ||
-		unchangedFile(directory, "ca.crt", caFile, expected, []uint32{0644}, 64*1024, false) != nil ||
-		replaceCertificate(directory, paths.tls, attemptID, expected, serverFile, combined) != nil {
+	combined := append([]byte(transaction.CertificatePEM), retained.keyPEM...)
+	if _, err := tls.X509KeyPair(combined, combined); err != nil || guard() != nil || unchangedJournal() != nil {
 		return receipt, errRecovery
 	}
-	return RecoveryReceipt{
-		Schema: "elevenid.openbao-tcp-recovery-result/v1", InstallationID: installationID, AttemptID: attemptID,
-		ClusterID: identity.ClusterID, IssuerID: identity.IssuerID,
-		PreviousSHA256: fingerprint(retained.leaf.Raw), CertificateSHA256: fingerprint(certificate.Raw),
-		CASHA256: identity.CASHA256, SPKISHA256: identity.SPKISHA256, NotAfter: certificate.NotAfter.UTC().Format(time.RFC3339),
-		NodeKeyPreserved: true, CertificatePublished: true, ReloadPerformed: false, NetworkTLSVerified: false,
-	}, nil
+	if transaction.Phase == "candidate" {
+		if fingerprint(retained.leaf.Raw) == transaction.PreviousSHA256 {
+			if verifyNode(certificate, retained.ca, retained.leaf.RawSubjectPublicKeyInfo, now) != nil ||
+				publishCandidate(directory, paths, expected, attemptID, serverFile, combined) != nil {
+				return receipt, errRecovery
+			}
+		} else if !bytes.Equal(serverFile.bytes, combined) {
+			return receipt, errRecovery
+		}
+		if _, exists, err := objectStat(directory, ".recovery-"+attemptID+".pem"); err != nil || exists {
+			return receipt, errRecovery
+		}
+		if guard() != nil || unchangedJournal() != nil {
+			return receipt, errRecovery
+		}
+		transaction.Phase = "published"
+		journal, err = saveTransaction(directory, paths, expected, &journal, transaction)
+		if err != nil {
+			return receipt, errRecovery
+		}
+	}
+	current, err := readFile(directory, "server.pem", expected, []uint32{0600}, 128*1024, false)
+	if err != nil || !bytes.Equal(current.bytes, combined) || guard() != nil || unchangedJournal() != nil {
+		return receipt, errRecovery
+	}
+	receipt = transaction.receipt()
+	if saveCompleted(directory, paths, expected, receipt) != nil || guard() != nil || unchangedJournal() != nil ||
+		unchangedFile(directory, "server.pem", current, expected, []uint32{0600}, 128*1024, false) != nil {
+		return RecoveryReceipt{}, errRecovery
+	}
+	return receipt, nil
 }
