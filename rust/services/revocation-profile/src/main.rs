@@ -9,7 +9,7 @@ use sqlx::postgres::PgPoolOptions;
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use subtle::ConstantTimeEq;
 use tokio::{net::TcpListener, sync::broadcast};
-use tokio_stream::{wrappers::TcpListenerStream, StreamExt};
+use tokio_stream::wrappers::TcpListenerStream;
 use tonic::{service::Interceptor, transport::Server, Request, Status};
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
@@ -134,15 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let grpc_server: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
             if let Some(acceptor) = tls_acceptor {
-                let incoming = TcpListenerStream::new(grpc_listener).then(move |connection| {
-                    let acceptor = acceptor.clone();
-                    async move {
-                        match connection {
-                            Ok(stream) => acceptor.accept(stream).await,
-                            Err(error) => Err(error),
-                        }
-                    }
-                });
+                let incoming = marty_service_runtime::keyless_incoming(grpc_listener, acceptor);
                 Box::pin(router.serve_with_incoming_shutdown(incoming, async move {
                     let _ = grpc_shutdown.recv().await;
                 }))

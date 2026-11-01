@@ -8,6 +8,8 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+http = { workspace = true, optional = true }
+marty-api-key-policy = { path = "../api-key-policy", optional = true }
 marty-crypto = { workspace = true, optional = true }
 mmf-security = { workspace = true, optional = true }
 tonic.workspace = true
@@ -20,4 +22,5 @@ tokio-rustls.workspace = true
 url.workspace = true
 
 [features]
+forwarded-principal = ["dep:http", "dep:marty-api-key-policy", "dep:mmf-security"]
 workload-identity = ["dep:marty-crypto", "dep:mmf-security"]
