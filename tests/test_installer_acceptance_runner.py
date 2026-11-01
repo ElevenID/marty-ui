@@ -182,13 +182,21 @@ def test_versioned_checkpoint_binds_real_probe_uid_and_authenticated_file_digest
     assert result['trust_inspection']==('verified_public_record' if mutation is None else 'unavailable')
 
 
-def test_selected_generation_evidence_requires_one_sequence_and_one_positive_attempt():
-    kinds={'intent','public-ingress-plan','helper','candidate','binding','activation-intent','activation','session','selection'}
+@pytest.mark.parametrize('plan',['public-ingress-plan','managed-renewal-plan'])
+def test_selected_generation_evidence_requires_one_sequence_and_one_positive_attempt(plan):
+    kinds={'intent',plan,'helper','candidate','binding','activation-intent','activation','session','selection'}
     base={'application-generation-current.json':'a'*64}
     for attempt in [None,1,99]:
         prefix='generation-'+f'{3:020}-'+('' if attempt is None else f'attempt-{attempt:020}-')
         proof={**base,**{prefix+kind+'.json':'b'*64 for kind in kinds}}
         a.selected_generation_evidence(proof)
+        source='acme' if plan=='public-ingress-plan' else 'managed-ca'
+        a.selected_generation_evidence(proof,certificate_source=source)
+        with pytest.raises(ValueError):a.selected_generation_evidence(proof,certificate_source='managed-ca' if source=='acme' else 'acme')
+        mixed=dict(proof)
+        other='managed-renewal-plan' if plan=='public-ingress-plan' else 'public-ingress-plan'
+        mixed[prefix+other+'.json']=mixed.pop(prefix+'helper.json')
+        with pytest.raises(ValueError):a.selected_generation_evidence(mixed)
         for bad_prefix in ['generation-'+f'{4:020}-', 'generation-'+f'{3:020}-attempt-{0:020}-',
                            'generation-'+f'{3:020}-attempt-{2:020}-']:
             mixed=dict(proof);mixed.pop(prefix+'binding.json');mixed[bad_prefix+'binding.json']='b'*64

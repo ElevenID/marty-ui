@@ -6,7 +6,10 @@ pub(crate) fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Attempt {
     pub(crate) sequence: u64,
     pub(crate) number: u64,

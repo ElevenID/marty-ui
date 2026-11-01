@@ -19,6 +19,17 @@ const MAX_BODY: usize = 65536;
 
 #[path = "installer_validation_page.rs"]
 mod page;
+pub(crate) use page::PageObservation;
+
+/// Produced only by the real bounded Docker/HTTPS observation below.
+pub(crate) struct ValidationObservation {
+    pub record_name: String,
+    pub record: Value,
+    pub record_sha256: String,
+    pub services: Value,
+    pub trust: TrustInfo,
+    pub page: Option<PageObservation>,
+}
 
 #[derive(Serialize)]
 struct Check {
@@ -195,9 +206,13 @@ fn readiness_valid(value: &Value, required: &[String]) -> bool {
                     .all(|name| services.get(name).is_some_and(|v| v["status"] == "healthy"))
         })
 }
-async fn public_checks(trust: &TrustInfo, required: &[String], alias: Option<&str>) -> Vec<bool> {
+async fn public_checks(
+    trust: &TrustInfo,
+    required: &[String],
+    alias: Option<&str>,
+) -> (Vec<bool>, Option<PageObservation>) {
     let Ok(client) = client(trust) else {
-        return vec![false; 7];
+        return (vec![false; 7], None);
     };
     let health = get(&client, trust, "/health").await;
     let services = get(&client, trust, "/health/ready").await;
@@ -212,21 +227,24 @@ async fn public_checks(trust: &TrustInfo, required: &[String], alias: Option<&st
         issuer.document,
         authorization.document,
     );
-    let entry = page::check(trust, alias).await;
-    vec![
-        tls,
-        health.is_some_and(|v| v["status"] == "healthy" && v["service"] == "api-gateway"),
-        services.is_some_and(|v| readiness_valid(&v, required)),
-        issuer
-            .as_ref()
-            .is_some_and(|v| issuer_valid(v, &trust.origin)),
-        issuer
-            .as_ref()
-            .zip(authorization.as_ref())
-            .is_some_and(|(i, a)| authorization_valid(a, i, &trust.origin)),
-        entry[0],
-        entry[1],
-    ]
+    let (entry, page) = page::check(trust, alias).await;
+    (
+        vec![
+            tls,
+            health.is_some_and(|v| v["status"] == "healthy" && v["service"] == "api-gateway"),
+            services.is_some_and(|v| readiness_valid(&v, required)),
+            issuer
+                .as_ref()
+                .is_some_and(|v| issuer_valid(v, &trust.origin)),
+            issuer
+                .as_ref()
+                .zip(authorization.as_ref())
+                .is_some_and(|(i, a)| authorization_valid(a, i, &trust.origin)),
+            entry[0],
+            entry[1],
+        ],
+        page,
+    )
 }
 
 /// The caller retains this lock across Docker, HTTPS, re-observation and report persistence.
@@ -236,6 +254,15 @@ pub(crate) fn run_locked(
     state: &LockedInspection,
     emit_json: bool,
 ) -> Result<()> {
+    observe_locked(installation, docker, state, emit_json).map(|_| ())
+}
+
+pub(crate) fn observe_locked(
+    installation: &Path,
+    docker: &Path,
+    state: &LockedInspection,
+    emit_json: bool,
+) -> Result<ValidationObservation> {
     state.require_path_binding(installation)?;
     let started = Instant::now();
     let deadline = started + DEADLINE;
@@ -252,6 +279,7 @@ pub(crate) fn run_locked(
     let hosting = crate::installer_hosting::resolve(state)?;
     let alias = hosting.public_entry_origin().map(|origin| origin.as_str());
     let mut observed = vec![false; 7];
+    let mut page = None;
     let required = required_services(state, installation).ok();
     if let (Some(trust), Some(required)) = (&trust, &required) {
         if let (Ok(rt), Some(remaining)) = (
@@ -260,10 +288,10 @@ pub(crate) fn run_locked(
                 .build(),
             deadline.checked_duration_since(Instant::now()),
         ) {
-            observed = rt.block_on(async {
+            (observed, page) = rt.block_on(async {
                 tokio::time::timeout(remaining, public_checks(trust, required, alias))
                     .await
-                    .unwrap_or_else(|_| vec![false; 7])
+                    .unwrap_or_else(|_| (vec![false; 7], None))
             });
         }
     }
@@ -363,11 +391,18 @@ pub(crate) fn run_locked(
     if emit_json {
         println!(
             "{}",
-            String::from_utf8(bytes).map_err(|_| "cannot encode validation report")?
+            std::str::from_utf8(&bytes).map_err(|_| "cannot encode validation report")?
         );
     }
     if passed {
-        Ok(())
+        Ok(ValidationObservation {
+            record_name: entry,
+            record_sha256: format!("{:x}", Sha256::digest(&bytes)),
+            record: report,
+            services: before.ok_or("validated services unavailable")?,
+            trust: trust.ok_or("validated trust unavailable")?,
+            page,
+        })
     } else {
         Err("Deployment validation failed; see the saved validation report. No repair was attempted.".into())
     }

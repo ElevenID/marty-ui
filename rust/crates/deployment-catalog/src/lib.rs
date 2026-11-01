@@ -71,6 +71,7 @@ pub mod installer_keycloak_bridge;
 pub mod installer_kms;
 pub mod installer_lifecycle;
 pub mod installer_logs;
+pub mod installer_managed_renewal;
 pub mod installer_openbao;
 pub(crate) mod installer_openbao_control;
 #[cfg(target_os = "linux")]
@@ -91,6 +92,8 @@ pub mod installer_rootless_canary_helper;
 #[cfg(target_os = "linux")]
 pub mod installer_rootless_storage_canary;
 pub mod installer_runtime;
+#[cfg(target_os = "linux")]
+pub mod installer_startup_observation;
 pub mod installer_state;
 pub mod installer_tls;
 pub mod installer_tls_outputs;

@@ -65,7 +65,7 @@ def trust_observation(raw, target, observed_at, *, journal, bound_hosting=None):
     r.require(not modern or value['trust_source'] in ('configured-ca','mozilla-public-roots'),
         'trust source differs')
     if 'selected_generation' in value:
-        selected_generation_evidence(value['selected_generation'])
+        selected_generation_evidence(value['selected_generation'],certificate_source='acme' if public else 'managed-ca')
     live_tls.public_origin(value['origin'])
     if bound_hosting is not None:
         r.candidate_hosting.validate(bound_hosting)
@@ -128,10 +128,10 @@ def trust_observation(raw, target, observed_at, *, journal, bound_hosting=None):
     return value
 
 
-def selected_generation_evidence(value):
+def selected_generation_evidence(value, *, certificate_source=None):
     r.require(isinstance(value,dict) and len(value)==10,'selected generation evidence differs')
-    kinds={'intent','public-ingress-plan','helper','candidate','binding','activation-intent',
-           'activation','session','selection'}
+    common={'intent','helper','candidate','binding','activation-intent','activation','session','selection'}
+    plans={'public-ingress-plan','managed-renewal-plan'}
     r.require('application-generation-current.json' in value,'generation selector missing')
     sequences=set()
     attempts=set()
@@ -140,11 +140,16 @@ def selected_generation_evidence(value):
         r.sha(digest,64)
         if name=='application-generation-current.json':continue
         match=re.fullmatch(r'generation-([0-9]{20})-(?:attempt-([0-9]{20})-)?([a-z-]+)\.json',name)
-        r.require(match is not None and int(match[1])>0 and match[3] in kinds
+        r.require(match is not None and int(match[1])>0 and match[3] in common|plans
             and (match[2] is None or int(match[2])>0),
             'selected generation record differs')
         sequences.add(match[1]);attempts.add(match[2]);observed.add(match[3])
-    r.require(len(sequences)==1 and len(attempts)==1 and observed==kinds,'selected generation lineage differs')
+    r.require(len(sequences)==1 and len(attempts)==1 and observed-plans==common
+        and len(observed&plans)==1,'selected generation lineage differs')
+    if certificate_source is not None:
+        r.require(certificate_source in ('acme','managed-ca') and observed&plans=={
+            'public-ingress-plan' if certificate_source=='acme' else 'managed-renewal-plan'},
+            'selected generation plan differs from certificate source')
 
 
 def public_certificate_admission(admission, trust, target, observed_at):
@@ -527,7 +532,8 @@ def authenticated_source_digests(files, assets, grants):
 def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign,
         ssh, scp, key, known_hosts, host, port, user, home,
         clock=time.time, verifier=provenance.command, execute=command,
-        candidate_dispatch=dispatch.dispatch, resource_profile=ROOTLESS_STARTUP_PROFILE):
+        candidate_dispatch=dispatch.dispatch, resource_profile=ROOTLESS_STARTUP_PROFILE,
+        browser_runtime=None, startup_client=None):
     r.require(os.name=='posix','Linux controller required')
     dispatch.executable(ssh);dispatch.executable(scp)
     r.require(re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}',host) is not None
@@ -536,8 +542,16 @@ def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign
     originals={path:read_record(path) for path in (context_file,target_file,ledger)}
     custody={path:dispatch.private_file(path,65536) for path in (key,known_hosts)}
     context=r.decode(originals[context_file]);target=r.decode(originals[target_file])
+    artifact_started_at=int(clock())
     authorization,receipt,inventory,files=dispatch.verify(assets=assets,grants=grants,context=context,target=target,
         ledger=ledger,gh=gh,cosign=cosign,now=int(clock()),runner=verifier)
+    artifact=None
+    if browser_runtime is not None:
+        r.require(resource_profile==ROOTLESS_STARTUP_PROFILE,'real startup browser needs the startup-only profile')
+        import installer_startup_observation
+        artifact=installer_startup_observation.artifact_record(files=files,assets=assets,grants=grants,
+            context=context,target=target,authorization=authorization,receipt=receipt,inventory=inventory,
+            started_at=artifact_started_at,completed_at=int(clock()))
     def unchanged():
         for path,raw in originals.items():
             dispatch.private_file(path,65536)
@@ -592,19 +606,60 @@ def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign
         unchanged()
         return execute(*args,**kwargs)
     checkpoint['dispatch']='failed_or_incomplete'
+    dispatched=None
     try:
-        candidate_dispatch(assets=assets,grants=grants,context_file=context_file,target_file=target_file,
+        dispatched=candidate_dispatch(assets=assets,grants=grants,context_file=context_file,target_file=target_file,
             ledger=ledger,gh=gh,cosign=cosign,ssh=ssh,scp=scp,key=key,known_hosts=known_hosts,
             host=host,port=port,user=user,home=home,clock=clock,verifier=verifier,run=guarded_execute)
         checkpoint['dispatch']='returned_zero_unqualified'
     except (ValueError,OSError):
         pass # No error bodies, tokens, automatic cleanup or replay.
-    return observe_after_dispatch(
+    if browser_runtime is not None and dispatched is not None and dispatched.get('completion')=='acme_pending':
+        import installer_acceptance_startup as startup
+        import installer_startup_continuation as continuation
+        import installer_candidate_rendezvous as transport
+        from installer_candidate_hosting import HeldInput
+        try:
+            r.exact(dispatched,{'schema','installation_id','command_returned_zero','installation_ready','acceptance_report',
+                'completion','native_startup_observation_name','native_startup_observation_sha256'},'typed pending dispatch')
+            name=context['nonce']+'.startup-pending.json'
+            r.require(dispatched['schema']=='elevenid.installer-candidate-dispatch-result/v2'
+                and dispatched['installation_id']==target['installation_id'] and dispatched['command_returned_zero'] is True
+                and dispatched['installation_ready'] is False and dispatched['acceptance_report'] is False
+                and dispatched['native_startup_observation_name']==name,'pending dispatch authority differs')
+            with startup.HarnessSources(context['harness_source_sha']) as sources, HeldInput(ledger.parent/name,65536) as held:
+                raw=held.check()
+                r.require(r.digest(raw)==dispatched['native_startup_observation_sha256'],'pending dispatch bytes changed')
+                def continuation_unchanged():
+                    unchanged();sources.check();held.check()
+                continuation.continue_pending(pending_raw=raw,context=context,target=target,authorization=authorization,
+                    receipt=receipt,inventory=inventory,pins=checkpoint['authenticated_evidence_sha256'],output=output,ledger=ledger,
+                    ssh=ssh,key=key,known_hosts=known_hosts,host=host,port=port,user=user,home=home,
+                    client=startup_client or transport.Client(os.environ.get('GH_TOKEN')),
+                    unchanged=continuation_unchanged,execute=guarded_execute,clock=clock)
+        except (ValueError,OSError):
+            unchanged()  # Unknown continuation stops mutation; fresh read-only owners may still observe actual recovery.
+    checkpoint=observe_after_dispatch(
         checkpoint=checkpoint, output=output, context=context, target=target,
         authorization=authorization, receipt=receipt, inventory=inventory,
         ssh=ssh, key=key, known_hosts=known_hosts, port=port, host=host, user=user,
         home=home, bootstrap_source=bootstrap_source, tls_source=tls_source,
         unchanged=unchanged, guarded_execute=guarded_execute, clock=clock)
+    if browser_runtime is None:
+        return checkpoint
+    import installer_acceptance_startup as startup
+    import installer_candidate_rendezvous as transport
+    try:
+        return startup.collect(output=output,runtime_root=browser_runtime,artifact=artifact,
+            host_raw=read_record(output/'host-observation.json'),context=context,target=target,
+            authorization=authorization,receipt=receipt,inventory=inventory,
+            pins=checkpoint['authenticated_evidence_sha256'],ssh=ssh,key=key,known_hosts=known_hosts,
+            port=port,host=host,user=user,home=home,bootstrap_source=bootstrap_source,probe_remote=remote,
+            unchanged=unchanged,guarded_execute=guarded_execute,
+            client=startup_client or transport.Client(os.environ.get('GH_TOKEN')),clock=clock)
+    except (ValueError,OSError):
+        unchanged()
+        return checkpoint  # Retained failures never become a passed startup record.
 
 
 def main(argv=None):
@@ -614,8 +669,11 @@ def main(argv=None):
     for name in ('host','user','home'):parser.add_argument('--'+name,required=True)
     parser.add_argument('--port',type=int,required=True)
     parser.add_argument('--resource-profile',choices=RESOURCE_PROFILES,default=ROOTLESS_STARTUP_PROFILE)
-    try:run(**vars(parser.parse_args(argv)))
+    parser.add_argument('--browser-runtime',type=Path)
+    try:result=run(**vars(parser.parse_args(argv)))
     except (ValueError,OSError,KeyError,TypeError):parser.exit(1,'Installed probe refused or uncertain; preserve all controller and guest state.\n')
+    if result.get('schema')==qualification.SCHEMA and result.get('profile')==qualification.STARTUP_PROFILE:
+        parser.exit(0,'Signed-path startup observations retained; Ready and functional/recovery qualification remain false.\n')
     parser.exit(2,'Installed checkpoint retained; real installed acceptance remains incomplete.\n')
 
 

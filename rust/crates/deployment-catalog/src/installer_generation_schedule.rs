@@ -213,6 +213,13 @@ fn private_status(
 ) -> Result<Value> {
     let metadata = binding.ingress_metadata(installation)?;
     let at = now()?;
+    let material = binding
+        .managed_ingress()
+        .then(|| GenerationMaterial::load(installation, binding))
+        .transpose()?;
+    if let Some(material) = &material {
+        material.validate_historical(installation, binding)?;
+    }
     let (due_at, due, expired) = if let Some(metadata) = &metadata {
         let (due_at, due) =
             credential_due(metadata.token_observed_at, metadata.token_ttl_seconds, at)?;
@@ -220,15 +227,39 @@ fn private_status(
     } else {
         (None, false, false)
     };
+    let issuer_insufficient = metadata
+        .as_ref()
+        .is_some_and(|value| value.ca_expires_at < at.saturating_add(28_800));
+    let pending = super::tx::pending_status(view, installation, binding)?;
+    let blocker = if pending
+        .as_ref()
+        .is_some_and(|value| value["stage"] == "producer_start_outcome_unobserved")
+    {
+        Some("generation_producer_outcome_requires_native_observation")
+    } else if binding.managed_ingress() && (due || expired) && issuer_insufficient {
+        Some("retained_private_issuer_needs_separate_rotation")
+    } else if pending.is_some() {
+        Some("generation_attempt_pending")
+    } else if binding.imported_foundation() {
+        Some("customer_managed_foundation_credentials")
+    } else if !binding.managed_ingress() && (due || expired) {
+        Some("legacy_generation_renewal_not_supported")
+    } else {
+        None
+    };
     view.require_path_binding(installation)?;
+    view.require_unchanged()?;
     Ok(json!({"schema":"elevenid.installer-generation-status/v1",
-        "selected_sequence":binding.sequence(),"generation_sha256":binding.sha256()?,
-        "automatic_renewal_supported":false,"credential_refresh_due":due,
+        "selected_sequence":binding.sequence(),"selected_attempt":binding.attempt(),
+        "generation_sha256":binding.sha256()?,"pending_generation":pending,
+        "automatic_renewal_supported":binding.managed_ingress(),"credential_refresh_due":due,
         "credential_refresh_at":due_at,"certificate_expired":expired,
+        "certificate_renewal_due":due || expired,
         "certificate_expires_at":metadata.as_ref().map(|value|value.certificate_expires_at),
-        "first_blocking_dependency":if due || expired { Some("private_generation_renewal_not_implemented") }
-            else if binding.imported_foundation() { Some("customer_managed_foundation_credentials") } else { None },
-        "read_only":true,"installation_ready":false}))
+        "issuer_expires_at":metadata.as_ref().map(|value|value.ca_expires_at),
+        "signer_token_expires_at":metadata.as_ref().map(|value|value.token_observed_at.checked_add(value.token_ttl_seconds).ok_or(REFUSED)).transpose()?,
+        "last_successful_activation":selected(installation)?.map(|value|value.selection.selected_at),
+        "first_blocking_dependency":blocker,"read_only":true,"installation_ready":false}))
 }
 
 pub(crate) fn status_locked(view: &LockedInspection, installation: &Path) -> Result<Value> {
@@ -414,21 +445,20 @@ pub(super) fn candidate_for_recovery(
     docker: &Path,
     state: &mut LockedMaintenance,
     parent: &GenerationBinding,
-    previous: &GenerationBinding,
+    previous: &AcmeCandidate,
     baseline: &GenerationRecoveryBaseline,
 ) -> Result<AcmeCandidate> {
     baseline.require_selected(state.inspection(), installation)?;
     require(binding(state.inspection(), installation)? == *parent)?;
     let selected = candidate_for_binding(state.inspection(), installation, parent)?;
-    let previous = candidate_for_binding(state.inspection(), installation, previous)?;
     let at = now()?;
     let same_leaf = previous.enrolment_receipt_sha256() == selected.enrolment_receipt_sha256();
     if if same_leaf {
-        expires(&previous)? > at
+        expires(previous)? > at
     } else {
-        new_leaf_usable(&previous, at)?
+        new_leaf_usable(previous, at)?
     } {
-        return Ok(previous);
+        return Ok(previous.clone());
     }
     if expires(&selected)? > at {
         return Ok(selected);
@@ -474,20 +504,43 @@ pub(crate) fn reconcile_locked(
     installer_root_retirement::require_no_pending_for_generation(state.inspection())?;
     reconcile_pending_locked(installation, docker, state)?;
     let parent = binding(state.inspection(), installation)?;
-    if !parent.public_ingress() {
-        let status = private_status(state.inspection(), installation, &parent)?;
-        if status["credential_refresh_due"] == true || status["certificate_expired"] == true {
-            return Err("Private generation renewal is due but its automatic replacement policy is not implemented; preserve the selected generation and scoped authority".into());
+    if parent.managed_ingress() {
+        let material = GenerationMaterial::load(installation, &parent)?;
+        let at = now()?;
+        material.validate_historical(installation, &parent)?;
+        let (_, due) = credential_due(material.observed_at(), material.ttl(), at)?;
+        let expired = at >= material.expires_at()?;
+        if !due && !expired {
+            material.validate_selected_at(installation, &parent, at)?;
+            return report(&parent, false, false, false, true, None, None);
         }
+        material.require_issuer_lifetime(installation, &parent, at)?;
+        let selected =
+            super::tx::begin_managed_and_reconcile(installation, docker, state, &parent)?;
+        return report(
+            &selected,
+            false,
+            false,
+            selected.sequence() != parent.sequence(),
+            true,
+            None,
+            None,
+        );
+    }
+    if !parent.public_ingress() {
+        // Imported foundations retain external renewal ownership. The older
+        // pre-managed source gains no implicit private issuer/mint authority.
         return report(
             &parent,
             false,
             false,
             false,
             false,
-            parent
-                .imported_foundation()
-                .then_some("customer_managed_foundation_credentials"),
+            Some(if parent.imported_foundation() {
+                "customer_managed_foundation_credentials"
+            } else {
+                "legacy_generation_renewal_not_supported"
+            }),
             None,
         );
     }

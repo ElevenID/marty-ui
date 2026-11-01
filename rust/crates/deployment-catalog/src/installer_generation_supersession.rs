@@ -2,6 +2,9 @@
 //! selected generation does not advance until fresh native activation succeeds.
 use super::*;
 
+#[path = "installer_generation_unused.rs"]
+mod unused;
+
 const SUPERSESSION_SCHEMA: &str = "elevenid.installer-generation-supersession/v1";
 const BASELINE_SCHEMA: &str = "elevenid.installer-generation-recovery-baseline/v1";
 
@@ -10,6 +13,7 @@ const BASELINE_SCHEMA: &str = "elevenid.installer-generation-recovery-baseline/v
 enum StaleReason {
     CredentialFreshnessElapsed,
     PublicCertificateExpired,
+    PrivateCertificateExpired,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -70,35 +74,80 @@ struct Baseline {
 /// grants no initial setup, account registration or arbitrary order authority.
 #[derive(Clone)]
 pub(crate) struct GenerationRecoveryBaseline {
-    data: Baseline,
+    data: BaselineRecord,
     digest: String,
+}
+#[derive(Clone)]
+enum BaselineRecord {
+    Completed(Box<Baseline>),
+    Unused(Box<unused::UnusedPreparation>),
 }
 impl GenerationRecoveryBaseline {
     pub(crate) fn inputs(&self) -> &ComposeInputs {
-        &self.data.inputs
+        match &self.data {
+            BaselineRecord::Completed(value) => &value.inputs,
+            BaselineRecord::Unused(value) => &value.inputs,
+        }
     }
     pub(super) fn scope(&self) -> Attempt {
-        Attempt::new(self.data.sequence, self.data.attempt)
+        match &self.data {
+            BaselineRecord::Completed(value) => Attempt::new(value.sequence, value.attempt),
+            BaselineRecord::Unused(value) => value.scope(),
+        }
     }
     pub(super) fn sha256(&self) -> &str {
         &self.digest
     }
     pub(super) fn receipt(&self) -> Result<&ComposeReceipt> {
-        self.data
-            .inputs
-            .prior
-            .as_ref()
-            .ok_or_else(|| REFUSED.into())
+        self.inputs().prior.as_ref().ok_or_else(|| REFUSED.into())
     }
     pub(super) fn runtime_root(&self) -> &Path {
-        &self.data.runtime_generation_root
+        match &self.data {
+            BaselineRecord::Completed(value) => &value.runtime_generation_root,
+            BaselineRecord::Unused(value) => &value.runtime_generation_root,
+        }
     }
     pub(super) fn observed_at(&self) -> u64 {
-        self.data.observed_at
+        match &self.data {
+            BaselineRecord::Completed(value) => value.observed_at,
+            BaselineRecord::Unused(value) => value.observed_at,
+        }
     }
-    pub(super) fn previous_work(&self, installation: &Path) -> Result<PathBuf> {
-        let previous = self.scope().number.checked_sub(1).ok_or(REFUSED)?;
-        Ok(Attempt::new(self.scope().sequence, previous).work(installation))
+    fn last_helper(&self) -> Result<Option<Attempt>> {
+        match &self.data {
+            BaselineRecord::Completed(value) => Ok(Some(Attempt::new(
+                value.sequence,
+                value.attempt.checked_sub(1).ok_or(REFUSED)?,
+            ))),
+            BaselineRecord::Unused(value) => Ok(value.last_helper),
+        }
+    }
+    pub(super) fn previous_work(&self, installation: &Path) -> Result<Option<PathBuf>> {
+        Ok(self.last_helper()?.map(|value| value.work(installation)))
+    }
+    fn model(&self) -> &Value {
+        match &self.data {
+            BaselineRecord::Completed(value) => &value.model,
+            BaselineRecord::Unused(value) => &value.model,
+        }
+    }
+    fn configuration_sha256(&self) -> &str {
+        match &self.data {
+            BaselineRecord::Completed(value) => &value.configuration_sha256,
+            BaselineRecord::Unused(value) => &value.configuration_sha256,
+        }
+    }
+    fn stopped_services(&self) -> &BTreeSet<String> {
+        match &self.data {
+            BaselineRecord::Completed(value) => &value.stopped_services,
+            BaselineRecord::Unused(value) => &value.stopped_services,
+        }
+    }
+    fn bytes(&self) -> Result<Vec<u8>> {
+        match &self.data {
+            BaselineRecord::Completed(value) => encode(value),
+            BaselineRecord::Unused(value) => encode(value),
+        }
     }
 
     pub(crate) fn require_current(
@@ -125,19 +174,19 @@ impl GenerationRecoveryBaseline {
         crate::installer_lifecycle::require_recorded_running_intent(view, installation)?;
         crate::installer_root_retirement::require_no_pending_for_generation(view)?;
         let retained = load_baseline(view, installation, self.scope())?;
-        require(retained.digest == self.digest && encode(&retained.data)? == encode(&self.data)?)?;
+        require(retained.digest == self.digest && retained.bytes()? == self.bytes()?)?;
         require(optional(installation, &self.scope().record("intent"))?.is_none())?;
         let selected = generation::load_verified(
             installation,
-            &self.data.installation_id,
-            &self.data.engine_id,
+            &view.journal().installation_id().to_string(),
+            &view.journal().runtime().ok_or(REFUSED)?.engine_id,
         )?
         .ok_or(REFUSED)?;
-        let supersession = load_supersession(view, installation, self.scope())?;
+        let (parent_attempt, parent_sha256) = recorded_parent(installation, self.scope())?;
         require(
-            selected.sequence().checked_add(1) == Some(self.data.sequence)
-                && selected.attempt() == supersession.parent_attempt
-                && selected.sha256()? == supersession.parent_binding_sha256,
+            selected.sequence().checked_add(1) == Some(self.scope().sequence)
+                && selected.attempt() == parent_attempt
+                && selected.sha256()? == parent_sha256,
         )?;
         view.require_unchanged()
     }
@@ -147,17 +196,17 @@ impl GenerationRecoveryBaseline {
         docker: &Path,
         runtime: &crate::installer_state::RuntimeBinding,
     ) -> Result<()> {
-        let session = ComposeSession::new_generation(docker, runtime, self.data.inputs.clone())?;
+        let session = ComposeSession::new_generation(docker, runtime, self.inputs().clone())?;
         require(
-            session.model() == &self.data.model
-                && session.configuration_sha256() == self.data.configuration_sha256
+            session.model() == self.model()
+                && session.configuration_sha256() == self.configuration_sha256()
                 && session.observe_resources()?
                     == *self.receipt()?.resources.as_ref().ok_or(REFUSED)?,
         )?;
         require_baseline_status(
             self.receipt()?.resources.as_ref().ok_or(REFUSED)?,
             &session.status()?,
-            &self.data.stopped_services,
+            self.stopped_services(),
         )
     }
 }
@@ -205,14 +254,39 @@ fn stale_material(
     binding: &GenerationBinding,
     at: u64,
 ) -> Result<Option<StaleReason>> {
-    let metadata = binding
-        .public_ingress_metadata(installation)?
-        .ok_or(REFUSED)?;
-    stale_metadata(
-        &metadata,
-        &binding.read(installation, "installer_ingress_tls_cert")?,
+    stale_from_material(
+        installation,
+        binding,
+        &GenerationMaterial::load(installation, binding)?,
         at,
     )
+}
+fn stale_from_material(
+    installation: &Path,
+    binding: &GenerationBinding,
+    material: &GenerationMaterial,
+    at: u64,
+) -> Result<Option<StaleReason>> {
+    if let GenerationMaterial::Public(metadata) = material {
+        require(binding.public_ingress())?;
+        return stale_metadata(
+            metadata,
+            &binding.read(installation, "installer_ingress_tls_cert")?,
+            at,
+        );
+    }
+    require(binding.managed_ingress())?;
+    let (_, due) =
+        super::super::schedule::credential_due(material.observed_at(), material.ttl(), at)?;
+    material.validate_historical(installation, binding)?;
+    let before = material.not_before(installation, binding)?;
+    let after = material.expires_at()?;
+    require(at >= before && after > before)?;
+    if at >= after {
+        return Ok(Some(StaleReason::PrivateCertificateExpired));
+    }
+    material.validate_selected_at(installation, binding, at)?;
+    Ok(due.then_some(StaleReason::CredentialFreshnessElapsed))
 }
 pub(super) fn requires_supersession(
     installation: &Path,
@@ -248,10 +322,16 @@ fn stale_metadata(
 }
 
 fn old_evidence(installation: &Path, scope: Attempt) -> Result<BTreeMap<String, String>> {
+    let intent: Intent = decode(&read(installation, &scope.record("intent"))?)?;
+    require(intent.scope() == scope)?;
+    let plan_kind = match intent.source()? {
+        PlanSource::Public => "public-ingress-plan",
+        PlanSource::Managed => "managed-renewal-plan",
+    };
     let mut result = BTreeMap::new();
     for kind in [
         "intent",
-        "public-ingress-plan",
+        plan_kind,
         "producer",
         "helper",
         "candidate",
@@ -271,7 +351,7 @@ fn old_evidence(installation: &Path, scope: Attempt) -> Result<BTreeMap<String, 
     require(
         [
             "intent",
-            "public-ingress-plan",
+            plan_kind,
             "producer",
             "helper",
             "candidate",
@@ -334,9 +414,7 @@ fn load_supersession(
     )?;
     let previous = generation::load_attempt(installation, scope.sequence, value.previous_attempt)?;
     let intent: Intent = decode(&read(installation, &value.previous().record("intent"))?)?;
-    let metadata = previous
-        .public_ingress_metadata(installation)?
-        .ok_or(REFUSED)?;
+    let metadata = GenerationMaterial::load(installation, &previous)?;
     require_supersession(installation, &value, &intent, &previous, &metadata)?;
     view.require_unchanged()?;
     Ok(value)
@@ -347,9 +425,13 @@ fn require_supersession(
     value: &Supersession,
     intent: &Intent,
     previous: &GenerationBinding,
-    metadata: &crate::installer_public_ingress::PublicIngressMetadata,
+    metadata: &GenerationMaterial,
 ) -> Result<()> {
     let helper = completed_helper(installation, intent)?;
+    require(match intent.source()? {
+        PlanSource::Public => previous.public_ingress(),
+        PlanSource::Managed => previous.managed_ingress(),
+    })?;
     require(
         value.schema == SUPERSESSION_SCHEMA
             && value.scope().sequence == previous.sequence()
@@ -364,22 +446,13 @@ fn require_supersession(
             && value.previous_evidence_sha256 == old_evidence(installation, intent.scope())?
             && value.previous_container_id
                 == helper.resources.as_ref().ok_or(REFUSED)?.containers["installer-generation"].id
-            && value.previous_token_observed_at == metadata.token_observed_at
+            && value.previous_token_observed_at == metadata.observed_at()
             && value.previous_credential_fresh_until
-                == metadata
-                    .token_observed_at
-                    .checked_add(1800)
-                    .ok_or(REFUSED)?
-            && value.previous_certificate_not_after
-                == metadata.certificate_admission["not_after"]
-                    .as_u64()
-                    .ok_or(REFUSED)?
+                == metadata.observed_at().checked_add(1800).ok_or(REFUSED)?
+            && value.previous_certificate_not_after == metadata.expires_at()?
             && value.observed_at >= intent.created_at
-            && stale_metadata(
-                metadata,
-                &previous.read(installation, "installer_ingress_tls_cert")?,
-                value.observed_at,
-            )? == Some(value.reason),
+            && stale_from_material(installation, previous, metadata, value.observed_at)?
+                == Some(value.reason),
     )?;
     let original = helper.resources.as_ref().ok_or(REFUSED)?;
     require(
@@ -439,26 +512,67 @@ fn require_supersession(
     Ok(())
 }
 
+fn recorded_parent(installation: &Path, scope: Attempt) -> Result<(u64, String)> {
+    let completed = optional(installation, &scope.record("supersession-intent"))?;
+    let unused = optional(installation, &scope.record("unused-preparation"))?;
+    require(scope.number > 0 && completed.is_some() != unused.is_some())?;
+    if let Some(bytes) = completed {
+        let value: Supersession = decode(&bytes)?;
+        require(value.scope() == scope && value.schema == SUPERSESSION_SCHEMA)?;
+        Ok((value.parent_attempt, value.parent_binding_sha256))
+    } else {
+        let value: unused::UnusedPreparation = decode(&unused.ok_or(REFUSED)?)?;
+        require(value.scope() == scope)?;
+        Ok((value.parent_attempt, value.parent_binding_sha256))
+    }
+}
+
 fn load_baseline(
     view: &LockedInspection,
     installation: &Path,
     scope: Attempt,
 ) -> Result<GenerationRecoveryBaseline> {
-    let supersession = load_supersession(view, installation, scope)?;
-    let bytes = read(installation, &scope.record("supersession-baseline"))?;
-    let data: Baseline = decode(&bytes)?;
-    let old: Intent = decode(&read(
-        installation,
-        &supersession.previous().record("intent"),
-    )?)?;
-    let previous =
-        generation::load_attempt(installation, scope.sequence, supersession.previous_attempt)?;
-    let parent = old.parent(installation)?;
-    require_baseline(installation, &supersession, &old, &previous, &parent, &data)?;
-    Ok(GenerationRecoveryBaseline {
+    view.require_path_binding(installation)?;
+    let (parent_attempt, _) = recorded_parent(installation, scope)?;
+    let result = generation::load_preparation_baseline(installation, scope, parent_attempt)?;
+    require(
+        result.receipt()?.engine_id == view.journal().runtime().ok_or(REFUSED)?.engine_id
+            && result.receipt()?.project
+                == format!(
+                    "marty-install-{}",
+                    view.journal().installation_id().simple()
+                ),
+    )?;
+    view.require_unchanged()?;
+    Ok(result)
+}
+
+// This is only a canonical record reader for an already-verified forward
+// lineage or an intent's exact retained digest. It grants no native authority.
+fn recorded_baseline(installation: &Path, scope: Attempt) -> Result<GenerationRecoveryBaseline> {
+    let completed = optional(installation, &scope.record("supersession-baseline"))?;
+    let unused = optional(installation, &scope.record("unused-preparation"))?;
+    require(scope.number > 0 && completed.is_some() != unused.is_some())?;
+    let (bytes, data) = if let Some(bytes) = completed {
+        let value: Baseline = decode(&bytes)?;
+        require(
+            value.schema == BASELINE_SCHEMA
+                && value.sequence == scope.sequence
+                && value.attempt == scope.number,
+        )?;
+        (bytes, BaselineRecord::Completed(Box::new(value)))
+    } else {
+        let bytes = unused.ok_or(REFUSED)?;
+        let value: unused::UnusedPreparation = decode(&bytes)?;
+        require(value.scope() == scope)?;
+        (bytes, BaselineRecord::Unused(Box::new(value)))
+    };
+    let result = GenerationRecoveryBaseline {
         data,
         digest: hash(&bytes),
-    })
+    };
+    require(result.bytes()? == bytes)?;
+    Ok(result)
 }
 
 fn require_baseline(
@@ -591,33 +705,29 @@ fn runtime_root_before(
     if old.attempt == 0 {
         return parent.secret_dir(installation);
     }
-    // The immediately preceding attempt is already authenticated by the
-    // forward binding walk. Read its exact pinned baseline without recursion.
-    let bytes = read(installation, &old.scope().record("supersession-baseline"))?;
-    require(old.recovery_baseline_sha256.as_deref() == Some(hash(&bytes).as_str()))?;
-    let baseline: Baseline = decode(&bytes)?;
-    require(baseline.sequence == old.sequence && baseline.attempt == old.attempt)?;
-    Ok(baseline.runtime_generation_root)
+    // The forward attempt walk already authenticated this exact incoming
+    // source, which may cross one or more retired unused preparations.
+    let value = recorded_baseline(installation, old.scope())?;
+    require(old.recovery_baseline_sha256.as_deref() == Some(value.sha256()))?;
+    Ok(value.runtime_root().into())
 }
 
-/// The binding owner supplies already-verified adjacent attempts and their
-/// common selected parent during one forward walk. No ancestry is recursively
-/// reloaded here, and another attempt's outputs cannot substitute by sequence.
-pub(crate) fn require_completed_attempt_link(
+/// Admit one completed predecessor using the already-verified common selected
+/// parent. The binding owner calls this in its single forward attempt walk.
+pub(crate) fn completed_predecessor(
     installation: &Path,
-    current: &GenerationBinding,
     parent: &GenerationBinding,
     previous: &GenerationBinding,
-    previous_metadata: &crate::installer_public_ingress::PublicIngressMetadata,
-) -> Result<()> {
-    let scope = current.attempt_id();
+    previous_metadata: &GenerationMaterial,
+) -> Result<GenerationRecoveryBaseline> {
+    let scope = Attempt::new(
+        previous.sequence(),
+        previous.attempt().checked_add(1).ok_or(REFUSED)?,
+    );
     require(
-        scope.number > 0
-            && previous.sequence() == scope.sequence
-            && previous.attempt().checked_add(1) == Some(scope.number)
-            && parent.sequence().checked_add(1) == Some(scope.sequence)
-            && current.parent_attempt() == parent.attempt()
-            && previous.parent_attempt() == parent.attempt(),
+        parent.sequence().checked_add(1) == Some(scope.sequence)
+            && previous.parent_attempt() == parent.attempt()
+            && optional(installation, &scope.record("unused-preparation"))?.is_none(),
     )?;
     let supersession: Supersession =
         decode(&read(installation, &scope.record("supersession-intent"))?)?;
@@ -632,28 +742,56 @@ pub(crate) fn require_completed_attempt_link(
     require(
         supersession.scope() == scope && supersession.parent_binding_sha256 == parent.sha256()?,
     )?;
-    let bytes = read(installation, &scope.record("supersession-baseline"))?;
-    let baseline: Baseline = decode(&bytes)?;
-    require_baseline(
-        installation,
-        &supersession,
-        &old,
-        previous,
-        parent,
-        &baseline,
-    )?;
+    let result = recorded_baseline(installation, scope)?;
+    let BaselineRecord::Completed(data) = &result.data else {
+        return Err(REFUSED.into());
+    };
+    require_baseline(installation, &supersession, &old, previous, parent, data)?;
+    Ok(result)
+}
+
+pub(crate) fn unused_predecessor(
+    installation: &Path,
+    parent: &crate::installer_generation_binding::VerifiedGeneration,
+    previous: Attempt,
+    incoming: Option<&GenerationRecoveryBaseline>,
+) -> Result<GenerationRecoveryBaseline> {
+    unused::historical(installation, parent, previous, incoming)
+}
+
+pub(crate) fn require_attempt_incoming(
+    installation: &Path,
+    current: &GenerationBinding,
+    parent: &GenerationBinding,
+    incoming: Option<&GenerationRecoveryBaseline>,
+) -> Result<()> {
+    let scope = current.attempt_id();
+    if scope.number == 0 {
+        // Keep legacy attempt-zero candidate proofs byte compatible.
+        return require(incoming.is_none());
+    }
+    let baseline = incoming.ok_or(REFUSED)?;
     let next: Intent = decode(&read(installation, &current.record_name("intent"))?)?;
+    let saved = match &baseline.data {
+        BaselineRecord::Completed(_) => {
+            // Preserve the original completed-attempt link and its exact
+            // retained parent-session bytes for existing v1 histories.
+            let previous = Attempt::new(scope.sequence, scope.number - 1);
+            decode::<Intent>(&read(installation, &previous.record("intent"))?)?.parent_session
+        }
+        BaselineRecord::Unused(_) => unused::recorded_parent_session(installation, parent)?,
+    };
     require(
-        next.scope() == scope
+        baseline.scope() == scope
+            && next.scope() == scope
             && next.parent_attempt == parent.attempt()
             && next.parent_binding_sha256 == parent.sha256()?
-            && next.recovery_baseline_sha256.as_deref() == Some(hash(&bytes).as_str())
-            && encode(&next.parent_session)? == encode(&old.parent_session)?
-            && next.created_at >= baseline.observed_at
+            && next.recovery_baseline_sha256.as_deref() == Some(baseline.sha256())
+            && encode(&next.parent_session)? == encode(&saved)?
+            && next.created_at >= baseline.observed_at()
             && encode(next.helper_inputs.prior.as_ref().ok_or(REFUSED)?)?
-                == encode(baseline.inputs.prior.as_ref().ok_or(REFUSED)?)?,
-    )?;
-    Ok(())
+                == encode(baseline.receipt()?)?,
+    )
 }
 
 pub(super) fn require_intent_baseline(
@@ -669,7 +807,7 @@ pub(super) fn require_intent_baseline(
         intent.recovery_baseline_sha256.as_deref() == Some(baseline.sha256())
             && encode(intent.helper_inputs.prior.as_ref().ok_or(REFUSED)?)?
                 == encode(baseline.receipt()?)?
-            && intent.created_at >= baseline.data.observed_at,
+            && intent.created_at >= baseline.observed_at(),
     )
 }
 pub(super) fn runtime_root_for_intent(
@@ -679,14 +817,9 @@ pub(super) fn runtime_root_for_intent(
     let Some(expected) = &intent.recovery_baseline_sha256 else {
         return Ok(None);
     };
-    let bytes = read(
-        installation,
-        &intent.scope().record("supersession-baseline"),
-    )?;
-    require(hash(&bytes) == *expected)?;
-    let value: Baseline = decode(&bytes)?;
-    require(value.sequence == intent.sequence && value.attempt == intent.attempt)?;
-    Ok(Some(value.runtime_generation_root))
+    let value = recorded_baseline(installation, intent.scope())?;
+    require(value.sha256() == expected)?;
+    Ok(Some(value.runtime_root().into()))
 }
 
 fn previous_session(
@@ -863,9 +996,7 @@ fn admit(
     }))?;
     let at = now()?;
     let reason = stale_material(installation, previous, at)?.ok_or(REFUSED)?;
-    let metadata = previous
-        .public_ingress_metadata(installation)?
-        .ok_or(REFUSED)?;
+    let metadata = GenerationMaterial::load(installation, previous)?;
     let value = Supersession {
         schema: SUPERSESSION_SCHEMA.into(),
         installation_id: old.installation_id.clone(),
@@ -878,14 +1009,9 @@ fn admit(
         parent_session_sha256: hash(&encode(&old.parent_session)?),
         previous_evidence_sha256: old_evidence(installation, old.scope())?,
         previous_container_id: expected.id.clone(),
-        previous_token_observed_at: metadata.token_observed_at,
-        previous_credential_fresh_until: metadata
-            .token_observed_at
-            .checked_add(1800)
-            .ok_or(REFUSED)?,
-        previous_certificate_not_after: metadata.certificate_admission["not_after"]
-            .as_u64()
-            .ok_or(REFUSED)?,
+        previous_token_observed_at: metadata.observed_at(),
+        previous_credential_fresh_until: metadata.observed_at().checked_add(1800).ok_or(REFUSED)?,
+        previous_certificate_not_after: metadata.expires_at()?,
         reason,
         runtime_replacement_started: replacement,
         original_create_intents: creates,
@@ -1036,29 +1162,42 @@ pub(super) fn pending_scope(
         numbers.insert(number);
     }
     for (index, number) in numbers.iter().enumerate() {
+        let next = Attempt::new(sequence, *number);
         require(
             u64::try_from(index)
                 .ok()
                 .and_then(|value| value.checked_add(1))
                 == Some(*number)
-                && names.contains(&Attempt::new(sequence, *number).record("supersession-intent")),
+                && (names.contains(&next.record("supersession-intent"))
+                    != names.contains(&next.record("unused-preparation"))),
         )?;
     }
-    if !names.contains(&first.record("intent")) {
-        require(numbers.is_empty())?;
+    if !names.contains(&first.record("intent"))
+        && !names.contains(&first.record("public-ingress-plan"))
+        && !names.contains(&first.record("managed-renewal-plan"))
+    {
+        require(numbers.is_empty() && !unused::orphan_evidence(&names, first))?;
         fs::require_directory_binding(&installation.join("evidence"), &held, REFUSED)?;
         view.require_unchanged()?;
         return Ok(None);
     }
     let scope = Attempt::new(sequence, numbers.last().copied().unwrap_or(0));
-    if scope.number > 0 {
-        let value = load_supersession(view, installation, scope)?;
+    if names.contains(&scope.record("intent")) {
+        let value = load_intent(view, installation, scope)?;
         require(
             value.parent_attempt == current.attempt()
                 && value.parent_binding_sha256 == current.sha256()?,
         )?;
+    } else if names.contains(&scope.record("public-ingress-plan")) {
+        unused::require_preparation(view, installation, scope, current)?;
+    } else if names.contains(&scope.record("managed-renewal-plan")) {
+        unused::require_managed_preparation(view, installation, scope, current)?;
+    } else if names.contains(&scope.record("unused-preparation")) {
+        let value = load_baseline(view, installation, scope)?;
+        let (parent_attempt, parent_sha256) = recorded_parent(installation, value.scope())?;
+        require(parent_attempt == current.attempt() && parent_sha256 == current.sha256()?)?;
     } else {
-        let value = load_intent(view, installation, scope)?;
+        let value = load_supersession(view, installation, scope)?;
         require(
             value.parent_attempt == current.attempt()
                 && value.parent_binding_sha256 == current.sha256()?,
@@ -1067,6 +1206,10 @@ pub(super) fn pending_scope(
     fs::require_directory_binding(&installation.join("evidence"), &held, REFUSED)?;
     view.require_unchanged()?;
     Ok(Some(scope))
+}
+
+pub(super) fn saved_preparation_status(installation: &Path, scope: Attempt) -> Result<(u64, bool)> {
+    unused::saved_status(installation, scope)
 }
 
 pub(super) fn supersede(
@@ -1086,12 +1229,28 @@ pub(super) fn resume(
     state: &mut LockedMaintenance,
     scope: Attempt,
 ) -> Result<GenerationBinding> {
-    require(scope.number > 0 && optional(installation, &scope.record("intent"))?.is_none())?;
+    require(optional(installation, &scope.record("intent"))?.is_none())?;
+    if optional(installation, &scope.record("public-ingress-plan"))?.is_some() {
+        return unused::resume_preparation(installation, docker, state, scope);
+    }
+    if optional(installation, &scope.record("managed-renewal-plan"))?.is_some() {
+        return unused::resume_managed_preparation(installation, docker, state, scope);
+    }
+    require(scope.number > 0)?;
+    if optional(installation, &scope.record("unused-preparation"))?.is_some() {
+        return unused::resume_retired(installation, docker, state, scope);
+    }
     let value = load_supersession(state.inspection(), installation, scope)?;
     let baseline = capture_baseline(installation, docker, state, &value)?;
     baseline.require_selected(state.inspection(), installation)?;
     let parent = generation::load_attempt(installation, scope.sequence - 1, value.parent_attempt)?;
+    if parent.managed_ingress() {
+        let intent = begin_managed(installation, docker, state, &parent, scope, Some(&baseline))?;
+        return reconcile(installation, docker, state, &intent, false);
+    }
+    require(parent.public_ingress())?;
     let previous = generation::load_attempt(installation, scope.sequence, value.previous_attempt)?;
+    let previous = candidate_for_binding(state.inspection(), installation, &previous)?;
     let candidate = super::super::schedule::candidate_for_recovery(
         installation,
         docker,
@@ -1122,7 +1281,14 @@ pub(super) fn stop_before_attempt(
     state: &mut LockedMaintenance,
     scope: Attempt,
 ) -> Result<Value> {
-    require(scope.number > 0 && optional(installation, &scope.record("intent"))?.is_none())?;
+    require(optional(installation, &scope.record("intent"))?.is_none())?;
+    if scope.number == 0
+        || optional(installation, &scope.record("unused-preparation"))?.is_some()
+        || optional(installation, &scope.record("public-ingress-plan"))?.is_some()
+        || optional(installation, &scope.record("managed-renewal-plan"))?.is_some()
+    {
+        return unused::stop_preparation(installation, docker, state, scope);
+    }
     let value = load_supersession(state.inspection(), installation, scope)?;
     let old = load_intent(state.inspection(), installation, value.previous())?;
     let previous = generation::load_attempt(installation, scope.sequence, value.previous_attempt)?;
@@ -1148,3 +1314,8 @@ pub(super) fn stop_before_attempt(
 #[cfg(test)]
 #[path = "installer_generation_supersession_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+fn completed_test_fixture() -> (tempfile::TempDir, GenerationBinding, GenerationBinding) {
+    tests::completed_fixture()
+}

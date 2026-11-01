@@ -39,6 +39,8 @@ pub struct GenerationReceipt {
     pub ingress: Option<crate::installer_ingress_outputs::IngressMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_ingress: Option<crate::installer_public_ingress::PublicIngressMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub managed_renewal_plan_sha256: Option<String>,
     pub candidate_validated: bool,
     pub activated: bool,
     pub candidate_sha256: BTreeMap<String, String>,
@@ -215,7 +217,9 @@ pub(crate) fn staged_identity(output: &File) -> Result<BTreeMap<String, Vec<u8>>
 fn validate_delivered(
     delivered: &File,
     proof: &crate::installer_generation::GenerationProof<'_>,
+    managed_plan: Option<&crate::installer_managed_renewal::ManagedRenewalPlan>,
 ) -> Result<BTreeMap<String, String>> {
+    require(managed_plan.is_none() || proof.public_ingress_plan.is_none())?;
     let inventory =
         crate::installer_generation::output_inventory(proof.current, proof.public_ingress_plan)?;
     let mut expected = inventory.clone();
@@ -230,7 +234,12 @@ fn validate_delivered(
     for name in ["pending.json", "validated.json", "completed.json"] {
         records.insert(name.into(), read_entry(delivered, name, 0o600, false)?);
     }
-    crate::installer_generation::validate_records(&records, &outputs, proof)
+    match managed_plan {
+        Some(plan) => {
+            crate::installer_generation::validate_managed_records(&records, &outputs, proof, plan)
+        }
+        None => crate::installer_generation::validate_records(&records, &outputs, proof),
+    }
 }
 
 fn require_directory_binding(path: &Path, held: &File) -> Result<()> {
@@ -266,22 +275,68 @@ pub(crate) fn validate_delivery(
     proof: &crate::installer_generation::GenerationProof<'_>,
     expected_host_uid: HelperOutputOwner,
 ) -> Result<BTreeMap<String, String>> {
+    validate_delivery_using(parent, held, expected_host_uid, |delivered| {
+        validate_delivered(delivered, proof, None)
+    })
+}
+
+/// The recurring private-CA source is an explicit capability. A v4 native
+/// managed proof cannot enter through the original/public delivery reader.
+pub(crate) fn validate_managed_delivery(
+    parent: &Path,
+    held: &File,
+    proof: &crate::installer_generation::GenerationProof<'_>,
+    plan: &crate::installer_managed_renewal::ManagedRenewalPlan,
+    expected_host_uid: HelperOutputOwner,
+) -> Result<BTreeMap<String, String>> {
+    require(proof.public_ingress_plan.is_none())?;
+    validate_delivery_using(parent, held, expected_host_uid, |delivered| {
+        validate_delivered(delivered, proof, Some(plan))
+    })
+}
+
+fn validate_delivery_using(
+    parent: &Path,
+    held: &File,
+    expected_host_uid: HelperOutputOwner,
+    validate: impl FnOnce(&File) -> Result<BTreeMap<String, String>>,
+) -> Result<BTreeMap<String, String>> {
     require_directory_binding(parent, held)?;
-    require(
-        file_names(held)?
-            == BTreeSet::from([
-                "transfer-pending.json".into(),
-                "output".into(),
-                "delivered".into(),
-            ]),
-    )?;
+    let expected = BTreeSet::from([
+        "transfer-pending.json".into(),
+        "output".into(),
+        "delivered".into(),
+    ]);
+    require(file_names(held)? == expected)?;
+    let parent_stamp = delivery_directory_stamp(held)?;
     validate_retained_entries(held, expected_host_uid)?;
     let delivered = open_child(held, "delivered", libc::O_RDONLY | libc::O_DIRECTORY)?;
     let m = delivered.metadata().map_err(|_| REFUSAL)?;
     require(m.is_dir() && m.uid() == unsafe { libc::geteuid() } && m.mode() & 0o7777 == 0o700)?;
-    let result = validate_delivered(&delivered, proof)?;
+    let delivered_stamp = delivery_directory_stamp(&delivered)?;
+    require_directory_binding(&parent.join("delivered"), &delivered)?;
+    let result = validate(&delivered)?;
+    require_directory_binding(&parent.join("delivered"), &delivered)?;
+    require(
+        delivery_directory_stamp(held)? == parent_stamp
+            && delivery_directory_stamp(&delivered)? == delivered_stamp
+            && file_names(held)? == expected,
+    )?;
+    validate_retained_entries(held, expected_host_uid)?;
     require_directory_binding(parent, held)?;
     Ok(result)
+}
+
+fn delivery_directory_stamp(held: &File) -> Result<(u64, u64, i64, i64, i64, i64)> {
+    let metadata = held.metadata().map_err(|_| REFUSAL)?;
+    Ok((
+        metadata.dev(),
+        metadata.ino(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec(),
+    ))
 }
 
 #[expect(
@@ -573,6 +628,7 @@ fn provision_selected(
         ingress_renewal: true,
         ingress,
         public_ingress,
+        managed_renewal_plan_sha256: None,
         candidate_validated: true,
         activated: false,
         candidate_sha256: delivered.clone(),
@@ -611,6 +667,50 @@ mod tests {
             profile,
         })
         .unwrap()
+    }
+
+    #[test]
+    fn delivered_directory_custody_cannot_change_during_validation() {
+        for mutation in ["unchanged", "replace", "move-back", "extra-entry"] {
+            let temp = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            for name in ["output", "delivered"] {
+                let path = temp.path().join(name);
+                std::fs::create_dir(&path).unwrap();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            let pending = temp.path().join("transfer-pending.json");
+            std::fs::write(&pending, b"retained transfer").unwrap();
+            std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let held = directory(temp.path()).unwrap();
+            let result =
+                validate_delivery_using(temp.path(), &held, host_output_owner_for_test(), |_| {
+                    let delivered = temp.path().join("delivered");
+                    let moved = temp.path().join("moved");
+                    match mutation {
+                        "unchanged" => (),
+                        "replace" => {
+                            std::fs::rename(&delivered, &moved).unwrap();
+                            std::fs::create_dir(&delivered).unwrap();
+                            std::fs::set_permissions(
+                                &delivered,
+                                std::fs::Permissions::from_mode(0o700),
+                            )
+                            .unwrap();
+                        }
+                        "move-back" => {
+                            std::fs::rename(&delivered, &moved).unwrap();
+                            std::fs::rename(&moved, &delivered).unwrap();
+                        }
+                        "extra-entry" => {
+                            std::fs::write(temp.path().join("extra"), b"unexpected").unwrap();
+                        }
+                        _ => unreachable!(),
+                    }
+                    Ok(BTreeMap::new())
+                });
+            assert_eq!(result.is_ok(), mutation == "unchanged", "{mutation}");
+        }
     }
 
     #[test]

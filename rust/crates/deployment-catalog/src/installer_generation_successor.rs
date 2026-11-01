@@ -72,7 +72,7 @@ pub(crate) fn stage_successor(
 ) -> Result<GenerationBinding> {
     state.inspection().require_path_binding(installation)?;
     parent.validate()?;
-    require(parent.public_ingress())?;
+    require(parent.public_ingress() || parent.managed_ingress())?;
     let sequence = parent.sequence().checked_add(1).ok_or(REFUSED)?;
     let successor = SuccessorBinding {
         sequence,
@@ -113,7 +113,7 @@ pub(crate) fn stage_successor(
         values.insert(name.clone(), bytes);
     }
     let result = GenerationBinding {
-        schema: "elevenid.installer-application-generation/v4".into(),
+        schema: parent.schema.clone(),
         installation_id: parent.installation_id.clone(),
         engine_id: parent.engine_id.clone(),
         network_id: parent.network_id.clone(),

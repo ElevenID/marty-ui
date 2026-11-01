@@ -534,7 +534,16 @@ fn install_inner(args: &[String], build_identity: &str) -> Result<()> {
         &mut state,
         crate::installer_command::RuntimeInvocation {
             operator_sha: &operator_sha,
-            completion: crate::installer_command::RuntimeCompletion::HoldIncomplete,
+            completion: if parsed.hosting.as_ref().is_some_and(|hosting| {
+                hosting.certificate_source == "acme"
+                    && hosting.acme_environment.as_deref() == Some("production")
+                    && hosting.public_entry_origin.is_some()
+                    && hosting.staging_trust.is_none()
+            }) {
+                crate::installer_command::RuntimeCompletion::SignedStartupObserved
+            } else {
+                crate::installer_command::RuntimeCompletion::HoldIncomplete
+            },
         },
         port,
     );

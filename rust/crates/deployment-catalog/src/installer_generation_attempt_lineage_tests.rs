@@ -107,7 +107,7 @@ fn native_pair(
     completed
 }
 
-fn chain() -> (tempfile::TempDir, GenerationBinding, GenerationBinding) {
+pub(super) fn chain() -> (tempfile::TempDir, GenerationBinding, GenerationBinding) {
     let (root, mut generations) = generation::test_lineage_fixture(1);
     let parent = generations.remove(0);
     let mut previous = generations.remove(0);
@@ -197,6 +197,7 @@ fn chain() -> (tempfile::TempDir, GenerationBinding, GenerationBinding) {
         initial_configuration_sha256: configuration.clone(),
         parent_session: saved,
         public_plan_sha256: hash(&encode(&old_plan).unwrap()),
+        managed_renewal_plan_sha256: None,
         source_sha256: crate::installer_generation::hashes(&before),
         identity_sha256: crate::installer_generation::hashes(&identities),
         helper_inputs: inputs.clone(),
@@ -277,7 +278,14 @@ fn chain() -> (tempfile::TempDir, GenerationBinding, GenerationBinding) {
         activation_performed: false,
         installation_ready: false,
     };
-    require_supersession(root.path(), &supersession, &old, &previous, &old_metadata).unwrap();
+    require_supersession(
+        root.path(),
+        &supersession,
+        &old,
+        &previous,
+        &GenerationMaterial::Public(Box::new(old_metadata.clone())),
+    )
+    .unwrap();
     require_baseline(
         root.path(),
         &supersession,

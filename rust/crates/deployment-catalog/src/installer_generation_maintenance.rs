@@ -37,9 +37,24 @@ const KINDS: [&str; 9] = [
     "session",
     "selection",
 ];
+fn record_kinds(binding: &GenerationBinding) -> Result<[&'static str; 9]> {
+    let mut kinds = KINDS;
+    if binding.managed_ingress() {
+        kinds[1] = "managed-renewal-plan";
+    } else {
+        require(binding.public_ingress())?;
+    }
+    Ok(kinds)
+}
 #[path = "installer_generation_attempt.rs"]
 pub(crate) mod attempt;
 use attempt::Attempt;
+#[path = "installer_generation_plan.rs"]
+mod plan;
+pub(crate) use plan::{GenerationPlan, PlanSource};
+#[path = "installer_generation_material.rs"]
+mod material;
+pub(crate) use material::GenerationMaterial;
 fn require(value: bool) -> Result<()> {
     if value {
         Ok(())
@@ -268,15 +283,8 @@ pub(crate) fn require_producer_journal_at(
             && start["installation_ready"] == false,
     )
 }
-pub(crate) fn require_completed_attempt_link(
-    installation: &Path,
-    current: &GenerationBinding,
-    parent: &GenerationBinding,
-    previous: &GenerationBinding,
-    previous_metadata: &crate::installer_public_ingress::PublicIngressMetadata,
-) -> Result<()> {
-    tx::require_completed_attempt_link(installation, current, parent, previous, previous_metadata)
-}
+pub(crate) use tx::{completed_predecessor, require_attempt_incoming, unused_predecessor};
+
 fn selected(installation: &Path) -> Result<Option<Selected>> {
     let Some(pointer) = optional(installation, SELECTOR)? else {
         return Ok(None);
@@ -304,16 +312,21 @@ fn selected_from(installation: &Path, pointer: &[u8]) -> Result<Selected> {
             && !selection.installation_ready
             && selection.selected_at > 0
             && valid_hash(&selection.initial_configuration_sha256)
-            && valid_hash(&selection.parent_binding_sha256)
-            && selection
-                .evidence_sha256
-                .keys()
-                .map(String::as_str)
-                .collect::<std::collections::BTreeSet<_>>()
-                == KINDS
-                    .into_iter()
-                    .filter(|kind| *kind != "selection")
-                    .collect(),
+            && valid_hash(&selection.parent_binding_sha256),
+    )?;
+    let binding_bytes = read(installation, &scope.record("binding"))?;
+    require(selection.evidence_sha256.get("binding") == Some(&hash(&binding_bytes)))?;
+    let binding: GenerationBinding = decode(&binding_bytes)?;
+    require(
+        selection
+            .evidence_sha256
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>()
+            == record_kinds(&binding)?
+                .into_iter()
+                .filter(|kind| *kind != "selection")
+                .collect(),
     )?;
     let mut evidence = BTreeMap::new();
     for (kind, digest) in &selection.evidence_sha256 {
@@ -323,7 +336,6 @@ fn selected_from(installation: &Path, pointer: &[u8]) -> Result<Selected> {
     }
     evidence.insert("selection".into(), selection_bytes);
     evidence.insert("selector".into(), pointer.to_vec());
-    let binding: GenerationBinding = decode(&evidence["binding"])?;
     require(
         binding.sequence() == selector.sequence
             && binding.attempt() == selector.attempt
@@ -396,14 +408,9 @@ pub(crate) fn require_selection_publication(
             && parent.sequence().checked_add(1) == Some(next.binding.sequence())
             && parent.attempt() == next.binding.parent_attempt(),
     )?;
-    let metadata = next
-        .binding
-        .public_ingress_metadata(installation)?
-        .ok_or(REFUSED)?;
-    metadata.validate_selected_at(
-        &next
-            .binding
-            .read(installation, "installer_ingress_tls_cert")?,
+    GenerationMaterial::load(installation, &next.binding)?.validate_selected_at(
+        installation,
+        &next.binding,
         now()?,
     )?;
     tx::require_candidate_fresh(installation, &next.binding, now()?)?;
@@ -665,6 +672,12 @@ pub(crate) fn retirement_view(
     let Some(selected) = selected(installation)? else {
         return Ok(None);
     };
+    // This qualification adapter is explicitly public-renewal-only. A
+    // managed successor must not inherit its account/identity proof contract.
+    if !selected.binding.public_ingress() {
+        view.require_unchanged()?;
+        return Ok(None);
+    }
     let parent = generation::load_attempt(
         installation,
         selected.binding.sequence() - 1,
@@ -727,6 +740,13 @@ fn candidate_for_binding(
     binding: &GenerationBinding,
 ) -> Result<AcmeCandidate> {
     let plan = plan_for_binding(view, installation, binding)?;
+    candidate_for_plan(view, &plan)
+}
+fn candidate_for_plan(
+    view: &LockedInspection,
+    plan: &crate::installer_public_ingress::PublicIngressPlan,
+) -> Result<AcmeCandidate> {
+    plan.require_saved(view)?;
     let candidate = installer_acme::retained_candidate(
         view,
         AcmeEnvironment::Production,

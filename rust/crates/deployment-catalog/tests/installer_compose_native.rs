@@ -637,6 +637,7 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
                 "SELFHOST_SECRET_DIR".into(),
                 root.join("application-generation").to_str().unwrap().into(),
             );
+            assert_native_managed_generation_models(&executable, &bundle, root, &selected);
             selected.insert("MARTY_ACME_CANONICAL_ORIGIN".into(), public_origin.into());
             selected.insert(
                 "MARTY_ACME_PUBLIC_ENTRY_ORIGIN".into(),
@@ -848,8 +849,44 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
     }
 }
 
-/// Exercise the shipped eighth layer through the real Compose parser. In
-/// particular, selected-service config is not a full maintenance/runtime model.
+fn assert_native_managed_generation_models(
+    executable: &OsString,
+    bundle: &Path,
+    root: &Path,
+    values: &BTreeMap<String, String>,
+) {
+    let layers = bundle.join("deploy-config/compose/selfhost-installer");
+    let files = vec![
+        bundle.join("docker-compose.yml"),
+        bundle.join("docker-compose.selfhost.openbao.yml"),
+        layers.join("compose.bootstrap.yml"),
+        layers.join("compose.installer.yml"),
+        layers.join("compose.runtime.yml"),
+    ];
+    let env = root.join("managed-original.env");
+    private_write(
+        &env,
+        values
+            .iter()
+            .map(|(key, value)| format!("{key}='{value}'\n"))
+            .collect::<String>()
+            .as_bytes(),
+    );
+    let full = config(
+        executable,
+        bundle,
+        &files,
+        &env,
+        &["setup", "installer-init"],
+        &[],
+    );
+    let runtime = config(executable, bundle, &files, &env, &[], &[]);
+    assert!(full["services"].get("installer-acme-http01").is_none());
+    assert_native_generation_models(executable, bundle, root, &files, values, &full, &runtime);
+}
+
+/// Exercise each source's shipped recurrence layer through the real Compose
+/// parser. Selected-service config is not a full maintenance/runtime model.
 fn assert_native_generation_models(
     executable: &OsString,
     bundle: &Path,
@@ -859,15 +896,43 @@ fn assert_native_generation_models(
     previous_full: &Value,
     previous_runtime: &Value,
 ) {
+    let public = previous_full["services"]["installer-generation"]["environment"]
+        .get("MARTY_INSTALLER_PUBLIC_INGRESS_PLAN_SHA256")
+        .is_some();
+    let (layer, plan_variable, plan_digest, plan_kind, plan_target, prefix) = if public {
+        (
+            "compose.generation.yml",
+            "MARTY_GENERATION_PUBLIC_INGRESS_PLAN",
+            "MARTY_INSTALLER_PUBLIC_INGRESS_PLAN_SHA256",
+            "public-ingress-plan",
+            "/input/public-ingress-plan.json",
+            "public-generation",
+        )
+    } else {
+        (
+            "compose.generation-managed.yml",
+            "MARTY_GENERATION_MANAGED_RENEWAL_PLAN",
+            "MARTY_INSTALLER_MANAGED_RENEWAL_PLAN_SHA256",
+            "managed-renewal-plan",
+            "/input/managed-renewal-plan.json",
+            "managed-generation",
+        )
+    };
     let mut files = original_files.to_vec();
-    files.push(bundle.join("deploy-config/compose/selfhost-installer/compose.generation.yml"));
+    files.push(
+        bundle
+            .join("deploy-config/compose/selfhost-installer")
+            .join(layer),
+    );
     assert_eq!(
         files.len(),
-        8,
+        if public { 8 } else { 6 },
         "the admitted native layer bound includes generation"
     );
     let work = root.join("generation-work/00000000000000000001");
-    let plan = root.join("evidence/generation-00000000000000000001-public-ingress-plan.json");
+    let plan = root.join(format!(
+        "evidence/generation-00000000000000000001-{plan_kind}.json"
+    ));
     let generation = root.join(format!(
         "application-generations/00000000000000000001-{}",
         "6".repeat(64)
@@ -877,15 +942,9 @@ fn assert_native_generation_models(
         "MARTY_GENERATION_WORK_DIR".into(),
         work.to_str().unwrap().into(),
     );
-    helper_values.insert(
-        "MARTY_GENERATION_PUBLIC_INGRESS_PLAN".into(),
-        plan.to_str().unwrap().into(),
-    );
-    helper_values.insert(
-        "MARTY_INSTALLER_PUBLIC_INGRESS_PLAN_SHA256".into(),
-        "5".repeat(64),
-    );
-    let helper_env = root.join("generation-helper.env");
+    helper_values.insert(plan_variable.into(), plan.to_str().unwrap().into());
+    helper_values.insert(plan_digest.into(), "5".repeat(64));
+    let helper_env = root.join(format!("{prefix}-helper.env"));
     private_write(
         &helper_env,
         helper_values
@@ -918,6 +977,10 @@ fn assert_native_generation_models(
         "unfiltered configuration retains the exact producer selected for its create/start command"
     );
     for role in ["openbao", "openbao-unseal", "installer-acme-http01"] {
+        if !public && role == "installer-acme-http01" {
+            assert!(helper_full["services"].get(role).is_none());
+            continue;
+        }
         assert!(helper_full["services"][role].is_object());
         assert_eq!(
             helper_full["services"][role],
@@ -927,13 +990,46 @@ fn assert_native_generation_models(
     assert_eq!(helper_full["services"]["auth"], previous_full["services"]["auth"], "the producer's full admission view retains unselected application services for stop without changing their configuration");
     let job = &helper["services"]["installer-generation"];
     let mut expected_helper = previous_full["services"]["installer-generation"].clone();
-    expected_helper["environment"]["MARTY_INSTALLER_PUBLIC_INGRESS_PLAN_SHA256"] =
-        Value::String("5".repeat(64));
+    expected_helper["environment"][plan_digest] = Value::String("5".repeat(64));
+    if !public {
+        for key in [
+            "MARTY_INSTALLER_PUBLIC_INGRESS_PLAN_SHA256",
+            "MARTY_INSTALLER_PUBLIC_RENEWAL_AUTHORITY_PLAN_SHA256",
+        ] {
+            assert!(job["environment"].get(key).is_none());
+        }
+        for target in [
+            "/input/public-ingress-plan.json",
+            "/input/public-renewal-authority-plan.json",
+        ] {
+            assert!(job["volumes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|mount| mount["target"] != target));
+        }
+        expected_helper["volumes"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "type":"bind", "source":plan.to_str().unwrap().replace('$', "$$"),
+                "target":plan_target, "read_only":true, "bind":{"create_host_path":false}
+            }));
+    } else {
+        assert!(job["environment"]
+            .get("MARTY_INSTALLER_MANAGED_RENEWAL_PLAN_SHA256")
+            .is_none());
+        assert!(job["volumes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|mount| mount["target"] != "/input/managed-renewal-plan.json"));
+    }
     let changed_mounts: BTreeMap<_, _> = [
         ("/transfer", (work.join("transfer"), false)),
         ("/input/current", (work.join("current"), true)),
         ("/input/identity", (work.join("identity"), true)),
-        ("/input/public-ingress-plan.json", (plan, true)),
+        (plan_target, (plan, true)),
     ]
     .into_iter()
     .collect();
@@ -949,7 +1045,7 @@ fn assert_native_generation_models(
     assert_eq!(observed_targets.len(), changed_mounts.len());
     assert_eq!(
         *job, expected_helper,
-        "the recurring producer changes exactly four mounts and its bound plan digest"
+        "the recurring producer changes only its three input roots, source-specific plan mount and bound digest"
     );
 
     let mut application_values = helper_values;
@@ -957,7 +1053,7 @@ fn assert_native_generation_models(
         "SELFHOST_SECRET_DIR".into(),
         generation.to_str().unwrap().into(),
     );
-    let application_env = root.join("generation-application.env");
+    let application_env = root.join(format!("{prefix}-application.env"));
     private_write(
         &application_env,
         application_values
@@ -1060,8 +1156,14 @@ fn assert_native_generation_models(
         &[],
         &["installer-ingress"],
     );
-    assert!(current_runtime["services"]["installer-acme-http01"].is_object());
-    assert!(selected["services"].get("installer-acme-http01").is_none(), "selected runtime config omits an unrelated retained responder, so it cannot equal the unfiltered activation model");
+    if public {
+        assert!(current_runtime["services"]["installer-acme-http01"].is_object());
+        assert!(selected["services"].get("installer-acme-http01").is_none(), "selected runtime config omits an unrelated retained responder, so it cannot equal the unfiltered activation model");
+    } else {
+        assert!(current_runtime["services"]
+            .get("installer-acme-http01")
+            .is_none());
+    }
     assert_eq!(
         selected["services"]["installer-ingress"], current_runtime["services"]["installer-ingress"],
         "full configuration admission does not change the specifically selected runtime service"

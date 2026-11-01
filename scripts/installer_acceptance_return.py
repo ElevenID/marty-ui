@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import sys
 import time
 import installer_release as r
 import installer_promote as promotion
@@ -91,7 +92,37 @@ def receive(*,client,authorization,inventory,receipt,descriptor,output,harness_s
     raise ValueError('checkpoint return deadline expired')
 
 
+def startup_main(argv):
+    import installer_startup_transport as startup_transport
+    parser=argparse.ArgumentParser(description='Authenticate a distinct startup-only report; no promotion or Ready.')
+    commands=parser.add_subparsers(dest='command',required=True)
+    for name in ('receive-startup-payload','upload-startup-payload'):
+        selected=commands.add_parser(name)
+        for field in ('authorization','inventory','receipt','descriptor','output','assets','gh','cosign'):
+            selected.add_argument('--'+field,type=Path,required=True)
+        selected.add_argument('--harness-source-sha',required=True)
+        for field in ('run-id','run-attempt','controller-user-id'):
+            selected.add_argument('--'+field,type=int,required=True)
+        if name=='upload-startup-payload':
+            for field in ('report','ledger'):selected.add_argument('--'+field,type=Path,required=True)
+    selected=commands.add_parser('verify-startup-return')
+    for field in ('report','signature-bundle','provenance','inventory','gh','cosign'):
+        selected.add_argument('--'+field,type=Path,required=True)
+    values=vars(parser.parse_args(argv));operation=values.pop('command')
+    try:
+        client=startup_transport.Client(os.environ.get('GH_TOKEN'))
+        if operation=='receive-startup-payload':startup_transport.receive(client=client,**values)
+        elif operation=='upload-startup-payload':startup_transport.upload(client=client,**values)
+        else:print(r.encode(startup_transport.verify_return(client=client,**values)).decode())
+    except (ValueError,OSError,KeyError,TypeError):
+        parser.exit(1,'Signed startup observation refused or uncertain; retain the original grants, proof files and transport intent.\n')
+    return 0
+
+
 def main(argv=None):
+    argv=sys.argv[1:] if argv is None else argv
+    if argv and argv[0] in ('receive-startup-payload','upload-startup-payload','verify-startup-return'):
+        return startup_main(argv)
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('authorization','inventory','receipt','descriptor','output'):parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--harness-source-sha',required=True)
@@ -100,4 +131,4 @@ def main(argv=None):
     except (ValueError,OSError,KeyError,TypeError):parser.exit(1,'Installed checkpoint return refused; preserve transport and controller evidence.\n')
 
 
-if __name__=='__main__':main()
+if __name__=='__main__':raise SystemExit(main())

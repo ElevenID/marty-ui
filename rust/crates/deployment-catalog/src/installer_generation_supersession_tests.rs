@@ -229,6 +229,7 @@ impl Fixture {
             initial_configuration_sha256: configuration.clone(),
             parent_session,
             public_plan_sha256: plan.sha256().unwrap(),
+            managed_renewal_plan_sha256: None,
             source_sha256: BTreeMap::new(),
             identity_sha256: BTreeMap::new(),
             helper_inputs: inputs.clone(),
@@ -452,7 +453,7 @@ impl Fixture {
             &self.supersession,
             &self.old,
             &self.previous,
-            &self.metadata,
+            &GenerationMaterial::Public(Box::new(self.metadata.clone())),
         )?;
         require_baseline(
             self.root.path(),
@@ -613,7 +614,7 @@ fn supersession_rejects_storage_infrastructure_clock_and_attempt_substitution() 
             &supersession,
             &fixture.old,
             &fixture.previous,
-            &fixture.metadata,
+            &GenerationMaterial::Public(Box::new(fixture.metadata.clone())),
         );
         let second = require_baseline(
             fixture.root.path(),
@@ -657,3 +658,7 @@ mod additional;
 
 #[path = "installer_generation_attempt_lineage_tests.rs"]
 mod lineage;
+
+pub(super) fn completed_fixture() -> (tempfile::TempDir, GenerationBinding, GenerationBinding) {
+    lineage::chain()
+}

@@ -1,7 +1,7 @@
-# Recurring public generation maintenance
+# Recurring generation maintenance
 
 The installation lifecycle calls one generation owner under the existing
-installation lock. That owner coordinates public certificate renewal and
+installation lock. That owner coordinates the selected certificate source and
 workload credential refresh, publishes immutable successor directories, and
 retains enough native Compose evidence to inspect an interrupted replacement.
 This implementation is still awaiting complete installed release qualification.
@@ -42,13 +42,60 @@ actual expiry. It must still have the required activation margin. Changing an
 order URL or serial while returning the old certificate lifetime does not
 constitute a renewal. Staging candidates cannot enter this production owner.
 
+## Installer-managed private certificates
+
+The managed private-CA source uses the same transaction, native replacement,
+immutable directory, and atomic selector owner. Its fixed producer refreshes
+all 22 scoped credentials and renews the ingress leaf through the already
+enrolled authority. It retains the original private issuer, ingress SPKI,
+workload CA, canonical identities, and persistent storage. It does not contact
+ACME or create an account, issuer, key, policy, or AppRole.
+
+A private renewal plan binds the selected parent's exact 43 input hashes,
+original credential observation, original enrollment and three durable identity
+hashes. Expired old leaf and token bytes are authenticated as historical input;
+they are not presented as live renewal credentials. The existing scoped renewal
+identity obtains fresh authority. Infrastructure-only recovery and the scoped
+local OpenBao TLS path run before that login, so an expired former TCP leaf
+does not require rerunning installation setup.
+
+Private renewal follows the same conservative 30-minute workload clock. Its
+producer replaces 41 of the 43 outputs: the workload and ingress CA files remain
+unchanged. Current activation still requires fresh credentials and a currently
+valid, correctly signed leaf. The trust reader authenticates retained private
+metadata, CA, SPKI and signatures at their recorded observation before checking
+current token expiry and certificate validity. A still-valid selected leaf stays
+inspectable through its final valid second; the new-candidate lifetime margins
+remain separate. Backwards clocks, changed bytes and changed identities refuse.
+A private issuer unable to cover another eight-hour leaf causes an explicit hold;
+issuer rotation is a separately supported operation. Imported foundations retain
+customer-managed certificate and credential ownership.
+
+The source remains explicit throughout the records:
+
+| Contract | Public certificate source | Installer-managed private source |
+| --- | --- | --- |
+| Maintenance intent | Existing v1 and public plan digest | v2 and managed renewal plan digest |
+| Fixed producer receipts | Existing v3 | v4 |
+| Host candidate receipt | Existing v4 | v5 |
+| Generation binding | Existing v4 | Existing private v3 with successor provenance |
+| Complete output set | 42 files; no private CA | 43 files; retained private CA |
+| Selected plan evidence | `public-ingress-plan` | `managed-renewal-plan` |
+
+Each selected evidence map still contains exactly nine records from one
+sequence/attempt plus the selector. It contains exactly one source-specific
+plan. Receipt version and digest, selected source, plan, native proof, and parent
+metadata must all agree. Presence of an optional field does not grant the other
+source's authority. Existing public and initial-private record formats remain
+unchanged.
+
 ## Immutable transaction
 
 Each sequence retains the following work and evidence:
 
 1. A generation intent binds the prior selected generation, original install
-   configuration, current native session, public ingress plan, and hashes of
-   the scoped identity and source credentials.
+   configuration, current native session, source-specific ingress plan, and
+   hashes of the scoped identity and source credentials.
 2. `generation-work/<sequence>` holds private identity inputs, a read-only
    source view and the fixed producer's output transfer. It does not change the
    selected files in place.
@@ -57,8 +104,9 @@ Each sequence retains the following work and evidence:
    prior resource census. A matching replacement without that retained intent
    is refused.
 4. The fixed producer runs once. Native create, start and completion evidence
-   binds its exact container. The host verifies the complete 42-file public
-   candidate, completed scoped enrollment, certificate and credential metadata.
+   binds its exact container. The host verifies the complete 42-file public or
+   43-file private candidate, completed scoped enrollment, certificate and
+   credential metadata.
 5. The generation publisher writes an immutable directory under
    `application-generations/<20-digit-sequence>-<binding-sha256>`. An interrupted
    file copy resumes only from an exact admitted partial or completed temporary
@@ -88,7 +136,7 @@ generation pruning is implemented.
 ## Stale completed attempts
 
 Selected generation sequence numbers remain contiguous. A completed producer
-whose credential admission deadline elapsed, or whose public certificate
+whose credential admission deadline elapsed, or whose serving certificate
 expired before selection, can be superseded by an immutable attempt within the
 same next sequence. Attempt zero
 keeps the original record names and serialized fields. Later attempts use
@@ -118,13 +166,51 @@ authority. A still-admissible public leaf is reused; otherwise certificate
 recovery enters the same retained due decision, account, CSR, known order and
 terminal cooldown policy as ordinary maintenance. The baseline is not presented
 as the selected application session. Losing a response resumes the same
-recorded attempt and order. Workload freshness and actual certificate validity
-are rechecked before every runtime create, start and selector publication.
+recorded attempt and order. A managed private attempt instead uses the exact
+retained private issuer and scoped renewal authority; it never enters the CA
+order path. Workload freshness and actual certificate validity are rechecked before every runtime create, start and selector publication.
 
 Pause, stop and security seal remain stop-only even between baseline capture
 and the next helper intent. They do not finish convergence or mint credentials.
 Installed interruption testing is still required for the complete runtime and
 CA path; local receipt tests do not establish arbitrary-duration availability.
+
+## Expired unused preparations
+
+A retained public ingress plan can expire after a crash that happened before
+the helper intent was written. That case uses the same attempt counter. The
+owner authenticates the plan and its selected parent or preceding recovery
+baseline, then proves that the preparation has no helper intent, native
+producer create/start/wait authority, result, candidate binding or activation.
+An absent result alone is insufficient. Its native container and storage
+identities must still match the authenticated source census exactly.
+
+The source-copy and identity directories may contain only their expected files
+or exact interrupted-copy prefixes. An existing transfer directory must be
+empty. The proof retains file hashes and private directory/file identity and
+change-time observations, so later removal of a possible writer's output does
+not restore eligibility. Interrupted preparation files are kept as evidence.
+
+A read-only native checkpoint and immutable `unused-preparation` predecessor
+receipt precede allocation of the next attempt. Reopening that receipt follows
+the same attempt; it does not retire the plan again or grant multiple helpers.
+The historical walk distinguishes completed producers from unused preparations
+and carries the last helper that actually ran. Skipped preparations therefore
+do not expand the allowed helper bind roots or manufacture producer success.
+The selected evidence still has exactly nine records for its chosen attempt
+plus the selector, with predecessor proofs checked through that lineage.
+
+A still-usable saved plan resumes its exact retained certificate candidate.
+An expired unused plan uses ordinary due/known-order certificate policy through
+the authenticated native baseline. Unknown, running and failed helpers remain
+held. Pause and security seal can stop the exact retained runtime while this
+preparation is pending, without creating a helper or retiring another attempt.
+
+A managed private plan is an authenticated historical source snapshot, not a
+public certificate candidate. A crash before its helper intent resumes that
+same plan after the shared absence, empty-transfer, source-copy, and exact
+native-census checks. It does not create an expired-unused predecessor or
+allocate another attempt merely because an old source token has expired.
 
 ## Restart and deliberate stop
 
@@ -155,7 +241,7 @@ maintenance. It does not initiate retirement merely because a timer ran.
 
 ## Status and remaining holds
 
-Lifecycle status exposes the selected sequence, attempt and binding, public
+Lifecycle status exposes the selected sequence, attempt and binding, serving
 certificate expiry and renewal deadline, credential refresh deadline, pending
 ACME stage, retry deadline, pending generation attempt, last successful
 activation and first blocking dependency.
@@ -175,14 +261,11 @@ The following limits still require implementation or installed qualification:
 - A retained helper start intent whose container still appears never started
   remains an uncertainty hold. The owner does not replay that setup operation
   based solely on the container's current state.
-- A crash after a public plan is retained but before its helper intent is
-  recorded needs a separate unused-preparation supersession boundary if that
-  plan later expires. It must not manufacture a successful helper receipt or
-  overwrite the immutable plan.
-- Recurring private-CA generation replacement is not yet connected to this
-  public-generation transaction. It reports a specific hold when its
-  conservative refresh deadline is reached. Imported foundations retain their
-  customer-managed credential responsibility.
+- A retained private issuer that cannot cover another leaf remains an explicit
+  hold. The recurrence owner does not rotate it or repair its policies. Imported
+  foundations retain their customer-managed credential responsibility.
+- Initial-root retirement's installed-proof adapter remains public-renewal-only;
+  a managed successor cannot acquire that authority from public receipt fields.
 - The exact shipped image, rootless UID mapping, native Docker daemon restart,
   host reboot without login, real CA orders, public browser trust, authenticated
   journey and backup/restore still need installed evidence.

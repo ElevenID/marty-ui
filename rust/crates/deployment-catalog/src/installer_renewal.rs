@@ -269,6 +269,236 @@ fn identity_hashes(delivered: &File) -> Result<BTreeMap<String, String>> {
         .collect()
 }
 
+/// Public binding of the already completed private renewal enrollment. This
+/// contains hashes and policy names only, never the RoleID or SecretID.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ManagedEnrolment {
+    pub receipt_sha256: String,
+    pub generation_intent_sha256: String,
+    pub identity_sha256: BTreeMap<String, String>,
+    pub leaf_policies: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedGenerationIntent {
+    schema: String,
+    installation_id: String,
+    engine_id: String,
+    operator_sha256: String,
+    keycloak_receipt_sha256: String,
+    renewal_receipt_sha256: String,
+    input_sha256: BTreeMap<String, String>,
+    identity_sha256: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedRenewalIntent {
+    schema: String,
+    installation_id: String,
+    engine_id: String,
+    operator_sha256: String,
+    input_sha256: BTreeMap<String, String>,
+}
+
+fn managed_native_receipt(
+    result: &RenewalReceipt,
+    operation: &ComposeReceipt,
+    owner: &str,
+    engine: &str,
+    project: &str,
+) -> Result<()> {
+    let hash = |value: &str| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
+    };
+    require(
+        result.schema == "elevenid.installer-renewal-host/v3"
+            && result.installation_id == owner
+            && result.engine_id == engine
+            && result.container_name == format!("{project}-installer-renewal-1")
+            && hash(&result.container_id)
+            && hash(&result.network_id)
+            && result
+                .image
+                .strip_prefix("ghcr.io/elevenid/marty-ui-oss/services@sha256:")
+                .is_some_and(hash)
+            && result.ingress_renewal
+            && !result.root_retired
+            && result.private_identity_validated
+            && result.public_renewal_authority_plan_sha256.is_none()
+            && result.public_identity_sha256.is_none()
+            && result.outputs == IDENTITY_FILES
+            && result.job_completed_successfully
+            && !result.container_removed
+            && !result.installation_ready,
+    )?;
+    let resources = operation.resources.as_ref().ok_or(REFUSAL)?;
+    let helper = resources
+        .containers
+        .get("installer-renewal")
+        .ok_or(REFUSAL)?;
+    require(
+        operation.schema == "elevenid.installer-compose-operation/v1"
+            && operation.operation == "setup-installer-renewal"
+            && operation.project == project
+            && operation.engine_id == engine
+            && operation.command_succeeded
+            && operation.client_exit_code == Some(0)
+            && operation.failure_class.is_none()
+            && !operation.installation_ready
+            && operation.observation_validated
+            && helper.setup
+            && helper
+                .setup_execution
+                .as_ref()
+                .is_some_and(|execution| execution.completed_without_restart)
+            && helper.id == result.container_id
+            && helper.image == result.image
+            && resources
+                .networks
+                .values()
+                .any(|id| id == &result.network_id)
+            && operation.status.iter().any(|row| {
+                row["Service"] == "installer-renewal"
+                    && row["ID"] == helper.id
+                    && row["State"] == "exited"
+                    && row["ExitCode"] == 0
+            }),
+    )
+}
+
+/// Restore only the original, successfully enrolled private renewal authority.
+/// Old workload tokens are historical evidence, not login credentials. This
+/// reader performs no OpenBao request and never recreates or repairs enrollment.
+pub(crate) fn require_managed_enrolment(
+    state: &crate::installer_state::LockedInspection,
+    installation: &Path,
+) -> Result<ManagedEnrolment> {
+    use crate::{installer_generation_binding as generation, installer_hosting};
+    state.require_path_binding(installation)?;
+    require(
+        installer_hosting::resolve(state)?.certificate_source()
+            == installer_hosting::CertificateSource::ManagedCa,
+    )?;
+    let owner = state.journal().installation_id().to_string();
+    let runtime = state.journal().runtime().ok_or(REFUSAL)?;
+    // Generation zero independently authenticates the original private
+    // producer and its exact input/identity/output receipts. It cannot recurse
+    // through a new managed successor or turn an imported foundation into one.
+    let initial = generation::load_initial_verified(installation, &owner, &runtime.engine_id)?
+        .ok_or(REFUSAL)?;
+    require(initial.managed_ingress() && !initial.imported_foundation())?;
+    let bytes = state.read_evidence("renewal-result.json")?;
+    require(state.read_evidence("renewal-observation.json")? == bytes)?;
+    let result: RenewalReceipt =
+        serde_json::from_value(crate::installer_json::decode(&bytes).map_err(|_| REFUSAL)?)
+            .map_err(|_| REFUSAL)?;
+    let native = state.read_evidence("compose-setup-installer-renewal-result.json")?;
+    require(crate::installer_release::sha256(&native) == result.compose_receipt_sha256)?;
+    let native: ComposeReceipt =
+        serde_json::from_value(crate::installer_json::decode(&native).map_err(|_| REFUSAL)?)
+            .map_err(|_| REFUSAL)?;
+    managed_native_receipt(
+        &result,
+        &native,
+        &owner,
+        &runtime.engine_id,
+        &state.journal().compose_project(),
+    )?;
+    require(initial.network_id.as_deref() == Some(result.network_id.as_str()))?;
+
+    let generation_intent_bytes = state.read_evidence("generation-pending.json")?;
+    let intent: ManagedGenerationIntent = serde_json::from_value(
+        crate::installer_json::decode(&generation_intent_bytes).map_err(|_| REFUSAL)?,
+    )
+    .map_err(|_| REFUSAL)?;
+    let renewal_intent: ManagedRenewalIntent = serde_json::from_value(
+        crate::installer_json::decode(&state.read_evidence("renewal-pending.json")?)
+            .map_err(|_| REFUSAL)?,
+    )
+    .map_err(|_| REFUSAL)?;
+    let keycloak = state.read_evidence("keycloak-observation.json")?;
+    crate::installer_generation::original_nonce(&keycloak, &owner)?;
+    let hashes_valid = |values: &BTreeMap<String, String>| {
+        values.values().all(|value| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
+        })
+    };
+    require(
+        intent.schema == "elevenid.installer-generation-host-intent/v2"
+            && renewal_intent.schema == "elevenid.installer-renewal-intent/v2"
+            && intent.installation_id == owner
+            && renewal_intent.installation_id == owner
+            && intent.engine_id == runtime.engine_id
+            && renewal_intent.engine_id == runtime.engine_id
+            && intent.renewal_receipt_sha256 == crate::installer_release::sha256(&bytes)
+            && intent.keycloak_receipt_sha256 == crate::installer_release::sha256(&keycloak)
+            && intent.operator_sha256 == renewal_intent.operator_sha256
+            && hashes_valid(&BTreeMap::from([(
+                "operator".into(),
+                intent.operator_sha256.clone(),
+            )]))
+            && intent.input_sha256 == renewal_intent.input_sha256
+            && intent.input_sha256.keys().cloned().collect::<BTreeSet<_>>()
+                == installer_renewal_bootstrap::managed_inputs()
+            && hashes_valid(&intent.input_sha256)
+            && intent
+                .identity_sha256
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>()
+                == IDENTITY_FILES.into()
+            && hashes_valid(&intent.identity_sha256),
+    )?;
+    let parent = open_child(
+        state.installation_directory(),
+        "renewal-transfer",
+        libc::O_RDONLY | libc::O_DIRECTORY,
+    )?;
+    let delivered = open_child(&parent, "delivered", libc::O_RDONLY | libc::O_DIRECTORY)?;
+    for directory in [&parent, &delivered] {
+        let m = directory.metadata().map_err(|_| REFUSAL)?;
+        require(m.is_dir() && m.uid() == unsafe { libc::geteuid() } && m.mode() & 0o7777 == 0o700)?;
+    }
+    require(validate_delivered(&delivered, &owner, true, None)? == IDENTITY_FILES)?;
+    require(identity_hashes(&delivered)? == intent.identity_sha256)?;
+    let staged_path = installation.join("generation-identity");
+    let staged = directory(&staged_path)?;
+    let staged_identity = crate::installer_generation_host::staged_identity(&staged)?;
+    require(crate::installer_generation::hashes(&staged_identity) == intent.identity_sha256)?;
+    for name in IDENTITY_FILES {
+        require(read_entry(&delivered, name, 0o600, false)? == staged_identity[name])?;
+    }
+    for name in ["generation-inputs", "renewal-inputs"] {
+        let path = installation.join(name);
+        let held = directory(&path)?;
+        require(file_names(&held)? == installer_renewal_bootstrap::managed_inputs())?;
+        require(crate::installer_generation::hashes(&read_inputs(&held)?) == intent.input_sha256)?;
+        require_directory_binding(&path, &held)?;
+    }
+    let leaf_policies: Vec<String> =
+        serde_json::from_slice(&staged_identity["renewal-leaf-policies.json"])
+            .map_err(|_| REFUSAL)?;
+    require_directory_binding(&staged_path, &staged)?;
+    require_directory_binding(&installation.join("renewal-transfer"), &parent)?;
+    require_directory_binding(&installation.join("renewal-transfer/delivered"), &delivered)?;
+    require(identity_hashes(&delivered)? == intent.identity_sha256)?;
+    state.require_unchanged()?;
+    Ok(ManagedEnrolment {
+        receipt_sha256: crate::installer_release::sha256(&bytes),
+        generation_intent_sha256: crate::installer_release::sha256(&generation_intent_bytes),
+        identity_sha256: intent.identity_sha256,
+        leaf_policies,
+    })
+}
+
 /// Revalidate completed pre-CA enrollment without logging in or requiring
 /// original leaf credentials to remain live after a certificate order wait.
 pub(crate) fn require_public_enrolment(
@@ -544,6 +774,100 @@ mod tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
     const OWNER: &str = "12345678-1234-4234-8234-123456789abc";
+    #[test]
+    fn managed_enrolment_requires_completed_exact_native_job_and_private_source() {
+        let project = format!("marty-install-{}", OWNER.replace('-', ""));
+        let image = format!(
+            "ghcr.io/elevenid/marty-ui-oss/services@sha256:{}",
+            "c".repeat(64)
+        );
+        let result = json!({"schema":"elevenid.installer-renewal-host/v3","installation_id":OWNER,
+            "engine_id":"engine-identity-123","container_id":"a".repeat(64),
+            "container_name":format!("{project}-installer-renewal-1"),"network_id":"b".repeat(64),"image":image,
+            "root_retired":false,"ingress_renewal":true,"private_identity_validated":true,
+            "outputs":IDENTITY_FILES,"compose_receipt_sha256":"d".repeat(64),
+            "job_completed_successfully":true,"container_removed":false,"installation_ready":false});
+        let operation = json!({"schema":"elevenid.installer-compose-operation/v1",
+            "project":project,"engine_id":"engine-identity-123","operation":"setup-installer-renewal",
+            "configuration_sha256":"e".repeat(64),"input_files":{},"command_succeeded":true,"client_exit_code":0,
+            "failure_class":null,"observation_validated":true,"installation_ready":false,
+            "resources":{"containers":{"installer-renewal":{"id":"a".repeat(64),"service":"installer-renewal",
+                "image":image,"config_hash":"f".repeat(64),"setup":true,
+                "setup_execution":{"started_at":"2026-01-01T00:00:00Z","finished_at":"2026-01-01T00:01:00Z","completed_without_restart":true},
+                "health_required":false,"cap_add":[],"cap_drop":["ALL"],"read_only":true,"memory_limit":134217728}},
+                "networks":{"default":"b".repeat(64)},"volumes":[]},
+            "status":[{"Service":"installer-renewal","ID":"a".repeat(64),"State":"exited","ExitCode":0}]});
+        let parsed_result: RenewalReceipt = serde_json::from_value(result.clone()).unwrap();
+        let parsed_operation: ComposeReceipt = serde_json::from_value(operation.clone()).unwrap();
+        managed_native_receipt(
+            &parsed_result,
+            &parsed_operation,
+            OWNER,
+            "engine-identity-123",
+            &project,
+        )
+        .unwrap();
+        for (field, value) in [
+            ("schema", json!("elevenid.installer-renewal-host/v4")),
+            ("private_identity_validated", json!(false)),
+            ("job_completed_successfully", json!(false)),
+            ("container_removed", json!(true)),
+            ("root_retired", json!(true)),
+            ("installation_ready", json!(true)),
+            (
+                "public_renewal_authority_plan_sha256",
+                json!("f".repeat(64)),
+            ),
+            ("public_identity_sha256", json!({})),
+            ("container_id", json!("f".repeat(64))),
+            ("network_id", json!("f".repeat(64))),
+        ] {
+            let mut changed = result.clone();
+            changed[field] = value;
+            assert!(
+                managed_native_receipt(
+                    &serde_json::from_value(changed).unwrap(),
+                    &parsed_operation,
+                    OWNER,
+                    "engine-identity-123",
+                    &project
+                )
+                .is_err(),
+                "accepted {field}"
+            );
+        }
+        for (pointer, value) in [
+            ("/operation", json!("up")),
+            ("/client_exit_code", json!(1)),
+            ("/command_succeeded", json!(false)),
+            ("/failure_class", json!("client_failure")),
+            ("/observation_validated", json!(false)),
+            (
+                "/resources/containers/installer-renewal/setup",
+                json!(false),
+            ),
+            (
+                "/resources/containers/installer-renewal/setup_execution/completed_without_restart",
+                json!(false),
+            ),
+            ("/status/0/ID", json!("f".repeat(64))),
+            ("/status/0/ExitCode", json!(1)),
+        ] {
+            let mut changed = operation.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                managed_native_receipt(
+                    &parsed_result,
+                    &serde_json::from_value(changed).unwrap(),
+                    OWNER,
+                    "engine-identity-123",
+                    &project
+                )
+                .is_err(),
+                "accepted {pointer}"
+            );
+        }
+    }
     fn host_output_owner_for_test() -> installer_helper_output::HelperOutputOwner {
         let uid = unsafe { libc::geteuid() };
         let profile = if uid == 0 {

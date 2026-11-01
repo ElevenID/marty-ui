@@ -234,6 +234,54 @@ impl ComposeSession {
         )
     }
 
+    /// A preparation without a helper intent has no replacement authority.
+    /// Stop its exact retained runtime census without allowing even a single
+    /// changed or missing container ID through a generation transition view.
+    pub(crate) fn stop_retained_generation_runtime(
+        &self,
+        state: &mut LockedMaintenance,
+        operation: &str,
+    ) -> Result<ComposeReceipt> {
+        require(
+            !self.cleanup_only
+                && self.generation_transition.is_none()
+                && self.inputs.prior.is_some()
+                && self.inputs.services.is_empty(),
+        )?;
+        let before = self.observe(false)?;
+        require(completed_setups(&before, &self.status()?))?;
+        let selected: BTreeSet<_> = before
+            .containers
+            .iter()
+            .filter(|(_, identity)| !identity.setup)
+            .map(|(role, _)| role.clone())
+            .collect();
+        require(!selected.is_empty())?;
+        let mut command = vec!["stop", "--timeout", "60"];
+        command.extend(selected.iter().map(String::as_str));
+        let mut writer = Evidence::Maintenance(state, Some(RuntimeOperationOwner::Generation));
+        self.generation_intent(
+            &mut writer,
+            operation,
+            &command,
+            &before,
+            &selected.iter().cloned().collect::<Vec<_>>(),
+        )?;
+        let result = self.compose(&command, false, Duration::from_secs(300));
+        let resources = self.observe(false);
+        let statuses = self.status();
+        let complete = matches!((&resources, &statuses), (Ok(resources), Ok(rows))
+            if generation_runtime_observation(resources, rows, &selected, &BTreeSet::new(), true));
+        self.receipt(
+            &mut writer,
+            operation,
+            &result,
+            complete,
+            resources,
+            statuses,
+        )
+    }
+
     /// Quiesce only the already-authorized replacement consumers before a
     /// stale-attempt baseline is captured. Infrastructure and all setup jobs
     /// are excluded. A missing consumer is completed later with no-start.

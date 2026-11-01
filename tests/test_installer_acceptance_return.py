@@ -120,7 +120,7 @@ def test_workflow_checkpoint_never_uses_acceptance_artifact_name():
     assert trigger['workflow_dispatch']['inputs']['phase']['options']==['staged','published']
     steps=workflow['jobs']['prepare-candidate-grant']['steps']
     step=next(s for s in steps if s.get('name')=='Refuse incomplete execution as installed acceptance')
-    assert 'exit 1' in step['run'] and step['if']=='inputs.execute'
+    assert 'exit 1' in step['run'] and step['if']=="inputs.execute && inputs.execution_result == 'incomplete-checkpoint'"
     assert any(s.get('with',{}).get('name','').startswith('installer-incomplete-checkpoint-') for s in steps)
     assert not any(s.get('with',{}).get('name','').startswith('installer-acceptance-staged-') for s in steps)
 

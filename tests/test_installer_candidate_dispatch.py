@@ -131,13 +131,21 @@ def test_versioned_dispatch_transfers_only_bound_fixed_hosting_and_staging_files
     for name, value in [(r.candidate_hosting.NAME,raw),(r.candidate_hosting.ROOTS_NAME,roots)]:
         if value is not None:
             file=options['grants']/name;file.write_bytes(value);file.chmod(0o600)
-    result = d.dispatch(**options)
+    public_startup = auth['hosting']['certificate_source']=='acme' and auth['hosting']['acme_environment']=='production'
+    if public_startup:
+        # The fixture's empty exit-zero stdout is insufficient for the new
+        # typed signed startup completion. Transfer remains independently tested.
+        with pytest.raises(ValueError):d.dispatch(**options)
+        result=None
+    else:result = d.dispatch(**options)
     grant_transfer = calls[2][0]
     assert str(options['grants']/r.candidate_hosting.NAME) in grant_transfer
     assert (str(options['grants']/r.candidate_hosting.ROOTS_NAME) in grant_transfer) is (roots is not None)
     assert '--hosting-file' not in calls[-1][0][-1]  # No arbitrary guest override.
     assert '/usr/bin/setpriv --no-new-privs --' in calls[-1][0][-1]
-    assert len(proofs) == 7 and result['installation_ready'] is False
+    assert len(proofs) == 7
+    if result is not None:assert result['installation_ready'] is False
+    else:assert not Path(str(options['ledger'])+'.dispatch-result.json').exists()
 
 
 def test_dispatch_can_borrow_held_controller_lease(staged):

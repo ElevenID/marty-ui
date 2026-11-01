@@ -1,6 +1,9 @@
 //! Immutable application credential selection. Originals and orphan producer evidence remain intact.
 #![cfg(target_os = "linux")]
-use crate::installer_state::{InstallerState, Phase};
+use crate::{
+    installer_generation_maintenance::{GenerationMaterial, GenerationPlan, PlanSource},
+    installer_state::{InstallerState, Phase},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -81,6 +84,7 @@ pub(crate) struct SuccessorBinding {
 pub(crate) struct VerifiedGeneration {
     binding: GenerationBinding,
     public_metadata: Option<crate::installer_public_ingress::PublicIngressMetadata>,
+    managed_metadata: Option<crate::installer_ingress_outputs::IngressMetadata>,
 }
 impl VerifiedGeneration {
     pub(crate) fn binding(&self) -> &GenerationBinding {
@@ -90,6 +94,18 @@ impl VerifiedGeneration {
         &self,
     ) -> Option<&crate::installer_public_ingress::PublicIngressMetadata> {
         self.public_metadata.as_ref()
+    }
+    pub(crate) fn managed_metadata(
+        &self,
+    ) -> Option<&crate::installer_ingress_outputs::IngressMetadata> {
+        self.managed_metadata.as_ref()
+    }
+    pub(crate) fn material(&self) -> Result<GenerationMaterial> {
+        match (&self.public_metadata, &self.managed_metadata) {
+            (Some(value), None) => Ok(GenerationMaterial::Public(Box::new(value.clone()))),
+            (None, Some(value)) => Ok(GenerationMaterial::Managed(Box::new(value.clone()))),
+            _ => Err(REFUSED.into()),
+        }
     }
 }
 fn require(ok: bool) -> Result<()> {
@@ -335,6 +351,11 @@ impl GenerationBinding {
         if !self.managed_ingress() {
             return Ok(None);
         }
+        if self.successor.is_some() {
+            let verified = load_verified_attempt(installation, self.sequence(), self.attempt())?;
+            require(verified.binding == *self)?;
+            return Ok(verified.managed_metadata);
+        }
         let evidence = directory(&installation.join("evidence"))?;
         let bytes = read(&evidence, "generation-observation.json", true)?.0;
         require(digest(&bytes) == self.generation_receipt_sha256)?;
@@ -385,7 +406,13 @@ impl GenerationBinding {
             &self.engine_id,
             self.successor.as_ref(),
         )?;
-        public_metadata_from_candidate(installation, self, &bytes, &outputs, plan.as_ref())
+        public_metadata_from_candidate(
+            installation,
+            self,
+            &bytes,
+            &outputs,
+            plan.as_ref().and_then(GenerationPlan::public),
+        )
     }
     pub fn secret_dir(&self, installation: &Path) -> Result<PathBuf> {
         self.validate()?;
@@ -415,7 +442,7 @@ impl GenerationBinding {
         crate::installer_renewal_bootstrap::validate_id(&self.installation_id)?;
         if let Some(successor) = &self.successor {
             require(
-                self.public_ingress()
+                (self.public_ingress() || self.managed_ingress())
                     && successor.sequence > 0
                     && (successor.sequence > 1 || successor.parent_attempt == 0)
                     && hex(&successor.parent_binding_sha256)
@@ -509,6 +536,8 @@ struct Receipt {
     ingress: Option<crate::installer_ingress_outputs::IngressMetadata>,
     #[serde(default)]
     public_ingress: Option<crate::installer_public_ingress::PublicIngressMetadata>,
+    #[serde(default)]
+    managed_renewal_plan_sha256: Option<String>,
     candidate_validated: bool,
     activated: bool,
     candidate_sha256: BTreeMap<String, String>,
@@ -518,11 +547,7 @@ struct Receipt {
     job_completed_successfully: bool,
     installation_ready: bool,
 }
-type CandidateProvenance = (
-    Vec<u8>,
-    CandidateFiles,
-    Option<crate::installer_public_ingress::PublicIngressPlan>,
-);
+type CandidateProvenance = (Vec<u8>, CandidateFiles, Option<GenerationPlan>);
 fn candidate(installation: &Path, id: &str, engine: &str) -> Result<CandidateProvenance> {
     candidate_at(installation, id, engine, None)
 }
@@ -573,9 +598,14 @@ fn candidate_with_parent(
     );
     let bytes = read(&evidence, &record_name, true)?.0;
     let r: Receipt = serde_json::from_slice(&bytes).map_err(|_| REFUSED)?;
-    let managed_ingress = r.schema == "elevenid.installer-generation-host/v3";
+    let managed_successor = r.schema == "elevenid.installer-generation-host/v5";
+    let managed_ingress = r.schema == "elevenid.installer-generation-host/v3" || managed_successor;
     let public_ingress = r.schema == "elevenid.installer-generation-host/v4";
-    require(successor.is_none() || public_ingress)?;
+    require(
+        (successor.is_none() || public_ingress || managed_successor)
+            && (!managed_successor || successor.is_some())
+            && r.managed_renewal_plan_sha256.is_some() == managed_successor,
+    )?;
     let inventory = if public_ingress {
         crate::installer_renewal_bootstrap::public_inputs()
     } else {
@@ -611,44 +641,51 @@ fn candidate_with_parent(
             && hex(&r.compose_receipt_sha256)
             && !r.installation_ready,
     )?;
-    let public_plan = r
-        .public_ingress
-        .as_ref()
-        .map(|metadata| {
-            let bytes = read(
-                &evidence,
-                &successor.map_or_else(
-                    || crate::installer_public_ingress::PUBLIC_INGRESS_PLAN_RECORD.into(),
-                    |v| {
-                        crate::installer_generation_maintenance::attempt::Attempt::new(
-                            v.sequence, v.attempt,
-                        )
-                        .record("public-ingress-plan")
-                    },
-                ),
-                true,
-            )?
-            .0;
-            let plan = crate::installer_public_ingress::PublicIngressPlan::parse_authenticated(
-                &bytes,
-                &metadata.plan_sha256,
-            )?;
-            require(
-                plan.installation_id() == id
-                    && plan.record_name()
-                        == successor.map_or_else(
-                            || crate::installer_public_ingress::PUBLIC_INGRESS_PLAN_RECORD.into(),
-                            |v| {
-                                crate::installer_generation_maintenance::attempt::Attempt::new(
-                                    v.sequence, v.attempt,
-                                )
-                                .record("public-ingress-plan")
-                            },
-                        ),
-            )?;
-            Ok::<_, String>(plan)
-        })
-        .transpose()?;
+    let plan = if let Some(next) = successor {
+        let scope = crate::installer_generation_maintenance::attempt::Attempt::new(
+            next.sequence,
+            next.attempt,
+        );
+        let (source, expected) = if public_ingress {
+            (
+                PlanSource::Public,
+                r.public_ingress
+                    .as_ref()
+                    .ok_or(REFUSED)?
+                    .plan_sha256
+                    .as_str(),
+            )
+        } else {
+            require(managed_successor)?;
+            (
+                PlanSource::Managed,
+                r.managed_renewal_plan_sha256.as_deref().ok_or(REFUSED)?,
+            )
+        };
+        Some(GenerationPlan::load(installation, scope, source, expected)?)
+    } else {
+        r.public_ingress
+            .as_ref()
+            .map(|metadata| {
+                let bytes = read(
+                    &evidence,
+                    crate::installer_public_ingress::PUBLIC_INGRESS_PLAN_RECORD,
+                    true,
+                )?
+                .0;
+                let plan = crate::installer_public_ingress::PublicIngressPlan::parse_authenticated(
+                    &bytes,
+                    &metadata.plan_sha256,
+                )?;
+                require(
+                    plan.installation_id() == id
+                        && plan.record_name()
+                            == crate::installer_public_ingress::PUBLIC_INGRESS_PLAN_RECORD,
+                )?;
+                Ok::<_, String>(GenerationPlan::Public(Box::new(plan)))
+            })
+            .transpose()?
+    };
     let operation_name = successor.map_or_else(
         || "compose-setup-installer-generation-result.json".into(),
         |v| format!("generation-compose-{}-result.json", v.native_operation),
@@ -701,7 +738,7 @@ fn candidate_with_parent(
                     && v["ExitCode"] == 0
             }),
     )?;
-    if public_ingress {
+    if public_ingress || successor.is_some() {
         require(
             proof.operation
                 == successor.map_or("setup-installer-generation", |v| {
@@ -770,17 +807,23 @@ fn candidate_with_parent(
         .into_iter()
         .map(|n| Ok((n.into(), read(&delivered, n, true)?.0)))
         .collect::<Result<BTreeMap<_, _>>>()?;
-    let hashes = crate::installer_generation::validate_records(
-        &records,
-        &outputs,
-        &crate::installer_generation::GenerationProof {
-            owner: id,
-            current: &current,
-            identity: &identity,
-            keycloak_receipt: &kc,
-            public_ingress_plan: public_plan.as_ref(),
-        },
-    )?;
+    let generation_proof = crate::installer_generation::GenerationProof {
+        owner: id,
+        current: &current,
+        identity: &identity,
+        keycloak_receipt: &kc,
+        public_ingress_plan: plan.as_ref().and_then(GenerationPlan::public),
+    };
+    let hashes = if let Some(managed) = plan.as_ref().and_then(GenerationPlan::managed) {
+        crate::installer_generation::validate_managed_records(
+            &records,
+            &outputs,
+            &generation_proof,
+            managed,
+        )?
+    } else {
+        crate::installer_generation::validate_records(&records, &outputs, &generation_proof)?
+    };
     require(crate::installer_generation::recorded_ingress(&records)? == r.ingress)?;
     require(crate::installer_generation::recorded_public_ingress(&records)? == r.public_ingress)?;
     require(
@@ -794,8 +837,7 @@ fn candidate_with_parent(
                 && parent.binding.installation_id == id
                 && parent.binding.engine_id == engine,
         )?;
-        public_plan
-            .as_ref()
+        plan.as_ref()
             .ok_or(REFUSED)?
             .require_verified_parent(installation, parent)?;
         for (name, bytes) in current {
@@ -807,7 +849,7 @@ fn candidate_with_parent(
             require(read(&secrets, &name, false)?.0 == bytes)?;
         }
     }
-    Ok((bytes, outputs, public_plan))
+    Ok((bytes, outputs, plan))
 }
 
 struct Provenance {
@@ -835,7 +877,12 @@ fn provenance(installation: &Path, id: &str, engine: &str) -> Result<Provenance>
             public_plan: None,
         })
     } else {
-        let (bytes, candidates, public_plan) = candidate(installation, id, engine)?;
+        let (bytes, candidates, plan) = candidate(installation, id, engine)?;
+        let public_plan = match plan {
+            Some(GenerationPlan::Public(value)) => Some(*value),
+            None => None,
+            Some(GenerationPlan::Managed(_)) => return Err(REFUSED.into()),
+        };
         let record: Receipt = serde_json::from_slice(&bytes).map_err(|_| REFUSED)?;
         Ok(Provenance {
             bytes,
@@ -971,6 +1018,32 @@ fn public_metadata_from_candidate(
     Ok(Some(metadata))
 }
 
+fn managed_metadata_from_candidate(
+    installation: &Path,
+    binding: &GenerationBinding,
+    bytes: &[u8],
+    outputs: &CandidateFiles,
+) -> Result<Option<crate::installer_ingress_outputs::IngressMetadata>> {
+    if !binding.managed_ingress() {
+        return Ok(None);
+    }
+    require(digest(bytes) == binding.generation_receipt_sha256)?;
+    let record: Receipt = serde_json::from_slice(bytes).map_err(|_| REFUSED)?;
+    require(
+        record.schema
+            == if binding.successor.is_some() {
+                "elevenid.installer-generation-host/v5"
+            } else {
+                "elevenid.installer-generation-host/v3"
+            },
+    )?;
+    let metadata = record.ingress.ok_or(REFUSED)?;
+    for name in &crate::installer_ingress_provision::OUTPUTS[..3] {
+        require(binding.read(installation, name)? == *outputs.get(*name).ok_or(REFUSED)?)?;
+    }
+    Ok(Some(metadata))
+}
+
 /// Validate exactly one generation against its already verified predecessor.
 /// Every candidate/42-file proof remains checked; there are no recursive loads.
 fn verify_one(
@@ -981,36 +1054,72 @@ fn verify_one(
     if b.successor.is_none() || b.attempt() == 0 {
         return verify_one_attempt(installation, b, parent);
     }
+    let parent = parent.ok_or(REFUSED)?;
+    let incoming = verify_predecessor_attempts(installation, parent, b.sequence(), b.attempt())?;
+    let admitted = verify_one_attempt(installation, b, Some(parent))?;
+    crate::installer_generation_maintenance::require_attempt_incoming(
+        installation,
+        &admitted.binding,
+        &parent.binding,
+        incoming.as_ref(),
+    )?;
+    Ok(admitted)
+}
+
+/// Completed attempts carry real producer output. An unused predecessor has
+/// no binding or helper authority, and is admitted only by its immutable
+/// absence/expiry/native proof. Keep one incoming baseline during this walk.
+fn verify_predecessor_attempts(
+    installation: &Path,
+    parent: &VerifiedGeneration,
+    sequence: u64,
+    attempts: u64,
+) -> Result<Option<crate::installer_generation_maintenance::GenerationRecoveryBaseline>> {
+    use crate::installer_generation_maintenance::{self as maintenance, attempt::Attempt};
+    require(parent.binding.sequence().checked_add(1) == Some(sequence))?;
     let evidence = directory(&installation.join("evidence"))?;
-    let mut previous: Option<VerifiedGeneration> = None;
-    for number in 0..=b.attempt() {
-        let candidate = if number == b.attempt() {
-            b.clone()
-        } else {
-            read_attempt(&evidence, b.sequence(), number)?
-        };
-        require(
-            candidate.parent_attempt() == b.parent_attempt()
-                && candidate
-                    .successor
-                    .as_ref()
-                    .ok_or(REFUSED)?
-                    .parent_binding_sha256
-                    == b.successor.as_ref().ok_or(REFUSED)?.parent_binding_sha256,
-        )?;
-        let admitted = verify_one_attempt(installation, candidate, parent)?;
-        if let Some(prior) = &previous {
-            crate::installer_generation_maintenance::require_completed_attempt_link(
+    let retained = names(&evidence)?;
+    let mut incoming = None;
+    for number in 0..attempts {
+        let scope = Attempt::new(sequence, number);
+        incoming = Some(if retained.contains(&scope.record("binding")) {
+            let candidate = read_attempt(&evidence, sequence, number)?;
+            require(candidate.parent_attempt() == parent.binding.attempt())?;
+            let admitted = verify_one_attempt(installation, candidate, Some(parent))?;
+            maintenance::require_attempt_incoming(
                 installation,
                 &admitted.binding,
-                &parent.ok_or(REFUSED)?.binding,
-                &prior.binding,
-                prior.public_metadata.as_ref().ok_or(REFUSED)?,
+                &parent.binding,
+                incoming.as_ref(),
             )?;
-        }
-        previous = Some(admitted);
+            maintenance::completed_predecessor(
+                installation,
+                &parent.binding,
+                &admitted.binding,
+                &admitted.material()?,
+            )?
+        } else {
+            maintenance::unused_predecessor(installation, parent, scope, incoming.as_ref())?
+        });
     }
-    previous.ok_or_else(|| REFUSED.into())
+    binding(&installation.join("evidence"), &evidence)?;
+    Ok(incoming)
+}
+
+/// Authenticate a positive attempt's incoming native capability without
+/// requiring that attempt to have created a helper or produced a binding.
+pub(crate) fn load_preparation_baseline(
+    installation: &Path,
+    scope: crate::installer_generation_maintenance::attempt::Attempt,
+    parent_attempt: u64,
+) -> Result<crate::installer_generation_maintenance::GenerationRecoveryBaseline> {
+    require(scope.sequence > 0 && scope.number > 0)?;
+    let root = directory(installation)?;
+    let parent = load_verified_attempt(installation, scope.sequence - 1, parent_attempt)?;
+    let result = verify_predecessor_attempts(installation, &parent, scope.sequence, scope.number)?
+        .ok_or(REFUSED)?;
+    binding(installation, &root)?;
+    Ok(result)
 }
 
 fn verify_one_attempt(
@@ -1049,11 +1158,19 @@ fn verify_one_attempt(
                     && b.read(installation, name)? == bytes,
             )?;
         }
-        let public_metadata =
-            public_metadata_from_candidate(installation, &b, &bytes, &candidates, plan.as_ref())?;
+        let public_metadata = public_metadata_from_candidate(
+            installation,
+            &b,
+            &bytes,
+            &candidates,
+            plan.as_ref().and_then(GenerationPlan::public),
+        )?;
+        let managed_metadata =
+            managed_metadata_from_candidate(installation, &b, &bytes, &candidates)?;
         return Ok(VerifiedGeneration {
             binding: b,
             public_metadata,
+            managed_metadata,
         });
     }
     require(parent.is_none())?;
@@ -1097,9 +1214,12 @@ fn verify_one_attempt(
         &proof.candidates,
         proof.public_plan.as_ref(),
     )?;
+    let managed_metadata =
+        managed_metadata_from_candidate(installation, &b, &proof.bytes, &proof.candidates)?;
     Ok(VerifiedGeneration {
         binding: b,
         public_metadata,
+        managed_metadata,
     })
 }
 
@@ -1265,7 +1385,7 @@ fn read_attempt(evidence: &File, sequence: u64, attempt: u64) -> Result<Generati
     Ok(binding)
 }
 
-fn load_verified_attempt(
+pub(crate) fn load_verified_attempt(
     installation: &Path,
     sequence: u64,
     attempt: u64,
@@ -1570,3 +1690,7 @@ mod tests {
         assert!(directory(&alias).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "installer_generation_managed_lineage_tests.rs"]
+mod managed_lineage_tests;

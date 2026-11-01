@@ -2,16 +2,12 @@
 //! derived from the held installation and its next immutable generation.
 use super::*;
 use crate::{
-    installer_acme_host,
     installer_compose::{
         BoundFile, ComposeReceipt, ComposeSession, GenerationOperation, ProjectResources,
         RuntimeOperationOwner,
     },
     installer_generation_host as host, installer_host_fs as fs,
-    installer_public_ingress::{
-        PublicIngressPlan, PublicRenewalAuthorityPlan, AUTHORITY_PLAN_DIGEST_ENV, PLAN_DIGEST_ENV,
-        PUBLIC_RENEWAL_AUTHORITY_PLAN_RECORD,
-    },
+    installer_public_ingress::PublicIngressPlan,
 };
 use std::{
     collections::BTreeSet,
@@ -27,8 +23,10 @@ use std::{
 
 #[path = "installer_generation_supersession.rs"]
 mod supersession;
-pub(super) use supersession::require_completed_attempt_link;
 pub(crate) use supersession::GenerationRecoveryBaseline;
+pub(crate) use supersession::{
+    completed_predecessor, require_attempt_incoming, unused_predecessor,
+};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -44,7 +42,10 @@ struct Intent {
     parent_binding_sha256: String,
     initial_configuration_sha256: String,
     parent_session: SavedSession,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     public_plan_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    managed_renewal_plan_sha256: Option<String>,
     source_sha256: BTreeMap<String, String>,
     identity_sha256: BTreeMap<String, String>,
     helper_inputs: ComposeInputs,
@@ -57,6 +58,40 @@ struct Intent {
 impl Intent {
     fn scope(&self) -> Attempt {
         Attempt::new(self.sequence, self.attempt)
+    }
+    fn source(&self) -> Result<PlanSource> {
+        match self.schema.as_str() {
+            "elevenid.installer-generation-maintenance-intent/v1"
+                if valid_hash(&self.public_plan_sha256)
+                    && self.managed_renewal_plan_sha256.is_none() =>
+            {
+                Ok(PlanSource::Public)
+            }
+            "elevenid.installer-generation-maintenance-intent/v2"
+                if self.public_plan_sha256.is_empty()
+                    && self
+                        .managed_renewal_plan_sha256
+                        .as_deref()
+                        .is_some_and(valid_hash) =>
+            {
+                Ok(PlanSource::Managed)
+            }
+            _ => Err(REFUSED.into()),
+        }
+    }
+    fn plan(&self, installation: &Path) -> Result<GenerationPlan> {
+        let source = self.source()?;
+        GenerationPlan::load(
+            installation,
+            self.scope(),
+            source,
+            match source {
+                PlanSource::Public => &self.public_plan_sha256,
+                PlanSource::Managed => {
+                    self.managed_renewal_plan_sha256.as_deref().ok_or(REFUSED)?
+                }
+            },
+        )
     }
     fn parent(&self, installation: &Path) -> Result<GenerationBinding> {
         generation::load_attempt(
@@ -108,17 +143,12 @@ pub(super) fn require_candidate_fresh(
     binding: &GenerationBinding,
     at: u64,
 ) -> Result<()> {
-    let metadata = binding
-        .public_ingress_metadata(installation)?
-        .ok_or(REFUSED)?;
-    require_candidate_fresh_at(metadata.token_observed_at, metadata.token_ttl_seconds, at)?;
-    // The leaf can expire inside a long activation even while newly minted
-    // workload credentials remain fresh. Recheck both clocks at every native
-    // create/start and selector boundary, including historical activation.
-    metadata.validate_selected_at(
-        &binding.read(installation, "installer_ingress_tls_cert")?,
-        at,
-    )?;
+    let material = GenerationMaterial::load(installation, binding)?;
+    require_candidate_fresh_at(material.observed_at(), material.ttl(), at)?;
+    // A serving leaf may expire inside a long activation while workload
+    // credentials remain fresh. Admit both source-specific clocks at every
+    // create/start/selector boundary, including historical activation.
+    material.validate_selected_at(installation, binding, at)?;
     Ok(())
 }
 fn store(state: &mut LockedMaintenance, name: &str, bytes: &[u8]) -> Result<()> {
@@ -399,14 +429,13 @@ fn load_intent(view: &LockedInspection, installation: &Path, scope: Attempt) -> 
     let sequence = scope.sequence;
     let intent: Intent = decode(&view.read_evidence(&scope.record("intent"))?)?;
     require(
-        intent.schema == "elevenid.installer-generation-maintenance-intent/v1"
+        intent.source().is_ok()
             && intent.sequence == sequence
             && intent.attempt == scope.number
             && sequence > 0
             && intent.installation_id == view.journal().installation_id().to_string()
             && intent.engine_id == view.journal().runtime().ok_or(REFUSED)?.engine_id
             && valid_hash(&intent.parent_binding_sha256)
-            && valid_hash(&intent.public_plan_sha256)
             && intent.created_at > 0
             && intent.helper_inputs.installation == installation,
     )?;
@@ -418,13 +447,11 @@ fn load_intent(view: &LockedInspection, installation: &Path, scope: Attempt) -> 
     require(parent.sha256()? == intent.parent_binding_sha256)?;
     let current = parent_session(view, installation)?;
     require(encode(&current)? == encode(&intent.parent_session)?)?;
-    let plan = PublicIngressPlan::parse_authenticated(
-        &view.read_evidence(&scope.record("public-ingress-plan"))?,
-        &intent.public_plan_sha256,
-    )?;
+    let plan = intent.plan(installation)?;
     plan.require_saved(view)?;
+    plan.require_parent(installation, &parent)?;
     let current_dir = directory(&work(installation, scope).join("current"))?;
-    let before = host::read_inputs_for_source(&current_dir, true)?;
+    let before = host::read_inputs_for_source(&current_dir, plan.public().is_some())?;
     require(crate::installer_generation::hashes(&before) == intent.source_sha256)?;
     for (name, value) in &before {
         require(parent.read(installation, name)? == *value)?;
@@ -432,8 +459,7 @@ fn load_intent(view: &LockedInspection, installation: &Path, scope: Attempt) -> 
     let identities =
         host::staged_identity(&directory(&work(installation, scope).join("identity"))?)?;
     require(crate::installer_generation::hashes(&identities) == intent.identity_sha256)?;
-    let authority = PublicRenewalAuthorityPlan::load(view)?;
-    crate::installer_renewal::require_public_enrolment(view, &authority)?;
+    plan.require_enrolment(view, installation)?;
     let enrolled = host::read_identity(&directory(
         &installation.join("renewal-transfer/delivered"),
     )?)?;
@@ -468,8 +494,23 @@ pub(super) fn pending_status(
         return Ok(None);
     };
     let has = |kind: &str| optional(installation, &scope.record(kind)).map(|value| value.is_some());
+    let preparation = if !has("intent")? && has("public-ingress-plan")? {
+        Some(supersession::saved_preparation_status(installation, scope)?)
+    } else {
+        None
+    };
     let stage = if !has("intent")? {
-        if has("supersession-baseline")? {
+        if let Some((_, expired)) = preparation {
+            if expired {
+                "unused_preparation_expired"
+            } else {
+                "unused_preparation_saved"
+            }
+        } else if has("managed-renewal-plan")? {
+            "managed_preparation_saved"
+        } else if has("unused-preparation")? {
+            "unused_preparation_retired"
+        } else if has("supersession-baseline")? {
             "supersession_baseline_captured"
         } else {
             "supersession_pending"
@@ -498,17 +539,18 @@ pub(super) fn pending_status(
     };
     let mut value = json!({"sequence":scope.sequence,"attempt":scope.number,"stage":stage,
         "installation_ready":false,"read_only":true});
+    if let Some((expiry, expired)) = preparation {
+        value["prepared_certificate_not_after"] = json!(expiry);
+        value["prepared_certificate_expired"] = json!(expired);
+        value["helper_authorized"] = json!(false);
+    }
     if has("binding")? {
         let binding = generation::load_attempt(installation, scope.sequence, scope.number)?;
-        let metadata = binding
-            .public_ingress_metadata(installation)?
-            .ok_or(REFUSED)?;
+        let material = GenerationMaterial::load(installation, &binding)?;
         let at = now()?;
-        value["credential_fresh_until"] = json!(metadata
-            .token_observed_at
-            .checked_add(1800)
-            .ok_or(REFUSED)?);
-        value["certificate_not_after"] = metadata.certificate_admission["not_after"].clone();
+        value["credential_fresh_until"] =
+            json!(material.observed_at().checked_add(1800).ok_or(REFUSED)?);
+        value["certificate_not_after"] = json!(material.expires_at()?);
         value["completed_attempt_stale"] = json!(supersession::requires_supersession(
             installation,
             &binding,
@@ -517,6 +559,38 @@ pub(super) fn pending_status(
     }
     view.require_unchanged()?;
     Ok(Some(value))
+}
+
+fn generation_layer(initial: &SavedSession, relative: &str, expected: &[u8]) -> Result<BoundFile> {
+    let bootstrap: Vec<_> = initial
+        .inputs
+        .files
+        .iter()
+        .filter(|file| {
+            file.path
+                .ends_with("deploy-config/compose/selfhost-installer/compose.bootstrap.yml")
+        })
+        .collect();
+    require(bootstrap.len() == 1)?;
+    let bootstrap = bootstrap[0];
+    let base = bootstrap.path.parent().ok_or(REFUSED)?;
+    require(
+        base.is_absolute()
+            && base.components().all(|part| {
+                matches!(
+                    part,
+                    std::path::Component::RootDir | std::path::Component::Normal(_)
+                )
+            }),
+    )?;
+    require(hash(&std::fs::read(&bootstrap.path).map_err(|_| REFUSED)?) == bootstrap.sha256)?;
+    let name = Path::new(relative).file_name().ok_or(REFUSED)?;
+    let path = base.join(name);
+    require(std::fs::read(&path).map_err(|_| REFUSED)?.as_slice() == expected)?;
+    Ok(BoundFile {
+        path,
+        sha256: hash(expected),
+    })
 }
 
 fn begin(
@@ -528,7 +602,38 @@ fn begin(
     scope: Attempt,
     baseline: Option<&GenerationRecoveryBaseline>,
 ) -> Result<Intent> {
-    let context = installer_acme_host::maintenance_context(state.inspection())?;
+    let plan = GenerationPlan::from_public(
+        state.inspection(),
+        installation,
+        candidate,
+        parent,
+        scope.number,
+    )?;
+    begin_with_plan(installation, docker, state, parent, &plan, scope, baseline)
+}
+fn begin_managed(
+    installation: &Path,
+    docker: &Path,
+    state: &mut LockedMaintenance,
+    parent: &GenerationBinding,
+    scope: Attempt,
+    baseline: Option<&GenerationRecoveryBaseline>,
+) -> Result<Intent> {
+    let plan =
+        GenerationPlan::from_managed(state.inspection(), installation, parent, scope.number)?;
+    begin_with_plan(installation, docker, state, parent, &plan, scope, baseline)
+}
+fn begin_with_plan(
+    installation: &Path,
+    docker: &Path,
+    state: &mut LockedMaintenance,
+    parent: &GenerationBinding,
+    plan: &GenerationPlan,
+    scope: Attempt,
+    baseline: Option<&GenerationRecoveryBaseline>,
+) -> Result<Intent> {
+    plan.require_enrolment(state.inspection(), installation)?;
+    plan.validate_before_producer(installation, parent, now()?)?;
     let saved = parent_session(state.inspection(), installation)?;
     let initial = installer_doctor::load_initial_session(state.inspection(), installation)?;
     let sequence = parent.sequence().checked_add(1).ok_or(REFUSED)?;
@@ -540,14 +645,8 @@ fn begin(
         baseline.require_live(docker, state.journal().runtime().ok_or(REFUSED)?)?;
     }
     require(state.read_evidence(&scope.record("intent"))?.is_none())?;
-    let plan = PublicIngressPlan::from_successor_attempt(
-        state.inspection(),
-        installation,
-        candidate,
-        parent,
-        scope.number,
-    )?;
-    let plan_path = plan.record_for_maintenance(state)?;
+    require(plan.record_name() == scope.record(plan.plan_kind()))?;
+    plan.record_for_maintenance(state)?;
     let root = directory(installation)?;
     let work_root = mkdir(&root, "generation-work")?;
     let sequence_root = mkdir(&work_root, &format!("{sequence:020}"))?;
@@ -560,7 +659,8 @@ fn begin(
     let identity = mkdir(&held, "identity")?;
     let transfer = mkdir(&held, "transfer")?;
     require(fs::file_names(&transfer, REFUSED)?.is_empty())?;
-    let source = crate::installer_renewal_bootstrap::public_inputs()
+    let source = plan
+        .inputs()
         .into_iter()
         .map(|name| Ok((name.clone(), parent.read(installation, &name)?)))
         .collect::<Result<BTreeMap<_, _>>>()?;
@@ -587,34 +687,18 @@ fn begin(
     });
     inputs.profiles = vec!["setup".into()];
     inputs.services = vec!["installer-generation".into()];
-    let layer = context.bundle.join(LAYER);
-    let expected = include_bytes!(
-        "../../../../deploy-config/compose/selfhost-installer/compose.generation.yml"
-    );
-    require(std::fs::read(&layer).map_err(|_| REFUSED)?.as_slice() == expected)?;
-    if let Some(existing) = inputs.files.iter().find(|file| file.path == layer) {
-        require(existing.sha256 == hash(expected))?;
+    let (relative, expected) = plan.layer();
+    let layer = generation_layer(&initial, relative, expected)?;
+    if let Some(existing) = inputs.files.iter().find(|file| file.path == layer.path) {
+        require(existing.sha256 == layer.sha256)?;
     } else {
-        inputs.files.push(BoundFile {
-            path: layer,
-            sha256: hash(expected),
-        });
+        inputs.files.push(layer);
     }
-    let values = BTreeMap::from([
-        (
-            "MARTY_GENERATION_WORK_DIR",
-            path_text(&work(installation, scope))?.into(),
-        ),
-        (
-            "MARTY_GENERATION_PUBLIC_INGRESS_PLAN",
-            path_text(&plan_path)?.into(),
-        ),
-        (PLAN_DIGEST_ENV, plan.sha256()?),
-        (
-            AUTHORITY_PLAN_DIGEST_ENV,
-            plan.renewal_authority_plan_sha256().into(),
-        ),
-    ]);
+    let mut values = plan.environment(installation)?;
+    values.insert(
+        "MARTY_GENERATION_WORK_DIR",
+        path_text(&work(installation, scope))?.into(),
+    );
     let bytes = environment(
         &crate::installer_verify::read_private_bytes(&inputs.environment.path, 65536)?,
         &values,
@@ -625,32 +709,7 @@ fn begin(
         path: installation.join("evidence").join(name),
         sha256: hash(&bytes),
     };
-    inputs.bound_inputs.retain(|file| {
-        !file
-            .path
-            .file_name()
-            .and_then(|v| v.to_str())
-            .is_some_and(|v| {
-                v.starts_with("generation-") && v.ends_with("public-ingress-plan.json")
-            })
-    });
-    inputs.bound_inputs.push(BoundFile {
-        path: plan_path,
-        sha256: plan.sha256()?,
-    });
-    let authority_path = installation
-        .join("evidence")
-        .join(PUBLIC_RENEWAL_AUTHORITY_PLAN_RECORD);
-    if !inputs
-        .bound_inputs
-        .iter()
-        .any(|file| file.path == authority_path)
-    {
-        inputs.bound_inputs.push(BoundFile {
-            path: authority_path,
-            sha256: plan.renewal_authority_plan_sha256().into(),
-        });
-    }
+    plan.bind_inputs(installation, &mut inputs)?;
     // Admission needs the original immutable paths, the genuinely selected
     // generation and at most the one actual stale runtime/helper baseline.
     // Do not accumulate writable roots across every superseded attempt.
@@ -663,11 +722,12 @@ fn begin(
         inputs
             .readonly_bind_roots
             .insert(baseline.runtime_root().into());
-        let previous = baseline.previous_work(installation)?;
-        inputs
-            .readonly_bind_roots
-            .extend([previous.join("current"), previous.join("identity")]);
-        inputs.writable_bind_roots.insert(previous.join("transfer"));
+        if let Some(previous) = baseline.previous_work(installation)? {
+            inputs
+                .readonly_bind_roots
+                .extend([previous.join("current"), previous.join("identity")]);
+            inputs.writable_bind_roots.insert(previous.join("transfer"));
+        }
     } else {
         inputs
             .readonly_bind_roots
@@ -683,12 +743,7 @@ fn begin(
         work(installation, scope).join("current"),
         work(installation, scope).join("identity"),
     ]);
-    plan.require_job_inputs(
-        docker,
-        state.journal().runtime().ok_or(REFUSED)?,
-        &inputs,
-        "installer-generation",
-    )?;
+    plan.require_job_inputs(docker, state.journal().runtime().ok_or(REFUSED)?, &inputs)?;
     let session = ComposeSession::new_generation(
         docker,
         state.journal().runtime().ok_or(REFUSED)?,
@@ -700,7 +755,11 @@ fn begin(
         require(created_at >= baseline.observed_at())?;
     }
     let intent = Intent {
-        schema: "elevenid.installer-generation-maintenance-intent/v1".into(),
+        schema: match plan.source() {
+            PlanSource::Public => "elevenid.installer-generation-maintenance-intent/v1",
+            PlanSource::Managed => "elevenid.installer-generation-maintenance-intent/v2",
+        }
+        .into(),
         installation_id: parent.installation_id.clone(),
         engine_id: parent.engine_id.clone(),
         sequence,
@@ -709,7 +768,12 @@ fn begin(
         parent_binding_sha256: parent.sha256()?,
         initial_configuration_sha256: initial.configuration_sha256,
         parent_session: saved,
-        public_plan_sha256: plan.sha256()?,
+        public_plan_sha256: if plan.public().is_some() {
+            plan.sha256()?
+        } else {
+            String::new()
+        },
+        managed_renewal_plan_sha256: plan.managed().map(|value| value.sha256()).transpose()?,
         source_sha256: crate::installer_generation::hashes(&source),
         identity_sha256: crate::installer_generation::hashes(&credentials),
         helper_inputs: inputs,
@@ -737,12 +801,7 @@ fn producer(
     )?;
     require(session.configuration_sha256() == intent.helper_configuration_sha256)?;
     let binding = intent.parent(installation)?;
-    let plan = PublicIngressPlan::parse_authenticated(
-        &state
-            .inspection()
-            .read_evidence(&scope.record("public-ingress-plan"))?,
-        &intent.public_plan_sha256,
-    )?;
+    let plan = intent.plan(installation)?;
     if state.read_evidence(&scope.record("helper"))?.is_none() {
         let producer_name = scope.record("producer");
         let prepared = if let Some(bytes) = state.read_evidence(&producer_name)? {
@@ -881,7 +940,8 @@ fn producer(
         .ok_or(REFUSED)?;
     require_producer_journal_at(installation, scope, &helper.id, &native.operation)?;
     let base = work(installation, scope);
-    let current = host::read_inputs_for_source(&directory(&base.join("current"))?, true)?;
+    let current =
+        host::read_inputs_for_source(&directory(&base.join("current"))?, plan.public().is_some())?;
     let identity = host::staged_identity(&directory(&base.join("identity"))?)?;
     let keycloak = state
         .inspection()
@@ -891,17 +951,23 @@ fn producer(
         current: &current,
         identity: &identity,
         keycloak_receipt: &keycloak,
-        public_ingress_plan: Some(&plan),
+        public_ingress_plan: plan.public(),
     };
     let output = directory(&base.join("transfer"))?;
-    let hashes = host::validate_delivery(
-        &base.join("transfer"),
-        &output,
-        &proof,
-        crate::installer_helper_output::expected_host_uid(
-            state.journal().runtime().ok_or(REFUSED)?,
-        )?,
+    let output_owner = crate::installer_helper_output::expected_host_uid(
+        state.journal().runtime().ok_or(REFUSED)?,
     )?;
+    let hashes = if let Some(managed) = plan.managed() {
+        host::validate_managed_delivery(
+            &base.join("transfer"),
+            &output,
+            &proof,
+            managed,
+            output_owner,
+        )?
+    } else {
+        host::validate_delivery(&base.join("transfer"), &output, &proof, output_owner)?
+    };
     let delivered = directory(&base.join("transfer/delivered"))?;
     let records = ["pending.json", "validated.json", "completed.json"]
         .into_iter()
@@ -912,9 +978,17 @@ fn producer(
             ))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
-    let public = crate::installer_generation::recorded_public_ingress(&records)?.ok_or(REFUSED)?;
+    let public = crate::installer_generation::recorded_public_ingress(&records)?;
+    let managed = crate::installer_generation::recorded_ingress(&records)?;
+    require(
+        public.is_some() == plan.public().is_some()
+            && managed.is_some() == plan.managed().is_some(),
+    )?;
     let candidate = host::GenerationReceipt {
-        schema: "elevenid.installer-generation-host/v4",
+        schema: match plan.source() {
+            PlanSource::Public => "elevenid.installer-generation-host/v4",
+            PlanSource::Managed => "elevenid.installer-generation-host/v5",
+        },
         installation_id: intent.installation_id.clone(),
         engine_id: intent.engine_id.clone(),
         container_id: helper.id.clone(),
@@ -923,8 +997,9 @@ fn producer(
         image: helper.image.clone(),
         root_retired: false,
         ingress_renewal: true,
-        ingress: None,
-        public_ingress: Some(public),
+        ingress: managed,
+        public_ingress: public,
+        managed_renewal_plan_sha256: plan.managed().map(|value| value.sha256()).transpose()?,
         candidate_validated: true,
         activated: false,
         candidate_sha256: hashes.clone(),
@@ -1093,11 +1168,12 @@ fn activation_inputs(
     inputs.prior = Some(helper.clone());
     inputs.profiles.clear();
     inputs.services.clear();
+    let plan = intent.plan(installation)?;
     let layer = intent
         .helper_inputs
         .files
         .iter()
-        .find(|file| file.path.ends_with(LAYER))
+        .find(|file| file.path.ends_with(plan.layer().0))
         .ok_or(REFUSED)?
         .clone();
     if let Some(existing) = inputs.files.iter().find(|file| file.path == layer.path) {
@@ -1105,34 +1181,15 @@ fn activation_inputs(
     } else {
         inputs.files.push(layer);
     }
-    let plan_path = installation
-        .join("evidence")
-        .join(intent.scope().record("public-ingress-plan"));
-    let plan = PublicIngressPlan::parse_authenticated(
-        &state
-            .inspection()
-            .read_evidence(&intent.scope().record("public-ingress-plan"))?,
-        &intent.public_plan_sha256,
-    )?;
-    let values = BTreeMap::from([
-        (
-            "SELFHOST_SECRET_DIR",
-            path_text(&binding.secret_dir(installation)?)?.into(),
-        ),
-        (
-            "MARTY_GENERATION_WORK_DIR",
-            path_text(&work(installation, intent.scope()))?.into(),
-        ),
-        (
-            "MARTY_GENERATION_PUBLIC_INGRESS_PLAN",
-            path_text(&plan_path)?.into(),
-        ),
-        (PLAN_DIGEST_ENV, plan.sha256()?),
-        (
-            AUTHORITY_PLAN_DIGEST_ENV,
-            plan.renewal_authority_plan_sha256().into(),
-        ),
-    ]);
+    let mut values = plan.environment(installation)?;
+    values.insert(
+        "SELFHOST_SECRET_DIR",
+        path_text(&binding.secret_dir(installation)?)?.into(),
+    );
+    values.insert(
+        "MARTY_GENERATION_WORK_DIR",
+        path_text(&work(installation, intent.scope()))?.into(),
+    );
     let bytes = environment(
         &crate::installer_verify::read_private_bytes(&inputs.environment.path, 65536)?,
         &values,
@@ -1143,19 +1200,7 @@ fn activation_inputs(
         path: installation.join("evidence").join(name),
         sha256: hash(&bytes),
     };
-    inputs.bound_inputs.retain(|file| {
-        !file
-            .path
-            .file_name()
-            .and_then(|v| v.to_str())
-            .is_some_and(|v| {
-                v.starts_with("generation-") && v.ends_with("public-ingress-plan.json")
-            })
-    });
-    inputs.bound_inputs.push(BoundFile {
-        path: plan_path,
-        sha256: plan.sha256()?,
-    });
+    plan.bind_inputs(installation, &mut inputs)?;
     let initial = installer_doctor::load_initial_session(state.inspection(), installation)?;
     inputs.readonly_bind_roots = initial.inputs.readonly_bind_roots;
     inputs.readonly_bind_roots.extend([
@@ -1487,7 +1532,7 @@ fn activate(
     require_activation(installation, scope, binding, &saved)?;
     let selection_name = scope.record("selection");
     if state.read_evidence(&selection_name)?.is_none() {
-        let evidence_sha256 = KINDS
+        let evidence_sha256 = record_kinds(binding)?
             .into_iter()
             .filter(|kind| *kind != "selection")
             .map(|kind| Ok((kind.into(), hash(&read(installation, &scope.record(kind))?))))
@@ -1731,6 +1776,31 @@ pub(super) fn begin_and_reconcile(
         state,
         parent,
         candidate,
+        Attempt::new(parent.sequence().checked_add(1).ok_or(REFUSED)?, 0),
+        None,
+    )?;
+    reconcile(installation, docker, state, &intent, false)
+}
+pub(super) fn begin_managed_and_reconcile(
+    installation: &Path,
+    docker: &Path,
+    state: &mut LockedMaintenance,
+    parent: &GenerationBinding,
+) -> Result<GenerationBinding> {
+    state.inspection().require_path_binding(installation)?;
+    crate::installer_lifecycle::require_recorded_running_intent(state.inspection(), installation)?;
+    crate::installer_root_retirement::require_no_pending_for_generation(state.inspection())?;
+    require(
+        parent.managed_ingress()
+            && generation::load_verified(installation, &parent.installation_id, &parent.engine_id)?
+                .as_ref()
+                == Some(parent),
+    )?;
+    let intent = begin_managed(
+        installation,
+        docker,
+        state,
+        parent,
         Attempt::new(parent.sequence().checked_add(1).ok_or(REFUSED)?, 0),
         None,
     )?;

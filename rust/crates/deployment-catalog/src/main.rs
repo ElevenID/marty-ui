@@ -497,6 +497,12 @@ fn run() -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         return Err("installer trust information currently requires Linux".into());
     }
+    if args.first().is_some_and(|arg| arg == "startup-observe") {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_startup_observation::run(&args[1..]);
+        #[cfg(not(target_os = "linux"))]
+        return Err("signed startup observation requires Linux".into());
+    }
     if args.first().is_some_and(|arg| arg == "acme") {
         #[cfg(target_os = "linux")]
         return marty_deployment_catalog::installer_command::acme(

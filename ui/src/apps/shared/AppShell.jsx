@@ -39,6 +39,7 @@ import { NotificationBell, LanguageSwitcher } from '../../components/common';
 import ImpersonationBanner from '../../components/ImpersonationBanner';
 import { initAnalytics, trackPageView, trackWebVitals } from '../../utils/analytics';
 import { isAdminImpersonationEnabled } from '../../utils/runtimeConfig';
+import { getPublicEntryCanonicalOrigin, publicEntryHref } from '../../application/routing/publicEntry';
 
 function createDynamicTheme(branding) {
   return createTheme({
@@ -96,6 +97,7 @@ function AppShell({ children, showAppBar = true }) {
   const theme = useMemo(() => createDynamicTheme(branding), [branding]);
   const compactHeader = useMediaQuery(theme.breakpoints.down('sm'));
   const adminImpersonationEnabled = isAdminImpersonationEnabled();
+  const publicEntry = Boolean(getPublicEntryCanonicalOrigin());
 
   useEffect(() => {
     initAnalytics();
@@ -168,6 +170,18 @@ function AppShell({ children, showAppBar = true }) {
             />
 
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              {publicEntry && !isAuthenticated && (
+                <Button
+                  component="a"
+                  href={publicEntryHref('/console')}
+                  variant="outlined"
+                  size="small"
+                  sx={{ color: 'white', borderColor: 'white' }}
+                  data-testid="public-entry-console"
+                >
+                  {t('common.openConsole', 'Console')}
+                </Button>
+              )}
               {isAuthenticated ? (
                 <>
                   {isVendor && organizationName && (

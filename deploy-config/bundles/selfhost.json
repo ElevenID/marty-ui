@@ -14,6 +14,7 @@
     "deploy-config/compose/selfhost-installer/compose.acme.yml",
     "deploy-config/compose/selfhost-installer/compose.acme-runtime.yml",
     "deploy-config/compose/selfhost-installer/compose.generation.yml",
+    "deploy-config/compose/selfhost-installer/compose.generation-managed.yml",
     "deploy-config/host/marty-acme-http01.socket",
     "deploy-config/host/marty-acme-http01.service",
     "deploy-config/compose/selfhost-installer/compose.aws-foundation.yml",

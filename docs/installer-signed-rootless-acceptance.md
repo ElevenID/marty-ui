@@ -7,11 +7,13 @@ not require a nested VM, install packages, configure the daemon, or change host
 network routing. The [optional disposable QEMU path](selfhost-disposable-rootless-vm.md)
 is a separate producer of guest identity evidence.
 
-This checkpoint connects authenticated hosting input, rootless storage admission,
-controller observations and versioned evidence. It does **not** establish a real
-signed installation, public browser success, reboot/restore qualification, release
-admission, or normal `Ready` completion. The installed assertion writers described
-below remain explicit blockers.
+The implementation connects authenticated hosting input, rootless storage
+admission and a distinct five-case startup observer. That observer invokes the
+installed signed operator and a pinned real browser; it emits a startup report
+only when their observations agree. Source and fixture tests do **not** establish
+that an AWS installation or public browser run has succeeded. The full functional
+and recovery contract, release admission, and normal `Ready` completion remain
+closed until their independent installed assertion owners are available and run.
 
 ## Authenticated hosting input
 
@@ -87,8 +89,11 @@ new signed rootless canary/preparation authority.
 `AcceptanceOnly` and `CandidateTest` remain different authorities. The former's
 ACME preparation requires the exact 13 completed canary records and nine pinned
 authenticated files. Candidate-test evidence cannot substitute for that set.
-The acceptance path provisions with incomplete completion policy and does not
-turn canary or setup success into `Ready`.
+The production-public/IP acceptance path can return a typed
+`SignedStartupObserved` result after real native startup validation. It remains
+`AcceptanceOnly`, with journal phase `Provisioning` and `installation_ready=false`.
+Candidate-test trial completion, staging certificates, managed/private trust,
+canary completion and setup success cannot produce that result or grant `Ready`.
 
 ## Resource profiles and an existing AWS guest
 
@@ -123,7 +128,152 @@ explicit profile through seed, launch, measured readiness, consumed intent,
 exchange and each dispatch preflight; it cannot relabel a legacy guest as v2 or
 switch profiles after consumption.
 
-## Checkpoints, qualification and promotion
+## Real startup observation
+
+The workflow's `execution_result` choice defaults to `incomplete-checkpoint`.
+Select `startup-observation` with `execute=true` to request the distinct startup
+path. It requires authenticated v2 hosting with an exact canonical DNS origin,
+one IP alias, ACME **production**, explicit terms agreement, and no staging root
+bundle. The original artifact phase can still be `staged` or `published`.
+
+Prepare the separate controller browser runtime using the exact local archives
+and instructions in [the browser runtime guide](installer-startup-browser-runtime.md).
+The fixed runtime is Node 24.22.1, Playwright Core 1.62.1, and full Chromium
+151.0.7922.34/revision 1234. Admission checks the code-bound manifest and every
+file in the private runtime tree. The browser runs as an ordinary nonroot user
+with Chromium's sandbox enabled; there is no browser download, package install,
+custom root import, proxy override or TLS-error bypass in the observation path.
+
+Add these options to the existing authenticated SSH controller invocation of
+`scripts/installer_acceptance_runner.py`:
+
+```sh
+--resource-profile rootless-startup-8gib \
+--browser-runtime /absolute/private/browser-runtime
+```
+
+The runner still needs the original private assets, grants and proof files,
+context, four-field controller target, consumed nonce ledger, pinned verifier
+binaries, SSH identity and pinned known-hosts file. The controller's approved
+GitHub identity must be able to observe the exact active workflow run. It never
+copies a source checkout, browser runtime or controller credentials into the
+customer installation. Existing AWS SSH qualification remains independent of
+the optional QEMU producer.
+
+The five cases have distinct real owners:
+
+| Startup case | Required observations |
+| --- | --- |
+| Artifact verification | Inventory plus all four payload digests, signatures and exact build provenance; both acceptance grants authenticated to the exact harness invocation |
+| Isolated install | Exact signed installation UUID, rootless storage canary, retained native identities and image pins, and no adoption of resources present in the initial host census |
+| Startup runtime | Current selected initial or successor generation, expected live native service states, bound local HTTPS, actual landing document and shipped asset fingerprints |
+| IP browser entry | Actual browser HTTPS navigation to the configured IP, visible landing heading and branding, loaded images, actual response bodies matching the native asset fingerprints, raw IP URL retained, and no IP session request, credential header or cookie |
+| Canonical origin routing | Actual clicks on the existing sign-in action and the visible public-entry-only Console link, with their first document requests going to `/v1/auth/login` and `/console` on the configured canonical DNS origin |
+
+The routing case does not log in, submit credentials, require a registration
+action or change signup policy. A registration URL helper is component coverage
+only. Canonical redirects remain on the configured origin. Both native public
+chain validation and the browser's normal HTTPS verification are required, and
+the observed browser leaf must match the native-bound public leaf.
+
+The installed operator exposes a fixed read-only command:
+
+```sh
+/absolute/installation/marty-deploy startup-observe \
+  --install-dir /absolute/installation --docker-bin /usr/bin/docker \
+  --observation-id CANONICAL_UUID_V4 --challenge LOWERCASE_64_HEX_DIGITS
+```
+
+The controller supplies fresh request challenges, observes the native owner
+before and after the browser, and requires the exact current selection, resource
+identities, public leaf, hosting and page fingerprints to remain the same.
+Initial selection binds its four real retained records; a public successor binds
+the exact ten-record sequence/attempt closure. Rollback-only evidence and an
+empty selection map cannot qualify. These bounded observations are explicitly
+not an atomic snapshot or a continuing availability guarantee.
+
+Browser execution has an isolated Linux supervisor. It retains ownership of the
+browser process tree with subreaping and PID identity checks, including Chromium
+children that start their own process groups. Timeout or cancellation requires
+bounded cleanup. A stalled cleanup or a remaining descendant is a failure and
+cannot produce a successful startup report.
+
+### Pending ACME issuance
+
+Initial ACME issuance is asynchronous. **There is no installed systemd lifecycle
+owner before application startup completes**: lifecycle export happens after
+the application and native validation succeed. A zero exit with an ACME-pending
+record therefore does not mean startup was observed.
+
+With the browser startup mode selected, the controller can continue only a
+typed, known pending order returned by the exact signed operator. It invokes:
+
+```sh
+/absolute/installation/marty-deploy acme continue \
+  --install-dir /absolute/installation --docker-bin /usr/bin/docker
+```
+
+The command and paths are fixed from the original target. Before every automatic
+invocation, the controller rechecks the original unexpired signed grant, exact
+active workflow invocation and retained input custody. It honors the later of
+the native poll and retry deadlines, limits this continuation window to 900
+monotonic seconds and at most 180 invocations, and records an intent before each
+SSH operation. It does not repeat installation or manufacture a new ACME order.
+
+Unknown order outcomes, terminal/replacement results, unsafe phase holds,
+expired authorization and a lost response stop automatic mutation. The retained
+native owner still enforces its own durable ACME protocol rules. The customer
+may use the explicit local continuation command against the retained state
+after the controller grant expires; that does not extend the workflow grant or
+authorize another controller dispatch. A timed-out qualification invocation is
+not resurrected by a later local recovery. Read-only startup observation never
+infers success from a failed or ambiguous command response.
+
+### Returning a startup report
+
+After all owners pass, the runner writes the bounded private file
+`installer-startup-observation.json` using
+`elevenid.installer-acceptance/v2` and profile `rootless-startup-8gib`. It embeds
+the exact public native/browser owner records and their digests. Failed runs
+retain the ordinary incomplete checkpoint and available partial observations;
+they do not create a passed startup report.
+
+The approved controller uploads this fixed subject to the original owned draft
+using `scripts/installer_acceptance_return.py upload-startup-payload`. Supply
+`--report`, the original `--authorization`, `--receipt`, `--inventory`,
+`--assets`, `--descriptor`, consumed `--ledger`, pinned `--gh` and `--cosign`,
+`--harness-source-sha`, `--run-id`, `--run-attempt`, approved
+`--controller-user-id`, and a fresh private `--output` receipt path. It holds the
+controller registry, verifies the exact active invocation and original receipt
+asset, and persists an exclusive upload intent before its only POST. A lost
+upload response leaves that intent and prohibits blind replay or overwrite.
+
+The workflow uses `receive-startup-payload` to independently reverify the
+inventory, all four original payloads, both grants and their exact proof bytes.
+It checks the approved uploader, original draft/receipt, exact active run and
+closed owner records before signing. Files, parent identity and content remain
+bound across external verifier calls. The workflow signs and attests the
+distinct subject and archives `installer-startup-observation-RUN-ATTEMPT`.
+
+After that exact workflow invocation has completed successfully, a consumer
+uses the separate final reader:
+
+```sh
+python scripts/installer_acceptance_return.py verify-startup-return \
+  --report /private/return/installer-startup-observation.json \
+  --signature-bundle /private/return/installer-startup-observation.json.sigstore.json \
+  --provenance /private/return/installer-startup-observation.json.provenance.jsonl \
+  --inventory /private/assets/installer-inventory.json \
+  --gh /private/tools/gh --cosign /private/tools/cosign
+```
+
+The inventory's signature and provenance sidecars must also be present. This
+reader obtains the authoritative completed-success run, verifies the inventory
+and signed report against the exact invocation, and returns startup-only facts.
+An active, failed, mismatched or different-attempt run cannot satisfy it. There
+is no `allow-active` option on the final consumer.
+
+## Checkpoints, full qualification and promotion
 
 The running controller emits `elevenid.installer-acceptance-checkpoint/v5` for
 the new profiles. It binds signed hosting, the nine source digests, actual host
@@ -150,13 +300,13 @@ independent root retirement and neighboring-state preservation.
 
 Each case has distinct checks and named native evidence owners. Required
 installation, Engine, operator, context, generation selection and clock bindings
-cannot be replaced by a generic `passed` record. **No installed case writer or
-native proof adapter is registered yet.** `missing_writers(profile)` lists the
-exact missing cases, and both report production and case admission refuse while
-those owners are unavailable. Detached official-Bao proofs, synthetic fixtures,
-self-hashed JSON, and an incomplete checkpoint cannot satisfy them. Implementing
-an adapter requires its actual protected output reader and real installed
-exercise; adding a name to the registry is not sufficient.
+cannot be replaced by a generic `passed` record. Five startup owners now have
+the dedicated collector and closed adapters above. The other 32 cases remain
+listed by `missing_writers(rootless-functional-recovery-8gib)`; full report
+production remains blocked. The generic caller-supplied case-JSON emitter cannot
+produce even a startup report. Detached official-Bao proofs, synthetic fixtures,
+self-hashed JSON and an incomplete checkpoint cannot stand in for the installed
+exercise or its protected owner outputs.
 
 The promotion validator recognizes the separate schema but requires the full
 profile and real installed proof owners. Startup reports cannot promote. The

@@ -31,8 +31,9 @@ def test_new_profiles_preserve_all_old_cases_and_require_real_new_owners():
     assert set(v2.STARTUP_CASES) < set(v2.FUNCTIONAL_CASES)
     assert set(v2.RECOVERY_CASES) <= set(v2.FUNCTIONAL_CASES)
     assert v2.MIN_MEMORY_BYTES==7*1024**3 and legacy.MIN_MEMORY_BYTES==32*1024**3
-    assert set(v2.missing_writers(v2.FUNCTIONAL_PROFILE))==set(v2.FUNCTIONAL_CASES)
-    assert v2.IMPLEMENTED_INSTALLED_WRITERS==frozenset()
+    assert set(v2.missing_writers(v2.FUNCTIONAL_PROFILE))==set(v2.FUNCTIONAL_CASES)-set(v2.STARTUP_CASES)
+    assert v2.IMPLEMENTED_INSTALLED_WRITERS==frozenset(v2.STARTUP_CASES)
+    assert v2.missing_writers(v2.STARTUP_PROFILE)==()
 
 
 @pytest.mark.parametrize('case',v2.FUNCTIONAL_CASES)

@@ -42,6 +42,7 @@ enum InstallMode {
 pub(crate) enum RuntimeCompletion {
     HoldIncomplete,
     CandidateTrialObserved,
+    SignedStartupObserved,
 }
 pub(crate) struct RuntimeInvocation<'a> {
     pub(crate) operator_sha: &'a str,
@@ -986,6 +987,8 @@ pub fn acme(args: &[String], build_identity: &str) -> Result<()> {
         ExecutionScope::CandidateTest(_)
     ) {
         RuntimeCompletion::CandidateTrialObserved
+    } else if crate::installer_startup_observation::retained_signed_startup(&view, &operator_sha)? {
+        RuntimeCompletion::SignedStartupObserved
     } else {
         RuntimeCompletion::HoldIncomplete
     };
@@ -1041,12 +1044,36 @@ fn validate_and_complete(
         )?;
     }
     eprintln!("Marty runtime stage: read-only deployment validation");
-    state.with_inspection(|inspection| {
-        crate::installer_validation::run_locked(installation, docker, inspection, false)
-    })?;
+    let startup = if invocation.completion == RuntimeCompletion::SignedStartupObserved {
+        Some(state.with_inspection(|inspection| {
+            crate::installer_startup_observation::observe_locked(
+                inspection,
+                installation,
+                docker,
+                crate::installer_startup_observation::StartupObservationRequest::fresh(),
+            )
+        })?)
+    } else {
+        state.with_inspection(|inspection| {
+            crate::installer_validation::run_locked(installation, docker, inspection, false)
+        })?;
+        None
+    };
     let lifecycle = state.with_maintenance(|maintenance| {
         crate::installer_lifecycle::install_locked(maintenance, installation, docker)
     })?;
+    if let Some(startup) = startup {
+        state.require_live_phase(Phase::Provisioning)?;
+        // The private native result can only be constructed by the real signed
+        // observer. Exit zero is observation-only, never admitted completion.
+        println!(
+            "{}",
+            std::str::from_utf8(&startup.bytes()?)
+                .map_err(|_| "cannot encode signed startup observation")?
+        );
+        eprintln!("SIGNED STARTUP OBSERVED: journal remains Provisioning; Ready, functional/recovery qualification and load characterization are false.");
+        return Ok(());
+    }
     println!(
         "{}",
         serde_json::to_string(&lifecycle)

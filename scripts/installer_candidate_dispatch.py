@@ -3,8 +3,9 @@
 Physical VM/disk identity and pre-install cleanliness remain controller assertions.
 This transfers no SSH key, source checkout, controller ledger or ambient credential.
 Any failed/uncertain attempt retains its durable intent and must not be retried.
-Native installation currently returns incomplete until journey/trust work finishes;
-that is a retained failure here, never an acceptance or readiness result.
+Signed public/IP startup has a distinct typed observation or known-pending
+result. Every result remains unqualified; other incomplete/uncertain output is
+retained as failure, never interpreted as acceptance or readiness.
 """
 from __future__ import annotations
 
@@ -321,10 +322,30 @@ def dispatch(*, assets, grants, context_file, target_file, ledger, gh, cosign,
             write_exclusive(Path(str(ledger) + '.invoke.json'), release.encode(dict(
                 schema='elevenid.installer-candidate-invocation/v1', receipt_sha256=release.digest(receipt),
                 installation_id=target['installation_id'], invoked_at=int(clock()), installation_ready=False)))
-            remote(invoke, timeout=1800, stage='invoke')
+            invocation_output=remote(invoke, timeout=1800, stage='invoke')
         result = dict(schema='elevenid.installer-candidate-dispatch-result/v1',
                       installation_id=target['installation_id'], command_returned_zero=True,
                       installation_ready=False, acceptance_report=False)
+        hosting=context.get('hosting')
+        if (hosting is not None and hosting['certificate_source']=='acme'
+                and hosting['acme_environment']=='production' and hosting['public_entry_origin'] is not None):
+            import installer_startup_observation as startup
+            from installer_acceptance_runner import authenticated_source_digests
+            value=release.decode(invocation_output)
+            if value.get('schema')==startup.NATIVE_SCHEMA:
+                startup.native(invocation_output,context=context,target=target,authorization=authorization,
+                    receipt=receipt,inventory=inventory,pins=authenticated_source_digests(files,assets,grants),
+                    observed_at=int(clock()))
+                completion='startup_observed';name=context['nonce']+'.startup-observation.json'
+            else:
+                import installer_startup_continuation as continuation
+                continuation.pending(invocation_output,context=context,target=target,
+                    installation=home+'/marty-install-'+target['installation_id'],now=int(clock()))
+                completion='acme_pending';name=context['nonce']+'.startup-pending.json'
+            write_exclusive(ledger.parent/name,invocation_output)
+            result.update(schema='elevenid.installer-candidate-dispatch-result/v2',
+                completion=completion,native_startup_observation_name=name,
+                native_startup_observation_sha256=release.digest(invocation_output))
         registry_unchanged(parent, ledger.parent)
         write_exclusive(Path(str(ledger) + '.dispatch-result.json'), release.encode(result))
         return result

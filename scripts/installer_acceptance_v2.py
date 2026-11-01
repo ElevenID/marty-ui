@@ -27,11 +27,10 @@ RECOVERY_CASES = ("openbao-static-seal-reboot", "openbao-expired-tls-recovery",
 FUNCTIONAL_CASES = tuple(dict.fromkeys((*legacy.CASES, *STARTUP_CASES, *RECOVERY_CASES)))
 require, exact = legacy.require, legacy.exact
 
-# The exact installed owners have not been connected to this signed report
-# producer yet. This set is deliberately empty: passing caller-supplied JSON,
-# even when it has a plausible schema and a self-consistent digest, cannot add
-# an owner or turn a component proof into installed qualification.
-IMPLEMENTED_INSTALLED_WRITERS = frozenset()
+# Startup has a separate real collector and closed raw-owner adapters. The
+# remaining functional/recovery owners stay closed. A name in this set never
+# authorizes the generic caller-supplied case-record path below.
+IMPLEMENTED_INSTALLED_WRITERS = frozenset(STARTUP_CASES)
 CASE_CHECKS = {
     "anonymous-download": ("public_release_downloaded_without_credentials", "exact_download_receipts"),
     "artifact-verification": ("all_signatures_verified", "exact_workflow_provenance", "all_payload_digests_verified"),
@@ -59,7 +58,7 @@ CASE_CHECKS = {
     "startup-runtime": ("exact_selected_runtime_healthy", "verified_local_https", "configured_page_assets_loaded"),
     "ip-entry-browser": ("configured_ip_url_visited", "browser_public_tls_verified", "real_landing_assets_rendered",
                          "raw_ip_url_retained", "no_ip_session_request_or_cookie"),
-    "canonical-origin-routing": ("sign_in_uses_canonical_origin", "registration_uses_canonical_origin", "console_uses_canonical_origin"),
+    "canonical-origin-routing": ("sign_in_uses_canonical_origin", "console_uses_canonical_origin"),
     "openbao-static-seal-reboot": ("guest_boot_id_changed", "same_cluster_auto_unsealed", "exact_static_key_retained", "no_init_or_unseal_replay"),
     "openbao-expired-tls-recovery": ("old_network_tls_expired", "scoped_unix_login", "same_key_certificate_replaced", "owned_hup", "verified_network_tls_recovered"),
     "http01-independent-recovery": ("https_unavailable", "exact_http01_response_available", "unknown_host_and_path_refused", "challenge_withdrawn_after_completion"),
@@ -153,12 +152,17 @@ def validate_case_proof(proof, *, case, scope, selection, observed_at):
     # A typed reference is still not a proof reader. Opening a new writer here
     # requires its real protected-file adapter, native output schema validation
     # and installed exercise. Until then no caller record can graduate the case.
-    require(case in IMPLEMENTED_INSTALLED_WRITERS,
-            f'installed assertion owner and native proof adapter unavailable: {case}')
+    require(False, f'installed assertion owner and native proof adapter unavailable through generic references: {case}; '
+            'startup requires its protected actual owner records')
 
 
 def validate(report: dict, *, inventory_bytes: bytes, source_sha: str,
              release_tag: str, phase: str, run: dict, require_functional=True):
+    if type(report) is dict and report.get('profile') == STARTUP_PROFILE:
+        require(not require_functional, 'startup evidence cannot promote a release')
+        import installer_acceptance_startup
+        return installer_acceptance_startup.validate_completed_return(report, inventory_bytes=inventory_bytes,
+            source_sha=source_sha, release_tag=release_tag, phase=phase, run=run)
     import installer_release as release
     from installer_host_admission import host_admission, resource_snapshot
     exact(report, {"schema", "repository", "source_sha", "source_ref", "harness_source_sha", "release_tag",
@@ -258,6 +262,8 @@ def produce(*, completed_case_bytes: dict[str, bytes], report: dict, inventory_b
     blockers; no checkpoint or component-only proof is accepted as a case.
     """
     import installer_release as release
+    require(report.get('profile') != STARTUP_PROFILE,
+            'installed qualification writers unavailable through caller case JSON; use the actual startup collector')
     expected = set(cases_for(report.get("profile")))
     missing = missing_writers(report.get('profile'))
     require(not missing, 'installed qualification writers unavailable: ' + ', '.join(missing))

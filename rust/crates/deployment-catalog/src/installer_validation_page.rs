@@ -3,12 +3,40 @@
 
 use super::{bound_get, client, TrustInfo};
 use reqwest::{header, Response, StatusCode};
+use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 const HTML_LIMIT: usize = 131072;
 const ASSET_LIMIT: usize = 4 * 1024 * 1024;
 const TOTAL_LIMIT: usize = 16 * 1024 * 1024;
+
+/// Public response fingerprints, never response bodies or cookie values.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct PageAsset {
+    pub path: String,
+    pub media_type: String,
+    pub size_bytes: usize,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct PageObservation {
+    pub origin: String,
+    pub assets: Vec<PageAsset>,
+    pub app_name: Option<String>,
+    pub alias_api_isolation_observed: bool,
+}
+
+fn fingerprint(path: &str, media_type: &str, bytes: &[u8]) -> PageAsset {
+    PageAsset {
+        path: path.into(),
+        media_type: media_type.into(),
+        size_bytes: bytes.len(),
+        sha256: format!("{:x}", Sha256::digest(bytes)),
+    }
+}
 
 #[derive(Debug, Eq, PartialEq)]
 struct Asset {
@@ -165,7 +193,7 @@ async fn document(
     canonical: &str,
     alias: Option<&str>,
     is_alias: bool,
-) -> Option<()> {
+) -> Option<PageObservation> {
     let client = client(trust).ok()?;
     let page = bound_get(&client, trust, "/").await?;
     if !content_type(&page, &["text/html"]) {
@@ -173,6 +201,7 @@ async fn document(
     }
     let bytes = body(page, HTML_LIMIT, is_alias).await?;
     let assets = entry_assets(&bytes)?;
+    let mut observed = vec![fingerprint("/", "text/html", &bytes)];
     let mut total = bytes.len();
     for path in ["/runtime-config.js", "/startup.js"] {
         let response = bound_get(&client, trust, path).await?;
@@ -184,6 +213,7 @@ async fn document(
             return None;
         }
         total += bytes.len();
+        observed.push(fingerprint(path, "application/javascript", &bytes));
     }
     for asset in assets {
         let response = bound_get(&client, trust, &asset.path).await?;
@@ -210,6 +240,15 @@ async fn document(
             return None;
         }
         total += bytes.len();
+        observed.push(fingerprint(
+            &asset.path,
+            if asset.stylesheet {
+                "text/css"
+            } else {
+                "application/javascript"
+            },
+            &bytes,
+        ));
     }
     if is_alias {
         // These requests are anonymous and must terminate at the alias policy.
@@ -228,23 +267,56 @@ async fn document(
             }
         }
     }
-    Some(())
+    // Branding is a real runtime input. It is observed for the alias proof,
+    // without adding a new requirement to legacy canonical-only validation.
+    let app_name = if is_alias {
+        let response = bound_get(&client, trust, "/config.json").await?;
+        if !content_type(&response, &["application/json"]) {
+            return None;
+        }
+        let bytes = body(
+            response,
+            HTML_LIMIT.min(TOTAL_LIMIT.checked_sub(total)?),
+            true,
+        )
+        .await?;
+        let config = crate::installer_json::decode(&bytes).ok()?;
+        let name = config["appName"].as_str()?;
+        if name.is_empty() || name.len() > 256 || name.chars().any(char::is_control) {
+            return None;
+        }
+        observed.push(fingerprint("/config.json", "application/json", &bytes));
+        Some(name.into())
+    } else {
+        None
+    };
+    observed.sort_by(|a, b| a.path.cmp(&b.path));
+    Some(PageObservation {
+        origin: trust.origin.clone(),
+        assets: observed,
+        app_name,
+        alias_api_isolation_observed: is_alias,
+    })
 }
 
-pub(super) async fn check(trust: &TrustInfo, alias: Option<&str>) -> [bool; 2] {
-    let canonical = document(trust, &trust.origin, alias, false).await.is_some();
+pub(super) async fn check(
+    trust: &TrustInfo,
+    alias: Option<&str>,
+) -> ([bool; 2], Option<PageObservation>) {
+    let canonical = document(trust, &trust.origin, alias, false).await;
     let entry = if let Some(alias) = alias {
         let mut entry = trust.clone();
         entry.origin = alias.into();
         // Transport keeps the same admitted leaf and bound local listener, but
         // verifies the exact IP SAN and sends the configured alias authority.
-        document(&entry, &trust.origin, Some(alias), true)
-            .await
-            .is_some()
+        document(&entry, &trust.origin, Some(alias), true).await
     } else {
-        true
+        None
     };
-    [canonical, entry]
+    (
+        [canonical.is_some(), alias.is_none() || entry.is_some()],
+        entry,
+    )
 }
 
 #[cfg(test)]
