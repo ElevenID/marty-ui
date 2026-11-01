@@ -2693,7 +2693,9 @@ fn proxy_overrides(
             .headers
             .insert("x-api-key".into(), state.issuance_service_api_key.clone());
     }
-    if (is_public_service_sign_path(path) || is_public_service_csr_path(path))
+    if (is_public_service_sign_path(path)
+        || is_public_service_csr_path(path)
+        || path == "/v1/signing-keys/config/validate-current")
         && identity.required_permission.as_deref() == Some("signing-key:create")
         && identity.organization_id.is_some()
     {
@@ -8079,6 +8081,18 @@ mod tests {
         assert!(!proxy_overrides(&state, path, &identity)
             .headers
             .contains_key("x-api-key"));
+        let readiness = "/v1/signing-keys/config/validate-current";
+        identity.organization_id = Some("org-1".into());
+        assert_eq!(
+            proxy_overrides(&state, readiness, &identity)
+                .headers
+                .get("x-api-key"),
+            state.service_sign_gateway_key.as_ref()
+        );
+        identity.required_permission = Some("signing-key:view".into());
+        assert!(!proxy_overrides(&state, readiness, &identity)
+            .headers
+            .contains_key("x-api-key"));
     }
 
     #[tokio::test]
@@ -8139,6 +8153,28 @@ mod tests {
                 body
             );
         }
+
+        // The caller cannot select another tenant even when query and JSON
+        // agree with each other: the authenticated membership is org-1.
+        let before = recorder.0.lock().unwrap().len();
+        let foreign = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/signing-keys/config/validate-current?organization_id=org-other")
+                    .header("content-type", "application/json")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::from(
+                        json!({"organization_id":"org-other", "issuer_did":"did:web:issuer.example",
+                            "credential_format":"SD_JWT_VC"})
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(foreign.status(), StatusCode::FORBIDDEN);
+        assert_eq!(recorder.0.lock().unwrap().len(), before);
     }
 
     #[tokio::test]

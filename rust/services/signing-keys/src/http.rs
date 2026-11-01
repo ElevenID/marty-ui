@@ -68,6 +68,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use certificate_operations::*;
+use marty_crypto::{ecdsa, jwk::PublicJwk};
 use marty_signing_grant::{
     ceremony::{IssuerCsrIntent, ServiceCsrIntent},
     replay::ConsumedGrant,
@@ -429,6 +430,10 @@ pub fn router_with_runtime_kms(
         .route(
             "/v1/signing-keys/config/validate",
             post(validate_public_service),
+        )
+        .route(
+            "/v1/signing-keys/config/validate-current",
+            post(validate_current_issuer_service),
         )
         .route(
             "/v1/signing-keys/config/resolve",
@@ -2184,6 +2189,516 @@ async fn save_public_config(
 
 async fn validate_public_service(Json(request): Json<ValidationRequest>) -> Response {
     Json(validation::validate(request).await).into_response()
+}
+
+// This probe uses the stored service credential. It never accepts a payload,
+// returns a signature, or enters the gateway signing-grant path.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CurrentIssuerServiceValidationRequest {
+    #[serde(default)]
+    organization_id: Option<String>,
+    issuer_did: String,
+    credential_format: String,
+}
+
+fn current_issuer_service_readiness(checks: &[validation::ValidationCheck]) -> bool {
+    let passed = |name: &str| {
+        checks
+            .iter()
+            .any(|check| check.name == name && check.status == "pass")
+    };
+    passed("Key exists")
+        && passed("Signer capability")
+        // A sign-only token can receive 403 from lookup-self while both key
+        // read and signing succeed. Treat that lookup as diagnostic only.
+        && !checks.iter().any(|check| check.status == "fail" && check.name != "Provider auth")
+}
+
+fn verify_current_issuer_signature(public: &Value, payload: &[u8], signature: &[u8]) -> bool {
+    let Ok(key) = PublicJwk::from_json(&public.to_string()) else {
+        return false;
+    };
+    if key.kty != "EC" || key.crv.as_deref() != Some("P-256") {
+        return false;
+    }
+    let (Some(x), Some(y)) = (key.x.as_deref(), key.y.as_deref()) else {
+        return false;
+    };
+    let (Ok(x), Ok(y)) = (URL_SAFE_NO_PAD.decode(x), URL_SAFE_NO_PAD.decode(y)) else {
+        return false;
+    };
+    if x.len() != 32 || y.len() != 32 {
+        return false;
+    }
+    let mut point = vec![4];
+    point.extend(x);
+    point.extend(y);
+    ecdsa::verify_p256_sha256(&point, payload, signature).ok() == Some(true)
+}
+
+async fn current_issuer_signature_verified(service: &Value) -> bool {
+    // Read the existing provider key for this registry service/key_reference,
+    // not the issuer profile's published JWK. Verify a fixed server-owned
+    // challenge; neither the challenge selector nor signature is returned.
+    const CHALLENGE: &[u8] = b"marty-current-issuer-service-readiness-v1";
+    let Ok(public) = kms::public_key_existing(ProviderRequest {
+        service_config: service.clone(),
+    })
+    .await
+    else {
+        return false;
+    };
+    let Ok(signed) = kms::sign(SignRequest {
+        service_config: service.clone(),
+        payload_b64: URL_SAFE_NO_PAD.encode(CHALLENGE),
+    })
+    .await
+    else {
+        return false;
+    };
+    if signed.signature_encoding != "der" {
+        return false;
+    }
+    let Ok(signature) = URL_SAFE_NO_PAD.decode(signed.signature_b64) else {
+        return false;
+    };
+    verify_current_issuer_signature(&public, CHALLENGE, &signature)
+}
+
+fn current_issuer_profiles<'a>(
+    document: &'a Value,
+    issuer_did: &str,
+    credential_format: &str,
+) -> Vec<&'a Value> {
+    document
+        .get("profiles")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|profile| {
+            profile.get("status").and_then(Value::as_str) == Some("active")
+                && profile.get("issuer_did").and_then(Value::as_str) == Some(issuer_did)
+                && profile.get("credential_format").and_then(Value::as_str)
+                    == Some(credential_format)
+                && profile.get("key_purpose").and_then(Value::as_str) == Some("vc_jwt_issuer")
+                && profile.get("algorithm").and_then(Value::as_str) == Some("ES256")
+        })
+        .collect()
+}
+
+fn supported_current_issuer_service(service: &Value) -> bool {
+    service.get("service_type").and_then(Value::as_str) == Some("openbao-transit")
+        && matches!(
+            service.get("auth_mode").and_then(Value::as_str),
+            Some("token" | "service_token")
+        )
+}
+
+// A service may host distinct VC and protected keys. The selected reference
+// must not itself have an explicit protected or mixed-purpose binding.
+fn current_issuer_key_is_vc_bound(
+    registry: &Value,
+    service: &Value,
+    service_id: &str,
+    key_reference: &str,
+) -> bool {
+    let service_purposes = service.get("key_purposes").and_then(Value::as_array);
+    let Some(service_purposes) = service_purposes else {
+        return false;
+    };
+    if !service_purposes
+        .iter()
+        .any(|purpose| purpose.as_str() == Some("vc_jwt_issuer"))
+    {
+        return false;
+    }
+    registry
+        .get("key_reference_purposes")
+        .and_then(|all| all.get(service_id))
+        .and_then(|keys| keys.get(key_reference))
+        .is_none_or(|bound| {
+            bound.as_array().is_some_and(|purposes| {
+                purposes.len() == 1 && purposes[0].as_str() == Some("vc_jwt_issuer")
+            })
+        })
+}
+
+#[cfg(test)]
+mod current_issuer_validation_tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    fn check(name: &str, status: &str) -> validation::ValidationCheck {
+        validation::ValidationCheck {
+            name: name.into(),
+            status: status.into(),
+            detail: String::new(),
+            source: "live".into(),
+        }
+    }
+
+    #[test]
+    fn sign_and_read_prove_ready_even_when_sign_only_token_cannot_lookup_self() {
+        assert!(current_issuer_service_readiness(&[
+            check("Key exists", "pass"),
+            check("Provider auth", "fail"),
+            check("Signer capability", "pass"),
+        ]));
+        assert!(!current_issuer_service_readiness(&[
+            check("Key exists", "pass"),
+            check("Provider auth", "pass"),
+            check("Signer capability", "fail"),
+        ]));
+        assert!(!current_issuer_service_readiness(&[check(
+            "Signer capability",
+            "pass"
+        )]));
+        // Fixed public ECDSA vector for the server-owned challenge; tests never sign.
+        let jwk = json!({"kty":"EC", "crv":"P-256",
+            "x":"jlM7b6C_e0YluzBmfAH7YH75-LioD-9bMAYocDGHsqM",
+            "y":"c-sdveAzGDZtBp-DpvWQAFPHNjPLBBshxV4ahsH0ALQ"});
+        let payload = b"marty-current-issuer-service-readiness-v1";
+        let signature = hex::decode(concat!(
+            "3045022018c28b956d1557b85154a8e9bd077adb21f4df0f9876f12f97fd9373a4d72f0f",
+            "022100bbab5fba0e276f3026e344c0b16aebd56db96fd1d756375cac3086745f52e6f5"
+        ))
+        .expect("fixed public DER signature");
+        assert!(verify_current_issuer_signature(
+            &jwk,
+            payload,
+            signature.as_slice()
+        ));
+        assert!(!verify_current_issuer_signature(
+            &jwk,
+            payload,
+            b"not-a-signature"
+        ));
+        let wrong_jwk = json!({"kty":"EC", "crv":"P-256",
+            "x":"Ytl3nb7psFNAQnQtOrVMrcHSOJgPzpfbtN2dwdtvs5M",
+            "y":"rVrMvZHp2CRP8V13EWfO4KLtUfa752p42lQKag8JlX4"});
+        assert!(!verify_current_issuer_signature(
+            &wrong_jwk,
+            payload,
+            signature.as_slice()
+        ));
+        assert!(!verify_current_issuer_signature(
+            &json!({"kty":"EC","crv":"P-256","x":"AA","y":"AA"}),
+            payload,
+            signature.as_slice()
+        ));
+    }
+
+    #[test]
+    fn only_unique_active_vc_issuer_tuple_can_be_probed() {
+        let document = json!({"profiles": [
+            {"status":"active", "issuer_did":"did:web:issuer.example", "credential_format":"SD_JWT_VC",
+             "key_purpose":"vc_jwt_issuer", "algorithm":"ES256", "signing_service_id":"svc-a"},
+            {"status":"active", "issuer_did":"did:web:issuer.example", "credential_format":"SD_JWT_VC",
+             "key_purpose":"mdoc_dsc", "algorithm":"ES256", "signing_service_id":"svc-b"},
+            {"status":"revoked", "issuer_did":"did:web:issuer.example", "credential_format":"SD_JWT_VC",
+             "key_purpose":"vc_jwt_issuer", "algorithm":"ES256", "signing_service_id":"svc-c"},
+        ]});
+        assert_eq!(
+            current_issuer_profiles(&document, "did:web:issuer.example", "SD_JWT_VC").len(),
+            1
+        );
+        assert!(
+            current_issuer_profiles(&document, "did:web:foreign.example", "SD_JWT_VC").is_empty()
+        );
+        assert!(current_issuer_profiles(&document, "did:web:issuer.example", "VC_JWT").is_empty());
+        assert!(validate_service_scope("org-a", Some("org-b")).is_err());
+        assert!(supported_current_issuer_service(&json!({
+            "service_type":"openbao-transit", "auth_mode":"token"
+        })));
+        assert!(!supported_current_issuer_service(&json!({
+            "service_type":"openbao-transit", "auth_mode":"approle"
+        })));
+        assert!(!supported_current_issuer_service(&json!({
+            "service_type":"managed-openbao-transit", "auth_mode":"service_token"
+        })));
+        assert!(serde_json::from_value::<CurrentIssuerServiceValidationRequest>(json!({
+            "issuer_did":"did:web:issuer.example", "credential_format":"SD_JWT_VC", "payload_b64":"dGVzdA=="
+        })).is_err());
+    }
+
+    #[test]
+    fn registry_binding_refuses_protected_key_before_provider_probe() {
+        let service = json!({"id":"svc-a", "service_type":"openbao-transit",
+            "auth_mode":"token", "key_reference":"vc-key",
+            "key_purposes":["vc_jwt_issuer","mdoc_dsc"]});
+        let vc_only = json!({"key_reference_purposes": {
+            "svc-a": {"vc-key":["vc_jwt_issuer"], "mdoc-key":["mdoc_dsc"]}}});
+        assert!(current_issuer_key_is_vc_bound(
+            &vc_only, &service, "svc-a", "vc-key"
+        ));
+        assert!(current_issuer_key_is_vc_bound(
+            &json!({"key_reference_purposes": {}}),
+            &service,
+            "svc-a",
+            "vc-key"
+        ));
+        assert!(!current_issuer_key_is_vc_bound(
+            &vc_only, &service, "svc-a", "mdoc-key"
+        ));
+        let protected = json!({"key_reference_purposes": {
+            "svc-a": {"vc-key":["vc_jwt_issuer","mdoc_dsc"]}}});
+        assert!(!current_issuer_key_is_vc_bound(
+            &protected, &service, "svc-a", "vc-key"
+        ));
+        assert!(!current_issuer_key_is_vc_bound(
+            &json!({"key_reference_purposes": {"svc-a": {"vc-key": "malformed"}}}),
+            &service,
+            "svc-a",
+            "vc-key"
+        ));
+        let mut mdoc_only_service = service.clone();
+        mdoc_only_service["key_purposes"] = json!(["mdoc_dsc"]);
+        assert!(!current_issuer_key_is_vc_bound(
+            &vc_only,
+            &mdoc_only_service,
+            "svc-a",
+            "vc-key"
+        ));
+    }
+
+    #[tokio::test]
+    async fn current_validation_denies_unauthenticated_cross_tenant_and_arbitrary_signing() {
+        let app = router_with_all_keys(
+            "shared-internal-signing-key-32-chars".into(),
+            Some("dedicated-service-sign-key-32-chars".into()),
+            Some("dedicated-issuer-sign-key-32-chars".into()),
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let route = "/v1/signing-keys/config/validate-current?organization_id=org-a";
+        let body = json!({"organization_id":"org-a", "issuer_did":"did:web:issuer.example",
+            "credential_format":"SD_JWT_VC"});
+        let request = |body: Value, key: Option<&str>| {
+            let mut builder = Request::post(route).header("content-type", "application/json");
+            if let Some(key) = key {
+                builder = builder.header("x-api-key", key);
+            }
+            builder.body(Body::from(body.to_string())).unwrap()
+        };
+        let key = "dedicated-service-sign-key-32-chars";
+        assert_eq!(
+            app.clone()
+                .oneshot(request(body.clone(), None))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let mut foreign = body.clone();
+        foreign["organization_id"] = json!("org-b");
+        assert_eq!(
+            app.clone()
+                .oneshot(request(foreign, Some(key)))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    json!({"organization_id":"org-a", "issuer_did":"did:web:issuer.example",
+            "credential_format":"mso_mdoc"}),
+                    Some(key)
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        // Caller-selected protected purposes cannot be smuggled into the
+        // fixed VC issuer probe, even when the requested format is VC_JWT.
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    json!({"organization_id":"org-a", "issuer_did":"did:web:issuer.example",
+                        "credential_format":"VC_JWT", "key_purpose":"mdoc_dsc"}),
+                    Some(key)
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    json!({"organization_id":"org-a", "issuer_did":"did:web:issuer.example",
+            "credential_format":"SD_JWT_VC", "payload_b64":"dGVzdA=="}),
+                    Some(key)
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        // A valid authenticated request reaches storage; the bare test router
+        // has none and must not claim signer readiness.
+        assert_eq!(
+            app.oneshot(request(body, Some(key)))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+}
+
+async fn validate_current_issuer_service(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
+    input: Result<
+        Json<CurrentIssuerServiceValidationRequest>,
+        axum::extract::rejection::JsonRejection,
+    >,
+) -> Response {
+    if !authorize_service_sign(&state, &headers) {
+        return public_error(
+            StatusCode::UNAUTHORIZED,
+            "Signing service authentication required.",
+        );
+    }
+    let Json(input) = match input {
+        Ok(input) => input,
+        Err(_) => {
+            return public_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Invalid issuer validation request.",
+            )
+        }
+    };
+    if let Err(error) =
+        validate_service_scope(&scope.organization_id, input.organization_id.as_deref())
+    {
+        return error.into_response();
+    }
+    if input.issuer_did.trim().is_empty()
+        || !matches!(input.credential_format.as_str(), "VC_JWT" | "SD_JWT_VC")
+    {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "A supported issuer tuple is required.",
+        );
+    }
+    let Some(profiles) = state.profile_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity storage is unavailable.",
+        );
+    };
+    let document = match profiles.list(&scope.organization_id).await {
+        Ok(document) => document,
+        Err(_) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Issuer identity storage is unavailable.",
+            )
+        }
+    };
+    let matches = current_issuer_profiles(&document, &input.issuer_did, &input.credential_format);
+    let [profile] = matches.as_slice() else {
+        return public_error(
+            StatusCode::CONFLICT,
+            "Exactly one active issuer binding is required.",
+        );
+    };
+    let (Some(service_id), Some(key_reference)) = (
+        profile.get("signing_service_id").and_then(Value::as_str),
+        profile.get("signing_key_reference").and_then(Value::as_str),
+    ) else {
+        return public_error(
+            StatusCode::CONFLICT,
+            "Issuer signing binding is incomplete.",
+        );
+    };
+    if let Err(error) = authorize_public_service_reference(
+        &state,
+        &scope.organization_id,
+        service_id,
+        key_reference,
+        Some("vc_jwt_issuer"),
+        Some("ES256"),
+    )
+    .await
+    {
+        return error.into_response();
+    }
+    let (registry, mut service) =
+        match registered_service_with_registry(&state, &scope.organization_id, service_id).await {
+            Ok(pair) => pair,
+            Err(error) => return error.into_response(),
+        };
+    if !supported_current_issuer_service(&service)
+        || !current_issuer_key_is_vc_bound(&registry, &service, service_id, key_reference)
+    {
+        return public_error(
+            StatusCode::CONFLICT,
+            "Issuer service or key purpose is not supported by this probe.",
+        );
+    }
+    service["key_reference"] = json!(key_reference);
+    let Some(service_config) = service.as_object().cloned() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is malformed.",
+        );
+    };
+    let result = validation::validate(ValidationRequest {
+        service_config,
+        live_probe: true,
+    })
+    .await;
+    let signature_verified = current_issuer_service_readiness(&result.checks)
+        && current_issuer_signature_verified(&service).await;
+    let ready = signature_verified;
+    let key_read = result
+        .checks
+        .iter()
+        .any(|check| check.name == "Key exists" && check.status == "pass");
+    let signer_capable = result
+        .checks
+        .iter()
+        .any(|check| check.name == "Signer capability" && check.status == "pass");
+    let auth_lookup = result
+        .checks
+        .iter()
+        .find(|check| check.name == "Provider auth")
+        .map(|check| check.status.as_str())
+        .unwrap_or("unavailable");
+    let status = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        status,
+        Json(json!({
+            "ok": ready, "organization_id": scope.organization_id,
+            "issuer_did": input.issuer_did, "credential_format": input.credential_format,
+            "service_id": service_id, "key_reference": key_reference,
+            "key_purpose": "vc_jwt_issuer", "algorithm": "ES256",
+            "key_read": key_read, "signer_capable": signer_capable,
+        "signature_verified": signature_verified,
+            "auth_lookup": auth_lookup,
+        })),
+    )
+        .into_response()
 }
 
 async fn list_public_issuer_identities(
@@ -7289,7 +7804,7 @@ mod public_contract_tests {
                     .is_some_and(|path| path.starts_with("/v1/signing-keys"))
             })
             .collect::<Vec<_>>();
-        assert_eq!(declared.len(), 41, "review route additions explicitly");
+        assert_eq!(declared.len(), 42, "review route additions explicitly");
         let app = router_with_internal_api_key("test-only".into())
             .route_layer(middleware::from_fn(mark_matched_route));
         let unknown = app

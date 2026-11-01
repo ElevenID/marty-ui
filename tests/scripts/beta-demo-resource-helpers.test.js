@@ -22,8 +22,40 @@ const {
   safeErrorDetail,
   selectApplicationTransaction,
   selectCurrentCredential,
+  requireCurrentIssuerServiceReady,
   selectOrganization,
 } = require('./beta-demo-resource-helpers');
+
+test('stored issuer service readiness binds the active tuple before any offer', async () => {
+  const tuple = { organizationId: 'org-1', credentialTemplateId: 'template-1', issuerDid: 'did:web:issuer.example' };
+  const template = { id: 'template-1', organization_id: 'org-1', status: 'ACTIVE',
+    issuer_did: tuple.issuerDid, credential_payload_format: 'SD_JWT_VC' };
+  const ready = { ok: true, organization_id: 'org-1', issuer_did: tuple.issuerDid,
+    credential_format: 'SD_JWT_VC', service_id: 'svc-1', key_reference: 'key-1',
+    key_purpose: 'vc_jwt_issuer', algorithm: 'ES256', key_read: true, signer_capable: true,
+    signature_verified: true };
+  const page = fakePage([{ ok: true, status: 200, body: template }, { ok: true, status: 200, body: ready }]);
+  assert.deepEqual(await requireCurrentIssuerServiceReady(page, tuple), {
+    serviceId: 'svc-1', keyReference: 'key-1', issuerDid: tuple.issuerDid, credentialFormat: 'SD_JWT_VC',
+  });
+  assert.equal(page.requests.length, 2);
+  assert.equal(page.requests[1].requestOptions.method, 'POST');
+  assert.deepEqual(JSON.parse(page.requests[1].requestOptions.body), {
+    organization_id: 'org-1', issuer_did: tuple.issuerDid, credential_format: 'SD_JWT_VC',
+  });
+  await assert.rejects(requireCurrentIssuerServiceReady(fakePage([
+    { ok: true, status: 200, body: template }, { ok: false, status: 503, body: { ok: false } },
+  ]), tuple), /unavailable before offer/);
+  await assert.rejects(requireCurrentIssuerServiceReady(fakePage([
+    { ok: true, status: 200, body: template }, { ok: true, status: 200, body: { ...ready, key_reference: null } },
+  ]), tuple), /unavailable before offer/);
+  await assert.rejects(requireCurrentIssuerServiceReady(fakePage([
+    { ok: true, status: 200, body: template }, { ok: true, status: 200, body: { ...ready, signature_verified: false } },
+  ]), tuple), /unavailable before offer/);
+  await assert.rejects(requireCurrentIssuerServiceReady(fakePage([
+    { ok: true, status: 200, body: { ...template, issuer_did: 'did:web:foreign.example' } },
+  ]), tuple), /issuer tuple/);
+});
 
 test('requestedClaim emits the strict public presentation-policy DTO', () => {
   assert.equal(DEFAULT_CREDENTIAL_RANKING_STRATEGY, 'FRESHEST_FIRST');

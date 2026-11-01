@@ -83,6 +83,17 @@ function fakeService(f = fixture(), options = {}) {
     if (route === '/v1/revocation-profiles') return reply([setups[0].revocation]);
     if (route === `/v1/presentation-policies/${f.login.presentationPolicyId}`) return reply(login.policy);
     if (route === '/v1/signing-keys/config') return reply({ default_service_id: uuid(19), format_defaults: {}, type_defaults: {} });
+    if (route === '/v1/signing-keys/config/validate-current' && method === 'POST') {
+      const body = JSON.parse(requestOptions.body);
+      const bound = setups.find((item) => item.credential.issuer_did === body.issuer_did
+        && item.credential.credential_payload_format === body.credential_format);
+      if (!bound || body.organization_id !== bound.credential.organization_id) return reply({ ok: false }, 403);
+      if (options.signerUnavailable) return reply({ ok: false, signer_capable: false }, 503);
+      return reply({ ok: true, organization_id: body.organization_id, issuer_did: body.issuer_did,
+        credential_format: body.credential_format, service_id: uuid(19), key_reference: 'issuer-key',
+        key_purpose: 'vc_jwt_issuer', algorithm: 'ES256', key_read: true, signer_capable: true,
+        signature_verified: true });
+    }
     if (route.startsWith('/.well-known/openid-credential-issuer/org/')) return reply({ credential_issuer: `${ORIGIN}/org/${f.trusted.organizationId}` });
     if (route === '/v1/me/applications' && method === 'GET') return reply({ items: applications, total: applications.length, offset: 0, limit: 500 });
     if (route === '/v1/me/applications' && method === 'POST') {
@@ -145,6 +156,16 @@ test('expired-offer preflight requires an explicit isolated short server TTL bef
     { isolatedDeployment: true, expectedServerOfferTtlSeconds: 60, maximumWaitSeconds: 10000 }]) {
     assert.throws(() => validateFixture({ ...fixture(), expiry: replacement }, 'expired-offer'));
   }
+});
+
+test('expired stored signing grant stops before application or offer creation', async () => {
+  const f = fixture();
+  const { controller, requests, applications, transactions } = fakeService(f, { signerUnavailable: true });
+  await controller.preflight();
+  await assert.rejects(controller.issue(f.trusted, 'first'), /unavailable before offer/);
+  assert.equal(applications.length, 0);
+  assert.equal(transactions.length, 0);
+  assert.ok(!requests.some((request) => request.path === '/v1/me/applications' && request.method === 'POST'));
 });
 
 test('fixture cannot smuggle provider secrets or replace the authorized foreign/trusted binding', () => {
@@ -263,6 +284,23 @@ test('same-application reissue rejects foreign, active, ambiguous, issued, or un
   await assert.rejects(service.controller.reissue({ ...issuance, owned: { ...issuance.owned } }, f.trusted), /captured by this controller/);
   await assert.rejects(service.controller.reissue(issuance, f.foreign), /cannot change.*binding/);
   assert.equal(service.requests.length, before);
+});
+
+test('failed signer readiness preserves the exact retired offer and application before reissue', async () => {
+  const f = fixture();
+  const options = { signerUnavailable: false };
+  const service = fakeService(f, options);
+  await service.controller.preflight();
+  const expired = await service.controller.issue(f.trusted, 'expired-offer');
+  await service.controller.cleanupOne(expired.owned);
+  options.signerUnavailable = true;
+  await assert.rejects(service.controller.reissue(expired, f.trusted), /unavailable before offer/);
+  assert.equal(service.transactions.length, 1);
+  assert.equal(service.transactions[0].status, 'revoked');
+  assert.equal(service.credentials.length, 0);
+  assert.equal(service.applications[0].status, 'OFFERED');
+  assert.equal(service.controller.ownedApplications[0], expired.owned);
+  assert.equal(service.requests.filter(({ path }) => path.endsWith('/issue')).length, 1);
 });
 
 test('reissued credential retirement preserves the same application and freshly proves the old canceled offer', async () => {
