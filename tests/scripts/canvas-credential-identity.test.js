@@ -15,14 +15,20 @@ const vcTemplate = { vct, credential_type: 'OpenBadgeCredential', credential_pay
 
 test('VC-JWT wallet receipt binds to its exact configuration rather than an absent top-level VCT', () => {
   const expectation = walletExpectationForTemplate(vcTemplate);
-  assert.deepEqual(expectation, { format: 'jwt_vc_json', credentialConfigurationId: 'OpenBadgeCredential' });
-  const body = { format: 'jwt_vc_json', credential_configuration_id: 'OpenBadgeCredential', vct: null };
+  assert.deepEqual(expectation, { format: 'jwt_vc_json', credentialConfigurationId: 'OpenBadgeCredential',
+    achievementId: vct, credentialTypes: ['VerifiableCredential', 'OpenBadgeCredential'] });
+  const body = { format: 'jwt_vc_json', credential_configuration_id: 'OpenBadgeCredential', vct: null,
+    achievement_id: vct, credential_types: ['VerifiableCredential', 'OpenBadgeCredential'] };
   assert.equal(walletReceiptMatchesExpectation(body, 'OpenBadgeCredential', expectation), true);
-  requireWalletReceiptBinding({ format: body.format, credentialConfigurationId: body.credential_configuration_id }, expectation);
+  requireWalletReceiptBinding({ format: body.format, credentialConfigurationId: body.credential_configuration_id,
+    achievementId: body.achievement_id, credentialTypes: body.credential_types }, expectation);
   assert.equal(walletReceiptMatchesExpectation({ ...body, format: 'dc+sd-jwt' }, 'OpenBadgeCredential', expectation), false);
   assert.equal(walletReceiptMatchesExpectation({ ...body, credential_configuration_id: 'OtherCredential' }, 'OpenBadgeCredential', expectation), false);
+  assert.equal(walletReceiptMatchesExpectation({ ...body, achievement_id: 'https://other.example/badge' }, 'OpenBadgeCredential', expectation), false);
+  assert.equal(walletReceiptMatchesExpectation({ ...body, credential_types: ['VerifiableCredential'] }, 'OpenBadgeCredential', expectation), false);
   assert.equal(walletReceiptMatchesExpectation(body, 'OtherCredential', expectation), false);
-  assert.throws(() => requireWalletReceiptBinding({ format: 'jwt_vc_json', credentialConfigurationId: 'OtherCredential' }, expectation));
+  assert.throws(() => requireWalletReceiptBinding({ format: 'jwt_vc_json', credentialConfigurationId: 'OtherCredential',
+    achievementId: vct, credentialTypes: body.credential_types }, expectation));
 });
 
 test('verified VC-JWT binds issuer, VC type and achievement URI to selected Open Badge template', () => {

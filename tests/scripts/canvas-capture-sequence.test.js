@@ -196,12 +196,16 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '', cred
       assert.equal(state.claimClicked, true);
       assert.equal(offer, 'offer-in-memory-only');
       if (credentialFormat === 'VC_JWT') assert.deepEqual(expected,
-        { format: 'jwt_vc_json', credentialConfigurationId: 'OpenBadgeCredential' });
+        { format: 'jwt_vc_json', credentialConfigurationId: 'OpenBadgeCredential',
+          achievementId: setup.templates.credential.vct,
+          credentialTypes: ['VerifiableCredential', 'OpenBadgeCredential'] });
       else assert.equal(expected, setup.templates.credential.vct);
       state.walletReceipts++;
       state.issued = true;
       return { ok: true, receipt: credentialFormat === 'VC_JWT'
-        ? { id: 'wallet-record', format: 'jwt_vc_json', credentialConfigurationId: 'OpenBadgeCredential' }
+        ? { id: 'wallet-record', format: 'jwt_vc_json', credentialConfigurationId: 'OpenBadgeCredential',
+          achievementId: fail === 'wallet-wrong-achievement' ? 'https://other.example/badge' : setup.templates.credential.vct,
+          credentialTypes: ['VerifiableCredential', 'OpenBadgeCredential'] }
         : { id: 'wallet-record', vct: setup.templates.credential.vct } };
     },
     async verify() { if (fail === 'wallet-presentation-rejected') return {
@@ -241,6 +245,12 @@ test('D08 accepts the real VC-JWT Open Badge wallet receipt after the same scope
   assert.equal(h.report.walletReceipt.receipt.format, 'jwt_vc_json');
   assert.equal(h.report.credentialId, 'credential');
   assert.doesNotThrow(() => requireCaptureMutationReconciliation(h.report));
+});
+
+test('D08 rejects a wallet receipt for another Open Badge achievement', async () => {
+  const h = harness({ credentialFormat: 'VC_JWT', fail: 'wallet-wrong-achievement' });
+  await assert.rejects(h.run(), /different Open Badge achievement/);
+  assert.equal(h.report.verification, undefined);
 });
 
 test('D07 runs fresh pre-issuance denial/recovery and retired-ingest operation without inheriting D08', async () => {

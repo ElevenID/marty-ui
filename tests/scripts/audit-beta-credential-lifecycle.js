@@ -474,6 +474,9 @@ function walletReceiptMatchesExpectation(receipt, inventory, expectation) {
     && expectation.credentialConfigurationId) {
     return receipt?.format === 'jwt_vc_json'
       && receipt?.credential_configuration_id === expectation.credentialConfigurationId
+      && receipt?.achievement_id === expectation.achievementId
+      && Array.isArray(receipt?.credential_types)
+      && expectation.credentialTypes.every(type => receipt.credential_types.includes(type))
       && typeof inventory === 'string'
       && inventory.includes(expectation.credentialConfigurationId);
   }
@@ -502,6 +505,7 @@ async function receiveCredential(walletPage, offerUri, expectedCredential) {
     receipt: response.ok() ? {
       id: body?.id, vct: body?.vct, format: body?.format,
       credentialConfigurationId: body?.credential_configuration_id,
+      achievementId: body?.achievement_id, credentialTypes: body?.credential_types,
     } : null,
   };
 }

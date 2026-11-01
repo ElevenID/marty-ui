@@ -9,7 +9,8 @@ function walletExpectationForTemplate(template) {
   if (format === 'VC_JWT') {
     assert.equal(template.credential_type, 'OpenBadgeCredential',
       'Canvas VC-JWT requires the selected Open Badge type');
-    return { format: 'jwt_vc_json', credentialConfigurationId: template.credential_type };
+    return { format: 'jwt_vc_json', credentialConfigurationId: template.credential_type,
+      achievementId: template.vct, credentialTypes: ['VerifiableCredential', 'OpenBadgeCredential'] };
   }
   assert.equal(format, 'SD_JWT_VC', 'Canvas credential format must be an explicitly supported Open Badge format');
   return template.vct;
@@ -22,6 +23,11 @@ function requireWalletReceiptBinding(receipt, expectation) {
     assert.equal(receipt?.format, expectation.format, 'Wallet stored the wrong credential format');
     assert.equal(receipt?.credentialConfigurationId, expectation.credentialConfigurationId,
       'Wallet stored the wrong credential configuration');
+    assert.equal(receipt?.achievementId, expectation.achievementId,
+      'Wallet stored a different Open Badge achievement');
+    assert.ok(Array.isArray(receipt?.credentialTypes)
+      && expectation.credentialTypes.every(type => receipt.credentialTypes.includes(type)),
+    'Wallet stored a credential without the selected Open Badge types');
   }
 }
 
