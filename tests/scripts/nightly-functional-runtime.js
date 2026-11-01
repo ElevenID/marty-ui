@@ -142,7 +142,7 @@ function authority(profile, {boundJson, verifyBoundFile, boundBytes}) {
   assert.equal(restored.writersRemainQuiesced, false);
   const raw = restored.restoredWriters;
   assert(Array.isArray(raw) && raw.length === 24);
-  const byRole = new Map(raw.map(row => [row.Config?.Labels?.['com.docker.compose.service'], row]));
+  let byRole = new Map(raw.map(row => [row.Config?.Labels?.['com.docker.compose.service'], row]));
   assert.equal(byRole.size, 24);
   assert.deepEqual([...byRole.keys()].sort(), [...ROLES, 'keycloak', 'nginx-proxy'].sort());
   const phase1 = boundJson(refs.phase1Input);
@@ -156,6 +156,8 @@ function authority(profile, {boundJson, verifyBoundFile, boundBytes}) {
   const auth = refs.authSuccessor ? authSuccessor(refs.authSuccessor, byRole.get('auth'),
     refs.writerRestore, phase1.engineId, {boundJson, verifyBoundFile, boundBytes}) : null;
   if (auth) byRole.set('auth', auth);
+  if (refs.restartSuccessor) byRole = require('./signed-nightly-restart').restartSuccessor(
+    refs.restartSuccessor, byRole, ROLES, {boundJson, verifyBoundFile});
   const rows = ROLES.map(role => {
     const row = byRole.get(role), reference = role === 'ui-prod' ? UI : SERVICES;
     assert.equal(lock.services[role === 'ui-prod' ? 'ui' : role] || (role.startsWith('passport-') ? SERVICES : null), reference);
@@ -190,6 +192,7 @@ function expected(profile, tools) {
   assert.equal(readback.writerRestoreSha256, refs.writerRestore.sha256);
   assert.equal(readback.organizationSuccessorSha256 ?? null, refs.organizationSuccessor?.sha256 ?? null);
   assert.equal(readback.authSuccessorSha256 ?? null, refs.authSuccessor?.sha256 ?? null);
+  assert.equal(readback.restartSuccessorSha256 ?? null, refs.restartSuccessor?.sha256 ?? null);
   assert.equal(readback.releaseQualified, false); assert.equal(readback.recordingQualified, false);
   validateImages(readback.images, rows);
   assert(Array.isArray(readback.roles) && readback.roles.length === 22);
@@ -210,7 +213,7 @@ function expected(profile, tools) {
     return expectation;
   });
 }
-function produce(profile, {readDocker, boundJson, verifyBoundFile, boundBytes, observeDocker, validateRuntimeObservation}) {
+function produce(profile, {readDocker, boundJson, verifyBoundFile, boundBytes, observeDocker, validateRuntimeObservation, validateRestartObservation}) {
   assert.equal(typeof readDocker, 'function');
   const {rows, engineId, refs} = authority(profile, {boundJson, verifyBoundFile, boundBytes});
   const engine = () => JSON.parse(readDocker(['info', '--format', '{{json .}}'])).ID;
@@ -223,6 +226,17 @@ function produce(profile, {readDocker, boundJson, verifyBoundFile, boundBytes, o
       ...(reference === UI ? {publicProfile: image.Config?.Labels?.['io.elevenid.selfhost.public-profile']} : {})};
   });
   validateImages(images, rows);
+  const previous = refs.restartSuccessor ? boundJson(boundJson(refs.restartSuccessor).previousObservation) : null;
+  if (previous) {
+    assert.equal(previous.schema,'marty.functional-signed-image-observation/v1');
+    assert.equal(previous.source,SOURCE); assert.equal(previous.release,RELEASE);
+    assert.equal(previous.engineId,engineId);
+    assert.equal(previous.deploymentSha256,refs.deployment.sha256);
+    assert.equal(previous.writerRestoreSha256,refs.writerRestore.sha256);
+    assert.equal(previous.authSuccessorSha256 ?? null,refs.authSuccessor?.sha256 ?? null);
+    assert.equal(previous.organizationSuccessorSha256 ?? null,refs.organizationSuccessor?.sha256 ?? null);
+    assert.equal(previous.roles.length,22);
+  }
   const roles = rows.map(row => {
     const actual = observeDocker(row, readDocker);
     assert.deepEqual(actual.binaryMounts, []);
@@ -231,13 +245,18 @@ function produce(profile, {readDocker, boundJson, verifyBoundFile, boundBytes, o
       assert(HASH.test(actual.binarySha256)); assert.equal(actual.effectiveUid, 10001);
       assert.equal(actual.configuredRuntimeUid, 10001);
     }
+    if (previous) {
+      const old=previous.roles.filter(value=>value.role===row.role); assert.equal(old.length,1);
+      assert.equal(typeof validateRestartObservation,'function');
+      validateRestartObservation({...expectation,requiredStartedAt:old[0].startedAt,requiredHostPid:old[0].hostPid,requiredObservation:old[0]},actual);
+    }
     validateRuntimeObservation(expectation, actual);
     return actual;
   });
   assert.equal(engine(), engineId);
   return {schema: 'marty.functional-signed-image-observation/v1', release: RELEASE, source: SOURCE,
     engineId, deploymentSha256: refs.deployment.sha256, writerRestoreSha256: refs.writerRestore.sha256,
-    images, roles, organizationSuccessorSha256: refs.organizationSuccessor?.sha256 ?? null,
+    images, roles, restartSuccessorSha256: refs.restartSuccessor?.sha256 ?? null, organizationSuccessorSha256: refs.organizationSuccessor?.sha256 ?? null,
     authSuccessorSha256: refs.authSuccessor?.sha256 ?? null, releaseQualified: false, recordingQualified: false};
 }
 module.exports = {authority, expected, produce, ROLES, SOURCE, RELEASE, LOCK_SHA, SERVICES, UI};
