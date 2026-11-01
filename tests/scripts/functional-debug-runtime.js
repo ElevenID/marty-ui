@@ -37,6 +37,7 @@ function boundJson(ref){
 function binaryFor(role){return ({issuance:'marty-issuance-service','issuance-native':'marty-issuance-service',verification:'marty-verification-service'})[role]||'marty-'+role;}
 function expectedRuntime(profile){
  if(profile?.schema==='marty.functional-mixed-runtime/v2'){
+  if(profile.signedImageDeployment)return require('./nightly-functional-runtime').expected(profile,{boundJson,validateRuntimeObservation});
   if(profile.nativeMaintenance)return require('./native-maintenance-runtime').expectedLatestRuntime(profile);
   if(profile.nativeOverlay)return expectedScopedNativeOverlay(profile);
   const expected=expectedIssuanceOverlay(profile);
@@ -521,7 +522,7 @@ function configuredUid(value){
  if(/^\d+(?::[^:]+)?$/.test(value))return Number(value.split(':')[0]);
  return null;
 }
-function receiptDigests(profile){if(profile.nativeMaintenance)return {baseProfile:profile.baseProfile.sha256,nativeSelection:profile.nativeMaintenance.selection.sha256,nativeMaintenance:profile.nativeMaintenance.outcome.sha256,nativeReadback:profile.nativeMaintenance.readback.sha256,nativeCompatibility:profile.nativeMaintenance.compatibility.result.sha256};if(profile.nativeOverlay)return {baseProfile:profile.baseProfile.sha256,nativeBuild:profile.nativeOverlay.buildReceipt.sha256,nativeDeployment:profile.nativeOverlay.deploymentReceipt.sha256,nativeCompatibility:profile.nativeOverlay.compatibilityResult.sha256,...(profile.nativeOverlay.predecessor?{nativePredecessorAuthority:profile.nativeOverlay.predecessor.failedAuthority.sha256,nativePriorBuild:profile.nativeOverlay.predecessor.buildReceipt.sha256}:{}),...(profile.nativeOverlay.priorRestore?{nativeOriginalRestore:profile.nativeOverlay.priorRestore.readback.sha256}:{})};return profile.schema==='marty.functional-mixed-runtime/v2'?{baseProfile:profile.baseProfile.sha256,issuanceBuild:profile.issuanceOverlay.buildReceipt.sha256,issuanceDeployment:profile.issuanceOverlay.deploymentReceipt.sha256,...(profile.maintenanceRestart?{maintenanceRestart:profile.maintenanceRestart.sha256}:{})}:{baselineDeployment:profile.baselineDeployment.sha256,baselineBuild:profile.baselineBuild.sha256,
+function receiptDigests(profile){if(profile.signedImageDeployment)return Object.fromEntries(Object.entries(profile.signedImageDeployment).map(([key,value])=>[key,value.sha256]));if(profile.nativeMaintenance)return {baseProfile:profile.baseProfile.sha256,nativeSelection:profile.nativeMaintenance.selection.sha256,nativeMaintenance:profile.nativeMaintenance.outcome.sha256,nativeReadback:profile.nativeMaintenance.readback.sha256,nativeCompatibility:profile.nativeMaintenance.compatibility.result.sha256};if(profile.nativeOverlay)return {baseProfile:profile.baseProfile.sha256,nativeBuild:profile.nativeOverlay.buildReceipt.sha256,nativeDeployment:profile.nativeOverlay.deploymentReceipt.sha256,nativeCompatibility:profile.nativeOverlay.compatibilityResult.sha256,...(profile.nativeOverlay.predecessor?{nativePredecessorAuthority:profile.nativeOverlay.predecessor.failedAuthority.sha256,nativePriorBuild:profile.nativeOverlay.predecessor.buildReceipt.sha256}:{}),...(profile.nativeOverlay.priorRestore?{nativeOriginalRestore:profile.nativeOverlay.priorRestore.readback.sha256}:{})};return profile.schema==='marty.functional-mixed-runtime/v2'?{baseProfile:profile.baseProfile.sha256,issuanceBuild:profile.issuanceOverlay.buildReceipt.sha256,issuanceDeployment:profile.issuanceOverlay.deploymentReceipt.sha256,...(profile.maintenanceRestart?{maintenanceRestart:profile.maintenanceRestart.sha256}:{})}:{baselineDeployment:profile.baselineDeployment.sha256,baselineBuild:profile.baselineBuild.sha256,
    debugDeployment:profile.debugDeployment.sha256,debugBuild:profile.debugBuild.sha256,
    retainedBuilds:Object.fromEntries(Object.entries(profile.retainedBuilds).map(([role,ref])=>[role,ref.sha256])),
    ...(profile.priorNativeOverlay?{priorNativeOverlay:profile.priorNativeOverlay.sha256,priorNativeBuild:profile.priorNativeBuild.sha256,priorNativeArtifacts:profile.priorNativeArtifacts.sha256}:{})};}
@@ -609,13 +610,13 @@ function validateRestartObservation(row,actual){
  assert(Number.isFinite(Date.parse(previous))&&Date.parse(actual.startedAt)>Date.parse(previous),'Maintenance generation must be newer');
 }
 function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observe,readDocker}={}){
- if(profile.maintenanceRestart||profile.nativeOverlay||profile.nativeMaintenance){assert(!observe,'Maintenance verification requires actual Docker transport');readDocker=readDocker||defaultDockerRead;}
+ if(profile.maintenanceRestart||profile.nativeOverlay||profile.nativeMaintenance||profile.signedImageDeployment){assert(!observe,'Maintenance verification requires actual Docker transport');readDocker=readDocker||defaultDockerRead;}
  assert(!(observe&&readDocker),'Select one observation transport');
  if(readDocker)assert.equal(typeof readDocker,'function');
  observe=observe||(readDocker?(expected=>observeDocker(expected,readDocker)):observeDocker);
  assert.equal(qualification,'FUNCTIONAL_ONLY','Mixed/debug stack cannot qualify release or recording');
  const expected=expectedRuntime(profile),roles=[];
- const maintenance=profile.maintenanceRestart?boundJson(profile.maintenanceRestart):profile.nativeOverlay?boundJson(profile.nativeOverlay.deploymentReceipt):profile.nativeMaintenance?boundJson(profile.nativeMaintenance.outcome):null;
+ const maintenance=profile.maintenanceRestart?boundJson(profile.maintenanceRestart):profile.nativeOverlay?boundJson(profile.nativeOverlay.deploymentReceipt):profile.nativeMaintenance?boundJson(profile.nativeMaintenance.outcome):profile.signedImageDeployment?{engineId:require('./nightly-functional-runtime').authority(profile,{boundJson}).engineId}:null;
  if(maintenance)assert.equal(JSON.parse(readDocker(['info','--format','{{json .}}'])).ID,maintenance.engineId);
  for(const row of expected){
   let actual;
@@ -630,7 +631,7 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
  expectedRuntime(profile);
  if(maintenance)assert.equal(JSON.parse(readDocker(['info','--format','{{json .}}'])).ID,maintenance.engineId);
  return {schema:profile.schema==='marty.functional-mixed-runtime/v2'?'marty.functional-mixed-runtime-binding/v2':'marty.functional-mixed-runtime-binding/v1',scope:'FUNCTIONAL_ONLY',
-  releaseQualified:false,recordingQualified:false,mixedSourceStack:true,roles,
+  releaseQualified:false,recordingQualified:false,mixedSourceStack:!profile.signedImageDeployment,...(profile.signedImageDeployment?{runtimeKind:'SIGNED_NIGHTLY_IMAGES'}:{}),roles,
   receiptDigests:receiptDigests(profile)};
 }
-module.exports={verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={produceSignedImageObservation:(profile,{readDocker=defaultDockerRead}={})=>require('./nightly-functional-runtime').produce(profile,{readDocker,boundJson,observeDocker,validateRuntimeObservation}),verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
