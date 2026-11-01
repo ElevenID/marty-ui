@@ -39,7 +39,7 @@ function binaryFor(role){return ({issuance:'marty-issuance-service','issuance-na
 function expectedRuntime(profile){
  if(profile?.schema==='marty.functional-mixed-runtime/v2'){
   if(profile.configurationOverlay)return expectedConfigurationSuccessor(profile);
-  if(profile.signedImageDeployment)return require('./nightly-functional-runtime').expected(profile,{boundJson,verifyBoundFile,validateRuntimeObservation});
+  if(profile.signedImageDeployment)return require('./nightly-functional-runtime').expected(profile,{boundJson,verifyBoundFile,boundBytes,validateRuntimeObservation});
   if(profile.nativeMaintenance)return require('./native-maintenance-runtime').expectedLatestRuntime(profile);
   if(profile.nativeOverlay)return expectedScopedNativeOverlay(profile);
   const expected=expectedIssuanceOverlay(profile);
@@ -818,7 +818,7 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
  assert.equal(qualification,'FUNCTIONAL_ONLY','Mixed/debug stack cannot qualify release or recording');
  const expected=expectedRuntime(profile),roles=[];
  const configuration=profile.configurationOverlay?observeMdocConfiguration(profile,readDocker):null;
- const maintenance=profile.configurationOverlay?boundJson(profile.configurationOverlay.deploymentReceipt):profile.maintenanceRestart?boundJson(profile.maintenanceRestart):profile.nativeOverlay?boundJson(profile.nativeOverlay.deploymentReceipt):profile.nativeMaintenance?boundJson(profile.nativeMaintenance.outcome):profile.signedImageDeployment?{engineId:require('./nightly-functional-runtime').authority(profile,{boundJson,verifyBoundFile}).engineId}:null;
+ const maintenance=profile.configurationOverlay?boundJson(profile.configurationOverlay.deploymentReceipt):profile.maintenanceRestart?boundJson(profile.maintenanceRestart):profile.nativeOverlay?boundJson(profile.nativeOverlay.deploymentReceipt):profile.nativeMaintenance?boundJson(profile.nativeMaintenance.outcome):profile.signedImageDeployment?{engineId:require('./nightly-functional-runtime').authority(profile,{boundJson,verifyBoundFile,boundBytes}).engineId}:null;
  if(maintenance)assert.equal(JSON.parse(readDocker(['info','--format','{{json .}}'])).ID,maintenance.engineId);
  for(const row of expected){
   let actual;
@@ -837,4 +837,4 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
   releaseQualified:false,recordingQualified:false,...(configuration?configuration.classification:runtimeClassification(profile)),roles,
   receiptDigests:receiptDigests(profile)};
 }
-module.exports={validateMdocJournalRead:mdocJournalRead,produceMdocConfigurationSuccessor,validateMdocConfigContainer,validateMdocKnownOutcome,produceSignedImageObservation:(profile,{readDocker=defaultDockerRead}={})=>require('./nightly-functional-runtime').produce(profile,{readDocker,boundJson,verifyBoundFile,observeDocker,validateRuntimeObservation}),verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={validateMdocJournalRead:mdocJournalRead,produceMdocConfigurationSuccessor,validateMdocConfigContainer,validateMdocKnownOutcome,produceSignedImageObservation:(profile,{readDocker=defaultDockerRead}={})=>require('./nightly-functional-runtime').produce(profile,{readDocker,boundJson,verifyBoundFile,boundBytes,observeDocker,validateRuntimeObservation}),verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
