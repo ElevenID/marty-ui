@@ -2029,8 +2029,8 @@ async function receiveAndVerifyCredential(offerUri, expectedTemplate, expectedIs
   const verified = verifyCompactJws(issuerJws, method.publicKeyJwk);
   try {
     requireSignedCredentialBinding(verified.payload, expectedTemplate);
-  } catch (error) {
-    fail('open_badge_type_mismatch', `The KMS-signed credential does not match the selected Open Badge template: ${error.message}`);
+  } catch {
+    fail('open_badge_type_mismatch', 'The KMS-signed credential does not match the selected Open Badge template.');
   }
   const cnf = verified.payload.cnf?.jwk || {};
   const holderJwkMatches = ['kty', 'crv', 'x', 'y'].every((key) => cnf[key] === holderJwk[key]);
