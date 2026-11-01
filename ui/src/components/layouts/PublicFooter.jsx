@@ -1,3 +1,4 @@
+import { publicEntryHref } from '../../application/routing/publicEntry';
 import { Box, Divider, Link as MuiLink, Stack, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router';
 import { SHOW_PUBLIC_DEMOS } from '@ui-public-config';
@@ -48,7 +49,7 @@ function PublicFooter() {
             <MuiLink
               key={link.to}
               component={RouterLink}
-              to={link.to}
+              to={publicEntryHref(link.to)}
               underline="hover"
               color="text.secondary"
               data-testid={link.testId}

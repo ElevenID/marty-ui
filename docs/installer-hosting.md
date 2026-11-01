@@ -19,7 +19,7 @@ pre-existing rootless Docker requirements still apply. See
 | Mode | Browser address | Owned host listener | Public TLS owner | Local Cloudflare container |
 | --- | --- | --- | --- | --- |
 | `local` | `https://localhost:<selected-port>` by default | Loopback only | Marty keyless ingress | None |
-| `direct` | Configured HTTPS DNS name or IPv4 address | Explicit non-loopback IP and unprivileged port | Marty keyless ingress | None |
+| `direct` | Configured HTTPS DNS name; optional IP public-entry alias | Explicit non-loopback IP and unprivileged port | Marty keyless ingress | None |
 | `external-proxy` | Configured public HTTPS origin | Explicit backend listener | The external proxy; Marty retains keyless backend TLS | Only with the explicit `cloudflare-tunnel` connector |
 
 No hosting file preserves automatic localhost port selection. For an explicit
@@ -28,14 +28,18 @@ and `listener: {"bind_address":"127.0.0.1","port":18443}` with the same TLS
 selection as the examples below.
 
 The schema is `elevenid.installation-hosting/v1`. Unknown keys and unsupported
-mode combinations are refused. Origins must be canonical HTTPS authorities:
-lowercase ASCII DNS names or standard IPv4 literals, with no credentials, path,
-query, fragment, trailing slash, or wildcard. Omit `:443` for the standard HTTPS
-port. Public IPv6 literal origins are refused before provisioning because the
-application's current `did:web` authority contract does not support them. A DNS
-origin can use an IPv6 listener, such as `"bind_address":"::"`, when the host
-and network support it. Low-level IPv6 TLS checks do not establish an installed
-IPv6 application journey. Host listener ports must be at least 1024; the
+mode combinations are refused. New installations require a canonical HTTPS DNS
+origin: a lowercase ASCII fully qualified name, or `localhost` for the isolated
+local profile, with no credentials, path, query, fragment, trailing slash, or
+wildcard. Omit `:443` for the standard HTTPS port. The
+[did:web method](https://w3c-ccg.github.io/did-method-web/) prohibits IP addresses
+in its identifier, so new installations cannot use an IPv4 or IPv6 literal as
+their canonical issuer origin. Previously recorded IPv4 selections remain
+inspectable without rewriting their identity; changing their identity requires
+a separately supported migration. A DNS origin can use an IPv6 listener, such
+as `"bind_address":"::"`, when the host and network support it. Low-level IPv6
+TLS checks do not establish an installed IPv6 application journey. Host listener
+ports must be at least 1024; the
 installer does not change host sysctls or grant privileged-port access.
 
 `public_origin` controls the UI/API URLs, credential issuer URL, CORS origin,
@@ -58,18 +62,38 @@ Start with [the direct example](examples/installation-hosting.direct.json):
 }
 ```
 
-A provider-assigned public IPv4 address can be used as the origin host instead, for
-example `https://203.0.113.10:8443`; replace this documentation address with the
-current address of the intended host. The certificate then needs that exact IP
-SAN, which the managed issuer creates. A DNS origin receives its configured DNS
-SAN. When a provider maps a public IP to a private interface, bind to an actual
-local interface address or `0.0.0.0`, not to an address absent from the VM.
+For direct hosting with `managed-ca`, optionally add one IP entry endpoint:
+
+```json
+"public_entry_origin": "https://203.0.113.10:8443"
+```
+
+Replace this documentation address with the intended host's address. This
+optional field is an exact IP access alias for the public landing page; it does
+not change the DNS issuer, API origin, authentication callbacks, or session
+origin. The managed certificate includes both the canonical DNS SAN and the
+alias IP SAN. Its explicit port can differ from the canonical origin's port
+when the customer supplies the required host routing. The alias is journal-bound
+with the hosting selection and cannot be changed by editing environment files.
+
+The alias loads the existing public page and its assets and branding. Sign-in
+and console actions transfer to the configured DNS origin. It does not create
+an IP-origin session or expand the authenticated API's accepted origins.
+Loopback aliases, DNS aliases, additional alias arrays, `local` or
+`external-proxy` aliases, and aliases with `foundation-import` are refused.
+An IP alias under the private managed CA still requires explicit browser trust;
+it is not a publicly trusted certificate or a qualified browser observation.
+
+When a provider maps a public IP to a private interface, bind to an actual local
+interface address or `0.0.0.0`, not to an address absent from the VM.
 
 The operator must configure DNS, any provider address mapping, and the cloud and
 host firewall for the chosen ingress port. Publish only the owned ingress;
 OpenBao, Keycloak, gateway diagnostics, databases, and internal service ports do
-not become public through this setting. Keep the configured address stable for
-the installation. A changed public IP needs reviewed configuration/certificate
+not become public through this setting. Keep the canonical DNS origin stable
+for the installation. DNS routing can move behind that identity; changing the
+canonical hostname, identifier path, or encoded port is a separate identity
+migration. A changed IP alias needs reviewed configuration/certificate
 replacement; changing an environment file by hand is not a supported repair.
 
 Marty does not create a VM, paid upgrade, address reservation, load balancer,

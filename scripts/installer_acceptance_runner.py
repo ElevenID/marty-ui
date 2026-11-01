@@ -8,7 +8,6 @@ runtime mutator. Missing journey/lifecycle probes keep all release gates closed.
 from __future__ import annotations
 import argparse
 import base64
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,47 +20,62 @@ import installer_release as r
 import installer_candidate_dispatch as dispatch
 from installer_candidate_authorize import read_record, write_exclusive
 from installer_host_probe import command, DEVTOOLS
-from installer_host_admission import host_admission
+from installer_host_admission import host_admission, resource_profile, STARTUP_PROFILE, LEGACY_PROFILE, RESOURCE_PROFILES
+import installer_live_tls_probe as live_tls
 import verify_installer_provenance as provenance
 
-SCHEMA = 'elevenid.installer-acceptance-checkpoint/v3'
+SCHEMA = 'elevenid.installer-acceptance-checkpoint/v4'
 NAME = 'installer-acceptance-checkpoint.json'
 TRUST_NAME = 'installer-trust-info-observation.json'
 STATUS_NAME = 'installer-status-observation.json'
 TLS_NAME = 'installer-live-tls-observation.json'
-TRUST_EVIDENCE = {'installer-ingress.json','application-plan.json','application-created-resources.json',
-    'application-start-result.json','application-generation-selection.json'}
+TRUST_EVIDENCE = {'installer-ingress.json','compose-session.json',
+    'application-generation-selection.json','generation-observation.json'}
+HOSTING_EVIDENCE = {'hosting-selection.json','hosting-input.json'}
 
 
-def trust_observation(raw, target, observed_at):
+def trust_observation(raw, target, observed_at, *, journal):
     """Validate the native public export; this is never browser trust or Ready."""
     r.require(isinstance(raw, bytes) and 0 < len(raw) <= 65536, 'trust observation exceeds bound')
+    r.require(isinstance(journal,dict) and journal.get('installation_id')==target['installation_id'],
+        'trust journal installation differs')
     value = r.decode(raw)
-    r.exact(value, {'schema','installation_id','origin','ca_certificate_pem','ca_der_sha256',
+    r.require(isinstance(value,dict), 'trust observation shape differs')
+    fields = {'schema','installation_id','origin','local_probe_address','certificate_scope',
+        'public_endpoint_observed','ca_certificate_pem','ca_der_sha256',
         'certificate_der_sha256',
         'ca_expires_at','certificate_expires_at','recorded_token_expires_at','evidence_sha256',
         'recorded_startup_containers','runtime_observed','host_trust_observed',
-        'host_trust_modified','installation_ready','pending'}, 'trust observation')
-    r.require(value['schema']=='elevenid.installer-trust-info/v2'
+        'host_trust_modified','installation_ready','pending'}
+    if 'ca_der_sha256s' in value:fields.add('ca_der_sha256s')
+    r.exact(value, fields, 'trust observation')
+    r.require(value['schema']=='elevenid.installer-trust-info/v4'
         and value['installation_id']==target['installation_id'], 'trust installation differs')
-    origin=value['origin']
-    r.require(isinstance(origin,str) and re.fullmatch(r'https://localhost:[1-9][0-9]{3,4}',origin)
-        and 1024 <= int(origin.rsplit(':',1)[1]) <= 65535, 'trust origin differs')
-    pem=value['ca_certificate_pem']
-    r.require(isinstance(pem,str) and len(pem)<=16384
-        and re.fullmatch(r'-----BEGIN CERTIFICATE-----\n(?:[A-Za-z0-9+/=]{1,64}\n)+-----END CERTIFICATE-----\n',pem),
-        'public CA encoding differs')
-    encoded=''.join(pem.splitlines()[1:-1])
-    try:der=base64.b64decode(encoded,validate=True)
-    except (ValueError,base64.binascii.Error):raise ValueError('public CA encoding differs') from None
-    r.require(0<len(der)<=12288 and base64.b64encode(der).decode()==encoded,
-        'public CA encoding differs')
+    live_tls.public_origin(value['origin'])
+    live_tls.local_address(value['local_probe_address'])
+    r.require(value['certificate_scope'] in ('public-ingress','backend')
+        and value['public_endpoint_observed'] is False, 'trust transport scope differs')
+    hashes=live_tls.certificate_hashes(value['ca_certificate_pem'])
     r.sha(value['ca_der_sha256'],64)
     r.sha(value['certificate_der_sha256'],64)
-    r.require(hashlib.sha256(der).hexdigest()==value['ca_der_sha256'], 'public CA hash differs')
-    r.exact(value['evidence_sha256'],TRUST_EVIDENCE,'trust evidence')
+    r.require(hashes[0]==value['ca_der_sha256'], 'public CA hash differs')
+    imported='ca_der_sha256s' in value
+    if imported:
+        r.require(value['ca_der_sha256s']==hashes
+            and value['recorded_token_expires_at'] is None, 'imported trust roots differ')
+        evidence={'foundation-selection.json','compose-session.json','application-generation-selection.json'}
+    else:
+        r.require(len(hashes)==1 and type(value['recorded_token_expires_at']) is int
+            and value['recorded_token_expires_at']>observed_at, 'trust token expiry differs')
+        evidence=set(TRUST_EVIDENCE)
+    if 'hosting_selection_sha256' in journal:
+        evidence.update(HOSTING_EVIDENCE)
+    r.exact(value['evidence_sha256'],evidence,'trust evidence')
     for digest in value['evidence_sha256'].values():r.sha(digest,64)
-    for key in ('ca_expires_at','certificate_expires_at','recorded_token_expires_at'):
+    if 'hosting_selection_sha256' in journal:
+        r.require(value['evidence_sha256']['hosting-selection.json']==journal['hosting_selection_sha256'],
+            'trust hosting selection differs')
+    for key in ('ca_expires_at','certificate_expires_at'):
         r.require(type(value[key]) is int and value[key]>observed_at,'trust expiry differs')
     r.require(type(value['recorded_startup_containers']) is int
         and value['recorded_startup_containers']>0
@@ -79,8 +93,15 @@ def status_observation(raw, context, target, authorization, inventory):
     r.exact(value,{'scope','runtime_observed','journal','cleanup'},'status observation')
     r.require(value['scope']=='installation-journal' and value['runtime_observed'] is False,
         'status falsely observed runtime')
-    journal=r.exact(value['journal'],{'schema','installation_id','identity','phase','revision',
-        'runtime','scope'},'candidate journal')
+    journal=value['journal']
+    r.require(isinstance(journal,dict), 'candidate journal shape differs')
+    fields={'schema','installation_id','identity','phase','revision','runtime','scope'}
+    for optional in ('hosting_selection_sha256','hosting_addon_sha256'):
+        if optional in journal:
+            fields.add(optional);r.sha(journal[optional],64)
+    r.exact(journal,fields,'candidate journal')
+    r.require('hosting_addon_sha256' not in journal or 'hosting_selection_sha256' in journal,
+        'hosting add-on lacks selection')
     r.require(journal['schema']=='elevenid.installer-state/v1'
         and journal['installation_id']==target['installation_id']
         and journal['phase'] in ('provisioning','provisioned')
@@ -90,10 +111,19 @@ def status_observation(raw, context, target, authorization, inventory):
     r.require(journal['identity']==dict(source_sha=context['source_sha'],
         release_tag=context['release_tag'],inventory_sha256='sha256:'+r.digest(inventory)),
         'candidate identity differs')
-    runtime=r.exact(journal['runtime'],{'docker_host','engine_id','openbao_port'},'candidate runtime')
+    runtime=journal['runtime']
+    r.require(isinstance(runtime,dict), 'candidate runtime shape differs')
+    runtime_fields={'docker_host','engine_id','openbao_port'}
+    if 'profile' in runtime:runtime_fields.add('profile')
+    r.exact(runtime,runtime_fields,'candidate runtime')
+    profile=runtime.get('profile','rootful')
+    socket=runtime['docker_host']
+    r.require((profile=='rootful' and socket=='unix:///var/run/docker.sock')
+        or (profile=='rootless' and isinstance(socket,str)
+            and re.fullmatch(r'unix:///run/user/[1-9][0-9]{0,9}/docker.sock',socket)),
+        'candidate runtime profile differs')
     r.require(runtime['engine_id']==target['engine_id']
-        and runtime['docker_host']=='unix:///var/run/docker.sock'
-        and type(runtime['openbao_port']) is int and runtime['openbao_port']>=1024,
+        and type(runtime['openbao_port']) is int and 1024<=runtime['openbao_port']<=65535,
         'candidate runtime differs')
     scope=r.exact(journal['scope'],{'kind','authorization_sha256','context_sha256',
         'consumption_id'},'candidate scope')
@@ -108,21 +138,29 @@ def status_observation(raw, context, target, authorization, inventory):
     consumed=json.dumps(dict(schema='elevenid.installer-candidate-consumption/v1',scope='guest-local',
         claim=claim),separators=(',',':'),ensure_ascii=True).encode('ascii')
     r.require(scope['consumption_id']==r.digest(consumed),'candidate nonce consumption differs')
-    cleanup=r.exact(value['cleanup'],{'state','runtime_observed'},'candidate cleanup')
-    r.require(cleanup==dict(state='not_started',runtime_observed=False),'candidate cleanup started')
+    cleanup=r.exact(value['cleanup'],{'operations','next_operations','historical_evidence_only',
+        'automatic_retry','host_data_credentials_images_and_named_volumes_retained'},'candidate cleanup')
+    r.require(cleanup==dict(operations=dict.fromkeys(('start','stop','down'),'not_started'),
+        next_operations={action:action+'-0001' for action in ('start','stop','down')},
+        historical_evidence_only=True,automatic_retry=False,
+        host_data_credentials_images_and_named_volumes_retained=True),'candidate cleanup started')
     return value
 
 
 def tls_observation(raw, trust, target, observed_at):
     r.require(isinstance(raw,bytes) and 0<len(raw)<=65536,'TLS observation exceeds bound')
     value=r.decode(raw)
-    r.exact(value,{'schema','installation_id','engine_id','origin','ca_der_sha256',
+    r.exact(value,{'schema','installation_id','engine_id','origin','local_probe_address',
+        'certificate_scope','public_endpoint_observed','ca_der_sha256',
         'peer_der_sha256','tls_version','root_status','discovery_status','discovery_sha256',
         'issuer','observed_at','browser_login_observed','host_trust_modified'},'live TLS observation')
-    r.require(value['schema']=='elevenid.installer-live-tls-observation/v1'
+    r.require(value['schema']=='elevenid.installer-live-tls-observation/v2'
         and value['installation_id']==target['installation_id']
         and value['engine_id']==target['engine_id']
         and value['origin']==trust['origin']
+        and value['local_probe_address']==trust['local_probe_address']
+        and value['certificate_scope']==trust['certificate_scope']
+        and value['public_endpoint_observed'] is False
         and value['ca_der_sha256']==trust['ca_der_sha256']
         and value['peer_der_sha256']==trust['certificate_der_sha256']
         and value['issuer']==trust['origin']+'/realms/11id'
@@ -143,10 +181,14 @@ def validate(record, *, context, target, authorization, receipt, inventory):
         'inventory_sha256','cases','host_observation_sha256','host_preflight','dispatch',
         'trust_info_sha256','trust_inspection','status_observation_sha256',
         'tls_observation_sha256','tls_inspection',
+        'resource_profile','functional_recovery_qualified','load_characterized',
         'acceptance','installation_ready','observed_at'}, 'incomplete installed checkpoint')
+    resource_profile(record['resource_profile'])
     r.require(record['schema']==SCHEMA and record['repository']==r.REPOSITORY
         and record['workflow']==r.acceptance.WORKFLOW and record['acceptance'] is False
-        and record['installation_ready'] is False, 'checkpoint scope differs')
+        and record['installation_ready'] is False
+        and record['functional_recovery_qualified'] is False
+        and record['load_characterized'] is False, 'checkpoint scope differs')
     for key in ('source_sha','release_tag','harness_source_sha','run_id','run_attempt','phase','nonce'):
         r.require(record[key]==context[key], 'checkpoint invocation differs')
     r.require(record['target']==target and record['authorization_sha256']==r.digest(authorization)
@@ -206,7 +248,7 @@ def probe_source():
 def incomplete_checkpoint(*, context, target, authorization, receipt, inventory,
                           host_observation_sha256=None,
                           host_preflight='failed', dispatch_status='not_attempted',
-                          observed_at):
+                          observed_at, resource_profile=LEGACY_PROFILE):
     """Create the shared false-authority checkpoint for one candidate attempt."""
     identity={key:context[key] for key in ('source_sha','release_tag','harness_source_sha',
                                           'run_id','run_attempt','phase','nonce')}
@@ -221,6 +263,7 @@ def incomplete_checkpoint(*, context, target, authorization, receipt, inventory,
         trust_info_sha256=None,status_observation_sha256=None,
         trust_inspection='not_attempted',acceptance=False,
         tls_observation_sha256=None,tls_inspection='not_attempted',
+        resource_profile=resource_profile,functional_recovery_qualified=False,load_characterized=False,
         installation_ready=False,observed_at=observed_at)
     validate(checkpoint,context=context,target=target,authorization=authorization,
              receipt=receipt,inventory=inventory)
@@ -264,13 +307,13 @@ def observe_after_dispatch(*, checkpoint, output, context, target, authorization
             status_command=remote_prefix+' status --install-dir '+shlex.quote(installation)
             status_raw=guarded_execute([*args,status_command],
                 env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
-            status_observation(status_raw,context,target,authorization,inventory)
+            status_value=status_observation(status_raw,context,target,authorization,inventory)
             raw=guarded_execute([*args,remote_prefix+' trust-info --install-dir '+shlex.quote(installation)],
                 env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
             status_again=guarded_execute([*args,status_command],
                 env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
             r.require(status_again==status_raw,'candidate status changed across trust export')
-        trust_value=trust_observation(raw,target,int(clock()))
+        trust_value=trust_observation(raw,target,int(clock()),journal=status_value['journal'])
         unchanged()
         writer(STATUS_NAME,status_raw)
         writer(TRUST_NAME,raw)
@@ -288,7 +331,8 @@ def observe_after_dispatch(*, checkpoint, output, context, target, authorization
             ca_encoded=base64.b64encode(trust_value['ca_certificate_pem'].encode('ascii')).decode('ascii')
             tls_remote=('set -eu; test "$(id -un)" = '+shlex.quote(user)+'; exec env -i HOME='+
                 shlex.quote(home)+' PATH=/usr/bin:/bin /usr/bin/python3 -I -c '+
-                shlex.join([code,trust_value['origin'],ca_encoded,target['installation_id'],target['engine_id']]))
+                shlex.join([code,trust_value['origin'],trust_value['local_probe_address'],
+                    trust_value['certificate_scope'],ca_encoded,target['installation_id'],target['engine_id']]))
             with tempfile.TemporaryDirectory(prefix='installer-tls-controller-') as private:
                 args=[str(ssh),*dispatch.ssh_options(key,known_hosts,port),'-T',user+'@'+host]
                 tls_raw=guarded_execute([*args,tls_remote],
@@ -316,7 +360,7 @@ def observe_after_dispatch(*, checkpoint, output, context, target, authorization
 def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign,
         ssh, scp, key, known_hosts, host, port, user, home,
         clock=time.time, verifier=provenance.command, execute=command,
-        candidate_dispatch=dispatch.dispatch):
+        candidate_dispatch=dispatch.dispatch, resource_profile=STARTUP_PROFILE):
     r.require(os.name=='posix','Linux controller required')
     dispatch.executable(ssh);dispatch.executable(scp)
     r.require(re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}',host) is not None
@@ -344,9 +388,10 @@ def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign
         bootstrap_source=bootstrap_source) # Validate fixed guest account/path contract.
     checkpoint=incomplete_checkpoint(context=context,target=target,
         authorization=authorization,receipt=receipt,inventory=inventory,
-        observed_at=int(clock()))
+        observed_at=int(clock()),resource_profile=resource_profile)
     write_exclusive(output/'runner-intent.json',r.encode(dict(schema='elevenid.installer-acceptance-runner-intent/v1',
-        context_sha256=r.candidate_context_sha256(context),receipt_sha256=r.digest(receipt),target=target)))
+        context_sha256=r.candidate_context_sha256(context),receipt_sha256=r.digest(receipt),
+        target=target,resource_profile=resource_profile)))
     probe=probe_source()
     r.require(probe.decode('utf-8')==dispatch.verified_harness_script(
         context['harness_source_sha'],'installer_host_probe.py'),
@@ -363,7 +408,7 @@ def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign
         r.require(isinstance(raw,bytes) and len(raw)<=65536,'host observation exceeds record bound')
         write_exclusive(output/'host-observation.json',raw)
         checkpoint['host_observation_sha256']=r.digest(raw)
-        host_admission(raw,target['engine_id'])
+        host_admission(raw,target['engine_id'],profile=resource_profile)
         checkpoint['host_preflight']='passed'
     except (ValueError,OSError):
         unchanged()
@@ -397,6 +442,7 @@ def main(argv=None):
         parser.add_argument('--'+name,type=Path,required=True)
     for name in ('host','user','home'):parser.add_argument('--'+name,required=True)
     parser.add_argument('--port',type=int,required=True)
+    parser.add_argument('--resource-profile',choices=RESOURCE_PROFILES,default=STARTUP_PROFILE)
     try:run(**vars(parser.parse_args(argv)))
     except (ValueError,OSError,KeyError,TypeError):parser.exit(1,'Installed probe refused or uncertain; preserve all controller and guest state.\n')
     parser.exit(2,'Installed checkpoint retained; real installed acceptance remains incomplete.\n')

@@ -86,6 +86,10 @@ struct Configuration {
     mode: Mode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     public_origin: Option<PublicOrigin>,
+    /// An optional IP transport alias for the public entry page. It never
+    /// changes the canonical application origin or the issuer identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    public_entry_origin: Option<PublicOrigin>,
     listener: Listener,
     tls: Tls,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,6 +210,7 @@ impl Configuration {
                 },
             },
             public_origin: foundation_origin,
+            public_entry_origin: None,
             connector: None,
         })
     }
@@ -264,6 +269,32 @@ impl Configuration {
         if let Some(connector) = &self.connector {
             require(self.mode == Mode::ExternalProxy && path_is_safe(&connector.token_file))?;
         }
+        if let Some(alias) = &self.public_entry_origin {
+            if self.tls.certificate_source != CertificateSource::ManagedCa {
+                return Err("public_entry_origin requires managed-ca certificate issuance with DNS and IP SAN coverage; foundation-import does not support an IP entry alias".into());
+            }
+            require(
+                self.mode == Mode::Direct
+                    && self
+                        .public_origin
+                        .as_ref()
+                        .is_some_and(|origin| origin.dns_name().is_some() && !origin.is_loopback())
+                    && alias.ip_address().is_some()
+                    && !alias.is_loopback(),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Only new installations apply this identity guard. Recorded legacy
+    /// selections remain inspectable without silently rewriting their origin.
+    fn validate_installation(&self) -> Result<()> {
+        self.validate()?;
+        if let Some(origin) = &self.public_origin {
+            origin.did_web_authority().map_err(|_| {
+                "new installations require a DNS canonical origin for did:web; configure a direct public_entry_origin for IP page access, and preserve an existing installation for a separately supported identity migration".to_string()
+            })?;
+        }
         Ok(())
     }
 
@@ -293,7 +324,7 @@ pub(crate) fn prepare(
         let raw = serde_json::to_vec(&configuration).map_err(|_| REFUSED)?;
         (raw, configuration)
     };
-    configuration.validate()?;
+    configuration.validate_installation()?;
     configuration.require_foundation(foundation_origin.as_ref())?;
     let connector_token_sha256 = configuration
         .connector
@@ -316,7 +347,12 @@ impl Prepared {
             .map(PublicOrigin::as_str)
             .unwrap_or("https://localhost:<selected-port>");
         format!(
-            "public origin {origin}; ingress listener {}; public TLS owner {}; connector {}",
+            "public origin {origin}; public entry origin {}; ingress listener {}; public TLS owner {}; connector {}",
+            self.configuration
+                .public_entry_origin
+                .as_ref()
+                .map(PublicOrigin::as_str)
+                .unwrap_or("none"),
             self.configuration.listener.socket_address(),
             if self.configuration.mode == Mode::ExternalProxy {
                 "external proxy"
@@ -334,6 +370,7 @@ impl Prepared {
 
 pub(crate) fn select(prepared: Prepared, state: &mut InstallerState) -> Result<Selection> {
     state.require_live_phase(Phase::Verified)?;
+    prepared.configuration.validate_installation()?;
     let foundation = state.with_inspection(crate::installer_foundation::load)?;
     let foundation_origin = foundation
         .as_ref()
@@ -482,6 +519,9 @@ impl Selection {
     pub fn requested_origin(&self) -> Option<&PublicOrigin> {
         self.configuration.public_origin.as_ref()
     }
+    pub fn public_entry_origin(&self) -> Option<&PublicOrigin> {
+        self.configuration.public_entry_origin.as_ref()
+    }
     pub fn listener(&self) -> Listener {
         self.configuration.listener
     }
@@ -501,6 +541,9 @@ impl Selection {
             .map_or(Some("localhost"), PublicOrigin::dns_name)
     }
     pub fn certificate_ip_address(&self) -> Option<IpAddr> {
+        if let Some(alias) = self.public_entry_origin() {
+            return alias.ip_address();
+        }
         self.requested_origin()
             .map_or(Some(IpAddr::V4(Ipv4Addr::LOCALHOST)), |origin| {
                 origin.ip_address().or_else(|| {

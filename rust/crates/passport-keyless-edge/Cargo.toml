@@ -16,6 +16,9 @@ path = "src/main.rs"
 name = "marty-oidf-keyless-edge"
 path = "src/bin/oidf_edge.rs"
 
+[[bin]]
+name = "marty-acme-http01"
+path = "src/bin/acme_http01.rs"
 
 [dependencies]
 marty-service-runtime = { path = "../service-runtime" }
@@ -30,8 +33,15 @@ hyper-util.workspace = true
 mmf-platform.workspace = true
 marty-openbao-http = { path = "../openbao-http" }
 reqwest.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [[bin]]
 name = "marty-passport-tls-bootstrap"

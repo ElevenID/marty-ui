@@ -24,11 +24,12 @@ def host():
 def trust(installation_id='22345678-1234-4234-8234-123456789abc'):
     pem=(Path(__file__).resolve().parents[1]/'rust/crates/deployment-catalog/tests/fixtures/installer-log-public-ca.txt').read_text()
     der=base64.b64decode(''.join(pem.splitlines()[1:-1]),validate=True)
-    return dict(schema='elevenid.installer-trust-info/v2',installation_id=installation_id,
-        origin='https://localhost:18443',ca_certificate_pem=pem,
+    return dict(schema='elevenid.installer-trust-info/v4',installation_id=installation_id,
+        origin='https://marty.example.test',local_probe_address='127.0.0.1:18443',
+        certificate_scope='public-ingress',public_endpoint_observed=False,ca_certificate_pem=pem,
         ca_der_sha256=hashlib.sha256(der).hexdigest(),certificate_der_sha256='c'*64,
         ca_expires_at=200000,certificate_expires_at=200000,
-        recorded_token_expires_at=200000,evidence_sha256=dict.fromkeys(a.TRUST_EVIDENCE,'b'*64),
+        recorded_token_expires_at=200000,evidence_sha256=dict.fromkeys(a.TRUST_EVIDENCE|a.HOSTING_EVIDENCE,'b'*64),
         recorded_startup_containers=30,runtime_observed=False,host_trust_observed=False,
         host_trust_modified=False,installation_ready=False,pending=['browser trust','business journey','recovery'])
 
@@ -43,16 +44,22 @@ def status(context,target,auth,inv):
         journal=dict(schema='elevenid.installer-state/v1',installation_id=target['installation_id'],
             identity=dict(source_sha=context['source_sha'],release_tag=context['release_tag'],
                 inventory_sha256='sha256:'+r.digest(inv)),phase='provisioning',revision=2,
-            runtime=dict(docker_host='unix:///var/run/docker.sock',engine_id=target['engine_id'],openbao_port=18442),
+            runtime=dict(docker_host='unix:///run/user/1000/docker.sock',engine_id=target['engine_id'],
+                openbao_port=18442,profile='rootless'),hosting_selection_sha256='b'*64,
             scope=dict(kind='acceptance-only',authorization_sha256=r.digest(auth),
                 context_sha256=r.candidate_context_sha256(context),consumption_id=consumption)),
-        cleanup=dict(state='not_started',runtime_observed=False))
+        cleanup=dict(operations=dict.fromkeys(('start','stop','down'),'not_started'),
+            next_operations={action:action+'-0001' for action in ('start','stop','down')},
+            historical_evidence_only=True,automatic_retry=False,
+            host_data_credentials_images_and_named_volumes_retained=True))
 
 
 def tls(target,trust_value):
-    return dict(schema='elevenid.installer-live-tls-observation/v1',
+    return dict(schema='elevenid.installer-live-tls-observation/v2',
         installation_id=target['installation_id'],engine_id=target['engine_id'],
         origin=trust_value['origin'],ca_der_sha256=trust_value['ca_der_sha256'],
+        local_probe_address=trust_value['local_probe_address'],certificate_scope=trust_value['certificate_scope'],
+        public_endpoint_observed=False,
         peer_der_sha256='c'*64,tls_version='TLSv1.3',root_status=200,discovery_status=200,
         discovery_sha256='d'*64,issuer=trust_value['origin']+'/realms/11id',observed_at=100000,
         browser_login_observed=False,host_trust_modified=False)
@@ -94,7 +101,7 @@ def candidate(tmp_path,monkeypatch):
 def test_real_probe_before_dispatch_and_never_claims_acceptance(candidate):
     args,calls,context,target,auth,receipt,inv=candidate
     a.status_observation(r.encode(status(context,target,auth,inv)),context,target,auth,inv)
-    a.trust_observation(r.encode(trust()),target,100000)
+    a.trust_observation(r.encode(trust()),target,100000,journal=status(context,target,auth,inv)['journal'])
     result=a.run(**args)
     assert [v[0] for v in calls]==['probe','dispatch','status','trust','status','tls','status','trust']
     assert calls[0][1][:2]==['/usr/bin/ssh','-F']
@@ -102,6 +109,8 @@ def test_real_probe_before_dispatch_and_never_claims_acceptance(candidate):
     assert set(calls[0][2]['env'])=={'HOME','PATH','LANG','LC_ALL'}
     assert calls[0][2]['timeout']==120
     assert result['dispatch']=='returned_zero_unqualified' and result['acceptance'] is False
+    assert result['resource_profile']==a.STARTUP_PROFILE
+    assert result['functional_recovery_qualified'] is False and result['load_characterized'] is False
     assert result['trust_inspection']=='verified_public_record'
     assert result['tls_inspection']=='verified_local_https'
     assert result['tls_observation_sha256']==r.digest((args['output']/a.TLS_NAME).read_bytes())
@@ -111,6 +120,51 @@ def test_real_probe_before_dispatch_and_never_claims_acceptance(candidate):
     assert (args['output']/a.NAME).exists() and not (args['output']/'installer-acceptance.json').exists()
     with pytest.raises(FileExistsError):a.run(**args)
     assert len(calls)==8
+
+
+def test_8gib_startup_checkpoint_never_becomes_functional_or_load_evidence(candidate):
+    args,calls,*_=candidate
+    original=args['execute']
+    def execute(argv,**kwargs):
+        if 'installer-host-probe' in argv[-1]:
+            value=host()
+            value.update(docker_memory_bytes=8*1024**3,guest_memory_bytes=8*1024**3-256*1024**2)
+            value['predicates']['capacity']=False
+            return r.encode(value)
+        return original(argv,**kwargs)
+    args['execute']=execute
+    result=a.run(**args)
+    observed=r.decode((args['output']/'host-observation.json').read_bytes())
+    assert observed['guest_memory_bytes']==8*1024**3-256*1024**2
+    assert result['resource_profile']=='startup-8gib' and result['host_preflight']=='passed'
+    assert result['functional_recovery_qualified'] is False and result['load_characterized'] is False
+    assert result['acceptance'] is False and result['installation_ready'] is False
+    assert result['cases']['issue']=='blocked'
+
+
+def test_imported_trust_bundle_uses_native_evidence_and_nullable_token_expiry(candidate):
+    _,_,context,target,auth,_,inv=candidate
+    value=trust()
+    value['ca_der_sha256s']=[value['ca_der_sha256']]
+    value['recorded_token_expires_at']=None
+    value['certificate_scope']='backend'
+    value['evidence_sha256'].pop('installer-ingress.json')
+    value['evidence_sha256'].pop('generation-observation.json')
+    value['evidence_sha256']['foundation-selection.json']='c'*64
+    journal=status(context,target,auth,inv)['journal']
+    assert a.trust_observation(r.encode(value),target,100000,journal=journal)==value
+    value['ca_der_sha256s']=['a'*64]
+    with pytest.raises(ValueError,match='trust roots differ'):
+        a.trust_observation(r.encode(value),target,100000,journal=journal)
+
+
+def test_legacy_rootful_status_is_historical_observation_only(candidate):
+    _,_,context,target,auth,_,inv=candidate
+    value=status(context,target,auth,inv)
+    value['journal']['runtime'].pop('profile')
+    value['journal']['runtime']['docker_host']='unix:///var/run/docker.sock'
+    assert a.status_observation(r.encode(value),context,target,auth,inv)==value
+    assert value['runtime_observed'] is False
 
 
 @pytest.mark.parametrize('field,value', [('host_preflight', 'failed'),
@@ -152,7 +206,7 @@ def test_tls_probe_must_match_signed_harness(candidate,monkeypatch):
     assert calls==[] and not (args['output']/a.NAME).exists()
 
 
-@pytest.mark.parametrize('mutation',['peer','engine','browser','ca','origin','stale'])
+@pytest.mark.parametrize('mutation',['peer','engine','browser','ca','origin','stale','address','scope','public'])
 def test_live_tls_record_refuses_substitution(candidate,mutation):
     args,calls,context,target,auth,receipt,inv=candidate
     original=args['execute']
@@ -165,6 +219,9 @@ def test_live_tls_record_refuses_substitution(candidate,mutation):
         if mutation=='ca':value['ca_der_sha256']='f'*64
         if mutation=='origin':value['origin']='https://evil.example:18443'
         if mutation=='stale':value['observed_at']=99800
+        if mutation=='address':value['local_probe_address']='127.0.0.1:18444'
+        if mutation=='scope':value['certificate_scope']='backend'
+        if mutation=='public':value['public_endpoint_observed']=True
         return r.encode(value)
     args['execute']=execute
     result=a.run(**args)
@@ -240,7 +297,8 @@ def test_native_incomplete_error_is_retained_without_raw_diagnostics(candidate):
     assert all(v=='blocked' for k,v in result['cases'].items() if k!='artifact-verification')
 
 
-@pytest.mark.parametrize('mutation',['identity','ready','origin','expiry','private_ca','ca_hash','malformed_ca'])
+@pytest.mark.parametrize('mutation',['identity','ready','origin','expiry','private_ca','ca_hash','malformed_ca',
+    'hosting','missing_generation','public','scope','address'])
 def test_untrusted_or_incomplete_trust_observation_cannot_be_recorded(candidate,mutation):
     args,calls,context,target,auth,receipt,inv=candidate
     def execute(argv,**kwargs):
@@ -250,11 +308,16 @@ def test_untrusted_or_incomplete_trust_observation_cannot_be_recorded(candidate,
         value=trust()
         if mutation=='identity':value['installation_id']='32345678-1234-4234-8234-123456789abc'
         if mutation=='ready':value['installation_ready']=True
-        if mutation=='origin':value['origin']='https://foreign.example:18443'
+        if mutation=='origin':value['origin']='https://foreign.example:18443/path'
         if mutation=='expiry':value['ca_expires_at']=100000
         if mutation=='private_ca':value['ca_certificate_pem']+='-----BEGIN PRIVATE KEY-----\nsecret\n'
         if mutation=='ca_hash':value['ca_der_sha256']='f'*64
         if mutation=='malformed_ca':value['ca_certificate_pem']=value['ca_certificate_pem'].replace('MIIB','bad!')
+        if mutation=='hosting':value['evidence_sha256']['hosting-selection.json']='e'*64
+        if mutation=='missing_generation':value['evidence_sha256'].pop('generation-observation.json')
+        if mutation=='public':value['public_endpoint_observed']=True
+        if mutation=='scope':value['certificate_scope']='browser'
+        if mutation=='address':value['local_probe_address']='marty.example.test:18443'
         return r.encode(value)
     args['execute']=execute
     result=a.run(**args)
@@ -263,7 +326,8 @@ def test_untrusted_or_incomplete_trust_observation_cannot_be_recorded(candidate,
     assert result['acceptance'] is False
 
 
-@pytest.mark.parametrize('mutation',['engine','scope','authorization','consumption','identity','inventory','cleanup','phase'])
+@pytest.mark.parametrize('mutation',['engine','scope','authorization','consumption','identity','inventory','cleanup','phase',
+    'socket','runtime_profile','missing_hosting_binding'])
 def test_wrong_candidate_status_cannot_bind_trust_record(candidate,mutation):
     args,_,context,target,auth,receipt,inv=candidate
     def execute(argv,**kwargs):
@@ -276,8 +340,11 @@ def test_wrong_candidate_status_cannot_bind_trust_record(candidate,mutation):
         if mutation=='consumption':journal['scope']['consumption_id']='f'*64
         if mutation=='identity':journal['identity']['source_sha']='f'*40
         if mutation=='inventory':journal['identity']['inventory_sha256']='sha256:'+'f'*64
-        if mutation=='cleanup':value['cleanup']['state']='in_progress'
+        if mutation=='cleanup':value['cleanup']['operations']['down']='uncertain'
         if mutation=='phase':journal['phase']='ready';journal['revision']=4
+        if mutation=='socket':journal['runtime']['docker_host']='unix:///var/run/docker.sock'
+        if mutation=='runtime_profile':journal['runtime']['profile']='rootful'
+        if mutation=='missing_hosting_binding':journal['hosting_addon_sha256']=journal.pop('hosting_selection_sha256')
         return r.encode(value)
     args['execute']=execute
     result=a.run(**args)
@@ -322,6 +389,14 @@ def test_checkpoint_cannot_upgrade_unimplemented_cases(candidate):
     args,_,context,target,auth,receipt,inv=candidate
     result=a.run(**args);result['cases']['browser-tls-login']='passed'
     with pytest.raises(ValueError):a.validate(result,context=context,target=target,authorization=auth,receipt=receipt,inventory=inv)
+
+
+@pytest.mark.parametrize('field',['functional_recovery_qualified','load_characterized'])
+def test_checkpoint_cannot_claim_functional_or_load_qualification(candidate,field):
+    args,_,context,target,auth,receipt,inv=candidate
+    result=a.run(**args);result[field]=True
+    with pytest.raises(ValueError,match='checkpoint scope differs'):
+        a.validate(result,context=context,target=target,authorization=auth,receipt=receipt,inventory=inv)
 
 
 def test_probe_source_fixed_bounded_regular_file(tmp_path,monkeypatch):

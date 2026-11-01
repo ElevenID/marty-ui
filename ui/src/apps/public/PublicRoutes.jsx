@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from 'react-router';
+import { Navigate, Route, Routes, useLocation } from 'react-router';
 
 import { useAuth } from '../../hooks/useAuth';
 import ProtectedRoute, { ApplicantRoute, VendorRoute } from '../../components/ProtectedRoute';
@@ -23,8 +23,10 @@ import {
   PreviewFlowPage,
 } from '../../components/preview';
 import { NotificationPreferencesPage } from '../../components/console';
+import { getPublicEntryCanonicalOrigin, publicEntryHref } from '../../application/routing/publicEntry';
 
 function PublicRoutes() {
+  const location = useLocation();
   const auth = useAuth() || {};
   const {
     isAuthenticated = false,
@@ -34,6 +36,22 @@ function PublicRoutes() {
     login = () => {},
   } = auth;
   const loginFallbackRedirect = getPublicLoginFallback({ isAuthenticated, isAdministrator, isVendor, isApplicant });
+
+  if (getPublicEntryCanonicalOrigin()) {
+    return (
+      <Routes>
+        <Route element={<PublicLayout />}>
+          <Route path="/" element={renderPublicRoot({ isAuthenticated: false })} />
+          <Route path="*" element={
+            <BrowserRedirect
+              to={publicEntryHref(`${location.pathname}${location.search}${location.hash}`)}
+              message="Opening application..."
+            />
+          } />
+        </Route>
+      </Routes>
+    );
+  }
 
   return (
     <Routes>

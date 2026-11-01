@@ -1,4 +1,5 @@
 import { createContext, useState, useEffect } from 'react';
+import { getPublicEntryCanonicalOrigin } from '../application/routing/publicEntry';
 
 // Default branding configuration (fallback if config.json fails to load)
 const defaultBranding = {
@@ -42,7 +43,7 @@ export function BrandingProvider({ children }) {
 
   useEffect(() => {
     // Fetch runtime branding configuration
-    fetch('/config.json')
+    fetch('/config.json', getPublicEntryCanonicalOrigin() ? { credentials: 'omit' } : undefined)
       .then(response => {
         if (!response.ok) {
           throw new Error('Config not found, using defaults');

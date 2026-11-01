@@ -280,7 +280,7 @@ def apply_foundation_reference_representation(model):
     return optional_inputs
 
 
-def assert_models(approved, actual, *, interpolated=False):
+def assert_models(approved, actual, *, interpolated=False, issuer_did=""):
     """Check the complete current KMS-only model against its reviewed snapshot."""
     expected = deepcopy(approved)
     # Keep the approved snapshot and its hash frozen. Admit only the exact
@@ -336,6 +336,33 @@ def assert_models(approved, actual, *, interpolated=False):
     )
     if not interpolated:
         apply_foundation_reference_representation(expected)
+    # The installer supplies one normalized DNS did:web identity (including an
+    # encoded nondefault port). Ordinary Compose retains its historical
+    # PUBLIC_DOMAIN/MARTY_ORG_SLUG fallback. Keep the snapshot frozen and admit
+    # only this exact shared value and its two existing authentication owners.
+    for environment in [
+        expected["x-runtime-env"],
+        expected["x-issuance-application-env"],
+        *(
+            service["environment"]
+            for service in expected["services"].values()
+            if "MARTY_ISSUER_BASE_URL" in service.get("environment", {})
+        ),
+    ]:
+        assert "MARTY_ISSUER_DID" not in environment
+        environment["MARTY_ISSUER_DID"] = (
+            issuer_did if interpolated else "${MARTY_ISSUER_DID:-}"
+        )
+    for owner, setting in (
+        ("auth", "CREDENTIAL_LOGIN_ISSUER_DID"),
+        ("flow", "OID4VP_ISSUER_DID"),
+    ):
+        environment = expected["services"][owner]["environment"]
+        historical = environment[setting]
+        environment[setting] = (
+            issuer_did or historical if interpolated
+            else "${MARTY_ISSUER_DID:-" + historical + "}"
+        )
     # Move the existing dedicated token only; its producer, secret name and
     # authority remain unchanged. Both Issuance variants use Signing Keys HTTPS.
     didcomm_secret = "didcomm_issuance_openbao_token"
@@ -509,6 +536,7 @@ def interpolated_models():
             set(re.findall(r"\$\{([A-Z0-9_]+):-", str(environment)))
             | set(SHARED_ADDITIONS)
             | set(NATIVE_ADDITIVE)
+            | {"MARTY_ISSUER_DID"}
             | {
                 key
                 for additions in PASSPORT_CONSUMER_ADDITIVE.values()
@@ -545,6 +573,9 @@ def interpolated_models():
         for mode, overrides in (
             ("default", {}),
             ("empty", dict.fromkeys(variables, "")),
+            ("installer-dns-port", {
+                "MARTY_ISSUER_DID": "did:web:identity.example%3A8443:orgs:marty",
+            }),
             (
                 "custom",
                 dict.fromkeys(
@@ -556,7 +587,7 @@ def interpolated_models():
             values = {**inputs, **overrides}
             after = render(GATE["BASE"], values)
             slug = values.get("MARTY_ORG_SLUG") or "marty"
-            issuer_did = f"did:web:synthetic.example:orgs:{slug}"
+            issuer_did = values.get("MARTY_ISSUER_DID") or f"did:web:synthetic.example:orgs:{slug}"
             assert after["services"]["auth"]["environment"]["CREDENTIAL_LOGIN_ISSUER_DID"] == issuer_did
             assert after["services"]["flow"]["environment"]["OID4VP_ISSUER_DID"] == issuer_did
             assert after["services"]["trust-profile"]["environment"]["MARTY_ORG_SLUG"] == slug
@@ -569,7 +600,10 @@ def interpolated_models():
                 assert actual_publication == expected_publication
             if mode == "custom":
                 assert set(expected_publication.values()) == {"synthetic-custom"}
-            assert_models(render(APPROVED, values), after, interpolated=True)
+            assert_models(
+                render(APPROVED, values), after, interpolated=True,
+                issuer_did=values.get("MARTY_ISSUER_DID") or "",
+            )
             print(f"PASS: self-host {mode} interpolated whole model")
         for file, source_required in (
             (APPROVED, required),

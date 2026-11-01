@@ -1,3 +1,4 @@
+import { publicEntryHref } from '../../application/routing/publicEntry';
 import { Link } from 'react-router';
 import {
   Box,
@@ -154,7 +155,7 @@ export default function DeploymentModelsSection({ t, onSelectMode }) {
                   '&:hover': { transform: 'translateY(-4px)', boxShadow: 6 },
                 }}
               >
-                <CardActionArea component={Link} to={mode.path} onClick={() => onSelectMode(mode)} sx={{ height: '100%' }}>
+                <CardActionArea component={Link} to={publicEntryHref(mode.path)} onClick={() => onSelectMode(mode)} sx={{ height: '100%' }}>
                   <CardContent sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1.5, mb: 2 }}>
                       <Box

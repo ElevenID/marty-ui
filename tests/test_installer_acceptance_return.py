@@ -27,6 +27,7 @@ def ready(scenario):
         host_observation_sha256='a'*64,host_preflight='passed',dispatch='failed_or_incomplete',
         trust_info_sha256=None,status_observation_sha256=None,trust_inspection='unavailable',
         tls_observation_sha256=None,tls_inspection='not_attempted',
+        resource_profile=runner.LEGACY_PROFILE,functional_recovery_qualified=False,load_characterized=False,
         acceptance=False,installation_ready=False,observed_at=100000)
     raw=r.encode(value)
     client.items.append(dict(id=789,name=runner.NAME,state='uploaded',size=len(raw),digest='sha256:'+r.digest(raw),

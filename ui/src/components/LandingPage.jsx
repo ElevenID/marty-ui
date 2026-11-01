@@ -1,3 +1,4 @@
+import { getPublicEntryCanonicalOrigin, publicEntryHref } from '../application/routing/publicEntry';
 /**
  * Landing Page Component
  *
@@ -216,13 +217,13 @@ function DeveloperQuickstartSection({ t }) {
               ))}
             </List>
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5 }}>
-              <Button variant="contained" component="a" href="/docs" endIcon={<ArrowForwardIcon />}>
+              <Button variant="contained" component="a" href={publicEntryHref('/docs')} endIcon={<ArrowForwardIcon />}>
                 Open API docs
               </Button>
               <Button
                 variant="outlined"
                 component="a"
-                href="/product"
+                href={publicEntryHref('/product')}
                 sx={{ borderColor: 'rgba(255,255,255,0.3)', color: 'common.white' }}
               >
                 View products
@@ -386,7 +387,7 @@ function StandardsArchitectureSection({ t, expandedLayer, onToggleLayer }) {
           variant="outlined"
           size="large"
           component="a"
-          href="/standards"
+          href={publicEntryHref('/standards')}
           endIcon={<ArrowForwardIcon />}
           sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
         >
@@ -660,7 +661,11 @@ function LandingPage() {
       ctaLabel: t('landingPage.footer.viewPricing', 'View Pricing'),
       destinationPath: '/pricing',
     });
-    navigate('/pricing');
+    if (getPublicEntryCanonicalOrigin()) {
+      redirectBrowser('/pricing');
+    } else {
+      navigate('/pricing');
+    }
   };
 
   const handleProofLabRun = async () => {
@@ -821,7 +826,7 @@ function LandingPage() {
               <Box sx={{ display: 'flex', gap: 2, justifyContent: { xs: 'center', lg: 'flex-start' }, flexWrap: 'wrap' }}>
                 {SHOW_PUBLIC_CTA && <Button
                   component={Link}
-                  to="/developers"
+                  to={publicEntryHref('/developers')}
                   onClick={() => handleLandingCtaClick({
                     section: 'hero',
                     ctaId: 'start_verifying',
@@ -847,7 +852,7 @@ function LandingPage() {
                 </Button>}
                 <Button
                   component={Link}
-                  to={VALUE_PROPOSITION.secondaryCTA.path}
+                  to={publicEntryHref(VALUE_PROPOSITION.secondaryCTA.path)}
                   onClick={() => handleLandingCtaClick({
                     section: 'hero',
                     ctaId: 'view_verification_api',
@@ -1005,7 +1010,7 @@ function LandingPage() {
                 '&:hover': { transform: 'translateY(-4px)', boxShadow: 4 },
               }}
             >
-              <CardActionArea component={Link} to={destination.path} onClick={() => handleQuickStartSelection(destination)} sx={{ height: '100%' }}>
+              <CardActionArea component={Link} to={publicEntryHref(destination.path)} onClick={() => handleQuickStartSelection(destination)} sx={{ height: '100%' }}>
                 <CardContent sx={{ p: 3.5, height: '100%', display: 'flex', flexDirection: 'column' }}>
                   <Typography variant="overline" sx={{ color: 'text.secondary', letterSpacing: 1.2 }}>
                     {destination.role}
@@ -1182,7 +1187,7 @@ function LandingPage() {
             variant="outlined"
             size="large"
             component="a"
-            href="/from-idv-to-verifiable-identity"
+            href={publicEntryHref('/from-idv-to-verifiable-identity')}
             endIcon={<ArrowForwardIcon />}
             sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
           >
@@ -1353,7 +1358,7 @@ function LandingPage() {
             variant="contained"
             size="large"
             component="a"
-            href="/identity"
+            href={publicEntryHref('/identity')}
             endIcon={<ArrowForwardIcon />}
             sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
           >
@@ -1401,7 +1406,7 @@ function LandingPage() {
                   '&:hover': { transform: 'translateY(-4px)', boxShadow: 6 },
                 }}
               >
-                <CardActionArea component="a" href={playbook.href} sx={{ height: '100%' }}>
+                <CardActionArea component="a" href={publicEntryHref(playbook.href)} sx={{ height: '100%' }}>
                   <CardContent sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1.5, mb: 2 }}>
                       <Box
@@ -1447,7 +1452,7 @@ function LandingPage() {
         </Grid>
 
         <Box textAlign="center" sx={{ mt: 4 }}>
-          <Button variant="outlined" size="large" component="a" href="/blog" endIcon={<ArrowForwardIcon />}>
+          <Button variant="outlined" size="large" component="a" href={publicEntryHref('/blog')} endIcon={<ArrowForwardIcon />}>
             Browse all deployment guides
           </Button>
         </Box>
@@ -1472,7 +1477,7 @@ function LandingPage() {
               >
                 <CardActionArea
                   component="a"
-                  href={path.path}
+                  href={publicEntryHref(path.path)}
                   sx={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}
                 >
                   <CardContent sx={{ textAlign: 'center', py: 4, flexGrow: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -1710,7 +1715,7 @@ function LandingPage() {
             variant="contained"
             size="large"
             startIcon={<GitHubIcon />}
-            href={PROTOCOL.githubUrl}
+            href={publicEntryHref(PROTOCOL.githubUrl)}
             target="_blank"
             rel="noopener noreferrer"
             sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
@@ -1721,7 +1726,7 @@ function LandingPage() {
             variant="outlined"
             size="large"
             component="a"
-            href="/protocol"
+            href={publicEntryHref('/protocol')}
             endIcon={<ArrowForwardIcon />}
             sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
           >
@@ -1748,7 +1753,7 @@ function LandingPage() {
               <Grid item xs={6} sm={4} md={2} key={ch.id}>
                 <Card
                   component="a"
-                  href={firstArticle ? `/blog/${firstArticle.slug}` : '/blog'}
+                  href={publicEntryHref(firstArticle ? `/blog/${firstArticle.slug}` : '/blog')}
                   elevation={0}
                   sx={{
                     display: 'block',
@@ -1789,7 +1794,7 @@ function LandingPage() {
             variant="contained"
             size="large"
             component="a"
-            href="/blog/foundations-identity"
+            href={publicEntryHref('/blog/foundations-identity')}
             endIcon={<ArrowForwardIcon />}
           >
             Start with Foundations
@@ -1798,7 +1803,7 @@ function LandingPage() {
             variant="text"
             size="large"
             component="a"
-            href="/blog"
+            href={publicEntryHref('/blog')}
             sx={{ ml: 2 }}
           >
             Browse All Guides
@@ -1833,7 +1838,7 @@ function LandingPage() {
                 >
                   <CardActionArea
                     component="a"
-                    href={`/blog/${post.slug}`}
+                    href={publicEntryHref(`/blog/${post.slug}`)}
                     sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}
                   >
                     <CardContent sx={{ flexGrow: 1, width: '100%' }}>
@@ -1864,7 +1869,7 @@ function LandingPage() {
             variant="outlined"
             size="large"
             component="a"
-            href="/blog"
+            href={publicEntryHref('/blog')}
             endIcon={<ArrowForwardIcon />}
           >
             View All Articles
@@ -1894,7 +1899,7 @@ function LandingPage() {
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
           {SHOW_PUBLIC_CTA && <Button
             component={Link}
-            to="/developers"
+            to={publicEntryHref('/developers')}
             onClick={() => handleLandingCtaClick({
               section: 'footer',
               ctaId: 'start_verifying',
@@ -1919,7 +1924,7 @@ function LandingPage() {
           </Button>}
           <Button
             component={Link}
-            to={VALUE_PROPOSITION.secondaryCTA.path}
+            to={publicEntryHref(VALUE_PROPOSITION.secondaryCTA.path)}
             onClick={() => handleLandingCtaClick({
               section: 'footer',
               ctaId: 'view_verification_api',
@@ -1986,7 +1991,7 @@ function LandingPage() {
         <Button
           size="small"
           component="a"
-          href="/identity"
+          href={publicEntryHref('/identity')}
           endIcon={<ArrowForwardIcon fontSize="small" />}
           sx={{ textTransform: 'none' }}
         >

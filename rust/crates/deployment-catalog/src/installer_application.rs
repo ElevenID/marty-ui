@@ -11,6 +11,7 @@ use crate::{
     installer_state::{InstallerState, Phase},
     installer_tls_outputs::bundle_text,
 };
+use marty_selfhost_identity::origin::PublicOrigin;
 use serde_json::json;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -399,6 +400,25 @@ fn start_inner(
             images.get("gateway").ok_or("gateway image absent")?.clone(),
         ),
         ("MARTY_INSTALLER_HTTPS_PORT", ports[0].to_string()),
+        (
+            "MARTY_INSTALLER_PUBLIC_ENTRY_ORIGIN",
+            hosting
+                .public_entry_origin()
+                .map(PublicOrigin::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+        ),
+        (
+            "MARTY_INSTALLER_PUBLIC_ENTRY_ORIGINS",
+            serde_json::to_string(
+                &hosting
+                    .public_entry_origin()
+                    .into_iter()
+                    .map(PublicOrigin::as_str)
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|_| "cannot encode public entry origin")?,
+        ),
         (
             "MARTY_INSTALLER_HTTPS_BIND_ADDRESS",
             ingress_listener.bind_address.to_string(),

@@ -5,6 +5,8 @@
  */
 
 import { LOGOUT_STARTED_EVENT } from './authEvents';
+import { getPublicEntryCanonicalOrigin, publicEntryHref } from '../application/routing/publicEntry';
+import { redirectBrowser } from '../application/routing/appHandoff';
 
 // Auth endpoints should always use relative paths to go through nginx proxy
 // This ensures cookies are sent correctly (same origin)
@@ -15,6 +17,7 @@ const AUTH_BASE_URL = '/v1/auth';
  * @returns {Promise<{authenticated: boolean, user: object|null}>}
  */
 export async function getCurrentUser() {
+  if (getPublicEntryCanonicalOrigin()) return { authenticated: false, user: null };
   try {
     const response = await fetch(`${AUTH_BASE_URL}/me`, {
       method: 'GET',
@@ -60,7 +63,7 @@ export function initiateLogin(redirectUri = '/', locale = null) {
     loginPath += `?${queryString}`;
   }
   
-  window.location.href = loginPath;
+  redirectBrowser(publicEntryHref(loginPath), { replace: false });
 }
 
 /**
@@ -87,13 +90,18 @@ export function initiateRegister(redirectUri = '/', locale = null) {
     registerPath += `?${queryString}`;
   }
   
-  window.location.href = registerPath;
+  redirectBrowser(publicEntryHref(registerPath), { replace: false });
 }
 
 /**
  * Initiate logout (full SSO logout)
  */
 export function initiateLogout() {
+  const canonical = getPublicEntryCanonicalOrigin();
+  if (canonical) {
+    redirectBrowser(`${canonical}/`);
+    return;
+  }
   window.dispatchEvent(new Event(LOGOUT_STARTED_EVENT));
   // POST to logout endpoint via nginx proxy, which will redirect to Keycloak logout
   // Using relative path ensures cookies are sent correctly (same origin)
@@ -118,6 +126,7 @@ export async function isAuthenticated() {
  * @returns {Promise<Array<{id: string, name: string, attributes: object}>>}
  */
 export async function getUserOrganizations() {
+  if (getPublicEntryCanonicalOrigin()) return [];
   try {
     const response = await fetch(`${AUTH_BASE_URL}/me/organizations`, {
       method: 'GET',
@@ -146,6 +155,9 @@ export async function getUserOrganizations() {
  * @returns {Promise<{success: boolean, error?: string}>}
  */
 export async function updateProfilePicture(pictureDataUrl) {
+  if (getPublicEntryCanonicalOrigin()) {
+    return { success: false, error: 'Sign in at the configured application origin to update your profile.' };
+  }
   try {
     const response = await fetch(`${AUTH_BASE_URL}/me`, {
       method: 'PATCH',

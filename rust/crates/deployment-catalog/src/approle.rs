@@ -186,7 +186,7 @@ fn signer_acl() -> String {
 /// SAN restriction. Legacy workload-only renewal never enters this path.
 fn ingress_sign_acl(name: &str, role: &Value) -> Result<String> {
     let domains = role["allowed_domains"].as_array().ok_or(REFUSAL)?;
-    if domains.len() != 1 {
+    if !(1..=2).contains(&domains.len()) {
         return Err(REFUSAL);
     }
     let common = domains[0].as_str().ok_or(REFUSAL)?;
@@ -205,10 +205,26 @@ fn ingress_sign_acl(name: &str, role: &Value) -> Result<String> {
         return Err(REFUSAL);
     }
     let allow_ip = role["allow_ip_sans"].as_bool().ok_or(REFUSAL)?;
-    let ip = match (origin.ip_address(), dns, allow_ip) {
-        (Some(ip), "", true) => ip.to_string(),
-        (None, "localhost", true) => "127.0.0.1".into(),
-        (None, _, false) => String::new(),
+    let entry_ip = domains
+        .get(1)
+        .map(|value| {
+            let text = value.as_str().ok_or(REFUSAL)?;
+            let ip: IpAddr = text.parse().map_err(|_| REFUSAL)?;
+            if ip.to_string() != text
+                || ip.is_loopback()
+                || dns == "localhost"
+                || origin.did_web_authority().is_err()
+            {
+                return Err(REFUSAL);
+            }
+            Ok(ip)
+        })
+        .transpose()?;
+    let ip = match (origin.ip_address(), dns, allow_ip, entry_ip) {
+        (Some(ip), "", true, None) => ip.to_string(),
+        (None, "localhost", true, None) => "127.0.0.1".into(),
+        (None, _, false, None) => String::new(),
+        (None, _, true, Some(ip)) => ip.to_string(),
         _ => return Err(REFUSAL),
     };
     // CSR-provided identities must never override these explicit parameters.
@@ -1439,6 +1455,43 @@ mod ingress_renewal_policy_tests {
             assert!(ingress_sign_acl(name, &role).is_err(), "{field}");
         }
         assert!(ingress_sign_acl(name, &ingress_role("203.0.113.10", false)).is_err());
+    }
+
+    #[test]
+    fn renewal_preserves_one_explicit_ip_alias_in_the_retained_role() {
+        let name = "installer-ingress-12345678123442348234123456789abc";
+        for ip in ["203.0.113.10", "2001:db8::10"] {
+            let mut role = ingress_role("marty.example.com", true);
+            role["allowed_domains"] = json!(["marty.example.com", ip]);
+            let acl = ingress_sign_acl(name, &role).unwrap();
+            assert!(acl.contains("\"common_name\" = [\"marty.example.com\"]"));
+            assert!(acl.contains("\"alt_names\" = [\"marty.example.com\"]"));
+            assert!(acl.contains(&format!("\"ip_sans\" = [{ip:?}]")));
+            assert!(!acl.contains('*'));
+            role["allow_ip_sans"] = json!(false);
+            assert!(ingress_sign_acl(name, &role).is_err());
+        }
+        for (dns, aliases) in [
+            (
+                "marty.example.com",
+                json!(["marty.example.com", "127.0.0.1"]),
+            ),
+            (
+                "marty.example.com",
+                json!(["marty.example.com", "2001:db8:0:0:0:0:0:10"]),
+            ),
+            (
+                "marty.example.com",
+                json!(["marty.example.com", "203.0.113.10", "203.0.113.11"]),
+            ),
+            ("marty", json!(["marty", "203.0.113.10"])),
+            ("localhost", json!(["localhost", "203.0.113.10"])),
+            ("203.0.113.10", json!(["203.0.113.10", "203.0.113.11"])),
+        ] {
+            let mut role = ingress_role(dns, true);
+            role["allowed_domains"] = aliases;
+            assert!(ingress_sign_acl(name, &role).is_err(), "{role}");
+        }
     }
 
     #[test]

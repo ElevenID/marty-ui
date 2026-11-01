@@ -1324,6 +1324,32 @@ pub(crate) fn bound_ingress_listener(
             service["environment"]["OIDF_EDGE_PUBLIC_ORIGIN"]
                 == selection.resolve_origin(listener.port)?.as_str(),
         )?;
+        let configured_entry = service["environment"]
+            .get("OIDF_EDGE_PUBLIC_ENTRY_ORIGIN")
+            .map(|entry| entry.as_str().ok_or(REFUSED))
+            .transpose()?;
+        if let Some(entry) = selection.public_entry_origin() {
+            require(configured_entry == Some(entry.as_str()))?;
+            let ui = &model["services"]["ui"]["environment"];
+            require(
+                ui["UI_CANONICAL_ORIGIN"] == selection.resolve_origin(listener.port)?.as_str(),
+            )?;
+            let aliases: Vec<String> =
+                serde_json::from_str(ui["UI_PUBLIC_ENTRY_ORIGINS"].as_str().ok_or(REFUSED)?)
+                    .map_err(|_| REFUSED)?;
+            require(aliases == [entry.as_str()])?;
+        } else {
+            // Older authenticated layers have no alias fields. They remain
+            // inspectable, but an unrecorded alias can never be admitted.
+            require(configured_entry.is_none_or(str::is_empty))?;
+            if let Some(aliases) =
+                model["services"]["ui"]["environment"].get("UI_PUBLIC_ENTRY_ORIGINS")
+            {
+                let aliases = aliases.as_str().ok_or(REFUSED)?;
+                let aliases: Vec<String> = serde_json::from_str(aliases).map_err(|_| REFUSED)?;
+                require(aliases.is_empty())?;
+            }
+        }
         published_ingress(&ports[0], listener)?;
         listener
     } else {
