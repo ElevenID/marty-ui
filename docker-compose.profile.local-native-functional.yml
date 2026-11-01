@@ -1,0 +1,21 @@
+# Local OIDF developer feedback only. The launcher verifies each binary,
+# source receipt, and same-image UID/loader proof before including this file.
+services:
+  auth:
+    volumes:
+      - type: bind
+        source: ${MARTY_LOCAL_FUNCTIONAL_AUTH_BINARY:?validated local Auth binary required}
+        target: /usr/local/bin/marty-auth
+        read_only: true
+  gateway:
+    volumes:
+      - type: bind
+        source: ${MARTY_LOCAL_FUNCTIONAL_GATEWAY_BINARY:?validated local Gateway binary required}
+        target: /usr/local/bin/marty-gateway
+        read_only: true
+  signing-keys:
+    volumes:
+      - type: bind
+        source: ${MARTY_LOCAL_FUNCTIONAL_SIGNING_KEYS_BINARY:?validated local Signing Keys binary required}
+        target: /usr/local/bin/marty-signing-keys
+        read_only: true
