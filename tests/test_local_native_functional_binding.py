@@ -39,6 +39,13 @@ def _binding(tmp_path: Path) -> Path:
                       "exitCode": 0, "oomKilled": False, "releaseQualified": False,
                       "roleBinaries": {role: binary},
                       "binaries": {binary: {"path": str(binary_path), "sha256": _ref(binary_path)["sha256"]}}}
+            if role == "signing-keys":
+                test_output = tmp_path / "focused-rust.stdout"
+                test_output.write_text("test result: ok. 4 passed; 0 failed; 0 ignored\n", encoding="utf-8")
+                source["focusedRustTest"] = {
+                    "name": "current_issuer_validation_tests::", "exitCode": 0,
+                    "stdout": {**_ref(test_output), "bytes": test_output.stat().st_size},
+                }
         source_proof.write_text(json.dumps(source), encoding="utf-8")
         abi = tmp_path / (binary + "-abi.json")
         abi.write_text(json.dumps({
@@ -84,6 +91,22 @@ def test_declared_source_or_foreign_role_proof_is_refused(tmp_path: Path) -> Non
     path = _binding(tmp_path)
     data = json.loads(path.read_text(encoding="utf-8"))
     data["roles"]["gateway"]["sourceRevision"] = "d" * 40
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError, match="source proof does not bind"):
+        load_binding(path)
+
+
+def test_signing_source_requires_four_real_focused_tests(tmp_path: Path) -> None:
+    path = _binding(tmp_path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    signing = data["roles"]["signing-keys"]
+    proof = Path(signing["sourceProof"]["path"])
+    body = json.loads(proof.read_text(encoding="utf-8"))
+    stdout = Path(body["focusedRustTest"]["stdout"]["path"])
+    stdout.write_text("test result: ok. 3 passed; 0 failed;\n", encoding="utf-8")
+    body["focusedRustTest"]["stdout"] = {**_ref(stdout), "bytes": stdout.stat().st_size}
+    proof.write_text(json.dumps(body), encoding="utf-8")
+    signing["sourceProof"] = _ref(proof)
     path.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(ValueError, match="source proof does not bind"):
         load_binding(path)

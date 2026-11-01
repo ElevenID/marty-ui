@@ -77,6 +77,24 @@ def _source_proof_matches(role: str, binary: str, source_revision: str,
             and actual_binary.get("sha256") == binary_sha
             and Path(str(actual_binary.get("path", ""))).resolve() == binary_path.resolve()
         )
+        if valid and role == "signing-keys":
+            test = proof.get("focusedRustTest")
+            valid = (isinstance(test, dict)
+                     and test.get("name") == "current_issuer_validation_tests::"
+                     and type(test.get("exitCode")) is int and test["exitCode"] == 0
+                     and isinstance(test.get("stdout"), dict))
+            if valid:
+                stdout = test["stdout"]
+                if set(stdout) != {"path", "sha256", "bytes"} or type(stdout["bytes"]) is not int:
+                    valid = False
+                else:
+                    output_path, _ = _private_reference(
+                        {"path": stdout["path"], "sha256": stdout["sha256"]},
+                        "signing-keys focused Rust test stdout",
+                    )
+                    output = output_path.read_text(encoding="utf-8")
+                    valid = (output_path.stat().st_size == stdout["bytes"]
+                             and "test result: ok. 4 passed; 0 failed;" in output)
     if not valid:
         raise ValueError(f"{role} source proof does not bind the selected binary and revision")
 
