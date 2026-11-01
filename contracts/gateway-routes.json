@@ -2287,6 +2287,12 @@
     },
     {
       "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/config/validate-current",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
       "method": "GET",
       "path": "/v1/signing-keys/did-document",
       "status_code": 200
