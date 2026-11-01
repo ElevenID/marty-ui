@@ -2238,7 +2238,9 @@ fn verify_current_issuer_signature(public: &Value, payload: &[u8], signature: &[
 }
 
 async fn current_issuer_signature_verified(service: &Value) -> bool {
-    // Fixed server-owned challenge. The signature never crosses this endpoint.
+    // Read the existing provider key for this registry service/key_reference,
+    // not the issuer profile's published JWK. Verify a fixed server-owned
+    // challenge; neither the challenge selector nor signature is returned.
     const CHALLENGE: &[u8] = b"marty-current-issuer-service-readiness-v1";
     let Ok(public) = kms::public_key_existing(ProviderRequest {
         service_config: service.clone(),
@@ -2293,10 +2295,40 @@ fn supported_current_issuer_service(service: &Value) -> bool {
         )
 }
 
+// A service may host distinct VC and protected keys. The selected reference
+// must not itself have an explicit protected or mixed-purpose binding.
+fn current_issuer_key_is_vc_bound(
+    registry: &Value,
+    service: &Value,
+    service_id: &str,
+    key_reference: &str,
+) -> bool {
+    let service_purposes = service.get("key_purposes").and_then(Value::as_array);
+    let Some(service_purposes) = service_purposes else {
+        return false;
+    };
+    if !service_purposes
+        .iter()
+        .any(|purpose| purpose.as_str() == Some("vc_jwt_issuer"))
+    {
+        return false;
+    }
+    registry
+        .get("key_reference_purposes")
+        .and_then(|all| all.get(service_id))
+        .and_then(|keys| keys.get(key_reference))
+        .is_none_or(|bound| {
+            bound.as_array().is_some_and(|purposes| {
+                purposes.len() == 1 && purposes[0].as_str() == Some("vc_jwt_issuer")
+            })
+        })
+}
+
 #[cfg(test)]
 mod current_issuer_validation_tests {
     use super::*;
     use axum::{body::Body, http::Request};
+    use p256::ecdsa::signature::Signer;
     use tower::ServiceExt;
 
     fn check(name: &str, status: &str) -> validation::ValidationCheck {
@@ -2324,10 +2356,42 @@ mod current_issuer_validation_tests {
             "Signer capability",
             "pass"
         )]));
+        let signer = p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into())
+            .expect("fixed test-only signing key");
+        let point = signer.verifying_key().to_encoded_point(false);
+        let public = point.as_bytes();
+        let jwk = json!({"kty":"EC", "crv":"P-256",
+            "x": URL_SAFE_NO_PAD.encode(&public[1..33]),
+            "y": URL_SAFE_NO_PAD.encode(&public[33..65])});
+        let payload = b"marty-current-issuer-service-readiness-v1";
+        let signature: p256::ecdsa::Signature = signer.sign(payload);
+        let signature = signature.to_der();
+        assert!(verify_current_issuer_signature(
+            &jwk,
+            payload,
+            signature.as_bytes()
+        ));
+        assert!(!verify_current_issuer_signature(
+            &jwk,
+            payload,
+            b"not-a-signature"
+        ));
+        let wrong_signer = p256::ecdsa::SigningKey::from_bytes((&[8u8; 32]).into())
+            .expect("second fixed test-only signing key");
+        let wrong_point = wrong_signer.verifying_key().to_encoded_point(false);
+        let wrong_public = wrong_point.as_bytes();
+        let wrong_jwk = json!({"kty":"EC", "crv":"P-256",
+            "x": URL_SAFE_NO_PAD.encode(&wrong_public[1..33]),
+            "y": URL_SAFE_NO_PAD.encode(&wrong_public[33..65])});
+        assert!(!verify_current_issuer_signature(
+            &wrong_jwk,
+            payload,
+            signature.as_bytes()
+        ));
         assert!(!verify_current_issuer_signature(
             &json!({"kty":"EC","crv":"P-256","x":"AA","y":"AA"}),
-            b"marty-current-issuer-service-readiness-v1",
-            b"not-a-signature"
+            payload,
+            signature.as_bytes()
         ));
     }
 
@@ -2362,6 +2426,46 @@ mod current_issuer_validation_tests {
         assert!(serde_json::from_value::<CurrentIssuerServiceValidationRequest>(json!({
             "issuer_did":"did:web:issuer.example", "credential_format":"SD_JWT_VC", "payload_b64":"dGVzdA=="
         })).is_err());
+    }
+
+    #[test]
+    fn registry_binding_refuses_protected_key_before_provider_probe() {
+        let service = json!({"id":"svc-a", "service_type":"openbao-transit",
+            "auth_mode":"token", "key_reference":"vc-key",
+            "key_purposes":["vc_jwt_issuer","mdoc_dsc"]});
+        let vc_only = json!({"key_reference_purposes": {
+            "svc-a": {"vc-key":["vc_jwt_issuer"], "mdoc-key":["mdoc_dsc"]}}});
+        assert!(current_issuer_key_is_vc_bound(
+            &vc_only, &service, "svc-a", "vc-key"
+        ));
+        assert!(current_issuer_key_is_vc_bound(
+            &json!({"key_reference_purposes": {}}),
+            &service,
+            "svc-a",
+            "vc-key"
+        ));
+        assert!(!current_issuer_key_is_vc_bound(
+            &vc_only, &service, "svc-a", "mdoc-key"
+        ));
+        let protected = json!({"key_reference_purposes": {
+            "svc-a": {"vc-key":["vc_jwt_issuer","mdoc_dsc"]}}});
+        assert!(!current_issuer_key_is_vc_bound(
+            &protected, &service, "svc-a", "vc-key"
+        ));
+        assert!(!current_issuer_key_is_vc_bound(
+            &json!({"key_reference_purposes": {"svc-a": {"vc-key": "malformed"}}}),
+            &service,
+            "svc-a",
+            "vc-key"
+        ));
+        let mut mdoc_only_service = service.clone();
+        mdoc_only_service["key_purposes"] = json!(["mdoc_dsc"]);
+        assert!(!current_issuer_key_is_vc_bound(
+            &vc_only,
+            &mdoc_only_service,
+            "svc-a",
+            "vc-key"
+        ));
     }
 
     #[tokio::test]
@@ -2415,6 +2519,20 @@ mod current_issuer_validation_tests {
                 .oneshot(request(
                     json!({"organization_id":"org-a", "issuer_did":"did:web:issuer.example",
             "credential_format":"mso_mdoc"}),
+                    Some(key)
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        // Caller-selected protected purposes cannot be smuggled into the
+        // fixed VC issuer probe, even when the requested format is VC_JWT.
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    json!({"organization_id":"org-a", "issuer_did":"did:web:issuer.example",
+                        "credential_format":"VC_JWT", "key_purpose":"mdoc_dsc"}),
                     Some(key)
                 ))
                 .await
@@ -2526,14 +2644,17 @@ async fn validate_current_issuer_service(
     {
         return error.into_response();
     }
-    let mut service = match registered_service(&state, &scope.organization_id, service_id).await {
-        Ok(service) => service,
-        Err(error) => return error.into_response(),
-    };
-    if !supported_current_issuer_service(&service) {
+    let (registry, mut service) =
+        match registered_service_with_registry(&state, &scope.organization_id, service_id).await {
+            Ok(pair) => pair,
+            Err(error) => return error.into_response(),
+        };
+    if !supported_current_issuer_service(&service)
+        || !current_issuer_key_is_vc_bound(&registry, &service, service_id, key_reference)
+    {
         return public_error(
             StatusCode::CONFLICT,
-            "Issuer service is not supported by this probe.",
+            "Issuer service or key purpose is not supported by this probe.",
         );
     }
     service["key_reference"] = json!(key_reference);
