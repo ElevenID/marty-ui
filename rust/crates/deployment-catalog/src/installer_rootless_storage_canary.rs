@@ -43,6 +43,21 @@ const REMOVE_INTENT: &str = "rootless-canary-remove-intent.json";
 const TRANSITION_REMOVED: &str = "rootless-canary-transition-removed.json";
 const RESTORE_REMOVED: &str = "rootless-canary-restore-removed.json";
 const COMPLETE: &str = "rootless-canary-complete.json";
+pub(crate) const COMPLETED_EVIDENCE: [&str; 13] = [
+    PULL_INTENT,
+    INTENT,
+    CREATED,
+    TRANSITION_CONTAINER,
+    RESTORE_CONTAINER,
+    START_INTENT,
+    FOREIGN,
+    RESTORE_INTENT,
+    RESULT,
+    REMOVE_INTENT,
+    TRANSITION_REMOVED,
+    RESTORE_REMOVED,
+    COMPLETE,
+];
 
 fn require(ok: bool) -> Result<()> {
     if ok {
@@ -1499,6 +1514,10 @@ fn require_verified_scope(view: &LockedInspection, operator_sha: &str) -> Result
                 && scope.build_run_id == inventory.build_run_id
                 && scope.build_run_attempt == inventory.build_run_attempt,
         ),
+        ExecutionScope::AcceptanceOnly(_) => {
+            crate::installer_candidate_command::require_retained_scope(view, operator_sha)
+                .map(|_| ())
+        }
         #[cfg(feature = "installer-development")]
         ExecutionScope::UnsignedDevelopment(scope) => {
             require(
@@ -1519,8 +1538,191 @@ fn require_verified_scope(view: &LockedInspection, operator_sha: &str) -> Result
                     && admission.operator_sha256 == operator_sha,
             )
         }
-        _ => Err(REFUSED.into()),
     }
+}
+
+/// Observe the completed storage qualification from the held installation.
+/// This is historical evidence for a signed candidate's preparation boundary;
+/// it never runs Docker, repairs ownership, grants deletion, or admits a release.
+pub(crate) fn require_completed(view: &LockedInspection) -> Result<BTreeMap<String, String>> {
+    let journal = view.journal();
+    require(journal.phase() == Phase::Provisioning)?;
+    let binding = journal.runtime().ok_or(REFUSED)?;
+    binding.validate()?;
+    require(binding.profile == crate::installer_state::RuntimeProfile::Rootless)?;
+    let inventory_bytes = view.read_evidence("installer-inventory.json")?;
+    let inventory = crate::installer_release::parse_inventory(&inventory_bytes)?;
+    require(
+        format!("sha256:{}", sha(&inventory_bytes)) == journal.identity().inventory_sha256
+            && inventory.source_sha == journal.identity().source_sha
+            && inventory.release_tag == journal.identity().release_tag,
+    )?;
+    let mut source_evidence = match journal.execution_scope() {
+        ExecutionScope::CandidateTest(scope) => {
+            require(
+                view.read_evidence("candidate-test-inventory.json")? == inventory_bytes
+                    && scope.inventory_sha256 == sha(&inventory_bytes)
+                    && scope.build_run_id == inventory.build_run_id
+                    && scope.build_run_attempt == inventory.build_run_attempt,
+            )?;
+            let mut evidence = BTreeMap::new();
+            for name in ["candidate-test-inventory.json", "installer-inventory.json"] {
+                evidence.insert(name.into(), sha(&inventory_bytes));
+                for suffix in [".sigstore.json", ".provenance.jsonl"] {
+                    let name = format!("{name}{suffix}");
+                    evidence.insert(name.clone(), sha(&view.read_evidence(&name)?));
+                }
+            }
+            evidence
+        }
+        ExecutionScope::AcceptanceOnly(_) => {
+            crate::installer_candidate_command::require_retained_scope(
+                view,
+                &inventory.artifact("marty-deploy-linux-amd64")?.sha256,
+            )?
+        }
+        _ => return Err(REFUSED.into()),
+    };
+    let records: BTreeMap<_, _> = COMPLETED_EVIDENCE
+        .into_iter()
+        .map(|name| Ok((name, view.read_evidence(name)?)))
+        .collect::<Result<_>>()?;
+    let intent_bytes = &records[INTENT];
+    let intent: Intent = serde_json::from_slice(intent_bytes).map_err(|_| REFUSED)?;
+    require(
+        encoded(&intent)? == *intent_bytes
+            && intent.schema == "elevenid.rootless-storage-canary-intent/v1"
+            && intent.installation_id == journal.installation_id()
+            && intent.source_sha == journal.identity().source_sha
+            && intent.inventory_sha256 == journal.identity().inventory_sha256
+            && intent.engine_id == binding.engine_id
+            && intent.host_uid == unsafe { libc::geteuid() }
+            && intent.host_gid == unsafe { libc::getegid() }
+            && intent.host_uid != 0
+            && intent.host_gid != 0
+            && intent.parent_name == format!("rootless-canary-{}", intent.canary_id.simple())
+            && inventory.images.get("gateway") == Some(&intent.image)
+            && inventory.images.get("signing-keys") == Some(&intent.image)
+            && inventory.artifact("marty-deploy-linux-amd64")?.sha256 == intent.operator_sha256
+            && id(intent.image_id.strip_prefix("sha256:").ok_or(REFUSED)?),
+    )?;
+    verify_pull_intent(&records[PULL_INTENT], &intent, &binding.docker_host)?;
+    let (created, transition, restore) = verified_records(
+        &intent,
+        intent_bytes,
+        &records[CREATED],
+        &records[TRANSITION_CONTAINER],
+        &records[RESTORE_CONTAINER],
+        &records[START_INTENT],
+    )?;
+    let root = view.installation_directory();
+    let evidence = open_dir(root, "evidence")?;
+    let parent = open_dir(&evidence, &intent.parent_name)?;
+    let child = open_dir(&parent, "child")?;
+    let restored = stamp(&child)?;
+    require(
+        stamp(root)? == intent.root
+            && stamp(&evidence)? == intent.evidence
+            && stamp(&parent)? == created.parent
+            && restored == created.child
+            && restored.uid == intent.host_uid
+            && restored.gid == intent.host_gid
+            && read_file(&parent, "request.json", 4096)? == request_bytes(&intent)?,
+    )?;
+    let marker = format!("marty-rootless-canary/v1:{}\n", intent.canary_id).into_bytes();
+    require(sha(&marker) == intent.marker_sha256 && read_file(&child, "marker", 256)? == marker)?;
+    exact_children(
+        &parent,
+        &[
+            "child",
+            "request.json",
+            "transition-output.json",
+            "restore-output.json",
+        ],
+    )?;
+    exact_children(&child, &["marker"])?;
+    let transition_output = helper_output(&parent, &intent, &created, "transition")?;
+    let restore_output = helper_output(&parent, &intent, &created, "restore")?;
+    require(
+        transition_output.host_uid_hundred == restore_output.host_uid_hundred
+            && transition_output.host_gid_hundred == restore_output.host_gid_hundred,
+    )?;
+    let foreign = recorded_foreign(
+        &records[FOREIGN],
+        intent_bytes,
+        &created,
+        &transition_output,
+    )?;
+    require(
+        records[RESTORE_INTENT]
+            == encoded(&json!({
+                "schema":"elevenid.rootless-storage-canary-restore-intent/v1",
+                "intent_sha256":sha(intent_bytes),"restore_id":restore.id,"foreign_child":foreign
+            }))?
+            && records[RESULT]
+                == encoded(&json!({
+                    "schema":"elevenid.rootless-storage-canary-result/v1",
+                    "intent_sha256":sha(intent_bytes),"restored_child":restored,
+                    "host_traversal_restored":true,"deletion_authorized":false,"installation_ready":false
+                }))?
+            && records[REMOVE_INTENT] == removal_intent_bytes(intent_bytes, &transition, &restore)?
+            && records[COMPLETE] == completion_bytes(intent_bytes)?,
+    )?;
+    verify_removed_bytes(&records[TRANSITION_REMOVED], intent_bytes, &transition)?;
+    verify_removed_bytes(&records[RESTORE_REMOVED], intent_bytes, &restore)?;
+    for name in [ABORT_INTENT, ABORT_COMPLETE] {
+        require(view.diagnostic_record(name, true)?.is_none())?;
+    }
+    let operator = open_at(root.as_raw_fd(), "marty-deploy", libc::O_RDONLY, 0)?;
+    let before = operator.metadata().map_err(|_| REFUSED)?;
+    require(
+        before.is_file()
+            && before.nlink() == 1
+            && before.uid() == intent.host_uid
+            && before.mode() & 0o7777 == 0o700
+            && before.len() == inventory.artifact("marty-deploy-linux-amd64")?.size,
+    )?;
+    let mut digest = Sha256::new();
+    let count =
+        std::io::copy(&mut (&operator).take(536870913), &mut digest).map_err(|_| REFUSED)?;
+    let after = open_at(root.as_raw_fd(), "marty-deploy", libc::O_PATH, 0)?
+        .metadata()
+        .map_err(|_| REFUSED)?;
+    require(
+        count == before.len()
+            && count <= 536870912
+            && format!("{:x}", digest.finalize()) == intent.operator_sha256
+            && (
+                before.dev(),
+                before.ino(),
+                before.mode(),
+                before.uid(),
+                before.gid(),
+                before.len(),
+                before.mtime(),
+                before.mtime_nsec(),
+                before.ctime(),
+                before.ctime_nsec(),
+            ) == (
+                after.dev(),
+                after.ino(),
+                after.mode(),
+                after.uid(),
+                after.gid(),
+                after.len(),
+                after.mtime(),
+                after.mtime_nsec(),
+                after.ctime(),
+                after.ctime_nsec(),
+            ),
+    )?;
+    let mut hashes: BTreeMap<String, String> = records
+        .into_iter()
+        .map(|(name, bytes)| (name.into(), sha(&bytes)))
+        .collect();
+    hashes.append(&mut source_evidence);
+    view.require_unchanged()?;
+    Ok(hashes)
 }
 /// Compatibility for the private candidate test harness; this selects the same
 /// implementation, with an additional candidate-scope check, never another engine.
@@ -2422,3 +2624,7 @@ mod tests {
 #[cfg(test)]
 #[path = "installer_rootless_storage_canary_development_tests.rs"]
 mod development_tests;
+
+#[cfg(test)]
+#[path = "installer_rootless_storage_canary_completed_tests.rs"]
+mod completed_tests;

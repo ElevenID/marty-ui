@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Outlet } from 'react-router';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter, Outlet, useLocation } from 'react-router';
 import { renderWithoutRouter, screen, waitFor } from '@test/utils';
 import type { ReactNode } from 'react';
 
@@ -137,10 +137,19 @@ vi.mock('../../components/console', () => ({
   DeviceManagementPage: () => <div data-testid="device-management-page" />,
 }));
 
+afterEach(() => {
+  delete (window as any).__MARTY_RUNTIME_CONFIG__;
+});
+
+function CurrentPath() {
+  return <span data-testid="current-path">{useLocation().pathname}</span>;
+}
+
 function renderConsoleRoutes(path: string) {
   return renderWithoutRouter(
     <MemoryRouter initialEntries={[path]}>
       <ConsoleRoutes />
+      <CurrentPath />
     </MemoryRouter>
   );
 }
@@ -160,6 +169,28 @@ describe('ConsoleRoutes login routing', () => {
       memberships: [],
       isLoading: false,
     });
+  });
+
+  it('keeps login inside the console when public pages are disabled', async () => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { web: { enabled_sections: ['console'] } };
+    renderConsoleRoutes('/console');
+    await waitFor(() => expect(mockLogin).toHaveBeenCalledWith('/console'));
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/login');
+    expect(screen.queryByTestId('web-section-unavailable')).not.toBeInTheDocument();
+  });
+
+  it('exchanges a shared callback served by the console entry when public pages are disabled', () => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { web: { enabled_sections: ['console'] } };
+    renderConsoleRoutes('/auth/callback?code=code-1&state=state-1');
+    expect(screen.getByTestId('auth-callback')).toBeInTheDocument();
+    expect(mockLogin).not.toHaveBeenCalled();
+  });
+
+  it.each([{ sections: ['public'] }, { sections: [] }])('does not start a console or login excluded at startup: $sections', ({ sections }) => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { web: { enabled_sections: sections } };
+    renderConsoleRoutes('/console/login');
+    expect(screen.getByTestId('web-section-unavailable')).toBeVisible();
+    expect(mockLogin).not.toHaveBeenCalled();
   });
 
   it('starts the real login flow from the logged-out console entry route', async () => {

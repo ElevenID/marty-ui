@@ -37,6 +37,30 @@ x-installer-bao-ca: &installer-bao-ca
   bind: {create_host_path: false}
 
 services:
+  installer-control-enroll:
+    <<: *installer-job
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?approved OpenBao image required}
+    entrypoint: [/usr/local/bin/selfhost-control-enroll]
+    command: [--installation-id, "${MARTY_INSTALLATION_ID:?}", --attempt-id, "${MARTY_OPENBAO_CONTROL_ATTEMPT_ID:?bound control enrollment attempt required}"]
+    tmpfs:
+      - /openbao/file:rw,noexec,nosuid,nodev,size=1048576,mode=0700
+      - /openbao/logs:rw,noexec,nosuid,nodev,size=1048576,mode=0700
+    volumes:
+      - type: bind
+        source: ${SELFHOST_OPENBAO_STATE_DIR:?}
+        target: /bao/data
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/socket
+        target: /bao/control
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/identity
+        target: /bao/control-identity
+        bind: {create_host_path: false}
+
   installer-keycloak:
     <<: *installer-job
     image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?approved OpenBao image required}
@@ -156,7 +180,14 @@ services:
     # TLS custody is established by the preceding exclusive setup job.
     depends_on: !reset {}
     init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    logging: &bao-bounded-logs
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
     security_opt: ["no-new-privileges:true"]
+    environment:
+      MARTY_OPENBAO_LOCAL_CONTROL: "1"
     tmpfs: &bao-scratch
       - /openbao/file:rw,noexec,nosuid,nodev,size=1048576,mode=0700
       - /openbao/logs:rw,noexec,nosuid,nodev,size=1048576,mode=0700
@@ -166,18 +197,34 @@ services:
         target: /bao/data
         bind: {create_host_path: false}
       - type: bind
-        source: ./docker/openbao-selfhost.hcl
+        source: ./docker/openbao-selfhost-installer.hcl
         target: /bao/config/openbao.hcl
         read_only: true
         bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/socket
+        target: /bao/control
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/identity
+        target: /bao/control-identity
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-seal/key
+        target: /bao/seal
+        read_only: true
+        bind: {create_host_path: false}
     healthcheck:
-      test: [CMD-SHELL, "bao status -address=https://127.0.0.1:8200 -ca-cert=/bao/data/tls/ca.crt >/dev/null 2>&1; result=$$?; test $$result -eq 0 -o $$result -eq 2"]
+      test: [CMD, /usr/local/bin/selfhost-openbao-ready, --check-listener]
 
   openbao-tls-init:
     profiles: [setup]
     init: true
     security_opt: ["no-new-privileges:true"]
     tmpfs: *bao-scratch
+    environment:
+      MARTY_OPENBAO_LOCAL_CONTROL: "1"
     labels:
       com.elevenid.installer.id: ${MARTY_INSTALLATION_ID:?}
       com.elevenid.installer.phase: setup
@@ -186,22 +233,39 @@ services:
         source: ${SELFHOST_OPENBAO_STATE_DIR:?}
         target: /bao/data
         bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/socket
+        target: /bao/control
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/identity
+        target: /bao/control-identity
+        bind: {create_host_path: false}
 
   openbao-unseal:
+    # Historical service key; the static-seal installer uses only read-only
+    # readiness observation here. OpenBao performs its own auto-unseal.
+    entrypoint: [/usr/local/bin/selfhost-openbao-ready]
+    command: [--watch]
     init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    logging: *bao-bounded-logs
     security_opt: ["no-new-privileges:true"]
     tmpfs: *bao-scratch
+    environment: !override
+      MARTY_OPENBAO_LOCAL_CONTROL: "1"
     volumes: !override
       - type: bind
-        source: ${SELFHOST_OPENBAO_STATE_DIR:?}
-        target: /bao/data
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/socket
+        target: /bao/control
         read_only: true
         bind: {create_host_path: false}
     depends_on:
       openbao:
         condition: service_healthy
     healthcheck:
-      test: [CMD-SHELL, "bao status -address=https://openbao:8200 -ca-cert=/bao/data/tls/ca.crt >/dev/null 2>&1"]
+      test: [CMD, /usr/local/bin/selfhost-openbao-ready, --check-ready]
       interval: 5s
       timeout: 5s
       retries: 24
@@ -212,6 +276,11 @@ services:
     init: true
     security_opt: ["no-new-privileges:true"]
     tmpfs: *bao-scratch
+    environment:
+      MARTY_OPENBAO_STATIC_SEAL: "1"
+      MARTY_OPENBAO_LOCAL_CONTROL: "1"
+      MARTY_INSTALLATION_ID: ${MARTY_INSTALLATION_ID:?}
+      MARTY_OPENBAO_STATIC_INIT_ATTEMPT_ID: ${MARTY_OPENBAO_STATIC_INIT_ATTEMPT_ID:?bound static initialization attempt required}
     labels:
       com.elevenid.installer.id: ${MARTY_INSTALLATION_ID:?}
       com.elevenid.installer.phase: setup
@@ -226,6 +295,15 @@ services:
       - type: bind
         source: ${MARTY_INSTALLATION_DIR:?}/secrets
         target: /bao/runtime
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/socket
+        target: /bao/control
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-seal/initialization
+        target: /bao/static-init
         bind: {create_host_path: false}
       - type: bind
         source: ./docker/openbao-init.sh

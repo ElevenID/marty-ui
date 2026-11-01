@@ -129,10 +129,28 @@ def test_console_is_one_independent_image_with_no_backend_startup_or_secret_depe
     )
     assert console["image"].startswith("ghcr.io/elevenid/marty-console/ui@sha256:")
     assert console["environment"] == {
-        "MARTY_SERVER_ORIGIN": "https://api.example.com:8443"
+        "MARTY_SERVER_ORIGIN": "https://api.example.com:8443",
+        "UI_ENABLED_SECTIONS": "${UI_ENABLED_SECTIONS-public,console}",
     }
     assert result["x-marty-product"]["version"] == "7.8.9"
     assert console["ports"] == ["127.0.0.1:3100:80"]
+
+
+@pytest.mark.parametrize("sections", ["public,console", "public", "console", "none", ""])
+def test_generated_console_compose_retains_the_selected_startup_sections(tmp_path, sections):
+    model = MODULE.console_composition(package("marty-console"), "https://api.example.com")
+    source = tmp_path / "console.json"
+    source.write_text(json.dumps(model))
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(source), "config", "--format", "json"],
+        env={**os.environ, "UI_ENABLED_SECTIONS": sections},
+        check=True, capture_output=True, text=True,
+    )
+    configured = json.loads(result.stdout)["services"]["console"]["environment"]
+    assert configured["UI_ENABLED_SECTIONS"] == sections
+    assert configured["MARTY_SERVER_ORIGIN"] == "https://api.example.com"
+    # An explicit empty setting reaches the validating startup hook rather
+    # than silently expanding back to both sections during interpolation.
 
 
 @pytest.mark.parametrize(

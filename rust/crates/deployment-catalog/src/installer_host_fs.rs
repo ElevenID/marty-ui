@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ffi::CString,
+    ffi::{CStr, CString},
     fs::{File, OpenOptions},
     io::{Read, Write},
     os::{
@@ -18,6 +18,47 @@ fn require(condition: bool, refusal: &str) -> Result<()> {
         Ok(())
     } else {
         Err(refusal.into())
+    }
+}
+
+pub(crate) enum RenameMode {
+    NoReplace,
+    Exchange,
+    Replace,
+}
+
+/// Atomically publish or exchange names relative to held directories. Calling
+/// the Linux syscall avoids a libc renameat2 symbol that some musl versions do
+/// not export. Unsupported kernels fail closed; never emulate NOREPLACE with
+/// an existence check followed by a clobbering rename.
+pub(crate) fn rename_at(
+    source_directory: &File,
+    source: &CStr,
+    target_directory: &File,
+    target: &CStr,
+    mode: RenameMode,
+) -> std::io::Result<()> {
+    let flags = match mode {
+        RenameMode::NoReplace => libc::RENAME_NOREPLACE,
+        RenameMode::Exchange => libc::RENAME_EXCHANGE,
+        RenameMode::Replace => 0,
+    };
+    // SAFETY: The directory descriptors and NUL-terminated names remain valid
+    // throughout the synchronous syscall; the kernel validates both paths.
+    let status = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            source_directory.as_raw_fd(),
+            source.as_ptr(),
+            target_directory.as_raw_fd(),
+            target.as_ptr(),
+            flags,
+        )
+    };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
     }
 }
 
@@ -260,6 +301,149 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
         temp
+    }
+
+    #[test]
+    fn atomic_no_replace_preserves_existing_files_symlinks_and_directories() {
+        let temp = private_dir();
+        let held = directory(temp.path(), REFUSAL).unwrap();
+        fs::write(temp.path().join("source"), b"complete new content").unwrap();
+        fs::write(temp.path().join("existing"), b"existing content").unwrap();
+        symlink("missing", temp.path().join("symlink")).unwrap();
+        fs::create_dir(temp.path().join("directory")).unwrap();
+        let source = CString::new("source").unwrap();
+        for target in ["existing", "symlink", "directory"] {
+            let before = fs::symlink_metadata(temp.path().join(target)).unwrap();
+            let failure = rename_at(
+                &held,
+                &source,
+                &held,
+                &CString::new(target).unwrap(),
+                RenameMode::NoReplace,
+            )
+            .unwrap_err();
+            assert_eq!(failure.raw_os_error(), Some(libc::EEXIST));
+            let after = fs::symlink_metadata(temp.path().join(target)).unwrap();
+            assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+            assert_eq!(
+                fs::read(temp.path().join("source")).unwrap(),
+                b"complete new content"
+            );
+        }
+        assert_eq!(
+            fs::read(temp.path().join("existing")).unwrap(),
+            b"existing content"
+        );
+        assert_eq!(
+            fs::read_link(temp.path().join("symlink")).unwrap(),
+            Path::new("missing")
+        );
+        assert!(temp.path().join("directory").is_dir());
+    }
+
+    #[test]
+    fn atomic_rename_modes_preserve_the_requested_publication_semantics() {
+        let source_root = private_dir();
+        let target_root = private_dir();
+        let source_directory = directory(source_root.path(), REFUSAL).unwrap();
+        let target_directory = directory(target_root.path(), REFUSAL).unwrap();
+        fs::write(source_root.path().join("source"), b"first").unwrap();
+        let first_inode = fs::metadata(source_root.path().join("source"))
+            .unwrap()
+            .ino();
+        let source = CString::new("source").unwrap();
+        let target = CString::new("target").unwrap();
+        rename_at(
+            &source_directory,
+            &source,
+            &target_directory,
+            &target,
+            RenameMode::NoReplace,
+        )
+        .unwrap();
+        assert!(!source_root.path().join("source").exists());
+        assert_eq!(
+            fs::read(target_root.path().join("target")).unwrap(),
+            b"first"
+        );
+        assert_eq!(
+            fs::metadata(target_root.path().join("target"))
+                .unwrap()
+                .ino(),
+            first_inode
+        );
+
+        fs::write(source_root.path().join("source"), b"second").unwrap();
+        let second_inode = fs::metadata(source_root.path().join("source"))
+            .unwrap()
+            .ino();
+        rename_at(
+            &source_directory,
+            &source,
+            &target_directory,
+            &target,
+            RenameMode::Exchange,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(source_root.path().join("source")).unwrap(),
+            b"first"
+        );
+        assert_eq!(
+            fs::read(target_root.path().join("target")).unwrap(),
+            b"second"
+        );
+        assert_eq!(
+            fs::metadata(source_root.path().join("source"))
+                .unwrap()
+                .ino(),
+            first_inode
+        );
+        assert_eq!(
+            fs::metadata(target_root.path().join("target"))
+                .unwrap()
+                .ino(),
+            second_inode
+        );
+
+        let missing = CString::new("missing").unwrap();
+        assert_eq!(
+            rename_at(
+                &source_directory,
+                &source,
+                &target_directory,
+                &missing,
+                RenameMode::Exchange
+            )
+            .unwrap_err()
+            .raw_os_error(),
+            Some(libc::ENOENT)
+        );
+        assert_eq!(
+            fs::read(source_root.path().join("source")).unwrap(),
+            b"first"
+        );
+        assert!(!target_root.path().join("missing").exists());
+
+        rename_at(
+            &source_directory,
+            &source,
+            &target_directory,
+            &target,
+            RenameMode::Replace,
+        )
+        .unwrap();
+        assert!(!source_root.path().join("source").exists());
+        assert_eq!(
+            fs::read(target_root.path().join("target")).unwrap(),
+            b"first"
+        );
+        assert_eq!(
+            fs::metadata(target_root.path().join("target"))
+                .unwrap()
+                .ino(),
+            first_inode
+        );
     }
 
     fn token_projection(root: &Path) -> PathBuf {

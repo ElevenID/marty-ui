@@ -112,20 +112,36 @@ def test_mismatched_signed_grant_refuses_completion(arranged):
     assert calls == ["verify", "upload", "receive"]
 
 
-@pytest.mark.parametrize("incomplete,observer_failure,replace_output,purpose", [
-    (False, False, False, exchange.QUALIFICATION),
-    (True, False, False, exchange.QUALIFICATION),
-    (False, True, False, exchange.QUALIFICATION),
-    (True, True, False, exchange.QUALIFICATION),
-    (False, False, True, exchange.QUALIFICATION),
-    (False, False, False, exchange.ENGINEERING),
-    (True, False, False, exchange.ENGINEERING),
-    (False, True, False, exchange.ENGINEERING)])
+@pytest.mark.parametrize("incomplete,observer_failure,replace_output,purpose,resource_profile", [
+    (False, False, False, exchange.QUALIFICATION, None),
+    (True, False, False, exchange.QUALIFICATION, None),
+    (False, True, False, exchange.QUALIFICATION, None),
+    (True, True, False, exchange.QUALIFICATION, None),
+    (False, False, True, exchange.QUALIFICATION, None),
+    (False, False, False, exchange.ENGINEERING, None),
+    (True, False, False, exchange.ENGINEERING, None),
+    (False, True, False, exchange.ENGINEERING, None),
+    (False, False, False, exchange.QUALIFICATION, "rootless-startup-8gib"),
+    (True, False, False, exchange.QUALIFICATION, "rootless-functional-recovery-8gib")])
 def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
                                                   incomplete, observer_failure,
-                                                  replace_output, purpose):
+                                                  replace_output, purpose, resource_profile):
     args, verified, calls = arranged
     verified.update(exchange._scope(purpose))
+    auth_raw, inv_raw, files = b"authorization", b"inventory", {}
+    host_raw = release.encode({"synthetic": "previously admitted host"})
+    if resource_profile is not None:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from test_installer_host_admission import observed_rootless_host_with_neighbors
+        fixture = json.loads((Path(__file__).resolve().parents[1] /
+            "rust/crates/deployment-catalog/tests/fixtures/installer-candidate-hosting-v2.json").read_text())
+        auth_raw, inv_raw = fixture[0]["authorization"].encode(), fixture[0]["inventory"].encode()
+        args["expected"] = release.candidate_context(release.decode(auth_raw))
+        host = observed_rootless_host_with_neighbors()
+        host["runtime"].update(uid=1001, docker_host="unix:///run/user/1001/docker.sock")
+        host_raw = release.encode(host)
+        verified.update({key: host[key] for key in exchange.ROOTLESS_FACT_FIELDS - {"resource_profile"}},
+                        resource_profile=resource_profile)
     moment = [100000]
     args["clock"] = lambda: moment[0]
     original_verify = exchange.verify_consumed_intent
@@ -153,17 +169,28 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
         path = registry / (args["expected"]["nonce"] + suffix)
         path.write_bytes(raw)
         path.chmod(0o600)
-    host_raw = release.encode({"synthetic": "previously admitted host"})
+    grants = registry / "signed-grant"
+    if resource_profile is not None:
+        for directory, name, raw in ((grants, "candidate-authorization.json", auth_raw),
+                (grants, "controller-consumption.json", receipt_raw),
+                (args["assets"], "installer-inventory.json", inv_raw)):
+            directory.mkdir(mode=0o700, exist_ok=True)
+            for suffix in exchange.dispatch.SUFFIXES:
+                path = directory / (name + suffix)
+                data = raw if not suffix else ("synthetic verified proof " + name + suffix).encode()
+                path.write_bytes(data); path.chmod(0o600)
+                files[path] = (release.digest(data), len(data))
     fresh = dict(target=verified["target"], ssh=verified["ssh"],
-                 authorization_sha256=release.digest(b"authorization"),
-                 inventory_sha256=release.digest(b"inventory"),
+                 authorization_sha256=release.digest(auth_raw),
+                 inventory_sha256=release.digest(inv_raw),
                  initial_guest_readiness_sha256=release.digest(b"initial VM"),
                  host_observation_sha256=release.digest(host_raw),
-                 probe_finished_at=100000)
+                 probe_finished_at=100000, **exchange._runtime_scope(verified, resource_profile))
     vm_id = verified["target"]["guest_id"]
     observation_id = "33333333-3333-4333-8333-333333333333"
     def preflight(lease, _registry, _runtime, **kwargs):
         assert kwargs["purpose"] == purpose
+        assert kwargs["resource_profile"] == resource_profile
         calls.append("fresh")
         fresh["probe_finished_at"] = moment[0]
         exchange._write(lease.parent,
@@ -177,7 +204,7 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
     def slow_payload_verify(**_kwargs):
         calls.append("payloads")
         moment[0] += 61
-        return b"authorization", receipt_raw, b"inventory", {}
+        return auth_raw, receipt_raw, inv_raw, files
     monkeypatch.setattr(exchange.dispatch, "verify", slow_payload_verify)
     monkeypatch.setattr(exchange.dispatch, "verified_harness_script",
                         lambda *_args: "synthetic signed TLS probe")
@@ -196,18 +223,20 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
         if incomplete:
             raise ValueError("native startup recorded; acceptance incomplete")
         return dict(installation_ready=False, acceptance_report=False)
-    signed = dict(schema=exchange._schema("signed-exchange", purpose),
+    signed = dict(schema=exchange._schema("signed-exchange", purpose, resource_profile),
                   nonce=args["expected"]["nonce"],
                   intent_sha256=verified["intent_sha256"],
                   receipt_sha256=verified["receipt_sha256"],
                   target=verified["target"], ssh=verified["ssh"],
-                  guest_dispatched=False, acceptance=False, **exchange._scope(purpose))
+                  guest_dispatched=False, acceptance=False, **exchange._scope(purpose),
+                  **exchange._runtime_scope(verified, resource_profile))
     def process_observer(_registry, _runtime, *, vm_id, process_check_id,
                          lease):
         calls.append("process")
         if observer_failure:
             raise OSError("post-dispatch VM observation failed")
-        record = dict(schema=exchange.live_vm.PROCESS_CHECK_SCHEMA,
+        record = dict(schema=(exchange.live_vm.ROOTLESS_PROCESS_CHECK_SCHEMA if resource_profile
+                              else exchange.live_vm.PROCESS_CHECK_SCHEMA),
                       vm_id=vm_id, observation_id=process_check_id,
                       initial_guest_readiness_sha256=fresh[
                           "initial_guest_readiness_sha256"])
@@ -219,6 +248,15 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
         assert purpose == exchange.QUALIFICATION, "engineering reached acceptance producer"
         calls.append("installed")
         assert kwargs["checkpoint"]["acceptance"] is False
+        if resource_profile is not None:
+            assert kwargs["checkpoint"]["schema"] == exchange.acceptance.SCHEMA_V5
+            assert kwargs["checkpoint"]["resource_profile"] == resource_profile
+            assert kwargs["checkpoint"]["host_runtime"]["uid"] == 1001
+            assert kwargs["checkpoint"]["hosting"] == args["expected"]["hosting"]
+            assert kwargs["checkpoint"]["authenticated_evidence_sha256"] == (
+                exchange.acceptance.authenticated_source_digests(files, args["assets"], grants))
+            assert kwargs["checkpoint"]["host_resources_sha256"] == release.digest(
+                release.encode(release.decode(host_raw)["resources"]))
         assert kwargs["checkpoint"]["dispatch"] == (
             "failed_or_incomplete" if incomplete else "returned_zero_unqualified")
         if replace_output:
@@ -240,12 +278,12 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
                   final_observation_id="44444444-4444-4444-8444-444444444444",
                   exchange_result=signed, authorization=args["authorization"],
                   assets=args["assets"], expected=args["expected"], gh=args["gh"],
-                  cosign=args["cosign"], grants=registry / "signed-grant",
+                  cosign=args["cosign"], grants=grants,
                   ssh=Path("/usr/bin/ssh"), scp=Path("/usr/bin/scp"),
-                  clock=args["clock"], purpose=purpose)
+                  clock=args["clock"], purpose=purpose, resource_profile=resource_profile)
     other = (exchange.QUALIFICATION if purpose == exchange.ENGINEERING
              else exchange.ENGINEERING)
-    with pytest.raises(ValueError, match="purpose differs"):
+    with pytest.raises(ValueError, match="purpose differs|relabelled engineering"):
         exchange.dispatch_once(**dict(common, purpose=other), invoke=invoke,
                                process_observer=process_observer,
                                observe_installed=observe_installed)
@@ -284,7 +322,7 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
         assert post["command_returned_zero"] is (not incomplete)
         assert post["installation_ready"] is False
         assert post["acceptance"] is False
-        assert post["schema"] == exchange._schema("post-dispatch", purpose)
+        assert post["schema"] == exchange._schema("post-dispatch", purpose, resource_profile)
         output = registry / (args["expected"]["nonce"] +
                              ".installed-observations")
         if purpose == exchange.ENGINEERING:
@@ -308,3 +346,55 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
                                observe_installed=observe_installed)
     assert calls[before_retry:] == ["verify", "payloads", "verify", "fresh"]
     assert calls.count("invoke") == 1
+
+
+@pytest.mark.parametrize('mutation', [None, 'profile', 'socket', 'memory', 'filesystem'])
+def test_versioned_exchange_preserves_profile_and_rejects_changed_runtime(arranged, monkeypatch, mutation):
+    import copy
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_installer_host_admission import observed_rootless_host_with_neighbors
+    args, verified, calls = arranged
+    fixture=json.loads((Path(__file__).resolve().parents[1]/
+        'rust/crates/deployment-catalog/tests/fixtures/installer-candidate-hosting-v2.json').read_text())[0]
+    args['expected']=release.candidate_context(release.decode(fixture['authorization'].encode()))
+    profile='rootless-startup-8gib'
+    args['resource_profile']=profile
+    host=observed_rootless_host_with_neighbors()
+    host['runtime'].update(uid=1001,docker_host='unix:///run/user/1001/docker.sock')
+    verified.update({key:host[key] for key in exchange.ROOTLESS_FACT_FIELDS-{'resource_profile'}},resource_profile=profile)
+    def verify(lease, _registry, **kwargs):
+        assert lease.parent is not None and kwargs['resource_profile']==profile
+        calls.append('verify')
+        return copy.deepcopy(verified)
+    monkeypatch.setattr(exchange,'verify_consumed_intent',verify)
+    def upload(**kwargs):
+        calls.append('upload')
+        if mutation=='profile':verified['resource_profile']='rootless-functional-recovery-8gib'
+        elif mutation=='socket':verified['runtime']['socket_inode']+=1
+        elif mutation=='memory':verified['docker_memory_bytes']-=1
+        elif mutation=='filesystem':verified['docker_data_filesystem']['device']+=1
+        return dict(receipt_sha256=verified['receipt_sha256'],
+                    context_sha256=release.candidate_context_sha256(args['expected']))
+    def receive(**kwargs):
+        calls.append('receive')
+        return dict(receipt_sha256=verified['receipt_sha256'],
+                    context_sha256=release.candidate_context_sha256(args['expected']),
+                    target_sha256=release.digest(release.encode(verified['target'])))
+    if mutation is not None:
+        with pytest.raises(ValueError,match='profile differs|runtime differs'):
+            exchange.exchange(**args,upload=upload,receive=receive)
+    else:
+        result=exchange.exchange(**args,upload=upload,receive=receive)
+        assert result['schema']=='elevenid.installer-vm-signed-exchange/v2'
+        assert result['resource_profile']==profile
+        assert result['runtime']==host['runtime']
+        assert result['acceptance'] is result['guest_dispatched'] is False
+    assert calls==['verify','upload','receive','verify']
+
+
+def test_hosting_grant_cannot_enter_legacy_exchange(arranged):
+    args, _, calls=arranged
+    args['expected']['hosting']={'untrusted':'must not be used before version admission'}
+    with pytest.raises(ValueError,match='explicit rootless resource profile'):
+        exchange.exchange(**args)
+    assert calls==[]

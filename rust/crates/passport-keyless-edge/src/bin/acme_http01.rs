@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind = validate_bind(&required("MARTY_ACME_HTTP01_BIND")?)?;
     let canonical = required("MARTY_ACME_HTTP01_CANONICAL_ORIGIN")?;
     let alias = match std::env::var("MARTY_ACME_HTTP01_PUBLIC_ENTRY_ORIGIN") {
-        Ok(value) => Some(value),
+        Ok(value) => (!value.is_empty()).then_some(value),
         Err(std::env::VarError::NotPresent) => None,
         Err(error) => return Err(error.into()),
     };

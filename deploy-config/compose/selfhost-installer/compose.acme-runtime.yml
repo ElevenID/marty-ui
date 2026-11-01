@@ -1,0 +1,22 @@
+# Public ACME chain from the existing immutable generation owner. Internal
+# OpenBao TLS keeps its separate retained CA and remote-signing token.
+services:
+  installer-ingress:
+    volumes: !override
+      - type: bind
+        source: ${SELFHOST_SECRET_DIR:?set the verified generation directory}/installer_ingress_tls_cert
+        target: /run/installer/tls.crt
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${SELFHOST_SECRET_DIR:?set the verified generation directory}/installer_ingress_tls_kms_token
+        target: /run/installer/signer.token
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${SELFHOST_SECRET_DIR:?set the verified generation directory}/openbao_tls_ca_cert
+        target: /run/installer/openbao-ca.crt
+        read_only: true
+        bind: {create_host_path: false}
+    healthcheck:
+      test: [CMD, curl, --disable, --fail, --silent, --show-error, --max-time, "10", --noproxy, "*", --cacert, /etc/ssl/certs/ca-certificates.crt, --connect-to, "${MARTY_INSTALLER_INGRESS_CONNECT_TO:?set the public identity and local TLS target}", "${PUBLIC_API_URL}/"]

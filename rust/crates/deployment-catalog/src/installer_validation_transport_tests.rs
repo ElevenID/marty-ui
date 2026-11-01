@@ -3,7 +3,11 @@ use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use std::{collections::BTreeMap, process::Command, sync::Arc};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-fn certificate(root: &Path, name: &str, dns: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+pub(super) fn certificate(
+    root: &Path,
+    name: &str,
+    dns: &str,
+) -> (std::path::PathBuf, std::path::PathBuf) {
     let cert = root.join(format!("{name}.pem"));
     let key = root.join(format!("{name}.key"));
     let config = root.join("openssl.cnf");
@@ -44,7 +48,7 @@ fn certificate(root: &Path, name: &str, dns: &str) -> (std::path::PathBuf, std::
     assert!(output.status.success());
     (cert, key)
 }
-async fn serve(
+pub(super) async fn serve(
     cert: &Path,
     key: &Path,
     response: Vec<u8>,
@@ -126,14 +130,17 @@ async fn serve_bound(
             local_probe_address,
             certificate_scope: "public-ingress",
             public_endpoint_observed: false,
-            ca_certificate_pem: std::fs::read_to_string(cert).unwrap(),
-            ca_der_sha256: fingerprint.clone(),
+            trust_source: crate::installer_trust::TrustSource::ConfiguredCa,
+            ca_certificate_pem: Some(std::fs::read_to_string(cert).unwrap()),
+            ca_der_sha256: Some(fingerprint.clone()),
             certificate_der_sha256: fingerprint,
-            ca_expires_at: 0,
+            ca_expires_at: Some(0),
+            public_certificate_admission: None,
             certificate_expires_at: 0,
             recorded_token_expires_at: Some(0),
             ca_der_sha256s: None,
             evidence_sha256: BTreeMap::new(),
+            selected_generation: None,
             recorded_startup_containers: 0,
             runtime_observed: false,
             host_trust_observed: false,
@@ -293,16 +300,35 @@ async fn wrong_leaf_is_rejected_before_an_authenticated_request_is_sent() {
 }
 
 #[tokio::test]
+async fn public_transport_never_adopts_the_installation_private_ca() {
+    let root = tempfile::tempdir().unwrap();
+    let (cert, key) = certificate(root.path(), "localhost", "localhost");
+    let (mut trust, task) = serve(&cert, &key, response(b"{}"), Duration::ZERO).await;
+    trust.trust_source = crate::installer_trust::TrustSource::MozillaPublicRoots;
+    assert!(
+        client(&trust).is_err(),
+        "a public source cannot carry a private trust override"
+    );
+    trust.ca_certificate_pem = None;
+    trust.ca_der_sha256 = None;
+    trust.ca_der_sha256s = None;
+    trust.ca_expires_at = None;
+    let observed = get(&client(&trust).unwrap(), &trust, "/health").await;
+    assert!(!observed.tls_verified && observed.document.is_none());
+    task.abort();
+}
+
+#[tokio::test]
 async fn bound_transport_accepts_a_recorded_leaf_from_the_second_ca_in_a_bundle() {
     let root = tempfile::tempdir().unwrap();
     let (first, _) = certificate(root.path(), "previous-ca", "previous.invalid");
     let (cert, key) = certificate(root.path(), "localhost", "localhost");
     let (mut trust, task) = serve(&cert, &key, response(b"{}"), Duration::ZERO).await;
-    trust.ca_certificate_pem = format!(
+    trust.ca_certificate_pem = Some(format!(
         "{}\n{}",
         std::fs::read_to_string(first).unwrap(),
-        trust.ca_certificate_pem
-    );
+        trust.ca_certificate_pem.as_deref().unwrap()
+    ));
     let observed = get(&client(&trust).unwrap(), &trust, "/health").await;
     assert!(observed.tls_verified && observed.document.is_some());
     task.abort();
@@ -333,7 +359,7 @@ async fn real_tls_accepts_bound_leaf_and_refuses_wrong_leaf_ca_or_hostname() {
             trust.certificate_der_sha256 = "0".repeat(64);
         }
         if case == 2 {
-            trust.ca_certificate_pem = std::fs::read_to_string(&foreign).unwrap();
+            trust.ca_certificate_pem = Some(std::fs::read_to_string(&foreign).unwrap());
         }
         let observed = get(&client(&trust).unwrap(), &trust, "/health").await;
         assert_eq!(observed.tls_verified, case == 0);

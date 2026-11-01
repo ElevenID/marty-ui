@@ -110,6 +110,22 @@ jobs:
           sbom: true
           cache-from: type=gha,scope=product-${{ needs.plan.outputs.product }}-${{ matrix.role }}
           cache-to: type=gha,mode=max,scope=product-${{ needs.plan.outputs.product }}-${{ matrix.role }}
+      - name: Verify the console is a customer UI image
+        if: matrix.role == 'ui'
+        env:
+          IMAGE: ${{ matrix.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE@$DIGEST"
+          test "$(docker inspect --format '{{ index .Config.Labels "io.elevenid.ui.audience" }}' "$IMAGE@$DIGEST")" = customer
+          docker run --rm --entrypoint cat "$IMAGE@$DIGEST" \
+            /opt/marty-ui-static/marty-ui-release.json > "$RUNNER_TEMP/ui-metadata.json"
+          python scripts/ui_release.py check-image --audience customer \
+            --source-sha "$GITHUB_SHA" --version "$VERSION" \
+            --image-metadata "$RUNNER_TEMP/ui-metadata.json"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-name: ${{ matrix.image }}

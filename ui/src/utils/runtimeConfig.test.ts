@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { isAdminImpersonationEnabled } from './runtimeConfig';
+import { getEnabledWebSections, isAdminImpersonationEnabled, isWebPathEnabled, isWebSectionEnabled } from './runtimeConfig';
 
 function setEnv(values: Record<string, unknown>) {
   Object.assign(import.meta.env, values);
@@ -39,5 +39,43 @@ describe('isAdminImpersonationEnabled', () => {
     setEnv({ PROD: false });
 
     expect(isAdminImpersonationEnabled()).toBe(true);
+  });
+});
+
+describe('startup web sections', () => {
+  it('preserves both sections when legacy runtime configuration has no web entry', () => {
+    expect(getEnabledWebSections()).toEqual(['public', 'console']);
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { hosting: {} };
+    expect(isWebSectionEnabled('public')).toBe(true);
+    expect(isWebSectionEnabled('console')).toBe(true);
+  });
+
+  it.each([
+    { sections: ['public', 'console'], publicEnabled: true, consoleEnabled: true },
+    { sections: ['public'], publicEnabled: true, consoleEnabled: false },
+    { sections: ['console'], publicEnabled: false, consoleEnabled: true },
+    { sections: [], publicEnabled: false, consoleEnabled: false },
+  ])('applies the explicit section list $sections', ({ sections, publicEnabled, consoleEnabled }) => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { web: { enabled_sections: sections } };
+    expect(isWebPathEnabled('/')).toBe(publicEnabled);
+    expect(isWebPathEnabled('/apply/badge')).toBe(publicEnabled && consoleEnabled);
+    expect(isWebPathEnabled('/organizations')).toBe(publicEnabled);
+    expect(isWebPathEnabled('/console')).toBe(consoleEnabled);
+    expect(isWebPathEnabled('/console/login?returnTo=%2Fconsole')).toBe(consoleEnabled);
+    expect(isWebPathEnabled('/console/applicant/identity')).toBe(consoleEnabled);
+    expect(isWebPathEnabled('/my-documents')).toBe(consoleEnabled);
+    expect(isWebPathEnabled('/auth/callback')).toBe(publicEnabled || consoleEnabled);
+  });
+
+  it.each([
+    null, false, [], {}, { enabled_sections: 'public,console' },
+    { enabled_sections: ['marketing'] }, { enabled_sections: ['public', 'unknown'] },
+    { enabled_sections: ['console', 'console'] }, { enabled_sections: [null] },
+  ])('fails closed for malformed explicit web configuration %j', (web) => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { web };
+    expect(getEnabledWebSections()).toEqual([]);
+    expect(isWebPathEnabled('/')).toBe(false);
+    expect(isWebPathEnabled('/console')).toBe(false);
+    expect(isWebPathEnabled('/auth/callback')).toBe(false);
   });
 });

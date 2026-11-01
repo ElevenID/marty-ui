@@ -6,6 +6,7 @@ use crate::{
     installer_ingress_outputs::IngressMetadata,
     installer_ingress_provision as ingress,
     installer_state::{LockedInspection, Phase},
+    operator_certificates::{check_chain_at, check_lifetime_at},
 };
 use marty_selfhost_identity::origin::PublicOrigin;
 use serde::Serialize;
@@ -16,7 +17,7 @@ use std::{
     collections::BTreeMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::Path,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "Trust information unavailable or inconsistent; preserve installation evidence. No host trust or readiness was granted";
@@ -30,7 +31,14 @@ fn require(ok: bool) -> Result<()> {
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
-#[derive(Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TrustSource {
+    ConfiguredCa,
+    MozillaPublicRoots,
+}
+
+#[derive(Clone, Serialize)]
 pub struct TrustInfo {
     pub schema: &'static str,
     pub installation_id: String,
@@ -39,15 +47,23 @@ pub struct TrustInfo {
     pub local_probe_address: SocketAddr,
     pub certificate_scope: &'static str,
     pub public_endpoint_observed: bool,
-    pub ca_certificate_pem: String,
-    pub ca_der_sha256: String,
+    pub trust_source: TrustSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_certificate_pem: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_der_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_der_sha256s: Option<Vec<String>>,
     pub certificate_der_sha256: String,
-    pub ca_expires_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_expires_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_certificate_admission: Option<Value>,
     pub certificate_expires_at: u64,
     pub recorded_token_expires_at: Option<u64>,
     pub evidence_sha256: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_generation: Option<BTreeMap<String, String>>,
     pub recorded_startup_containers: usize,
     pub runtime_observed: bool,
     pub host_trust_observed: bool,
@@ -84,7 +100,17 @@ fn certificates(
     now: u64,
     identity: &ingress::IngressIdentity,
 ) -> Result<(IngressMetadata, String, u64)> {
-    let m = crate::installer_ingress_outputs::metadata_for_identity(metadata, id, now, identity)?;
+    require(metadata.len() <= 8192)?;
+    let recorded: IngressMetadata = serde_json::from_slice(metadata).map_err(|_| REFUSED)?;
+    // A selected generation retains its original admission time. The fresh
+    // producer's age and lifetime margins do not shorten a serving chain's
+    // actual validity or move the fixed credential renewal clock.
+    let m = crate::installer_ingress_outputs::metadata_for_identity(
+        metadata,
+        id,
+        recorded.token_observed_at,
+        identity,
+    )?;
     let name = ingress::resource_name(id)?;
     let expires = m
         .token_observed_at
@@ -119,9 +145,20 @@ fn certificates(
         .to_pem(spki::der::pem::LineEnding::LF)
         .map_err(|_| REFUSED)?;
     require(
-        ingress::check_certificates_for(&ca_text, &leaf_text, &public, &name, now, identity)?
-            == (m.ca_expires_at, m.certificate_expires_at),
+        ingress::check_certificates_for(
+            &ca_text,
+            &leaf_text,
+            &public,
+            &name,
+            m.token_observed_at,
+            identity,
+        )? == (m.ca_expires_at, m.certificate_expires_at)
+            && now < m.ca_expires_at
+            && now < m.certificate_expires_at
+            && check_lifetime_at(ca, 0, Duration::from_secs(now)).map_err(|_| REFUSED)?
+            && check_lifetime_at(leaf, 0, Duration::from_secs(now)).map_err(|_| REFUSED)?,
     )?;
+    check_chain_at(leaf, ca, Duration::from_secs(now)).map_err(|_| REFUSED)?;
     Ok((m, ca_text, expires))
 }
 
@@ -241,15 +278,17 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
     let engine = &state.journal().runtime().ok_or(REFUSED)?.engine_id;
     let binding = generation::load_verified(path, &id, engine)?.ok_or(REFUSED)?;
     let imported = binding.imported_foundation();
+    let public_metadata = binding.public_ingress_metadata(path)?;
+    let public = public_metadata.is_some();
     let mut names = vec![
-        if imported {
-            crate::installer_foundation::RECORD
-        } else {
-            "installer-ingress.json"
-        },
         installer_doctor::SESSION_RECORD,
         "application-generation-selection.json",
     ];
+    if imported {
+        names.push(crate::installer_foundation::RECORD);
+    } else if !public {
+        names.push("installer-ingress.json");
+    }
     if !imported {
         names.push("generation-observation.json");
     }
@@ -269,6 +308,10 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
     let origin = origin(&saved.model)?;
     let public_origin = PublicOrigin::parse(&origin)?;
     let hosting = crate::installer_hosting::resolve(state)?;
+    require(
+        public
+            == (hosting.certificate_source() == crate::installer_hosting::CertificateSource::Acme),
+    )?;
     let listener = crate::installer_compose::bound_ingress_listener(&saved.model, &saved.inputs)?;
     require(hosting.resolve_origin(listener.port)? == public_origin)?;
     let identity = ingress::IngressIdentity::new(
@@ -280,54 +323,97 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
         IpAddr::V6(ip) if ip.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),
         ip => ip,
     };
-    let ca = binding.read(path, "installer_ingress_ca_cert")?;
+    let ca = if public {
+        None
+    } else {
+        Some(binding.read(path, "installer_ingress_ca_cert")?)
+    };
     let leaf = binding.read(path, "installer_ingress_tls_cert")?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| REFUSED)?
         .as_secs();
-    let (pem, ca_hash, ca_hashes, leaf_hash, ca_expiry, leaf_expiry, token_expiry) = if imported {
-        let selection = crate::installer_foundation::load(state)?.ok_or(REFUSED)?;
-        require(selection.configuration.public_origin == origin)?;
-        let c = imported_certificates(&ca, &leaf, now, &public_origin)?;
-        (
-            c.pem,
-            c.ca_hashes[0].clone(),
-            Some(c.ca_hashes),
-            c.leaf_hash,
-            c.ca_expiry,
-            c.leaf_expiry,
-            None,
-        )
-    } else {
-        let selected_metadata = binding.ingress_metadata(path)?;
-        let metadata_bytes = match selected_metadata {
-            Some(metadata) => serde_json::to_vec(&metadata).map_err(|_| REFUSED)?,
-            None => {
-                require(
-                    state.read_secret("installer_ingress_ca_cert")? == ca
-                        && state.read_secret("installer_ingress_tls_cert")? == leaf,
-                )?;
-                records["installer-ingress.json"].clone()
-            }
+    let (pem, ca_hash, ca_hashes, leaf_hash, ca_expiry, leaf_expiry, token_expiry) =
+        if let Some(metadata) = &public_metadata {
+            require(
+                metadata.installation_id == id
+                    && metadata.dns_names == identity.dns_names()
+                    && metadata.ip_addresses == identity.ip_addresses()
+                    && metadata.token_observed_at <= now,
+            )?;
+            let token_expiry = metadata
+                .token_observed_at
+                .checked_add(metadata.token_ttl_seconds)
+                .ok_or(REFUSED)?;
+            require(token_expiry > now)?;
+            let certificate = metadata.validate_selected_at(&leaf, now)?;
+            let admission = certificate.metadata();
+            require(
+                admission["trust_class"] == "production_public"
+                    && admission["public_chain_validated"] == true,
+            )?;
+            (
+                None,
+                None,
+                None,
+                admission["leaf_der_sha256"]
+                    .as_str()
+                    .ok_or(REFUSED)?
+                    .to_owned(),
+                None,
+                admission["not_after"].as_u64().ok_or(REFUSED)?,
+                Some(token_expiry),
+            )
+        } else if imported {
+            let selection = crate::installer_foundation::load(state)?.ok_or(REFUSED)?;
+            require(selection.configuration.public_origin == origin)?;
+            let c =
+                imported_certificates(ca.as_deref().ok_or(REFUSED)?, &leaf, now, &public_origin)?;
+            (
+                Some(c.pem),
+                Some(c.ca_hashes[0].clone()),
+                Some(c.ca_hashes),
+                c.leaf_hash,
+                Some(c.ca_expiry),
+                c.leaf_expiry,
+                None,
+            )
+        } else {
+            let selected_metadata = binding.ingress_metadata(path)?;
+            let metadata_bytes = match selected_metadata {
+                Some(metadata) => serde_json::to_vec(&metadata).map_err(|_| REFUSED)?,
+                None => {
+                    require(
+                        Some(state.read_secret("installer_ingress_ca_cert")?) == ca
+                            && state.read_secret("installer_ingress_tls_cert")? == leaf,
+                    )?;
+                    records["installer-ingress.json"].clone()
+                }
+            };
+            let (m, pem, expires) = certificates(
+                &metadata_bytes,
+                ca.as_deref().ok_or(REFUSED)?,
+                &leaf,
+                &id,
+                now,
+                &identity,
+            )?;
+            (
+                Some(pem),
+                Some(m.ca_der_sha256),
+                None,
+                m.certificate_der_sha256,
+                Some(m.ca_expires_at),
+                m.certificate_expires_at,
+                Some(expires),
+            )
         };
-        let (m, pem, expires) = certificates(&metadata_bytes, &ca, &leaf, &id, now, &identity)?;
-        (
-            pem,
-            m.ca_der_sha256,
-            None,
-            m.certificate_der_sha256,
-            m.ca_expires_at,
-            m.certificate_expires_at,
-            Some(expires),
-        )
-    };
     for (name, bytes) in &records {
         require(state.read_evidence(name)? == *bytes)?;
     }
     require(
         generation::load_verified(path, &id, engine)?.as_ref() == Some(&binding)
-            && binding.read(path, "installer_ingress_ca_cert")? == ca
+            && (public || Some(binding.read(path, "installer_ingress_ca_cert")?) == ca)
             && binding.read(path, "installer_ingress_tls_cert")? == leaf
             && serde_json::to_value(&saved).map_err(|_| REFUSED)?
                 == serde_json::to_value(installer_doctor::load_session(state, path)?)
@@ -335,7 +421,7 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
     )?;
     state.require_path_binding(path)?;
     Ok(TrustInfo {
-        schema: "elevenid.installer-trust-info/v4",
+        schema: "elevenid.installer-trust-info/v5",
         installation_id: id,
         origin,
         local_probe_address: SocketAddr::new(probe_ip, listener.port),
@@ -345,17 +431,28 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
             "public-ingress"
         },
         public_endpoint_observed: false,
+        trust_source: if public {
+            TrustSource::MozillaPublicRoots
+        } else {
+            TrustSource::ConfiguredCa
+        },
         ca_certificate_pem: pem,
         ca_der_sha256: ca_hash,
         ca_der_sha256s: ca_hashes,
         certificate_der_sha256: leaf_hash,
         ca_expires_at: ca_expiry,
+        public_certificate_admission: public_metadata
+            .map(|metadata| metadata.certificate_admission),
         certificate_expires_at: leaf_expiry,
         recorded_token_expires_at: token_expiry,
         evidence_sha256: records
             .iter()
             .map(|(name, bytes)| (name.to_string(), hash(bytes)))
             .collect(),
+        selected_generation: {
+            let evidence = binding.selected_evidence(path)?;
+            (!evidence.is_empty()).then_some(evidence)
+        },
         recorded_startup_containers: resources.containers.len(),
         runtime_observed: false,
         host_trust_observed: false,
@@ -366,6 +463,12 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
                 "External proxy routing, public certificate and backend TLS verification",
                 "Browser OIDC login and installed issue/present/verify/revoke/deny journey",
                 "Live custody, renewal and recovery qualification",
+            ]
+        } else if public {
+            vec![
+                "Trusted public browser entry at the configured DNS origin and IP alias",
+                "Browser OIDC login and installed issue/present/verify/revoke/deny journey",
+                "Live renewal, root retirement, restore and reboot recovery qualification",
             ]
         } else if imported {
             vec![
@@ -387,6 +490,92 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn retained_private_trust_outlives_the_initial_admission_window() {
+        use crate::installer_managed_renewal::tests::{Fixture, OWNER, REPLACED};
+        let fixture = Fixture::new();
+        let metadata = serde_json::to_vec(&fixture.next_metadata).unwrap();
+        let identity = ingress::IngressIdentity::from_metadata(
+            &fixture.next_metadata.dns_names,
+            &fixture.next_metadata.ip_addresses,
+        )
+        .unwrap();
+        let ca = &fixture.next[ingress::OUTPUTS[0]];
+        let leaf = &fixture.next[ingress::OUTPUTS[1]];
+        for at in [REPLACED + 1801, REPLACED + 28_799] {
+            let (selected, _, expiry) =
+                certificates(&metadata, ca, leaf, OWNER, at, &identity).unwrap();
+            assert_eq!(selected, fixture.next_metadata);
+            assert_eq!(expiry, REPLACED + 28_800);
+            // Initial candidate admission still requires fresh metadata.
+            assert!(crate::installer_ingress_outputs::metadata_for_identity(
+                &metadata, OWNER, at, &identity
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn retained_private_trust_refuses_expired_tokens_chains_and_clock_rollback() {
+        use crate::installer_managed_renewal::tests::{Fixture, OWNER, REPLACED};
+        let fixture = Fixture::new();
+        let identity = ingress::IngressIdentity::from_metadata(
+            &fixture.next_metadata.dns_names,
+            &fixture.next_metadata.ip_addresses,
+        )
+        .unwrap();
+        let ca = &fixture.next[ingress::OUTPUTS[0]];
+        let leaf = &fixture.next[ingress::OUTPUTS[1]];
+        let metadata = serde_json::to_vec(&fixture.next_metadata).unwrap();
+        assert!(certificates(&metadata, ca, leaf, OWNER, REPLACED - 1, &identity).is_err());
+
+        let mut expired_token = fixture.next_metadata.clone();
+        expired_token.token_ttl_seconds = 3600;
+        assert!(certificates(
+            &serde_json::to_vec(&expired_token).unwrap(),
+            ca,
+            leaf,
+            OWNER,
+            REPLACED + 3600,
+            &identity,
+        )
+        .is_err());
+
+        // The token remains live for a minute beyond this leaf. An unexpired
+        // token cannot turn the chain's exact expiry into serving validity.
+        let mut expired_chain = fixture.next_metadata.clone();
+        expired_chain.token_observed_at += 60;
+        assert!(certificates(
+            &serde_json::to_vec(&expired_chain).unwrap(),
+            ca,
+            leaf,
+            OWNER,
+            expired_chain.certificate_expires_at,
+            &identity,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn retained_private_trust_rechecks_identity_and_certificate_bytes() {
+        use crate::installer_managed_renewal::tests::{Fixture, OWNER, REPLACED};
+        let fixture = Fixture::new();
+        let metadata = serde_json::to_vec(&fixture.next_metadata).unwrap();
+        let identity = ingress::IngressIdentity::from_metadata(
+            &fixture.next_metadata.dns_names,
+            &fixture.next_metadata.ip_addresses,
+        )
+        .unwrap();
+        let ca = &fixture.next[ingress::OUTPUTS[0]];
+        let leaf = &fixture.next[ingress::OUTPUTS[1]];
+        let mut changed = leaf.clone();
+        changed.push(b'\n');
+        assert!(certificates(&metadata, ca, &changed, OWNER, REPLACED + 1801, &identity).is_err());
+        let other = ingress::IngressIdentity::new(Some("other.example.com"), None).unwrap();
+        assert!(certificates(&metadata, ca, leaf, OWNER, REPLACED + 1801, &other).is_err());
+    }
+
     #[test]
     fn public_export_rejects_private_material_and_extra_pem() {
         let ca = include_bytes!("../tests/fixtures/installer-log-public-ca.txt");

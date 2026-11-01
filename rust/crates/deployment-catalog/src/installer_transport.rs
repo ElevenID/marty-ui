@@ -2,7 +2,7 @@
 //! Shared by read-only probes and authenticated operator requests.
 #![cfg(target_os = "linux")]
 
-use crate::installer_trust::TrustInfo;
+use crate::installer_trust::{TrustInfo, TrustSource};
 use marty_selfhost_identity::origin::PublicOrigin;
 use rustls::{
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
@@ -101,7 +101,31 @@ pub(crate) fn client(trust: &TrustInfo, timeout: Duration) -> Result<reqwest::Cl
         return Err("invalid bound HTTPS origin or certificate".into());
     }
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let verifier = verifier(trust.ca_certificate_pem.as_bytes(), provider.clone())?;
+    let verifier = match trust.trust_source {
+        TrustSource::ConfiguredCa => verifier(
+            trust
+                .ca_certificate_pem
+                .as_deref()
+                .ok_or("configured HTTPS CA absent")?
+                .as_bytes(),
+            provider.clone(),
+        )?,
+        TrustSource::MozillaPublicRoots => {
+            if trust.ca_certificate_pem.is_some()
+                || trust.ca_der_sha256.is_some()
+                || trust.ca_der_sha256s.is_some()
+                || trust.ca_expires_at.is_some()
+            {
+                return Err("public HTTPS trust cannot substitute a configured CA".into());
+            }
+            verifier_from_roots(
+                rustls::RootCertStore {
+                    roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+                },
+                provider.clone(),
+            )?
+        }
+    };
     let tls = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .map_err(|_| "bound HTTPS verifier unavailable")?
@@ -159,6 +183,13 @@ fn verifier(
     if roots.is_empty() {
         return Err("invalid bound HTTPS CA".into());
     }
+    verifier_from_roots(roots, provider)
+}
+
+fn verifier_from_roots(
+    roots: rustls::RootCertStore,
+    provider: Arc<rustls::crypto::CryptoProvider>,
+) -> Result<Arc<rustls::client::WebPkiServerVerifier>, String> {
     rustls::client::WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider)
         .build()
         .map_err(|_| "bound HTTPS verifier unavailable".into())

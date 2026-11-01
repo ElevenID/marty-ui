@@ -21,6 +21,16 @@ use std::{
 };
 type Result<T> = std::result::Result<T, String>;
 const LAYERS: &str = "deploy-config/compose/selfhost-installer";
+
+/// An ACME order may remain pending across operator processes. Application
+/// storage and the password projection are created by the original installer
+/// before that boundary, and are only observed by continuation.
+pub(crate) fn require_acme_preparation(
+    state: &crate::installer_state::LockedInspection,
+    installation: &Path,
+) -> Result<()> {
+    crate::installer_acme_preparation::verify(state, installation)
+}
 fn encode(value: &str) -> Result<String> {
     if value
         .chars()
@@ -123,6 +133,14 @@ pub(crate) fn bootstrap_inputs(
             ),
             ("MARTY_KEYCLOAK_NONCE", nonce.into()),
             (
+                "MARTY_OPENBAO_CONTROL_ATTEMPT_ID",
+                uuid::Uuid::new_v4().to_string(),
+            ),
+            (
+                "MARTY_OPENBAO_STATIC_INIT_ATTEMPT_ID",
+                uuid::Uuid::new_v4().to_string(),
+            ),
+            (
                 "SELFHOST_OPENBAO_STATE_DIR",
                 path(&installation.join("openbao-state"))?.into(),
             ),
@@ -139,6 +157,8 @@ pub(crate) fn bootstrap_inputs(
     let writable_bind_roots = [
         "secrets",
         "openbao-state",
+        "openbao-control",
+        "openbao-seal/initialization",
         "keycloak-output",
         "tls-output",
         "ingress-output",
@@ -159,6 +179,7 @@ pub(crate) fn bootstrap_inputs(
         "generation-inputs",
         "generation-identity",
         "application-generation",
+        "openbao-seal/key",
     ]
     .into_iter()
     .map(|n| installation.join(n))
@@ -216,6 +237,87 @@ pub(crate) fn job_inputs(
     inputs.prior = Some(prior);
     inputs.services = vec![service.into()];
     inputs
+}
+
+pub(crate) fn public_ingress_inputs(
+    installation: &Path,
+    state: &mut InstallerState,
+    base: &ComposeInputs,
+    plan: &crate::installer_public_ingress::PublicIngressPlan,
+) -> Result<ComposeInputs> {
+    state.require_live_phase(Phase::Provisioning)?;
+    let plan_path = plan.record_for_install(installation, state)?;
+    let mut environment =
+        crate::installer_verify::read_private_bytes(&base.environment.path, 65536)?;
+    append(
+        &mut environment,
+        crate::installer_public_ingress::PLAN_DIGEST_ENV,
+        &plan.sha256()?,
+    )?;
+    let name = "acme-production-public-ingress.env";
+    state.write_evidence(name, &environment)?;
+    let mut inputs = base.clone();
+    inputs.environment = bound(installation.join("evidence").join(name))?;
+    inputs.bound_inputs.push(bound(plan_path)?);
+    Ok(inputs)
+}
+
+pub(crate) fn public_renewal_inputs(
+    installation: &Path,
+    bundle: &Path,
+    state: &mut InstallerState,
+    base: &ComposeInputs,
+    plan: &crate::installer_public_ingress::PublicRenewalAuthorityPlan,
+) -> Result<ComposeInputs> {
+    state.require_live_phase(Phase::Provisioning)?;
+    let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
+    let port = hosting
+        .http01_host_port()
+        .ok_or("ACME HTTP-01 port is absent")?;
+    if base.allowed_loopback_ports.contains(&port)
+        || port == hosting.listener().port
+        || port
+            == state
+                .journal()
+                .runtime()
+                .ok_or("runtime binding absent")?
+                .openbao_port
+    {
+        return Err("ACME HTTP-01 port conflicts with a selected service listener".into());
+    }
+    let plan_path = plan.record_for_install(installation, state)?;
+    let mut environment =
+        crate::installer_verify::read_private_bytes(&base.environment.path, 65536)?;
+    if crate::installer_release::sha256(&environment) != base.environment.sha256 {
+        return Err("bound bootstrap environment changed".into());
+    }
+    for (key, value) in [
+        (
+            crate::installer_public_ingress::AUTHORITY_PLAN_DIGEST_ENV,
+            plan.sha256()?,
+        ),
+        (
+            "MARTY_ACME_CANONICAL_ORIGIN",
+            plan.canonical_origin().into(),
+        ),
+        (
+            "MARTY_ACME_PUBLIC_ENTRY_ORIGIN",
+            plan.public_entry_origin().unwrap_or_default().into(),
+        ),
+        ("MARTY_ACME_HTTP01_HOST_PORT", port.to_string()),
+    ] {
+        append(&mut environment, key, &value)?;
+    }
+    let name = "acme-public-renewal-authority.env";
+    state.write_evidence(name, &environment)?;
+    let mut inputs = base.clone();
+    inputs.environment = bound(installation.join("evidence").join(name))?;
+    inputs.bound_inputs.push(bound(plan_path)?);
+    inputs
+        .files
+        .push(bundle_bound(bundle, crate::installer_acme_host::LAYER)?);
+    inputs.allowed_loopback_ports.insert(port);
+    Ok(inputs)
 }
 
 #[expect(
@@ -281,6 +383,8 @@ fn start_inner(
     state.require_live_phase(Phase::Provisioning)?;
     let foundation = state.with_inspection(crate::installer_foundation::load)?;
     let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
+    let public_acme =
+        hosting.certificate_source() == crate::installer_hosting::CertificateSource::Acme;
     match (bao, foundation.as_ref()) {
         (Some(bao), None) => crate::installer_openbao::require_binding(state, bao)?,
         (None, Some(_)) => {}
@@ -351,14 +455,19 @@ fn start_inner(
         &parameters,
         images,
         foundation.as_ref(),
+        Some(&hosting),
     )?;
-    state.prepare_application_storage()?;
+    if public_acme {
+        state.with_inspection(|view| require_acme_preparation(view, installation))?;
+    } else {
+        state.prepare_application_storage()?;
+        state.persist_application_storage_creation_receipt(installation)?;
+        if foundation.is_none() {
+            state.stage_operator_password()?;
+        }
+    }
     if state.validate_applicant_storage()? != group.host_gid() {
         return Err("applicant state group changed".into());
-    }
-    state.persist_application_storage_creation_receipt(installation)?;
-    if foundation.is_none() {
-        state.stage_operator_password()?;
     }
     let nginx = crate::installer_ingress_config::render(
         &bundle_text(bundle, "docker/nginx-selfhost.prod.conf.template", 131072)?,
@@ -400,6 +509,10 @@ fn start_inner(
             images.get("gateway").ok_or("gateway image absent")?.clone(),
         ),
         ("MARTY_INSTALLER_HTTPS_PORT", ports[0].to_string()),
+        (
+            "MARTY_INSTALLER_UI_ENABLED_SECTIONS",
+            hosting.enabled_web_sections().to_owned(),
+        ),
         (
             "MARTY_INSTALLER_PUBLIC_ENTRY_ORIGIN",
             hosting
@@ -459,6 +572,12 @@ fn start_inner(
         bundle_bound(bundle, "docker-compose.yml")?,
         bundle_bound(bundle, &format!("{LAYERS}/compose.installer.yml"))?,
     ];
+    if public_acme {
+        inputs.files.push(bundle_bound(
+            bundle,
+            &format!("{LAYERS}/compose.acme-runtime.yml"),
+        )?);
+    }
     if foundation.is_some() {
         inputs
             .files
@@ -514,6 +633,13 @@ fn start_inner(
             bundle_bound(bundle, &format!("{LAYERS}/compose.runtime.yml"))?,
         ]
     };
+    if public_acme {
+        for file in ["compose.acme.yml", "compose.acme-runtime.yml"] {
+            maintenance_inputs
+                .files
+                .push(bundle_bound(bundle, &format!("{LAYERS}/{file}"))?);
+        }
+    }
     crate::installer_hosting_addon::bind_inputs(&mut maintenance_inputs)?;
     #[cfg(feature = "installer-development")]
     if let Some(image) = &maintenance_inputs.development_image {
@@ -535,14 +661,15 @@ fn start_inner(
         &serde_json::to_vec(&cleanup_plan).map_err(|_| "cannot record runtime cleanup plan")?,
     )?;
     for file in &maintenance_inputs.files {
-        #[cfg(feature = "installer-development")]
-        if inputs.development_image.is_some()
-            && inputs
-                .files
-                .iter()
-                .chain(&inputs.bound_inputs)
-                .any(|bound| bound.path == file.path)
+        if let Some(existing) = inputs
+            .files
+            .iter()
+            .chain(&inputs.bound_inputs)
+            .find(|bound| bound.path == file.path)
         {
+            if existing.sha256 != file.sha256 {
+                return Err("maintenance input changed".into());
+            }
             continue;
         }
         inputs.bound_inputs.push(file.clone());

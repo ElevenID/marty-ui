@@ -143,7 +143,10 @@ fn validate_saved(
 
 /// Rebind the private session to the release inventory, journal, exact files,
 /// and native model. This does not contact Docker or grant lifecycle authority.
-pub(crate) fn load_session(state: &LockedInspection, installation: &Path) -> Result<SavedSession> {
+pub(crate) fn load_initial_session(
+    state: &LockedInspection,
+    installation: &Path,
+) -> Result<SavedSession> {
     state.require_path_binding(installation)?;
     let session_bytes = state.diagnostic_record(SESSION_RECORD, true)?;
     let (mut saved, mut records) = if let Some(bytes) = &session_bytes {
@@ -215,6 +218,13 @@ pub(crate) fn load_session(state: &LockedInspection, installation: &Path) -> Res
     )?;
     state.require_unchanged()?;
     Ok(saved)
+}
+
+pub(crate) fn load_session(state: &LockedInspection, installation: &Path) -> Result<SavedSession> {
+    match crate::installer_generation_maintenance::current_session(state, installation)? {
+        Some(saved) => Ok(saved),
+        None => load_initial_session(state, installation),
+    }
 }
 
 fn failed_runtime_session(

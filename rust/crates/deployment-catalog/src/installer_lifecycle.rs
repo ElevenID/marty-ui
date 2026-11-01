@@ -1,9 +1,12 @@
 //! Customer-owned user-systemd integration for an existing, bound Compose stack.
-//! No daemon management, privileged setup replay, credential renewal or repair.
+//! The operator serializes bounded recovery; Docker owns process restarts.
+//! Customer maintenance intent always precedes a runtime mutation.
 #![cfg(target_os = "linux")]
 
 use crate::{
-    installer_doctor, installer_host_fs, installer_json, installer_release,
+    installer_doctor, installer_generation_maintenance, installer_health, installer_host_fs,
+    installer_json, installer_openbao_recovery, installer_release, installer_root_retirement,
+    installer_runtime,
     installer_state::{
         Identity, LockedInspection, LockedMaintenance, RuntimeBinding, RuntimeProfile,
     },
@@ -22,9 +25,9 @@ use std::{
 
 type Result<T> = std::result::Result<T, String>;
 const CONFIGURATION: &str = "lifecycle-configuration.json";
-const CONFIGURATION_SCHEMA: &str = "elevenid.installer-lifecycle-configuration/v1";
-const INTENT_SCHEMA: &str = "elevenid.installer-lifecycle-intent/v1";
-const REFUSED: &str = "Installer lifecycle refused; preserve the installation-scoped units and intent evidence. No provisioning, repair or automatic renewal was attempted";
+const CONFIGURATION_SCHEMA: &str = "elevenid.installer-lifecycle-configuration/v2";
+const INTENT_SCHEMA: &str = "elevenid.installer-lifecycle-intent/v2";
+const REFUSED: &str = "Installer lifecycle could not establish its next postcondition; preserve the installation-scoped units, intent and operation evidence";
 const MAX_INTENTS: usize = 10000;
 
 fn require(ok: bool) -> Result<()> {
@@ -43,6 +46,10 @@ enum Action {
     Boot,
     Shutdown,
     Check,
+    Maintain,
+    Pause,
+    Resume,
+    SecuritySeal,
 }
 
 struct Arguments {
@@ -87,7 +94,11 @@ fn arguments(args: &[String]) -> Result<Arguments> {
         Some("boot") => Action::Boot,
         Some("shutdown") => Action::Shutdown,
         Some("check") => Action::Check,
-        _ => return Err("Expected lifecycle export|install|status|boot|shutdown|check --install-dir ABS [--docker-bin ABS]".into()),
+        Some("maintain") => Action::Maintain,
+        Some("pause") => Action::Pause,
+        Some("resume") => Action::Resume,
+        Some("security-seal") => Action::SecuritySeal,
+        _ => return Err("Expected lifecycle export|install|status|boot|shutdown|check|maintain|pause|resume|security-seal --install-dir ABS [--docker-bin ABS]".into()),
     };
     require((args.len() - 1).is_multiple_of(2))?;
     let mut values = BTreeMap::new();
@@ -129,6 +140,7 @@ struct Configuration {
 enum DesiredState {
     Running,
     Paused,
+    SecuritySealed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,6 +150,9 @@ enum IntentReason {
     ManualStart,
     ManualStop,
     Uninstall,
+    Pause,
+    Resume,
+    SecuritySeal,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,12 +174,14 @@ struct Loaded {
     intent_sha256: String,
 }
 
-fn unit_names(id: uuid::Uuid) -> [String; 3] {
+fn unit_names(id: uuid::Uuid) -> [String; 5] {
     let prefix = format!("lifecycle-marty-{id}");
     [
         format!("{prefix}.service"),
         format!("{prefix}-check.service"),
         format!("{prefix}-check.timer"),
+        format!("{prefix}-maintenance.service"),
+        format!("{prefix}-maintenance.timer"),
     ]
 }
 
@@ -209,7 +226,7 @@ fn command(configuration: &Configuration, action: &str) -> Result<String> {
 
 fn render_units(configuration: &Configuration) -> Result<BTreeMap<String, String>> {
     let id = configuration.installation_id;
-    let [boot, check, timer] = unit_names(id);
+    let [boot, check, timer, maintenance, maintenance_timer] = unit_names(id);
     let boot_text = format!(
         "# Generated for Marty installation {id}; customer enables this user unit.\n\
 [Unit]\nDescription=Marty installation {id}\nWants=docker.service\nAfter=docker.service\n\
@@ -231,7 +248,25 @@ ExecStart={}\nExecStop={}\n\n[Install]\nWantedBy=default.target\n",
 [Timer]\nOnCalendar=*-*-* *:00/5:00\nPersistent=true\nRandomizedDelaySec=30\nUnit={check}\n\n\
 [Install]\nWantedBy=timers.target\n"
     );
-    Ok([(boot, boot_text), (check, check_text), (timer, timer_text)].into())
+    let maintenance_text = format!(
+        "# Bounded operator reconciliation under the installation lock.\n\
+[Unit]\nDescription=Marty maintenance {id}\nWants=docker.service\nAfter=docker.service {boot}\n\n\
+[Service]\nType=oneshot\nNoNewPrivileges=yes\nUMask=0077\nTimeoutStartSec=1800\nExecStart={}\n",
+        command(configuration, "maintain")?
+    );
+    let maintenance_timer_text = format!(
+        "[Unit]\nDescription=Marty maintenance schedule {id}\n\n\
+[Timer]\nOnCalendar=*-*-* *:00/5:00\nPersistent=true\nRandomizedDelaySec=30\nUnit={maintenance}\n\n\
+[Install]\nWantedBy=timers.target\n"
+    );
+    Ok([
+        (boot, boot_text),
+        (check, check_text),
+        (timer, timer_text),
+        (maintenance, maintenance_text),
+        (maintenance_timer, maintenance_timer_text),
+    ]
+    .into())
 }
 
 fn prepare(state: &LockedInspection, installation: &Path, docker: &Path) -> Result<Configuration> {
@@ -242,7 +277,9 @@ fn prepare(state: &LockedInspection, installation: &Path, docker: &Path) -> Resu
     let runtime = journal.runtime().ok_or(REFUSED)?;
     runtime.validate()?;
     require(runtime.profile == RuntimeProfile::Rootless)?;
-    let saved = installer_doctor::load_session(state, installation)?;
+    // Later credential activations replace runtime inputs. The customer unit
+    // binding remains anchored to the original admitted application session.
+    let saved = installer_doctor::load_initial_session(state, installation)?;
     require(saved.schema != installer_doctor::FAILED_RUNTIME_SESSION_SCHEMA)?;
     let inventory_bytes = state.read_evidence("installer-inventory.json")?;
     require(
@@ -296,7 +333,7 @@ fn record_names(state: &LockedInspection) -> Result<BTreeSet<String>> {
         let name = entry.map_err(|_| REFUSED)?.file_name();
         if name.as_bytes().starts_with(b"lifecycle-") {
             let name = name.to_str().ok_or(REFUSED)?;
-            require(names.len() < MAX_INTENTS + 4 && name.len() <= 128)?;
+            require(names.len() < MAX_INTENTS + 6 && name.len() <= 128)?;
             names.insert(name.to_owned());
         }
     }
@@ -332,13 +369,26 @@ fn intent_chain(
             IntentReason::Installed => {
                 sequence == 1 && intent.desired_state == DesiredState::Paused
             }
-            IntentReason::ManualStart => {
+            IntentReason::ManualStart | IntentReason::Resume => {
                 sequence > 1 && intent.desired_state == DesiredState::Running
             }
-            IntentReason::ManualStop | IntentReason::Uninstall => {
+            IntentReason::ManualStop | IntentReason::Uninstall | IntentReason::Pause => {
                 sequence > 1 && intent.desired_state == DesiredState::Paused
             }
+            IntentReason::SecuritySeal => {
+                sequence > 1 && intent.desired_state == DesiredState::SecuritySealed
+            }
         };
+        if let Some((prior, _)) = &latest {
+            let prior: &Intent = prior;
+            require(
+                prior.desired_state != DesiredState::SecuritySealed
+                    || matches!(
+                        intent.reason,
+                        IntentReason::Resume | IntentReason::SecuritySeal
+                    ),
+            )?;
+        }
         require(
             intent.schema == INTENT_SCHEMA
                 && intent.installation_id == configuration.installation_id
@@ -394,15 +444,19 @@ fn append_intent(
 ) -> Result<Intent> {
     let sequence = previous.map_or(1, |(intent, _)| intent.sequence + 1);
     require(sequence <= MAX_INTENTS && (sequence == 1) == (reason == IntentReason::Installed))?;
+    require(previous.is_none_or(|(intent, _)| {
+        intent.desired_state != DesiredState::SecuritySealed
+            || matches!(reason, IntentReason::Resume | IntentReason::SecuritySeal)
+    }))?;
     let intent = Intent {
         schema: INTENT_SCHEMA.into(),
         installation_id: configuration.installation_id,
         configuration_sha256: configuration_sha256.into(),
         sequence,
-        desired_state: if reason == IntentReason::ManualStart {
-            DesiredState::Running
-        } else {
-            DesiredState::Paused
+        desired_state: match reason {
+            IntentReason::ManualStart | IntentReason::Resume => DesiredState::Running,
+            IntentReason::SecuritySeal => DesiredState::SecuritySealed,
+            _ => DesiredState::Paused,
         },
         reason,
         previous_sha256: previous.map(|(_, digest)| digest.into()),
@@ -430,6 +484,20 @@ pub(crate) fn record_manual_intent_if_configured(
         _ => return Err(REFUSED.into()),
     };
     if let Some(loaded) = configured(state.inspection(), installation, docker)? {
+        if loaded.intent.desired_state == DesiredState::SecuritySealed {
+            if reason == IntentReason::ManualStart {
+                return Err("This installation is deliberately security-sealed; use lifecycle resume to explicitly authorize recovery".into());
+            }
+            // A stop or uninstall must not turn a deliberate seal into a pause
+            // that an ordinary start could subsequently clear.
+            return Ok(());
+        }
+        if (reason == IntentReason::ManualStart
+            && loaded.intent.desired_state == DesiredState::Running)
+            || (reason == loaded.intent.reason)
+        {
+            return Ok(());
+        }
         append_intent(
             state,
             &loaded.configuration,
@@ -492,22 +560,75 @@ fn install(state: &mut LockedMaintenance, installation: &Path, docker: &Path) ->
     configured(state.inspection(), installation, docker)?.ok_or_else(|| REFUSED.into())
 }
 
-fn next_actions(configuration: &Configuration) -> Value {
-    let [boot, check, timer] = unit_names(configuration.installation_id);
+/// Fresh installation prepares immutable user units after native application
+/// validation. Customer service enablement and the initial resume stay explicit.
+pub(crate) fn install_locked(
+    state: &mut LockedMaintenance,
+    installation: &Path,
+    docker: &Path,
+) -> Result<Value> {
+    let loaded = install(state, installation, docker)?;
+    let prerequisites = installer_runtime::observe_user_systemd_prerequisites(installation);
+    Ok(json!({"schema":"elevenid.installer-lifecycle-export/v2",
+        "installation_id":loaded.configuration.installation_id,
+        "configured":true,"desired_state":loaded.intent.desired_state,
+        "unit_sha256":loaded.configuration.units,
+        "user_systemd_prerequisites":prerequisites,
+        "unattended_eligible":unattended_eligible(loaded.configuration.owner_uid, &prerequisites),
+        "unattended_eligibility_scope":"user_systemd_prerequisites_only",
+        "next_actions":next_actions(&loaded.configuration, &prerequisites),
+        "systemd_controlled":false,"systemd_enablement_observed":false,
+        "installation_ready":false}))
+}
+
+/// Unknown observations cannot authorize unattended startup. A known missing
+/// prerequisite remains false even when a different observation is unavailable.
+/// This is not evidence that Marty units are enabled or reboot-qualified.
+fn unattended_eligible(
+    owner_uid: u32,
+    prerequisites: &installer_runtime::UserSystemdPrerequisites,
+) -> Option<bool> {
+    if owner_uid == 0 || prerequisites.uid != owner_uid {
+        return Some(false);
+    }
+    let observed = [
+        prerequisites.linger_enabled,
+        prerequisites.docker_unit_loaded,
+        prerequisites.docker_unit_enabled,
+        prerequisites.docker_unit_active,
+    ];
+    if observed.contains(&Some(false)) {
+        Some(false)
+    } else if observed.iter().all(|value| *value == Some(true)) {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+fn next_actions(
+    configuration: &Configuration,
+    prerequisites: &installer_runtime::UserSystemdPrerequisites,
+) -> Value {
+    let [boot, check, timer, maintenance, maintenance_timer] =
+        unit_names(configuration.installation_id);
     let evidence = configuration.installation.join("evidence");
-    let commands: Vec<Vec<String>> = vec![
-        vec![
-            configuration
-                .installation
-                .join("marty-deploy")
-                .to_string_lossy()
-                .to_string(),
-            "start".into(),
-            "--install-dir".into(),
-            configuration.installation.to_string_lossy().to_string(),
-            "--docker-bin".into(),
-            configuration.docker.to_string_lossy().to_string(),
-        ],
+    let eligible = unattended_eligible(configuration.owner_uid, prerequisites);
+    let manual_recovery_command = vec![
+        configuration
+            .installation
+            .join("marty-deploy")
+            .to_string_lossy()
+            .to_string(),
+        "lifecycle".into(),
+        "resume".into(),
+        "--install-dir".into(),
+        configuration.installation.to_string_lossy().to_string(),
+        "--docker-bin".into(),
+        configuration.docker.to_string_lossy().to_string(),
+    ];
+    let mut commands: Vec<Vec<String>> = vec![
+        manual_recovery_command.clone(),
         vec![
             "systemctl".into(),
             "--user".into(),
@@ -515,6 +636,11 @@ fn next_actions(configuration: &Configuration) -> Value {
             evidence.join(&boot).to_string_lossy().to_string(),
             evidence.join(&check).to_string_lossy().to_string(),
             evidence.join(&timer).to_string_lossy().to_string(),
+            evidence.join(&maintenance).to_string_lossy().to_string(),
+            evidence
+                .join(&maintenance_timer)
+                .to_string_lossy()
+                .to_string(),
         ],
         vec!["systemctl".into(), "--user".into(), "daemon-reload".into()],
         vec![
@@ -524,35 +650,276 @@ fn next_actions(configuration: &Configuration) -> Value {
             "--now".into(),
             boot,
             timer,
+            maintenance_timer,
         ],
     ];
+    if eligible != Some(true) {
+        commands.clear();
+    }
+    let mut remediation = Vec::new();
+    if configuration.owner_uid == 0 || prerequisites.uid != configuration.owner_uid {
+        remediation.push(json!({
+            "prerequisite":"installation_owner_user_manager",
+            "observed":false,
+            "customer_action":"Run lifecycle status as the recorded non-root installation owner in that user's systemd session; root or another user's manager cannot establish unattended eligibility."
+        }));
+    }
+    for (name, observed, missing, unknown) in [
+        (
+            "linger_enabled",
+            prerequisites.linger_enabled,
+            format!("Ask the host administrator to enable lingering for installation owner UID {}; then rerun lifecycle status as that owner.", configuration.owner_uid),
+            "Verify the installation owner's lingering state from the owner's host session; an unavailable observation does not prove reboot startup.".into(),
+        ),
+        (
+            "docker_unit_loaded",
+            prerequisites.docker_unit_loaded,
+            "Install or repair the customer's rootless docker.service in the installation owner's user manager; then rerun lifecycle status.".into(),
+            "Inspect docker.service from the installation owner's user manager and resolve an unavailable user bus or unit before enabling unattended Marty startup.".into(),
+        ),
+        (
+            "docker_unit_enabled",
+            prerequisites.docker_unit_enabled,
+            "Enable the customer's rootless docker.service persistently in the installation owner's user manager; runtime-only enablement does not survive reboot.".into(),
+            "Verify persistent enablement of docker.service from the installation owner's user manager; unknown enablement does not authorize unattended startup.".into(),
+        ),
+        (
+            "docker_unit_active",
+            prerequisites.docker_unit_active,
+            "Start or repair the customer's rootless docker.service in the installation owner's user manager; then rerun lifecycle status.".into(),
+            "Verify that the customer's rootless docker.service is active in the installation owner's user manager before enabling unattended Marty startup.".into(),
+        ),
+    ] {
+        if observed != Some(true) {
+            remediation.push(json!({
+                "prerequisite":name,"observed":observed,
+                "customer_action":if observed == Some(false) {missing} else {unknown}
+            }));
+        }
+    }
     json!({
         "required_prerequisites":["customer-managed rootless docker.service", "customer-enabled user lingering for unattended boot"],
+        "unattended_eligible":eligible,
+        "unattended_eligibility_scope":"user_systemd_prerequisites_only",
+        "manual_recovery_command":manual_recovery_command,
+        "prerequisite_remediation":remediation,
+        "prerequisite_verification_commands":[
+            ["/usr/bin/loginctl","show-user",&configuration.owner_uid.to_string(),"--property=Linger","--value"],
+            ["/usr/bin/systemctl","--user","show","docker.service","--property=LoadState","--property=UnitFileState","--property=ActiveState"]
+        ],
         "commands":commands,
         "commands_executed":false,
-        "note":"Use retained start only when running is intended. Use retained stop for persistent maintenance pause. Generated units do not enable lingering or manage Docker."
+        "enablement_condition":"Enable the exported Marty units only after lifecycle status observes every user-systemd prerequisite as true for the recorded installation owner. Eligibility does not prove Marty-unit enablement or host reboot recovery.",
+        "note":"Manual lifecycle resume remains available without lingering or user-service enablement when Docker is accessible and running is intended. Stop, lifecycle pause and security-seal persist across timers and reboot. The customer manages Docker and lingering."
     })
 }
 
-/// A paused boot/check/shutdown is a successful no-op before any Docker call.
-/// The timer never changes desired state, and host shutdown never appends pause.
+/// Scheduling never changes intent. A pending stop is reconciled separately;
+/// an initial paused export needs no Docker operation at all.
 fn scheduled_operation(
     action: Action,
     desired_state: DesiredState,
 ) -> Result<Option<&'static str>> {
     require(matches!(
         action,
-        Action::Boot | Action::Shutdown | Action::Check
+        Action::Boot | Action::Shutdown | Action::Check | Action::Maintain
     ))?;
-    if desired_state == DesiredState::Paused {
+    if desired_state != DesiredState::Running {
         return Ok(None);
     }
     Ok(Some(match action {
         Action::Boot => "start",
         Action::Shutdown => "stop",
         Action::Check => "validate",
+        Action::Maintain => "maintain",
         _ => unreachable!(),
     }))
+}
+
+fn compose_result(report: String) -> Result<Value> {
+    let report: Value = installer_json::decode(report.as_bytes()).map_err(|_| REFUSED)?;
+    require(report["command_succeeded"] == true && report["observation_validated"] == true)?;
+    Ok(report)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ApplicationRecoveryStep {
+    MaintainGeneration,
+    RepairHealth,
+    StartRetained,
+    ValidateSelected,
+}
+
+struct ApplicationRecovery {
+    generation: Value,
+    health: Value,
+    application: Value,
+}
+
+/// A currently usable selection can serve while optional provider maintenance
+/// runs. The health owner is invoked exactly once in either order; a successor
+/// is started by the generation owner and receives a final read-only check.
+fn recover_application_in_order(
+    start_before_maintenance: bool,
+    mut execute: impl FnMut(ApplicationRecoveryStep) -> Result<Value>,
+) -> Result<ApplicationRecovery> {
+    let generation = if start_before_maintenance {
+        None
+    } else {
+        Some(execute(ApplicationRecoveryStep::MaintainGeneration)?)
+    };
+    let health = execute(ApplicationRecoveryStep::RepairHealth)?;
+    let application = execute(ApplicationRecoveryStep::StartRetained)?;
+    execute(ApplicationRecoveryStep::ValidateSelected)?;
+    let generation = if let Some(generation) = generation {
+        generation
+    } else {
+        let generation = execute(ApplicationRecoveryStep::MaintainGeneration)?;
+        execute(ApplicationRecoveryStep::ValidateSelected)?;
+        generation
+    };
+    Ok(ApplicationRecovery {
+        generation,
+        health,
+        application,
+    })
+}
+
+/// Cold recovery uses the local Unix authority before opening OpenBao HTTPS.
+/// The generation owner is the only writer of the application selection. This
+/// sequence is also used after daemon restarts and explicit customer resume.
+fn recover_running(
+    state: &mut LockedMaintenance,
+    installation: &Path,
+    docker: &Path,
+) -> Result<Value> {
+    // A lost replacement response can leave an authenticated mixture of old
+    // and new container IDs. Only the transaction owner may reconcile it;
+    // ordinary doctor/health admission must not run against that intermediate
+    // state and strand the pending activation.
+    installer_generation_maintenance::reconcile_pending_locked(installation, docker, state)
+        .map_err(|error| format!("Lifecycle blocked at pending generation recovery: {error}"))?;
+    let initial = installer_doctor::load_initial_session(state.inspection(), installation)?;
+    installer_generation_maintenance::require_lineage(
+        state.inspection(),
+        installation,
+        &initial.configuration_sha256,
+    )?;
+    let infrastructure_health =
+        installer_health::reconcile_infrastructure_locked(installation, docker, state)?;
+    let (_, session) = installer_doctor::open_session(state.inspection(), installation, docker)?;
+    let resources = session.observe_resources()?;
+    let infrastructure: Vec<String> = ["openbao", "openbao-unseal", "installer-acme-http01"]
+        .into_iter()
+        .filter(|role| resources.containers.contains_key(*role))
+        .map(String::from)
+        .collect();
+    let infrastructure_report = if infrastructure.is_empty() {
+        Value::Null
+    } else {
+        compose_result(
+            installer_uninstall::start_selected_locked(
+                installation,
+                docker,
+                &infrastructure,
+                state,
+            )
+            .map_err(|error| {
+                format!("Lifecycle blocked while starting retained infrastructure: {error}")
+            })?,
+        )?
+    };
+    let openbao = if resources.containers.contains_key("openbao") {
+        let (_, current) =
+            installer_doctor::open_session(state.inspection(), installation, docker)?;
+        serde_json::to_value(
+            installer_openbao_recovery::reconcile_locked(installation, docker, state, &current)
+                .map_err(|error| {
+                    format!("Lifecycle blocked at OpenBao local TLS recovery: {error}")
+                })?,
+        )
+        .map_err(|_| REFUSED)?
+    } else {
+        Value::Null
+    };
+    let retirement = if resources.containers.contains_key("openbao") {
+        let (_, current) =
+            installer_doctor::open_session(state.inspection(), installation, docker)?;
+        serde_json::to_value(
+            installer_root_retirement::resume_pending_locked(installation, docker, state, &current)
+                .map_err(|error| {
+                    format!("Lifecycle blocked while reconciling initial-root retirement: {error}")
+                })?,
+        )
+        .map_err(|_| REFUSED)?
+    } else {
+        Value::Null
+    };
+    let usability: installer_generation_maintenance::CurrentGenerationUsability =
+        installer_generation_maintenance::current_startup_usability(
+            state.inspection(),
+            installation,
+        )
+        .map_err(|error| {
+            format!("Lifecycle blocked at selected-generation startup validation: {error}")
+        })?;
+    let start_before_maintenance = usability.can_start_before_maintenance();
+    let application = recover_application_in_order(start_before_maintenance, |step| match step {
+        ApplicationRecoveryStep::MaintainGeneration => serde_json::to_value(
+            installer_generation_maintenance::reconcile_locked(installation, docker, state)
+                .map_err(|error| {
+                    format!("Lifecycle blocked at credential generation reconciliation: {error}")
+                })?,
+        )
+        .map_err(|_| REFUSED.into()),
+        ApplicationRecoveryStep::RepairHealth => {
+            installer_health::reconcile_locked(installation, docker, state)
+                .map_err(|error| format!("Lifecycle blocked at bounded health recovery: {error}"))
+        }
+        ApplicationRecoveryStep::StartRetained => compose_result(
+            installer_uninstall::execute_locked(installation, docker, "start", state).map_err(
+                |error| {
+                    format!(
+                        "Lifecycle blocked while starting retained application services: {error}"
+                    )
+                },
+            )?,
+        ),
+        ApplicationRecoveryStep::ValidateSelected => {
+            installer_validation::run_locked(installation, docker, state.inspection(), false)
+                .map_err(|error| format!("Lifecycle blocked at application validation: {error}"))?;
+            Ok(Value::Null)
+        }
+    })?;
+    Ok(
+        json!({"outcome":"reconciled", "infrastructure":infrastructure_report,
+        "infrastructure_health":infrastructure_health,
+        "openbao_tls":openbao,"root_retirement":retirement,"generation":application.generation,"health":application.health,
+        "current_generation_startup":usability,
+        "application_started_before_generation_maintenance":start_before_maintenance,
+        "application":application.application,"validation_passed":true,"intent_preserved":true,
+        "reboot_qualification_established":false,"installation_ready":false}),
+    )
+}
+
+fn stop_for_intent(
+    state: &mut LockedMaintenance,
+    installation: &Path,
+    docker: &Path,
+    desired: DesiredState,
+) -> Result<Value> {
+    let operation = compose_result(installer_uninstall::execute_locked(
+        installation,
+        docker,
+        "stop",
+        state,
+    )?)?;
+    Ok(
+        json!({"outcome":if desired == DesiredState::SecuritySealed { "security_sealed" } else { "paused" },
+        "compose_operation":operation,"intent_preserved":true,
+        "seal_method":if desired == DesiredState::SecuritySealed { Some("owned_runtime_stopped") } else { None },
+        "seal_key_preserved":true,"openbao_api_seal_invoked":false,"installation_ready":false}),
+    )
 }
 
 fn scheduled(
@@ -563,32 +930,162 @@ fn scheduled(
     loaded: &Loaded,
 ) -> Result<Value> {
     let Some(operation) = scheduled_operation(action, loaded.intent.desired_state)? else {
-        return Ok(json!({"outcome":"paused", "docker_invoked":false, "intent_preserved":true}));
+        // An interrupted deliberate stop must converge to stopped. Checks stay
+        // read-only, and an initial export or completed uninstall cannot start
+        // or recreate a missing project.
+        if action != Action::Check
+            && matches!(
+                loaded.intent.reason,
+                IntentReason::ManualStop | IntentReason::Pause | IntentReason::SecuritySeal
+            )
+        {
+            return stop_for_intent(state, installation, docker, loaded.intent.desired_state);
+        }
+        return Ok(
+            json!({"outcome":if loaded.intent.desired_state == DesiredState::SecuritySealed { "security_sealed" } else { "paused" },
+            "docker_invoked":false, "intent_preserved":true}),
+        );
     };
     if operation == "validate" {
         installer_validation::run_locked(installation, docker, state.inspection(), false)?;
-        return Ok(
-            json!({"outcome":"validation_passed", "read_only":true, "intent_preserved":true}),
-        );
+        let (_, session) =
+            installer_doctor::open_session(state.inspection(), installation, docker)?;
+        let openbao = if session
+            .observe_resources()?
+            .containers
+            .contains_key("openbao")
+        {
+            serde_json::to_value(installer_openbao_recovery::inspect_locked(
+                installation,
+                docker,
+                state,
+                &session,
+            )?)
+            .map_err(|_| REFUSED)?
+        } else {
+            Value::Null
+        };
+        return Ok(json!({"outcome":"validation_passed", "read_only":true,
+            "openbao_tls":openbao,"intent_preserved":true}));
     }
-    let report = installer_uninstall::execute_locked(installation, docker, operation, state)?;
-    let report: Value = installer_json::decode(report.as_bytes()).map_err(|_| REFUSED)?;
-    require(report["command_succeeded"] == true && report["observation_validated"] == true)?;
+    if operation == "start" || operation == "maintain" {
+        return recover_running(state, installation, docker);
+    }
+    let report = compose_result(installer_uninstall::execute_locked(
+        installation,
+        docker,
+        operation,
+        state,
+    )?)?;
     Ok(json!({"outcome":"completed", "compose_operation":report, "intent_preserved":true}))
+}
+
+fn manual_control(
+    state: &mut LockedMaintenance,
+    installation: &Path,
+    docker: &Path,
+    action: Action,
+    loaded: &Loaded,
+) -> Result<Value> {
+    let reason = match action {
+        Action::Pause => IntentReason::Pause,
+        Action::Resume => IntentReason::Resume,
+        Action::SecuritySeal => IntentReason::SecuritySeal,
+        _ => return Err(REFUSED.into()),
+    };
+    let keep_seal =
+        loaded.intent.desired_state == DesiredState::SecuritySealed && action != Action::Resume;
+    let desired = if keep_seal {
+        DesiredState::SecuritySealed
+    } else if reason == loaded.intent.reason {
+        loaded.intent.desired_state
+    } else {
+        append_intent(
+            state,
+            &loaded.configuration,
+            &loaded.configuration_sha256,
+            Some((&loaded.intent, &loaded.intent_sha256)),
+            reason,
+        )?
+        .desired_state
+    };
+    if desired == DesiredState::Running {
+        recover_running(state, installation, docker)
+    } else {
+        stop_for_intent(state, installation, docker, desired)
+    }
+}
+
+/// A configured ordinary start shares the cold-recovery path. The caller has
+/// already persisted manual intent under this same lock.
+pub(crate) fn start_if_configured(
+    state: &mut LockedMaintenance,
+    installation: &Path,
+    docker: &Path,
+) -> Result<Option<String>> {
+    let Some(loaded) = configured(state.inspection(), installation, docker)? else {
+        return Ok(None);
+    };
+    require(loaded.intent.desired_state == DesiredState::Running)?;
+    let report = recover_running(state, installation, docker)?;
+    serde_json::to_string(&report)
+        .map(Some)
+        .map_err(|_| REFUSED.into())
+}
+
+/// Destructive initial-root retirement is a separate operator command and must
+/// not run during a durable customer pause or security seal.
+pub(crate) fn require_running_intent(
+    state: &LockedMaintenance,
+    installation: &Path,
+    docker: &Path,
+) -> Result<()> {
+    let loaded = configured(state.inspection(), installation, docker)?.ok_or(REFUSED)?;
+    require(loaded.intent.desired_state == DesiredState::Running)
+}
+
+/// Revalidate a permit against current durable intent without contacting Docker.
+/// The retained configuration supplies only the executable path; `configured`
+/// still rechecks the release, operator, units and full append-only intent chain.
+pub(crate) fn require_recorded_running_intent(
+    state: &LockedInspection,
+    installation: &Path,
+) -> Result<()> {
+    state.require_path_binding(installation)?;
+    let bytes = state.read_evidence(CONFIGURATION)?;
+    require(bytes.len() <= 65536)?;
+    let configuration: Configuration =
+        serde_json::from_value(installer_json::decode(&bytes).map_err(|_| REFUSED)?)
+            .map_err(|_| REFUSED)?;
+    let loaded = configured(state, installation, &configuration.docker)?.ok_or(REFUSED)?;
+    require(loaded.intent.desired_state == DesiredState::Running)
 }
 
 pub fn run(args: &[String]) -> Result<String> {
     let args = arguments(args)?;
     let mut state = LockedMaintenance::open(&args.installation)?;
-    let mut report = json!({"schema":"elevenid.installer-lifecycle/v1", "installation_id":state.journal().installation_id(),
+    let prerequisites = installer_runtime::observe_user_systemd_prerequisites(&args.installation);
+    let mut report = json!({"schema":"elevenid.installer-lifecycle/v2", "installation_id":state.journal().installation_id(),
         "systemd_controlled":false, "systemd_enablement_observed":false, "installation_ready":false,
-        "automatic_renewal":"not_implemented", "expired_credential_recovery":"not_qualified",
+        "automatic_renewal":"selection_specific_see_generation_status", "automatic_renewal_supported":null,
+        "expired_credential_recovery":"owner_specific_qualification_required",
+        "maintenance_capabilities":{
+            "openbao_listener_tls":"retained_local_control_recovery",
+            "public_generation_credentials":"selected_generation_owner",
+            "private_generation_renewal":"selected_generation_owner",
+            "imported_foundation_credentials":"customer_managed"
+        },
+        "user_systemd_prerequisites":prerequisites,
+        "unattended_eligible":unattended_eligible(prerequisites.uid, &prerequisites),
+        "unattended_eligibility_scope":"user_systemd_prerequisites_only",
         "boot_recovery_qualification":"not_assessed", "scheduler":"customer_user_systemd"});
     if args.action == Action::Export {
         let configuration = prepare(state.inspection(), &args.installation, &args.docker)?;
         report["operation"] = json!("export");
         report["units"] = json!(render_units(&configuration)?);
-        report["next_actions"] = next_actions(&configuration);
+        report["unattended_eligible"] =
+            json!(unattended_eligible(configuration.owner_uid, &prerequisites));
+        report["next_actions"] = next_actions(&configuration, &prerequisites);
         report["files_written"] = json!(false);
     } else {
         let loaded = if args.action == Action::Install {
@@ -598,6 +1095,10 @@ pub fn run(args: &[String]) -> Result<String> {
         };
         report["configured"] = json!(loaded.is_some());
         if let Some(loaded) = loaded {
+            report["unattended_eligible"] = json!(unattended_eligible(
+                loaded.configuration.owner_uid,
+                &prerequisites
+            ));
             report["desired_state"] = json!(loaded.intent.desired_state);
             report["intent_sequence"] = json!(loaded.intent.sequence);
             report["intent_reason"] = json!(loaded.intent.reason);
@@ -609,24 +1110,60 @@ pub fn run(args: &[String]) -> Result<String> {
                     } else {
                         "status"
                     });
-                    report["next_actions"] = next_actions(&loaded.configuration);
+                    report["next_actions"] = next_actions(&loaded.configuration, &prerequisites);
                     report["compose_maintenance"] =
                         installer_uninstall::status(state.inspection())?;
+                    report["generation"] = installer_generation_maintenance::status_locked(
+                        state.inspection(),
+                        &args.installation,
+                    )
+                    .unwrap_or_else(|_| {
+                        json!({
+                            "available":false,
+                            "first_blocking_dependency":"generation_evidence_unavailable",
+                            "read_only":true,"installation_ready":false
+                        })
+                    });
+                    report["automatic_renewal_supported"] =
+                        report["generation"]["automatic_renewal_supported"].clone();
                     report["current_container_state_observed"] = json!(false);
                 }
                 action => {
                     report["operation"] = json!(match action {
                         Action::Boot => "boot",
                         Action::Shutdown => "shutdown",
-                        _ => "check",
+                        Action::Maintain => "maintain",
+                        Action::Pause => "pause",
+                        Action::Resume => "resume",
+                        Action::SecuritySeal => "security-seal",
+                        Action::Check => "check",
+                        _ => return Err(REFUSED.into()),
                     });
-                    report["result"] = scheduled(
-                        &mut state,
-                        &args.installation,
-                        &args.docker,
+                    report["result"] = if matches!(
                         action,
-                        &loaded,
-                    )?;
+                        Action::Pause | Action::Resume | Action::SecuritySeal
+                    ) {
+                        manual_control(
+                            &mut state,
+                            &args.installation,
+                            &args.docker,
+                            action,
+                            &loaded,
+                        )?
+                    } else {
+                        scheduled(
+                            &mut state,
+                            &args.installation,
+                            &args.docker,
+                            action,
+                            &loaded,
+                        )?
+                    };
+                    let current = configured(state.inspection(), &args.installation, &args.docker)?
+                        .ok_or(REFUSED)?;
+                    report["desired_state"] = json!(current.intent.desired_state);
+                    report["intent_sequence"] = json!(current.intent.sequence);
+                    report["intent_reason"] = json!(current.intent.reason);
                 }
             }
         } else if args.action != Action::Status {

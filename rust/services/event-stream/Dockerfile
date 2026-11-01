@@ -14,6 +14,8 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 
 COPY --from=planner /build/rust/recipe.json recipe.json
+# Excluded vendored path dependencies are not reconstructed by the chef recipe.
+COPY rust/vendor /build/rust/vendor
 COPY proto /build/proto
 RUN cargo chef cook --locked --release --workspace --recipe-path recipe.json
 

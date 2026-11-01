@@ -291,15 +291,20 @@ def test_manifest_binds_nightly_base_lock_and_has_no_stable_release_identity(pre
         nightly.product_manifest(value, lock, "2026-10-24T12:00:00+00:00")
 
 
-def test_build_plan_reuses_existing_recipes_and_explicit_tester_profile(prepared):
+def test_build_plan_has_only_customer_ui_images_with_explicit_tester_profile(prepared):
     lock, claim, _, _ = prepared
     plan = nightly.build_plan(claim, nightly.read(lock))
     assert {item["role"] for item in plan} == set(nightly.IMAGE_COORDINATES)
     assert all((ROOT / item["dockerfile"]).is_file() for item in plan)
     assert all("MARTY_RELEASE_VERSION=" + claim["version"] in item["build_args"] for item in plan)
-    tester = next(item for item in plan if item["role"] == "ui_selfhost")
-    assert tester["target"] == "selfhost"
-    assert "SELFHOST_PUBLIC_PROFILE=tester" in tester["build_args"]
+    for role in ("ui", "ui_selfhost"):
+        customer = next(item for item in plan if item["role"] == role)
+        assert customer["target"] == "selfhost"
+        assert "UI_VARIANT=selfhost" in customer["build_args"]
+        assert "SELFHOST_PUBLIC_PROFILE=tester" in customer["build_args"]
+        assert "NGINX_CONFIG=nginx.spa.conf" in customer["build_args"]
+        assert "UI_VARIANT=public" not in customer["build_args"]
+    assert not any(item["image"].endswith("/ui-public") for item in plan)
     bad = nightly.read(lock)
     bad["components"][0]["version"] += "\nINJECTED=1"
     with pytest.raises(ValueError, match="multiline"):

@@ -60,10 +60,12 @@ def read_report(path: Path) -> dict:
 
     require(not path.is_symlink() and path.is_file(), "report must be a regular file")
     with path.open("rb") as stream:
-        raw = stream.read(MAX_REPORT_BYTES + 1)
-    require(len(raw) <= MAX_REPORT_BYTES, "report exceeds size limit")
+        raw = stream.read(256 * 1024 + 1)
+    require(len(raw) <= 256 * 1024, "report exceeds size limit")
     result = json.loads(raw, object_pairs_hook=pairs)
     require(isinstance(result, dict), "report must be an object")
+    require(len(raw) <= (256 * 1024 if result.get("schema") == "elevenid.installer-acceptance/v2"
+                        else MAX_REPORT_BYTES), "report exceeds versioned size limit")
     return result
 
 
@@ -82,6 +84,10 @@ def validate(report: dict, *, inventory_bytes: bytes, source_sha: str,
     are measured after explicit purge of the test installation. Neighboring-stack
     resources are excluded from those counts and independently checked unchanged.
     """
+    if type(report) is dict and report.get("schema") == "elevenid.installer-acceptance/v2":
+        import installer_acceptance_v2
+        return installer_acceptance_v2.validate(report, inventory_bytes=inventory_bytes, source_sha=source_sha,
+            release_tag=release_tag, phase=phase, run=run, require_functional=True)
     require(phase in {"staged", "published", "channel"}, "unknown acceptance phase")
     require(matches(source_sha, r"[0-9a-f]{40}"), "invalid expected source")
     tier, _ = classify_release_tag(release_tag)

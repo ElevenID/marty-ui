@@ -250,6 +250,7 @@ fn assert_no_maintenance_history(report: &Value) {
                 "stop": "stop-0001",
                 "down": "down-0001"
             },
+            "pending_operations": {},
             "historical_evidence_only": true,
             "automatic_retry": false,
             "host_data_credentials_images_and_named_volumes_retained": true
@@ -434,6 +435,68 @@ esac
         .file_name()
         .to_string_lossy()
         .starts_with(".installer-command-")));
+}
+
+#[test]
+fn acme_status_is_locked_read_only_and_does_not_claim_a_live_account_or_certificate() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("installation");
+    let mut state = InstallerState::create(
+        &path,
+        Identity {
+            source_sha: "a".repeat(40),
+            release_tag: "v1.2.3".into(),
+            inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+        },
+    )
+    .unwrap();
+    state.create_private_directory("evidence").unwrap();
+    let invoke = || {
+        Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+            .current_dir(root.path())
+            .args(["acme", "status", "--install-dir"])
+            .arg(&path)
+            .env("DOCKER_HOST", "tcp://unrelated.invalid:2375")
+            .output()
+            .unwrap()
+    };
+    let busy = invoke();
+    assert!(!busy.status.success() && busy.stdout.is_empty());
+    let journal = state.journal().clone();
+    drop(state);
+    let before = std::fs::read(path.join("installation.json")).unwrap();
+    let result = invoke();
+    assert!(result.status.success(), "{:?}", result.stderr);
+    let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["schema"], "elevenid.installer-acme-status/v1");
+    assert_eq!(
+        report["installation_id"],
+        journal.installation_id().to_string()
+    );
+    assert_eq!(report["configured"], false);
+    assert_eq!(report["read_only"], true);
+    assert_eq!(report["environments"], serde_json::json!([]));
+    assert_eq!(report["activation_performed"], false);
+    assert_eq!(report["installation_ready"], false);
+    assert_eq!(
+        before,
+        std::fs::read(path.join("installation.json")).unwrap()
+    );
+    assert_eq!(std::fs::read_dir(path.join("evidence")).unwrap().count(), 0);
+    assert!(result.stderr.is_empty());
+    let invalid = Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+        .args([
+            "acme",
+            "status",
+            "--install-dir",
+            "/missing",
+            "--issue",
+            "secret-input",
+        ])
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success() && invalid.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&invalid.stderr).contains("secret-input"));
 }
 
 #[test]
