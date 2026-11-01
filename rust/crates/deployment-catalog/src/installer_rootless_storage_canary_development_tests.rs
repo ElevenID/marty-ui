@@ -145,55 +145,12 @@ impl MockCreate {
             encoded(&changed).unwrap(),
         )
         .unwrap();
-        let binary = temp.path().join("docker-stub");
-        fs::write(
-            &binary,
-            r#"#!/bin/sh
-set -eu
-base=$(dirname "$0")
-case "$1" in
-info)
-printf '%s\n' '{"id":"development-mock-engine","os":"linux","architecture":"x86_64","server_version":"29.9.2","security_options":["name=seccomp,profile=builtin"]}'
-;;
-compose)
-if [ "$#" != 3 ] || [ "$2" != version ] || [ "$3" != --short ]; then
-    printf 'UNEXPECTED:compose\n' >> "$base/trace"
-    exit 72
-fi
-printf '2.40.3\n'
-;;
-ps) printf 'ps\n' >> "$base/trace" ;;
-create)
-printf 'create\n' >> "$base/trace"
-receipt=$(cat "$base/receipt-name")
-if [ -e "$base/installation/evidence/$receipt" ]; then
-    printf 'receipt-present-before-create\n' >> "$base/trace"
-else
-    printf 'receipt-absent-before-create\n' >> "$base/trace"
-fi
-if [ "$(cat "$base/create-mode")" = drift-journal ]; then
-    cat "$base/changed-journal.json" > "$base/installation/installation.json"
-    printf 'journal-drift\n' >> "$base/trace"
-fi
-cat "$base/container-id"
-;;
-inspect)
-printf 'inspect\n' >> "$base/trace"
-receipt=$(cat "$base/receipt-name")
-cmp -s "$base/installation/evidence/$receipt" "$base/expected-provisional.json"
-[ "$(stat -c %a "$base/installation/evidence/$receipt")" = 600 ]
-printf 'provisional-readback-before-inspect\n' >> "$base/trace"
-[ "$(cat "$base/inspect-mode")" != fail ] || exit 71
-cat "$base/inspect.json"
-;;
-*)
-printf 'UNEXPECTED:%s\n' "$1" >> "$base/trace"
-exit 72
-;;
-esac
-"#,
-        ).unwrap();
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+        // A concurrent fork can retain a newly written executable's writer fd
+        // until exec, even after fs::write closes it here, causing ETXTBSY.
+        // Execute a fixed checkout fixture; only this test's data files change.
+        // The stub locates that data through the runner's private working dir.
+        let binary = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/rootless-canary-docker-stub.sh");
         // The rootful endpoint constructor performs syntactic checks for
         // this fake executable. No Docker socket is opened, no rootless
         // admission is weakened, and no real daemon can be contacted.
