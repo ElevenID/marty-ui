@@ -8,7 +8,7 @@ const nightly=require('./nightly-functional-runtime');
 function main(){
  const {values}=parseArgs({options:{profile:{type:'string'},sha256:{type:'string'},output:{type:'string'},check:{type:'boolean'}},strict:true});
  const profile=verifier.boundJson({path:values.profile,sha256:values.sha256});
- nightly.authority(profile,{boundJson:verifier.boundJson});
+ nightly.authority(profile,{boundJson:verifier.boundJson,verifyBoundFile:verifier.verifyBoundFile});
  if(values.check){console.log(JSON.stringify({state:'FUNCTIONAL_IMAGE_INPUTS_CHECKED',dockerCommands:0,releaseQualified:false}));return;}
  if(!path.isAbsolute(values.output||''))throw Error('Explicit absolute private observation output required');
  const proof=verifier.produceSignedImageObservation(profile),bytes=Buffer.from(JSON.stringify(proof,null,2)+'\n');

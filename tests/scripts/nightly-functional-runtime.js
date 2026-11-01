@@ -16,7 +16,53 @@ function binary(role) {
   return ['issuance','issuance-native'].includes(role) ? 'marty-issuance-service'
     : role === 'verification' ? 'marty-verification-service' : 'marty-' + role;
 }
-function authority(profile, {boundJson}) {
+function organizationSuccessor(ref, original, restoreRef, engineId, tools) {
+  const value = tools.boundJson(ref);
+  assert.equal(value.schema, 'marty.functional-organization-bootstrap-successor/v1');
+  assert.equal(typeof tools.verifyBoundFile, 'function');
+  tools.verifyBoundFile(value.operator, 1024 * 1024);
+  const input = tools.boundJson(value.input), intent = tools.boundJson(value.intent);
+  assert.equal(input.schema, 'marty.nightly-d05-synthetic-org-admin-operator-input/v1');
+  assert.equal(input.sourceSha256, value.operator.sha256); assert.equal(intent.sourceSha256, value.operator.sha256);
+  assert.equal(input.phase3Result.sha256, restoreRef.sha256); assert.equal(intent.phase3Sha256, restoreRef.sha256);
+  assert.equal(input.engineId, engineId); assert.equal(intent.oldCid, original.Id);
+  const permission = tools.boundJson(value.permission), retired = tools.boundJson(value.retirement);
+  assert.equal(permission.schema, 'marty.nightly-d05-org-permission-reconciliation/v1');
+  assert.equal(permission.state, 'PUBLIC_KMS_ADMIN_CONTROL_VISIBLE'); assert.equal(permission.probeExit, 0);
+  assert.equal(permission.originalOperatorFailureRetained, true);
+  assert.equal(permission.probeSourceSha256, value.permissionProbe.sha256);
+  tools.verifyBoundFile(value.permissionProbe, 1024 * 1024);
+  for (const [field, digestField] of [['probeStdout', 'stdoutSha256'], ['probeStderr', 'stderrSha256']]) {
+    tools.verifyBoundFile(value[field], 1024 * 1024, 0); assert.equal(value[field].sha256, permission[digestField]);
+  }
+  assert.equal(retired.state, 'OWNED_LOCK_RETIRED'); assert.equal(retired.originalOperatorFailureRetained, true);
+  for (const operation of [value.createTerminal, value.startTerminal]) {
+    const terminal = tools.boundJson(operation); assert.equal(terminal.exit, 0);
+    tools.verifyBoundFile(terminal.stdout, 1024 * 1024, 0); tools.verifyBoundFile(terminal.stderr, 1024 * 1024, 0);
+  }
+  const rows = tools.boundJson(value.inspect); assert(Array.isArray(rows) && rows.length === 1);
+  const row = rows[0]; assert.equal(row.Id, permission.newCid); assert.equal(row.Id, retired.newCid);
+  assert.notEqual(row.Id, original.Id); assert(HASH.test(row.Id));
+  assert.equal(row.Name, original.Name); assert.equal(row.Image, original.Image);
+  assert.deepEqual(row.HostConfig, original.HostConfig);
+  const mounts = record => {const map = new Map(record.Mounts.map(item => [item.Destination, item])); assert.equal(map.size, record.Mounts.length); return Object.fromEntries([...map].sort());};
+  assert.deepEqual(mounts(row), mounts(original));
+  const config = record => {const result = {...record.Config}; delete result.Hostname; delete result.Env; delete result.Labels; return result;};
+  assert.deepEqual(config(row), config(original));
+  const env = record => {const result = {}; for (const item of record.Config.Env) {const at = item.indexOf('='); assert(at > 0); const key = item.slice(0, at); assert(!Object.hasOwn(result, key)); result[key] = item.slice(at + 1);} return result;};
+  const expectedEnv = env(original); assert.equal(typeof input.newAdminEmail, 'string'); assert(input.newAdminEmail.includes('@'));
+  expectedEnv.MARTY_ORG_ADMIN_EMAIL = input.newAdminEmail; assert.deepEqual(env(row), expectedEnv);
+  assert.equal(row.Config.Labels['com.docker.compose.service'], 'organization');
+  assert.equal(row.Config.Labels['com.docker.compose.project'], 'elevenid-beta');
+  const networks = record => Object.fromEntries(Object.entries(record.NetworkSettings.Networks).map(([name, endpoint]) => [name, endpoint.NetworkID]));
+  assert.deepEqual(networks(row), networks(original));
+  assert.equal(row.State.Running, true); assert.equal(row.State.OOMKilled, false);
+  assert.equal(row.State.Health.Status, 'healthy');
+  assert(Date.parse(row.State.StartedAt) > Date.parse(original.State.StartedAt));
+  assert(Number.isSafeInteger(row.State.Pid) && row.State.Pid > 0);
+  return row;
+}
+function authority(profile, {boundJson, verifyBoundFile}) {
   assert.equal(profile.schema, 'marty.functional-mixed-runtime/v2');
   assert.equal(profile.scope, 'FUNCTIONAL_ONLY');
   assert.equal(profile.releaseQualified, false); assert.equal(profile.recordingQualified, false);
@@ -36,10 +82,17 @@ function authority(profile, {boundJson}) {
   const byRole = new Map(raw.map(row => [row.Config?.Labels?.['com.docker.compose.service'], row]));
   assert.equal(byRole.size, 24);
   assert.deepEqual([...byRole.keys()].sort(), [...ROLES, 'keycloak', 'nginx-proxy'].sort());
+  const phase1 = boundJson(refs.phase1Input);
+  assert.equal(phase1.release, RELEASE); assert.equal(phase1.betaOnly, true);
+  assert.equal(typeof phase1.engineId, 'string'); assert(phase1.engineId.length > 0);
+  assert.equal(byRole.get('organization').Id, deployed.newCids.organization, 'Original organization lineage differs');
+  const successor = refs.organizationSuccessor ? organizationSuccessor(refs.organizationSuccessor,
+    byRole.get('organization'), refs.writerRestore, phase1.engineId, {boundJson, verifyBoundFile}) : null;
+  if (successor) byRole.set('organization', successor);
   const rows = ROLES.map(role => {
     const row = byRole.get(role), reference = role === 'ui-prod' ? UI : SERVICES;
     assert.equal(lock.services[role === 'ui-prod' ? 'ui' : role] || (role.startsWith('passport-') ? SERVICES : null), reference);
-    assert.equal(row.Config.Image, reference); assert.equal(row.Id, deployed.newCids[role]);
+    assert.equal(row.Config.Image, reference); assert.equal(row.Id, role === 'organization' && successor ? successor.Id : deployed.newCids[role]);
     assert(HASH.test(row.Id) && /^sha256:[a-f0-9]{64}$/.test(row.Image));
     assert.equal(row.State.Running, true); assert.equal(row.State.OOMKilled, false);
     const project = role === 'ui-prod' ? 'elevenid-beta-ui' : 'elevenid-beta';
@@ -48,9 +101,6 @@ function authority(profile, {boundJson}) {
       imageId: row.Image, project, reference, requiredContainerId: row.Id,
       requiredStartedAt: row.State.StartedAt, requiredHostPid: row.State.Pid};
   });
-  const phase1 = boundJson(refs.phase1Input);
-  assert.equal(phase1.release, RELEASE); assert.equal(phase1.betaOnly, true);
-  assert.equal(typeof phase1.engineId, 'string'); assert(phase1.engineId.length > 0);
   return {rows, engineId: phase1.engineId, refs};
 }
 function validateImages(images, rows) {
@@ -71,6 +121,7 @@ function expected(profile, tools) {
   assert.equal(readback.engineId, engineId);
   assert.equal(readback.deploymentSha256, refs.deployment.sha256);
   assert.equal(readback.writerRestoreSha256, refs.writerRestore.sha256);
+  assert.equal(readback.organizationSuccessorSha256 ?? null, refs.organizationSuccessor?.sha256 ?? null);
   assert.equal(readback.releaseQualified, false); assert.equal(readback.recordingQualified, false);
   validateImages(readback.images, rows);
   assert(Array.isArray(readback.roles) && readback.roles.length === 22);
@@ -91,9 +142,9 @@ function expected(profile, tools) {
     return expectation;
   });
 }
-function produce(profile, {readDocker, boundJson, observeDocker, validateRuntimeObservation}) {
+function produce(profile, {readDocker, boundJson, verifyBoundFile, observeDocker, validateRuntimeObservation}) {
   assert.equal(typeof readDocker, 'function');
-  const {rows, engineId, refs} = authority(profile, {boundJson});
+  const {rows, engineId, refs} = authority(profile, {boundJson, verifyBoundFile});
   const engine = () => JSON.parse(readDocker(['info', '--format', '{{json .}}'])).ID;
   assert.equal(engine(), engineId);
   const images = [SERVICES, UI].map(reference => {
@@ -118,6 +169,6 @@ function produce(profile, {readDocker, boundJson, observeDocker, validateRuntime
   assert.equal(engine(), engineId);
   return {schema: 'marty.functional-signed-image-observation/v1', release: RELEASE, source: SOURCE,
     engineId, deploymentSha256: refs.deployment.sha256, writerRestoreSha256: refs.writerRestore.sha256,
-    images, roles, releaseQualified: false, recordingQualified: false};
+    images, roles, organizationSuccessorSha256: refs.organizationSuccessor?.sha256 ?? null, releaseQualified: false, recordingQualified: false};
 }
 module.exports = {authority, expected, produce, ROLES, SOURCE, RELEASE, LOCK_SHA, SERVICES, UI};
