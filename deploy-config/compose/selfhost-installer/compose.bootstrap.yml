@@ -37,6 +37,30 @@ x-installer-bao-ca: &installer-bao-ca
   bind: {create_host_path: false}
 
 services:
+  installer-control-enroll:
+    <<: *installer-job
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?approved OpenBao image required}
+    entrypoint: [/usr/local/bin/selfhost-control-enroll]
+    command: [--installation-id, "${MARTY_INSTALLATION_ID:?}", --attempt-id, "${MARTY_OPENBAO_CONTROL_ATTEMPT_ID:?bound control enrollment attempt required}"]
+    tmpfs:
+      - /openbao/file:rw,noexec,nosuid,nodev,size=1048576,mode=0700
+      - /openbao/logs:rw,noexec,nosuid,nodev,size=1048576,mode=0700
+    volumes:
+      - type: bind
+        source: ${SELFHOST_OPENBAO_STATE_DIR:?}
+        target: /bao/data
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/socket
+        target: /bao/control
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/identity
+        target: /bao/control-identity
+        bind: {create_host_path: false}
+
   installer-keycloak:
     <<: *installer-job
     image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?approved OpenBao image required}
@@ -157,6 +181,8 @@ services:
     depends_on: !reset {}
     init: true
     security_opt: ["no-new-privileges:true"]
+    environment:
+      MARTY_OPENBAO_LOCAL_CONTROL: "1"
     tmpfs: &bao-scratch
       - /openbao/file:rw,noexec,nosuid,nodev,size=1048576,mode=0700
       - /openbao/logs:rw,noexec,nosuid,nodev,size=1048576,mode=0700
@@ -166,18 +192,29 @@ services:
         target: /bao/data
         bind: {create_host_path: false}
       - type: bind
-        source: ./docker/openbao-selfhost.hcl
+        source: ./docker/openbao-selfhost-installer.hcl
         target: /bao/config/openbao.hcl
         read_only: true
         bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/socket
+        target: /bao/control
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/identity
+        target: /bao/control-identity
+        read_only: true
+        bind: {create_host_path: false}
     healthcheck:
-      test: [CMD-SHELL, "bao status -address=https://127.0.0.1:8200 -ca-cert=/bao/data/tls/ca.crt >/dev/null 2>&1; result=$$?; test $$result -eq 0 -o $$result -eq 2"]
+      test: [CMD, /usr/local/bin/selfhost-unseal, --check-listener]
 
   openbao-tls-init:
     profiles: [setup]
     init: true
     security_opt: ["no-new-privileges:true"]
     tmpfs: *bao-scratch
+    environment:
+      MARTY_OPENBAO_LOCAL_CONTROL: "1"
     labels:
       com.elevenid.installer.id: ${MARTY_INSTALLATION_ID:?}
       com.elevenid.installer.phase: setup
@@ -186,22 +223,37 @@ services:
         source: ${SELFHOST_OPENBAO_STATE_DIR:?}
         target: /bao/data
         bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/socket
+        target: /bao/control
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/identity
+        target: /bao/control-identity
+        bind: {create_host_path: false}
 
   openbao-unseal:
     init: true
     security_opt: ["no-new-privileges:true"]
     tmpfs: *bao-scratch
+    environment:
+      MARTY_OPENBAO_LOCAL_CONTROL: "1"
     volumes: !override
       - type: bind
         source: ${SELFHOST_OPENBAO_STATE_DIR:?}
         target: /bao/data
         read_only: true
         bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-control/socket
+        target: /bao/control
+        read_only: true
+        bind: {create_host_path: false}
     depends_on:
       openbao:
         condition: service_healthy
     healthcheck:
-      test: [CMD-SHELL, "bao status -address=https://openbao:8200 -ca-cert=/bao/data/tls/ca.crt >/dev/null 2>&1"]
+      test: [CMD, /usr/local/bin/selfhost-unseal, --check-unsealed]
       interval: 5s
       timeout: 5s
       retries: 24

@@ -417,6 +417,10 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
         ("MARTY_OPENBAO_DIDCOMM_IMAGE", openbao),
         ("MARTY_KEYCLOAK_NONCE", "config-only-synthetic-nonce".into()),
         (
+            "MARTY_OPENBAO_CONTROL_ATTEMPT_ID",
+            "6b0176e0-a046-4310-917c-57f1ddda1ac0".into(),
+        ),
+        (
             "MARTY_SELFHOST_PROJECT",
             "marty-selfhost-disposable-config-fixture".into(),
         ),
@@ -645,6 +649,15 @@ fn assert_actual_installer_layers(
 ) {
     let temp = PrivateFixture::new();
     baseline(executable, temp.path());
+    let installation = fs::read_to_string(supplied_env)
+        .unwrap()
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("MARTY_INSTALLATION_DIR='")
+                .and_then(|v| v.strip_suffix('\''))
+        })
+        .map(PathBuf::from)
+        .expect("bound installation path in source fixture");
     let env = temp.path().join("private.env");
     fs::copy(supplied_env, &env).unwrap();
     fs::set_permissions(&env, fs::Permissions::from_mode(0o600)).unwrap();
@@ -840,12 +853,56 @@ fn assert_actual_installer_layers(
     assert!(restarted.contains_key("openbao") && restarted.contains_key("openbao-unseal"));
     assert_eq!(
         restarted["openbao-unseal"]["healthcheck"]["test"],
-        serde_json::json!([
-            "CMD-SHELL",
-            "bao status -address=https://openbao:8200 -ca-cert=/bao/data/tls/ca.crt >/dev/null 2>&1"
-        ]),
+        serde_json::json!(["CMD", "/usr/local/bin/selfhost-unseal", "--check-unsealed"]),
         "the runtime KMS prerequisite must require successful unsealed status"
     );
+    assert_eq!(
+        restarted["openbao"]["healthcheck"]["test"],
+        serde_json::json!(["CMD", "/usr/local/bin/selfhost-unseal", "--check-listener"]),
+        "sealed or expired-TCP startup must not block the local recovery channel"
+    );
+    assert!(setup_roles.contains("installer-control-enroll"));
+    for target in ["/openbao/file:", "/openbao/logs:"] {
+        assert!(
+            maintenance["installer-control-enroll"]["tmpfs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str().is_some_and(|v| v.starts_with(target))),
+            "the enrollment job must cover inherited image volumes without anonymous storage"
+        );
+    }
+    for role in ["openbao", "openbao-unseal"] {
+        assert_eq!(
+            restarted[role]["environment"]["MARTY_OPENBAO_LOCAL_CONTROL"],
+            "1"
+        );
+        let volumes = restarted[role]["volumes"].as_array().unwrap();
+        let control = volumes
+            .iter()
+            .find(|v| v["target"] == "/bao/control")
+            .unwrap();
+        assert_eq!(
+            control["source"],
+            installation
+                .join("openbao-control/socket")
+                .to_str()
+                .unwrap()
+        );
+        assert_eq!(control["bind"]["create_host_path"], false);
+        if role == "openbao-unseal" {
+            assert_eq!(control["read_only"], true);
+            assert!(!volumes
+                .iter()
+                .any(|v| v["target"] == "/bao/control-identity"));
+        } else {
+            let identity = volumes
+                .iter()
+                .find(|v| v["target"] == "/bao/control-identity")
+                .unwrap();
+            assert_eq!(identity["read_only"], true);
+        }
+    }
     for (role, service) in restarted {
         let mut expected: BTreeMap<_, _> = maintenance[role]["depends_on"]
             .as_object()

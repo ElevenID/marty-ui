@@ -610,6 +610,12 @@ fn maintenance_started(directory: &File) -> Result<bool> {
     };
     for entry in [
         "lifecycle-configuration.json",
+        "acme-staging-000000.json",
+        "acme-production-000000.json",
+        "acme-custody-staging-intent.json",
+        "acme-custody-production-intent.json",
+        "acme-credentials-staging-intent.json",
+        "acme-credentials-production-intent.json",
         "uninstall-plan.json",
         "uninstall-result.json",
         "uninstall-compose-stop-intent.json",
@@ -971,6 +977,7 @@ impl LockedMaintenance {
         let filename = Self::entry(entry)?;
         if !(entry.starts_with("uninstall-")
             || entry.starts_with("lifecycle-")
+            || entry.starts_with("acme-")
             || entry.starts_with("rootless-canary-")
             || entry.starts_with("kms-registration-"))
             || bytes.is_empty()
@@ -1036,6 +1043,37 @@ impl InstallerState {
         };
         let result = operation(&view);
         view.require_unchanged()?;
+        result
+    }
+    /// Run a scoped maintenance transaction under the fresh installer's lock.
+    /// A panic, uncertain append or changed journal poisons the writer. The
+    /// borrowed descriptor cannot unlock the original installation guard.
+    pub(crate) fn with_maintenance<T>(
+        &mut self,
+        operation: impl FnOnce(&mut LockedMaintenance) -> Result<T>,
+    ) -> Result<T> {
+        if self.poisoned || read(&self.directory)? != self.journal {
+            return Err("uncertain installation cannot enter maintenance".into());
+        }
+        let mut view = LockedMaintenance {
+            inspection: LockedInspection {
+                directory: LockedDirectory {
+                    file: self
+                        .directory
+                        .file
+                        .try_clone()
+                        .map_err(|_| "cannot borrow installation lock")?,
+                    owner_pid: self.directory.owner_pid,
+                    unlock_on_drop: false,
+                },
+                journal: self.journal.clone(),
+            },
+            poisoned: false,
+        };
+        self.poisoned = true;
+        let result = operation(&mut view);
+        view.require_unchanged()?;
+        self.poisoned = false;
         result
     }
     /// Preserve the caller's authenticated release operator for recovery after
@@ -1151,6 +1189,7 @@ impl InstallerState {
                 "downloads",
                 "evidence",
                 "openbao-state",
+                "openbao-control",
                 "keycloak-output",
                 "tls-output",
                 "ingress-output",
@@ -1204,6 +1243,65 @@ impl InstallerState {
         }
         self.poisoned = false;
         Ok(())
+    }
+    /// Create the two private control mounts for a fresh managed OpenBao node.
+    /// Only the socket child may later change to the mapped image owner. The
+    /// installation root, outer directory and credential identity stay private
+    /// to the installer user. Existing directories are never adopted.
+    pub(crate) fn prepare_openbao_control(&mut self) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        self.create_private_directory("openbao-control")?;
+        self.poisoned = true;
+        let control = open_at(
+            &self.directory,
+            &name("openbao-control"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&control, true)?;
+        let mut observed = serde_json::Map::new();
+        for entry in ["socket", "identity"] {
+            if unsafe { libc::mkdirat(control.as_raw_fd(), name(entry).as_ptr(), 0o700) } != 0 {
+                return Err(error("create OpenBao control child"));
+            }
+            let child = open_at(
+                &control,
+                &name(entry),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?;
+            private(&child, true)?;
+            child
+                .sync_all()
+                .map_err(|_| "persist OpenBao control child")?;
+            let metadata = child
+                .metadata()
+                .map_err(|_| "OpenBao control metadata unavailable")?;
+            observed.insert(
+                entry.into(),
+                serde_json::json!({
+                    "device": metadata.dev(), "inode": metadata.ino(),
+                    "owner_uid": metadata.uid(), "owner_gid": metadata.gid(), "mode": 0o700,
+                }),
+            );
+        }
+        control
+            .sync_all()
+            .and_then(|_| self.directory.sync_all())
+            .map_err(|_| "persist OpenBao control directories")?;
+        let metadata = control
+            .metadata()
+            .map_err(|_| "OpenBao control metadata unavailable")?;
+        let receipt = serde_json::to_vec(&serde_json::json!({
+            "schema": "elevenid.installer-openbao-control-created/v1",
+            "installation_id": self.journal.installation_id(),
+            "device": metadata.dev(), "inode": metadata.ino(),
+            "owner_uid": metadata.uid(), "owner_gid": metadata.gid(), "mode": 0o700,
+            "children": observed, "enrolled": false,
+        }))
+        .map_err(|_| "cannot encode OpenBao control creation")?;
+        self.poisoned = false;
+        self.write_evidence("openbao-control-created.json", &receipt)
     }
     /// Persist creation-time identities for only the fresh root and the two
     /// fixed directories created immediately after it. This receipt is local
@@ -2430,6 +2528,55 @@ mod tests {
         assert!(LockedInspection::open(&path).is_ok());
     }
     #[test]
+    fn borrowed_maintenance_preserves_lock_and_propagates_uncertain_writes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("installation");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        state.create_private_directory("evidence").unwrap();
+        let before = std::fs::read(path.join(JOURNAL)).unwrap();
+        state
+            .with_maintenance(|view| {
+                assert!(LockedMaintenance::open(&path).is_err());
+                view.write_evidence_exclusive("acme-staging-000000.json", b"retained intent")
+            })
+            .unwrap();
+        assert!(LockedInspection::open(&path).is_err());
+        let error: Result<()> = state.with_maintenance(|_| Err("validation failed".into()));
+        assert!(error.is_err() && !state.poisoned);
+        assert!(state
+            .with_maintenance(|view| {
+                view.write_evidence_exclusive("acme-staging-000000.json", b"overwrite")
+            })
+            .is_err());
+        assert!(state.poisoned && LockedInspection::open(&path).is_err());
+        assert!(state.advance(Phase::Verified).is_err());
+        assert_eq!(std::fs::read(path.join(JOURNAL)).unwrap(), before);
+        drop(state);
+        let view = LockedMaintenance::open(&path).unwrap();
+        assert_eq!(
+            view.read_evidence("acme-staging-000000.json")
+                .unwrap()
+                .unwrap(),
+            b"retained intent"
+        );
+        drop(view);
+        assert!(InstallerState::resume(&path, &identity()).is_err());
+    }
+    #[test]
+    fn borrowed_maintenance_panic_poisoning_does_not_release_the_writer_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("installation");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<()> = state.with_maintenance(|_| panic!("maintenance interrupted"));
+        }));
+        assert!(panic.is_err() && state.poisoned);
+        assert!(LockedMaintenance::open(&path).is_err());
+        assert!(state.advance(Phase::Verified).is_err());
+        drop(state);
+        assert!(LockedInspection::open(&path).is_ok());
+    }
+    #[test]
     fn validation_reports_are_private_append_only_and_reject_replaced_paths() {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -2828,6 +2975,12 @@ mod tests {
     fn old_and_native_maintenance_markers_block_provisioning_replay() {
         for entry in [
             "lifecycle-configuration.json",
+            "acme-staging-000000.json",
+            "acme-production-000000.json",
+            "acme-custody-staging-intent.json",
+            "acme-custody-production-intent.json",
+            "acme-credentials-staging-intent.json",
+            "acme-credentials-production-intent.json",
             "uninstall-plan.json",
             "uninstall-result.json",
             "uninstall-compose-stop-intent.json",
@@ -3280,6 +3433,39 @@ mod tests {
             assert!(InstallerState::create_with_runtime(&path, identity(), runtime).is_err());
             assert!(!path.exists());
         }
+    }
+    #[test]
+    fn openbao_control_is_fresh_private_and_never_adopted() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        state.create_private_directory("evidence").unwrap();
+        assert!(state.prepare_openbao_control().is_err());
+        assert!(!path.join("openbao-control").exists());
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        state.prepare_openbao_control().unwrap();
+        for entry in [
+            "openbao-control",
+            "openbao-control/socket",
+            "openbao-control/identity",
+        ] {
+            let metadata = std::fs::symlink_metadata(path.join(entry)).unwrap();
+            assert!(metadata.is_dir());
+            assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+            assert_eq!(metadata.mode() & 0o7777, 0o700);
+        }
+        let receipt = state
+            .with_inspection(|view| view.read_evidence("openbao-control-created.json"))
+            .unwrap();
+        let receipt: serde_json::Value = serde_json::from_slice(&receipt).unwrap();
+        assert_eq!(
+            receipt["installation_id"],
+            state.journal().installation_id().to_string()
+        );
+        assert_eq!(receipt["enrolled"], false);
+        assert!(state.prepare_openbao_control().is_err());
+        assert!(state.require_live_phase(Phase::Provisioning).is_err());
     }
     #[test]
     fn renewal_directories_are_private_and_never_adopted() {

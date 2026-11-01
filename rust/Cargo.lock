@@ -2875,6 +2875,7 @@ dependencies = [
  "hyper-util",
  "rustls",
  "rustls-native-certs",
+ "rustls-platform-verifier",
  "tokio",
  "tokio-rustls",
  "tower-service",
@@ -3116,6 +3117,28 @@ checksum = "3b5cf4372d022092674a83b8febf5865f7a573cc0c5baec5e49c879b6a20978f"
 dependencies = [
  "block-padding 0.4.2",
  "hybrid-array",
+]
+
+[[package]]
+name = "instant-acme"
+version = "0.8.5"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "http 1.5.0",
+ "http-body 1.1.0",
+ "http-body-util",
+ "httpdate",
+ "hyper-rustls",
+ "rcgen",
+ "ring",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
 ]
 
 [[package]]
@@ -3866,6 +3889,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
+name = "marty-acme-client"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "http 1.5.0",
+ "http-body-util",
+ "instant-acme",
+ "marty-openbao-http",
+ "reqwest",
+ "ring",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "marty-api-key-policy"
 version = "0.1.0"
 dependencies = [
@@ -4226,11 +4267,16 @@ dependencies = [
 name = "marty-deployment-catalog"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "flate2",
+ "http 1.5.0",
+ "http-body-util",
  "icu_normalizer",
  "libc",
+ "marty-acme-client",
  "marty-crypto",
  "marty-managed-key-reference",
  "marty-openbao-http",
@@ -4240,6 +4286,7 @@ dependencies = [
  "mmf-aws-kms",
  "regex",
  "reqwest",
+ "ring",
  "rustls",
  "rustls-webpki",
  "serde",
@@ -4251,6 +4298,7 @@ dependencies = [
  "tokio-rustls",
  "url",
  "uuid",
+ "webpki-roots",
  "x509-cert",
  "zip",
 ]
@@ -5053,7 +5101,9 @@ dependencies = [
 name = "marty-selfhost-identity"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "serde",
+ "serde_json",
  "url",
 ]
 
@@ -6702,6 +6752,7 @@ checksum = "091e7a8e7d86e6feb87a27ce8e2cba29d49eff9507afeebefab7eeb2ca667fb4"
 dependencies = [
  "aws-lc-rs",
  "pem",
+ "ring",
  "rustls-pki-types",
  "time",
  "x509-parser",
@@ -9680,6 +9731,7 @@ dependencies = [
  "lazy_static",
  "nom",
  "oid-registry",
+ "ring",
  "rusticata-macros",
  "thiserror 2.0.20",
  "time",

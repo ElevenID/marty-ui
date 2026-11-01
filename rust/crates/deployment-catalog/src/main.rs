@@ -465,6 +465,23 @@ fn run() -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         return Err("installer trust information currently requires Linux".into());
     }
+    if args.first().is_some_and(|arg| arg == "acme") {
+        if args.len() != 4 || args[1] != "status" || args[2] != "--install-dir" {
+            return Err("usage: marty-deploy acme status --install-dir ABSOLUTE_PATH".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let inspection = marty_deployment_catalog::installer_state::LockedInspection::open(
+                std::path::Path::new(&args[3]),
+            )?;
+            let report = marty_deployment_catalog::installer_acme::status(&inspection)?;
+            inspection.require_unchanged()?;
+            println!("{report}");
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer ACME status currently requires Linux".into());
+    }
     if args.first().is_some_and(|arg| arg == "status") {
         if args.len() != 3 || args[1] != "--install-dir" {
             return Err("usage: marty-deploy status --install-dir ABSOLUTE_PATH".into());

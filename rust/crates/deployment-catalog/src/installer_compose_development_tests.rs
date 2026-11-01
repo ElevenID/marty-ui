@@ -1,8 +1,8 @@
 //! Explicitly opted-in real-component development qualification.
 //!
 //! The published fixture package is authenticated and retained unchanged. A
-//! separate unsigned development copy adds only the three compile-time installer
-//! layers. Neither that copy nor the local executable is represented as a signed
+//! separate unsigned development copy adds the compile-time installer layers
+//! and their local-control listener configuration. Neither that copy nor the local executable is represented as a signed
 //! release. No production verifier, dispatch, credential contract or policy is
 //! bypassed or modified by this test-only module.
 #![cfg(all(test, target_os = "linux"))]
@@ -36,7 +36,7 @@ const HOLD: &str = "Owned application startup observations recorded. Explicit lo
 const HELPER_IDENTITY: &str = "unknown:unreleased";
 #[cfg(feature = "installer-development")]
 const HELPER_IDENTITY: &str = crate::installer_development_image::HELPER_IDENTITY;
-const LAYERS: [(&str, &[u8]); 3] = [
+const LAYERS: [(&str, &[u8]); 4] = [
     (
         "deploy-config/compose/selfhost-installer/compose.bootstrap.yml",
         include_bytes!(
@@ -52,6 +52,10 @@ const LAYERS: [(&str, &[u8]); 3] = [
     (
         "deploy-config/compose/selfhost-installer/compose.runtime.yml",
         include_bytes!("../../../../deploy-config/compose/selfhost-installer/compose.runtime.yml"),
+    ),
+    (
+        "docker/openbao-selfhost-installer.hcl",
+        include_bytes!("../../../../docker/openbao-selfhost-installer.hcl"),
     ),
 ];
 

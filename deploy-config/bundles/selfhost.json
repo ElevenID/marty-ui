@@ -24,6 +24,7 @@
     "docker/nginx-selfhost.prod.conf.template",
     "docker/openbao-init.sh",
     "docker/openbao-selfhost.hcl",
+    "docker/openbao-selfhost-installer.hcl",
     "docker/openbao-selfhost-init.sh",
     "docker/openbao-haip-workload-policy.hcl",
     "docker/secrets/selfhost.example/README.md",

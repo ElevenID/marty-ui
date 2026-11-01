@@ -31,11 +31,29 @@ def resource_profile(profile: str) -> int:
 def _host_state(raw: bytes, engine: str) -> dict:
     value = release.decode(raw)
     release.require(
-        value.get("schema") == "elevenid.installer-host-observation/v1"
+        value.get("schema") in ("elevenid.installer-host-observation/v1", "elevenid.installer-host-observation/v2")
         and value.get("acceptance") is False
         and value.get("engine_id") == engine,
         "host identity differs",
     )
+    if value["schema"] == "elevenid.installer-host-observation/v2":
+        runtime = release.exact(value.get("runtime"), {
+            "profile", "uid", "docker_host", "socket_device", "socket_inode",
+        }, "rootless host observation")
+        controls = release.exact(value.get("rootless_resource_controls"), {
+            "cgroup_version", "cgroup_driver", "memory_limit",
+        }, "rootless resource controls")
+        release.require(
+            runtime["profile"] == "rootless" and type(runtime["uid"]) is int
+            and 0 < runtime["uid"] <= 4_294_967_294
+            and runtime["docker_host"] == f'unix:///run/user/{runtime["uid"]}/docker.sock'
+            and all(type(runtime[key]) is int and runtime[key] >= 0
+                    for key in ("socket_device", "socket_inode"))
+            and controls["cgroup_version"] == "2"
+            and controls["cgroup_driver"] == "systemd"
+            and controls["memory_limit"] is True,
+            "rootless host control observations differ",
+        )
     predicates = value.get("predicates", {})
     release.exact(predicates, {"capacity", "initial_docker_clean"}, "host predicates")
     release.require(

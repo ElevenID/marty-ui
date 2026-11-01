@@ -110,6 +110,7 @@ fn checked_rootless_socket(path: &Path, uid: u32) -> Result<(u64, u64)> {
         || parent.mode() & 0o7777 != 0o700
         || !socket.file_type().is_socket()
         || socket.uid() != uid
+        || socket.mode() & 0o007 != 0
     {
         return Err("rootless Docker socket custody differs".into());
     }
@@ -889,11 +890,16 @@ mod tests {
         let parent = private_temp();
         let socket = parent.path().join("docker.sock");
         let listener = UnixListener::bind(&socket).unwrap();
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o660)).unwrap();
         let uid = unsafe { libc::geteuid() };
         let first = checked_rootless_socket(&socket, uid).unwrap();
         assert_ne!(first.1, 0);
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(checked_rootless_socket(&socket, uid).is_err());
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o660)).unwrap();
         let replacement = parent.path().join("replacement.sock");
         let other = UnixListener::bind(&replacement).unwrap();
+        fs::set_permissions(&replacement, fs::Permissions::from_mode(0o660)).unwrap();
         let second = checked_rootless_socket(&replacement, uid).unwrap();
         assert_ne!(second, first);
         fs::rename(&replacement, &socket).unwrap();
@@ -914,6 +920,7 @@ mod tests {
         let parent = private_temp();
         let socket = parent.path().join("docker.sock");
         let _listener = UnixListener::bind(&socket).unwrap();
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o660)).unwrap();
         let info_path = parent.path().join("engine-info.json");
         let rootless = rootless_info();
         fs::write(&info_path, &rootless).unwrap();
@@ -980,6 +987,7 @@ esac"#,
         fs::write(&info_path, rootless).unwrap();
         let other_path = parent.path().join("other.sock");
         let _other = UnixListener::bind(&other_path).unwrap();
+        fs::set_permissions(&other_path, fs::Permissions::from_mode(0o660)).unwrap();
         fs::rename(&other_path, &socket).unwrap();
         assert!(docker.run_checked(&["ps"]).is_err());
         assert_eq!(

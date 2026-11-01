@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only Linux Docker observations, NOT clean-host or acceptance evidence.
+"""Read-only Linux rootless Docker observations, NOT clean-host or acceptance evidence.
 
 The sole local write is an ephemeral private empty Docker client config directory.
 No credentials are read and no resources are created, pulled, stopped or removed.
@@ -24,11 +24,11 @@ import time
 
 LIMIT = 256 * 1024
 MAX_RESOURCES = 512
-SOCKET = Path("/var/run/docker.sock")
 SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 DEVTOOLS = ("git", "rustc", "cargo", "node", "npm", "gcc", "g++", "make")
 INFO_FORMAT = '{' + ','.join('"' + key + '":{{json .' + key + '}}' for key in (
-    "ID", "OSType", "Architecture", "SecurityOptions", "MemTotal", "DockerRootDir", "ServerVersion")) + '}'
+    "ID", "OSType", "Architecture", "SecurityOptions", "MemTotal", "DockerRootDir", "ServerVersion",
+    "CgroupVersion", "CgroupDriver", "MemoryLimit")) + '}'
 NETWORK_FORMAT = '{"Id":{{json .Id}},"Name":{{json .Name}},"Driver":{{json .Driver}},"AttachedCount":{{len .Containers}}}'
 
 
@@ -106,10 +106,16 @@ def identifiers(raw, expression, *, deduplicate=False):
 
 class Filesystem:
     """Observation seams; production uses the local guest kernel only."""
-    def ancestors(self, path):
+    def __init__(self):
+        self.uid = os.geteuid()
+        self.socket_path = Path(f"/run/user/{self.uid}/docker.sock")
+
+    def ancestors(self, path, *, owned=False):
         for parent in path.parents:
             info = parent.lstat()
-            require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022)
+            require(stat.S_ISDIR(info.st_mode)
+                    and info.st_uid in ({0, self.uid} if owned else {0})
+                    and not info.st_mode & 0o022)
 
     def config(self, path):
         info = path.lstat()
@@ -118,10 +124,18 @@ class Filesystem:
                 and not any(path.iterdir()))
 
     def socket(self):
-        require(SOCKET.resolve() == Path("/run/docker.sock"))
-        self.ancestors(Path("/run/docker.sock"))
-        info = SOCKET.lstat()
-        require(stat.S_ISSOCK(info.st_mode) and info.st_uid == 0)
+        require(self.uid != 0 and os.getuid() == self.uid)
+        path = self.socket_path
+        require(path.resolve() == path)
+        self.ancestors(path, owned=True)
+        runtime = path.parent.lstat()
+        require(runtime.st_uid == self.uid and stat.S_IMODE(runtime.st_mode) == 0o700)
+        info = path.lstat()
+        require(stat.S_ISSOCK(info.st_mode) and info.st_uid == self.uid
+                and not info.st_mode & 0o007)
+        return {"profile": "rootless", "uid": self.uid,
+                "docker_host": "unix://" + str(path),
+                "socket_device": info.st_dev, "socket_inode": info.st_ino}
 
     def executable(self, path):
         require(path.is_absolute())
@@ -143,9 +157,10 @@ class Filesystem:
     def disk(self, root):
         path = Path(root)
         require(path.is_absolute() and path.resolve() == path)
-        self.ancestors(path)
+        self.ancestors(path, owned=True)
         info = path.lstat()
-        require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0)
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid == self.uid
+                and not info.st_mode & 0o022)
         fs = os.statvfs(path)
         return {"device": info.st_dev, "free_bytes": fs.f_bavail * fs.f_frsize}
 
@@ -171,12 +186,17 @@ class Filesystem:
 def observe(docker, config, *, runner=command, filesystem=None, ambient=None):
     fs = filesystem or Filesystem()
     ambient = os.environ if ambient is None else ambient
-    fs.socket()
+    runtime = fs.socket()
+    require(isinstance(runtime, dict) and runtime.get("profile") == "rootless"
+            and type(runtime.get("uid")) is int and 0 < runtime["uid"] <= 4_294_967_294
+            and runtime.get("docker_host") == f'unix:///run/user/{runtime["uid"]}/docker.sock'
+            and all(type(runtime.get(key)) is int and runtime[key] >= 0
+                    for key in ("socket_device", "socket_inode")))
     fs.executable(docker)
     fs.config(config)
     # Only this empty private temporary directory is visible as HOME/config.
     env = {"PATH": SAFE_PATH, "HOME": str(config), "LANG": "C", "LC_ALL": "C"}
-    prefix = [str(docker), "--host", "unix:///var/run/docker.sock", "--config", str(config)]
+    prefix = [str(docker), "--host", runtime["docker_host"], "--config", str(config)]
     def run(*args):
         return runner(prefix + list(args), env=env)
     info = decode(run("info", "--format", INFO_FORMAT))
@@ -184,7 +204,11 @@ def observe(docker, config, *, runner=command, filesystem=None, ambient=None):
             and info.get("Architecture") in ("x86_64", "amd64"))
     security = info.get("SecurityOptions")
     require(isinstance(security, list) and all(isinstance(v, str) for v in security)
-            and not any("rootless" in v or "userns" in v for v in security))
+            and security.count("name=rootless") == 1
+            and not any(v.startswith("name=rootless,") or v == "name=userns"
+                        or v.startswith("name=userns,") for v in security)
+            and info.get("CgroupVersion") == "2" and info.get("CgroupDriver") == "systemd"
+            and info.get("MemoryLimit") is True)
     engine = info.get("ID")
     require(isinstance(engine, str) and re.fullmatch(r"[A-Za-z0-9:_-]{1,128}", engine))
     memory = info.get("MemTotal")
@@ -220,14 +244,16 @@ def observe(docker, config, *, runner=command, filesystem=None, ambient=None):
                              "attached_count": attached})
         require(sorted(v["id"] for v in networks) == network_ids)
     final = decode(run("info", "--format", INFO_FORMAT))
-    require(final == info)  # Refuse observed daemon drift; not an atomic snapshot.
+    require(final == info and fs.socket() == runtime)  # Refuse daemon/socket drift; not atomic.
     credential_names = sorted(name for name in ambient if re.fullmatch(
         r"(?:GH_TOKEN|GITHUB_TOKEN|DOCKER_AUTH_CONFIG|DOCKER_CONFIG|REGISTRY_.*|AWS_.*|AZURE_.*|GOOGLE_APPLICATION_CREDENTIALS)", name))
     require(len(credential_names) <= 128 and all(len(v) <= 128 for v in credential_names))
     defaults = {"bridge": "bridge", "host": "host", "none": "null"}
     clean_networks = (len(networks) == 3 and {v["name"] for v in networks} == set(defaults)
                       and all(v["driver"] == defaults[v["name"]] and v["attached_count"] == 0 for v in networks))
-    result = {"schema": "elevenid.installer-host-observation/v1", "acceptance": False,
+    result = {"schema": "elevenid.installer-host-observation/v2", "acceptance": False,
+              "runtime": runtime,
+              "rootless_resource_controls": {"cgroup_version": "2", "cgroup_driver": "systemd", "memory_limit": True},
               "engine_id": engine, "docker_version": version, "compose_version": compose,
               "docker_memory_bytes": memory, "guest_memory_bytes": guest_memory,
               "docker_data_filesystem": disk,

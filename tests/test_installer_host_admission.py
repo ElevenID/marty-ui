@@ -42,6 +42,38 @@ def test_qualification_capacity_still_admits_production():
     assert admission.host_admission(release.encode(value), ENGINE) == value
 
 
+def rootless_host():
+    value = host(8)
+    value["schema"] = "elevenid.installer-host-observation/v2"
+    value["runtime"] = dict(profile="rootless", uid=1000,
+                            docker_host="unix:///run/user/1000/docker.sock",
+                            socket_device=1, socket_inode=7)
+    value["rootless_resource_controls"] = dict(cgroup_version="2",
+                                              cgroup_driver="systemd", memory_limit=True)
+    return value
+
+
+def test_rootless_observation_preserves_selected_socket_and_kernel_resource_controls():
+    value = rootless_host()
+    assert admission.host_admission(release.encode(value), ENGINE,
+                                    profile=admission.STARTUP_PROFILE) == value
+
+
+@pytest.mark.parametrize("field,value", [
+    ("uid", 0), ("uid", True), ("uid", 1001), ("profile", "rootful"),
+    ("docker_host", "unix:///var/run/docker.sock"), ("socket_inode", True),
+    ("cgroup_version", "1"), ("cgroup_driver", "cgroupfs"),
+    ("memory_limit", False), ("memory_limit", 1),
+])
+def test_rootless_observation_refuses_unbound_or_ineffective_runtime(field, value):
+    record = rootless_host()
+    target = record["runtime"] if field in record["runtime"] else record["rootless_resource_controls"]
+    target[field] = value
+    with pytest.raises(ValueError, match="rootless"):
+        admission.host_admission(release.encode(record), ENGINE,
+                                 profile=admission.STARTUP_PROFILE)
+
+
 def test_nominal_8gib_startup_profile_preserves_measured_memory_and_legacy_predicate():
     value=host(8)
     value['guest_memory_bytes']-=256*1024**2

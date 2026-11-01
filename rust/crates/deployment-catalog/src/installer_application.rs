@@ -123,6 +123,10 @@ pub(crate) fn bootstrap_inputs(
             ),
             ("MARTY_KEYCLOAK_NONCE", nonce.into()),
             (
+                "MARTY_OPENBAO_CONTROL_ATTEMPT_ID",
+                uuid::Uuid::new_v4().to_string(),
+            ),
+            (
                 "SELFHOST_OPENBAO_STATE_DIR",
                 path(&installation.join("openbao-state"))?.into(),
             ),
@@ -139,6 +143,7 @@ pub(crate) fn bootstrap_inputs(
     let writable_bind_roots = [
         "secrets",
         "openbao-state",
+        "openbao-control",
         "keycloak-output",
         "tls-output",
         "ingress-output",

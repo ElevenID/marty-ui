@@ -111,6 +111,7 @@ pub fn start_openbao(
     }
     state.create_private_directory("openbao-state")?;
     state.persist_openbao_state_creation_receipt(installation)?;
+    state.prepare_openbao_control()?;
     let state_before = fs::symlink_metadata(installation.join("openbao-state"))
         .map_err(|_| "OpenBao initial directory identity unavailable")?;
     let pending = installation.join("openbao-pending.json");
@@ -168,8 +169,13 @@ pub fn start_openbao(
     receipt = bootstrap.run_setup_job(state, "openbao-bootstrap")?;
     inputs.prior = Some(receipt);
     inputs.services = vec!["openbao-unseal".into()];
-    let ready = ComposeSession::new(docker_path, binding, inputs)?;
+    let ready = ComposeSession::new(docker_path, binding, inputs.clone())?;
     receipt = ready.up_wait(state, "openbao-ready", Duration::from_secs(180))?;
+    inputs.prior = Some(receipt);
+    inputs.services = vec!["installer-control-enroll".into()];
+    let control = ComposeSession::new(docker_path, binding, inputs)?;
+    receipt = control.run_setup_job(state, "installer-control-enroll")?;
+    crate::installer_openbao_control::record_enrollment(installation, state, &control, &receipt)?;
     for name in [
         "openbao_service_token",
         "openbao_bootstrap_token",
