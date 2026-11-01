@@ -28,7 +28,7 @@ function labels(row,keepCompose=false){
  return output;
 }
 function mounts(values,key){const output=Object.fromEntries(values.map(value=>[value[key],value.Type==='bind'?{...value,Source:canonical(value.Source)}:value]));assert.equal(Object.keys(output).length,values.length);return output;}
-function host(row){const output=structuredClone(row.HostConfig);if(output.Mounts)output.Mounts=mounts(output.Mounts,'Target');for(const field of ['Dns','DnsOptions','DnsSearch'])if(output[field]===null||(Array.isArray(output[field])&&!output[field].length))output[field]=[];return output;}
+function host(row){const output=structuredClone(row.HostConfig),representations=require('./functional-debug-runtime').canonicalHostMountRepresentations(row);output.Binds=Object.fromEntries(representations.binds);output.Mounts=Object.fromEntries(representations.api);for(const field of ['Dns','DnsOptions','DnsSearch'])if(output[field]===null||(Array.isArray(output[field])&&!output[field].length))output[field]=[];return output;}
 function environment(row){const result={};for(const value of row.Config.Env){const at=value.indexOf('=');assert(at>0);const key=value.slice(0,at);assert(!Object.hasOwn(result,key));result[key]=value.slice(at+1);}return result;}
 function sameGenerationConfiguration(original,actual){
  const before=structuredClone(original),after=structuredClone(actual);
@@ -47,16 +47,21 @@ function transition(original, actual, role, input, marker){
  for(const field of ['Name','Image','Path','Args'])same(actual[field],original[field],'Metadata changed '+field);
  const before=structuredClone(original),after=structuredClone(actual);
  if(role==='ui-prod'){
-  const pub=input.publicManifest.path;
-  const remove=(items,key)=>{
-   const found=items.filter(value=>value[key]===TARGET);assert.equal(found.length,1);const item=found[0];assert.equal(item.Type,'bind');assert.equal(canonical(item.Source),canonical(pub));
-   assert.equal(key==='Target'?item.ReadOnly:!item.RW,true);
-   if(key==='Target')same({...item,Source:canonical(item.Source)},{Type:'bind',Source:canonical(pub),Target:TARGET,ReadOnly:true,BindOptions:{}},'Unexpected public bind options');
-   else same({...item,Source:canonical(item.Source)},{Type:'bind',Source:canonical(pub),Destination:TARGET,Mode:'ro',RW:false,Propagation:'rprivate'},'Unexpected public mount fields');
-   return items.filter(value=>value!==item);};
+  const pub=input.publicManifest.path,representations=require('./functional-debug-runtime').canonicalHostMountRepresentations(after);
+  const legacy=representations.binds.get(TARGET),api=representations.api.get(TARGET);assert(Boolean(legacy)!==Boolean(api),'One public mount representation required');
   assert(!before.Mounts.some(value=>value.Destination===TARGET));
-  assert(!(before.HostConfig.Mounts||[]).some(value=>value.Target===TARGET));
-  after.Mounts=remove(after.Mounts,'Destination');after.HostConfig.Mounts=remove(after.HostConfig.Mounts,'Target');
+  const found=after.Mounts.filter(value=>value.Destination===TARGET);assert.equal(found.length,1);
+  same({...found[0],Source:canonical(found[0].Source)},{Type:'bind',Source:canonical(pub),Destination:TARGET,Mode:legacy?'ro':'',RW:false,Propagation:'rprivate'},'Unexpected public mount fields');
+  if(legacy){
+   same(legacy,{type:'bind',source:canonical(pub),mode:'ro'},'Unexpected public legacy bind');
+   const values=after.HostConfig.Binds.filter(value=>value.endsWith(':'+TARGET+':ro'));assert.equal(values.length,1);
+   after.HostConfig.Binds=after.HostConfig.Binds.filter(value=>value!==values[0]);
+  }else{
+   const expected={Type:'bind',Source:canonical(pub),Target:TARGET,ReadOnly:true};
+   if(Object.hasOwn(api,'BindOptions'))expected.BindOptions={};same(api,expected,'Unexpected public bind options');
+   after.HostConfig.Mounts=after.HostConfig.Mounts.filter(value=>value.Target!==TARGET);
+  }
+  after.Mounts=after.Mounts.filter(value=>value!==found[0]);
  }
  same(host(after),host(before),'Metadata HostConfig changed');same(mounts(after.Mounts,'Destination'),mounts(before.Mounts,'Destination'),'Metadata mounts changed');
  generatedHostname(before,after);
