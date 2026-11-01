@@ -33,6 +33,15 @@ SIGNING_CAS_NO_TRANSFORM = BuildProfile(
     "d02-signing-cas-header-native",
 )
 
+CURRENT_ISSUER_READY = BuildProfile(
+    "current-issuer-ready-two-role",
+    "5d22484685fc6c8723e419e656252385c0db3654",
+    (("signing-keys", "marty-signing-keys"), ("gateway", "marty-gateway")),
+    ("marty-signing-keys", "marty-gateway"),
+    "marty-current-issuer-ready-",
+    "current-issuer-ready-native",
+)
+
 CANVAS_SCOPED_JOBS = BuildProfile(
     "canvas-issuer-scoped-jobs",
     "fce109daf47a7712c1ff5779b0e33def57bbce20",
@@ -82,7 +91,7 @@ LATEST_ALL_SERVICES = BuildProfile(
 
 
 def reviewed_profile(name):
-    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CANVAS_SCOPED_JOBS, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
+    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CANVAS_SCOPED_JOBS, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
         if name == profile.name:
             return profile
     raise ValueError("UNKNOWN_REVIEWED_BUILD_PROFILE")
