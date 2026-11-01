@@ -72,6 +72,8 @@ def static_contract(c):
         "bind_deployed_demo_manifest.py",
         "prepare_beta_release_metadata.py",
         "scoped_native_runtime.py",
+        "validate_demo_manifests.py",
+        "demo_asset_hashes.py",
     }
     require(
         set(c["sourceFiles"]) == required_sources, "OPERATOR_SOURCE_CLOSURE_CHANGED"
