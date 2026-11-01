@@ -28,6 +28,7 @@ pub struct AuthServiceConfig {
     pub cookie: SessionCookieConfig,
     pub post_logout_redirect_uri: String,
     pub credential_login_policy_id: String,
+    pub credential_login_trust_profile_id: Option<String>,
     pub credential_login_organization_id: String,
     pub credential_login_issuer_did: String,
     pub credential_login_webhook_secret: String,
@@ -252,6 +253,9 @@ impl AuthServiceConfig {
                 get("CREDENTIAL_LOGIN_POLICY_ID"),
                 "CREDENTIAL_LOGIN_POLICY_ID",
             )?,
+            credential_login_trust_profile_id: get("CREDENTIAL_LOGIN_TRUST_PROFILE_ID")
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned),
             credential_login_organization_id: credential_login_organization_id.clone(),
             credential_login_issuer_did: required(
                 get("CREDENTIAL_LOGIN_ISSUER_DID").or_else(|| get("OID4VP_ISSUER_DID")),
