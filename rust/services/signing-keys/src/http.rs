@@ -2329,6 +2329,7 @@ mod current_issuer_validation_tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use p256::ecdsa::signature::Signer;
+    use p256::elliptic_curve::sec1::ToEncodedPoint;
     use tower::ServiceExt;
 
     fn check(name: &str, status: &str) -> validation::ValidationCheck {
