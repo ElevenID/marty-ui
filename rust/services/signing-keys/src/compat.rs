@@ -1774,6 +1774,83 @@ fn selected_algorithm(
     Ok(algorithms.first().copied().unwrap_or("ES256").to_owned())
 }
 
+// Validate the selected VC issuer reference using the same service and
+// ceremony authority as an actual sign. Explicit bindings must be well formed;
+// other supported purposes on this key do not remove VC authority.
+pub(crate) fn authorize_current_issuer_binding(
+    registry: &Value,
+    service: &Map<String, Value>,
+    profile: &Value,
+    organization_id: &str,
+    service_id: &str,
+    key_reference: &str,
+) -> Result<(), CompatibilityError> {
+    for (field, expected) in [
+        ("organization_id", organization_id),
+        ("signing_service_id", service_id),
+        ("signing_key_reference", key_reference),
+        ("key_purpose", "vc_jwt_issuer"),
+        ("algorithm", "ES256"),
+    ] {
+        if profile.get(field).and_then(Value::as_str) != Some(expected) {
+            return Err(CompatibilityError::Conflict(
+                "Active issuer binding changed before validation.".into(),
+            ));
+        }
+    }
+    let binding = registry.pointer(&format!(
+        "/key_reference_purposes/{}/{}",
+        escape_pointer(service_id),
+        escape_pointer(key_reference)
+    ));
+    if let Some(binding) = binding {
+        let purposes = binding
+            .as_array()
+            .filter(|values| !values.is_empty())
+            .ok_or_else(|| {
+                CompatibilityError::Conflict(
+                    "Selected issuer key purpose binding is malformed.".into(),
+                )
+            })?;
+        let mut seen = std::collections::HashSet::new();
+        for purpose in purposes {
+            let Some(purpose) = purpose.as_str() else {
+                return Err(CompatibilityError::Conflict(
+                    "Selected issuer key purpose binding is malformed.".into(),
+                ));
+            };
+            if !crate::domain::key_purposes()
+                .iter()
+                .any(|definition| definition.id == purpose)
+                || !seen.insert(purpose)
+            {
+                return Err(CompatibilityError::Conflict(
+                    "Selected issuer key purpose binding is malformed.".into(),
+                ));
+            }
+        }
+        if !seen.contains("vc_jwt_issuer") {
+            return Err(CompatibilityError::Conflict(
+                "Selected issuer key is not registered for VC signing.".into(),
+            ));
+        }
+    }
+    authorize_signing_binding(
+        registry,
+        service,
+        service_id,
+        Some(key_reference),
+        Some("vc_jwt_issuer"),
+        Some("ES256"),
+    )?;
+    profiles::validate_binding(&ValidateBindingRequest {
+        profile: profile.clone(),
+        service: Value::Object(service.clone()),
+        registry: registry.clone(),
+    })
+    .map_err(map_profile_error)
+}
+
 fn authorize_signing_binding(
     registry: &Value,
     service: &Map<String, Value>,
