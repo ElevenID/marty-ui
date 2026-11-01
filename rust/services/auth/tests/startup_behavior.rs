@@ -18,7 +18,10 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
             "https://beta.elevenidllc.com".into(),
         ),
         ("CREDENTIAL_LOGIN_POLICY_ID".into(), "policy-1".into()),
-        ("CREDENTIAL_LOGIN_TRUST_PROFILE_ID".into(), "trust-1".into()),
+        (
+            "CREDENTIAL_LOGIN_TRUST_PROFILE_ID".into(),
+            " trust-1 ".into(),
+        ),
         ("CREDENTIAL_LOGIN_ORGANIZATION_ID".into(), "org-1".into()),
         (
             "CREDENTIAL_LOGIN_ISSUER_DID".into(),

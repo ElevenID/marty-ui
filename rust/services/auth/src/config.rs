@@ -254,7 +254,8 @@ impl AuthServiceConfig {
                 "CREDENTIAL_LOGIN_POLICY_ID",
             )?,
             credential_login_trust_profile_id: get("CREDENTIAL_LOGIN_TRUST_PROFILE_ID")
-                .filter(|value| !value.trim().is_empty())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
                 .map(str::to_owned),
             credential_login_organization_id: credential_login_organization_id.clone(),
             credential_login_issuer_did: required(
