@@ -213,6 +213,99 @@ def static_contract(c):
     return models, changed, marker, identities
 
 
+NGINX_PRINCIPAL_SHA = "86423da8d99919b0ea5044031c4d9339df5ad1a861472a18ab1b20aa820152d5"
+NGINX_CENSUS = r"""set -eu
+awk '{print "MASTER\t" $22}' /proc/1/stat
+for d in /proc/[0-9]*; do
+ [ -r "$d/comm" ] || continue
+ [ "$(cat "$d/comm")" = nginx ] || continue
+ cmd=$(tr '\000' ' ' < "$d/cmdline")
+ case "$cmd" in 'nginx: worker process'*)
+ p=${d##*/}; parent=$(awk '$1=="PPid:"{print $2}' "$d/status"); ticks=$(awk '{print $22}' "$d/stat")
+ uids=$(awk '$1=="Uid:"{printf "%s,%s,%s,%s",$2,$3,$4,$5}' "$d/status")
+ gids=$(awk '$1=="Gid:"{printf "%s,%s,%s,%s",$2,$3,$4,$5}' "$d/status")
+ groups=$(awk '$1=="Groups:"{for(i=2;i<=NF;i++){printf "%s%s",i==2?"":",",$i}}' "$d/status")
+ printf 'WORKER\t%s\t%s\t%s\t%s\t%s\t%s\n' "$p" "$parent" "$ticks" "$uids" "$gids" "${groups:--}"
+ ;; esac
+done
+"""
+
+
+def validate_nginx_principal(ui, witness, first, second):
+    require(first == second, "NGINX_WORKER_CENSUS_CHANGED")
+    require(
+        witness["state"] == "ACTUAL_NGINX_SERVING_PRINCIPAL_AND_EXE_VERIFIED_READONLY",
+        "NGINX_EXE_WITNESS_REQUIRED",
+    )
+    require(
+        ui["Id"] == witness["containerId"]
+        and ui["Image"] == witness["imageId"]
+        and ui["State"]["Pid"] == witness["masterHostPid"]
+        and ui["State"]["StartedAt"] == witness["containerStartedAt"],
+        "NGINX_MASTER_GENERATION_CHANGED",
+    )
+    lines = first.decode("utf8").splitlines()
+    require(
+        lines[0] == "MASTER\t" + str(witness["master"]["startTicks"]),
+        "NGINX_MASTER_START_CHANGED",
+    )
+    workers = {row["namespacePids"][-1]: row for row in witness["workers"]}
+    require(
+        0 < len(workers) <= 64 and len(workers) == len(witness["workers"]),
+        "NGINX_WORKER_SET_INVALID",
+    )
+    actual = {}
+    for line in lines[1:]:
+        kind, pid, parent, ticks, uids, gids, groups = line.split("\t")
+        pid = int(pid)
+        require(
+            kind == "WORKER" and pid not in actual and pid in workers,
+            "NGINX_WORKER_GENERATION_CHANGED",
+        )
+        row = workers[pid]
+        uid_values, gid_values = (
+            list(map(int, uids.split(","))),
+            list(map(int, gids.split(","))),
+        )
+        supplementary = [] if groups == "-" else list(map(int, groups.split(",")))
+        require(
+            int(parent) == 1
+            and int(ticks) == row["startTicks"]
+            and uid_values == row["uids"]
+            and gid_values == row["gids"]
+            and supplementary == row["supplementaryGroups"],
+            "NGINX_WORKER_IDENTITY_CHANGED",
+        )
+        require(
+            row["parentHostPid"] == witness["masterHostPid"]
+            and row["executablePath"] == witness["master"]["executablePath"]
+            and row["executableSha256"] == witness["master"]["executableSha256"],
+            "NGINX_EXE_WITNESS_CHANGED",
+        )
+        require(
+            len(uid_values) == 4
+            and len(set(uid_values)) == 1
+            and uid_values[1] > 0
+            and len(gid_values) == 4
+            and len(set(gid_values)) == 1,
+            "NGINX_NONROOT_SERVING_PRINCIPAL_REQUIRED",
+        )
+        actual[pid] = (
+            uid_values[1],
+            gid_values[1],
+            tuple(sorted(set(supplementary + [gid_values[1]]))),
+        )
+    require(
+        set(actual) == set(workers) and len(set(actual.values())) == 1,
+        "NGINX_WORKER_SET_CHANGED",
+    )
+    uid, gid, groups = next(iter(actual.values()))
+    require(list(groups) == [gid], "UNREVIEWED_NGINX_ADDITIONAL_GROUPS")
+    return dict(
+        uid=uid, gid=gid, permissionGroups=list(groups), workerCount=len(actual)
+    )
+
+
 def rendered_delta(role, original, changed, marker, public_path):
     expected = (
         gateway_metadata_model(original, marker)
@@ -550,8 +643,12 @@ class Operation:
 
     def guard_read_helper(self, value, cid):
         image = self.models["ui-prod"]["services"]["ui-prod"]["image"]
-        uid = self.identities["ui-prod"]["effectiveUid"]
-        gid = self.identities["ui-prod"]["effectiveGid"]
+        witness = load(self.c["uiServingPrincipal"])
+        require(
+            self.c["uiServingPrincipal"]["sha256"] == NGINX_PRINCIPAL_SHA,
+            "REVIEWED_NGINX_PRINCIPAL_REQUIRED",
+        )
+        uid, gid = witness["uid"], witness["gid"]
         owner = "beta-release-metadata-" + self.c["runId"]
         source = str(read_ref(self.c["publicManifest"])).replace("\\", "/")
 
@@ -566,7 +663,7 @@ class Operation:
             and value["Config"].get("User") == str(uid) + ":" + str(gid)
             and value["Config"].get("Entrypoint") == ["/bin/sh"]
             and value["Config"].get("Cmd")
-            == ["-c", "id -u; id -g; cat /metadata.json"],
+            == ["-c", "id -u; id -g; id -G; cat /metadata.json"],
             "PUBLIC_READ_HELPER_COMMAND_OR_USER_CHANGED",
         )
         host = value["HostConfig"]
@@ -614,12 +711,46 @@ class Operation:
         }
         role = "ui-prod"
         image = self.models[role]["services"][role]["image"]
-        uid = self.identities[role].get("effectiveUid")
-        gid = self.identities[role].get("effectiveGid")
         require(
-            isinstance(uid, int) and uid > 0 and isinstance(gid, int) and gid >= 0,
-            "ACTUAL_NONROOT_UI_UID_REQUIRED",
+            self.c["uiServingPrincipal"]["sha256"] == NGINX_PRINCIPAL_SHA,
+            "REVIEWED_NGINX_PRINCIPAL_REQUIRED",
         )
+        witness = load(self.c["uiServingPrincipal"])
+        require(
+            self.c["uiServingPrincipalSource"]["sha256"] == witness["sourceSha256"],
+            "NGINX_PRINCIPAL_SOURCE_CHANGED",
+        )
+        read_ref(self.c["uiServingPrincipalSource"])
+        require(
+            witness["engineId"] == self.c["engineId"], "NGINX_PRINCIPAL_ENGINE_CHANGED"
+        )
+        ui = self.guarded(role, self.c["oldCids"][role], self.models[role], True)
+        first = self.g.command(
+            ["exec", "--user", "0", ui["Id"], "sh", "-c", NGINX_CENSUS],
+            "nginx-serving-first",
+            timeout=20,
+            limit=65536,
+        )
+        second = self.g.command(
+            ["exec", "--user", "0", ui["Id"], "sh", "-c", NGINX_CENSUS],
+            "nginx-serving-second",
+            timeout=20,
+            limit=65536,
+        )
+        principal = validate_nginx_principal(
+            ui, witness, first.read_bytes(), second.read_bytes()
+        )
+        self.state["uiServingPrincipal"] = self.save(
+            "ui-serving-principal.json",
+            dict(
+                **principal,
+                witness=self.c["uiServingPrincipal"],
+                first=ref(first),
+                second=ref(second),
+            ),
+        )
+        self.persist()
+        uid, gid = principal["uid"], principal["gid"]
         require(
             not self.g.IMAGE_CONFIG[image].get("Volumes"),
             "IMAGE_ANONYMOUS_VOLUMES_NOT_ALLOWED",
@@ -660,7 +791,7 @@ class Operation:
                     "type=bind,source=" + source + ",target=/metadata.json,readonly",
                     image,
                     "-c",
-                    "id -u; id -g; cat /metadata.json",
+                    "id -u; id -g; id -G; cat /metadata.json",
                 ],
                 "public-file-read-create",
             ),
@@ -695,10 +826,14 @@ class Operation:
         )
         transcript = self.g.command(["logs", cid], "public-file-read-logs").read_bytes()
         actual_uid, sep, remainder = transcript.partition(b"\n")
-        actual_gid, sep2, body = remainder.partition(b"\n")
+        actual_gid, sep2, remainder = remainder.partition(b"\n")
+        actual_groups, sep3, body = remainder.partition(b"\n")
         require(
             sep
             and sep2
+            and sep3
+            and sorted(set(map(int, actual_groups.split())))
+            == principal["permissionGroups"]
             and actual_uid.strip() == str(uid).encode()
             and actual_gid.strip() == str(gid).encode()
             and hashlib.sha256(body).hexdigest() == self.c["publicManifest"]["sha256"],
@@ -727,6 +862,8 @@ class Operation:
         )
         return dict(
             aclBeforeAndAfter=acl_before,
+            servingPrincipal=self.state["uiServingPrincipal"],
+            permissionGroups=principal["permissionGroups"],
             uid=uid,
             gid=gid,
             sourceSha256=self.c["publicManifest"]["sha256"],

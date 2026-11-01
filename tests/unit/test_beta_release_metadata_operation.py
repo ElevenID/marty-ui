@@ -162,3 +162,89 @@ def test_actual_operator_imports_from_the_complete_isolated_source_closure(tmp_p
         "Isolated operator import failed before any Docker command"
     )
     assert result.stdout.strip() == b"IMPORTED_CLOSED_OPERATOR"
+
+
+def nginx_principal_fixture():
+    ui = dict(
+        Id="ui",
+        Image="image",
+        Config=dict(User="0"),
+        State=dict(Pid=900, StartedAt="current"),
+    )
+    master = dict(
+        startTicks=100, executablePath="/usr/sbin/nginx", executableSha256="a" * 64
+    )
+    workers = [
+        dict(
+            namespacePids=[901 + index, 2 + index],
+            parentHostPid=900,
+            startTicks=101 + index,
+            uids=[101] * 4,
+            gids=[101] * 4,
+            supplementaryGroups=[101, 101],
+            executablePath=master["executablePath"],
+            executableSha256=master["executableSha256"],
+        )
+        for index in range(2)
+    ]
+    witness = dict(
+        state="ACTUAL_NGINX_SERVING_PRINCIPAL_AND_EXE_VERIFIED_READONLY",
+        containerId="ui",
+        imageId="image",
+        masterHostPid=900,
+        containerStartedAt="current",
+        master=master,
+        workers=workers,
+    )
+    raw = b"MASTER\t100\nWORKER\t2\t1\t101\t101,101,101,101\t101,101,101,101\t101,101\nWORKER\t3\t1\t102\t101,101,101,101\t101,101,101,101\t101,101\n"
+    return ui, witness, raw
+
+
+def test_nginx_serving_identity_comes_from_workers_and_keeps_root_master():
+    from repair_beta_release_metadata import validate_nginx_principal
+
+    ui, witness, raw = nginx_principal_fixture()
+    result = validate_nginx_principal(ui, witness, raw, raw)
+    assert result == dict(uid=101, gid=101, permissionGroups=[101], workerCount=2)
+    assert ui["Config"]["User"] == "0"
+
+
+def test_nginx_changed_missing_root_worker_and_wrong_witness_refuse():
+    from repair_beta_release_metadata import validate_nginx_principal
+
+    ui, witness, raw = nginx_principal_fixture()
+    with pytest.raises(ValueError, match="NGINX_WORKER_IDENTITY_CHANGED"):
+        validate_nginx_principal(
+            ui,
+            witness,
+            raw.replace(b"2\t1\t101", b"2\t1\t999"),
+            raw.replace(b"2\t1\t101", b"2\t1\t999"),
+        )
+    missing = b"\n".join(raw.splitlines()[:-1]) + b"\n"
+    with pytest.raises(ValueError, match="NGINX_WORKER_SET_CHANGED"):
+        validate_nginx_principal(ui, witness, missing, missing)
+    root = copy.deepcopy(witness)
+    for worker in root["workers"]:
+        worker["uids"] = [0] * 4
+    root_raw = raw.replace(
+        b"101,101,101,101\t101,101,101,101", b"0,0,0,0\t101,101,101,101"
+    )
+    with pytest.raises(ValueError, match="NGINX_NONROOT_SERVING_PRINCIPAL_REQUIRED"):
+        validate_nginx_principal(ui, root, root_raw, root_raw)
+    with pytest.raises(ValueError, match="NGINX_EXE_WITNESS_REQUIRED"):
+        validate_nginx_principal(ui, {**witness, "state": "UNVERIFIED"}, raw, raw)
+
+
+def test_wrong_nginx_witness_hash_refuses_before_any_docker_command(
+    tmp_path, monkeypatch
+):
+    import repair_beta_release_metadata as operator
+
+    public = tmp_path / "public.json"
+    public.write_text("{}", encoding="utf8")
+    op = operator.Operation.__new__(operator.Operation)
+    op.c = dict(publicManifest=ref(public), uiServingPrincipal=dict(sha256="0" * 64))
+    op.models = {"ui-prod": dict(services={"ui-prod": dict(image="unchanged")})}
+    monkeypatch.setattr(operator, "acl_digest", lambda _: "a" * 64)
+    with pytest.raises(ValueError, match="REVIEWED_NGINX_PRINCIPAL_REQUIRED"):
+        op.readability(set())
