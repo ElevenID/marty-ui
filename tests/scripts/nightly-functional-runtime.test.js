@@ -138,3 +138,9 @@ test('stale image observation cannot silently adopt an Auth successor',()=>{
  const f=authFixture();f.documents.observation=produce(f);f.documents.observation.authSuccessorSha256=null;
  assert.throws(()=>nightly.expected(f.profile,{boundJson:f.boundJson,boundBytes:f.boundBytes,verifyBoundFile:f.verifyBoundFile,validateRuntimeObservation:shared.validateRuntimeObservation}));
 });
+test('private model and environment mismatches never print their values',()=>{
+ for(const mutate of [f=>f.documents['auth-model'].services.other.privateSecret='PRIVATE_SECRET_CANARY',
+  f=>f.documents['auth-inspect'][0].Config.Env.push('PRIVATE_SECRET=PRIVATE_SECRET_CANARY')]){
+  const f=authFixture();mutate(f);assert.throws(()=>produce(f),error=>!error.message.includes('PRIVATE_SECRET_CANARY'));
+ }
+});

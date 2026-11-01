@@ -12,6 +12,7 @@ const ROLES = Object.freeze(['applicant','auth','canvas-sync-worker','compliance
   'revocation-profile','signing-keys','trust-profile','verification','ui-prod']);
 const HASH = /^[a-f0-9]{64}$/;
 const AUTH_OPERATOR_SHA = '02991b6b5f03c00d099eb33a00b68c5109ccdd65e2ce4d26f6eef46094fca500';
+const same = (actual, expected, reason) => assert(require('node:util').isDeepStrictEqual(actual, expected), reason);
 function uniqueMounts(rows, key) {
   assert(Array.isArray(rows));
   const map = new Map(rows.map(row => {assert(typeof row[key] === 'string' && row[key]); return [row[key], row];}));
@@ -29,15 +30,15 @@ function replacement(original, row, role, changes) {
   assert.equal(row.Name, original.Name); assert.equal(row.Image, original.Image);
   const host = record => {const value = {...record.HostConfig};
     if (Object.hasOwn(value, 'Mounts')) value.Mounts = uniqueMounts(value.Mounts, 'Target'); return value;};
-  assert.deepEqual(host(row), host(original));
-  assert.deepEqual(uniqueMounts(row.Mounts, 'Destination'), uniqueMounts(original.Mounts, 'Destination'));
+  same(host(row), host(original), 'Replacement HostConfig changed');
+  same(uniqueMounts(row.Mounts, 'Destination'), uniqueMounts(original.Mounts, 'Destination'), 'Replacement mount fields changed');
   const config = record => {const result = {...record.Config}; delete result.Hostname; delete result.Env; delete result.Labels; return result;};
-  assert.deepEqual(config(row), config(original));
-  assert.deepEqual(environment(row), {...environment(original), ...changes});
+  same(config(row), config(original), 'Replacement Config changed');
+  same(environment(row), {...environment(original), ...changes}, 'Replacement environment changed');
   assert.equal(row.Config.Labels['com.docker.compose.service'], role);
   assert.equal(row.Config.Labels['com.docker.compose.project'], 'elevenid-beta');
   const networks = record => Object.fromEntries(Object.entries(record.NetworkSettings.Networks).map(([name, endpoint]) => [name, endpoint.NetworkID]));
-  assert.deepEqual(networks(row), networks(original));
+  same(networks(row), networks(original), 'Replacement networks changed');
   assert.equal(row.State.Running, true); assert.equal(row.State.OOMKilled, false);
   assert.equal(row.State.Health.Status, 'healthy');
   assert(Date.parse(row.State.StartedAt) > Date.parse(original.State.StartedAt));
@@ -98,7 +99,7 @@ function authSuccessor(ref, original, restoreRef, engineId, tools) {
   assert.equal(base.services.auth.environment.CREDENTIAL_LOGIN_POLICY_ID, '50000000-0000-0000-0000-000000000004');
   assert.equal(base.services.auth.environment.CREDENTIAL_LOGIN_ISSUER_DID, 'did:web:beta.elevenidllc.com:orgs:marty');
   const changes = {CREDENTIAL_LOGIN_POLICY_ID: input.policyId, CREDENTIAL_LOGIN_ISSUER_DID: input.issuerDid};
-  Object.assign(expected.services.auth.environment, changes); assert.deepEqual(model, expected);
+  Object.assign(expected.services.auth.environment, changes); same(model, expected, 'Auth model changed outside exact login bindings');
   const createIntent = tools.boundJson(value.createIntent), created = tools.boundJson(value.created);
   assert.equal(createIntent.oldCid, original.Id); assert.equal(createIntent.role, 'auth');
   assert.equal(createIntent.modelSha256, value.model.sha256);
@@ -121,7 +122,7 @@ function authSuccessor(ref, original, restoreRef, engineId, tools) {
   // Compose may change only these generated provenance labels for this model.
   const labels = record => {const value = {...record.Config.Labels};
     for (const key of ['com.docker.compose.config-hash','com.docker.compose.project.config_files','com.docker.compose.project.working_dir']) delete value[key]; return value;};
-  assert.deepEqual(labels(row), labels(original));
+  same(labels(row), labels(original), 'Auth provenance labels changed');
   return replacement(original, row, 'auth', changes);
 }
 function authority(profile, {boundJson, verifyBoundFile, boundBytes}) {
