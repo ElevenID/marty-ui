@@ -108,8 +108,15 @@ setup job is recreated automatically after an uncertain outcome.
 
 ## Continuing a normal pending order
 
-`marty-deploy acme continue --install-dir ABSOLUTE_PATH` uses the installation's
-retained operator and complete prepared boundary. It does not recreate keys,
+Run the retained operator as the installation owner under no-new-privileges:
+
+```sh
+/usr/bin/setpriv --no-new-privs -- \
+  /absolute/installation/marty-deploy acme continue \
+  --install-dir /absolute/installation --docker-bin /usr/bin/docker
+```
+
+This uses the installation's complete prepared boundary. It does not recreate keys,
 policies, AppRoles, setup containers, application storage, or the password
 projection. A known order continues with its retained account URL and exact
 signed CSR bytes. Unknown outcomes of non-idempotent order creation remain an
