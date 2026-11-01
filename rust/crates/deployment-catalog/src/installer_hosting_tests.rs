@@ -184,6 +184,111 @@ fn addon_journal_binding_requires_verified_hosting_and_cannot_be_replaced() {
 }
 
 #[test]
+fn compose_public_entry_requires_bound_gateway_and_ui_authorities() {
+    use crate::installer_compose::bound_ingress_listener;
+    use std::collections::BTreeSet;
+    for alias in [None, Some("https://203.0.113.10:8443")] {
+        let root = private_root();
+        let mut state = state(root.path());
+        let mut configuration = direct();
+        if let Some(alias) = alias {
+            configuration["public_entry_origin"] = json!(alias);
+        }
+        let selected = select(
+            prepare(Some(&input(root.path(), &configuration)), None).unwrap(),
+            &mut state,
+        )
+        .unwrap();
+        let installation = root.path().join("installation");
+        let mut inputs = ComposeInputs {
+            installation: installation.clone(),
+            project: state.journal().compose_project(),
+            files: Vec::new(),
+            bound_inputs: Vec::new(),
+            environment: BoundFile {
+                path: installation.join("evidence/fixture.env"),
+                sha256: "a".repeat(64),
+            },
+            profiles: Vec::new(),
+            services: Vec::new(),
+            approved_images: BTreeSet::new(),
+            #[cfg(feature = "installer-development")]
+            development_image: None,
+            writable_bind_roots: BTreeSet::new(),
+            readonly_bind_roots: BTreeSet::new(),
+            allowed_loopback_ports: BTreeSet::new(),
+            ingress_listener: Some(selected.listener()),
+            prior: None,
+        };
+        selected.bind_inputs(&mut inputs).unwrap();
+        let model = json!({"services":{
+            "installer-ingress": {
+                "ports":[{"target":8443,"published":"8443","host_ip":"0.0.0.0","protocol":"tcp"}],
+                "environment": {"OIDF_EDGE_PUBLIC_ORIGIN":"https://marty.example.com", "OIDF_EDGE_PUBLIC_ENTRY_ORIGIN":alias.unwrap_or("")}
+            },
+            "ui":{"environment":{"UI_CANONICAL_ORIGIN":"https://marty.example.com", "UI_PUBLIC_ENTRY_ORIGINS":serde_json::to_string(&alias.into_iter().collect::<Vec<_>>()).unwrap()}}
+        }});
+        assert_eq!(
+            bound_ingress_listener(&model, &inputs).unwrap(),
+            selected.listener()
+        );
+        for (role, field, value) in [
+            (
+                "installer-ingress",
+                "OIDF_EDGE_PUBLIC_ENTRY_ORIGIN",
+                json!("https://203.0.113.11:8443"),
+            ),
+            (
+                "installer-ingress",
+                "OIDF_EDGE_PUBLIC_ENTRY_ORIGIN",
+                json!(false),
+            ),
+            (
+                "ui",
+                "UI_PUBLIC_ENTRY_ORIGINS",
+                json!("[\"https://203.0.113.11:8443\"]"),
+            ),
+            ("ui", "UI_PUBLIC_ENTRY_ORIGINS", json!([])),
+        ] {
+            let mut altered = model.clone();
+            altered["services"][role]["environment"][field] = value;
+            assert!(
+                bound_ingress_listener(&altered, &inputs).is_err(),
+                "{role}/{field}"
+            );
+        }
+        if alias.is_some() {
+            for (role, field) in [
+                ("installer-ingress", "OIDF_EDGE_PUBLIC_ENTRY_ORIGIN"),
+                ("ui", "UI_PUBLIC_ENTRY_ORIGINS"),
+                ("ui", "UI_CANONICAL_ORIGIN"),
+            ] {
+                let mut altered = model.clone();
+                altered["services"][role]["environment"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(field);
+                assert!(
+                    bound_ingress_listener(&altered, &inputs).is_err(),
+                    "missing {role}/{field}"
+                );
+            }
+        } else {
+            let mut legacy = model;
+            legacy["services"]["installer-ingress"]["environment"]
+                .as_object_mut()
+                .unwrap()
+                .remove("OIDF_EDGE_PUBLIC_ENTRY_ORIGIN");
+            legacy["services"]["ui"]["environment"]
+                .as_object_mut()
+                .unwrap()
+                .remove("UI_PUBLIC_ENTRY_ORIGINS");
+            assert!(bound_ingress_listener(&legacy, &inputs).is_ok());
+        }
+    }
+}
+
+#[test]
 fn origin_exposure_tls_and_provider_inputs_are_a_closed_contract() {
     let root = private_root();
     for case in 0..14 {
@@ -289,23 +394,142 @@ fn explicit_cloudflare_connector_keeps_token_out_of_evidence_and_binds_its_copy(
 }
 
 #[test]
-fn public_ip_identity_has_no_dns_name_and_local_ip_matches_its_listener() {
+fn fresh_ip_canonical_origins_are_refused_before_identity_provisioning() {
     let root = private_root();
+    for (mode, origin, listener) in [
+        ("direct", "https://203.0.113.10:8443", "0.0.0.0"),
+        ("external-proxy", "https://203.0.113.10", "127.0.0.1"),
+        ("local", "https://127.0.0.1:8443", "127.0.0.1"),
+    ] {
+        let mut value = direct();
+        value["mode"] = json!(mode);
+        value["public_origin"] = json!(origin);
+        value["listener"]["bind_address"] = json!(listener);
+        let path = input(root.path(), &value);
+        assert!(prepare(Some(&path), None)
+            .err()
+            .unwrap()
+            .contains("DNS canonical origin"));
+        assert!(!root.path().join("installation").exists());
+    }
+    let mut value = direct();
+    value["public_origin"] = json!("https://marty:8443");
+    assert!(prepare(Some(&input(root.path(), &value)), None).is_err());
+}
+
+#[test]
+fn legacy_ip_selection_remains_inspectable_without_rebinding_identity() {
+    let root = private_root();
+    let mut state = state(root.path());
     let mut value = direct();
     value["public_origin"] = json!("https://203.0.113.10:8443");
-    let path = input(root.path(), &value);
-    let mut state = state(root.path());
-    let selected = select(prepare(Some(&path), None).unwrap(), &mut state).unwrap();
+    let source = serde_json::to_vec(&value).unwrap();
+    let recorded = Selection {
+        schema: SELECTION_SCHEMA.into(),
+        installation_id: state.journal().installation_id(),
+        source_sha256: digest(&source),
+        configuration: decode(&source).unwrap(),
+        connector_token_sha256: None,
+        recorded: true,
+    };
+    let raw = serde_json::to_vec(&recorded).unwrap();
+    assert!(!std::str::from_utf8(&raw)
+        .unwrap()
+        .contains("public_entry_origin"));
+    state.write_evidence(SOURCE, &source).unwrap();
+    state.write_evidence(RECORD, &raw).unwrap();
+    state.bind_hosting_selection(&digest(&raw)).unwrap();
+    let selected = state.with_inspection(resolve).unwrap();
+    assert_eq!(
+        selected.requested_origin().unwrap().as_str(),
+        "https://203.0.113.10:8443"
+    );
+    assert!(selected.public_entry_origin().is_none());
     assert_eq!(selected.certificate_dns_name(), None);
     assert_eq!(
         selected.certificate_ip_address(),
         Some("203.0.113.10".parse().unwrap())
     );
-    value["mode"] = json!("local");
-    value["public_origin"] = json!("https://127.0.0.1:8443");
-    value["listener"]["bind_address"] = json!("::1");
-    let path = input(root.path(), &value);
-    assert!(prepare(Some(&path), None).is_err());
+    assert_eq!(
+        state.journal().hosting_selection_sha256(),
+        Some(digest(&raw).as_str())
+    );
+}
+
+#[test]
+fn ip_public_entry_alias_is_bound_without_changing_canonical_identity() {
+    for ip in ["203.0.113.10", "[2001:db8::10]"] {
+        let root = private_root();
+        let mut value = direct();
+        let alias = format!("https://{ip}:8443");
+        value["public_entry_origin"] = json!(alias);
+        let prepared = prepare(Some(&input(root.path(), &value)), None).unwrap();
+        assert!(prepared.host_impact().contains(&alias));
+        let mut state = state(root.path());
+        let selected = select(prepared, &mut state).unwrap();
+        assert_eq!(
+            selected.resolve_origin(8443).unwrap().as_str(),
+            "https://marty.example.com"
+        );
+        assert_eq!(selected.public_entry_origin().unwrap().as_str(), alias);
+        assert_eq!(selected.certificate_dns_name(), Some("marty.example.com"));
+        assert_eq!(
+            selected.certificate_ip_address(),
+            selected.public_entry_origin().unwrap().ip_address()
+        );
+        let observed = state.with_inspection(resolve).unwrap();
+        assert_eq!(
+            observed.public_entry_origin(),
+            selected.public_entry_origin()
+        );
+        value["public_entry_origin"] = json!("https://203.0.113.11:8443");
+        write(
+            &root.path().join("installation/evidence").join(SOURCE),
+            &serde_json::to_vec(&value).unwrap(),
+        );
+        assert!(state.with_inspection(resolve).is_err());
+    }
+}
+
+#[test]
+fn public_entry_alias_does_not_expand_other_hosting_or_certificate_modes() {
+    let root = private_root();
+    for alias in [
+        "https://other.example.com:8443",
+        "https://127.0.0.1:8443",
+        "https://[::1]:8443",
+        "http://203.0.113.10:8443",
+        "https://203.0.113.10:8443/path",
+        "https://0.0.0.0:8443",
+    ] {
+        let mut value = direct();
+        value["public_entry_origin"] = json!(alias);
+        assert!(
+            prepare(Some(&input(root.path(), &value)), None).is_err(),
+            "accepted {alias}"
+        );
+    }
+    for (mode, origin, listener) in [
+        ("local", "https://localhost:8443", "127.0.0.1"),
+        ("external-proxy", "https://marty.example.com", "127.0.0.1"),
+    ] {
+        let mut value = direct();
+        value["mode"] = json!(mode);
+        value["public_origin"] = json!(origin);
+        value["listener"]["bind_address"] = json!(listener);
+        value["public_entry_origin"] = json!("https://203.0.113.10:8443");
+        assert!(prepare(Some(&input(root.path(), &value)), None).is_err());
+    }
+    let mut value = direct();
+    value["public_entry_origin"] = json!("https://203.0.113.10:8443");
+    value["tls"]["certificate_source"] = json!("foundation-import");
+    assert!(prepare(
+        Some(&input(root.path(), &value)),
+        Some(PublicOrigin::parse("https://marty.example.com").unwrap())
+    )
+    .err()
+    .unwrap()
+    .contains("foundation-import does not support an IP entry alias"));
 }
 
 #[test]

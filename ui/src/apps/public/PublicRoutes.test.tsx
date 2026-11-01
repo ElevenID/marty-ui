@@ -1,8 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router';
 import { renderWithoutRouter, screen } from '@test/utils';
 
 import PublicRoutes from './PublicRoutes';
+
+const originalUrl = window.location.href;
+afterEach(() => {
+  delete (window as any).__MARTY_RUNTIME_CONFIG__;
+  (globalThis as any).jsdom.reconfigure({ url: originalUrl });
+});
 
 const {
   mockUseAuth,
@@ -104,6 +110,23 @@ vi.mock('../../components/console', () => ({
 }));
 
 describe('PublicRoutes', () => {
+  it('keeps only the landing page local and hands interactive routes to the DNS origin', () => {
+    const alias = 'https://203.0.113.10:8443';
+    (globalThis as any).jsdom.reconfigure({ url: `${alias}/` });
+    (window as any).__MARTY_RUNTIME_CONFIG__ = {
+      hosting: { canonicalOrigin: 'https://marty.example.com:8443', publicEntryOrigins: [alias] },
+    };
+    mockUseAuth.mockReturnValue({ isAuthenticated: false });
+    const { unmount } = renderWithoutRouter(<MemoryRouter initialEntries={['/']}><PublicRoutes /></MemoryRouter>);
+    expect(screen.getByTestId('public-root')).toBeInTheDocument();
+    expect(screen.queryByTestId('browser-redirect')).not.toBeInTheDocument();
+    unmount();
+
+    renderWithoutRouter(<MemoryRouter initialEntries={['/login?redirect_uri=%2Fconsole']}><PublicRoutes /></MemoryRouter>);
+    expect(screen.queryByTestId('login-page')).not.toBeInTheDocument();
+    expect(screen.getByTestId('browser-redirect')).toHaveTextContent('https://marty.example.com:8443/login?redirect_uri=%2Fconsole');
+  });
+
   it('passes the variant login fallback to the login route', () => {
     mockUseAuth.mockReturnValue({
       isAuthenticated: false,

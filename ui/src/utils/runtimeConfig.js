@@ -40,6 +40,10 @@ function getWindowRuntimeConfig() {
   return runtimeConfig;
 }
 
+export function getHostingRuntimeConfig() {
+  return getWindowRuntimeConfig().hosting;
+}
+
 export function getGoogleAnalyticsMeasurementId() {
   const runtimeValue = getWindowRuntimeConfig().googleAnalyticsMeasurementId;
   if (typeof runtimeValue === 'string' && runtimeValue.trim()) {

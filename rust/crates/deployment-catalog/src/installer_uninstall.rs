@@ -167,16 +167,34 @@ pub fn uninstall(args: &[String]) -> Result<String> {
 fn execute(args: &[String], action: &str) -> Result<String> {
     let args = arguments(args)?;
     let mut state = LockedMaintenance::open(&args.installation)?;
+    crate::installer_lifecycle::record_manual_intent_if_configured(
+        &mut state,
+        &args.installation,
+        &args.docker,
+        action,
+    )?;
+    execute_locked(&args.installation, &args.docker, action, &mut state)
+}
+
+/// Systemd reuses the held installation lock and native ownership checks. Its
+/// shutdown path deliberately bypasses the manual durable-pause hook above.
+pub(crate) fn execute_locked(
+    installation: &Path,
+    docker: &Path,
+    action: &str,
+    state: &mut LockedMaintenance,
+) -> Result<String> {
+    require(["start", "stop", "down"].contains(&action))?;
     let (saved, session) =
-        installer_doctor::open_session(state.inspection(), &args.installation, &args.docker)?;
+        installer_doctor::open_session(state.inspection(), installation, docker)?;
     let operation = next_operation(state.inspection(), action)?;
     let resources = session.observe_resources()?;
     union_scope(&saved, &resources)?;
     no_active_setup(&resources, &session.status()?)?;
-    unchanged(state.inspection(), &args.installation, &saved)?;
+    unchanged(state.inspection(), installation, &saved)?;
     let result = match action {
-        "down" => session.down(&mut state, &operation, STOP_GRACE)?,
-        "stop" => session.stop(&mut state, &operation, STOP_GRACE)?,
+        "down" => session.down(state, &operation, STOP_GRACE)?,
+        "stop" => session.stop(state, &operation, STOP_GRACE)?,
         "start" => {
             require(saved.schema != installer_doctor::FAILED_RUNTIME_SESSION_SCHEMA)?;
             let mut inputs = saved.inputs.clone();
@@ -189,12 +207,12 @@ fn execute(args: &[String], action: &str) -> Result<String> {
                 .collect();
             require(!inputs.services.is_empty())?;
             let binding = state.journal().runtime().ok_or(REFUSED)?.clone();
-            let runtime = ComposeSession::new(&args.docker, &binding, inputs)?;
-            runtime.start_existing(&mut state, &operation, START_WAIT)?
+            let runtime = ComposeSession::new(docker, &binding, inputs)?;
+            runtime.start_existing(state, &operation, START_WAIT)?
         }
         _ => return Err(REFUSED.into()),
     };
-    unchanged(state.inspection(), &args.installation, &saved)?;
+    unchanged(state.inspection(), installation, &saved)?;
     serde_json::to_string(&json!({"schema":"elevenid.installer-compose-maintenance/v1",
         "installation_id":saved.installation_id,"project":result.project,
         "operation":action,"evidence_operation":operation,"command_succeeded":result.command_succeeded,

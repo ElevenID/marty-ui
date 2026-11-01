@@ -1,3 +1,4 @@
+import { publicEntryHref } from '../application/routing/publicEntry';
 import { useMemo } from 'react';
 import { Tabs, Tab, Box, Button } from '@mui/material';
 import { Link, useLocation } from 'react-router';
@@ -110,7 +111,7 @@ function Navigation() {
               key={tab.path} 
               label={t(tab.labelKey, tab.defaultLabel)} 
               component={tab.disabled ? undefined : Link}
-              to={tab.disabled ? undefined : tab.path}
+              to={publicEntryHref(tab.disabled ? undefined : tab.path)}
               disabled={Boolean(tab.disabled)}
               sx={tab.disabled ? {
                 '&.Mui-disabled': {
@@ -128,7 +129,7 @@ function Navigation() {
             variant="contained"
             size="small"
             component={Link}
-            to="/developers"
+            to={publicEntryHref('/developers')}
             sx={{
               ml: 2,
               whiteSpace: 'nowrap',

@@ -432,6 +432,10 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
         ("PUBLIC_API_URL", "https://localhost:18443".into()),
         ("GATEWAY_OBSERVE_CLIENT_IP", "false".into()),
         ("PUBLIC_DOMAIN", "localhost:18443".into()),
+        (
+            "MARTY_ISSUER_DID",
+            "did:web:localhost%3A18443:orgs:marty".into(),
+        ),
     ] {
         values.insert(name.into(), value);
     }
@@ -446,15 +450,35 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
     private_write(&supplied_env, environment.as_bytes());
     // Use the packaged installer layers, including their real resource closure.
     assert_actual_installer_layers(&executable, &bundle, &bundle, &supplied_env);
-    for (case, public_origin, bind_address) in [
-        ("direct-dns", "https://marty.example.com", "0.0.0.0"),
-        ("direct-ip", "https://192.0.2.10:8443", "0.0.0.0"),
+    for (case, public_origin, bind_address, public_entry) in [
+        ("direct-dns", "https://marty.example.com", "0.0.0.0", None),
+        // Legacy Compose inputs remain readable; fresh hosting selection
+        // separately rejects an IP as the canonical identity.
+        (
+            "legacy-direct-ip",
+            "https://192.0.2.10:8443",
+            "0.0.0.0",
+            None,
+        ),
+        (
+            "direct-dns-with-ip-entry",
+            "https://marty.example.com",
+            "0.0.0.0",
+            Some("https://192.0.2.10:8443"),
+        ),
+        (
+            "direct-dns-port-with-ipv6-entry",
+            "https://marty.example.com:8443",
+            "::",
+            Some("https://[2001:db8::10]:8443"),
+        ),
         (
             "direct-dns-ipv6-listener",
             "https://marty.example.com",
             "::",
+            None,
         ),
-        ("proxy", "https://marty.example.com", "127.0.0.1"),
+        ("proxy", "https://marty.example.com", "127.0.0.1", None),
     ] {
         let origin = marty_selfhost_identity::origin::PublicOrigin::parse(public_origin).unwrap();
         let host = match origin.ip_address() {
@@ -464,6 +488,22 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
         let mut selected = values.clone();
         selected.insert("PUBLIC_API_URL".into(), public_origin.into());
         selected.insert("PUBLIC_DOMAIN".into(), origin.authority().into());
+        selected.remove("MARTY_ISSUER_DID");
+        let issuer = origin
+            .did_web_authority()
+            .ok()
+            .map(|authority| format!("did:web:{authority}:orgs:marty"));
+        if let Some(issuer) = &issuer {
+            selected.insert("MARTY_ISSUER_DID".into(), issuer.clone());
+        }
+        selected.insert(
+            "MARTY_INSTALLER_PUBLIC_ENTRY_ORIGIN".into(),
+            public_entry.unwrap_or("").into(),
+        );
+        selected.insert(
+            "MARTY_INSTALLER_PUBLIC_ENTRY_ORIGINS".into(),
+            serde_json::to_string(&public_entry.into_iter().collect::<Vec<_>>()).unwrap(),
+        );
         selected.insert(
             "MARTY_INSTALLER_HTTPS_BIND_ADDRESS".into(),
             bind_address.into(),
@@ -503,6 +543,33 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
             ingress["environment"]["OIDF_EDGE_PUBLIC_ORIGIN"],
             public_origin
         );
+        assert_eq!(
+            ingress["environment"]["OIDF_EDGE_PUBLIC_ENTRY_ORIGIN"],
+            public_entry.unwrap_or("")
+        );
+        assert_eq!(
+            services["ui"]["environment"]["UI_CANONICAL_ORIGIN"],
+            public_origin
+        );
+        let aliases: Vec<String> = serde_json::from_str(
+            services["ui"]["environment"]["UI_PUBLIC_ENTRY_ORIGINS"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(aliases, public_entry.into_iter().collect::<Vec<_>>());
+        if let Some(issuer) = issuer {
+            assert_eq!(
+                services["gateway"]["environment"]["MARTY_ISSUER_DID"],
+                issuer
+            );
+            assert_eq!(
+                services["auth"]["environment"]["CREDENTIAL_LOGIN_ISSUER_DID"],
+                issuer
+            );
+            assert_eq!(services["flow"]["environment"]["OID4VP_ISSUER_DID"], issuer);
+        }
+        assert_eq!(ingress["restart"], "unless-stopped");
         let health = ingress["healthcheck"]["test"].as_array().unwrap();
         assert!(health.contains(&Value::String(connect_to)));
         assert!(health.contains(&Value::String(format!("{public_origin}/"))));
