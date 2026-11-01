@@ -28,11 +28,23 @@ def test_auth_login_uses_bootstrapped_organization_issuer_did():
     model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
     services = model["services"]
     expected = (
-        "did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:"
-        "${MARTY_ORG_SLUG:-marty}"
+        "${MARTY_ISSUER_DID:-did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:"
+        "${MARTY_ORG_SLUG:-marty}}"
     )
     assert services["auth"]["environment"]["CREDENTIAL_LOGIN_ISSUER_DID"] == expected
     assert services["flow"]["environment"]["OID4VP_ISSUER_DID"] == expected
+
+
+@pytest.mark.parametrize("owner,setting", [
+    ("auth", "CREDENTIAL_LOGIN_ISSUER_DID"),
+    ("flow", "OID4VP_ISSUER_DID"),
+    ("issuance-native", "MARTY_ISSUER_DID"),
+])
+def test_preservation_gate_rejects_issuer_identity_drift(rendered_models, owner, setting):
+    approved, current = deepcopy(rendered_models)
+    current["services"][owner]["environment"][setting] = "did:web:unreviewed.example"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
 
 
 def test_flow_waits_for_both_issuance_peers_without_a_startup_cycle():
