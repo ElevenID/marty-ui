@@ -1,5 +1,6 @@
 """Focused closed current-issuer native build controls."""
 import json
+import math
 from pathlib import Path
 import sys
 import tempfile
@@ -81,6 +82,50 @@ class CurrentIssuerProfileTests(unittest.TestCase):
         self.assertEqual(tuple(scope["roles"].values()), ("marty-signing-keys", "marty-gateway"))
         self.assertIn("--bin marty-signing-keys", build.render_recipe(PROFILE))
         self.assertIn("--bin marty-gateway", build.render_recipe(PROFILE))
+
+    def test_compact_signing_profile_preserves_spare_and_exact_caps(self):
+        compact = build.CURRENT_ISSUER_POLICY_COMPACT_PROFILE
+        scope = build.build_scope(compact)
+        self.assertEqual(scope["uiRevision"], "53138ba3cbddccd063e1d49ef8efa0f28d838a02")
+        self.assertEqual(scope["roles"], {"signing-keys": "marty-signing-keys"})
+        self.assertEqual(scope["volumes"], build.build_scope(PROFILE)["volumes"])
+        self.assertEqual(build.current_issuer_limits(compact),
+                         ("1536m", 1536 * 1024 ** 2, 1536 * 1024 + math.ceil(1.1 * 1024 * 1024)))
+        self.assertEqual(build.current_issuer_limits(PROFILE),
+                         ("2g", 2 * 1024 ** 3, int(3.1 * 1024 * 1024)))
+        self.assertGreaterEqual(build.current_issuer_limits(compact)[2] / 1024 ** 2 - 1.5, 1.1)
+        p = plan()
+        p.update(buildProfile=compact, uiRevision=scope["uiRevision"],
+                 coreRevision=scope["coreRevision"], roleBinaries=scope["roles"],
+                 containerName=scope["prefix"] + RUN)
+        args = build.build_arguments(p, compact)
+        self.assertEqual(args[args.index("--memory") + 1], "1536m")
+        self.assertEqual(args[args.index("--memory-swap") + 1], "1536m")
+        self.assertEqual(args[args.index("--pids-limit") + 1], "64")
+        self.assertEqual(args[args.index("--network") + 1], "none")
+        self.assertEqual(args[args.index("--cpus") + 1], "1")
+        self.assertIn("--lib current_issuer_validation_tests::", build.render_recipe(compact))
+        row = created_row(p)
+        row["HostConfig"]["Memory"] = row["HostConfig"]["MemorySwap"] = 1536 * 1024 ** 2
+        build.current_issuer_created_identity(Helper(row), p, row["Id"], profile=compact)
+        row["HostConfig"]["MemorySwap"] = 2 * 1024 ** 3
+        with self.assertRaisesRegex(ValueError, "CURRENT_ISSUER_CREATED_LIMITS_CHANGED"):
+            build.current_issuer_created_identity(Helper(row), p, row["Id"], profile=compact)
+
+    def test_compact_host_gate_rejects_below_2point6g(self):
+        compact = build.CURRENT_ISSUER_POLICY_COMPACT_PROFILE
+        class Capacity:
+            def __init__(self, kib):
+                self.kib = kib
+            def run(self, *args):
+                return type("Result", (), {"stdout": str(self.kib)})()
+        threshold = build.current_issuer_limits(compact)[2]
+        with patch.object(build.shutil, "disk_usage", return_value=type("Disk", (), {"free": 9 * 1024 ** 3})()):
+            build.current_issuer_capacity(Capacity(threshold), Path("."), compact)
+            with self.assertRaisesRegex(ValueError, "CURRENT_ISSUER_HOST_HEADROOM_REQUIRED"):
+                build.current_issuer_capacity(Capacity(threshold - 1), Path("."), compact)
+            with self.assertRaisesRegex(ValueError, "CURRENT_ISSUER_HOST_HEADROOM_REQUIRED"):
+                build.current_issuer_capacity(Capacity(threshold), Path("."), PROFILE)
 
     def test_each_focused_test_receipt_requires_one_real_pass(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -51,6 +51,15 @@ CURRENT_ISSUER_POLICY_SIGNING = BuildProfile(
     "current-issuer-ready-native",
 )
 
+CURRENT_ISSUER_POLICY_SIGNING_COMPACT = BuildProfile(
+    "current-issuer-policy-signing-compact",
+    "53138ba3cbddccd063e1d49ef8efa0f28d838a02",
+    (("signing-keys", "marty-signing-keys"),),
+    ("marty-signing-keys",),
+    "marty-current-issuer-policy-signing-compact-",
+    "current-issuer-ready-native",
+)
+
 CANVAS_SCOPED_JOBS = BuildProfile(
     "canvas-issuer-scoped-jobs",
     "fce109daf47a7712c1ff5779b0e33def57bbce20",
@@ -100,7 +109,7 @@ LATEST_ALL_SERVICES = BuildProfile(
 
 
 def reviewed_profile(name):
-    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CANVAS_SCOPED_JOBS, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
+    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, CANVAS_SCOPED_JOBS, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
         if name == profile.name:
             return profile
     raise ValueError("UNKNOWN_REVIEWED_BUILD_PROFILE")

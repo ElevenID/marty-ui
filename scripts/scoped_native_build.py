@@ -7,6 +7,7 @@ The default passport source, recipe bytes and durability gate remain unchanged.
 """
 from __future__ import annotations
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -23,7 +24,9 @@ OFFICIAL_PROFILE = "oid4vc-all-services"
 LATEST_OFFICIAL_PROFILE = "oid4vc-latest-maintenance-all-services"
 CURRENT_ISSUER_READY_PROFILE = "current-issuer-ready-two-role"
 CURRENT_ISSUER_POLICY_PROFILE = "current-issuer-policy-signing-only"
-CURRENT_ISSUER_READY_PROFILES = (CURRENT_ISSUER_READY_PROFILE, CURRENT_ISSUER_POLICY_PROFILE)
+CURRENT_ISSUER_POLICY_COMPACT_PROFILE = "current-issuer-policy-signing-compact"
+CURRENT_ISSUER_POLICY_PROFILES = (CURRENT_ISSUER_POLICY_PROFILE, CURRENT_ISSUER_POLICY_COMPACT_PROFILE)
+CURRENT_ISSUER_READY_PROFILES = (CURRENT_ISSUER_READY_PROFILE, *CURRENT_ISSUER_POLICY_PROFILES)
 OFFICIAL_PROFILES = (OFFICIAL_PROFILE, LATEST_OFFICIAL_PROFILE)
 LATEST_FREEZE_SHA256 = "075a9bafaf27bd31acfe8372c3172e04cf584120882018ff327e71044b69a5c1"
 OFFICIAL_FREEZE_SHA256 = "b77d6883f51bc1d3cf19d6cfa76fe567477c7d27e32134e05007c9104e49c941"
@@ -214,7 +217,7 @@ focused_status=$?
 set -e
 printf '%s\n' "$focused_status" > /out/focused-rust-test.exit-code
 test "$focused_status" -eq 0
-""" if profile == CURRENT_ISSUER_POLICY_PROFILE else "")
+""" if profile in CURRENT_ISSUER_POLICY_PROFILES else "")
 
 
 def focused_rust_test_receipt(output, prefix, name, expected_passes):
@@ -307,12 +310,20 @@ for binary in """ + " ".join(names) + """; do
 done
 """
 
+def current_issuer_limits(profile):
+    require(profile in CURRENT_ISSUER_READY_PROFILES, "CURRENT_ISSUER_PROFILE_REQUIRED")
+    if profile == CURRENT_ISSUER_POLICY_COMPACT_PROFILE:
+        return "1536m", 1536 * 1024 ** 2, 1536 * 1024 + math.ceil(1.1 * 1024 * 1024)
+    return "2g", 2 * 1024 ** 3, int(3.1 * 1024 * 1024)
+
+
 def build_arguments(plan, profile=None):
     selected_sources(plan, profile)
     scope = build_scope(profile)
     require(re.fullmatch(re.escape(scope["prefix"]) + r"[a-f0-9-]{36}", plan.get("containerName", "")) and plan["containerName"] == scope["prefix"] + plan["runId"], "RUN_BOUND_CONTAINER_NAME_REQUIRED")
+    memory = current_issuer_limits(profile)[0] if profile in CURRENT_ISSUER_READY_PROFILES else "2g"
     args = ["docker", "--context", "desktop-linux", "run", "--detach", "--pull", "never", "--network", "none", "--name", plan["containerName"],
-        "--cpus", "1", "--memory", "2g", "--memory-swap", "2g" if profile in CURRENT_ISSUER_READY_PROFILES else "4g",
+        "--cpus", "1", "--memory", memory, "--memory-swap", memory if profile in CURRENT_ISSUER_READY_PROFILES else "4g",
         "--label", "elevenid.owner=" + scope["owner"],
         "--label", "elevenid.run=" + plan["runId"]]
     if profile in CURRENT_ISSUER_READY_PROFILES:
@@ -329,14 +340,14 @@ def build_arguments(plan, profile=None):
         args += ["--mount", "type=volume,src=" + volume + ",dst=" + target]
     return args + ["--entrypoint", "/bin/sh", plan["builderImage"], "/build.sh"]
 
-def current_issuer_capacity(helper, private):
+def current_issuer_capacity(helper, private, profile=CURRENT_ISSUER_READY_PROFILE):
     host_kib = int(helper.run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
                               "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory").stdout.strip())
-    require(host_kib >= int(3.1 * 1024 * 1024), "CURRENT_ISSUER_HOST_HEADROOM_REQUIRED")
+    require(host_kib >= current_issuer_limits(profile)[2], "CURRENT_ISSUER_HOST_HEADROOM_REQUIRED")
     require(shutil.disk_usage(private).free >= 8 * 1024 ** 3, "CURRENT_ISSUER_DISK_HEADROOM_REQUIRED")
     return host_kib
 
-def current_issuer_created_identity(helper, plan, cid, expected_status="created"):
+def current_issuer_created_identity(helper, plan, cid, expected_status="created", profile=CURRENT_ISSUER_READY_PROFILE):
     row = json.loads(helper.run("docker", "inspect", cid).stdout)[0]
     host = row["HostConfig"]
     require(row["Id"] == cid and row["Image"] == plan["builderImage"]
@@ -347,7 +358,7 @@ def current_issuer_created_identity(helper, plan, cid, expected_status="created"
             and row["Config"]["Labels"]["elevenid.owner"] == "current-issuer-ready-native"
             and row["Config"]["Labels"]["elevenid.run"] == plan["runId"],
             "CURRENT_ISSUER_CREATED_IDENTITY_CHANGED")
-    require(host["Memory"] == host["MemorySwap"] == 2 * 1024 ** 3
+    require(host["Memory"] == host["MemorySwap"] == current_issuer_limits(profile)[1]
             and host["PidsLimit"] == 64 and host["NetworkMode"] == "none"
             and host["Privileged"] is False and "ALL" in host["CapDrop"]
             and "no-new-privileges" in host["SecurityOpt"],
@@ -416,7 +427,7 @@ def start(prepared_ref, helper, git, profile=None):
     require(not list(output.iterdir()), "PRESERVE_PREVIOUS_BUILD_OUTPUTS")
     require(helper.VOLUMES == VOLUMES, "SHARED_RESOURCE_SCOPE_CHANGED")
     if profile in CURRENT_ISSUER_READY_PROFILES:
-        current_issuer_capacity(helper, private)
+        current_issuer_capacity(helper, private, profile)
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED")
     if profile in OFFICIAL_PROFILES:
         volume = build_scope(profile)["volumes"][1]
@@ -475,7 +486,7 @@ def start(prepared_ref, helper, git, profile=None):
     require(image["Id"] == plan["builderImage"] and image["Os"] == "linux" and image["Architecture"] == "amd64", "BUILDER_IDENTITY_CHANGED")
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED_AFTER_RESOURCE_CHECK")
     if profile in CURRENT_ISSUER_READY_PROFILES:
-        current_issuer_capacity(helper, private)
+        current_issuer_capacity(helper, private, profile)
     state = {"state": "BUILD_CREATE_INTENT", "runId": plan["runId"], "preparationSha256": preparation_sha, "resourcesBefore": resource, "releaseQualified": False, "recordingQualified": False}
     if resource_state is None:
         state["intentDurability"] = store.exclusive("build-apply-intent.json", state)
@@ -501,8 +512,8 @@ def start(prepared_ref, helper, git, profile=None):
         state.update(state="BUILD_CREATED" if profile in CURRENT_ISSUER_READY_PROFILES else "BUILD_RUNNING", containerId=cid)
         if profile in CURRENT_ISSUER_READY_PROFILES:
             require(durable_barrier(store.state(state)), "BUILD_CREATED_JOURNAL_REQUIRED")
-            current_issuer_created_identity(helper, plan, cid)
-            current_issuer_capacity(helper, private)
+            current_issuer_created_identity(helper, plan, cid, profile=profile)
+            current_issuer_capacity(helper, private, profile)
             state["state"] = "BUILD_START_INTENT"
             require(durable_barrier(store.state(state)), "BUILD_START_INTENT_JOURNAL_REQUIRED")
             require(helper.run("docker", "start", cid).stdout.strip() == cid, "BUILD_START_ACK_CHANGED")
@@ -531,7 +542,7 @@ def finish(prepared_ref, helper, git, profile=None):
         and row["Config"]["Labels"]["elevenid.owner"] == scope["owner"], "BUILD_OWNER_CHANGED")
     require(row["State"]["Status"] == "exited", "BUILD_STILL_ACTIVE")
     if profile in CURRENT_ISSUER_READY_PROFILES:
-        current_issuer_created_identity(helper, plan, state["containerId"], "exited")
+        current_issuer_created_identity(helper, plan, state["containerId"], "exited", profile=profile)
     if profile in OFFICIAL_PROFILES:
         mounts = {mount["Destination"]: mount for mount in row["Mounts"]}
         for destination, volume in zip(("/cargo", "/target"), scope["volumes"]):
@@ -568,7 +579,7 @@ def finish(prepared_ref, helper, git, profile=None):
             require(len(matches) == 1, "EXACT_COMPILER_OUTPUT_REQUIRED")
             artifacts[binary] = ref(file)
         result.update(state="BUILD_SUCCEEDED", binaries=artifacts, runtimeUidLibrariesValidated=False)
-        if profile == CURRENT_ISSUER_POLICY_PROFILE:
+        if profile in CURRENT_ISSUER_POLICY_PROFILES:
             result["focusedRustTest"] = focused_rust_test_receipt(
                 output, "focused-rust-test", "current_issuer_validation_tests::", 4)
         if profile in OFFICIAL_PROFILES:
