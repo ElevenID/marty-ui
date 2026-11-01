@@ -13,10 +13,11 @@ backup restore, or public browser qualification. Its reports continue to say
 Existing v1 unit exports are not adopted or upgraded by this fresh-install release.
 
 Maintenance capabilities depend on the retained owners and selected generation.
-The current recurring generation owner supports public ACME generations;
-automatic private-generation renewal is not implemented, and imported foundation
-credentials remain customer-managed. Lifecycle install and status copy the
-selected generation owner's `automatic_renewal_supported` observation, or report
+The recurring generation owner supports public ACME generations and
+installer-managed private-CA generations; imported foundation credentials remain
+customer-managed. The capability map identifies that owner for both supported
+sources without asserting installed renewal success. Lifecycle install and status
+copy the selected generation owner's `automatic_renewal_supported` observation, or report
 `null` if that evidence is unavailable. Export and action reports do not infer
 all-mode renewal support. OpenBao listener TLS recovery has its separate retained
 local-control authority and does not establish application-credential recovery.

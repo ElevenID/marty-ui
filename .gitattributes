@@ -25,3 +25,6 @@ docs/demo-audit/2026-10-20-canvas-adapter/focused-source-tests.log -text
 docs/demo-audit/2026-10-20-vc-api-auth/*.json -text
 
 tests/scripts/audit-beta-issuer-provider-switch.js text eol=lf
+
+# Preserve the exact signed public image-lock fixture bytes on Windows.
+tests/fixtures/nightly263-images.json text eol=lf

@@ -47,38 +47,40 @@ pub struct VerificationRuntime {
 
 impl VerificationRuntime {
     pub fn new(config: &VerificationServiceConfig) -> Result<Self, MmfError> {
-        let state = RuntimeState::new(BuildInfo {
-            service: "verification".into(),
-            version: config.release_version.clone(),
-            build_revision: config.build_revision.clone(),
-            enabled_features: vec![
-                "http".into(),
-                "redis_session_coordination".into(),
-                "native_oid4vp".into(),
-                "native_siopv2".into(),
-                "terminal_data_minimization".into(),
-            ],
-        });
-        for dependency in [
-            VerificationDependency::SessionStore,
-            VerificationDependency::Organization,
-            VerificationDependency::CredentialTemplate,
-            VerificationDependency::PresentationPolicy,
-            VerificationDependency::NativeVerification,
-            VerificationDependency::HttpListener,
-        ] {
-            state.register_required_component(dependency.name())?;
-        }
-        if config.grpc_enabled {
-            state.register_required_component(VerificationDependency::GrpcListener.name())?;
-        }
-        if config.credentials_compat_enabled {
-            state.register_required_component(
-                VerificationDependency::CompatibilityDatabase.name(),
-            )?;
-        }
-        state.transition(LifecycleState::Initialized)?;
-        state.transition(LifecycleState::Starting)?;
+        let state = RuntimeState::starting(
+            BuildInfo {
+                service: "verification".into(),
+                version: config.release_version.clone(),
+                build_revision: config.build_revision.clone(),
+                enabled_features: vec![
+                    "http".into(),
+                    "redis_session_coordination".into(),
+                    "native_oid4vp".into(),
+                    "native_siopv2".into(),
+                    "terminal_data_minimization".into(),
+                ],
+            },
+            [
+                VerificationDependency::SessionStore,
+                VerificationDependency::Organization,
+                VerificationDependency::CredentialTemplate,
+                VerificationDependency::PresentationPolicy,
+                VerificationDependency::NativeVerification,
+                VerificationDependency::HttpListener,
+            ]
+            .into_iter()
+            .chain(
+                config
+                    .grpc_enabled
+                    .then_some(VerificationDependency::GrpcListener),
+            )
+            .chain(
+                config
+                    .credentials_compat_enabled
+                    .then_some(VerificationDependency::CompatibilityDatabase),
+            )
+            .map(|dependency| dependency.name()),
+        )?;
         Ok(Self { state })
     }
 
@@ -88,13 +90,7 @@ impl VerificationRuntime {
     }
 
     pub fn mark_healthy(&self, dependency: VerificationDependency) -> Result<(), MmfError> {
-        self.state.set_component_health(
-            dependency.name(),
-            ComponentHealth {
-                status: HealthStatus::Healthy,
-                message: None,
-            },
-        )
+        self.state.mark_component_healthy(dependency.name())
     }
 
     pub fn mark_degraded(
@@ -255,6 +251,36 @@ mod tests {
             VerificationDependency::HttpListener,
         ] {
             runtime.mark_healthy(dependency).unwrap();
+        }
+    }
+
+    #[test]
+    fn conditional_dependencies_keep_the_same_activation_and_shutdown_gate() {
+        for grpc in [false, true] {
+            for compatibility in [false, true] {
+                let mut config = config(compatibility);
+                config.grpc_enabled = grpc;
+                let runtime = VerificationRuntime::new(&config).unwrap();
+                assert!(runtime.activate().is_err());
+                mark_static_dependencies_healthy(&runtime);
+                if grpc {
+                    assert!(runtime.activate().is_err());
+                    runtime
+                        .mark_healthy(VerificationDependency::GrpcListener)
+                        .unwrap();
+                }
+                if compatibility {
+                    assert!(runtime.activate().is_err());
+                    runtime
+                        .mark_healthy(VerificationDependency::CompatibilityDatabase)
+                        .unwrap();
+                }
+                runtime.activate().unwrap();
+                assert!(runtime.state().readiness().unwrap().ready);
+                runtime.drain().unwrap();
+                assert!(!runtime.state().readiness().unwrap().ready);
+                runtime.stop().unwrap();
+            }
         }
     }
 

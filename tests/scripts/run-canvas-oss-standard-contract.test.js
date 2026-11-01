@@ -399,13 +399,13 @@ function compactEs256(privateKey, payload) {
   return `${signingInput}.${signature.toString('base64url')}`;
 }
 
-function localCredentialExchange(t, vct) {
+function localCredentialExchange(t, vct, format = 'dc+sd-jwt') {
   const origin = 'https://beta.elevenidllc.com';
   const issuer = `${origin}/org/org-1`;
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const offer = {
     credential_issuer: issuer,
-    credential_configuration_ids: ['OpenBadgeCredential#sd-jwt'],
+    credential_configuration_ids: [format === 'jwt_vc_json' ? 'OpenBadgeCredential' : 'OpenBadgeCredential#sd-jwt'],
     grants: { 'urn:ietf:params:oauth:grant-type:pre-authorized_code': { 'pre-authorized_code': 'local-test-offer' } },
   };
   const offerUri = `openid-credential-offer://?credential_offer=${encodeURIComponent(JSON.stringify(offer))}`;
@@ -428,12 +428,17 @@ function localCredentialExchange(t, vct) {
     } else if (href === `${origin}/v1/issuance/credential`) {
       const proof = JSON.parse(options.body).proofs.jwt[0];
       const proofHeader = JSON.parse(Buffer.from(proof.split('.')[0], 'base64url').toString('utf8'));
-      const compact = compactEs256(privateKey, {
+      const compact = compactEs256(privateKey, format === 'jwt_vc_json' ? {
+        iss: 'did:web:issuer.example',
+        vc: { type: ['VerifiableCredential', 'OpenBadgeCredential'],
+          credentialSubject: { achievement: { id: vct } } },
+        cnf: { jwk: proofHeader.jwk },
+      } : {
         iss: 'did:web:issuer.example',
         vct,
         cnf: { jwk: proofHeader.jwk },
       });
-      body = { credentials: [{ format: 'dc+sd-jwt', credential: compact }] };
+      body = { credentials: [{ format, credential: compact }] };
     } else if (href === 'https://issuer.example/.well-known/did.json') {
       body = {
         id: 'did:web:issuer.example',
@@ -450,15 +455,38 @@ function localCredentialExchange(t, vct) {
 
 test('credential receipt accepts the exact template VCT with a verified signature and holder binding', async (t) => {
   const fixture = localCredentialExchange(t, 'urn:example:OpenBadgeCredential');
-  const result = await receiveAndVerifyCredential(fixture.offerUri, { vct: 'urn:example:OpenBadgeCredential' }, fixture.origin);
+  const result = await receiveAndVerifyCredential(fixture.offerUri, {
+    vct: 'urn:example:OpenBadgeCredential', credential_payload_format: 'SD_JWT_VC',
+  }, fixture.origin);
   assert.equal(result.payload.vct, 'urn:example:OpenBadgeCredential');
   assert.equal(fixture.requests.length, 5);
 });
 
+test('credential receipt accepts the signed Open Badge VC-JWT type and achievement binding', async (t) => {
+  const achievement = 'https://issuer.example/achievements/canvas';
+  const fixture = localCredentialExchange(t, achievement, 'jwt_vc_json');
+  const result = await receiveAndVerifyCredential(fixture.offerUri, {
+    vct: achievement, credential_type: 'OpenBadgeCredential', credential_payload_format: 'VC_JWT',
+    issuer_did: 'did:web:issuer.example',
+  }, fixture.origin);
+  assert.deepEqual(result.payload.vc.type, ['VerifiableCredential', 'OpenBadgeCredential']);
+  assert.equal(result.payload.vc.credentialSubject.achievement.id, achievement);
+  assert.equal(fixture.requests.length, 5);
+});
+
+test('credential receipt rejects a VC-JWT achievement unrelated to the selected template', async (t) => {
+  const fixture = localCredentialExchange(t, 'https://issuer.example/achievements/other', 'jwt_vc_json');
+  await assert.rejects(receiveAndVerifyCredential(fixture.offerUri, {
+    vct: 'https://issuer.example/achievements/canvas', credential_type: 'OpenBadgeCredential',
+    credential_payload_format: 'VC_JWT', issuer_did: 'did:web:issuer.example',
+  }, fixture.origin), (error) => error instanceof ContractFailure && error.code === 'open_badge_type_mismatch');
+  assert.equal(fixture.requests.length, 5);
+});
+
 for (const [name, actualVct, template] of [
-  ['unrelated VCT when the template has no legacy credential_type', 'urn:example:UnrelatedCredential', { vct: 'urn:example:OpenBadgeCredential' }],
-  ['missing signed VCT', undefined, { vct: 'urn:example:OpenBadgeCredential' }],
-  ['substring matching the legacy credential_type', 'urn:example:NotOpenBadgeCredential', { vct: 'urn:example:OpenBadgeCredential', credential_type: 'OpenBadgeCredential' }],
+  ['unrelated VCT when the template has no legacy credential_type', 'urn:example:UnrelatedCredential', { vct: 'urn:example:OpenBadgeCredential', credential_payload_format: 'SD_JWT_VC' }],
+  ['missing signed VCT', undefined, { vct: 'urn:example:OpenBadgeCredential', credential_payload_format: 'SD_JWT_VC' }],
+  ['substring matching the legacy credential_type', 'urn:example:NotOpenBadgeCredential', { vct: 'urn:example:OpenBadgeCredential', credential_type: 'OpenBadgeCredential', credential_payload_format: 'SD_JWT_VC' }],
 ]) {
   test(`credential receipt rejects ${name} even with a valid signature and holder binding`, async (t) => {
     const fixture = localCredentialExchange(t, actualVct);

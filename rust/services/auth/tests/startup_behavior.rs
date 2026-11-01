@@ -18,6 +18,10 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
             "https://beta.elevenidllc.com".into(),
         ),
         ("CREDENTIAL_LOGIN_POLICY_ID".into(), "policy-1".into()),
+        (
+            "CREDENTIAL_LOGIN_TRUST_PROFILE_ID".into(),
+            " trust-1 ".into(),
+        ),
         ("CREDENTIAL_LOGIN_ORGANIZATION_ID".into(), "org-1".into()),
         (
             "CREDENTIAL_LOGIN_ISSUER_DID".into(),
@@ -123,6 +127,10 @@ fn complete_beta_configuration_is_normalized_without_hidden_fallbacks() {
     assert_eq!(config.http_addr.to_string(), "0.0.0.0:8001");
     assert_eq!(config.grpc_addr.to_string(), "0.0.0.0:9001");
     assert_eq!(config.flow_grpc_target, "https://flow:9011");
+    assert_eq!(
+        config.credential_login_trust_profile_id.as_deref(),
+        Some("trust-1")
+    );
     assert_eq!(config.organization_grpc_target, "https://organization:9002");
     assert_eq!(config.event_stream_grpc_target, "https://event-stream:9015");
     assert_eq!(config.grpc_service_token, "g".repeat(32));

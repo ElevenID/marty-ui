@@ -1072,7 +1072,7 @@ pub fn run(args: &[String]) -> Result<String> {
         "maintenance_capabilities":{
             "openbao_listener_tls":"retained_local_control_recovery",
             "public_generation_credentials":"selected_generation_owner",
-            "private_generation_renewal":"not_implemented",
+            "private_generation_renewal":"selected_generation_owner",
             "imported_foundation_credentials":"customer_managed"
         },
         "user_systemd_prerequisites":prerequisites,

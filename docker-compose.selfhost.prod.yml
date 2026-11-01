@@ -527,6 +527,7 @@ services:
       MARTY_API_CLIENT_ID: ${MARTY_API_CLIENT_ID:-marty-api}
       MARTY_API_CLIENT_SECRET_FILE: /run/secrets/marty_api_client_secret
       CREDENTIAL_LOGIN_POLICY_ID: ${CREDENTIAL_LOGIN_POLICY_ID:-}
+      CREDENTIAL_LOGIN_TRUST_PROFILE_ID: ${CREDENTIAL_LOGIN_TRUST_PROFILE_ID:-}
       CREDENTIAL_LOGIN_ISSUER_DID: ${MARTY_ISSUER_DID:-did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:${MARTY_ORG_SLUG:-marty}}
       CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: ${CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER:-true}
       CREDENTIAL_LOGIN_CREATE_USERS: ${CREDENTIAL_LOGIN_CREATE_USERS:-false}
@@ -580,6 +581,8 @@ services:
         condition: service_healthy
       keycloak-configurator:
         condition: service_completed_successfully
+      applicant:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 10s
@@ -1284,6 +1287,10 @@ services:
       issuance:
         condition: service_healthy
       issuance-native:
+        condition: service_healthy
+      trust-profile:
+        condition: service_healthy
+      deployment-profile:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8011/health"]

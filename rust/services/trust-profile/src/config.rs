@@ -1,3 +1,4 @@
+use marty_service_runtime::config;
 use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf, time::Duration};
 
 use thiserror::Error;
@@ -307,7 +308,7 @@ fn number<T>(
 where
     T: std::str::FromStr,
 {
-    value(values, name).map_or(Ok(default), |raw| raw.parse().map_err(|_| invalid(name)))
+    config::number_or(value(values, name), default).map_err(|_| invalid(name))
 }
 
 fn csv(value: &str) -> Vec<String> {
@@ -320,11 +321,11 @@ fn csv(value: &str) -> Vec<String> {
 }
 
 fn boolean(value: &str, name: &'static str) -> Result<bool, TrustProfileConfigError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" => Ok(false),
-        _ => Err(invalid(name)),
-    }
+    config::boolean(
+        value.trim(),
+        config::BooleanVocabulary::AsciiInsensitiveWithOnOff,
+    )
+    .map_err(|_| invalid(name))
 }
 
 fn required(
@@ -337,11 +338,7 @@ fn required(
 }
 
 fn value<'a>(values: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
-    values
-        .get(name)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    config::trimmed_nonempty(values.get(name).map(String::as_str))
 }
 
 fn invalid(name: &'static str) -> TrustProfileConfigError {

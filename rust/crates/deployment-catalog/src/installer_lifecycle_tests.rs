@@ -65,6 +65,38 @@ fn load_intent(
 }
 
 #[test]
+fn unconfigured_status_distinguishes_renewal_owners_from_installed_support() {
+    let (_parent, path, state, _configuration) = fixture();
+    drop(state);
+    let report: Value = serde_json::from_str(
+        &run(&[
+            "status".into(),
+            "--install-dir".into(),
+            path.to_str().unwrap().into(),
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["configured"], false);
+    for capability in [
+        "public_generation_credentials",
+        "private_generation_renewal",
+    ] {
+        assert_eq!(
+            report["maintenance_capabilities"][capability],
+            "selected_generation_owner"
+        );
+    }
+    assert_eq!(
+        report["maintenance_capabilities"]["imported_foundation_credentials"],
+        "customer_managed"
+    );
+    assert!(report["automatic_renewal_supported"].is_null());
+    assert_eq!(report["installation_ready"], false);
+    assert_eq!(report["boot_recovery_qualification"], "not_assessed");
+}
+
+#[test]
 fn arguments_are_closed_and_paths_cannot_inject_unit_directives() {
     let valid = vec![
         "install".into(),

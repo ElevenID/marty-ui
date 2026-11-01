@@ -62,7 +62,9 @@ Start with [the direct example](examples/installation-hosting.direct.json):
 }
 ```
 
-For direct hosting with `managed-ca`, optionally add one IP entry endpoint:
+For direct hosting with `managed-ca` or `acme`, optionally add one IP entry
+endpoint. The [ACME hosting guide](installer-acme-host.md) supplies the complete
+Let's Encrypt settings and HTTP-01 routing requirements:
 
 ```json
 "public_entry_origin": "https://203.0.113.10:8443"
@@ -216,6 +218,17 @@ selected origin, listener, TLS owner, and connector in the host-impact summary.
 Do not patch the generated Compose model, environment, certificate files, or
 journal to change hosting: later operations verify their recorded bindings.
 
+The signed `CandidateTest` path can exercise a production ACME deployment for a
+manual HTTPS visual trial before the full 37-case functional/recovery contract
+is complete. It still requires the configured canonical DNS origin, exact IP
+entry alias when testing by address, public HTTP-01/HTTPS routing, and explicit
+agreement to the selected CA terms. Open the configured IP URL with normal
+browser certificate verification after actual application startup; a pending
+order alone is not startup. The journal remains `Provisioning`. This trial does
+not produce the separate five-case
+[signed startup observation](installer-signed-rootless-acceptance.md), release
+admission, or full functional/recovery qualification.
+
 An existing AWS KMS foundation remains available. Combine it with an explicit
 hosting file using `tls.certificate_source: "foundation-import"`, and require
 the two files' public origins to match. `managed-ca` plus a foundation, or
@@ -245,9 +258,10 @@ the trust export. Likewise, `restart_history_observed: false` and
 `oom_kill_history_observed: false` mean those histories were not observed; they
 do not mean zero restarts or OOM events.
 
-For direct access, open the exact `origin` after checking the provider routing
-and firewall. For `local` mode on a remote VM, establish an SSH tunnel from the
-browser's computer with the same local and remote port. For an origin of
+For direct access, open the exact `origin` or configured IP entry URL after
+checking the provider routing and firewall. For `local` mode on a remote VM,
+establish an SSH tunnel from the browser's computer with the same local and
+remote port. For an origin of
 `https://localhost:18443`, for example:
 
 ```sh
@@ -275,12 +289,13 @@ observations are separate from installer status and local validation.
 
 ## Scope and remaining work
 
-This schema accepts `managed-ca` or the existing `foundation-import` path. It
-does not accept uploaded TLS private keys, arbitrary public certificate files,
-or an ACME option. Managed public-certificate enrollment needs a separately
-reviewed prepare-CSR, attach-matching-chain, activation, and renewal lifecycle
-for the nonexportable ingress key. Do not relabel a private managed CA as a
-publicly trusted certificate.
+This schema accepts `managed-ca`, the existing `foundation-import` path, and
+`acme`. ACME uses direct DNS hosting with managed OpenBao and the optional exact
+IP entry alias. Its enrollment, CSR, certificate admission, activation, and
+renewal owners retain the nonexportable ingress key; see
+[ACME hosting](installer-acme-host.md). Uploaded TLS private keys and arbitrary
+public certificate files are not accepted. A private managed CA does not provide
+public browser trust.
 
 For a fresh managed installation, the native generation owner now uses the
 scoped renewal identity to produce and validate the selected ingress certificate
@@ -289,20 +304,22 @@ generation selector binds these files, and native Compose starts the application
 with that selected generation. `trust-info` reports the selected ingress leaf
 and its metadata, which can differ from the earlier bootstrap certificate.
 
-The renewal principal retains certificate-issuing authority for the exact
-configured DNS or IP identity. Its ACL fixes the name/SAN and lifetime
-parameters, while the renewal helper and immutable generation checks bind the
+For managed private-CA certificates, the renewal principal retains issuing
+authority for the exact configured DNS or IP identity. Its ACL fixes the name/SAN
+and lifetime parameters, while the renewal helper and immutable generation checks bind the
 selected certificate to the retained Transit public key. The ACL does not
 restrict the public key inside an arbitrary CSR: a compromised renewal
 principal could directly obtain a certificate for the same permitted identity
 using another key. The activation checks would reject that replacement, so
 renewal credentials must be protected as issuer credentials.
 
-This is the initial generation handoff. Repeated automatic renewal/cutover and
-an installed journey across the expiry boundary are not implemented or
-qualified by this hosting feature. Check `certificate_expires_at` and
-`recorded_token_expires_at` for the selected ingress; do not infer an unattended
-continuous-runtime guarantee from initial startup. Root retirement and recovery
+The [recurring generation owner](installer-generation-maintenance.md) coordinates
+public ACME renewal, independent workload-token refresh, and installer-managed
+private-CA renewal through immutable generation activation. These implemented
+paths still need installed expiry, crash, and reboot qualification. Check
+`certificate_expires_at` and `recorded_token_expires_at` for the selected ingress;
+do not infer an unattended continuous-runtime guarantee from initial startup.
+Root retirement and recovery
 retain their separate evidence and qualification requirements. Neither a
 longer-lived frontend certificate nor a healthy connector proves that backend
 credentials have renewed. Preserve uncertain state for review.

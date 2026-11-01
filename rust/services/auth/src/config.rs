@@ -1,3 +1,4 @@
+use marty_service_runtime::config;
 use std::{collections::HashMap, net::SocketAddr};
 
 use thiserror::Error;
@@ -27,6 +28,7 @@ pub struct AuthServiceConfig {
     pub cookie: SessionCookieConfig,
     pub post_logout_redirect_uri: String,
     pub credential_login_policy_id: String,
+    pub credential_login_trust_profile_id: Option<String>,
     pub credential_login_organization_id: String,
     pub credential_login_issuer_did: String,
     pub credential_login_webhook_secret: String,
@@ -251,6 +253,10 @@ impl AuthServiceConfig {
                 get("CREDENTIAL_LOGIN_POLICY_ID"),
                 "CREDENTIAL_LOGIN_POLICY_ID",
             )?,
+            credential_login_trust_profile_id: get("CREDENTIAL_LOGIN_TRUST_PROFILE_ID")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
             credential_login_organization_id: credential_login_organization_id.clone(),
             credential_login_issuer_did: required(
                 get("CREDENTIAL_LOGIN_ISSUER_DID").or_else(|| get("OID4VP_ISSUER_DID")),
@@ -452,20 +458,14 @@ fn number<T: std::str::FromStr + Copy>(
     default: T,
     name: &str,
 ) -> Result<T, AuthConfigError> {
-    value.map_or(Ok(default), |value| {
-        value
-            .parse()
-            .map_err(|_| invalid(format!("{name} is invalid")))
-    })
+    config::number_or(value, default).map_err(|_| invalid(format!("{name} is invalid")))
 }
 
 fn boolean(value: Option<&str>, default: bool) -> Result<bool, AuthConfigError> {
-    match value.map(str::to_ascii_lowercase).as_deref() {
-        None => Ok(default),
-        Some("true" | "1" | "yes") => Ok(true),
-        Some("false" | "0" | "no") => Ok(false),
-        Some(_) => Err(invalid("boolean configuration is invalid")),
-    }
+    value.map_or(Ok(default), |raw| {
+        config::boolean(raw, config::BooleanVocabulary::AsciiInsensitive)
+            .map_err(|_| invalid("boolean configuration is invalid"))
+    })
 }
 
 fn listener(

@@ -253,6 +253,7 @@ fn assemble_applications(
         Arc::new(RustCredentialLoginPageRenderer::from_environment()),
         CredentialLoginStartConfig {
             presentation_policy_id: config.credential_login_policy_id.clone(),
+            trust_profile_id: config.credential_login_trust_profile_id.clone(),
             organization_id: config.credential_login_organization_id.clone(),
             issuer_did: config.credential_login_issuer_did.clone(),
             auth_service_internal_url: config.auth_service_internal_url.clone(),

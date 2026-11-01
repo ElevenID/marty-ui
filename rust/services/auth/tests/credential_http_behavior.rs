@@ -96,6 +96,7 @@ fn application(
         Arc::new(Renderer),
         CredentialLoginStartConfig {
             presentation_policy_id: "policy-1".into(),
+            trust_profile_id: Some("trust-1".into()),
             organization_id: "org-1".into(),
             issuer_did: "did:web:issuer.example".into(),
             auth_service_internal_url: "http://auth:8001/base/".into(),
@@ -122,6 +123,7 @@ async fn start_binds_flow_callback_persists_pending_state_and_renders_page() {
     assert!(result.html.contains("flow-1"));
     let request = flow.request.lock().unwrap().clone().unwrap();
     assert_eq!(request.presentation_policy_id, "policy-1");
+    assert_eq!(request.trust_profile_id.as_deref(), Some("trust-1"));
     assert_eq!(request.organization_id, "org-1");
     assert_eq!(request.issuer_did, "did:web:issuer.example");
     assert_eq!(request.user_id, "auth-service");
@@ -160,6 +162,7 @@ fn unsafe_or_incomplete_start_configuration_is_rejected() {
     for url in ["file:///tmp/auth", "https://user:pass@auth.example"] {
         let config = CredentialLoginStartConfig {
             presentation_policy_id: "policy-1".into(),
+            trust_profile_id: Some("trust-1".into()),
             organization_id: "org-1".into(),
             issuer_did: "did:web:issuer.example".into(),
             auth_service_internal_url: url.into(),
