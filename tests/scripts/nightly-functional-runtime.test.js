@@ -58,7 +58,11 @@ test('shared verifier returns existing v2 IPC binding with truthful signed-image
   }
   f.documents.observation=produce(f);const file=path.join(root,'observation.json'),bytes=Buffer.from(JSON.stringify(f.documents.observation));
   fs.writeFileSync(file,bytes);f.profile.signedImageDeployment.observation={path:file,sha256:createHash('sha256').update(bytes).digest('hex')};
-  const binding=shared.verifyFunctionalRuntime(f.profile,{readDocker:f.readDocker});
+  const originalAuthority=nightly.authority;let binding,preflightCalls=0;
+  try{nightly.authority=(profile,tools)=>{if(tools.boundJson===shared.boundJson){preflightCalls++;assert.equal(tools.boundBytes,shared.boundBytes,'Shared authority must receive the canonical receipt reader');}return originalAuthority(profile,tools);};
+   binding=shared.verifyFunctionalRuntime(f.profile,{readDocker:f.readDocker});
+  }finally{nightly.authority=originalAuthority;}
+  assert.equal(preflightCalls,1);
   assert.equal(binding.schema,'marty.functional-mixed-runtime-binding/v2');assert.equal(binding.runtimeKind,'SIGNED_NIGHTLY_IMAGES');
   assert.equal(binding.mixedSourceStack,false);assert.equal(binding.releaseQualified,false);assert.equal(binding.roles.length,22);
  }finally{assert.equal(path.dirname(root),os.tmpdir());fs.rmSync(root,{recursive:true});}

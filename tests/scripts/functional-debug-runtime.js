@@ -616,7 +616,7 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
  observe=observe||(readDocker?(expected=>observeDocker(expected,readDocker)):observeDocker);
  assert.equal(qualification,'FUNCTIONAL_ONLY','Mixed/debug stack cannot qualify release or recording');
  const expected=expectedRuntime(profile),roles=[];
- const maintenance=profile.maintenanceRestart?boundJson(profile.maintenanceRestart):profile.nativeOverlay?boundJson(profile.nativeOverlay.deploymentReceipt):profile.nativeMaintenance?boundJson(profile.nativeMaintenance.outcome):profile.signedImageDeployment?{engineId:require('./nightly-functional-runtime').authority(profile,{boundJson,verifyBoundFile}).engineId}:null;
+ const maintenance=profile.maintenanceRestart?boundJson(profile.maintenanceRestart):profile.nativeOverlay?boundJson(profile.nativeOverlay.deploymentReceipt):profile.nativeMaintenance?boundJson(profile.nativeMaintenance.outcome):profile.signedImageDeployment?{engineId:require('./nightly-functional-runtime').authority(profile,{boundJson,verifyBoundFile,boundBytes}).engineId}:null;
  if(maintenance)assert.equal(JSON.parse(readDocker(['info','--format','{{json .}}'])).ID,maintenance.engineId);
  for(const row of expected){
   let actual;
