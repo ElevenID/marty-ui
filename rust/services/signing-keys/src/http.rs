@@ -2328,7 +2328,6 @@ fn current_issuer_key_is_vc_bound(
 mod current_issuer_validation_tests {
     use super::*;
     use axum::{body::Body, http::Request};
-    use p256::ecdsa::signature::Signer;
     use tower::ServiceExt;
 
     fn check(name: &str, status: &str) -> validation::ValidationCheck {
@@ -2356,42 +2355,24 @@ mod current_issuer_validation_tests {
             "Signer capability",
             "pass"
         )]));
-        let signer = p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into())
-            .expect("fixed test-only signing key");
-        let point = signer.verifying_key().to_sec1_point(false);
-        let public = point.as_bytes();
-        let jwk = json!({"kty":"EC", "crv":"P-256",
-            "x": URL_SAFE_NO_PAD.encode(&public[1..33]),
-            "y": URL_SAFE_NO_PAD.encode(&public[33..65])});
+        // Public verification vector; tests must not enable local KMS signing features.
+        let jwk = json!({"kty":"EC","crv":"P-256","x":"HhhTL9R1TALzBB2cdc6zO4P_2BrHzk_ogsyxyYvFiW4","y":"pGwxHE4v9A3ZajZT5uRURdMt_khuztdcepDGoYiBwKM"});
         let payload = b"marty-current-issuer-service-readiness-v1";
-        let signature: p256::ecdsa::Signature = signer.sign(payload);
-        let signature = signature.to_der();
-        assert!(verify_current_issuer_signature(
-            &jwk,
-            payload,
-            signature.as_bytes()
-        ));
+        let signature = URL_SAFE_NO_PAD.decode("MEUCIFojx0dIIdujGRXkFISJ6YcREqD3_TJvdnxNi8a2HC-VAiEAsK0nYAwAKGNW01NJIBUUw1EMHU5BnS0vSIIAVXcxMl4").unwrap();
+        assert!(verify_current_issuer_signature(&jwk, payload, &signature));
         assert!(!verify_current_issuer_signature(
             &jwk,
             payload,
             b"not-a-signature"
         ));
-        let wrong_signer = p256::ecdsa::SigningKey::from_bytes((&[8u8; 32]).into())
-            .expect("second fixed test-only signing key");
-        let wrong_point = wrong_signer.verifying_key().to_sec1_point(false);
-        let wrong_public = wrong_point.as_bytes();
-        let wrong_jwk = json!({"kty":"EC", "crv":"P-256",
-            "x": URL_SAFE_NO_PAD.encode(&wrong_public[1..33]),
-            "y": URL_SAFE_NO_PAD.encode(&wrong_public[33..65])});
+        let wrong_jwk = json!({"kty":"EC","crv":"P-256","x":"OtqxXWYla_Fc1xYDWz8EFETlEv7R3WTUunVZfSDjZvE","y":"VG0skKg-uroBWVCZ5fP_u9M4THSU3mdZ_dXmXvrpzGc"});
         assert!(!verify_current_issuer_signature(
-            &wrong_jwk,
-            payload,
-            signature.as_bytes()
+            &wrong_jwk, payload, &signature
         ));
         assert!(!verify_current_issuer_signature(
             &json!({"kty":"EC","crv":"P-256","x":"AA","y":"AA"}),
             payload,
-            signature.as_bytes()
+            &signature
         ));
     }
 
@@ -2814,6 +2795,182 @@ fn managed_key_binding_sha256(organization_id: &str, profile: &Value) -> Option<
     Some(hex::encode(digest.finalize()))
 }
 
+struct CurrentManagedIssuerIdentity {
+    resolved: Value,
+    current_jwk: Value,
+}
+
+/// Resolve before reading the current provider key, refusing a stale profile
+/// before polling the provider future. Callers keep tuple admission, algorithm
+/// rules, authority and all signing/grant operations outside this read-only step.
+async fn resolve_current_managed_issuer_identity(
+    profile: &Value,
+    resolution: impl std::future::Future<Output = Result<Value, CompatibilityError>>,
+    provider_key: impl std::future::Future<Output = Result<Value, CompatibilityError>>,
+) -> Result<CurrentManagedIssuerIdentity, Response> {
+    let resolved = resolution.await.map_err(IntoResponse::into_response)?;
+    if !same_managed_identity(profile, &resolved) {
+        return Err(public_error(
+            StatusCode::CONFLICT,
+            "Resolved issuer identity does not match its active managed profile.",
+        ));
+    }
+    let current_jwk = provider_key.await.map_err(IntoResponse::into_response)?;
+    if !same_current_managed_key(&resolved, &current_jwk) {
+        return Err(public_error(
+            StatusCode::CONFLICT,
+            "Published issuer identity does not match its current managed KMS key.",
+        ));
+    }
+    Ok(CurrentManagedIssuerIdentity {
+        resolved,
+        current_jwk,
+    })
+}
+
+#[cfg(test)]
+mod current_managed_issuer_tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use std::sync::Mutex;
+
+    fn fixture() -> (Value, Value, Value) {
+        let profile = json!({"id":"profile-a", "signing_service_id":"service-a", "signing_key_reference":"key-a"});
+        let jwk = json!({"kty":"EC", "crv":"P-256", "x":"public-x", "y":"public-y"});
+        let resolved = json!({"issuer_profile":profile, "public_jwk":jwk});
+        (profile, resolved, jwk)
+    }
+
+    async fn response_value(response: Response) -> (StatusCode, Value) {
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn current_managed_identity_preserves_readbacks_and_provider_call_order() {
+        let (profile, resolved, jwk) = fixture();
+        let calls = Mutex::new(Vec::new());
+        let current = resolve_current_managed_issuer_identity(
+            &profile,
+            async {
+                calls.lock().unwrap().push("resolve");
+                Ok(resolved.clone())
+            },
+            async {
+                calls.lock().unwrap().push("provider");
+                Ok(jwk.clone())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(*calls.lock().unwrap(), ["resolve", "provider"]);
+        assert_eq!(current.resolved, resolved);
+        assert_eq!(current.current_jwk, jwk);
+    }
+
+    #[tokio::test]
+    async fn stale_or_incomplete_profile_never_polls_the_provider() {
+        let (profile, resolved, _) = fixture();
+        for field in ["id", "signing_service_id", "signing_key_reference"] {
+            for replacement in [Value::Null, json!(""), json!("different")] {
+                let mut stale = profile.clone();
+                stale[field] = replacement;
+                let error = resolve_current_managed_issuer_identity(
+                    &stale,
+                    async { Ok(resolved.clone()) },
+                    async { panic!("stale profile must fail before provider lookup") },
+                )
+                .await
+                .err()
+                .expect("stale profile refused");
+                assert_eq!(
+                    response_value(error).await,
+                    (
+                        StatusCode::CONFLICT,
+                        json!({"detail":"Resolved issuer identity does not match its active managed profile."})
+                    )
+                );
+            }
+        }
+        let error = resolve_current_managed_issuer_identity(
+            &profile,
+            async { Ok(json!({"public_jwk":{}})) },
+            async { panic!("missing resolved profile must fail before provider lookup") },
+        )
+        .await
+        .err()
+        .expect("missing profile refused");
+        assert_eq!(error.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn missing_or_rotated_public_key_keeps_the_current_key_conflict() {
+        let (profile, resolved, jwk) = fixture();
+        for published in [
+            Value::Null,
+            json!({}),
+            json!({"kty":"EC", "crv":"P-256", "x":"rotated-x", "y":"public-y"}),
+        ] {
+            let mut stale = resolved.clone();
+            stale["public_jwk"] = published;
+            let error =
+                resolve_current_managed_issuer_identity(&profile, async { Ok(stale) }, async {
+                    Ok(jwk.clone())
+                })
+                .await
+                .err()
+                .expect("stale published key refused");
+            assert_eq!(
+                response_value(error).await,
+                (
+                    StatusCode::CONFLICT,
+                    json!({"detail":"Published issuer identity does not match its current managed KMS key."})
+                )
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn resolution_and_provider_errors_keep_their_complete_native_responses() {
+        let (profile, resolved, _) = fixture();
+        let failures: [fn() -> CompatibilityError; 11] = [
+            || CompatibilityError::Unauthorized,
+            || CompatibilityError::ProfileNotFound,
+            || CompatibilityError::AmbiguousProfile,
+            || CompatibilityError::ServiceNotFound,
+            || CompatibilityError::NotFound("absent".into()),
+            || CompatibilityError::BadRequest("bad request".into()),
+            || CompatibilityError::Unavailable,
+            || CompatibilityError::SecretCapabilityUnavailable,
+            || CompatibilityError::Invalid("invalid".into()),
+            || CompatibilityError::Conflict("changed".into()),
+            || CompatibilityError::PreconditionFailed,
+        ];
+        for failure in failures {
+            let expected = response_value(failure().into_response()).await;
+            let error = resolve_current_managed_issuer_identity(
+                &profile,
+                async { Err(failure()) },
+                async { panic!("resolution failure must not poll the provider") },
+            )
+            .await
+            .err()
+            .expect("resolution failure forwarded");
+            assert_eq!(response_value(error).await, expected);
+            let error = resolve_current_managed_issuer_identity(
+                &profile,
+                async { Ok(resolved.clone()) },
+                async { Err(failure()) },
+            )
+            .await
+            .err()
+            .expect("provider failure forwarded");
+            assert_eq!(response_value(error).await, expected);
+        }
+    }
+}
+
 async fn resolve_public_issuer_identity(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
@@ -2835,39 +2992,25 @@ async fn resolve_public_issuer_identity(
             "Issuer identity service is unavailable.",
         );
     };
-    let resolved = match compatibility
-        .resolve_issuer_did(&ResolveIssuerDidRequest {
-            organization_id: scope.organization_id.clone(),
-            issuer_did: input.issuer_did,
-            verification_method_id: None,
-            credential_format: Some(input.credential_format),
-            key_purpose: Some(input.key_purpose),
-            algorithm: Some(canonical_algorithm(&input.algorithm)),
-        })
-        .await
-    {
-        Ok(resolved) => resolved,
-        Err(error) => return error.into_response(),
+    let request = ResolveIssuerDidRequest {
+        organization_id: scope.organization_id.clone(),
+        issuer_did: input.issuer_did,
+        verification_method_id: None,
+        credential_format: Some(input.credential_format),
+        key_purpose: Some(input.key_purpose),
+        algorithm: Some(canonical_algorithm(&input.algorithm)),
     };
-    if !same_managed_identity(&profile, &resolved) {
-        return public_error(
-            StatusCode::CONFLICT,
-            "Resolved issuer identity does not match its active managed profile.",
-        );
-    }
-    let current_jwk = match compatibility
-        .provider_public_key_for_profile(&scope.organization_id, &profile)
+    let CurrentManagedIssuerIdentity { resolved, .. } =
+        match resolve_current_managed_issuer_identity(
+            &profile,
+            compatibility.resolve_issuer_did(&request),
+            compatibility.provider_public_key_for_profile(&scope.organization_id, &profile),
+        )
         .await
-    {
-        Ok(jwk) => jwk,
-        Err(error) => return error.into_response(),
-    };
-    if !same_current_managed_key(&resolved, &current_jwk) {
-        return public_error(
-            StatusCode::CONFLICT,
-            "Published issuer identity does not match its current managed KMS key.",
-        );
-    }
+        {
+            Ok(identity) => identity,
+            Err(error) => return error,
+        };
     let Some(jwk) = resolved.get("public_jwk") else {
         return public_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -7809,7 +7952,8 @@ mod public_contract_tests {
                     .is_some_and(|path| path.starts_with("/v1/signing-keys"))
             })
             .collect::<Vec<_>>();
-        assert_eq!(declared.len(), 41, "review route additions explicitly");
+        // Stored-service readiness adds the reviewed validate-current route.
+        assert_eq!(declared.len(), 42, "review route additions explicitly");
         let app = router_with_internal_api_key("test-only".into())
             .route_layer(middleware::from_fn(mark_matched_route));
         let unknown = app

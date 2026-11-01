@@ -40,8 +40,9 @@ def test_language_neutral_gateway_contracts_are_the_runtime_boundary() -> None:
         assert (ROOT / str(behavior[field])).is_file()
     assert 'include_str!("../../../../contracts/gateway-routes.json")' in rust_contract
     routes = json.loads(text("contracts/gateway-routes.json"))
-    assert routes["route_count"] == len(routes["routes"]) == 462
+    assert routes["route_count"] == len(routes["routes"]) == 463
     assert {
+        ("POST", "/v1/signing-keys/config/validate-current"),
         ("GET", "/v1/organizations/{organization_id}/offline-verification-events"),
         ("POST", "/v1/organizations/{organization_id}/offline-verification-events"),
         ("GET", "/v1/organizations/{organization_id}/offline-verification-events/{verification_id}"),
