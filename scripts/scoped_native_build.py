@@ -22,6 +22,7 @@ VOLUMES = ("ui-canvas-cargo", "d05-rust-target-20261026")
 OFFICIAL_PROFILE = "oid4vc-all-services"
 LATEST_OFFICIAL_PROFILE = "oid4vc-latest-maintenance-all-services"
 CURRENT_ISSUER_READY_PROFILE = "current-issuer-ready-two-role"
+CURRENT_ISSUER_READY_PROFILES = (CURRENT_ISSUER_READY_PROFILE, "current-issuer-policy-signing-only")
 OFFICIAL_PROFILES = (OFFICIAL_PROFILE, LATEST_OFFICIAL_PROFILE)
 LATEST_FREEZE_SHA256 = "075a9bafaf27bd31acfe8372c3172e04cf584120882018ff327e71044b69a5c1"
 OFFICIAL_FREEZE_SHA256 = "b77d6883f51bc1d3cf19d6cfa76fe567477c7d27e32134e05007c9104e49c941"
@@ -287,10 +288,10 @@ def build_arguments(plan, profile=None):
     scope = build_scope(profile)
     require(re.fullmatch(re.escape(scope["prefix"]) + r"[a-f0-9-]{36}", plan.get("containerName", "")) and plan["containerName"] == scope["prefix"] + plan["runId"], "RUN_BOUND_CONTAINER_NAME_REQUIRED")
     args = ["docker", "--context", "desktop-linux", "run", "--detach", "--pull", "never", "--network", "none", "--name", plan["containerName"],
-        "--cpus", "1", "--memory", "2g", "--memory-swap", "2g" if profile == CURRENT_ISSUER_READY_PROFILE else "4g",
+        "--cpus", "1", "--memory", "2g", "--memory-swap", "2g" if profile in CURRENT_ISSUER_READY_PROFILES else "4g",
         "--label", "elevenid.owner=" + scope["owner"],
         "--label", "elevenid.run=" + plan["runId"]]
-    if profile == CURRENT_ISSUER_READY_PROFILE:
+    if profile in CURRENT_ISSUER_READY_PROFILES:
         args += ["--pids-limit", "64", "--cap-drop", "ALL", "--security-opt", "no-new-privileges"]
     for source, target, readonly in ((plan["sources"]["ui"]["directory"], "/src/ui", True), (plan["sources"]["core"]["directory"], "/build/core", True),
             (plan["outputDirectory"], "/out", False), (plan["recipe"]["path"], "/build.sh", True)):
@@ -364,7 +365,7 @@ class LocalBuildJournal:
 def build_journal(plan, private, profile=None):
     if "journalBackend" not in plan:
         return LocalBuildJournal(private)
-    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", CURRENT_ISSUER_READY_PROFILE, "canvas-issuer-scoped-jobs", *OFFICIAL_PROFILES), "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED")
+    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", *CURRENT_ISSUER_READY_PROFILES, "canvas-issuer-scoped-jobs", *OFFICIAL_PROFILES), "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED")
     from scoped_linux_journal import LinuxBuildJournal
     return LinuxBuildJournal(private, plan["runId"], plan["journalBackend"])
 
@@ -390,7 +391,7 @@ def start(prepared_ref, helper, git, profile=None):
     require(os.environ.get("DOCKER_CONTEXT") == "desktop-linux", "EXPLICIT_DESKTOP_CONTEXT_REQUIRED")
     require(not list(output.iterdir()), "PRESERVE_PREVIOUS_BUILD_OUTPUTS")
     require(helper.VOLUMES == VOLUMES, "SHARED_RESOURCE_SCOPE_CHANGED")
-    if profile == CURRENT_ISSUER_READY_PROFILE:
+    if profile in CURRENT_ISSUER_READY_PROFILES:
         current_issuer_capacity(helper, private)
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED")
     if profile in OFFICIAL_PROFILES:
@@ -449,7 +450,7 @@ def start(prepared_ref, helper, git, profile=None):
     image = json.loads(helper.run("docker", "image", "inspect", plan["builderImage"]).stdout)[0]
     require(image["Id"] == plan["builderImage"] and image["Os"] == "linux" and image["Architecture"] == "amd64", "BUILDER_IDENTITY_CHANGED")
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED_AFTER_RESOURCE_CHECK")
-    if profile == CURRENT_ISSUER_READY_PROFILE:
+    if profile in CURRENT_ISSUER_READY_PROFILES:
         current_issuer_capacity(helper, private)
     state = {"state": "BUILD_CREATE_INTENT", "runId": plan["runId"], "preparationSha256": preparation_sha, "resourcesBefore": resource, "releaseQualified": False, "recordingQualified": False}
     if resource_state is None:
@@ -467,14 +468,14 @@ def start(prepared_ref, helper, git, profile=None):
         raise ValueError("DURABLE_INTENT_AND_JOURNAL_REQUIRED")
     try:
         args = build_arguments(plan, profile)
-        if profile == CURRENT_ISSUER_READY_PROFILE:
+        if profile in CURRENT_ISSUER_READY_PROFILES:
             require(args[3:5] == ["run", "--detach"], "BUILD_ARGUMENTS_CHANGED")
             args = args[:3] + ["create"] + args[5:]
         result = helper.run(*args)
         cid = result.stdout.strip()
         require(re.fullmatch(r"[a-f0-9]{64}", cid), "BUILD_DISPATCH_UNRESOLVED")
-        state.update(state="BUILD_CREATED" if profile == CURRENT_ISSUER_READY_PROFILE else "BUILD_RUNNING", containerId=cid)
-        if profile == CURRENT_ISSUER_READY_PROFILE:
+        state.update(state="BUILD_CREATED" if profile in CURRENT_ISSUER_READY_PROFILES else "BUILD_RUNNING", containerId=cid)
+        if profile in CURRENT_ISSUER_READY_PROFILES:
             require(durable_barrier(store.state(state)), "BUILD_CREATED_JOURNAL_REQUIRED")
             current_issuer_created_identity(helper, plan, cid)
             current_issuer_capacity(helper, private)
@@ -505,7 +506,7 @@ def finish(prepared_ref, helper, git, profile=None):
     require(row["Id"] == state["containerId"] and row["Image"] == plan["builderImage"] and row["Config"]["Labels"]["elevenid.run"] == plan["runId"]
         and row["Config"]["Labels"]["elevenid.owner"] == scope["owner"], "BUILD_OWNER_CHANGED")
     require(row["State"]["Status"] == "exited", "BUILD_STILL_ACTIVE")
-    if profile == CURRENT_ISSUER_READY_PROFILE:
+    if profile in CURRENT_ISSUER_READY_PROFILES:
         current_issuer_created_identity(helper, plan, state["containerId"], "exited")
     if profile in OFFICIAL_PROFILES:
         mounts = {mount["Destination"]: mount for mount in row["Mounts"]}

@@ -82,6 +82,31 @@ class CurrentIssuerProfileTests(unittest.TestCase):
         self.assertIn("--bin marty-signing-keys", build.render_recipe(PROFILE))
         self.assertIn("--bin marty-gateway", build.render_recipe(PROFILE))
 
+    def test_policy_signing_profile_reuses_closed_builder_without_gateway(self):
+        one = "current-issuer-policy-signing-only"
+        scope = build.build_scope(one)
+        self.assertEqual(scope["uiRevision"], "bdea3471667c6d413d74afc85c41573941682d5b")
+        self.assertEqual(scope["coreRevision"], "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac")
+        self.assertEqual(scope["roles"], {"signing-keys": "marty-signing-keys"})
+        self.assertEqual(scope["owner"], "current-issuer-ready-native")
+        recipe = build.render_recipe(one)
+        self.assertIn("--bin marty-signing-keys", recipe)
+        self.assertNotIn("--bin marty-gateway", recipe)
+        p = plan()
+        p.update(buildProfile=one, uiRevision=scope["uiRevision"],
+                 coreRevision=scope["coreRevision"], roleBinaries=scope["roles"],
+                 containerName=scope["prefix"] + RUN)
+        args = build.build_arguments(p, one)
+        self.assertEqual(args[args.index("--memory-swap") + 1], "2g")
+        self.assertEqual(args[args.index("--pids-limit") + 1], "64")
+        self.assertEqual(args[args.index("--network") + 1], "none")
+        self.assertEqual(args[args.index("--cpus") + 1], "1")
+        row = created_row(p)
+        build.current_issuer_created_identity(Helper(row), p, row["Id"])
+        row["Mounts"][0]["Source"] = "/foreign/ui"
+        with self.assertRaisesRegex(ValueError, "CURRENT_ISSUER_CREATED_MOUNTS_CHANGED"):
+            build.current_issuer_created_identity(Helper(row), p, row["Id"])
+
     def test_only_new_profile_has_no_swap_and_bounded_pids(self):
         p = plan()
         args = build.build_arguments(p, PROFILE)
