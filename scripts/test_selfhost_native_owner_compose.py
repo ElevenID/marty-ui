@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 GATE = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
 BIND = runpy.run_path(str(ROOT / "scripts/test_beta_application_image_compose.py"))
 APPROVED = "selfhost-kms-only-model.keyless-tls.snapshot.yml"
+APPROVED_SHA256 = (
+    "6b904f625a0d6ff156a47b84de8e72b341e1d7d357bb67d600415b9995c3bac7"
+)
 PUBLICATION_SETTINGS = {
     "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": "${CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE:-}",
     "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE": "${CANVAS_CREDENTIALS_ASSERTION_NARRATIVE:-}",
@@ -599,7 +602,7 @@ def run():
     data = (ROOT / APPROVED).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "6b904f625a0d6ff156a47b84de8e72b341e1d7d357bb67d600415b9995c3bac7"
+        == APPROVED_SHA256
     )
     before = GATE["render"](APPROVED)
     after = GATE["render"](GATE["BASE"])
