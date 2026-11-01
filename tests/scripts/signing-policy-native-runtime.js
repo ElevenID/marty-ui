@@ -5,8 +5,8 @@ const fs=require('node:fs');
 const ROLE='signing-keys', BINARY='marty-signing-keys';
 const CORE='4320b5fa1c6f41231ee0aa2bc57d8008549f67ac';
 const SOURCES=Object.freeze({
- 'bdea3471667c6d413d74afc85c41573941682d5b':1,
- '53138ba3cbddccd063e1d49ef8efa0f28d838a02':4,
+ 'bdea3471667c6d413d74afc85c41573941682d5b':{tests:1,profiles:['current-issuer-policy-signing-only']},
+ '53138ba3cbddccd063e1d49ef8efa0f28d838a02':{tests:4,profiles:['current-issuer-policy-signing-only','current-issuer-policy-signing-compact']},
 });
 const HASH=/^[a-f0-9]{64}$/;
 function expected(profile,{boundJson,verifyBoundFile,expectedRuntime,receiptDigests,applyNativeOverlayRows}){
@@ -22,9 +22,10 @@ function expected(profile,{boundJson,verifyBoundFile,expectedRuntime,receiptDige
  const build=boundJson(overlay.buildReceipt),prepared=boundJson(overlay.preparedSource);
  const plan=boundJson(overlay.compatibilityPlan),compatibility=boundJson(overlay.compatibilityResult);
  const deployed=boundJson(overlay.deploymentReceipt);
- const testCount=SOURCES[build.uiRevision];assert(Number.isInteger(testCount),'Unreviewed Signing Keys source');
+ const spec=SOURCES[build.uiRevision];assert(spec,'Unreviewed Signing Keys source');
  assert.equal(build.state,'BUILD_SUCCEEDED');assert.equal(build.exitCode,0);assert.equal(build.oomKilled,false);
- assert.equal(build.coreRevision,CORE);assert.equal(build.buildProfile,'current-issuer-policy-signing-only');
+ assert.equal(build.coreRevision,CORE);assert(spec.profiles.includes(build.buildProfile),'Unreviewed Signing Keys build profile');
+ assert.equal(prepared.buildProfile,build.buildProfile);
  assert.deepEqual(build.roleBinaries,{[ROLE]:BINARY});
  assert.equal(build.preparationSha256,overlay.preparedSource.sha256);
  assert.equal(prepared.sources?.ui?.revision,build.uiRevision);assert.equal(prepared.sources?.core?.revision,CORE);
@@ -32,7 +33,7 @@ function expected(profile,{boundJson,verifyBoundFile,expectedRuntime,receiptDige
  assert.deepEqual(Object.keys(build.binaries),[BINARY]);
  const binary=build.binaries[BINARY];assert(HASH.test(binary.sha256));verifyBoundFile(binary,512*1024*1024);
  assert.equal(build.focusedRustTest?.exitCode,0);verifyBoundFile(build.focusedRustTest.stdout,1024*1024);
- assert(fs.readFileSync(build.focusedRustTest.stdout.path,'utf8').includes(`test result: ok. ${testCount} passed; 0 failed;`));
+ assert(fs.readFileSync(build.focusedRustTest.stdout.path,'utf8').includes(`test result: ok. ${spec.tests} passed; 0 failed;`));
  assert.equal(plan.scope,'ELF_LOADER_UID_COMPATIBILITY_ONLY');
  assert.equal(plan.buildReceiptAuthoritativeSha256,overlay.buildReceipt.sha256);
  assert.equal(compatibility.schema,1);assert.equal(compatibility.state,'ELF_LOADER_UID_COMPATIBILITY_PASS');
@@ -44,7 +45,7 @@ function expected(profile,{boundJson,verifyBoundFile,expectedRuntime,receiptDige
  assert.equal(row.imageId,previous.imageId);
  for(const field of ['candidateReadableExecutable','loaderListSucceeded','ownedContainerRemoved'])assert.equal(row[field],true);
  assert.equal(deployed.schema,'marty.scoped-native-overlay-deployment/v1');
- assert.equal(deployed.profile,'current-issuer-policy-signing-only');
+ assert.equal(deployed.profile,build.buildProfile);
  assert.equal(deployed.scope,'FUNCTIONAL_ONLY');assert.equal(deployed.state,'APPLIED_FUNCTIONAL_ONLY');
  assert.equal(deployed.actualReadbackVerified,true);assert.equal(deployed.baseProfileSha256,profile.baseProfile.sha256);
  assert.equal(deployed.buildReceiptSha256,overlay.buildReceipt.sha256);
