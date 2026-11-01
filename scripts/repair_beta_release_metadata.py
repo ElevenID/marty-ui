@@ -33,6 +33,21 @@ GUARD_SHA = "9b1ac1ad73588d12c1115e9fc15c3424836b6c6a519b9debdfddf913a8e28224"
 KEYS = ("ELEVENID_COMPONENT_REVISIONS_JSON", "ELEVENID_IMAGE_DIGESTS_JSON")
 
 
+SOURCE_FILES = frozenset(
+    {
+        "repair_beta_release_metadata.py",
+        "beta_release_metadata.py",
+        "bind_deployed_demo_manifest.py",
+        "prepare_beta_release_metadata.py",
+        "scoped_native_runtime.py",
+        "validate_demo_manifests.py",
+        "demo_asset_hashes.py",
+        "../deploy-config/catalog/demo-portfolio-v3.json",
+        "../deploy-config/schemas/stack-demo-manifest.schema.json",
+    }
+)
+
+
 def load(bound):
     return json.loads(read_ref(bound).read_bytes())
 
@@ -66,15 +81,7 @@ def static_contract(c):
     )
     read_ref(c["guardSource"])
     read_executable_ref(c["dockerExecutable"])
-    required_sources = {
-        "repair_beta_release_metadata.py",
-        "beta_release_metadata.py",
-        "bind_deployed_demo_manifest.py",
-        "prepare_beta_release_metadata.py",
-        "scoped_native_runtime.py",
-        "validate_demo_manifests.py",
-        "demo_asset_hashes.py",
-    }
+    required_sources = SOURCE_FILES
     require(
         set(c["sourceFiles"]) == required_sources, "OPERATOR_SOURCE_CLOSURE_CHANGED"
     )

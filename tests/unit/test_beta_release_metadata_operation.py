@@ -136,3 +136,29 @@ def test_recovery_context_is_disabled_and_refuses_unknown_create():
         ValueError, match="UNKNOWN_CREATE_REQUIRES_READONLY_RECONCILIATION"
     ):
         recovery_context(original, failed, {}, {}, {}, {}, "fresh-root")
+
+
+def test_actual_operator_imports_from_the_complete_isolated_source_closure(tmp_path):
+    import shutil
+    import subprocess
+    from repair_beta_release_metadata import SOURCE_FILES
+
+    source = Path(__file__).resolve().parents[2] / "scripts"
+    isolated = tmp_path / "isolated" / "scripts"
+    isolated.mkdir(parents=True)
+    for filename in SOURCE_FILES:
+        target = isolated / filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / filename, target)
+    code = (
+        "import sys; sys.path.insert(0, "
+        + repr(str(isolated))
+        + "); import repair_beta_release_metadata; print('IMPORTED_CLOSED_OPERATOR')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", code], capture_output=True, timeout=30
+    )
+    assert result.returncode == 0, (
+        "Isolated operator import failed before any Docker command"
+    )
+    assert result.stdout.strip() == b"IMPORTED_CLOSED_OPERATOR"

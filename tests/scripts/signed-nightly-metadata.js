@@ -1,6 +1,6 @@
 "use strict";
 const assert=require('node:assert/strict'),{isDeepStrictEqual}=require('node:util');
-const OPERATOR_SHA='e83c396cf54aec3fb49760d871bcac2deaab19247dd2e21f0b542d327a07ed41';
+const OPERATOR_SHA='c8fb62400a23c6505ed92b963ce951be13816f849f62e43859dae04b9f8d7ed3';
 const TARGET='/usr/share/nginx/html/demos/manifests/2026.08.0.json';
 const ROLES=['ui-prod','gateway'];
 const same=(a,b,reason)=>assert(isDeepStrictEqual(a,b),reason);
