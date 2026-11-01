@@ -5,7 +5,7 @@ import json
 import re
 import tomllib
 
-TARGET = "/usr/share/nginx/html/demos/manifests/2026.08.0.json"
+TARGET = "/opt/marty-ui-static/demos/manifests/2026.08.0.json"
 KEYS = ("ELEVENID_COMPONENT_REVISIONS_JSON", "ELEVENID_IMAGE_DIGESTS_JSON")
 
 

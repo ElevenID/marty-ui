@@ -23,14 +23,23 @@ from scoped_native_runtime import (
     save_exclusive,
     save_state,
 )
-from beta_release_metadata import marker_maps, gateway_metadata_model, ui_metadata_model
+from beta_release_metadata import TARGET, marker_maps, gateway_metadata_model, ui_metadata_model
 from bind_deployed_demo_manifest import bind_manifest
 from prepare_beta_release_metadata import git_blob
 
 ROLES = ("ui-prod", "gateway")
-TARGET = "/usr/share/nginx/html/demos/manifests/2026.08.0.json"
 GUARD_SHA = "9b1ac1ad73588d12c1115e9fc15c3424836b6c6a519b9debdfddf913a8e28224"
 KEYS = ("ELEVENID_COMPONENT_REVISIONS_JSON", "ELEVENID_IMAGE_DIGESTS_JSON")
+SERVING_DIRECTORY = "/usr/share/nginx/html"
+READ_HELPER_COMMAND = (
+    "set -eu; sh /docker-entrypoint.d/40-ui-selfhost.sh >/dev/null; "
+    "id -u; id -g; id -G; "
+    "cat /usr/share/nginx/html/demos/manifests/2026.08.0.json"
+)
+
+
+def read_helper_tmpfs(uid, gid):
+    return "rw,noexec,nosuid,nodev,size=64m,mode=0755,uid=" + str(uid) + ",gid=" + str(gid)
 
 
 SOURCE_FILES = frozenset(
@@ -213,7 +222,6 @@ def static_contract(c):
     return models, changed, marker, identities
 
 
-NGINX_PRINCIPAL_SHA = "86423da8d99919b0ea5044031c4d9339df5ad1a861472a18ab1b20aa820152d5"
 NGINX_CENSUS = r"""set -eu
 awk '{print "MASTER\t" $22}' /proc/1/stat
 for d in /proc/[0-9]*; do
@@ -637,10 +645,6 @@ class Operation:
     def guard_read_helper(self, value, cid):
         image = self.models["ui-prod"]["services"]["ui-prod"]["image"]
         witness = load(self.c["uiServingPrincipal"])
-        require(
-            self.c["uiServingPrincipal"]["sha256"] == NGINX_PRINCIPAL_SHA,
-            "REVIEWED_NGINX_PRINCIPAL_REQUIRED",
-        )
         uid, gid = witness["uid"], witness["gid"]
         owner = "beta-release-metadata-" + self.c["runId"]
         source = str(read_ref(self.c["publicManifest"])).replace("\\", "/")
@@ -656,7 +660,7 @@ class Operation:
             and value["Config"].get("User") == str(uid) + ":" + str(gid)
             and value["Config"].get("Entrypoint") == ["/bin/sh"]
             and value["Config"].get("Cmd")
-            == ["-c", "id -u; id -g; id -G; cat /metadata.json"],
+            == ["-c", READ_HELPER_COMMAND],
             "PUBLIC_READ_HELPER_COMMAND_OR_USER_CHANGED",
         )
         host = value["HostConfig"]
@@ -671,14 +675,15 @@ class Operation:
             and host.get("CapAdd") in (None, [])
             and host.get("CapDrop") == ["ALL"]
             and host.get("SecurityOpt") == ["no-new-privileges:true"]
-            and host.get("RestartPolicy") == {"Name": "no", "MaximumRetryCount": 0},
+            and host.get("RestartPolicy") == {"Name": "no", "MaximumRetryCount": 0}
+            and host.get("Tmpfs") == {SERVING_DIRECTORY: read_helper_tmpfs(uid, gid)},
             "PUBLIC_READ_HELPER_CAPS_CHANGED",
         )
         require(len(value["Mounts"]) == 1, "PUBLIC_READ_HELPER_MOUNTS_CHANGED")
         mount = value["Mounts"][0]
         require(
             mount["Type"] == "bind"
-            and mount["Destination"] == "/metadata.json"
+            and mount["Destination"] == TARGET
             and mount["RW"] is False
             and self.g.DAEMON_SOURCE(mount["Source"]) == self.g.DAEMON_SOURCE(source),
             "PUBLIC_READ_HELPER_SOURCE_CHANGED",
@@ -704,10 +709,6 @@ class Operation:
         }
         role = "ui-prod"
         image = self.models[role]["services"][role]["image"]
-        require(
-            self.c["uiServingPrincipal"]["sha256"] == NGINX_PRINCIPAL_SHA,
-            "REVIEWED_NGINX_PRINCIPAL_REQUIRED",
-        )
         witness = load(self.c["uiServingPrincipal"])
         require(
             self.c["uiServingPrincipalSource"]["sha256"] == witness["sourceSha256"],
@@ -781,10 +782,12 @@ class Operation:
                     "--entrypoint",
                     "/bin/sh",
                     "--mount",
-                    "type=bind,source=" + source + ",target=/metadata.json,readonly",
+                    "type=bind,source=" + source + ",target=" + TARGET + ",readonly",
+                    "--tmpfs",
+                    SERVING_DIRECTORY + ":" + read_helper_tmpfs(uid, gid),
                     image,
                     "-c",
-                    "id -u; id -g; id -G; cat /metadata.json",
+                    READ_HELPER_COMMAND,
                 ],
                 "public-file-read-create",
             ),

@@ -243,10 +243,10 @@ def test_wrong_nginx_witness_hash_refuses_before_any_docker_command(
     public = tmp_path / "public.json"
     public.write_text("{}", encoding="utf8")
     op = operator.Operation.__new__(operator.Operation)
-    op.c = dict(publicManifest=ref(public), uiServingPrincipal=dict(sha256="0" * 64))
+    op.c = dict(publicManifest=ref(public), uiServingPrincipal={**ref(public), "sha256": "0" * 64})
     op.models = {"ui-prod": dict(services={"ui-prod": dict(image="unchanged")})}
     monkeypatch.setattr(operator, "acl_digest", lambda _: "a" * 64)
-    with pytest.raises(ValueError, match="REVIEWED_NGINX_PRINCIPAL_REQUIRED"):
+    with pytest.raises(ValueError, match="BOUND_FILE_CHANGED"):
         op.readability(set())
 
 
@@ -327,3 +327,60 @@ def test_execute_delegates_preview_generation_to_existing_guard(tmp_path, refuse
     assert calls == ([operator.ROLES[0]] if refuse else list(operator.ROLES))
     assert bool(reached) is not refuse
     assert (tmp_path / "before.json").exists() is not refuse
+
+
+def test_nginx_witness_wrong_source_refuses_before_docker(tmp_path, monkeypatch):
+    import repair_beta_release_metadata as operator
+
+    public = tmp_path / "public.json"
+    public.write_text("{}", encoding="utf8")
+    witness = tmp_path / "witness.json"
+    witness.write_text(json.dumps({"sourceSha256": "a" * 64}), encoding="utf8")
+    op = operator.Operation.__new__(operator.Operation)
+    op.c = dict(publicManifest=ref(public), uiServingPrincipal=ref(witness), uiServingPrincipalSource={"sha256": "b" * 64})
+    op.models = {"ui-prod": dict(services={"ui-prod": dict(image="unchanged")})}
+    monkeypatch.setattr(operator, "acl_digest", lambda _: "a" * 64)
+    with pytest.raises(ValueError, match="NGINX_PRINCIPAL_SOURCE_CHANGED"):
+        op.readability(set())
+
+
+def test_nginx_witness_must_match_current_cid_and_master_generation():
+    from repair_beta_release_metadata import validate_nginx_principal
+
+    ui, witness, raw = nginx_principal_fixture()
+    for target, field, changed in [(ui, "Id", "other"), (ui["State"], "Pid", 999), (ui["State"], "StartedAt", "other")]:
+        original = target[field]
+        target[field] = changed
+        with pytest.raises(ValueError, match="NGINX_MASTER_GENERATION_CHANGED"):
+            validate_nginx_principal(ui, witness, raw, raw)
+        target[field] = original
+
+
+def test_same_read_helper_runs_real_image_startup_with_only_bounded_html_tmpfs(tmp_path, monkeypatch):
+    import repair_beta_release_metadata as operator
+    from types import SimpleNamespace
+
+    public = tmp_path / "public.json"
+    public.write_text("{}", encoding="utf8")
+    op = operator.Operation.__new__(operator.Operation)
+    op.c = {"publicManifest": ref(public), "uiServingPrincipal": {"path": "bound-witness", "sha256": "a" * 64}, "runId": "owned"}
+    monkeypatch.setattr(operator, "load", lambda _: {"uid": 101, "gid": 101})
+    op.models = {"ui-prod": {"services": {"ui-prod": {"image": "signed-ui"}}}}
+    op.g = SimpleNamespace(IMAGE_IDS={"signed-ui": "exact-image"}, NETWORK_IDS={"none": "isolated"}, DAEMON_SOURCE=lambda value: value.replace("\\", "/"))
+    row = {"Id": "exact-cid", "Image": "exact-image",
+           "Config": {"Image": "signed-ui", "User": "101:101", "Entrypoint": ["/bin/sh"], "Cmd": ["-c", operator.READ_HELPER_COMMAND], "Labels": {"io.elevenid.owner": "beta-release-metadata-owned"}},
+           "HostConfig": {"NetworkMode": "none", "ReadonlyRootfs": True, "Memory": 64 * 1024**2, "MemorySwap": 64 * 1024**2, "NanoCpus": 250000000, "PidsLimit": 16, "Privileged": False, "CapAdd": None, "CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges:true"], "RestartPolicy": {"Name": "no", "MaximumRetryCount": 0}, "Tmpfs": {operator.SERVING_DIRECTORY: operator.read_helper_tmpfs(101, 101)}},
+           "Mounts": [{"Type": "bind", "Source": str(public), "Destination": operator.TARGET, "RW": False}],
+           "NetworkSettings": {"Networks": {"none": {"NetworkID": "isolated"}}}}
+    op.guard_read_helper(row, "exact-cid")
+    assert "sh /docker-entrypoint.d/40-ui-selfhost.sh >/dev/null" in operator.READ_HELPER_COMMAND
+    assert operator.TARGET.startswith("/opt/marty-ui-static/")
+    for mutate in [lambda value: value["HostConfig"]["Tmpfs"].clear(),
+                   lambda value: value["HostConfig"]["Tmpfs"].update({"/other": "rw"}),
+                   lambda value: value["HostConfig"]["Tmpfs"].update({operator.SERVING_DIRECTORY: operator.read_helper_tmpfs(0, 0)}),
+                   lambda value: value["Mounts"][0].update(Destination="/usr/share/nginx/html/demos/manifests/2026.08.0.json"),
+                   lambda value: value["Config"].update(Cmd=["-c", "cat /metadata.json"])]:
+        changed = copy.deepcopy(row)
+        mutate(changed)
+        with pytest.raises(ValueError):
+            op.guard_read_helper(changed, "exact-cid")

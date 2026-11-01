@@ -69,3 +69,18 @@ def test_ui_adds_only_the_one_public_readonly_file():
         pass
     else:
         raise AssertionError("Existing public override cannot be silently replaced")
+
+
+def test_ui_manifest_override_is_copied_by_existing_selfhost_startup():
+    import re
+    from pathlib import PurePosixPath
+
+    startup = (Path(__file__).resolve().parents[2] / "scripts/ui-selfhost-start.sh").read_text(encoding="utf8")
+    source = re.search(r'^SOURCE_DIR="([^\"]+)"$', startup, re.MULTILINE).group(1)
+    served = re.search(r'^TARGET_DIR="([^\"]+)"$', startup, re.MULTILINE).group(1)
+    relative = PurePosixPath(TARGET).relative_to(source)
+    assert str(relative) == "demos/manifests/2026.08.0.json"
+    assert not PurePosixPath(TARGET).is_relative_to(served)
+    assert 'rm -rf "${TARGET_DIR:?}/"*' in startup
+    assert 'cp -R "${SOURCE_DIR}/." "${TARGET_DIR}/"' in startup
+    assert str(PurePosixPath(served) / relative) == "/usr/share/nginx/html/demos/manifests/2026.08.0.json"

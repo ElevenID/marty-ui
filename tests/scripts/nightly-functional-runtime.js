@@ -158,12 +158,14 @@ function authority(profile, {boundJson, verifyBoundFile, boundBytes}) {
   if (auth) byRole.set('auth', auth);
   if (refs.restartSuccessor) byRole = require('./signed-nightly-restart').restartSuccessor(
     refs.restartSuccessor, byRole, ROLES, {boundJson, verifyBoundFile});
+  if (refs.metadataRecovery) byRole = require('./signed-nightly-metadata').metadataRecovery(
+    refs.metadataRecovery, byRole, {boundJson, verifyBoundFile});
   if (refs.metadataSuccessor) byRole = require('./signed-nightly-metadata').metadataSuccessor(
     refs.metadataSuccessor, byRole, {boundJson, verifyBoundFile});
   const rows = ROLES.map(role => {
     const row = byRole.get(role), reference = role === 'ui-prod' ? UI : SERVICES;
     assert.equal(lock.services[role === 'ui-prod' ? 'ui' : role] || (role.startsWith('passport-') ? SERVICES : null), reference);
-    assert.equal(row.Config.Image, reference); assert.equal(row.Id, refs.metadataSuccessor && ['ui-prod','gateway'].includes(role) ? byRole.get(role).Id : role === 'organization' && successor ? successor.Id : role === 'auth' && auth ? auth.Id : deployed.newCids[role]);
+    assert.equal(row.Config.Image, reference); assert.equal(row.Id, ((refs.metadataSuccessor && ['ui-prod','gateway'].includes(role)) || (refs.metadataRecovery && role==='ui-prod')) ? byRole.get(role).Id : role === 'organization' && successor ? successor.Id : role === 'auth' && auth ? auth.Id : deployed.newCids[role]);
     assert(HASH.test(row.Id) && /^sha256:[a-f0-9]{64}$/.test(row.Image));
     assert.equal(row.State.Running, true); assert.equal(row.State.OOMKilled, false);
     const project = role === 'ui-prod' ? 'elevenid-beta-ui' : 'elevenid-beta';
@@ -196,6 +198,7 @@ function expected(profile, tools) {
   assert.equal(readback.authSuccessorSha256 ?? null, refs.authSuccessor?.sha256 ?? null);
   assert.equal(readback.restartSuccessorSha256 ?? null, refs.restartSuccessor?.sha256 ?? null);
   assert.equal(readback.metadataSuccessorSha256 ?? null, refs.metadataSuccessor?.sha256 ?? null);
+  assert.equal(readback.metadataRecoverySha256 ?? null, refs.metadataRecovery?.sha256 ?? null);
   assert.equal(readback.releaseQualified, false); assert.equal(readback.recordingQualified, false);
   validateImages(readback.images, rows);
   assert(Array.isArray(readback.roles) && readback.roles.length === 22);
@@ -248,7 +251,7 @@ function produce(profile, {readDocker, boundJson, verifyBoundFile, boundBytes, o
       assert(HASH.test(actual.binarySha256)); assert.equal(actual.effectiveUid, 10001);
       assert.equal(actual.configuredRuntimeUid, 10001);
     }
-    if (previous && !(refs.metadataSuccessor && ['ui-prod','gateway'].includes(row.role))) {
+    if (previous && !((refs.metadataSuccessor && ['ui-prod','gateway'].includes(row.role)) || (refs.metadataRecovery && row.role==='ui-prod'))) {
       const old=previous.roles.filter(value=>value.role===row.role); assert.equal(old.length,1);
       assert.equal(typeof validateRestartObservation,'function');
       validateRestartObservation({...expectation,requiredStartedAt:old[0].startedAt,requiredHostPid:old[0].hostPid,requiredObservation:old[0]},actual);
@@ -259,7 +262,7 @@ function produce(profile, {readDocker, boundJson, verifyBoundFile, boundBytes, o
   assert.equal(engine(), engineId);
   return {schema: 'marty.functional-signed-image-observation/v1', release: RELEASE, source: SOURCE,
     engineId, deploymentSha256: refs.deployment.sha256, writerRestoreSha256: refs.writerRestore.sha256,
-    images, roles, metadataSuccessorSha256: refs.metadataSuccessor?.sha256 ?? null, restartSuccessorSha256: refs.restartSuccessor?.sha256 ?? null, organizationSuccessorSha256: refs.organizationSuccessor?.sha256 ?? null,
+    images, roles, metadataRecoverySha256:refs.metadataRecovery?.sha256 ?? null, metadataSuccessorSha256: refs.metadataSuccessor?.sha256 ?? null, restartSuccessorSha256: refs.restartSuccessor?.sha256 ?? null, organizationSuccessorSha256: refs.organizationSuccessor?.sha256 ?? null,
     authSuccessorSha256: refs.authSuccessor?.sha256 ?? null, releaseQualified: false, recordingQualified: false};
 }
 module.exports = {authority, expected, produce, ROLES, SOURCE, RELEASE, LOCK_SHA, SERVICES, UI};
