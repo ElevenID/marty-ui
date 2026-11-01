@@ -137,6 +137,94 @@ mod tests {
     }
 
     #[test]
+    fn retained_recovery_keeps_full_model_but_requires_an_explicit_runtime_dependency_closure() {
+        let root = tempfile::tempdir().unwrap();
+        let p = inputs(root.path());
+        let mut full = model(&p);
+        let image = p.approved_images.first().unwrap();
+        let mut prior = ProjectResources::default();
+        for role in ["app", "openbao", "openbao-unseal", "installer-acme-http01"] {
+            full["services"][role] = full["services"]["app"].clone();
+            prior
+                .containers
+                .insert(role.into(), identity(role, false, image));
+        }
+        full["services"]["setup"] = json!({"labels":{SETUP_LABEL:"setup"}});
+        prior
+            .containers
+            .insert("setup".into(), identity("setup", true, image));
+        full["services"]["openbao-unseal"]["depends_on"] =
+            json!({"openbao":{"condition":"service_healthy"}});
+        let selected: Vec<String> = ["openbao", "openbao-unseal", "installer-acme-http01"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let original = full.clone();
+        let roles = retained_runtime_selection(&full, &prior, &selected).unwrap();
+        assert_eq!(roles, selected.iter().cloned().collect());
+        assert_eq!(
+            full, original,
+            "admission must retain the complete native model"
+        );
+        assert!(
+            runtime_selection(&full, &prior, &selected).is_err(),
+            "ordinary runtime admission retains its existing no-setup-model policy"
+        );
+        for mutation in [
+            "empty",
+            "duplicate",
+            "unknown",
+            "missing-model",
+            "missing-retained",
+            "setup-selected",
+            "setup-dependency",
+            "unselected-dependency",
+            "incomplete-closure",
+            "retained-setup",
+            "malformed-dependencies",
+            "setup-condition",
+        ] {
+            let mut model = full.clone();
+            let mut retained = prior.clone();
+            let mut selection = selected.clone();
+            match mutation {
+                "empty" => selection.clear(),
+                "duplicate" => selection.push("openbao".into()),
+                "unknown" => selection.push("foreign".into()),
+                "missing-model" => {
+                    model["services"].as_object_mut().unwrap().remove("openbao");
+                }
+                "missing-retained" => {
+                    retained.containers.remove("openbao");
+                }
+                "setup-selected" => selection.push("setup".into()),
+                "setup-dependency" => {
+                    model["services"]["openbao"]["depends_on"] =
+                        json!({"setup":{"condition":"service_completed_successfully"}})
+                }
+                "unselected-dependency" => {
+                    model["services"]["openbao"]["depends_on"] =
+                        json!({"app":{"condition":"service_started"}})
+                }
+                "incomplete-closure" => selection.retain(|role| role != "openbao"),
+                "retained-setup" => retained.containers.get_mut("openbao").unwrap().setup = true,
+                "malformed-dependencies" => {
+                    model["services"]["openbao-unseal"]["depends_on"] = json!(["openbao"])
+                }
+                "setup-condition" => {
+                    model["services"]["openbao-unseal"]["depends_on"]["openbao"]["condition"] =
+                        json!("service_completed_successfully")
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                retained_runtime_selection(&model, &retained, &selection).is_err(),
+                "accepted {mutation}"
+            );
+        }
+    }
+
+    #[test]
     fn infrastructure_start_checks_selected_health_and_all_retained_identities() {
         let mut resources = ProjectResources::default();
         for (role, setup, id) in [
@@ -1021,6 +1109,10 @@ pub struct ComposeSession {
     // A generation owner may lend a read-only mixed-ID observation to local
     // recovery. Ordinary Compose operations cannot use this view to mutate.
     generation_transition: Option<BTreeSet<String>>,
+    // A retained recovery command admits the complete model but starts only
+    // this explicit runtime dependency closure. Ordinary starts keep their
+    // existing whole-model runtime admission.
+    runtime_recovery_roles: Option<BTreeSet<String>>,
 }
 
 /// Written before application startup. It binds the authenticated maintenance
@@ -1954,6 +2046,23 @@ impl ComposeSession {
     ) -> Result<Self> {
         Self::new_inner(docker_path, binding, inputs, None, false, false)
     }
+    /// Keep listener, mounts and the retained ownership census visible while
+    /// selecting only an explicit closed set of existing runtime containers.
+    /// This constructor grants no creation or setup execution authority.
+    pub(crate) fn new_runtime_recovery(
+        docker_path: &Path,
+        binding: &RuntimeBinding,
+        inputs: ComposeInputs,
+    ) -> Result<Self> {
+        require(inputs.prior.is_some())?;
+        let mut session = Self::new_inner(docker_path, binding, inputs, None, false, false)?;
+        session.runtime_recovery_roles = Some(retained_runtime_selection(
+            &session.model,
+            &session.prior(),
+            &session.inputs.services,
+        )?);
+        Ok(session)
+    }
     pub(crate) fn new_with_deadline(
         docker_path: &Path,
         binding: &RuntimeBinding,
@@ -2081,6 +2190,7 @@ impl ComposeSession {
             bindings,
             cleanup_only,
             generation_transition: None,
+            runtime_recovery_roles: None,
         };
         let output = session.compose(
             &["config", "--format", "json"],
@@ -2126,7 +2236,24 @@ impl ComposeSession {
         &self.bindings
     }
     pub(crate) fn require_runtime_selection(&self) -> Result<()> {
-        runtime_selection(&self.model, &self.prior(), &self.inputs.services)
+        self.runtime_selection_roles().map(|_| ())
+    }
+    pub(crate) fn runtime_selection_roles(&self) -> Result<BTreeSet<String>> {
+        if let Some(expected) = &self.runtime_recovery_roles {
+            require(!self.cleanup_only && self.generation_transition.is_none())?;
+            let roles =
+                retained_runtime_selection(&self.model, &self.prior(), &self.inputs.services)?;
+            require(&roles == expected)?;
+            Ok(roles)
+        } else {
+            runtime_selection(&self.model, &self.prior(), &self.inputs.services)?;
+            Ok(self.model["services"]
+                .as_object()
+                .ok_or(REFUSED)?
+                .keys()
+                .cloned()
+                .collect())
+        }
     }
     pub fn observe_resources(&self) -> Result<ProjectResources> {
         self.observe_transition(false, self.generation_transition.as_ref())
@@ -2600,6 +2727,10 @@ impl ComposeSession {
     }
     fn begin(&self, state: &mut Evidence<'_>, operation: &str, command: &[&str]) -> Result<()> {
         require(self.generation_transition.is_none())?;
+        if self.runtime_recovery_roles.is_some() {
+            require(command.first() == Some(&"start"))?;
+            self.runtime_selection_roles()?;
+        }
         let observed = self.observe(false)?;
         self.write(
             state,
@@ -2794,7 +2925,7 @@ impl ComposeSession {
                 && timeout.as_secs() > 0
                 && timeout.as_secs() <= MAX_WAIT,
         )?;
-        self.require_runtime_selection()?;
+        let selected = self.runtime_selection_roles()?;
         let mut state = Evidence::Maintenance(state, owner);
         let seconds = timeout.as_secs().to_string();
         let command = ["start", "--wait", "--wait-timeout", &seconds];
@@ -2802,12 +2933,6 @@ impl ComposeSession {
         let result = self.compose(&command, true, timeout + Duration::from_secs(60));
         let resources = self.observe(false);
         let status = self.status();
-        let selected = self.model["services"]
-            .as_object()
-            .ok_or(REFUSED)?
-            .keys()
-            .cloned()
-            .collect();
         let complete = matches!((&resources, &status), (Ok(resources), Ok(status)) if completed_selected(resources, status, Some(&selected)));
         self.receipt(&mut state, operation, &result, complete, resources, status)
     }
@@ -2966,6 +3091,41 @@ impl ComposeSession {
             )
         }
     }
+}
+
+/// The command explicitly names every dependency it may start. Unrelated
+/// runtime/setup roles remain in the complete authenticated model and census,
+/// but they cannot become implicit mutation or health-wait targets.
+fn retained_runtime_selection(
+    model: &Value,
+    prior: &ProjectResources,
+    selected: &[String],
+) -> Result<BTreeSet<String>> {
+    let services = model["services"].as_object().ok_or(REFUSED)?;
+    let roles: BTreeSet<String> = selected.iter().cloned().collect();
+    require(!roles.is_empty() && roles.len() == selected.len())?;
+    for role in &roles {
+        let config = services.get(role).ok_or(REFUSED)?;
+        require(
+            config["labels"][SETUP_LABEL] != "setup"
+                && prior
+                    .containers
+                    .get(role)
+                    .is_some_and(|identity| !identity.setup),
+        )?;
+        if let Some(dependencies) = config.get("depends_on") {
+            for (dependency, condition) in dependencies.as_object().ok_or(REFUSED)? {
+                require(
+                    roles.contains(dependency)
+                        && matches!(
+                            condition["condition"].as_str(),
+                            Some("service_started" | "service_healthy")
+                        ),
+                )?;
+            }
+        }
+    }
+    Ok(roles)
 }
 
 fn runtime_selection(model: &Value, prior: &ProjectResources, selected: &[String]) -> Result<()> {

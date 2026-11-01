@@ -78,12 +78,12 @@ fn native_intent(receipt: &ComposeReceipt, command: Value, prior: &ProjectResour
         "automatic_retry":false,"installation_ready":false})
 }
 
-struct Fixture {
-    root: tempfile::TempDir,
-    generations: Vec<GenerationBinding>,
+pub(super) struct Fixture {
+    pub(super) root: tempfile::TempDir,
+    pub(super) generations: Vec<GenerationBinding>,
 }
 impl Fixture {
-    fn new(last: u64) -> Self {
+    pub(super) fn new(last: u64) -> Self {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         for name in [
@@ -341,6 +341,8 @@ impl Fixture {
                 installation_ready: false,
                 successor: generations.last().map(|parent| SuccessorBinding {
                     sequence,
+                    attempt: 0,
+                    parent_attempt: parent.attempt(),
                     parent_binding_sha256: parent.sha256().unwrap(),
                     native_operation: operation.clone(),
                 }),

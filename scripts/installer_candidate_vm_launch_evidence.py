@@ -9,8 +9,10 @@ from __future__ import annotations
 import installer_release as release
 import re
 import uuid
+from installer_candidate_vm_policy import ROOTLESS_SEED_FIELDS, memory_mib, seed_profile
 
 LAUNCH_SCHEMA = "elevenid.installer-vm-launch/v1"
+ROOTLESS_LAUNCH_SCHEMA = "elevenid.installer-vm-launch/v2"
 PID_SCHEMA = "elevenid.installer-vm-pid/v2"
 CREATION_INTENT_FIELDS = {
     "schema", "phase", "vm_id", "image", "vm_dir", "disk_path",
@@ -60,6 +62,18 @@ def bind_exact_launch(intent_raw: bytes, pid_raw: bytes, receipt_raw: bytes,
         and str(uuid.UUID(boot_id)) == boot_id,
         "VM launch identity invalid",
     )
+    rootless = intent.get("schema") == ROOTLESS_LAUNCH_SCHEMA
+    resource_profile = None
+    if rootless:
+        seed = release.decode(seed_raw)
+        release.require(release.encode(seed) == seed_raw,
+                        "VM rootless seed encoding is not canonical")
+        resource_profile = seed_profile(seed)
+        release.require(resource_profile is not None
+                        and intent.get("resource_profile") == resource_profile
+                        and type(intent.get("memory_mib")) is int
+                        and intent["memory_mib"] == memory_mib(resource_profile),
+                        "VM rootless launch profile differs from seed")
     release.exact(intent, {
         "schema", "phase", "vm_id", "seed_receipt_sha256", "runtime_dir",
         "control_dir", "runtime_dir_device", "runtime_dir_inode",
@@ -68,7 +82,7 @@ def bind_exact_launch(intent_raw: bytes, pid_raw: bytes, receipt_raw: bytes,
         "kvm_gid", "ssh_port", "memory_mib", "cpus", "args",
         "qemu_sha256", "controller_boot_id", "started_at", "qualified",
         "dispatch_authorized",
-    }, "VM launch intent")
+    } | ({"resource_profile"} if rootless else set()), "VM launch intent")
     release.exact(spawned, {
         "schema", "phase", "vm_id", "intent_sha256", "pid",
         "start_ticks", "controller_boot_id", "spawned_at",
@@ -78,7 +92,8 @@ def bind_exact_launch(intent_raw: bytes, pid_raw: bytes, receipt_raw: bytes,
         "observation_route", "pid_authentication", "observed_at",
     }, "VM launch receipt")
     release.require(
-        intent["schema"] == receipt["schema"] == LAUNCH_SCHEMA
+        intent["schema"] == receipt["schema"]
+        == (ROOTLESS_LAUNCH_SCHEMA if rootless else LAUNCH_SCHEMA)
         and spawned["schema"] == PID_SCHEMA
         and intent["phase"] == "intent"
         and spawned["phase"] == "spawned"
@@ -146,6 +161,12 @@ def bind_provisioned_launch(*, creation_intent: bytes, creation_receipt: bytes,
     ri, rr = records["runtime_intent"], records["runtime_receipt"]
     si, sr = records["seed_intent"], records["seed_receipt"]
     li = records["launch_intent"]
+    resource_profile = seed_profile(si)
+    release.require(seed_profile(sr) == resource_profile
+                    and li["schema"] == (ROOTLESS_LAUNCH_SCHEMA if resource_profile else LAUNCH_SCHEMA)
+                    and li.get("resource_profile") == resource_profile,
+                    "VM provisioned runtime profile differs")
+    seed_fields = SEED_FIELDS | (ROOTLESS_SEED_FIELDS if resource_profile else set())
     vm_id = li["vm_id"]
     for record, fields, label in (
         (ci, CREATION_INTENT_FIELDS, "creation intent"),
@@ -154,8 +175,8 @@ def bind_provisioned_launch(*, creation_intent: bytes, creation_receipt: bytes,
         (rr, RUNTIME_FIELDS | {"intent_sha256", "runtime_dir_device",
                                "runtime_dir_inode", "transferred_at"},
          "runtime receipt"),
-        (si, SEED_FIELDS, "seed intent"),
-        (sr, SEED_FIELDS | SEED_RECEIPT_EXTRA, "seed receipt"),
+        (si, seed_fields, "seed intent"),
+        (sr, seed_fields | SEED_RECEIPT_EXTRA, "seed receipt"),
     ):
         release.exact(record, fields, "VM " + label)
     def inherited(intent: dict, receipt: dict) -> bool:
@@ -172,7 +193,7 @@ def bind_provisioned_launch(*, creation_intent: bytes, creation_receipt: bytes,
         all(record["vm_id"] == vm_id for record in (ci, cr, ri, rr, si, sr))
         and ci["schema"] == cr["schema"] == "elevenid.installer-vm-overlay-creation/v2"
         and ri["schema"] == rr["schema"] == "elevenid.installer-vm-runtime-transfer/v1"
-        and si["schema"] == sr["schema"] == "elevenid.installer-vm-seed/v1"
+        and si["schema"] == sr["schema"]
         and (ci["phase"], cr["phase"], ri["phase"], rr["phase"],
              si["phase"], sr["phase"])
         == ("intent", "created", "intent", "transferred", "intent", "seeded")

@@ -649,3 +649,69 @@ def test_initial_grant_repeat_refuses_existing_staging(scenario,monkeypatch):
     initial_grant.acquire(**kwargs)
     with pytest.raises(ValueError,match='already exists'):
         initial_grant.acquire(**kwargs)
+
+
+@pytest.mark.parametrize('stage', ['initial', 'execution'])
+@pytest.mark.parametrize('version', ['v1', 'managed', 'production', 'staging'])
+def test_fixed_hosting_archive_closure_preserves_versioned_raw_bytes(tmp_path, stage, version):
+    """Archive staging is bounded; this does not substitute for signature admission."""
+    import zipfile
+    base=initial_grant.NAMES if stage=='initial' else grant_receiver.NAMES
+    fixture_dir=Path(__file__).resolve().parents[1]/'rust/crates/deployment-catalog/tests/fixtures'
+    if version=='v1':
+        case=json.loads((fixture_dir/'installer-candidate-records.json').read_text())
+    else:
+        case=json.loads((fixture_dir/'installer-candidate-hosting-v2.json').read_text())[
+            {'managed':0,'production':1,'staging':2}[version]]
+    auth=r.decode(case['authorization'].encode())
+    members=dict.fromkeys(base,b'synthetic transport proof')
+    members['candidate-authorization.json']=case['authorization'].encode()
+    if version!='v1':members[r.candidate_hosting.NAME]=case['hosting_input'].encode()
+    if version=='staging':members[r.candidate_hosting.ROOTS_NAME]=case['staging_roots'].encode()
+    expected=base|r.candidate_hosting.file_names(auth)
+    archive=io.BytesIO()
+    with zipfile.ZipFile(archive,'w') as bundle:
+        for name,raw in members.items():bundle.writestr(name,raw)
+    archive.seek(0)
+    names=grant_receiver.initial_archive_names(archive,base) if stage=='initial' else expected
+    assert names==expected
+    held=grant_receiver.dispatch._directory(tmp_path)
+    try:grant_receiver.extract_exact(archive,tmp_path/'grant',held,names)
+    finally:os.close(held)
+    retained=r.candidate_hosting.check_file(auth,tmp_path/'grant')
+    assert retained=={name:members[name] for name in r.candidate_hosting.file_names(auth)}
+    assert {path.name for path in (tmp_path/'grant').iterdir()}==expected
+    assert all((path.stat().st_mode&0o777)==0o600 for path in (tmp_path/'grant').iterdir())
+
+
+@pytest.mark.parametrize('mutation',['missing-hosting','missing-roots','extra-file','duplicate-hosting',
+                                    'changed-raw-hosting','changed-root-bytes','legacy-hosting'])
+def test_fixed_initial_archive_refuses_unbound_or_changed_hosting_inputs(tmp_path, mutation):
+    import zipfile
+    fixture_dir=Path(__file__).resolve().parents[1]/'rust/crates/deployment-catalog/tests/fixtures'
+    case=json.loads((fixture_dir/'installer-candidate-hosting-v2.json').read_text())[2]
+    members=dict.fromkeys(initial_grant.NAMES,b'synthetic transport proof')
+    members.update({'candidate-authorization.json':case['authorization'].encode(),
+                    r.candidate_hosting.NAME:case['hosting_input'].encode(),
+                    r.candidate_hosting.ROOTS_NAME:case['staging_roots'].encode()})
+    if mutation=='missing-hosting':members.pop(r.candidate_hosting.NAME)
+    elif mutation=='missing-roots':members.pop(r.candidate_hosting.ROOTS_NAME)
+    elif mutation=='extra-file':members['caller-flags.txt']=b'--unsafe'
+    elif mutation=='changed-raw-hosting':members[r.candidate_hosting.NAME]+=b'\n'
+    elif mutation=='changed-root-bytes':members[r.candidate_hosting.ROOTS_NAME]+=b'\n'
+    elif mutation=='legacy-hosting':
+        old=json.loads((fixture_dir/'installer-candidate-records.json').read_text())
+        members['candidate-authorization.json']=old['authorization'].encode()
+    archive=io.BytesIO()
+    with zipfile.ZipFile(archive,'w') as bundle:
+        for name,raw in members.items():bundle.writestr(name,raw)
+        if mutation=='duplicate-hosting':
+            with pytest.warns(UserWarning,match='Duplicate name'):
+                bundle.writestr(r.candidate_hosting.NAME,members[r.candidate_hosting.NAME])
+    archive.seek(0)
+    with pytest.raises(ValueError):
+        names=grant_receiver.initial_archive_names(archive,initial_grant.NAMES)
+        held=grant_receiver.dispatch._directory(tmp_path)
+        try:grant_receiver.extract_exact(archive,tmp_path/'grant',held,names)
+        finally:os.close(held)
+        r.candidate_hosting.check_file(r.decode(members['candidate-authorization.json']),tmp_path/'grant')

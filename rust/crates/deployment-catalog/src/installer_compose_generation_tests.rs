@@ -229,6 +229,7 @@ esac
             bindings: BTreeMap::new(),
             cleanup_only: false,
             generation_transition: None,
+            runtime_recovery_roles: None,
         };
         let result = Self {
             inspected: prior

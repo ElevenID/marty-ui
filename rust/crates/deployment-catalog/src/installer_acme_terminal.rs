@@ -150,7 +150,7 @@ pub(super) fn observation(
 
 /// None means publication is not yet confirmed; Some(None) means no challenge
 /// projection exists and this order never published one.
-fn withdrawn_projection(
+pub(super) fn withdrawn_projection(
     state: &LockedInspection,
     installation: &Path,
     saved: &Ledger,
@@ -202,7 +202,7 @@ pub(super) fn confirm_withdrawal(
     inputs: &EnrolmentInputs<'_>,
     saved: &mut Ledger,
 ) -> Result<()> {
-    let Some(terminal) = &saved.state.terminal_retry else {
+    let Some(terminal) = saved.state.terminal_observation() else {
         return Ok(());
     };
     if terminal.withdrawal_confirmed_at.is_some() {
@@ -211,7 +211,7 @@ pub(super) fn confirm_withdrawal(
     let projection =
         withdrawn_projection(state.inspection(), inputs.installation, saved)?.ok_or(REFUSED)?;
     let mut next = saved.state.clone();
-    let terminal = next.terminal_retry.as_mut().ok_or(REFUSED)?;
+    let terminal = next.terminal_observation_mut().ok_or(REFUSED)?;
     let observed = now()?;
     require(observed >= terminal.observed_at)?;
     terminal.withdrawal_confirmed_at = Some(observed);

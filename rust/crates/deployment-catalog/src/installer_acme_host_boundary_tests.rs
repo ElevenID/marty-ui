@@ -636,6 +636,20 @@ fn boundary_fixture_with_staging(staging: bool) -> Boundary {
         )
         .unwrap();
     inputs.prior = Some(observed.clone());
+    if let Some(acme) = &acme {
+        // The in-memory worker's real account binding must be the exact public
+        // account retained by this otherwise synthetic native setup fixture.
+        state
+            .write_evidence(
+                &format!("acme-custody-{}-result.json", environment.as_str()),
+                &encode(&serde_json::json!({
+                    "schema":"elevenid.installer-acme-custody-result/v1",
+                    "account_key":acme.inputs().account_key.binding_metadata()
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+    }
     for filename in evidence_names(environment) {
         if state
             .with_inspection(|view| view.diagnostic_record(&filename, true))
@@ -671,6 +685,9 @@ fn boundary_fixture_with_staging(staging: bool) -> Boundary {
         acme,
     }
 }
+
+#[path = "installer_acme_initial_terminal_tests.rs"]
+mod initial_terminal_cases;
 
 #[test]
 #[ignore = "requires an ordinary nonroot OS identity for rootless prepared-boundary admission"]
@@ -709,7 +726,10 @@ fn complete_prepared_staging_candidate_can_roll_over_after_expiry_and_resume_its
         .unwrap()
         .unwrap();
     assert_eq!(permit.cycle(), 1);
-    assert_eq!(permit.prior_candidate().metadata(), candidate.metadata());
+    assert_eq!(
+        permit.prior_candidate().unwrap().metadata(),
+        candidate.metadata()
+    );
     fixture
         .state
         .with_inspection(|view| permit.require_worker(view, &inputs))

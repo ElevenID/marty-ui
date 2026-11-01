@@ -61,6 +61,16 @@ pub struct GenerationBinding {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SuccessorBinding {
     pub sequence: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::installer_generation_maintenance::attempt::is_zero"
+    )]
+    pub attempt: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::installer_generation_maintenance::attempt::is_zero"
+    )]
+    pub parent_attempt: u64,
     pub parent_binding_sha256: String,
     pub native_operation: String,
 }
@@ -274,6 +284,23 @@ impl GenerationBinding {
     pub(crate) fn sequence(&self) -> u64 {
         self.successor.as_ref().map_or(0, |value| value.sequence)
     }
+    pub(crate) fn attempt(&self) -> u64 {
+        self.successor.as_ref().map_or(0, |value| value.attempt)
+    }
+    pub(crate) fn attempt_id(&self) -> crate::installer_generation_maintenance::attempt::Attempt {
+        crate::installer_generation_maintenance::attempt::Attempt::new(
+            self.sequence(),
+            self.attempt(),
+        )
+    }
+    pub(crate) fn parent_attempt(&self) -> u64 {
+        self.successor
+            .as_ref()
+            .map_or(0, |value| value.parent_attempt)
+    }
+    pub(crate) fn record_name(&self, kind: &str) -> String {
+        self.attempt_id().record(kind)
+    }
     pub(crate) fn sha256(&self) -> Result<String> {
         self.validate()?;
         Ok(digest(&serde_json::to_vec(self).map_err(|_| REFUSED)?))
@@ -347,6 +374,11 @@ impl GenerationBinding {
         if !self.public_ingress() {
             return Ok(None);
         }
+        if self.attempt() > 0 {
+            let verified = load_verified_attempt(installation, self.sequence(), self.attempt())?;
+            require(verified.binding == *self)?;
+            return Ok(verified.public_metadata);
+        }
         let (bytes, outputs, plan) = candidate_at(
             installation,
             &self.installation_id,
@@ -385,10 +417,11 @@ impl GenerationBinding {
             require(
                 self.public_ingress()
                     && successor.sequence > 0
+                    && (successor.sequence > 1 || successor.parent_attempt == 0)
                     && hex(&successor.parent_binding_sha256)
                     && regex::Regex::new(&format!(
-                        r"\Ag{:020}-wait-[0-9]{{6}}\z",
-                        successor.sequence
+                        r"\A{}-wait-[0-9]{{6}}\z",
+                        self.attempt_id().operation_prefix()
                     ))
                     .map_err(|_| REFUSED)?
                     .is_match(&successor.native_operation),
@@ -501,7 +534,11 @@ fn candidate_at(
 ) -> Result<CandidateProvenance> {
     let parent = successor
         .map(|next| {
-            load_verified_sequence(installation, next.sequence.checked_sub(1).ok_or(REFUSED)?)
+            load_verified_attempt(
+                installation,
+                next.sequence.checked_sub(1).ok_or(REFUSED)?,
+                next.parent_attempt,
+            )
         })
         .transpose()?;
     candidate_with_parent(installation, id, engine, successor, parent.as_ref())
@@ -518,6 +555,7 @@ fn candidate_with_parent(
     if let (Some(next), Some(parent)) = (successor, parent) {
         require(
             parent.binding.sequence().checked_add(1) == Some(next.sequence)
+                && parent.binding.attempt() == next.parent_attempt
                 && parent.binding.sha256()? == next.parent_binding_sha256
                 && parent.binding.installation_id == id
                 && parent.binding.engine_id == engine,
@@ -528,7 +566,10 @@ fn candidate_with_parent(
     let evidence = directory(&installation.join("evidence"))?;
     let record_name = successor.map_or_else(
         || "generation-observation.json".into(),
-        |v| format!("generation-{:020}-candidate.json", v.sequence),
+        |v| {
+            crate::installer_generation_maintenance::attempt::Attempt::new(v.sequence, v.attempt)
+                .record("candidate")
+        },
     );
     let bytes = read(&evidence, &record_name, true)?.0;
     let r: Receipt = serde_json::from_slice(&bytes).map_err(|_| REFUSED)?;
@@ -578,7 +619,12 @@ fn candidate_with_parent(
                 &evidence,
                 &successor.map_or_else(
                     || crate::installer_public_ingress::PUBLIC_INGRESS_PLAN_RECORD.into(),
-                    |v| format!("generation-{:020}-public-ingress-plan.json", v.sequence),
+                    |v| {
+                        crate::installer_generation_maintenance::attempt::Attempt::new(
+                            v.sequence, v.attempt,
+                        )
+                        .record("public-ingress-plan")
+                    },
                 ),
                 true,
             )?
@@ -587,7 +633,19 @@ fn candidate_with_parent(
                 &bytes,
                 &metadata.plan_sha256,
             )?;
-            require(plan.installation_id() == id)?;
+            require(
+                plan.installation_id() == id
+                    && plan.record_name()
+                        == successor.map_or_else(
+                            || crate::installer_public_ingress::PUBLIC_INGRESS_PLAN_RECORD.into(),
+                            |v| {
+                                crate::installer_generation_maintenance::attempt::Attempt::new(
+                                    v.sequence, v.attempt,
+                                )
+                                .record("public-ingress-plan")
+                            },
+                        ),
+            )?;
             Ok::<_, String>(plan)
         })
         .transpose()?;
@@ -600,14 +658,21 @@ fn candidate_with_parent(
         require(
             read(
                 &evidence,
-                &format!("generation-{:020}-helper.json", next.sequence),
+                &crate::installer_generation_maintenance::attempt::Attempt::new(
+                    next.sequence,
+                    next.attempt,
+                )
+                .record("helper"),
                 true,
             )?
             .0 == operation,
         )?;
-        crate::installer_generation_maintenance::require_producer_journal(
+        crate::installer_generation_maintenance::require_producer_journal_at(
             installation,
-            next.sequence,
+            crate::installer_generation_maintenance::attempt::Attempt::new(
+                next.sequence,
+                next.attempt,
+            ),
             &r.container_id,
             &next.native_operation,
         )?;
@@ -658,9 +723,8 @@ fn candidate_with_parent(
         )?;
     }
     let work = successor.map(|v| {
-        installation
-            .join("generation-work")
-            .join(format!("{:020}", v.sequence))
+        crate::installer_generation_maintenance::attempt::Attempt::new(v.sequence, v.attempt)
+            .work(installation)
     });
     let transfer = directory(&work.as_ref().map_or_else(
         || installation.join("generation-transfer"),
@@ -914,6 +978,46 @@ fn verify_one(
     b: GenerationBinding,
     parent: Option<&VerifiedGeneration>,
 ) -> Result<VerifiedGeneration> {
+    if b.successor.is_none() || b.attempt() == 0 {
+        return verify_one_attempt(installation, b, parent);
+    }
+    let evidence = directory(&installation.join("evidence"))?;
+    let mut previous: Option<VerifiedGeneration> = None;
+    for number in 0..=b.attempt() {
+        let candidate = if number == b.attempt() {
+            b.clone()
+        } else {
+            read_attempt(&evidence, b.sequence(), number)?
+        };
+        require(
+            candidate.parent_attempt() == b.parent_attempt()
+                && candidate
+                    .successor
+                    .as_ref()
+                    .ok_or(REFUSED)?
+                    .parent_binding_sha256
+                    == b.successor.as_ref().ok_or(REFUSED)?.parent_binding_sha256,
+        )?;
+        let admitted = verify_one_attempt(installation, candidate, parent)?;
+        if let Some(prior) = &previous {
+            crate::installer_generation_maintenance::require_completed_attempt_link(
+                installation,
+                &admitted.binding,
+                &parent.ok_or(REFUSED)?.binding,
+                &prior.binding,
+                prior.public_metadata.as_ref().ok_or(REFUSED)?,
+            )?;
+        }
+        previous = Some(admitted);
+    }
+    previous.ok_or_else(|| REFUSED.into())
+}
+
+fn verify_one_attempt(
+    installation: &Path,
+    b: GenerationBinding,
+    parent: Option<&VerifiedGeneration>,
+) -> Result<VerifiedGeneration> {
     b.validate()?;
     if let Some(successor) = &b.successor {
         let parent = parent.ok_or(REFUSED)?;
@@ -1007,7 +1111,11 @@ pub fn verify(installation: &Path, b: &GenerationBinding) -> Result<()> {
         .successor
         .as_ref()
         .map(|next| {
-            load_verified_sequence(installation, next.sequence.checked_sub(1).ok_or(REFUSED)?)
+            load_verified_attempt(
+                installation,
+                next.sequence.checked_sub(1).ok_or(REFUSED)?,
+                next.parent_attempt,
+            )
         })
         .transpose()?;
     verify_one(installation, b.clone(), parent.as_ref())?;
@@ -1109,29 +1217,40 @@ pub fn load_verified(
     }
     load_initial_verified(installation, id, engine)
 }
-pub(crate) fn load_sequence(installation: &Path, sequence: u64) -> Result<GenerationBinding> {
-    Ok(load_verified_sequence(installation, sequence)?.binding)
+#[cfg(test)]
+fn load_sequence(installation: &Path, sequence: u64) -> Result<GenerationBinding> {
+    load_attempt(installation, sequence, 0)
+}
+pub(crate) fn load_attempt(
+    installation: &Path,
+    sequence: u64,
+    attempt: u64,
+) -> Result<GenerationBinding> {
+    Ok(load_verified_attempt(installation, sequence, attempt)?.binding)
 }
 
 /// Read canonical binding syntax for an already verified lineage's model
 /// comparison. This deliberately grants no candidate or activation authority.
-pub(crate) fn read_recorded_sequence(
+pub(crate) fn read_recorded_attempt(
     installation: &Path,
     sequence: u64,
+    attempt: u64,
 ) -> Result<GenerationBinding> {
     let root = directory(installation)?;
     let evidence = child(&root, "evidence")?;
-    let value = read_sequence(&evidence, sequence)?;
+    let value = read_attempt(&evidence, sequence, attempt)?;
     binding(installation, &root)?;
     binding(&installation.join("evidence"), &evidence)?;
     Ok(value)
 }
 
-fn read_sequence(evidence: &File, sequence: u64) -> Result<GenerationBinding> {
+fn read_attempt(evidence: &File, sequence: u64, attempt: u64) -> Result<GenerationBinding> {
+    require(sequence > 0 || attempt == 0)?;
     let name = if sequence == 0 {
         RECORD.into()
     } else {
-        format!("generation-{sequence:020}-binding.json")
+        crate::installer_generation_maintenance::attempt::Attempt::new(sequence, attempt)
+            .record("binding")
     };
     let bytes = read(evidence, &name, true)?.0;
     let binding: GenerationBinding =
@@ -1139,18 +1258,38 @@ fn read_sequence(evidence: &File, sequence: u64) -> Result<GenerationBinding> {
             .map_err(|_| REFUSED)?;
     require(
         binding.sequence() == sequence
+            && binding.attempt() == attempt
             && serde_json::to_vec(&binding).map_err(|_| REFUSED)? == bytes,
     )?;
     binding.validate()?;
     Ok(binding)
 }
 
-fn load_verified_sequence(installation: &Path, sequence: u64) -> Result<VerifiedGeneration> {
+fn load_verified_attempt(
+    installation: &Path,
+    sequence: u64,
+    attempt: u64,
+) -> Result<VerifiedGeneration> {
     let root = directory(installation)?;
     let evidence = child(&root, "evidence")?;
+    // Pin exact chosen attempts while walking backward, then authenticate the
+    // contiguous lineage once forward. This remains linear and never adopts
+    // another in-flight attempt merely because its sequence number matches.
+    let mut chain = Vec::new();
+    let mut current = sequence;
+    let mut chosen = attempt;
+    loop {
+        let next = read_attempt(&evidence, current, chosen)?;
+        chain.push((current, chosen));
+        if current == 0 {
+            break;
+        }
+        chosen = next.parent_attempt();
+        current -= 1;
+    }
     let mut previous = None;
-    for current in 0..=sequence {
-        let next = read_sequence(&evidence, current)?;
+    for (current, chosen) in chain.into_iter().rev() {
+        let next = read_attempt(&evidence, current, chosen)?;
         previous = Some(verify_one(installation, next, previous.as_ref())?);
     }
     binding(installation, &root)?;
@@ -1210,6 +1349,16 @@ pub fn verify_model(
 #[cfg(test)]
 #[path = "installer_generation_lineage_tests.rs"]
 mod lineage_tests;
+
+#[cfg(test)]
+pub(crate) fn test_lineage_fixture(last: u64) -> (tempfile::TempDir, Vec<GenerationBinding>) {
+    let fixture = lineage_tests::Fixture::new(last);
+    (fixture.root, fixture.generations)
+}
+#[cfg(test)]
+pub(crate) fn test_lineage_visits<T>(operation: impl FnOnce() -> T) -> (T, Vec<u64>) {
+    candidate_visits::measure(operation)
+}
 
 #[cfg(test)]
 mod tests {

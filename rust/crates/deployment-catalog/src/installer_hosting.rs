@@ -338,6 +338,56 @@ impl Configuration {
 
 /// Validate user files before confirmation or runtime side effects. Foundation
 /// origin is read by its existing owner; hosting never creates KMS resources.
+pub(crate) fn candidate_binding(
+    raw: &[u8],
+    staging_roots: Option<&[u8]>,
+) -> Result<crate::installer_release::CandidateHosting> {
+    require(!raw.is_empty() && raw.len() <= crate::installer_release::MAX_CANDIDATE_HOSTING)?;
+    let configuration: Configuration = decode(raw)?;
+    configuration.validate_installation()?;
+    configuration.require_foundation(None)?;
+    require(configuration.mode == Mode::Direct && configuration.connector.is_none())?;
+    let binding = crate::installer_release::CandidateHosting {
+        input_sha256: digest(raw),
+        input_size_bytes: raw.len() as u64,
+        public_origin: configuration
+            .public_origin
+            .as_ref()
+            .ok_or(REFUSED)?
+            .as_str()
+            .into(),
+        public_entry_origin: configuration
+            .public_entry_origin
+            .as_ref()
+            .map(|origin| origin.as_str().into()),
+        certificate_source: match configuration.tls.certificate_source {
+            CertificateSource::ManagedCa => "managed-ca",
+            CertificateSource::Acme => "acme",
+            CertificateSource::FoundationImport => return Err(REFUSED.into()),
+        }
+        .into(),
+        acme_environment: configuration
+            .tls
+            .acme
+            .as_ref()
+            .map(|p| p.environment().as_str().into()),
+        acme_terms_url: configuration
+            .tls
+            .acme
+            .as_ref()
+            .map(|p| p.terms_url().into()),
+        staging_trust: staging_roots.map(|bytes| crate::installer_release::CandidateStagingTrust {
+            sha256: digest(bytes),
+            size_bytes: bytes.len() as u64,
+        }),
+    };
+    binding.validate()?;
+    if let Some(bytes) = staging_roots {
+        crate::installer_acme_certificates::validate_staging_roots(bytes)?;
+    }
+    Ok(binding)
+}
+
 pub(crate) fn prepare(
     path: Option<&Path>,
     foundation_origin: Option<PublicOrigin>,
@@ -366,6 +416,9 @@ pub(crate) fn prepare(
 }
 
 impl Prepared {
+    pub(crate) fn input_sha256(&self) -> String {
+        digest(&self.raw)
+    }
     pub(crate) fn acme_parameters(&self) -> Option<&AcmeParameters> {
         self.configuration.tls.acme.as_ref()
     }
@@ -540,6 +593,9 @@ pub(crate) fn resolve(state: &LockedInspection) -> Result<Selection> {
 }
 
 impl Selection {
+    pub(crate) fn source_sha256(&self) -> &str {
+        &self.source_sha256
+    }
     pub(crate) fn is_recorded(&self) -> bool {
         self.recorded
     }

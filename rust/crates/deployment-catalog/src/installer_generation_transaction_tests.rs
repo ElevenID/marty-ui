@@ -42,7 +42,7 @@ fn a_same_model_new_helper_without_a_bound_create_intent_is_not_adopted() {
     let roles = BTreeSet::from(["installer-generation".into()]);
     let creates = authorized_creates(
         fixture.root(),
-        1,
+        Attempt::new(1, 0),
         "create",
         fixture.session(),
         &prior,
@@ -72,7 +72,7 @@ fn a_lost_create_response_reconciles_only_the_exact_prior_config_inputs_and_sele
     let roles = BTreeSet::from(["installer-generation".into()]);
     let creates = authorized_creates(
         fixture.root(),
-        1,
+        Attempt::new(1, 0),
         "create",
         fixture.session(),
         &prior,
@@ -102,7 +102,7 @@ fn a_lost_create_response_reconciles_only_the_exact_prior_config_inputs_and_sele
         assert!(
             authorized_creates(
                 fixture.root(),
-                1,
+                Attempt::new(1, 0),
                 "create",
                 fixture.session(),
                 &prior,
@@ -135,7 +135,7 @@ fn partial_activation_requires_each_changed_or_missing_role_to_have_a_prior_crea
     let roles = BTreeSet::from(["api".into(), "edge".into()]);
     let creates = authorized_creates(
         fixture.root(),
-        1,
+        Attempt::new(1, 0),
         "activate-create",
         fixture.session(),
         &prior,
@@ -154,7 +154,7 @@ fn partial_activation_requires_each_changed_or_missing_role_to_have_a_prior_crea
     );
     let creates = authorized_creates(
         fixture.root(),
-        1,
+        Attempt::new(1, 0),
         "activate-create",
         fixture.session(),
         &prior,

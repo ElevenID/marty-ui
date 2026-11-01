@@ -154,7 +154,20 @@ pub struct AcceptanceScope {
     pub authorization_sha256: String,
     pub context_sha256: String,
     pub consumption_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authenticated_evidence_sha256: Option<std::collections::BTreeMap<String, String>>,
 }
+pub(crate) const ACCEPTANCE_AUTHENTICATED_EVIDENCE: [&str; 9] = [
+    "installer-candidate-authorization.json",
+    "installer-candidate-authorization.json.sigstore.json",
+    "installer-candidate-authorization.json.provenance.jsonl",
+    "installer-controller-consumption.json",
+    "installer-controller-consumption.json.sigstore.json",
+    "installer-controller-consumption.json.provenance.jsonl",
+    "installer-inventory.json",
+    "installer-inventory.json.sigstore.json",
+    "installer-inventory.json.provenance.jsonl",
+];
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CandidateTestScope {
@@ -195,6 +208,15 @@ impl CandidateTestScope {
     }
 }
 impl AcceptanceScope {
+    pub(crate) fn authenticated_evidence(
+        &self,
+    ) -> Result<&std::collections::BTreeMap<String, String>> {
+        self.validate()?;
+        self.authenticated_evidence_sha256
+            .as_ref()
+            .ok_or_else(|| "historical acceptance scope has no authenticated file binding".into())
+    }
+
     fn validate(&self) -> Result<()> {
         for value in [
             &self.authorization_sha256,
@@ -207,6 +229,21 @@ impl AcceptanceScope {
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
             {
                 return Err("invalid acceptance execution scope".into());
+            }
+        }
+        if let Some(evidence) = &self.authenticated_evidence_sha256 {
+            if evidence.len() != ACCEPTANCE_AUTHENTICATED_EVIDENCE.len()
+                || ACCEPTANCE_AUTHENTICATED_EVIDENCE
+                    .iter()
+                    .any(|name| !evidence.contains_key(*name))
+                || evidence.values().any(|value| {
+                    value.len() != 64
+                        || !value
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                })
+            {
+                return Err("invalid authenticated acceptance evidence binding".into());
             }
         }
         Ok(())
@@ -2865,6 +2902,47 @@ mod tests {
             authorization_sha256: "a".repeat(64),
             context_sha256: "b".repeat(64),
             consumption_id: "c".repeat(64),
+            authenticated_evidence_sha256: None,
+        }
+    }
+    #[test]
+    fn acceptance_authenticated_evidence_is_closed_and_legacy_bytes_are_preserved() {
+        let legacy = acceptance_scope();
+        legacy.validate().unwrap();
+        let bytes = serde_json::to_vec(&legacy).unwrap();
+        assert!(!String::from_utf8(bytes.clone())
+            .unwrap()
+            .contains("authenticated_evidence"));
+        let restored: AcceptanceScope = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(serde_json::to_vec(&restored).unwrap(), bytes);
+        assert!(restored.authenticated_evidence().is_err());
+        let mut bound = legacy;
+        bound.authenticated_evidence_sha256 = Some(
+            ACCEPTANCE_AUTHENTICATED_EVIDENCE
+                .iter()
+                .map(|name| ((*name).into(), "d".repeat(64)))
+                .collect(),
+        );
+        bound.authenticated_evidence().unwrap();
+        for mutation in ["missing", "extra", "uppercase", "short"] {
+            let mut invalid = bound.clone();
+            let map = invalid.authenticated_evidence_sha256.as_mut().unwrap();
+            match mutation {
+                "missing" => {
+                    map.remove(ACCEPTANCE_AUTHENTICATED_EVIDENCE[0]);
+                }
+                "extra" => {
+                    map.insert("other.json".into(), "d".repeat(64));
+                }
+                "uppercase" => {
+                    map.insert(ACCEPTANCE_AUTHENTICATED_EVIDENCE[0].into(), "D".repeat(64));
+                }
+                "short" => {
+                    map.insert(ACCEPTANCE_AUTHENTICATED_EVIDENCE[0].into(), "d".repeat(63));
+                }
+                _ => unreachable!(),
+            }
+            assert!(invalid.validate().is_err(), "accepted {mutation}");
         }
     }
     fn acceptance_runtime() -> RuntimeBinding {

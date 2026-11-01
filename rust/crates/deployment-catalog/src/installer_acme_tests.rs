@@ -835,26 +835,139 @@ impl Fixture {
         panic!("fixture failed to produce a candidate")
     }
     pub(crate) fn finish_locked(&self, state: &mut LockedMaintenance) -> Result<EnrolmentOutcome> {
+        self.finish_initial_locked(state, None)
+    }
+    pub(crate) fn initial_binding(
+        &self,
+        state: &LockedInspection,
+        permit: &crate::installer_acme_host::InitialRolloverPermit,
+    ) -> Result<Binding> {
+        recurrent::initial_rollover_binding(state, &self.inputs(), permit)
+    }
+    pub(crate) fn run_initial_locked(
+        &self,
+        state: &mut LockedMaintenance,
+        permit: Option<&crate::installer_acme_host::InitialRolloverPermit>,
+    ) -> Result<EnrolmentOutcome> {
+        let inputs = self.inputs();
+        let binding = match permit {
+            Some(permit) => self.initial_binding(state.inspection(), permit)?,
+            None => bind_inputs(state.inspection(), &inputs)?,
+        };
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(drive(
+                state,
+                &inputs,
+                binding,
+                self.signer.clone(),
+                Box::new(self.ca.clone()),
+            ))
+    }
+    pub(crate) fn finish_initial_locked(
+        &self,
+        state: &mut LockedMaintenance,
+        permit: Option<&crate::installer_acme_host::InitialRolloverPermit>,
+    ) -> Result<EnrolmentOutcome> {
         for _ in 0..8 {
-            let inputs = self.inputs();
-            let binding = bind_inputs(state.inspection(), &inputs)?;
-            let outcome = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(drive(
-                    state,
-                    &inputs,
-                    binding,
-                    self.signer.clone(),
-                    Box::new(self.ca.clone()),
-                ))?;
+            let outcome = self.run_initial_locked(state, permit)?;
             if outcome.candidate.is_some() {
                 return Ok(outcome);
             }
+            assert_ne!(
+                outcome.report["stage"], "terminal",
+                "fixture reached a terminal result: {}",
+                outcome.report["failure"]
+            );
             self.advance(20);
         }
         panic!("fixture failed to produce a locked candidate")
+    }
+    pub(crate) fn reject_initial_order(&self, retry_after: Option<u64>) {
+        let mut ca = self.ca.state.lock().unwrap();
+        ca.order_invalid = true;
+        ca.terminal_retry_after = retry_after;
+    }
+    pub(crate) fn lose_initial_order_response(&self) {
+        self.ca.state.lock().unwrap().lose_order = true;
+    }
+    pub(crate) fn initial_counts(&self) -> (usize, usize, usize, usize) {
+        let ca = self.ca.state.lock().unwrap();
+        (
+            ca.registration_posts,
+            ca.lookup_posts,
+            ca.new_orders,
+            ca.finalizations,
+        )
+    }
+    pub(crate) fn request_count(&self) -> usize {
+        self.ca.state.lock().unwrap().requests.len()
+    }
+    pub(crate) fn next_initial_order(&mut self, serial: u8) {
+        let observed = now().unwrap();
+        let mut leaf = Certificate::from_pem(&self.ca.certificate).unwrap();
+        leaf.tbs_certificate.serial_number =
+            x509_cert::serial_number::SerialNumber::new(&[serial]).unwrap();
+        // Only the protocol clock advances in this fixture. Certificate
+        // admission also verifies real wall time, so retain the original
+        // already-valid not_before while extending the replacement lifetime.
+        leaf.tbs_certificate.validity.not_after = (UNIX_EPOCH
+            + Duration::from_secs(observed + 8 * 3600))
+        .try_into()
+        .unwrap();
+        self.ca.certificate = sign_certificate(leaf, &self.ca_key)
+            .to_pem(LineEnding::LF)
+            .unwrap();
+        let certificate = admitted(&self.inputs(), self.ca.certificate.as_bytes()).unwrap();
+        let before = certificate.metadata()["not_before"].as_u64().unwrap();
+        let after = certificate.metadata()["not_after"].as_u64().unwrap();
+        let wall_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(before <= wall_time && before <= observed);
+        assert!(after > wall_time + 3600 && after > observed + 3600);
+        assert!(after - before <= SHORTLIVED_MAXIMUM_SECONDS);
+        self.ca.created_at = observed;
+        let mut ca = self.ca.state.lock().unwrap();
+        ca.order_exists = false;
+        ca.order_invalid = false;
+        ca.terminal_retry_after = None;
+        ca.ready = [false; 2];
+        ca.finalized = false;
+        ca.authorization_reads = [0; 2];
+    }
+    /// Simulate interruption after the worker's authenticated terminal
+    /// observation was durably recorded, before its local withdrawal step.
+    pub(crate) fn interrupt_initial_terminal(
+        &self,
+        state: &mut LockedMaintenance,
+        cycle: u64,
+        typed: bool,
+    ) -> Result<()> {
+        let mut saved = Ledger::load_cycle(state.inspection(), AcmeEnvironment::Staging, cycle)?
+            .ok_or(REFUSED)?;
+        let observed = now()?;
+        let mut next = saved.state.clone();
+        next.stage = Stage::Terminal;
+        next.failure = Some("authorization_invalid".into());
+        next.retry = None;
+        next.next_poll_at = None;
+        next.pending_challenge = None;
+        next.initial_terminal_retry = if typed {
+            initial_terminal::observation(
+                state.inspection(),
+                &saved,
+                "authorization_invalid",
+                None,
+                observed,
+            )?
+        } else {
+            None
+        };
+        saved.append(state, next, observed)
     }
     pub(crate) fn installation(&self) -> &Path {
         &self.installation

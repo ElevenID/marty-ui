@@ -16,14 +16,15 @@ pub(super) fn same_material(left: &Binding, right: &Binding) -> Result<()> {
     require(left == right)
 }
 
-pub(super) fn require_lineage(state: &LockedInspection, saved: &Ledger) -> Result<()> {
+pub(crate) fn require_lineage(state: &LockedInspection, saved: &Ledger) -> Result<()> {
     let mut binding = saved.binding.clone();
     while let Some(renewal) = &binding.renewal {
         let record_name = match renewal.reason {
             IssuanceReason::SelectedGenerationDue { .. } => {
                 RenewalPermit::record_name(binding.cycle)
             }
-            IssuanceReason::InitialCandidateExpired { .. } => {
+            IssuanceReason::InitialCandidateExpired { .. }
+            | IssuanceReason::InitialOrderTerminal { .. } => {
                 crate::installer_acme_host::InitialRolloverPermit::record_name(
                     binding.environment,
                     binding.cycle,
@@ -35,11 +36,21 @@ pub(super) fn require_lineage(state: &LockedInspection, saved: &Ledger) -> Resul
         let prior =
             Ledger::load_cycle(state, binding.environment, renewal.prior_cycle)?.ok_or(REFUSED)?;
         require(
-            prior.state.stage == Stage::Complete
-                && prior.digest == renewal.prior_enrolment_receipt_sha256
+            prior.digest == renewal.prior_enrolment_receipt_sha256
                 && prior.state.account_url.as_deref() == Some(renewal.account_url.as_str()),
         )?;
         same_material(&binding, &prior.binding)?;
+        match renewal.reason {
+            IssuanceReason::SelectedGenerationDue { .. } => {
+                require(prior.state.stage == Stage::Complete)?;
+            }
+            IssuanceReason::InitialCandidateExpired { .. }
+            | IssuanceReason::InitialOrderTerminal { .. } => {
+                crate::installer_acme_host::InitialRolloverPermit::require_link(
+                    state, &binding, &prior,
+                )?;
+            }
+        }
         binding = prior.binding;
     }
     require(binding.cycle == 0)
@@ -54,9 +65,19 @@ pub fn retained_candidate(
     cycle: u64,
 ) -> Result<AcmeCandidate> {
     let saved = Ledger::load_cycle(state, environment, cycle)?.ok_or(REFUSED)?;
+    require_lineage(state, &saved)?;
+    retained_candidate_material(state, &saved)
+}
+
+/// Internal leaf admission without recursive lineage traversal. Only callers
+/// which separately validate the complete iterative chain may use this result.
+pub(crate) fn retained_candidate_material(
+    state: &LockedInspection,
+    saved: &Ledger,
+) -> Result<AcmeCandidate> {
     require(saved.state.stage == Stage::Complete)?;
-    let certificate = retained_certificate(state, &saved)?;
-    outcome(&saved, Some(certificate))
+    let certificate = retained_certificate_material(state, saved)?;
+    outcome(saved, Some(certificate))
         .candidate
         .ok_or_else(|| REFUSED.into())
 }
@@ -65,12 +86,19 @@ pub(super) fn retained_certificate(
     state: &LockedInspection,
     saved: &Ledger,
 ) -> Result<ValidatedCertificate> {
+    require_lineage(state, saved)?;
+    retained_certificate_material(state, saved)
+}
+
+fn retained_certificate_material(
+    state: &LockedInspection,
+    saved: &Ledger,
+) -> Result<ValidatedCertificate> {
     require(matches!(
         saved.state.stage,
         Stage::CertificateAdmitted | Stage::Complete
     ))?;
     let environment = saved.binding.environment;
-    require_lineage(state, saved)?;
     let configuration = saved.binding.configuration(state)?;
     let spki = STANDARD
         .decode(&saved.binding.ingress_spki_base64)
@@ -118,6 +146,33 @@ pub(super) fn retained_certificate(
                 .is_some_and(|lifetime| lifetime <= SHORTLIVED_MAXIMUM_SECONDS),
     )?;
     Ok(certificate)
+}
+
+/// Terminal initial predecessors have no certificate. Walk to the most recent
+/// real admitted candidate, if one exists, without inventing a predecessor leaf.
+pub(super) fn previous_certificate_metadata(
+    state: &LockedInspection,
+    saved: &Ledger,
+) -> Result<Option<Value>> {
+    require_lineage(state, saved)?;
+    let mut binding = saved.binding.clone();
+    while let Some(link) = &binding.renewal {
+        let prior =
+            Ledger::load_cycle(state, binding.environment, link.prior_cycle)?.ok_or(REFUSED)?;
+        if prior.state.stage == Stage::Complete {
+            return Ok(Some(
+                retained_certificate_material(state, &prior)?
+                    .metadata()
+                    .clone(),
+            ));
+        }
+        require(
+            matches!(link.reason, IssuanceReason::InitialOrderTerminal { .. })
+                && prior.state.initial_terminal_retry.is_some(),
+        )?;
+        binding = prior.binding;
+    }
+    Ok(None)
 }
 
 fn prior_for_permit(state: &LockedInspection, permit: &RenewalPermit) -> Result<Ledger> {
@@ -203,18 +258,31 @@ pub(crate) fn run_initial_rollover_locked(
     credentials: Arc<dyn WorkloadCredentials>,
     permit: &crate::installer_acme_host::InitialRolloverPermit,
 ) -> Result<EnrolmentOutcome> {
-    permit.require_worker(state.inspection(), inputs)?;
-    let prior = Ledger::load_cycle(
-        state.inspection(),
-        permit.prior_candidate().environment(),
-        permit.prior_candidate().cycle(),
-    )?
-    .ok_or(REFUSED)?;
-    require(
-        prior.state.stage == Stage::Complete
-            && prior.digest == permit.prior_candidate().enrolment_receipt_sha256(),
-    )?;
-    let mut binding = bind_inputs(state.inspection(), inputs)?;
+    let binding = initial_rollover_binding(state.inspection(), inputs, permit)?;
+    run_with_binding(state, inputs, binding, bao, credentials)
+}
+
+pub(super) fn initial_rollover_binding(
+    state: &LockedInspection,
+    inputs: &EnrolmentInputs<'_>,
+    permit: &crate::installer_acme_host::InitialRolloverPermit,
+) -> Result<Binding> {
+    permit.require_worker(state, inputs)?;
+    let prior =
+        Ledger::load_cycle(state, permit.environment(), permit.prior_cycle())?.ok_or(REFUSED)?;
+    require(prior.digest == permit.prior_receipt_sha256())?;
+    if let Some(candidate) = permit.prior_candidate() {
+        require(
+            prior.state.stage == Stage::Complete
+                && prior.digest == candidate.enrolment_receipt_sha256(),
+        )?;
+    } else {
+        require(
+            prior.state.stage == Stage::Terminal
+                && matches!(permit.reason(), IssuanceReason::InitialOrderTerminal { .. }),
+        )?;
+    }
+    let mut binding = bind_inputs(state, inputs)?;
     same_material(&binding, &prior.binding)?;
     binding.cycle = permit.cycle();
     binding.renewal = Some(RenewalBinding {
@@ -226,6 +294,6 @@ pub(crate) fn run_initial_rollover_locked(
         account_url: prior.state.account_url.ok_or(REFUSED)?,
         created_at: permit.created_at(),
     });
-    binding.configuration(state.inspection())?;
-    run_with_binding(state, inputs, binding, bao, credentials)
+    binding.configuration(state)?;
+    Ok(binding)
 }

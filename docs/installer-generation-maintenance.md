@@ -85,6 +85,47 @@ inspection and qualification of recovery material. Retention alone does not
 establish an automatic rollback procedure or a verified backup. No automatic
 generation pruning is implemented.
 
+## Stale completed attempts
+
+Selected generation sequence numbers remain contiguous. A completed producer
+whose credential admission deadline elapsed, or whose public certificate
+expired before selection, can be superseded by an immutable attempt within the
+same next sequence. Attempt zero
+keeps the original record names and serialized fields. Later attempts use
+`generation-<sequence>-attempt-<attempt>-<kind>.json` with both numbers padded to
+20 digits, and a separate `generation-work/<sequence>/attempt-<attempt>` directory.
+The selector, selection receipt, binding, ingress plan and native operations all
+identify the same attempt. The next selected generation also pins its parent's
+chosen attempt. Historical validation checks every supersession link.
+
+Supersession first requires a certainly successful, unrestarted helper and its
+complete admitted output. Certificate integrity and clock consistency are
+checked separately from expiry. A failed, running or unknown helper does not
+grant a new minting attempt. In particular, an ambiguous retained start intent
+cannot be bypassed by allocating another attempt.
+
+A durable supersession intent precedes native changes. If runtime replacement
+had not begun, the serving selected census is preserved. If replacement was
+interrupted, only its already authorized consumer footprint is stopped and
+converged to the exact stale model with create-only commands. Those containers
+are not started. OpenBao, readiness, HTTP-01, setup jobs, networks and persistent
+volumes retain their identities. A separate baseline receipt records this
+factual census without claiming healthy activation or changing the selector.
+
+That authenticated baseline authorizes at most one fresh producer attempt per
+recovery invocation. Existing scoped renewal credentials remain the minting
+authority. A still-admissible public leaf is reused; otherwise certificate
+recovery enters the same retained due decision, account, CSR, known order and
+terminal cooldown policy as ordinary maintenance. The baseline is not presented
+as the selected application session. Losing a response resumes the same
+recorded attempt and order. Workload freshness and actual certificate validity
+are rechecked before every runtime create, start and selector publication.
+
+Pause, stop and security seal remain stop-only even between baseline capture
+and the next helper intent. They do not finish convergence or mint credentials.
+Installed interruption testing is still required for the complete runtime and
+CA path; local receipt tests do not establish arbitrary-duration availability.
+
 ## Restart and deliberate stop
 
 An incomplete replacement may contain a mixture of retained and newly created
@@ -114,9 +155,10 @@ maintenance. It does not initiate retirement merely because a timer ran.
 
 ## Status and remaining holds
 
-Lifecycle status exposes the selected sequence and binding, public certificate
-expiry and renewal deadline, credential refresh deadline, pending ACME stage,
-retry deadline, last successful activation and first blocking dependency.
+Lifecycle status exposes the selected sequence, attempt and binding, public
+certificate expiry and renewal deadline, credential refresh deadline, pending
+ACME stage, retry deadline, pending generation attempt, last successful
+activation and first blocking dependency.
 Read-only status does not contact the CA, sign, renew, recreate containers or
 select a generation. Neither successful local maintenance nor a status report
 grants installation readiness.
@@ -125,17 +167,18 @@ The following limits still require implementation or installed qualification:
 
 - A lost new-order response without a retained order URL remains an explicit
   reconciliation hold. Reboot does not authorize a duplicate CA order.
-- A terminal first-install order before any completed candidate also remains a
-  hold. Retrying that order under the original preparation needs its own
-  authority; neither the selected-generation permit nor expired-candidate
-  rollover can stand in for it.
+- Before application ownership begins, a positively terminal known order may
+  receive a distinct initial-installation retry permit after the original
+  preparation, account, key and CSR lineage, confirmed challenge withdrawal,
+  and durable cooldown are revalidated. Unknown outcomes, legacy untyped
+  terminal records and selected-generation/lifecycle lineage remain held.
 - A retained helper start intent whose container still appears never started
   remains an uncertainty hold. The owner does not replay that setup operation
   based solely on the container's current state.
-- A completed but unselected producer can become stale during a long
-  interruption. Stale credential activation is refused. A new bounded producer
-  attempt and recovery of an already partially replaced runtime need their own
-  completion path before arbitrary-duration offline recovery can be claimed.
+- A crash after a public plan is retained but before its helper intent is
+  recorded needs a separate unused-preparation supersession boundary if that
+  plan later expires. It must not manufacture a successful helper receipt or
+  overwrite the immutable plan.
 - Recurring private-CA generation replacement is not yet connected to this
   public-generation transaction. It reports a specific hold when its
   conservative refresh deadline is reached. Imported foundations retain their
@@ -151,6 +194,12 @@ Component tests exercise real filesystem publication and inode replacement,
 complete historical certificate lineage, actual native observer logic over
 controlled CLI fixtures, and real nonroot preparation ownership. They do not
 substitute for a running customer deployment.
+
+The contracts CI lane also runs 14 explicitly named permission-sensitive
+preparation and canary fixtures as an ordinary UID/GID with no capabilities and
+`no_new_privs`, through `scripts/ci/qualify-installer-recovery-fixtures.sh`.
+Every selected case must report a real pass. This is component ownership and
+filesystem coverage, not live Docker, public CA or host-reboot qualification.
 
 Changing the immutable secret-directory path changes native service bindings
 even when some individual file bytes are unchanged. A rotation may therefore

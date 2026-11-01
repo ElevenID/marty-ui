@@ -58,6 +58,36 @@ def test_return_after_grant_expiry_is_historical_consumption_only(ready):
     assert not any(method!='GET' for method,_,_ in client.calls[1:])
 
 
+@pytest.mark.parametrize('mutation',[None,'proof','missing','extra'])
+def test_versioned_return_pins_exact_signed_sources_and_keeps_qualification_false(ready,mutation):
+    options,client=ready
+    pins={}
+    for path,name in [(options['authorization'],'installer-candidate-authorization.json'),
+        (options['receipt'],'installer-controller-consumption.json'),(options['inventory'],'installer-inventory.json')]:
+        path.chmod(0o600)
+        for suffix in runner.dispatch.SUFFIXES:
+            source=Path(str(path)+suffix)
+            if suffix:source.write_bytes(('synthetic proof '+name+suffix).encode());source.chmod(0o600)
+            pins[name+suffix]=r.digest(source.read_bytes())
+    original=r.decode(client.checkpoint)
+    context=r.candidate_context(r.decode(options['authorization'].read_bytes()))
+    value=runner.incomplete_checkpoint(context=context,target=original['target'],authorization=options['authorization'].read_bytes(),
+        receipt=options['receipt'].read_bytes(),inventory=options['inventory'].read_bytes(),observed_at=100000,
+        resource_profile=runner.ROOTLESS_STARTUP_PROFILE,authenticated_evidence=pins)
+    if mutation=='missing':value['authenticated_evidence_sha256']=dict(pins);value['authenticated_evidence_sha256'].pop('installer-controller-consumption.json.sigstore.json')
+    if mutation=='extra':value['authenticated_evidence_sha256']=dict(pins,extra='a'*64)
+    client.checkpoint=r.encode(value);client.items[1].update(size=len(client.checkpoint),digest='sha256:'+r.digest(client.checkpoint))
+    if mutation=='proof':
+        client.on_download=lambda:Path(str(options['receipt'])+'.sigstore.json').write_bytes(b'changed public proof')
+    if mutation is None:
+        result=p.receive(**options)
+        assert result['schema']==runner.SCHEMA_V5 and result['functional_recovery_qualified'] is False
+        assert result['authenticated_evidence_sha256']==pins
+    else:
+        with pytest.raises(ValueError):p.receive(**options)
+        assert not options['output'].exists()
+
+
 @pytest.mark.parametrize('kind',['nonce','case','ready','receipt','uploader','original'])
 def test_rejects_return_substitution(ready,kind):
     options,client=ready;value=r.decode(client.checkpoint)

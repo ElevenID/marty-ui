@@ -47,7 +47,7 @@ pub(crate) struct RuntimeInvocation<'a> {
     pub(crate) operator_sha: &'a str,
     pub(crate) completion: RuntimeCompletion,
 }
-const STAGING_ROOTS: &str = "staging-acme-roots.pem";
+pub(crate) const STAGING_ROOTS: &str = "staging-acme-roots.pem";
 
 fn initial_staging_roots(
     hosting: &crate::installer_hosting::Prepared,

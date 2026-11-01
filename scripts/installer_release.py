@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 import installer_acceptance as acceptance
+import installer_candidate_hosting as candidate_hosting
 import verify_installer_provenance as provenance
 from stack_tag_gate import classify_release_tag
 
@@ -34,6 +35,7 @@ ARTIFACT_MAX_BYTES = {
 ARTIFACTS = frozenset(ARTIFACT_MAX_BYTES)
 PROMOTION_WORKFLOW = ".github/workflows/installer-promote.yml"
 CANDIDATE_SCHEMA = "elevenid.installer-candidate-authorization/v1"
+CANDIDATE_SCHEMA_V2 = "elevenid.installer-candidate-authorization/v2"
 require = acceptance.require
 exact = acceptance.exact
 
@@ -144,8 +146,9 @@ def validate_candidate_authorization(record: dict, *, now: int) -> None:
     exact(record, {"schema", "repository", "scope", "source_ref", "source_sha", "release_tag",
                    "platform", "inventory_sha256", "operator_sha256", "build_run_id",
                    "build_run_attempt", "phase", "harness_source_sha", "workflow", "run_id",
-                   "run_attempt", "issued_at", "expires_at", "nonce"}, "candidate authorization")
-    require(record["schema"] == CANDIDATE_SCHEMA and record["repository"] == REPOSITORY
+                   "run_attempt", "issued_at", "expires_at", "nonce"}
+          | hosting_fields(record, "candidate-authorization"), "candidate authorization")
+    require(record["repository"] == REPOSITORY
             and record["scope"] == "acceptance-only" and record["source_ref"] == "refs/heads/main"
             and record["platform"] == "linux/amd64" and record["workflow"] == acceptance.WORKFLOW,
             "candidate authorization identity differs")
@@ -165,7 +168,8 @@ def validate_candidate_authorization(record: dict, *, now: int) -> None:
 def candidate_authorization(inventory_bytes: bytes, *, source_sha: str, release_tag: str,
                             build_run_id: int, build_run_attempt: int,
                             acceptance_run: dict, phase: str, now: int,
-                            lifetime: int = 3600) -> dict:
+                            lifetime: int = 3600, hosting_input: bytes | None = None,
+                            staging_roots: bytes | None = None) -> dict:
     """Produce unsigned acceptance-only authorization from authenticated inputs.
 
     The caller authenticates exact inventory bytes and independently obtains the
@@ -200,6 +204,11 @@ def candidate_authorization(inventory_bytes: bytes, *, source_sha: str, release_
                   phase=phase, harness_source_sha=run["head_sha"], workflow=acceptance.WORKFLOW,
                   run_id=run["id"], run_attempt=run["run_attempt"], issued_at=now,
                   expires_at=now + lifetime, nonce=secrets.token_hex(32))
+    if hosting_input is not None:
+        record.update(schema=CANDIDATE_SCHEMA_V2, hosting=candidate_hosting.from_bytes(hosting_input,
+                      staging_roots=staging_roots))
+    else:
+        require(staging_roots is None, "legacy authorization cannot bind staging roots")
     validate_candidate_authorization(record, now=now)
     return record
 
@@ -212,12 +221,12 @@ def bind_candidate_authorization(authorization_bytes: bytes, inventory_bytes: by
     all payloads, and the control-plane expected context before any execution.
     Expected values must not simply be copied from the authorization being read.
     """
-    exact(expected, {"source_sha", "release_tag", "operator_sha256", "phase", "nonce",
-                     "harness_source_sha", "run_id", "run_attempt"}, "candidate context")
+    exact(expected, candidate_context_fields(expected), "candidate context")
     for field in ("run_id", "run_attempt"):
         positive(expected[field])
     record = decode(authorization_bytes)
     validate_candidate_authorization(record, now=now)
+    require(candidate_context_fields(expected) == candidate_context_fields(record), "candidate context version differs")
     require(all(record[key] == value for key, value in expected.items()), "candidate context differs")
     inv = decode(inventory_bytes)
     validate_inventory(inv)
@@ -231,6 +240,7 @@ def bind_candidate_authorization(authorization_bytes: bytes, inventory_bytes: by
 
 
 CONTROLLER_SCHEMA = "elevenid.installer-controller-consumption/v1"
+CONTROLLER_SCHEMA_V2 = "elevenid.installer-controller-consumption/v2"
 CONTEXT_FIELDS = {"source_sha", "release_tag", "operator_sha256", "phase", "nonce",
                   "harness_source_sha", "run_id", "run_attempt"}
 CONTROLLER_FIELDS = {"schema", "repository", "scope", "source_ref", "workflow",
@@ -238,11 +248,46 @@ CONTROLLER_FIELDS = {"schema", "repository", "scope", "source_ref", "workflow",
     "operator_sha256", "inventory_sha256", "build_run_id", "build_run_attempt",
     "harness_source_sha", "run_id", "run_attempt", "phase", "guest_id", "disk_id",
     "engine_id", "installation_id", "consumed_at"}
+AUTHENTICATED_CANDIDATE_EVIDENCE = {name + suffix for name in (
+    "installer-candidate-authorization.json", "installer-controller-consumption.json", "installer-inventory.json")
+    for suffix in ("", ".sigstore.json", ".provenance.jsonl")}
+
+
+def validate_candidate_evidence(value: dict) -> None:
+    exact(value, AUTHENTICATED_CANDIDATE_EVIDENCE, "authenticated candidate evidence")
+    for digest_value in value.values():
+        sha(digest_value, 64)
+
+
+def hosting_fields(record: dict, family: str) -> set[str]:
+    """A new record version alone can carry exact hosting-input authority."""
+    require(type(record) is dict, "candidate record must be an object")
+    if record.get("schema") == f"elevenid.installer-{family}/v1":
+        require("hosting" not in record, "legacy candidate cannot authorize hosting input")
+        return set()
+    require(record.get("schema") == f"elevenid.installer-{family}/v2", "candidate record version differs")
+    candidate_hosting.validate(record.get("hosting"))
+    return {"hosting"}
+
+
+def candidate_context_fields(value: dict) -> set[str]:
+    require(type(value) is dict, "candidate context must be an object")
+    if "hosting" in value:
+        candidate_hosting.validate(value["hosting"])
+        return CONTEXT_FIELDS | {"hosting"}
+    return CONTEXT_FIELDS
+
+
+def candidate_context(record: dict) -> dict:
+    """Extract scope from an already authenticated controller/grant record."""
+    fields = candidate_context_fields(record)
+    require(fields <= set(record), "candidate context is incomplete")
+    return {key: record[key] for key in fields}
 
 
 def candidate_context_sha256(expected: dict) -> str:
     """Sorted compact ASCII JSON without newline, identical to native contract."""
-    exact(expected, CONTEXT_FIELDS, "candidate context")
+    exact(expected, candidate_context_fields(expected), "candidate context")
     identity(expected["source_sha"], expected["release_tag"], expected["run_id"], expected["run_attempt"])
     sha(expected["operator_sha256"], 64)
     sha(expected["nonce"], 64)
@@ -253,13 +298,13 @@ def candidate_context_sha256(expected: dict) -> str:
 
 def validate_controller_consumption(record: dict, *, now: int) -> None:
     """Validate structure; exact signature/provenance and persistence are separate."""
-    exact(record, CONTROLLER_FIELDS, "controller consumption")
-    require(record["schema"] == CONTROLLER_SCHEMA and record["repository"] == REPOSITORY
+    exact(record, CONTROLLER_FIELDS | hosting_fields(record, "controller-consumption"), "controller consumption")
+    require(record["repository"] == REPOSITORY
             and record["scope"] == "controller-dispatch-consumed"
             and record["source_ref"] == "refs/heads/main" and record["workflow"] == acceptance.WORKFLOW,
             "controller consumption identity differs")
     identity(record["source_sha"], record["release_tag"], record["build_run_id"], record["build_run_attempt"])
-    candidate_context_sha256({key: record[key] for key in CONTEXT_FIELDS})
+    candidate_context_sha256(candidate_context(record))
     for field in ("authorization_sha256", "context_sha256", "inventory_sha256", "disk_id"):
         sha(record[field], 64)
     for field in ("guest_id", "installation_id"):
@@ -281,11 +326,12 @@ def bind_controller_consumption(receipt_bytes: bytes, authorization_bytes: bytes
     authorization, _ = bind_candidate_authorization(authorization_bytes, inventory_bytes, expected=expected, now=now)
     record = decode(receipt_bytes)
     validate_controller_consumption(record, now=now)
+    require(candidate_context_fields(record) == candidate_context_fields(authorization), "controller grant version differs")
     require(record["authorization_sha256"] == digest(authorization_bytes)
             and record["context_sha256"] == candidate_context_sha256(expected)
             and record["inventory_sha256"] == digest(inventory_bytes), "controller record hashes differ")
     require(all(record[field] == authorization[field] for field in
-                CONTEXT_FIELDS | {"build_run_id", "build_run_attempt", "workflow"}), "controller candidate differs")
+                candidate_context_fields(authorization) | {"build_run_id", "build_run_attempt", "workflow"}), "controller candidate differs")
     require(record["engine_id"] == expected_engine and authorization["issued_at"] <= record["consumed_at"] < authorization["expires_at"],
             "controller target or consumption time differs")
     return record
@@ -303,8 +349,9 @@ def controller_consumption(authorization_bytes: bytes, inventory_bytes: bytes, *
     """
     authorization, _ = bind_candidate_authorization(authorization_bytes, inventory_bytes, expected=expected, now=now)
     record = {field: authorization[field] for field in
-              CONTEXT_FIELDS | {"build_run_id", "build_run_attempt", "workflow", "source_ref", "repository"}}
-    record.update(schema=CONTROLLER_SCHEMA, scope="controller-dispatch-consumed",
+              candidate_context_fields(authorization) | {"build_run_id", "build_run_attempt", "workflow", "source_ref", "repository"}}
+    record.update(schema=CONTROLLER_SCHEMA_V2 if "hosting" in authorization else CONTROLLER_SCHEMA,
+                  scope="controller-dispatch-consumed",
                   authorization_sha256=digest(authorization_bytes), context_sha256=candidate_context_sha256(expected),
                   inventory_sha256=digest(inventory_bytes), guest_id=guest_id, disk_id=disk_id,
                   engine_id=engine_id, installation_id=installation_id, consumed_at=consumed_at)

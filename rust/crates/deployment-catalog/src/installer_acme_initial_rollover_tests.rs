@@ -36,7 +36,10 @@ fn expired_candidate_reference_alone_cannot_grant_original_preparation_authority
     fixture.advance(expiry - installer_acme::now().unwrap());
     let permit = InitialRolloverPermit::load(state.inspection(), environment, 1).unwrap();
     assert_eq!(permit.cycle(), 1);
-    assert_eq!(permit.prior_candidate().metadata(), prior.metadata());
+    assert_eq!(
+        permit.prior_candidate().unwrap().metadata(),
+        prior.metadata()
+    );
     assert!(matches!(
         permit.reason(),
         IssuanceReason::InitialCandidateExpired { .. }

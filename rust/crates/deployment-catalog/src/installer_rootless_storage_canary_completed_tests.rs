@@ -1,10 +1,111 @@
 //! Synthetic completed observations exercise the read-only evidence admission;
 //! this fixture does not claim a Docker or user-namespace qualification run.
 use super::*;
-use crate::installer_state::{CandidateTestScope, Identity, RuntimeBinding, RuntimeProfile};
+use crate::installer_state::{
+    AcceptanceScope, CandidateTestScope, Identity, RuntimeBinding, RuntimeProfile,
+};
 use std::os::unix::fs::PermissionsExt;
 
 pub(crate) fn candidate_fixture(hosting: &Value) -> (tempfile::TempDir, PathBuf, InstallerState) {
+    completed_fixture(hosting, false)
+}
+
+fn acceptance_records(
+    installation_id: uuid::Uuid,
+    binding: &RuntimeBinding,
+    inventory: &[u8],
+    operator: &[u8],
+    hosting: &Value,
+) -> (AcceptanceScope, BTreeMap<String, Vec<u8>>) {
+    let issued = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        - 7200;
+    let hosting =
+        crate::installer_hosting::candidate_binding(&encoded(hosting).unwrap(), None).unwrap();
+    let context = crate::installer_release::CandidateContext {
+        operator_sha: sha(operator),
+        source_sha: "a".repeat(40),
+        release_tag: "v1.2.3-nightly.20261031.42".into(),
+        phase: crate::installer_release::CandidatePhase::Staged,
+        nonce: "e".repeat(64),
+        harness_source_sha: "f".repeat(40),
+        run_id: 90,
+        run_attempt: 2,
+        hosting: Some(hosting.clone()),
+    };
+    let context_sha = crate::installer_release::candidate_context_sha256(&context).unwrap();
+    let authorization = json!({"schema":"elevenid.installer-candidate-authorization/v2",
+        "repository":crate::installer_release::REPOSITORY,"scope":"acceptance-only","source_ref":"refs/heads/main",
+        "platform":"linux/amd64","source_sha":context.source_sha,"release_tag":context.release_tag,
+        "inventory_sha256":sha(inventory),"operator_sha256":context.operator_sha,
+        "build_run_id":42,"build_run_attempt":2,"phase":"staged","harness_source_sha":context.harness_source_sha,
+        "workflow":crate::installer_release::ACCEPTANCE_WORKFLOW,"run_id":90,"run_attempt":2,
+        "issued_at":issued,"expires_at":issued+3600,"nonce":context.nonce,"hosting":hosting});
+    let auth_bytes = encoded(&authorization).unwrap();
+    let mut controller = authorization;
+    for name in ["issued_at", "expires_at", "platform"] {
+        controller.as_object_mut().unwrap().remove(name);
+    }
+    controller["schema"] = json!("elevenid.installer-controller-consumption/v2");
+    controller["scope"] = json!("controller-dispatch-consumed");
+    controller["authorization_sha256"] = json!(sha(&auth_bytes));
+    controller["context_sha256"] = json!(context_sha);
+    controller["guest_id"] = json!(uuid::Uuid::new_v4());
+    controller["disk_id"] = json!("d".repeat(64));
+    controller["engine_id"] = json!(binding.engine_id);
+    controller["installation_id"] = json!(installation_id);
+    controller["consumed_at"] = json!(issued + 1);
+    let claim = crate::installer_candidate_nonce::Consumption {
+        nonce: context.nonce,
+        authorization_sha256: sha(&auth_bytes),
+        context_sha256: context_sha.clone(),
+        installation_id,
+        engine_id: binding.engine_id.clone(),
+    };
+    let consumption = encoded(
+        &json!({"schema":"elevenid.installer-candidate-consumption/v1",
+        "scope":"guest-local","claim":claim}),
+    )
+    .unwrap();
+    let mut records = BTreeMap::new();
+    for (name, bytes) in [
+        ("installer-candidate-authorization.json", auth_bytes.clone()),
+        (
+            "installer-controller-consumption.json",
+            encoded(&controller).unwrap(),
+        ),
+        ("installer-inventory.json", inventory.to_vec()),
+    ] {
+        records.insert(name.into(), bytes);
+        for suffix in [".sigstore.json", ".provenance.jsonl"] {
+            records.insert(
+                format!("{name}{suffix}"),
+                format!("synthetic fixture proof for {name}{suffix}").into_bytes(),
+            );
+        }
+    }
+    (
+        AcceptanceScope {
+            authorization_sha256: sha(&auth_bytes),
+            context_sha256: context_sha,
+            consumption_id: sha(&consumption),
+            authenticated_evidence_sha256: Some(
+                records
+                    .iter()
+                    .map(|(name, bytes)| (name.clone(), sha(bytes)))
+                    .collect(),
+            ),
+        },
+        records,
+    )
+}
+
+fn completed_fixture(
+    hosting: &Value,
+    acceptance: bool,
+) -> (tempfile::TempDir, PathBuf, InstallerState) {
     assert_ne!(
         unsafe { libc::geteuid() },
         0,
@@ -43,27 +144,46 @@ pub(crate) fn candidate_fixture(hosting: &Value) -> (tempfile::TempDir, PathBuf,
         openbao_port: 18200,
         profile: RuntimeProfile::Rootless,
     };
-    let mut state = InstallerState::create_test_with_runtime(
-        &installation,
-        Identity {
-            source_sha: "a".repeat(40),
-            release_tag: "v1.2.3-nightly.20261031.42".into(),
-            inventory_sha256: format!("sha256:{}", sha(&inventory)),
-        },
-        binding.clone(),
-        CandidateTestScope {
-            inventory_sha256: sha(&inventory),
-            build_run_id: 42,
-            build_run_attempt: 2,
-        },
-    )
+    let identity = Identity {
+        source_sha: "a".repeat(40),
+        release_tag: "v1.2.3-nightly.20261031.42".into(),
+        inventory_sha256: format!("sha256:{}", sha(&inventory)),
+    };
+    let mut signed_records = BTreeMap::new();
+    let mut state = if acceptance {
+        let id = uuid::Uuid::new_v4();
+        let (scope, records) = acceptance_records(id, &binding, &inventory, operator, hosting);
+        signed_records = records;
+        InstallerState::create_candidate_with_runtime(
+            &installation,
+            identity,
+            binding.clone(),
+            scope,
+            id,
+        )
+    } else {
+        InstallerState::create_test_with_runtime(
+            &installation,
+            identity,
+            binding.clone(),
+            CandidateTestScope {
+                inventory_sha256: sha(&inventory),
+                build_run_id: 42,
+                build_run_attempt: 2,
+            },
+        )
+    }
     .unwrap();
     state.create_private_directory("evidence").unwrap();
     state.create_private_directory("downloads").unwrap();
     state
         .persist_operator(&operator_source, &sha(operator))
         .unwrap();
-    for name in ["candidate-test-inventory.json", "installer-inventory.json"] {
+    for name in if acceptance {
+        Vec::new()
+    } else {
+        vec!["candidate-test-inventory.json", "installer-inventory.json"]
+    } {
         state.write_evidence(name, &inventory).unwrap();
         for suffix in [".sigstore.json", ".provenance.jsonl"] {
             state
@@ -73,6 +193,9 @@ pub(crate) fn candidate_fixture(hosting: &Value) -> (tempfile::TempDir, PathBuf,
                 )
                 .unwrap();
         }
+    }
+    for (name, bytes) in signed_records {
+        state.write_evidence(&name, &bytes).unwrap();
     }
     state.advance(Phase::Verified).unwrap();
     let selection = files.path().join("hosting.json");
@@ -203,6 +326,59 @@ fn hosting() -> Value {
             "acme":{"environment":"production","directory_url":"https://acme-v02.api.letsencrypt.org/directory",
                 "profile":"shortlived","terms_url":"https://letsencrypt.org/documents/LE-SA-v1.6-August-18-2025.pdf",
                 "terms_agreed":true}}})
+}
+
+#[test]
+#[ignore = "requires an ordinary nonroot OS identity for the rootless evidence fixture"]
+fn completed_acceptance_chain_preserves_exact_authenticated_scope_after_grant_expiry() {
+    let (_files, installation, mut state) = completed_fixture(&hosting(), true);
+    let canary = state.with_inspection(require_completed).unwrap();
+    assert_eq!(canary.len(), 22);
+    crate::installer_acme_preparation::prepare(&mut state, &installation).unwrap();
+    let raw = state
+        .with_inspection(|view| view.read_evidence(crate::installer_acme_preparation::RECORD))
+        .unwrap();
+    let record: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(record["provenance"], "signed-acceptance-qualification");
+    assert_eq!(record["deletion_authorized"], false);
+    assert_eq!(record["installation_ready"], false);
+    assert!(state.advance(Phase::Ready).is_err());
+    for name in [
+        crate::installer_creation_identity::RECEIPT,
+        crate::installer_creation_identity::CREDENTIAL_RECEIPT,
+        crate::installer_creation_identity::APPLICATION_RECEIPT,
+    ] {
+        assert!(!installation.join("evidence").join(name).exists());
+    }
+    drop(state);
+    let view = LockedInspection::open(&installation).unwrap();
+    assert_eq!(require_completed(&view).unwrap(), canary);
+    crate::installer_acme_preparation::verify(&view, &installation).unwrap();
+}
+
+#[test]
+#[ignore = "requires an ordinary nonroot OS identity for the rootless evidence fixture"]
+fn acceptance_preparation_refuses_controller_proof_and_hosting_substitution() {
+    for name in [
+        "installer-controller-consumption.json",
+        "installer-controller-consumption.json.sigstore.json",
+        "installer-inventory.json.provenance.jsonl",
+        crate::installer_hosting::SOURCE,
+    ] {
+        let (_files, installation, mut state) = completed_fixture(&hosting(), true);
+        crate::installer_acme_preparation::prepare(&mut state, &installation).unwrap();
+        let path = installation.join("evidence").join(name);
+        let mut bytes = fs::read(&path).unwrap();
+        bytes.push(b' ');
+        fs::write(&path, bytes).unwrap();
+        drop(state);
+        let view = LockedInspection::open(&installation).unwrap();
+        assert!(require_completed(&view).is_err(), "accepted {name}");
+        assert!(
+            crate::installer_acme_preparation::verify(&view, &installation).is_err(),
+            "accepted {name}"
+        );
+    }
 }
 
 #[test]

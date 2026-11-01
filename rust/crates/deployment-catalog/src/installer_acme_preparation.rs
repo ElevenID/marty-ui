@@ -10,7 +10,12 @@ use crate::{
     },
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fs::File, os::unix::fs::MetadataExt, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::File,
+    os::unix::fs::MetadataExt,
+    path::Path,
+};
 
 type Result<T> = std::result::Result<T, String>;
 pub(crate) const RECORD: &str = "acme-application-prepared.json";
@@ -88,17 +93,74 @@ struct Preparation {
 enum Provenance {
     OriginalCreationReceipts,
     SignedCandidateQualification,
+    SignedAcceptanceQualification,
 }
 
-/// Candidate trials retain their own authenticated provenance. They cannot
+const CANDIDATE_EVIDENCE: [&str; 6] = [
+    "candidate-test-inventory.json",
+    "candidate-test-inventory.json.sigstore.json",
+    "candidate-test-inventory.json.provenance.jsonl",
+    "installer-inventory.json",
+    "installer-inventory.json.sigstore.json",
+    "installer-inventory.json.provenance.jsonl",
+];
+
+fn qualification_provenance(scope: &ExecutionScope) -> Result<Provenance> {
+    match scope {
+        ExecutionScope::CandidateTest(_) => Ok(Provenance::SignedCandidateQualification),
+        ExecutionScope::AcceptanceOnly(_) => Ok(Provenance::SignedAcceptanceQualification),
+        _ => Err(REFUSED.into()),
+    }
+}
+
+/// Exact filenames and the journal-pinned acceptance grant bytes distinguish
+/// the two qualification sources. A same-sized substituted map is insufficient.
+fn require_qualification_evidence(
+    scope: &ExecutionScope,
+    provenance: &Provenance,
+    evidence: &BTreeMap<String, String>,
+) -> Result<()> {
+    let sources: &[&str] = match (scope, provenance) {
+        (ExecutionScope::CandidateTest(_), Provenance::SignedCandidateQualification) => {
+            &CANDIDATE_EVIDENCE
+        }
+        (ExecutionScope::AcceptanceOnly(scope), Provenance::SignedAcceptanceQualification) => {
+            let retained = scope
+                .authenticated_evidence_sha256
+                .as_ref()
+                .ok_or(REFUSED)?;
+            let names = &crate::installer_state::ACCEPTANCE_AUTHENTICATED_EVIDENCE;
+            require(
+                retained.len() == names.len()
+                    && names.iter().all(|name| {
+                        retained
+                            .get(*name)
+                            .is_some_and(|hash| evidence.get(*name) == Some(hash))
+                    }),
+            )?;
+            names
+        }
+        _ => return Err(REFUSED.into()),
+    };
+    let expected: BTreeSet<_> = crate::installer_rootless_storage_canary::COMPLETED_EVIDENCE
+        .iter()
+        .chain(sources)
+        .copied()
+        .collect();
+    require(evidence.keys().map(String::as_str).collect::<BTreeSet<_>>() == expected)
+}
+
+/// Qualification trials retain their own authenticated provenance. They cannot
 /// acquire admitted-installation creation/deletion capabilities or Ready.
 pub(crate) fn require_supported_scope(state: &LockedInspection) -> Result<()> {
     match state.journal().execution_scope() {
         ExecutionScope::Unclassified => Ok(()),
-        ExecutionScope::CandidateTest(_) => {
-            crate::installer_rootless_storage_canary::require_completed(state).map(|_| ())
+        scope @ (ExecutionScope::CandidateTest(_) | ExecutionScope::AcceptanceOnly(_)) => {
+            let evidence = crate::installer_rootless_storage_canary::require_completed(state)?;
+            require_qualification_evidence(scope, &qualification_provenance(scope)?, &evidence)
         }
-        _ => Err(REFUSED.into()),
+        #[cfg(feature = "installer-development")]
+        ExecutionScope::UnsignedDevelopment(_) => Err(REFUSED.into()),
     }
 }
 
@@ -184,9 +246,11 @@ fn observe(state: &LockedInspection, installation: &Path) -> Result<Preparation>
             }
             Provenance::OriginalCreationReceipts
         }
-        ExecutionScope::CandidateTest(_) => {
+        scope @ (ExecutionScope::CandidateTest(_) | ExecutionScope::AcceptanceOnly(_)) => {
             prior_evidence_sha256 =
                 crate::installer_rootless_storage_canary::require_completed(state)?;
+            let provenance = qualification_provenance(scope)?;
+            require_qualification_evidence(scope, &provenance, &prior_evidence_sha256)?;
             for name in [
                 installer_creation_identity::RECEIPT,
                 installer_creation_identity::CREDENTIAL_RECEIPT,
@@ -194,9 +258,10 @@ fn observe(state: &LockedInspection, installation: &Path) -> Result<Preparation>
             ] {
                 require(state.diagnostic_record(name, true)?.is_none())?;
             }
-            Provenance::SignedCandidateQualification
+            provenance
         }
-        _ => return Err(REFUSED.into()),
+        #[cfg(feature = "installer-development")]
+        ExecutionScope::UnsignedDevelopment(_) => return Err(REFUSED.into()),
     };
     let preparation = Preparation {
         schema: "elevenid.installer-acme-application-preparation/v2".into(),
@@ -263,7 +328,7 @@ pub(crate) fn verify_retained_provenance(
         installer_creation_identity::CREDENTIAL_RECEIPT,
         installer_creation_identity::APPLICATION_RECEIPT,
     ];
-    match (&preparation.execution_scope, preparation.provenance) {
+    match (&preparation.execution_scope, &preparation.provenance) {
         (ExecutionScope::Unclassified, Provenance::OriginalCreationReceipts) => {
             require(
                 preparation.prior_evidence_sha256.len() == originals.len()
@@ -272,8 +337,13 @@ pub(crate) fn verify_retained_provenance(
                         .all(|name| preparation.prior_evidence_sha256.contains_key(*name)),
             )?;
         }
-        (ExecutionScope::CandidateTest(_), Provenance::SignedCandidateQualification) => {
-            require(preparation.prior_evidence_sha256.len() == 19)?;
+        (ExecutionScope::CandidateTest(_), Provenance::SignedCandidateQualification)
+        | (ExecutionScope::AcceptanceOnly(_), Provenance::SignedAcceptanceQualification) => {
+            require_qualification_evidence(
+                &preparation.execution_scope,
+                &preparation.provenance,
+                &preparation.prior_evidence_sha256,
+            )?;
             for name in originals {
                 require(state.diagnostic_record(name, true)?.is_none())?;
             }
@@ -353,6 +423,116 @@ pub(crate) fn prepared_fixture(
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn qualification_provenance_requires_exact_named_records_and_acceptance_pins() {
+        let candidate = ExecutionScope::CandidateTest(crate::installer_state::CandidateTestScope {
+            inventory_sha256: "a".repeat(64),
+            build_run_id: 1,
+            build_run_attempt: 1,
+        });
+        let mut candidate_evidence: BTreeMap<String, String> =
+            crate::installer_rootless_storage_canary::COMPLETED_EVIDENCE
+                .iter()
+                .chain(&CANDIDATE_EVIDENCE)
+                .map(|name| ((*name).into(), "b".repeat(64)))
+                .collect();
+        require_qualification_evidence(
+            &candidate,
+            &Provenance::SignedCandidateQualification,
+            &candidate_evidence,
+        )
+        .unwrap();
+        candidate_evidence.remove(CANDIDATE_EVIDENCE[0]);
+        candidate_evidence.insert("unrelated-same-sized-map.json".into(), "b".repeat(64));
+        assert!(require_qualification_evidence(
+            &candidate,
+            &Provenance::SignedCandidateQualification,
+            &candidate_evidence
+        )
+        .is_err());
+
+        let pins: BTreeMap<String, String> =
+            crate::installer_state::ACCEPTANCE_AUTHENTICATED_EVIDENCE
+                .iter()
+                .map(|name| ((*name).into(), "c".repeat(64)))
+                .collect();
+        let scope = crate::installer_state::AcceptanceScope {
+            authorization_sha256: "d".repeat(64),
+            context_sha256: "e".repeat(64),
+            consumption_id: "f".repeat(64),
+            authenticated_evidence_sha256: Some(pins.clone()),
+        };
+        let mut acceptance_evidence = pins;
+        acceptance_evidence.extend(
+            crate::installer_rootless_storage_canary::COMPLETED_EVIDENCE
+                .iter()
+                .map(|name| ((*name).into(), "b".repeat(64))),
+        );
+        let acceptance = ExecutionScope::AcceptanceOnly(scope.clone());
+        require_qualification_evidence(
+            &acceptance,
+            &Provenance::SignedAcceptanceQualification,
+            &acceptance_evidence,
+        )
+        .unwrap();
+        assert!(require_qualification_evidence(
+            &acceptance,
+            &Provenance::SignedCandidateQualification,
+            &acceptance_evidence
+        )
+        .is_err());
+        assert!(require_qualification_evidence(
+            &candidate,
+            &Provenance::SignedAcceptanceQualification,
+            &acceptance_evidence
+        )
+        .is_err());
+        for mutation in [
+            "legacy-no-pins",
+            "changed-pin",
+            "missing-pin",
+            "same-count-substitution",
+        ] {
+            let mut scope = scope.clone();
+            let mut evidence = acceptance_evidence.clone();
+            match mutation {
+                "legacy-no-pins" => scope.authenticated_evidence_sha256 = None,
+                "changed-pin" => {
+                    scope
+                        .authenticated_evidence_sha256
+                        .as_mut()
+                        .unwrap()
+                        .insert(
+                            crate::installer_state::ACCEPTANCE_AUTHENTICATED_EVIDENCE[0].into(),
+                            "0".repeat(64),
+                        );
+                }
+                "missing-pin" => {
+                    scope
+                        .authenticated_evidence_sha256
+                        .as_mut()
+                        .unwrap()
+                        .remove(crate::installer_state::ACCEPTANCE_AUTHENTICATED_EVIDENCE[0]);
+                }
+                "same-count-substitution" => {
+                    evidence
+                        .remove(crate::installer_rootless_storage_canary::COMPLETED_EVIDENCE[0]);
+                    evidence.insert("another-canary.json".into(), "b".repeat(64));
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                require_qualification_evidence(
+                    &ExecutionScope::AcceptanceOnly(scope),
+                    &Provenance::SignedAcceptanceQualification,
+                    &evidence
+                )
+                .is_err(),
+                "{mutation}"
+            );
+        }
+    }
 
     #[test]
     fn prepared_storage_survives_lock_reopen_but_not_projection_or_receipt_replacement() {

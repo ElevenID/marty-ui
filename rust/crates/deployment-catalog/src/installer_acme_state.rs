@@ -74,6 +74,10 @@ pub(crate) enum IssuanceReason {
         host_intent_sha256: String,
         host_prepared_sha256: String,
     },
+    InitialOrderTerminal {
+        host_intent_sha256: String,
+        host_prepared_sha256: String,
+    },
 }
 impl IssuanceReason {
     fn validate(&self) -> Result<()> {
@@ -83,6 +87,10 @@ impl IssuanceReason {
                 schedule_sha256,
             } => [generation_binding_sha256, schedule_sha256],
             Self::InitialCandidateExpired {
+                host_intent_sha256,
+                host_prepared_sha256,
+            }
+            | Self::InitialOrderTerminal {
                 host_intent_sha256,
                 host_prepared_sha256,
             } => [host_intent_sha256, host_prepared_sha256],
@@ -183,6 +191,12 @@ impl Binding {
     }
     pub fn digest(&self) -> Result<String> {
         Ok(hash(&serde_json::to_vec(self).map_err(|_| REFUSED)?))
+    }
+    pub(crate) fn initial_material_sha256(&self) -> Result<String> {
+        let mut initial = self.clone();
+        initial.cycle = 0;
+        initial.renewal = None;
+        initial.digest()
     }
 }
 
@@ -306,6 +320,50 @@ pub(crate) struct TerminalRetry {
     pub withdrawn_projection_sha256: Option<String>,
 }
 
+/// Original preparation authority is deliberately distinct from a selected
+/// generation's due/terminal authority. It remains public metadata only.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InitialAuthority {
+    pub host_intent_sha256: String,
+    pub host_prepared_sha256: String,
+    pub initial_material_sha256: String,
+}
+impl InitialAuthority {
+    pub(crate) fn validate(&self, binding: &Binding) -> Result<()> {
+        require(
+            digest(&self.host_intent_sha256)
+                && digest(&self.host_prepared_sha256)
+                && self.initial_material_sha256 == binding.initial_material_sha256()?,
+        )?;
+        match &binding.renewal {
+            None => require(binding.cycle == 0),
+            Some(link) => match &link.reason {
+                IssuanceReason::InitialCandidateExpired {
+                    host_intent_sha256,
+                    host_prepared_sha256,
+                }
+                | IssuanceReason::InitialOrderTerminal {
+                    host_intent_sha256,
+                    host_prepared_sha256,
+                } => require(
+                    *host_intent_sha256 == self.host_intent_sha256
+                        && *host_prepared_sha256 == self.host_prepared_sha256,
+                ),
+                IssuanceReason::SelectedGenerationDue { .. } => Err(REFUSED.into()),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InitialTerminalRetry {
+    pub schema: String,
+    pub authority: InitialAuthority,
+    pub observation: TerminalRetry,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct State {
@@ -321,6 +379,8 @@ pub(crate) struct State {
     pub failure: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_retry: Option<TerminalRetry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_terminal_retry: Option<InitialTerminalRetry>,
 }
 impl State {
     pub fn prepared() -> Self {
@@ -336,6 +396,7 @@ impl State {
             next_poll_at: None,
             failure: None,
             terminal_retry: None,
+            initial_terminal_retry: None,
         }
     }
     fn initial(binding: &Binding) -> Self {
@@ -345,6 +406,22 @@ impl State {
             initial.account_url = Some(renewal.account_url.clone());
         }
         initial
+    }
+    pub(crate) fn terminal_observation(&self) -> Option<&TerminalRetry> {
+        self.terminal_retry.as_ref().or_else(|| {
+            self.initial_terminal_retry
+                .as_ref()
+                .map(|proof| &proof.observation)
+        })
+    }
+    pub(crate) fn terminal_observation_mut(&mut self) -> Option<&mut TerminalRetry> {
+        if self.terminal_retry.is_some() {
+            self.terminal_retry.as_mut()
+        } else {
+            self.initial_terminal_retry
+                .as_mut()
+                .map(|proof| &mut proof.observation)
+        }
     }
     fn validate(&self, binding: &Binding) -> Result<()> {
         use marty_selfhost_identity::origin::PublicOrigin;
@@ -505,13 +582,22 @@ impl State {
                 .contains(&failure.as_str()),
             )?;
         }
-        if let Some(terminal) = &self.terminal_retry {
+        require(self.terminal_retry.is_none() || self.initial_terminal_retry.is_none())?;
+        if self.terminal_retry.is_some() {
             require(
-                self.stage == Stage::Terminal
-                    && binding.cycle > 0
+                binding.cycle > 0
                     && binding.renewal.as_ref().is_some_and(|renewal| {
                         matches!(renewal.reason, IssuanceReason::SelectedGenerationDue { .. })
-                    })
+                    }),
+            )?;
+        }
+        if let Some(initial) = &self.initial_terminal_retry {
+            require(initial.schema == "elevenid.installer-acme-initial-terminal/v1")?;
+            initial.authority.validate(binding)?;
+        }
+        if let Some(terminal) = self.terminal_observation() {
+            require(
+                self.stage == Stage::Terminal
                     && self.order.is_some()
                     && self.certificate.is_none()
                     && self.failure.as_deref() == Some(terminal.reason.as_str())
@@ -660,7 +746,7 @@ fn names(
 }
 
 fn require_terminal_time(state: &State, observed_at: u64) -> Result<()> {
-    if let Some(terminal) = &state.terminal_retry {
+    if let Some(terminal) = state.terminal_observation() {
         require(
             terminal.observed_at <= observed_at
                 && terminal
@@ -672,7 +758,7 @@ fn require_terminal_time(state: &State, observed_at: u64) -> Result<()> {
 }
 
 fn require_terminal_event_time(before: &State, after: &State, observed_at: u64) -> Result<()> {
-    match (&before.terminal_retry, &after.terminal_retry) {
+    match (before.terminal_observation(), after.terminal_observation()) {
         (None, Some(terminal)) => require(
             terminal.observed_at == observed_at && terminal.withdrawal_confirmed_at.is_none(),
         )?,
@@ -700,8 +786,15 @@ fn transition(before: &State, after: &State) -> Result<()> {
     if before.stage == Stage::Terminal {
         require(before.failure == after.failure)?;
     }
-    if let Some(previous) = &before.terminal_retry {
-        let current = after.terminal_retry.as_ref().ok_or(REFUSED)?;
+    if let Some(previous) = &before.initial_terminal_retry {
+        let current = after.initial_terminal_retry.as_ref().ok_or(REFUSED)?;
+        require(previous.schema == current.schema && previous.authority == current.authority)?;
+    }
+    if before.terminal_retry.is_some() {
+        require(after.terminal_retry.is_some())?;
+    }
+    if let Some(previous) = before.terminal_observation() {
+        let current = after.terminal_observation().ok_or(REFUSED)?;
         let mut comparable = current.clone();
         comparable.withdrawal_confirmed_at = previous.withdrawal_confirmed_at;
         comparable.withdrawn_projection_sha256 = previous.withdrawn_projection_sha256.clone();
@@ -709,7 +802,7 @@ fn transition(before: &State, after: &State) -> Result<()> {
         if previous.withdrawal_confirmed_at.is_some() {
             require(current == previous)?;
         }
-    } else if after.terminal_retry.is_some() {
+    } else if after.terminal_observation().is_some() {
         // A legacy terminal failure cannot acquire an inferred retry proof.
         require(before.stage != Stage::Terminal)?;
     }
@@ -958,6 +1051,8 @@ impl Ledger {
             "next_attempt_at":self.retry().map(|retry|retry.next_attempt_at),"failure":self.state.failure,
             "next_poll_at":self.next_poll_at(),"candidate_currently_valid":"not_assessed",
             "ordinary_phase_budget_reserved":!self.ordinary_phase_available(),
+            "initial_terminal_retry_at":self.state.initial_terminal_retry.as_ref().map(|proof|proof.observation.eligible_at.max(proof.observation.withdrawal_confirmed_at.unwrap_or(0))),
+            "initial_terminal_withdrawal_confirmed":self.state.initial_terminal_retry.as_ref().is_some_and(|proof|proof.observation.withdrawal_confirmed_at.is_some()),
             "activation_performed":false,"installation_ready":false,"automatic_renewal":false,
             "public_reachability":"not_assessed","boot_recovery_qualification":"not_assessed"})
     }

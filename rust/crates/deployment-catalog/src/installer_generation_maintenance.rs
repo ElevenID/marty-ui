@@ -37,6 +37,9 @@ const KINDS: [&str; 9] = [
     "session",
     "selection",
 ];
+#[path = "installer_generation_attempt.rs"]
+pub(crate) mod attempt;
+use attempt::Attempt;
 fn require(value: bool) -> Result<()> {
     if value {
         Ok(())
@@ -65,9 +68,6 @@ fn now() -> Result<u64> {
         .duration_since(UNIX_EPOCH)
         .map(|v| v.as_secs())
         .map_err(|_| REFUSED.into())
-}
-pub(crate) fn record_name(sequence: u64, kind: &str) -> String {
-    format!("generation-{sequence:020}-{kind}.json")
 }
 pub(crate) fn installation_path(view: &LockedInspection) -> Result<PathBuf> {
     let path = std::fs::read_link(format!(
@@ -100,6 +100,8 @@ struct Selector {
     installation_id: String,
     engine_id: String,
     sequence: u64,
+    #[serde(default, skip_serializing_if = "attempt::is_zero")]
+    attempt: u64,
     selection_sha256: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -109,6 +111,8 @@ struct Selection {
     installation_id: String,
     engine_id: String,
     sequence: u64,
+    #[serde(default, skip_serializing_if = "attempt::is_zero")]
+    attempt: u64,
     initial_configuration_sha256: String,
     parent_binding_sha256: String,
     evidence_sha256: BTreeMap<String, String>,
@@ -129,6 +133,8 @@ struct ProducerRecord {
     schema: String,
     installation_id: String,
     sequence: u64,
+    #[serde(default, skip_serializing_if = "attempt::is_zero")]
+    attempt: u64,
     parent_binding_sha256: String,
     container_id: String,
     create_operation: String,
@@ -136,29 +142,34 @@ struct ProducerRecord {
     create_intent_operation: String,
     create_intent_sha256: String,
 }
-pub(crate) fn require_producer_journal(
+pub(crate) fn require_producer_journal_at(
     installation: &Path,
-    sequence: u64,
+    scope: Attempt,
     container_id: &str,
     wait_operation: &str,
 ) -> Result<()> {
-    let producer: ProducerRecord =
-        decode(&read(installation, &record_name(sequence, "producer"))?)?;
+    let sequence = scope.sequence;
+    let producer: ProducerRecord = decode(&read(installation, &scope.record("producer"))?)?;
     require(
         producer.schema == "elevenid.installer-generation-producer/v1"
             && producer.sequence == sequence
+            && producer.attempt == scope.number
             && sequence > 0
             && producer.container_id == container_id
             && valid_hash(container_id)
             && valid_hash(&producer.parent_binding_sha256)
             && regex::Regex::new(&format!(
-                r"\Ag{sequence:020}-(?:create|observe-created)-[0-9]{{6}}\z"
+                r"\A{}-(?:create|observe-created)-[0-9]{{6}}\z",
+                scope.operation_prefix()
             ))
             .map_err(|_| REFUSED)?
             .is_match(&producer.create_operation)
-            && regex::Regex::new(&format!(r"\Ag{sequence:020}-wait-[0-9]{{6}}\z"))
-                .map_err(|_| REFUSED)?
-                .is_match(wait_operation),
+            && regex::Regex::new(&format!(
+                r"\A{}-wait-[0-9]{{6}}\z",
+                scope.operation_prefix()
+            ))
+            .map_err(|_| REFUSED)?
+            .is_match(wait_operation),
     )?;
     let created = read(
         installation,
@@ -170,9 +181,12 @@ pub(crate) fn require_producer_journal(
     require(hash(&created) == producer.created_receipt_sha256)?;
     let receipt: crate::installer_compose::ComposeReceipt = decode(&created)?;
     require(
-        regex::Regex::new(&format!(r"\Ag{sequence:020}-create-[0-9]{{6}}\z"))
-            .map_err(|_| REFUSED)?
-            .is_match(&producer.create_intent_operation),
+        regex::Regex::new(&format!(
+            r"\A{}-create-[0-9]{{6}}\z",
+            scope.operation_prefix()
+        ))
+        .map_err(|_| REFUSED)?
+        .is_match(&producer.create_intent_operation),
     )?;
     let create_intent = read(
         installation,
@@ -238,7 +252,10 @@ pub(crate) fn require_producer_journal(
     )?;
     let start: Value = decode(&read(
         installation,
-        &format!("generation-compose-g{sequence:020}-start-000000-intent.json"),
+        &format!(
+            "generation-compose-{}-intent.json",
+            scope.operation("start", 0)
+        ),
     )?)?;
     require(
         start["schema"] == "elevenid.installer-compose-intent/v1"
@@ -250,6 +267,15 @@ pub(crate) fn require_producer_journal(
             && start["automatic_retry"] == false
             && start["installation_ready"] == false,
     )
+}
+pub(crate) fn require_completed_attempt_link(
+    installation: &Path,
+    current: &GenerationBinding,
+    parent: &GenerationBinding,
+    previous: &GenerationBinding,
+    previous_metadata: &crate::installer_public_ingress::PublicIngressMetadata,
+) -> Result<()> {
+    tx::require_completed_attempt_link(installation, current, parent, previous, previous_metadata)
 }
 fn selected(installation: &Path) -> Result<Option<Selected>> {
     let Some(pointer) = optional(installation, SELECTOR)? else {
@@ -264,12 +290,14 @@ fn selected_from(installation: &Path, pointer: &[u8]) -> Result<Selected> {
             && selector.sequence > 0
             && valid_hash(&selector.selection_sha256),
     )?;
-    let selection_bytes = read(installation, &record_name(selector.sequence, "selection"))?;
+    let scope = Attempt::new(selector.sequence, selector.attempt);
+    let selection_bytes = read(installation, &scope.record("selection"))?;
     require(hash(&selection_bytes) == selector.selection_sha256)?;
     let selection: Selection = decode(&selection_bytes)?;
     require(
         selection.schema == "elevenid.installer-generation-selection/v1"
             && selection.sequence == selector.sequence
+            && selection.attempt == selector.attempt
             && selection.installation_id == selector.installation_id
             && selection.engine_id == selector.engine_id
             && selection.activated
@@ -289,7 +317,7 @@ fn selected_from(installation: &Path, pointer: &[u8]) -> Result<Selected> {
     )?;
     let mut evidence = BTreeMap::new();
     for (kind, digest) in &selection.evidence_sha256 {
-        let bytes = read(installation, &record_name(selector.sequence, kind))?;
+        let bytes = read(installation, &scope.record(kind))?;
         require(valid_hash(digest) && hash(&bytes) == *digest)?;
         evidence.insert(kind.clone(), bytes);
     }
@@ -298,6 +326,7 @@ fn selected_from(installation: &Path, pointer: &[u8]) -> Result<Selected> {
     let binding: GenerationBinding = decode(&evidence["binding"])?;
     require(
         binding.sequence() == selector.sequence
+            && binding.attempt() == selector.attempt
             && binding.installation_id == selector.installation_id
             && binding.engine_id == selector.engine_id
             && binding
@@ -327,7 +356,7 @@ fn selected_from(installation: &Path, pointer: &[u8]) -> Result<Selected> {
         &session.model,
         binding.network_id.as_deref(),
     )?;
-    tx::require_activation(installation, selector.sequence, &binding, &session)?;
+    tx::require_activation(installation, scope, &binding, &session)?;
     installer_compose::verify_input_files(installation, &session.receipt.input_files)?;
     Ok(Selected {
         selector,
@@ -364,7 +393,8 @@ pub(crate) fn require_selection_publication(
     };
     require(
         parent.sha256()? == next.selection.parent_binding_sha256
-            && parent.sequence().checked_add(1) == Some(next.binding.sequence()),
+            && parent.sequence().checked_add(1) == Some(next.binding.sequence())
+            && parent.attempt() == next.binding.parent_attempt(),
     )?;
     let metadata = next
         .binding
@@ -405,7 +435,7 @@ pub(crate) fn selected_evidence(
                 if kind == "selector" {
                     SELECTOR.into()
                 } else {
-                    record_name(binding.sequence(), &kind)
+                    binding.record_name(&kind)
                 },
                 hash(&bytes),
             )
@@ -441,7 +471,11 @@ pub(crate) fn require_lineage(
     require(initial.configuration_sha256 == initial_sha)?;
     if let Some(selected) = selected(installation)? {
         require(selected.selection.initial_configuration_sha256 == initial_sha)?;
-        let parent = generation::load_sequence(installation, selected.binding.sequence() - 1)?;
+        let parent = generation::load_attempt(
+            installation,
+            selected.binding.sequence() - 1,
+            selected.binding.parent_attempt(),
+        )?;
         require(parent.sha256()? == selected.selection.parent_binding_sha256)?;
     }
     view.require_unchanged()
@@ -458,6 +492,8 @@ struct PermitData {
     prior_candidate: Value,
     configuration_sha256: String,
     generation_sequence: u64,
+    #[serde(default, skip_serializing_if = "attempt::is_zero")]
+    generation_attempt: u64,
     generation_binding_sha256: String,
     initial_configuration_sha256: String,
     schedule_sha256: String,
@@ -570,7 +606,11 @@ impl RenewalPermit {
             &saved.receipt.engine_id,
         )?
         .ok_or(REFUSED)?;
-        let original = generation::load_sequence(installation, self.data.generation_sequence)?;
+        let original = generation::load_attempt(
+            installation,
+            self.data.generation_sequence,
+            self.data.generation_attempt,
+        )?;
         let metadata = binding
             .public_ingress_metadata(installation)?
             .ok_or(REFUSED)?;
@@ -625,7 +665,11 @@ pub(crate) fn retirement_view(
     let Some(selected) = selected(installation)? else {
         return Ok(None);
     };
-    let parent = generation::load_sequence(installation, selected.binding.sequence() - 1)?;
+    let parent = generation::load_attempt(
+        installation,
+        selected.binding.sequence() - 1,
+        selected.binding.parent_attempt(),
+    )?;
     let renewal: Value = decode(&view.read_evidence("renewal-result.json")?)?;
     let previous_helper = if parent.sequence() == 0 {
         read(
@@ -633,7 +677,7 @@ pub(crate) fn retirement_view(
             "compose-setup-installer-generation-result.json",
         )?
     } else {
-        read(installation, &record_name(parent.sequence(), "helper"))?
+        read(installation, &parent.record_name("helper"))?
     };
     require_lineage(
         view,
@@ -668,7 +712,7 @@ fn plan_for_binding(
     let name = if binding.sequence() == 0 {
         crate::installer_public_ingress::PUBLIC_INGRESS_PLAN_RECORD.into()
     } else {
-        record_name(binding.sequence(), "public-ingress-plan")
+        binding.record_name("public-ingress-plan")
     };
     let plan = crate::installer_public_ingress::PublicIngressPlan::parse_authenticated(
         &view.read_evidence(&name)?,
@@ -703,15 +747,6 @@ pub(crate) fn reconcile_pending_locked(
 }
 pub(crate) fn has_pending_generation(view: &LockedInspection, installation: &Path) -> Result<bool> {
     view.require_path_binding(installation)?;
-    let sequence = selected(installation)?.map_or(0, |value| value.binding.sequence());
-    if optional(
-        installation,
-        &record_name(sequence.checked_add(1).ok_or(REFUSED)?, "intent"),
-    )?
-    .is_some()
-    {
-        return Ok(true);
-    }
     let current = generation::load_verified(
         installation,
         &view.journal().installation_id().to_string(),
@@ -720,6 +755,9 @@ pub(crate) fn has_pending_generation(view: &LockedInspection, installation: &Pat
     let Some(binding) = current else {
         return Ok(false);
     };
+    if tx::has_pending_activation(view, installation, &binding)? {
+        return Ok(true);
+    }
     let Some(_metadata) = binding.public_ingress_metadata(installation)? else {
         return Ok(false);
     };
@@ -760,6 +798,7 @@ mod model;
 #[path = "installer_generation_maintenance_tx.rs"]
 mod tx;
 pub(crate) use model::require_runtime_model;
+pub(crate) use tx::GenerationRecoveryBaseline;
 #[path = "installer_generation_schedule.rs"]
 mod schedule;
 pub(crate) use schedule::{reconcile_locked, status_locked};

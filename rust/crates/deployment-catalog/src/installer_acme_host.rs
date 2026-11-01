@@ -1135,6 +1135,63 @@ fn require_job(
 fn load_prepared(state: &LockedInspection) -> Result<(Intent, Prepared, BoundAcmeConfiguration)> {
     load_retained_setup(state, true)
 }
+
+/// Bind an initial order to the original completed host preparation. Historical
+/// reads retain immutable setup/custody provenance after application storage has
+/// changed; creating retry authority additionally requires pristine preparation.
+pub(crate) fn initial_order_authority(
+    state: &LockedInspection,
+    binding: &crate::installer_acme_state::Binding,
+    pristine: bool,
+) -> Result<Option<crate::installer_acme_state::InitialAuthority>> {
+    use crate::installer_acme_state::{InitialAuthority, IssuanceReason};
+    use base64::Engine;
+
+    if binding
+        .renewal
+        .as_ref()
+        .is_some_and(|link| matches!(link.reason, IssuanceReason::SelectedGenerationDue { .. }))
+    {
+        return Ok(None);
+    }
+    let environment = binding.environment;
+    let intent_bytes = state.diagnostic_record(&name(environment, "intent"), true)?;
+    let prepared_bytes = state.diagnostic_record(&name(environment, "prepared"), true)?;
+    let (intent_bytes, prepared_bytes) = match (intent_bytes, prepared_bytes) {
+        (None, None) => return Ok(None),
+        (Some(intent), Some(prepared)) => (intent, prepared),
+        _ => return Err(REFUSED.into()),
+    };
+    if pristine {
+        initial_rollover::before_application(state)?;
+    }
+    let (intent, _, configured) = load_retained_setup(state, pristine)?;
+    let configuration = binding.configuration(state)?;
+    let ingress = intent.ingress_key.bind(intent.installation_id)?;
+    let custody_result: Value = decode(&state.read_evidence(&format!(
+        "acme-custody-{}-result.json",
+        environment.as_str()
+    ))?)?;
+    require(
+        configured == configuration
+            && custody_result["schema"] == "elevenid.installer-acme-custody-result/v1"
+            && custody_result["account_key"] == binding.account_key
+            && binding.ingress_key_name == ingress.transit_key_name()
+            && binding.ingress_key_version == ingress.key_version()
+            && binding.ingress_spki_base64
+                == base64::engine::general_purpose::STANDARD.encode(ingress.public_spki_der())
+            && binding.staging_roots_sha256 == intent.staging_roots_sha256,
+    )?;
+    let authority = InitialAuthority {
+        host_intent_sha256: sha(&intent_bytes),
+        host_prepared_sha256: sha(&prepared_bytes),
+        initial_material_sha256: binding.initial_material_sha256()?,
+    };
+    authority.validate(binding)?;
+    state.require_unchanged()?;
+    Ok(Some(authority))
+}
+
 fn load_retained_setup(
     state: &LockedInspection,
     before_application_start: bool,
@@ -1578,6 +1635,70 @@ pub(crate) fn renew_for_maintenance(
     current_inputs: &ComposeInputs,
     permit: &crate::installer_generation_maintenance::RenewalPermit,
 ) -> Result<EnrolmentOutcome> {
+    renew_with_authority(
+        context,
+        state,
+        RenewalRuntime::Selected(current_inputs),
+        permit,
+    )
+}
+
+/// A stale generation attempt may leave an authenticated mixed native census.
+/// Its typed baseline is runtime authority only; the renewal permit still binds
+/// the real selected logical session and exact preceding certificate/order.
+pub(crate) fn renew_for_generation_recovery(
+    context: &HostInputs<'_>,
+    state: &mut crate::installer_state::LockedMaintenance,
+    baseline: &crate::installer_generation_maintenance::GenerationRecoveryBaseline,
+    permit: &crate::installer_generation_maintenance::RenewalPermit,
+) -> Result<EnrolmentOutcome> {
+    renew_with_authority(context, state, RenewalRuntime::Recovery(baseline), permit)
+}
+
+enum RenewalRuntime<'a> {
+    Selected(&'a ComposeInputs),
+    Recovery(&'a crate::installer_generation_maintenance::GenerationRecoveryBaseline),
+}
+impl RenewalRuntime<'_> {
+    fn inputs(&self) -> &ComposeInputs {
+        match self {
+            Self::Selected(inputs) => inputs,
+            Self::Recovery(baseline) => baseline.inputs(),
+        }
+    }
+    fn require_current(
+        &self,
+        context: &HostInputs<'_>,
+        state: &LockedInspection,
+        permit: &crate::installer_generation_maintenance::RenewalPermit,
+        configuration: &BoundAcmeConfiguration,
+        ingress: &RetainedIngressKey,
+    ) -> Result<()> {
+        match self {
+            Self::Selected(inputs) => {
+                permit.require_current(state, context.installation, inputs, configuration, ingress)
+            }
+            Self::Recovery(baseline) => {
+                baseline.require_current(
+                    state,
+                    context.installation,
+                    permit,
+                    configuration,
+                    ingress,
+                )?;
+                baseline.require_live(context.docker, state.journal().runtime().ok_or(REFUSED)?)
+            }
+        }
+    }
+}
+
+fn renew_with_authority(
+    context: &HostInputs<'_>,
+    state: &mut crate::installer_state::LockedMaintenance,
+    authority: RenewalRuntime<'_>,
+    permit: &crate::installer_generation_maintenance::RenewalPermit,
+) -> Result<EnrolmentOutcome> {
+    let current_inputs = authority.inputs();
     let (intent, prepared, configuration) = load_retained_setup(state.inspection(), false)?;
     require(
         configuration.parameters().environment() == AcmeEnvironment::Production
@@ -1590,14 +1711,21 @@ pub(crate) fn renew_for_maintenance(
                 == ProjectionDirectory::observe(state.inspection(), context.installation)?,
     )?;
     let retained_key = intent.ingress_key.bind(intent.installation_id)?;
-    permit.require_current(
+    authority.require_current(
+        context,
         state.inspection(),
-        context.installation,
-        current_inputs,
+        permit,
         &configuration,
         &retained_key,
     )?;
     recovery::recover_runtime(context, state, current_inputs)?;
+    authority.require_current(
+        context,
+        state.inspection(),
+        permit,
+        &configuration,
+        &retained_key,
+    )?;
     let connection = connection_view(context, state.inspection(), current_inputs)?;
     require(
         connection.ca_sha256 == intent.openbao_ca_pem_sha256
@@ -1629,10 +1757,10 @@ pub(crate) fn renew_for_maintenance(
         prepared.projection
             == ProjectionDirectory::observe(state.inspection(), context.installation)?,
     )?;
-    permit.require_current(
+    authority.require_current(
+        context,
         state.inspection(),
-        context.installation,
-        current_inputs,
+        permit,
         &configuration,
         &ingress,
     )?;

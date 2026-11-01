@@ -43,6 +43,21 @@ const REMOVE_INTENT: &str = "rootless-canary-remove-intent.json";
 const TRANSITION_REMOVED: &str = "rootless-canary-transition-removed.json";
 const RESTORE_REMOVED: &str = "rootless-canary-restore-removed.json";
 const COMPLETE: &str = "rootless-canary-complete.json";
+pub(crate) const COMPLETED_EVIDENCE: [&str; 13] = [
+    PULL_INTENT,
+    INTENT,
+    CREATED,
+    TRANSITION_CONTAINER,
+    RESTORE_CONTAINER,
+    START_INTENT,
+    FOREIGN,
+    RESTORE_INTENT,
+    RESULT,
+    REMOVE_INTENT,
+    TRANSITION_REMOVED,
+    RESTORE_REMOVED,
+    COMPLETE,
+];
 
 fn require(ok: bool) -> Result<()> {
     if ok {
@@ -1499,6 +1514,10 @@ fn require_verified_scope(view: &LockedInspection, operator_sha: &str) -> Result
                 && scope.build_run_id == inventory.build_run_id
                 && scope.build_run_attempt == inventory.build_run_attempt,
         ),
+        ExecutionScope::AcceptanceOnly(_) => {
+            crate::installer_candidate_command::require_retained_scope(view, operator_sha)
+                .map(|_| ())
+        }
         #[cfg(feature = "installer-development")]
         ExecutionScope::UnsignedDevelopment(scope) => {
             require(
@@ -1519,7 +1538,6 @@ fn require_verified_scope(view: &LockedInspection, operator_sha: &str) -> Result
                     && admission.operator_sha256 == operator_sha,
             )
         }
-        _ => Err(REFUSED.into()),
     }
 }
 
@@ -1528,9 +1546,6 @@ fn require_verified_scope(view: &LockedInspection, operator_sha: &str) -> Result
 /// it never runs Docker, repairs ownership, grants deletion, or admits a release.
 pub(crate) fn require_completed(view: &LockedInspection) -> Result<BTreeMap<String, String>> {
     let journal = view.journal();
-    let ExecutionScope::CandidateTest(scope) = journal.execution_scope() else {
-        return Err(REFUSED.into());
-    };
     require(journal.phase() == Phase::Provisioning)?;
     let binding = journal.runtime().ok_or(REFUSED)?;
     binding.validate()?;
@@ -1538,32 +1553,40 @@ pub(crate) fn require_completed(view: &LockedInspection) -> Result<BTreeMap<Stri
     let inventory_bytes = view.read_evidence("installer-inventory.json")?;
     let inventory = crate::installer_release::parse_inventory(&inventory_bytes)?;
     require(
-        view.read_evidence("candidate-test-inventory.json")? == inventory_bytes
-            && format!("sha256:{}", sha(&inventory_bytes)) == journal.identity().inventory_sha256
-            && scope.inventory_sha256 == sha(&inventory_bytes)
-            && scope.build_run_id == inventory.build_run_id
-            && scope.build_run_attempt == inventory.build_run_attempt
+        format!("sha256:{}", sha(&inventory_bytes)) == journal.identity().inventory_sha256
             && inventory.source_sha == journal.identity().source_sha
             && inventory.release_tag == journal.identity().release_tag,
     )?;
-    let records: BTreeMap<_, _> = [
-        PULL_INTENT,
-        INTENT,
-        CREATED,
-        TRANSITION_CONTAINER,
-        RESTORE_CONTAINER,
-        START_INTENT,
-        FOREIGN,
-        RESTORE_INTENT,
-        RESULT,
-        REMOVE_INTENT,
-        TRANSITION_REMOVED,
-        RESTORE_REMOVED,
-        COMPLETE,
-    ]
-    .into_iter()
-    .map(|name| Ok((name, view.read_evidence(name)?)))
-    .collect::<Result<_>>()?;
+    let mut source_evidence = match journal.execution_scope() {
+        ExecutionScope::CandidateTest(scope) => {
+            require(
+                view.read_evidence("candidate-test-inventory.json")? == inventory_bytes
+                    && scope.inventory_sha256 == sha(&inventory_bytes)
+                    && scope.build_run_id == inventory.build_run_id
+                    && scope.build_run_attempt == inventory.build_run_attempt,
+            )?;
+            let mut evidence = BTreeMap::new();
+            for name in ["candidate-test-inventory.json", "installer-inventory.json"] {
+                evidence.insert(name.into(), sha(&inventory_bytes));
+                for suffix in [".sigstore.json", ".provenance.jsonl"] {
+                    let name = format!("{name}{suffix}");
+                    evidence.insert(name.clone(), sha(&view.read_evidence(&name)?));
+                }
+            }
+            evidence
+        }
+        ExecutionScope::AcceptanceOnly(_) => {
+            crate::installer_candidate_command::require_retained_scope(
+                view,
+                &inventory.artifact("marty-deploy-linux-amd64")?.sha256,
+            )?
+        }
+        _ => return Err(REFUSED.into()),
+    };
+    let records: BTreeMap<_, _> = COMPLETED_EVIDENCE
+        .into_iter()
+        .map(|name| Ok((name, view.read_evidence(name)?)))
+        .collect::<Result<_>>()?;
     let intent_bytes = &records[INTENT];
     let intent: Intent = serde_json::from_slice(intent_bytes).map_err(|_| REFUSED)?;
     require(
@@ -1697,13 +1720,7 @@ pub(crate) fn require_completed(view: &LockedInspection) -> Result<BTreeMap<Stri
         .into_iter()
         .map(|(name, bytes)| (name.into(), sha(&bytes)))
         .collect();
-    for name in ["candidate-test-inventory.json", "installer-inventory.json"] {
-        hashes.insert(name.into(), sha(&inventory_bytes));
-        for suffix in [".sigstore.json", ".provenance.jsonl"] {
-            let name = format!("{name}{suffix}");
-            hashes.insert(name.clone(), sha(&view.read_evidence(&name)?));
-        }
-    }
+    hashes.append(&mut source_evidence);
     view.require_unchanged()?;
     Ok(hashes)
 }

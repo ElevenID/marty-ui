@@ -50,9 +50,13 @@ bindings, unexpected transitions and unsupported receipt shapes hold execution
 before another CA request. Receipts are `0600`, bounded to 128 KiB each and 512
 per order cycle. Cycle zero keeps the original filenames. Positive cycles use
 `acme-<environment>-order-<20-digit-cycle>-<6-digit-sequence>.json` and retain
-the completed predecessor, exact account/CSR/key/configuration, and the typed
-generation or expired-initial-candidate permit. An unknown `newOrder` outcome
-never permits a replacement cycle.
+the exact predecessor, account/CSR/key/configuration, and an explicit typed
+permit. Selected-generation renewal binds a completed candidate. Initial
+replacement permits instead distinguish an expired candidate from a confirmed
+initial terminal order; the latter can precede the installation's first
+certificate. Their original-preparation authority cannot be used by selected
+generation maintenance. An unknown `newOrder` outcome never permits a
+replacement cycle.
 
 Polling uses a separate, bounded `acme-poll-<environment>-<20-digit-cycle>.json`
 checkpoint. It contains only timing and an exact immutable phase anchor. It
@@ -74,6 +78,7 @@ completed before further CA requests.
 | Challenge notification | Exact published authorization/challenge target and notification intent | The target is refreshed and checked before notification. Only a pending challenge receives the readiness POST; processing/valid observations do not trigger another POST. |
 | Finalization | Finalization intent before sending the retained CSR DER | A known order is queried first. Processing/valid state proceeds without repeating finalization; a ready order can resend the exact retained CSR. |
 | Candidate admission | Admitted full chain and its validation metadata before challenge withdrawal | A restart revalidates the retained chain and completes withdrawal. No active generation or installer `Ready` state is written. |
+| Initial terminal order | Distinct initial authority, positive known-order terminal reason, observation time and cooldown, followed by confirmed withdrawal | While the original preparation is still pristine, a v2 initial permit binds the immediate terminal receipt and exact original account/key/CSR/configuration. A retained permit resumes the same cycle. An old untyped terminal record is not upgraded into retry authority. |
 
 The fetched directory must still advertise the exact accepted terms URL and
 selected profile before account registration or same-key recovery. Preparation

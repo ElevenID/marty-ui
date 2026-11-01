@@ -92,6 +92,16 @@ derives a new environment file from those exact bytes. An already-present
 setting must be byte-identical and unique; conflicting or duplicate settings,
 layers, or file bindings are refused. Earlier bound input files are preserved.
 
+Signed trial scopes retain separate preparation provenance. A customer
+`CandidateTest` uses its authenticated inventory and completed rootless storage
+canary. A signed `AcceptanceOnly` qualification uses the exact authorization,
+controller consumption and inventory subjects plus their signature/provenance
+sidecars pinned in the installation journal, together with the same completed
+canary records. The preparation reader requires the exact named evidence set;
+the two scopes cannot substitute for each other. Neither scope gains original
+creation/deletion receipts or a Ready outcome, and an older acceptance record
+without the pinned grant set cannot enter this execution path.
+
 The setup evidence retains `activation_performed: false` and
 `installation_ready: false`. Partial setup is not treated as absent, and neither
 setup job is recreated automatically after an uncertain outcome.
@@ -120,14 +130,32 @@ Compose session as its authority. It retains the original preparation's exact
 provenance and immutable setup files, while leaving historical storage ownership
 and mode observations out of that recurring admission check.
 
-If a completed first-install candidate expires before activation, continuation
-can admit one replacement cycle under a separate original-preparation permit.
-That permit records the expired candidate, unchanged hosting configuration, and
-the exact host intent and preparation hashes. The account URL, account key,
-ingress key and signed CSR are retained. It refuses to run after application,
-generation, lifecycle or uninstall work has begun. An interruption after writing
-the permit resumes the same cycle; uncertain order creation never creates a
-replacement attempt automatically.
+Initial continuation has its own replacement authority, separate from renewal
+of a selected generation. A completed candidate that expired before activation
+can authorize a replacement. A known order with an authenticated invalid or
+expired order/authorization can also authorize a later attempt, including before
+the first candidate exists or after an expired candidate's replacement failed.
+The latter case requires a distinct initial-terminal receipt, confirmed challenge
+withdrawal, and the retained cooldown. The first consecutive terminal attempt
+waits at least five minutes; subsequent consecutive failures double the delay up
+to six hours. A longer CA `Retry-After` or previously retained polling deadline
+remains the lower bound without that cap. A completed candidate ends that
+consecutive-failure series.
+
+Both reasons require the complete, still-pristine original preparation and its
+exact host intent, configuration, custody and credential evidence. The account
+URL, distinct account/ingress keys, signed CSR, origins, CA environment, profile
+and agreed terms remain unchanged. The v2 initial permit explicitly identifies
+either the expired admitted candidate or the immediate confirmed terminal
+predecessor. Existing v1 expiry permits remain readable. Initial permits refuse
+to run after application, selected-generation, lifecycle or uninstall ownership
+appears. Their terminal proof cannot substitute for a generation-renewal permit.
+
+An interruption after writing a permit but before the first order-stream receipt
+resumes that same permit. Interrupted withdrawal resumes locally and must finish
+before another order is authorized. An unknown `newOrder` result, an account or
+certificate-admission failure, or an old terminal record without the typed
+initial proof remains held; none is converted into permission for another order.
 
 A candidate inside the minimum one-hour activation margin is reported as
 non-activatable, with its expiry as the next replacement eligibility time. A
@@ -181,6 +209,15 @@ native health probes use OpenBao's local Unix listener. The fixed scoped Unix
 TLS recovery runs before verified HTTPS, so an expired local HTTPS certificate
 does not force root access or setup replay. The host then revalidates the account
 and ingress public keys and checks the generation permit again before CA work.
+
+Recovery of an interrupted generation can supply a separately validated native
+baseline when the retained containers no longer match the selected logical
+session. That capability pins the real container census and stopped application
+roles; it does not replace the selected certificate or issuance permit. The host
+checks both authorities before and after infrastructure recovery and scoped-key
+authentication. Full Compose model admission retains the ingress-listener
+policy, while recovery commands and health checks select only the three existing
+OpenBao, unseal/readiness and HTTP-01 roles. Setup jobs remain observation-only.
 
 Expired selected certificates remain historically identifiable and are due for
 replacement; they are not re-admitted as currently valid. The public certificate

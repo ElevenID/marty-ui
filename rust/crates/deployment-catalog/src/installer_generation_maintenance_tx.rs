@@ -25,6 +25,11 @@ use std::{
     time::Duration,
 };
 
+#[path = "installer_generation_supersession.rs"]
+mod supersession;
+pub(super) use supersession::require_completed_attempt_link;
+pub(crate) use supersession::GenerationRecoveryBaseline;
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Intent {
@@ -32,6 +37,10 @@ struct Intent {
     installation_id: String,
     engine_id: String,
     sequence: u64,
+    #[serde(default, skip_serializing_if = "attempt::is_zero")]
+    attempt: u64,
+    #[serde(default, skip_serializing_if = "attempt::is_zero")]
+    parent_attempt: u64,
     parent_binding_sha256: String,
     initial_configuration_sha256: String,
     parent_session: SavedSession,
@@ -42,6 +51,20 @@ struct Intent {
     helper_configuration_sha256: String,
     helper_model: Value,
     created_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recovery_baseline_sha256: Option<String>,
+}
+impl Intent {
+    fn scope(&self) -> Attempt {
+        Attempt::new(self.sequence, self.attempt)
+    }
+    fn parent(&self, installation: &Path) -> Result<GenerationBinding> {
+        generation::load_attempt(
+            installation,
+            self.sequence.checked_sub(1).ok_or(REFUSED)?,
+            self.parent_attempt,
+        )
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +72,8 @@ struct ActivationIntent {
     schema: String,
     installation_id: String,
     sequence: u64,
+    #[serde(default, skip_serializing_if = "attempt::is_zero")]
+    attempt: u64,
     binding_sha256: String,
     helper_receipt_sha256: String,
     inputs: ComposeInputs,
@@ -86,7 +111,15 @@ pub(super) fn require_candidate_fresh(
     let metadata = binding
         .public_ingress_metadata(installation)?
         .ok_or(REFUSED)?;
-    require_candidate_fresh_at(metadata.token_observed_at, metadata.token_ttl_seconds, at)
+    require_candidate_fresh_at(metadata.token_observed_at, metadata.token_ttl_seconds, at)?;
+    // The leaf can expire inside a long activation even while newly minted
+    // workload credentials remain fresh. Recheck both clocks at every native
+    // create/start and selector boundary, including historical activation.
+    metadata.validate_selected_at(
+        &binding.read(installation, "installer_ingress_tls_cert")?,
+        at,
+    )?;
+    Ok(())
 }
 fn store(state: &mut LockedMaintenance, name: &str, bytes: &[u8]) -> Result<()> {
     match state.read_evidence(name)? {
@@ -176,10 +209,8 @@ fn copy(directory: &File, name: &str, bytes: &[u8], mode: u32) -> Result<()> {
     )?;
     directory.sync_all().map_err(|_| REFUSED.into())
 }
-fn work(installation: &Path, sequence: u64) -> PathBuf {
-    installation
-        .join("generation-work")
-        .join(format!("{sequence:020}"))
+fn work(installation: &Path, scope: Attempt) -> PathBuf {
+    scope.work(installation)
 }
 fn path_text(path: &Path) -> Result<&str> {
     let text = path.to_str().ok_or(REFUSED)?;
@@ -224,13 +255,29 @@ fn receipt_bytes(state: &LockedMaintenance, operation: &str) -> Result<Vec<u8>> 
 }
 fn authorized_creates(
     installation: &Path,
-    sequence: u64,
+    scope: Attempt,
     phase: &str,
     session: &ComposeSession,
     prior: &ProjectResources,
     allowed: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, String>> {
-    let prefix = format!("generation-compose-g{sequence:020}-{phase}-");
+    let authority = CreateAuthority {
+        project: session.model()["name"].as_str().ok_or(REFUSED)?,
+        engine: &session.runtime_binding().engine_id,
+        configuration: session.configuration_sha256(),
+        input_files: session.input_files(),
+        prior,
+        allowed,
+    };
+    recorded_creates(installation, scope, phase, &authority)
+}
+fn recorded_creates(
+    installation: &Path,
+    scope: Attempt,
+    phase: &str,
+    authority: &CreateAuthority<'_>,
+) -> Result<BTreeMap<String, String>> {
+    let prefix = format!("generation-compose-{}-{phase}-", scope.operation_prefix());
     let mut result = BTreeMap::new();
     for name in fs::file_names(&directory(&installation.join("evidence"))?, REFUSED)? {
         let Some(ordinal) = name
@@ -242,23 +289,38 @@ fn authorized_creates(
         require(ordinal.len() == 6 && ordinal.bytes().all(|byte| byte.is_ascii_digit()))?;
         let bytes = read(installation, &name)?;
         let value: Value = decode(&bytes)?;
+        authority.require(&value)?;
+        let operation = name
+            .strip_prefix("generation-compose-")
+            .and_then(|name| name.strip_suffix("-intent.json"))
+            .ok_or(REFUSED)?;
+        result.insert(operation.into(), hash(&bytes));
+    }
+    Ok(result)
+}
+struct CreateAuthority<'a> {
+    project: &'a str,
+    engine: &'a str,
+    configuration: &'a str,
+    input_files: &'a BTreeMap<PathBuf, String>,
+    prior: &'a ProjectResources,
+    allowed: &'a BTreeSet<String>,
+}
+impl CreateAuthority<'_> {
+    fn require(&self, value: &Value) -> Result<()> {
         let roles: Vec<String> =
             serde_json::from_value(value["selected_services"].clone()).map_err(|_| REFUSED)?;
         let selected: BTreeSet<_> = roles.iter().cloned().collect();
         require(
             !selected.is_empty()
                 && selected.len() == roles.len()
-                && selected.is_subset(allowed)
+                && selected.is_subset(self.allowed)
                 && value["schema"] == "elevenid.installer-compose-intent/v1"
-                && value["project"]
-                    == format!(
-                        "marty-install-{}",
-                        sequence_installation_id(session)?.replace('-', "")
-                    )
-                && value["engine_id"] == session_engine(session)?
-                && value["configuration_sha256"] == session.configuration_sha256()
+                && value["project"] == self.project
+                && value["engine_id"] == self.engine
+                && value["configuration_sha256"] == self.configuration
                 && value["input_files"]
-                    == serde_json::to_value(session.input_files()).map_err(|_| REFUSED)?
+                    == serde_json::to_value(self.input_files).map_err(|_| REFUSED)?
                 && value["command"]
                     == json!([
                         "up",
@@ -276,9 +338,11 @@ fn authorized_creates(
         )?;
         let observed: ProjectResources =
             serde_json::from_value(value["prior_resources"].clone()).map_err(|_| REFUSED)?;
-        require(observed.networks == prior.networks && observed.volumes == prior.volumes)?;
-        for (role, identity) in &prior.containers {
-            if !allowed.contains(role) {
+        require(
+            observed.networks == self.prior.networks && observed.volumes == self.prior.volumes,
+        )?;
+        for (role, identity) in &self.prior.containers {
+            if !self.allowed.contains(role) {
                 require(observed.containers.get(role) == Some(identity))?;
             }
         }
@@ -286,33 +350,29 @@ fn authorized_creates(
             observed
                 .containers
                 .keys()
-                .all(|role| prior.containers.contains_key(role)),
-        )?;
-        let operation = name
-            .strip_prefix("generation-compose-")
-            .and_then(|name| name.strip_suffix("-intent.json"))
-            .ok_or(REFUSED)?;
-        result.insert(operation.into(), hash(&bytes));
+                .all(|role| self.prior.containers.contains_key(role)),
+        )
+    }
+}
+fn input_files(inputs: &ComposeInputs) -> Result<BTreeMap<PathBuf, String>> {
+    let mut result = inputs.prior.as_ref().ok_or(REFUSED)?.input_files.clone();
+    for file in inputs
+        .files
+        .iter()
+        .chain(std::iter::once(&inputs.environment))
+        .chain(&inputs.bound_inputs)
+    {
+        if let Some(previous) = result.insert(file.path.clone(), file.sha256.clone()) {
+            require(previous == file.sha256)?;
+        }
     }
     Ok(result)
 }
-fn sequence_installation_id(session: &ComposeSession) -> Result<String> {
-    let project = session.model()["name"].as_str().ok_or(REFUSED)?;
-    Ok(project
-        .strip_prefix("marty-install-")
-        .ok_or(REFUSED)?
-        .parse::<uuid::Uuid>()
-        .map_err(|_| REFUSED)?
-        .to_string())
-}
-fn session_engine(session: &ComposeSession) -> Result<String> {
-    Ok(session.runtime_binding().engine_id.clone())
-}
-fn operation(state: &LockedInspection, sequence: u64, phase: &str) -> Result<String> {
+fn operation(state: &LockedInspection, scope: Attempt, phase: &str) -> Result<String> {
     // The ordinal is per phase/transaction, not a lifetime renewal limit.
     let path = installation_path(state)?;
     let directory = directory(&path.join("evidence"))?;
-    let prefix = format!("generation-compose-g{sequence:020}-{phase}-");
+    let prefix = format!("generation-compose-{}-{phase}-", scope.operation_prefix());
     let mut maximum = None;
     for name in fs::file_names(&directory, REFUSED)? {
         if let Some(part) = name
@@ -328,18 +388,20 @@ fn operation(state: &LockedInspection, sequence: u64, phase: &str) -> Result<Str
         .map_or(Some(0), |value| value.checked_add(1))
         .ok_or(REFUSED)?;
     require(next < 1_000_000)?;
-    Ok(format!("g{sequence:020}-{phase}-{next:06}"))
+    Ok(scope.operation(phase, next))
 }
 fn parent_session(view: &LockedInspection, installation: &Path) -> Result<SavedSession> {
     current_session(view, installation)?
         .map(Ok)
         .unwrap_or_else(|| installer_doctor::load_initial_session(view, installation))
 }
-fn load_intent(view: &LockedInspection, installation: &Path, sequence: u64) -> Result<Intent> {
-    let intent: Intent = decode(&view.read_evidence(&record_name(sequence, "intent"))?)?;
+fn load_intent(view: &LockedInspection, installation: &Path, scope: Attempt) -> Result<Intent> {
+    let sequence = scope.sequence;
+    let intent: Intent = decode(&view.read_evidence(&scope.record("intent"))?)?;
     require(
         intent.schema == "elevenid.installer-generation-maintenance-intent/v1"
             && intent.sequence == sequence
+            && intent.attempt == scope.number
             && sequence > 0
             && intent.installation_id == view.journal().installation_id().to_string()
             && intent.engine_id == view.journal().runtime().ok_or(REFUSED)?.engine_id
@@ -352,23 +414,23 @@ fn load_intent(view: &LockedInspection, installation: &Path, sequence: u64) -> R
         installer_compose::model_sha256(&intent.helper_model)?
             == intent.helper_configuration_sha256,
     )?;
-    let parent = generation::load_sequence(installation, sequence - 1)?;
+    let parent = intent.parent(installation)?;
     require(parent.sha256()? == intent.parent_binding_sha256)?;
     let current = parent_session(view, installation)?;
     require(encode(&current)? == encode(&intent.parent_session)?)?;
     let plan = PublicIngressPlan::parse_authenticated(
-        &view.read_evidence(&record_name(sequence, "public-ingress-plan"))?,
+        &view.read_evidence(&scope.record("public-ingress-plan"))?,
         &intent.public_plan_sha256,
     )?;
     plan.require_saved(view)?;
-    let current_dir = directory(&work(installation, sequence).join("current"))?;
+    let current_dir = directory(&work(installation, scope).join("current"))?;
     let before = host::read_inputs_for_source(&current_dir, true)?;
     require(crate::installer_generation::hashes(&before) == intent.source_sha256)?;
     for (name, value) in &before {
         require(parent.read(installation, name)? == *value)?;
     }
     let identities =
-        host::staged_identity(&directory(&work(installation, sequence).join("identity"))?)?;
+        host::staged_identity(&directory(&work(installation, scope).join("identity"))?)?;
     require(crate::installer_generation::hashes(&identities) == intent.identity_sha256)?;
     let authority = PublicRenewalAuthorityPlan::load(view)?;
     crate::installer_renewal::require_public_enrolment(view, &authority)?;
@@ -385,6 +447,7 @@ fn load_intent(view: &LockedInspection, installation: &Path, sequence: u64) -> R
             .ok_or(REFUSED)?
             .input_files,
     )?;
+    supersession::require_intent_baseline(view, installation, &intent)?;
     view.require_unchanged()?;
     Ok(intent)
 }
@@ -394,13 +457,66 @@ pub(super) fn has_pending_activation(
     installation: &Path,
     current: &GenerationBinding,
 ) -> Result<bool> {
-    let sequence = current.sequence().checked_add(1).ok_or(REFUSED)?;
-    if optional(installation, &record_name(sequence, "intent"))?.is_none() {
-        return Ok(false);
+    supersession::pending_scope(view, installation, current).map(|value| value.is_some())
+}
+pub(super) fn pending_status(
+    view: &LockedInspection,
+    installation: &Path,
+    current: &GenerationBinding,
+) -> Result<Option<Value>> {
+    let Some(scope) = supersession::pending_scope(view, installation, current)? else {
+        return Ok(None);
+    };
+    let has = |kind: &str| optional(installation, &scope.record(kind)).map(|value| value.is_some());
+    let stage = if !has("intent")? {
+        if has("supersession-baseline")? {
+            "supersession_baseline_captured"
+        } else {
+            "supersession_pending"
+        }
+    } else {
+        let _ = load_intent(view, installation, scope)?;
+        if has("activation")? {
+            "selection_pending"
+        } else if has("activation-intent")? {
+            "runtime_replacement_pending"
+        } else if has("helper")? {
+            "producer_completed"
+        } else if optional(
+            installation,
+            &format!(
+                "generation-compose-{}-intent.json",
+                scope.operation("start", 0)
+            ),
+        )?
+        .is_some()
+        {
+            "producer_start_outcome_unobserved"
+        } else {
+            "producer_pending"
+        }
+    };
+    let mut value = json!({"sequence":scope.sequence,"attempt":scope.number,"stage":stage,
+        "installation_ready":false,"read_only":true});
+    if has("binding")? {
+        let binding = generation::load_attempt(installation, scope.sequence, scope.number)?;
+        let metadata = binding
+            .public_ingress_metadata(installation)?
+            .ok_or(REFUSED)?;
+        let at = now()?;
+        value["credential_fresh_until"] = json!(metadata
+            .token_observed_at
+            .checked_add(1800)
+            .ok_or(REFUSED)?);
+        value["certificate_not_after"] = metadata.certificate_admission["not_after"].clone();
+        value["completed_attempt_stale"] = json!(supersession::requires_supersession(
+            installation,
+            &binding,
+            at
+        )?);
     }
-    let intent = load_intent(view, installation, sequence)?;
-    require(intent.parent_binding_sha256 == current.sha256()?)?;
-    Ok(true)
+    view.require_unchanged()?;
+    Ok(Some(value))
 }
 
 fn begin(
@@ -409,22 +525,37 @@ fn begin(
     state: &mut LockedMaintenance,
     parent: &GenerationBinding,
     candidate: &AcmeCandidate,
+    scope: Attempt,
+    baseline: Option<&GenerationRecoveryBaseline>,
 ) -> Result<Intent> {
     let context = installer_acme_host::maintenance_context(state.inspection())?;
     let saved = parent_session(state.inspection(), installation)?;
     let initial = installer_doctor::load_initial_session(state.inspection(), installation)?;
     let sequence = parent.sequence().checked_add(1).ok_or(REFUSED)?;
-    require(
-        state
-            .read_evidence(&record_name(sequence, "intent"))?
-            .is_none(),
+    require(scope.sequence == sequence)?;
+    require((scope.number > 0) == baseline.is_some())?;
+    if let Some(baseline) = baseline {
+        require(baseline.scope() == scope)?;
+        baseline.require_selected(state.inspection(), installation)?;
+        baseline.require_live(docker, state.journal().runtime().ok_or(REFUSED)?)?;
+    }
+    require(state.read_evidence(&scope.record("intent"))?.is_none())?;
+    let plan = PublicIngressPlan::from_successor_attempt(
+        state.inspection(),
+        installation,
+        candidate,
+        parent,
+        scope.number,
     )?;
-    let plan =
-        PublicIngressPlan::from_successor(state.inspection(), installation, candidate, parent)?;
     let plan_path = plan.record_for_maintenance(state)?;
     let root = directory(installation)?;
     let work_root = mkdir(&root, "generation-work")?;
-    let held = mkdir(&work_root, &format!("{sequence:020}"))?;
+    let sequence_root = mkdir(&work_root, &format!("{sequence:020}"))?;
+    let held = if scope.number == 0 {
+        sequence_root
+    } else {
+        mkdir(&sequence_root, &format!("attempt-{:020}", scope.number))?
+    };
     let current = mkdir(&held, "current")?;
     let identity = mkdir(&held, "identity")?;
     let transfer = mkdir(&held, "transfer")?;
@@ -450,7 +581,10 @@ fn begin(
     // listener and port policy. The initial bootstrap model cannot represent
     // those runtime roles after the first application has started.
     let mut inputs = saved.inputs.clone();
-    inputs.prior = Some(saved.receipt.clone());
+    inputs.prior = Some(match baseline {
+        Some(value) => value.receipt()?.clone(),
+        None => saved.receipt.clone(),
+    });
     inputs.profiles = vec!["setup".into()];
     inputs.services = vec!["installer-generation".into()];
     let layer = context.bundle.join(LAYER);
@@ -469,7 +603,7 @@ fn begin(
     let values = BTreeMap::from([
         (
             "MARTY_GENERATION_WORK_DIR",
-            path_text(&work(installation, sequence))?.into(),
+            path_text(&work(installation, scope))?.into(),
         ),
         (
             "MARTY_GENERATION_PUBLIC_INGRESS_PLAN",
@@ -485,7 +619,7 @@ fn begin(
         &crate::installer_verify::read_private_bytes(&inputs.environment.path, 65536)?,
         &values,
     )?;
-    let name = format!("generation-{sequence:020}-helper.env");
+    let name = scope.environment_name("helper");
     store(state, &name, &bytes)?;
     inputs.environment = BoundFile {
         path: installation.join("evidence").join(name),
@@ -517,20 +651,38 @@ fn begin(
             sha256: plan.renewal_authority_plan_sha256().into(),
         });
     }
-    inputs
-        .writable_bind_roots
-        .insert(work(installation, sequence).join("transfer"));
-    inputs.readonly_bind_roots.extend([
-        work(installation, sequence).join("current"),
-        work(installation, sequence).join("identity"),
-    ]);
-    // Existing runtime containers may still bind their selected immutable root.
+    // Admission needs the original immutable paths, the genuinely selected
+    // generation and at most the one actual stale runtime/helper baseline.
+    // Do not accumulate writable roots across every superseded attempt.
+    inputs.readonly_bind_roots = initial.inputs.readonly_bind_roots.clone();
+    inputs.writable_bind_roots = initial.inputs.writable_bind_roots.clone();
     inputs
         .readonly_bind_roots
-        .extend(saved.inputs.readonly_bind_roots.iter().cloned());
+        .insert(parent.secret_dir(installation)?);
+    if let Some(baseline) = baseline {
+        inputs
+            .readonly_bind_roots
+            .insert(baseline.runtime_root().into());
+        let previous = baseline.previous_work(installation)?;
+        inputs
+            .readonly_bind_roots
+            .extend([previous.join("current"), previous.join("identity")]);
+        inputs.writable_bind_roots.insert(previous.join("transfer"));
+    } else {
+        inputs
+            .readonly_bind_roots
+            .extend(saved.inputs.readonly_bind_roots.iter().cloned());
+        inputs
+            .writable_bind_roots
+            .extend(saved.inputs.writable_bind_roots.iter().cloned());
+    }
     inputs
         .writable_bind_roots
-        .extend(saved.inputs.writable_bind_roots.iter().cloned());
+        .insert(work(installation, scope).join("transfer"));
+    inputs.readonly_bind_roots.extend([
+        work(installation, scope).join("current"),
+        work(installation, scope).join("identity"),
+    ]);
     plan.require_job_inputs(
         docker,
         state.journal().runtime().ok_or(REFUSED)?,
@@ -543,11 +695,17 @@ fn begin(
         inputs.clone(),
     )?;
     session.observe_resources()?;
+    let created_at = now()?;
+    if let Some(baseline) = baseline {
+        require(created_at >= baseline.observed_at())?;
+    }
     let intent = Intent {
         schema: "elevenid.installer-generation-maintenance-intent/v1".into(),
         installation_id: parent.installation_id.clone(),
         engine_id: parent.engine_id.clone(),
         sequence,
+        attempt: scope.number,
+        parent_attempt: parent.attempt(),
         parent_binding_sha256: parent.sha256()?,
         initial_configuration_sha256: initial.configuration_sha256,
         parent_session: saved,
@@ -557,10 +715,11 @@ fn begin(
         helper_inputs: inputs,
         helper_configuration_sha256: session.configuration_sha256().into(),
         helper_model: session.model().clone(),
-        created_at: now()?,
+        created_at,
+        recovery_baseline_sha256: baseline.map(|value| value.sha256().into()),
     };
-    store(state, &record_name(sequence, "intent"), &encode(&intent)?)?;
-    load_intent(state.inspection(), installation, sequence)
+    store(state, &scope.record("intent"), &encode(&intent)?)?;
+    load_intent(state.inspection(), installation, scope)
 }
 
 fn producer(
@@ -570,24 +729,22 @@ fn producer(
     intent: &Intent,
 ) -> Result<ComposeReceipt> {
     let sequence = intent.sequence;
+    let scope = intent.scope();
     let session = ComposeSession::new_generation(
         docker,
         state.journal().runtime().ok_or(REFUSED)?,
         intent.helper_inputs.clone(),
     )?;
     require(session.configuration_sha256() == intent.helper_configuration_sha256)?;
-    let binding = generation::load_sequence(installation, sequence - 1)?;
+    let binding = intent.parent(installation)?;
     let plan = PublicIngressPlan::parse_authenticated(
         &state
             .inspection()
-            .read_evidence(&record_name(sequence, "public-ingress-plan"))?,
+            .read_evidence(&scope.record("public-ingress-plan"))?,
         &intent.public_plan_sha256,
     )?;
-    if state
-        .read_evidence(&record_name(sequence, "helper"))?
-        .is_none()
-    {
-        let producer_name = record_name(sequence, "producer");
+    if state.read_evidence(&scope.record("helper"))?.is_none() {
+        let producer_name = scope.record("producer");
         let prepared = if let Some(bytes) = state.read_evidence(&producer_name)? {
             decode::<ProducerRecord>(&bytes)?
         } else {
@@ -598,8 +755,10 @@ fn producer(
                 GenerationOperation::Candidate,
             )?;
             let previous = intent
-                .parent_session
-                .receipt
+                .helper_inputs
+                .prior
+                .as_ref()
+                .ok_or(REFUSED)?
                 .resources
                 .as_ref()
                 .ok_or(REFUSED)?
@@ -612,19 +771,21 @@ fn producer(
                 .filter(|value| value.id != previous.id);
             let allowed = BTreeSet::from(["installer-generation".into()]);
             let prior = intent
-                .parent_session
-                .receipt
+                .helper_inputs
+                .prior
+                .as_ref()
+                .ok_or(REFUSED)?
                 .resources
                 .as_ref()
                 .ok_or(REFUSED)?;
             let previous_creates =
-                authorized_creates(installation, sequence, "create", &session, prior, &allowed)?;
+                authorized_creates(installation, scope, "create", &session, prior, &allowed)?;
             if replacement.is_some() {
                 require(!previous_creates.is_empty())?;
             }
             let operation = operation(
                 state.inspection(),
-                sequence,
+                scope,
                 if replacement.is_some() {
                     "observe-created"
                 } else {
@@ -655,13 +816,14 @@ fn producer(
                     && row["State"] == "created"
             }))?;
             let creates =
-                authorized_creates(installation, sequence, "create", &session, prior, &allowed)?;
+                authorized_creates(installation, scope, "create", &session, prior, &allowed)?;
             let (create_intent_operation, create_intent_sha256) =
                 creates.last_key_value().ok_or(REFUSED)?;
             let prepared = ProducerRecord {
                 schema: "elevenid.installer-generation-producer/v1".into(),
                 installation_id: intent.installation_id.clone(),
                 sequence,
+                attempt: scope.number,
                 parent_binding_sha256: binding.sha256()?,
                 container_id: helper.id.clone(),
                 create_operation: operation.clone(),
@@ -675,6 +837,7 @@ fn producer(
         require(
             prepared.installation_id == intent.installation_id
                 && prepared.sequence == sequence
+                && prepared.attempt == scope.number
                 && prepared.parent_binding_sha256 == binding.sha256()?,
         )?;
         let live = session.observe_generation_transition(GenerationOperation::Candidate)?;
@@ -690,7 +853,7 @@ fn producer(
                 row["Service"] == "installer-generation" && row["ID"] == prepared.container_id
             })
             .ok_or(REFUSED)?;
-        let start = format!("g{sequence:020}-start-000000");
+        let start = scope.operation("start", 0);
         let started = state
             .read_evidence(&format!("generation-compose-{start}-intent.json"))?
             .is_some();
@@ -700,26 +863,24 @@ fn producer(
             }
             CandidateExecution::Wait => (),
         }
-        let wait = operation(state.inspection(), sequence, "wait")?;
+        let wait = operation(state.inspection(), scope, "wait")?;
         session.wait_generation_candidate(state, &wait, &prepared.container_id)?;
-        require_producer_journal(installation, sequence, &prepared.container_id, &wait)?;
+        require_producer_journal_at(installation, scope, &prepared.container_id, &wait)?;
         store(
             state,
-            &record_name(sequence, "helper"),
+            &scope.record("helper"),
             &receipt_bytes(state, &wait)?,
         )?;
     }
-    let native_bytes = state
-        .inspection()
-        .read_evidence(&record_name(sequence, "helper"))?;
+    let native_bytes = state.inspection().read_evidence(&scope.record("helper"))?;
     let native: ComposeReceipt = decode(&native_bytes)?;
     let helper = native
         .resources
         .as_ref()
         .and_then(|v| v.containers.get("installer-generation"))
         .ok_or(REFUSED)?;
-    require_producer_journal(installation, sequence, &helper.id, &native.operation)?;
-    let base = work(installation, sequence);
+    require_producer_journal_at(installation, scope, &helper.id, &native.operation)?;
+    let base = work(installation, scope);
     let current = host::read_inputs_for_source(&directory(&base.join("current"))?, true)?;
     let identity = host::staged_identity(&directory(&base.join("identity"))?)?;
     let keycloak = state
@@ -773,11 +934,7 @@ fn producer(
         container_removed: false,
         installation_ready: false,
     };
-    store(
-        state,
-        &record_name(sequence, "candidate"),
-        &encode(&candidate)?,
-    )?;
+    store(state, &scope.record("candidate"), &encode(&candidate)?)?;
     Ok(native)
 }
 
@@ -794,6 +951,8 @@ struct Activation {
     installation_id: String,
     engine_id: String,
     sequence: u64,
+    #[serde(default, skip_serializing_if = "attempt::is_zero")]
+    attempt: u64,
     binding_sha256: String,
     parent_binding_sha256: String,
     activation_intent_sha256: String,
@@ -890,8 +1049,10 @@ fn admitted_transition(
         GenerationOperation::Candidate => (
             "create",
             intent
-                .parent_session
-                .receipt
+                .helper_inputs
+                .prior
+                .as_ref()
+                .ok_or(REFUSED)?
                 .resources
                 .as_ref()
                 .ok_or(REFUSED)?
@@ -901,7 +1062,7 @@ fn admitted_transition(
         GenerationOperation::Activate => {
             let activation: ActivationIntent = decode(&read(
                 installation,
-                &record_name(intent.sequence, "activation-intent"),
+                &intent.scope().record("activation-intent"),
             )?)?;
             (
                 "activate-create",
@@ -916,14 +1077,7 @@ fn admitted_transition(
         }
     };
     let observed = session.observe_generation_transition(kind)?;
-    let creates = authorized_creates(
-        installation,
-        intent.sequence,
-        phase,
-        session,
-        &prior,
-        &roles,
-    )?;
+    let creates = authorized_creates(installation, intent.scope(), phase, session, &prior, &roles)?;
     require_replacements_authorized(installation, &creates, &prior, &observed, &roles)?;
     Ok(observed)
 }
@@ -953,11 +1107,11 @@ fn activation_inputs(
     }
     let plan_path = installation
         .join("evidence")
-        .join(record_name(intent.sequence, "public-ingress-plan"));
+        .join(intent.scope().record("public-ingress-plan"));
     let plan = PublicIngressPlan::parse_authenticated(
         &state
             .inspection()
-            .read_evidence(&record_name(intent.sequence, "public-ingress-plan"))?,
+            .read_evidence(&intent.scope().record("public-ingress-plan"))?,
         &intent.public_plan_sha256,
     )?;
     let values = BTreeMap::from([
@@ -967,7 +1121,7 @@ fn activation_inputs(
         ),
         (
             "MARTY_GENERATION_WORK_DIR",
-            path_text(&work(installation, intent.sequence))?.into(),
+            path_text(&work(installation, intent.scope()))?.into(),
         ),
         (
             "MARTY_GENERATION_PUBLIC_INGRESS_PLAN",
@@ -983,7 +1137,7 @@ fn activation_inputs(
         &crate::installer_verify::read_private_bytes(&inputs.environment.path, 65536)?,
         &values,
     )?;
-    let name = format!("generation-{:020}-application.env", intent.sequence);
+    let name = intent.scope().environment_name("application");
     store(state, &name, &bytes)?;
     inputs.environment = BoundFile {
         path: installation.join("evidence").join(name),
@@ -1006,18 +1160,25 @@ fn activation_inputs(
     inputs.readonly_bind_roots = initial.inputs.readonly_bind_roots;
     inputs.readonly_bind_roots.extend([
         binding.secret_dir(installation)?,
-        work(installation, intent.sequence).join("current"),
-        work(installation, intent.sequence).join("identity"),
+        work(installation, intent.scope()).join("current"),
+        work(installation, intent.scope()).join("identity"),
     ]);
     inputs.writable_bind_roots = initial.inputs.writable_bind_roots;
     inputs
         .writable_bind_roots
-        .insert(work(installation, intent.sequence).join("transfer"));
+        .insert(work(installation, intent.scope()).join("transfer"));
     // Creation admission must still inspect the exact old runtime bind roots.
     inputs.readonly_bind_roots.insert(
-        generation::read_recorded_sequence(installation, intent.sequence - 1)?
-            .secret_dir(installation)?,
+        generation::read_recorded_attempt(
+            installation,
+            intent.sequence - 1,
+            intent.parent_attempt,
+        )?
+        .secret_dir(installation)?,
     );
+    if let Some(root) = supersession::runtime_root_for_intent(installation, intent)? {
+        inputs.readonly_bind_roots.insert(root);
+    }
     Ok(inputs)
 }
 fn load_activation_intent(
@@ -1027,18 +1188,16 @@ fn load_activation_intent(
 ) -> Result<ActivationIntent> {
     let value: ActivationIntent = decode(&read(
         installation,
-        &record_name(intent.sequence, "activation-intent"),
+        &intent.scope().record("activation-intent"),
     )?)?;
     require(
         value.schema == "elevenid.installer-generation-activation-intent/v1"
             && value.installation_id == intent.installation_id
             && value.sequence == intent.sequence
+            && value.attempt == intent.attempt
             && value.binding_sha256 == binding.sha256()?
             && value.helper_receipt_sha256
-                == hash(&read(
-                    installation,
-                    &record_name(intent.sequence, "helper"),
-                )?)
+                == hash(&read(installation, &intent.scope().record("helper"))?)
             && value.configuration_sha256 == installer_compose::model_sha256(&value.model)?
             && value.inputs.installation == installation
             && value.inputs.profiles.is_empty()
@@ -1046,12 +1205,13 @@ fn load_activation_intent(
             && !value.services.is_empty()
             && value.created_at >= intent.created_at,
     )?;
-    let helper: ComposeReceipt = decode(&read(
-        installation,
-        &record_name(intent.sequence, "helper"),
-    )?)?;
+    let helper: ComposeReceipt = decode(&read(installation, &intent.scope().record("helper"))?)?;
     require(encode(value.inputs.prior.as_ref().ok_or(REFUSED)?)? == encode(&helper)?)?;
-    let parent = generation::read_recorded_sequence(installation, intent.sequence - 1)?;
+    let parent = generation::read_recorded_attempt(
+        installation,
+        intent.sequence - 1,
+        intent.parent_attempt,
+    )?;
     model::require_transition_model(
         installation,
         &parent,
@@ -1083,7 +1243,7 @@ fn prepare_activation(
     binding: &GenerationBinding,
     helper: &ComposeReceipt,
 ) -> Result<ActivationIntent> {
-    let name = record_name(intent.sequence, "activation-intent");
+    let name = intent.scope().record("activation-intent");
     if state.read_evidence(&name)?.is_some() {
         return load_activation_intent(installation, intent, binding);
     }
@@ -1093,7 +1253,11 @@ fn prepare_activation(
         state.journal().runtime().ok_or(REFUSED)?,
         inputs.clone(),
     )?;
-    let parent = generation::read_recorded_sequence(installation, intent.sequence - 1)?;
+    let parent = generation::read_recorded_attempt(
+        installation,
+        intent.sequence - 1,
+        intent.parent_attempt,
+    )?;
     model::require_transition_model(
         installation,
         &parent,
@@ -1115,11 +1279,9 @@ fn prepare_activation(
         schema: "elevenid.installer-generation-activation-intent/v1".into(),
         installation_id: intent.installation_id.clone(),
         sequence: intent.sequence,
+        attempt: intent.attempt,
         binding_sha256: binding.sha256()?,
-        helper_receipt_sha256: hash(&read(
-            installation,
-            &record_name(intent.sequence, "helper"),
-        )?),
+        helper_receipt_sha256: hash(&read(installation, &intent.scope().record("helper"))?),
         inputs,
         model: session.model().clone(),
         configuration_sha256: session.configuration_sha256().into(),
@@ -1139,6 +1301,7 @@ fn activate(
     helper: &ComposeReceipt,
 ) -> Result<()> {
     let sequence = intent.sequence;
+    let scope = intent.scope();
     let planned = prepare_activation(installation, docker, state, intent, binding, helper)?;
     require_candidate_fresh(installation, binding, now()?)?;
     let session = ComposeSession::new_generation(
@@ -1154,7 +1317,7 @@ fn activate(
         planned.services == session.changed_generation_services(&intent.parent_session.model)?,
     )?;
     let roles: BTreeSet<_> = planned.services.iter().cloned().collect();
-    let created_name = record_name(sequence, "runtime-created");
+    let created_name = scope.record("runtime-created");
     let created: ComposeReceipt = if let Some(bytes) = state.read_evidence(&created_name)? {
         decode(&bytes)?
     } else {
@@ -1175,7 +1338,7 @@ fn activate(
         });
         let op = operation(
             state.inspection(),
-            sequence,
+            scope,
             if complete {
                 "activate-observe"
             } else {
@@ -1195,7 +1358,7 @@ fn activate(
     require(created.configuration_sha256 == planned.configuration_sha256)?;
     let creates = authorized_creates(
         installation,
-        sequence,
+        scope,
         "activate-create",
         &session,
         helper.resources.as_ref().ok_or(REFUSED)?,
@@ -1208,7 +1371,7 @@ fn activate(
         created.resources.as_ref().ok_or(REFUSED)?,
         &roles,
     )?;
-    let started_name = record_name(sequence, "runtime-started");
+    let started_name = scope.record("runtime-started");
     require_candidate_fresh(installation, binding, now()?)?;
     let prior_started = state.read_evidence(&started_name)?;
     if let Some(bytes) = &prior_started {
@@ -1236,7 +1399,7 @@ fn activate(
             state.journal().runtime().ok_or(REFUSED)?,
             inputs,
         )?;
-        let op = operation(state.inspection(), sequence, "activate-start")?;
+        let op = operation(state.inspection(), scope, "activate-start")?;
         let receipt = session.start_existing_owned(
             state,
             RuntimeOperationOwner::Generation,
@@ -1254,7 +1417,7 @@ fn activate(
         started.resources == created.resources
             && started.configuration_sha256 == planned.configuration_sha256,
     )?;
-    let session_name = record_name(sequence, "session");
+    let session_name = scope.record("session");
     let saved: SavedSession = if let Some(bytes) = state.read_evidence(&session_name)? {
         decode(&bytes)?
     } else {
@@ -1267,7 +1430,8 @@ fn activate(
             state.journal().runtime().ok_or(REFUSED)?,
             inputs.clone(),
         )?;
-        let parent = generation::read_recorded_sequence(installation, sequence - 1)?;
+        let parent =
+            generation::read_recorded_attempt(installation, sequence - 1, intent.parent_attempt)?;
         model::require_transition_model(
             installation,
             &parent,
@@ -1279,7 +1443,7 @@ fn activate(
         )?;
         let model = session.model().clone();
         let configuration_sha256 = session.configuration_sha256().to_owned();
-        let op = operation(state.inspection(), sequence, "checkpoint")?;
+        let op = operation(state.inspection(), scope, "checkpoint")?;
         let checkpoint = session.checkpoint_generation(state, &op)?;
         inputs.prior = Some(checkpoint.clone());
         let saved = SavedSession {
@@ -1295,20 +1459,21 @@ fn activate(
     };
     let checkpoint_ref = native_reference(state, &saved.receipt)?;
     require_candidate_fresh(installation, binding, now()?)?;
-    let activation_name = record_name(sequence, "activation");
+    let activation_name = scope.record("activation");
     if state.read_evidence(&activation_name)?.is_none() {
         let value = Activation {
             schema: "elevenid.installer-generation-activation/v1".into(),
             installation_id: intent.installation_id.clone(),
             engine_id: intent.engine_id.clone(),
             sequence,
+            attempt: scope.number,
             binding_sha256: binding.sha256()?,
             parent_binding_sha256: intent.parent_binding_sha256.clone(),
             activation_intent_sha256: hash(&read(
                 installation,
-                &record_name(sequence, "activation-intent"),
+                &scope.record("activation-intent"),
             )?),
-            helper_receipt_sha256: hash(&read(installation, &record_name(sequence, "helper"))?),
+            helper_receipt_sha256: hash(&read(installation, &scope.record("helper"))?),
             create_intents: creates,
             created: created_ref,
             started: started_ref,
@@ -1319,24 +1484,20 @@ fn activate(
         };
         store(state, &activation_name, &encode(&value)?)?;
     }
-    require_activation(installation, sequence, binding, &saved)?;
-    let selection_name = record_name(sequence, "selection");
+    require_activation(installation, scope, binding, &saved)?;
+    let selection_name = scope.record("selection");
     if state.read_evidence(&selection_name)?.is_none() {
         let evidence_sha256 = KINDS
             .into_iter()
             .filter(|kind| *kind != "selection")
-            .map(|kind| {
-                Ok((
-                    kind.into(),
-                    hash(&read(installation, &record_name(sequence, kind))?),
-                ))
-            })
+            .map(|kind| Ok((kind.into(), hash(&read(installation, &scope.record(kind))?))))
             .collect::<Result<_>>()?;
         let selection = Selection {
             schema: "elevenid.installer-generation-selection/v1".into(),
             installation_id: intent.installation_id.clone(),
             engine_id: intent.engine_id.clone(),
             sequence,
+            attempt: scope.number,
             initial_configuration_sha256: intent.initial_configuration_sha256.clone(),
             parent_binding_sha256: intent.parent_binding_sha256.clone(),
             evidence_sha256,
@@ -1351,6 +1512,7 @@ fn activate(
         installation_id: intent.installation_id.clone(),
         engine_id: intent.engine_id.clone(),
         sequence,
+        attempt: scope.number,
         selection_sha256: hash(&read(installation, &selection_name)?),
     };
     let next = encode(&pointer)?;
@@ -1364,29 +1526,28 @@ fn activate(
 
 pub(super) fn require_activation(
     installation: &Path,
-    sequence: u64,
+    scope: Attempt,
     binding: &GenerationBinding,
     saved: &SavedSession,
 ) -> Result<()> {
-    let intent: Intent = decode(&read(installation, &record_name(sequence, "intent"))?)?;
+    let sequence = scope.sequence;
+    let intent: Intent = decode(&read(installation, &scope.record("intent"))?)?;
     let plan = load_activation_intent(installation, &intent, binding)?;
-    let activation: Activation =
-        decode(&read(installation, &record_name(sequence, "activation"))?)?;
+    let activation: Activation = decode(&read(installation, &scope.record("activation"))?)?;
     require_candidate_fresh(installation, binding, activation.observed_at)?;
     require(
         activation.schema == "elevenid.installer-generation-activation/v1"
             && activation.installation_id == binding.installation_id
             && activation.engine_id == binding.engine_id
             && activation.sequence == sequence
+            && activation.attempt == scope.number
+            && binding.attempt_id() == scope
             && activation.binding_sha256 == binding.sha256()?
             && activation.parent_binding_sha256 == intent.parent_binding_sha256
             && activation.activation_intent_sha256
-                == hash(&read(
-                    installation,
-                    &record_name(sequence, "activation-intent"),
-                )?)
+                == hash(&read(installation, &scope.record("activation-intent"))?)
             && activation.helper_receipt_sha256
-                == hash(&read(installation, &record_name(sequence, "helper"))?)
+                == hash(&read(installation, &scope.record("helper"))?)
             && activation.observed_at >= plan.created_at
             && activation.activated
             && !activation.installation_ready,
@@ -1409,7 +1570,7 @@ pub(super) fn require_activation(
             && checkpoint.configuration_sha256 == saved.configuration_sha256
             && saved.schema == "elevenid.installer-compose-session/v1",
     )?;
-    let helper: ComposeReceipt = decode(&read(installation, &record_name(sequence, "helper"))?)?;
+    let helper: ComposeReceipt = decode(&read(installation, &scope.record("helper"))?)?;
     let before = helper.resources.as_ref().ok_or(REFUSED)?;
     let after = checkpoint.resources.as_ref().ok_or(REFUSED)?;
     let roles: BTreeSet<_> = plan.services.iter().cloned().collect();
@@ -1449,7 +1610,7 @@ pub(super) fn require_activation(
     )?;
     for (operation, digest) in &activation.create_intents {
         require(
-            operation.starts_with(&format!("g{sequence:020}-activate-create-"))
+            operation.starts_with(&format!("{}-activate-create-", scope.operation_prefix()))
                 && valid_hash(digest),
         )?;
         let bytes = read(
@@ -1493,24 +1654,20 @@ fn recover_infrastructure(
     state: &mut LockedMaintenance,
     intent: &Intent,
 ) -> Result<()> {
-    let (inputs, kind) = if optional(
-        installation,
-        &record_name(intent.sequence, "activation-intent"),
-    )?
-    .is_some()
-    {
-        let binding = generation::load_sequence(installation, intent.sequence)?;
-        (
-            load_activation_intent(installation, intent, &binding)?.inputs,
-            GenerationOperation::Activate,
-        )
-    } else {
-        (intent.helper_inputs.clone(), GenerationOperation::Candidate)
-    };
+    let (inputs, kind) =
+        if optional(installation, &intent.scope().record("activation-intent"))?.is_some() {
+            let binding = generation::load_attempt(installation, intent.sequence, intent.attempt)?;
+            (
+                load_activation_intent(installation, intent, &binding)?.inputs,
+                GenerationOperation::Activate,
+            )
+        } else {
+            (intent.helper_inputs.clone(), GenerationOperation::Candidate)
+        };
     let session =
         ComposeSession::new_generation(docker, state.journal().runtime().ok_or(REFUSED)?, inputs)?;
     admitted_transition(installation, intent, &session, kind)?;
-    let op = operation(state.inspection(), intent.sequence, "infrastructure")?;
+    let op = operation(state.inspection(), intent.scope(), "infrastructure")?;
     session.start_generation_infrastructure(state, &op, kind)?;
     let view = session.into_generation_observation(kind)?;
     crate::installer_openbao_recovery::reconcile_locked(installation, docker, state, &view)?;
@@ -1521,28 +1678,35 @@ fn reconcile(
     docker: &Path,
     state: &mut LockedMaintenance,
     intent: &Intent,
+    allow_new_attempt: bool,
 ) -> Result<GenerationBinding> {
     crate::installer_lifecycle::require_recorded_running_intent(state.inspection(), installation)?;
     crate::installer_root_retirement::require_no_pending_for_generation(state.inspection())?;
     recover_infrastructure(installation, docker, state, intent)?;
     let helper = producer(installation, docker, state, intent)?;
-    let parent = generation::load_sequence(installation, intent.sequence - 1)?;
+    let parent = intent.parent(installation)?;
     let binding = if state
-        .read_evidence(&record_name(intent.sequence, "binding"))?
+        .read_evidence(&intent.scope().record("binding"))?
         .is_some()
     {
-        generation::load_sequence(installation, intent.sequence)?
+        generation::load_attempt(installation, intent.sequence, intent.attempt)?
     } else {
-        generation::stage_successor(installation, state, &parent, &helper.operation)?
+        generation::stage_successor(
+            installation,
+            state,
+            &parent,
+            intent.attempt,
+            &helper.operation,
+        )?
     };
-    let metadata = binding
-        .public_ingress_metadata(installation)?
-        .ok_or(REFUSED)?;
-    metadata.validate_selected_at(
-        &binding.read(installation, "installer_ingress_tls_cert")?,
-        now()?,
-    )?;
-    require_candidate_fresh(installation, &binding, now()?)?;
+    let observed_at = now()?;
+    if supersession::requires_supersession(installation, &binding, observed_at)? {
+        if allow_new_attempt {
+            return supersession::supersede(installation, docker, state, intent, &binding);
+        }
+        return Err("The new generation attempt completed after its admission deadline; retain its evidence for the next bounded recovery invocation".into());
+    }
+    require_candidate_fresh(installation, &binding, observed_at)?;
     activate(installation, docker, state, intent, &binding, &helper)?;
     Ok(binding)
 }
@@ -1561,8 +1725,16 @@ pub(super) fn begin_and_reconcile(
             .as_ref()
             == Some(parent),
     )?;
-    let intent = begin(installation, docker, state, parent, candidate)?;
-    reconcile(installation, docker, state, &intent)
+    let intent = begin(
+        installation,
+        docker,
+        state,
+        parent,
+        candidate,
+        Attempt::new(parent.sequence().checked_add(1).ok_or(REFUSED)?, 0),
+        None,
+    )?;
+    reconcile(installation, docker, state, &intent, false)
 }
 pub(super) fn reconcile_pending(
     installation: &Path,
@@ -1578,16 +1750,16 @@ pub(super) fn reconcile_pending(
     else {
         return Ok(None);
     };
-    let sequence = parent.sequence().checked_add(1).ok_or(REFUSED)?;
-    if state
-        .read_evidence(&record_name(sequence, "intent"))?
-        .is_none()
-    {
+    let Some(scope) = supersession::pending_scope(state.inspection(), installation, &parent)?
+    else {
         return Ok(None);
-    }
+    };
     // No pending transaction returns above before the retirement mutation gate.
-    let intent = load_intent(state.inspection(), installation, sequence)?;
-    reconcile(installation, docker, state, &intent).map(Some)
+    if state.read_evidence(&scope.record("intent"))?.is_none() {
+        return supersession::resume(installation, docker, state, scope).map(Some);
+    }
+    let intent = load_intent(state.inspection(), installation, scope)?;
+    reconcile(installation, docker, state, &intent, true).map(Some)
 }
 pub(super) fn stop_pending(
     installation: &Path,
@@ -1603,19 +1775,20 @@ pub(super) fn stop_pending(
     else {
         return Ok(None);
     };
-    let sequence = parent.sequence().checked_add(1).ok_or(REFUSED)?;
-    if state
-        .read_evidence(&record_name(sequence, "intent"))?
-        .is_none()
-    {
+    let Some(scope) = supersession::pending_scope(state.inspection(), installation, &parent)?
+    else {
         return Ok(None);
+    };
+    let sequence = scope.sequence;
+    if state.read_evidence(&scope.record("intent"))?.is_none() {
+        return supersession::stop_before_attempt(installation, docker, state, scope).map(Some);
     }
-    let intent = load_intent(state.inspection(), installation, sequence)?;
+    let intent = load_intent(state.inspection(), installation, scope)?;
     let (inputs, kind) = if state
-        .read_evidence(&record_name(sequence, "activation-intent"))?
+        .read_evidence(&scope.record("activation-intent"))?
         .is_some()
     {
-        let binding = generation::load_sequence(installation, sequence)?;
+        let binding = generation::load_attempt(installation, sequence, scope.number)?;
         (
             load_activation_intent(installation, &intent, &binding)?.inputs,
             GenerationOperation::Activate,
@@ -1633,10 +1806,12 @@ pub(super) fn stop_pending(
             .containers
             .get("installer-generation")
             .filter(|helper| {
-                parent_session(state.inspection(), installation)
-                    .ok()
-                    .and_then(|saved| saved.receipt.resources)
-                    .and_then(|resources| resources.containers.get("installer-generation").cloned())
+                intent
+                    .helper_inputs
+                    .prior
+                    .as_ref()
+                    .and_then(|saved| saved.resources.as_ref())
+                    .and_then(|resources| resources.containers.get("installer-generation"))
                     .is_some_and(|old| old.id != helper.id)
             })
         {
@@ -1647,14 +1822,15 @@ pub(super) fn stop_pending(
                 .ok_or(REFUSED)?;
             let started = state
                 .read_evidence(&format!(
-                    "generation-compose-g{sequence:020}-start-000000-intent.json"
+                    "generation-compose-{}-intent.json",
+                    scope.operation("start", 0)
                 ))?
                 .is_some();
             if row["State"] == "created" {
                 producer_start_outcome_unknown = started;
             } else if row["State"] == "running" {
                 require(started)?;
-                let op = operation(state.inspection(), sequence, "pause-wait")?;
+                let op = operation(state.inspection(), scope, "pause-wait")?;
                 // Waiting issues no mint/restart. A nonzero producer exit is
                 // retained as failure, but does not prevent runtime shutdown.
                 let _wait_result = session.wait_generation_candidate(state, &op, &helper.id);
@@ -1679,7 +1855,7 @@ pub(super) fn stop_pending(
             }
         }
     }
-    let op = operation(state.inspection(), sequence, "stop")?;
+    let op = operation(state.inspection(), scope, "stop")?;
     let receipt = session.stop_generation_runtime(state, &op, kind)?;
     Ok(Some(
         json!({"schema":"elevenid.installer-generation-stop/v1","installation_id":intent.installation_id,"sequence":sequence,

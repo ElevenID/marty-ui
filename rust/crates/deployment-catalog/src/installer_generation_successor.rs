@@ -67,6 +67,7 @@ pub(crate) fn stage_successor(
     installation: &Path,
     state: &mut LockedMaintenance,
     parent: &GenerationBinding,
+    attempt: u64,
     native_operation: &str,
 ) -> Result<GenerationBinding> {
     state.inspection().require_path_binding(installation)?;
@@ -75,6 +76,8 @@ pub(crate) fn stage_successor(
     let sequence = parent.sequence().checked_add(1).ok_or(REFUSED)?;
     let successor = SuccessorBinding {
         sequence,
+        attempt,
+        parent_attempt: parent.attempt(),
         parent_binding_sha256: parent.sha256()?,
         native_operation: native_operation.into(),
     };
@@ -86,7 +89,9 @@ pub(crate) fn stage_successor(
     )?;
     let plan = plan.ok_or(REFUSED)?;
     plan.require_saved(state.inspection())?;
-    plan.validate_current_certificate()?;
+    // Staging preserves a completed producer's historical admission even if
+    // interruption outlived its leaf or token validity. Current material is
+    // required separately before any runtime start or selector publication.
     let mut files = BTreeMap::new();
     let mut values = BTreeMap::new();
     for (name, previous) in &parent.files {
@@ -121,7 +126,7 @@ pub(crate) fn stage_successor(
     };
     result.validate()?;
     let bytes = serde_json::to_vec(&result).map_err(|_| REFUSED)?;
-    let pending = format!("generation-{sequence:020}-binding-pending.json");
+    let pending = result.record_name("binding-pending");
     match state.read_evidence(&pending)? {
         Some(saved) => require(saved == bytes)?,
         None => {
@@ -149,7 +154,7 @@ pub(crate) fn stage_successor(
     binding(&result.secret_dir(installation)?, &output)?;
     verify(installation, &result)?;
     state.require_unchanged()?;
-    let record = format!("generation-{sequence:020}-binding.json");
+    let record = result.record_name("binding");
     match state.read_evidence(&record)? {
         Some(saved) => require(saved == bytes)?,
         None => state.write_evidence_exclusive(&record, &bytes)?,

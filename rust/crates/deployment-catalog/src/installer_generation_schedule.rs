@@ -15,6 +15,8 @@ const NEW_LEAF_MINIMUM_SECONDS: u64 = 3600;
 pub(crate) struct GenerationMaintenanceReport {
     pub schema: &'static str,
     pub selected_sequence: u64,
+    #[serde(skip_serializing_if = "attempt::is_zero")]
+    pub selected_attempt: u64,
     pub generation_sha256: String,
     pub credential_refresh_due: bool,
     pub certificate_renewal_due: bool,
@@ -159,6 +161,7 @@ impl RenewalPermit {
             prior_candidate: serde_json::to_value(current).map_err(|_| REFUSED)?,
             configuration_sha256: hash(&encode(&configuration)?),
             generation_sequence: parent.sequence(),
+            generation_attempt: parent.attempt(),
             generation_binding_sha256: parent.sha256()?,
             initial_configuration_sha256: initial.configuration_sha256,
             schedule_sha256: schedule_receipt_sha256.into(),
@@ -247,7 +250,13 @@ pub(crate) fn status_locked(view: &LockedInspection, installation: &Path) -> Res
         .as_ref()
         .map(|permit| pending_status(view, installation, permit))
         .transpose()?;
-    let blocker = if pending
+    let pending_generation = super::tx::pending_status(view, installation, &binding)?;
+    let blocker = if pending_generation
+        .as_ref()
+        .is_some_and(|value| value["stage"] == "producer_start_outcome_unobserved")
+    {
+        Some("generation_producer_outcome_requires_native_observation")
+    } else if pending
         .as_ref()
         .is_some_and(|value| value["stage"] == "terminal")
     {
@@ -263,11 +272,14 @@ pub(crate) fn status_locked(view: &LockedInspection, installation: &Path) -> Res
         Some("public_certificate_expired")
     } else if pending.is_some() {
         Some("acme_order_pending")
+    } else if pending_generation.is_some() {
+        Some("generation_attempt_pending")
     } else {
         None
     };
     Ok(json!({"schema":"elevenid.installer-generation-status/v1",
         "selected_sequence":binding.sequence(),"generation_sha256":binding.sha256()?,
+        "selected_attempt":binding.attempt(),"pending_generation":pending_generation,
         "certificate_expires_at":schedule.not_after(),
         "signer_token_expires_at":metadata.token_observed_at.checked_add(metadata.token_ttl_seconds).ok_or(REFUSED)?,
         "credential_refresh_at":refresh_at,"credential_refresh_due":refresh_due,
@@ -290,6 +302,7 @@ fn report(
     Ok(GenerationMaintenanceReport {
         schema: "elevenid.installer-generation-maintenance/v1",
         selected_sequence: binding.sequence(),
+        selected_attempt: binding.attempt(),
         generation_sha256: binding.sha256()?,
         credential_refresh_due: credential_due,
         certificate_renewal_due: certificate_due,
@@ -301,42 +314,30 @@ fn report(
     })
 }
 
-pub(crate) fn reconcile_locked(
+struct OrderWork {
+    permit: Option<RenewalPermit>,
+    candidate: Option<AcmeCandidate>,
+    blocker: Option<&'static str>,
+    withdraw_terminal: bool,
+}
+
+// Both ordinary maintenance and a factual supersession baseline enter the
+// same retained due/order policy. The native authority is selected later by
+// the host adapter; it cannot change account, CSR or new-order retry rules.
+fn prepare_order_work(
     installation: &Path,
-    docker: &Path,
     state: &mut LockedMaintenance,
-) -> Result<GenerationMaintenanceReport> {
-    crate::installer_lifecycle::require_running_intent(state, installation, docker)?;
-    installer_root_retirement::require_no_pending_for_generation(state.inspection())?;
-    reconcile_pending_locked(installation, docker, state)?;
-    let parent = binding(state.inspection(), installation)?;
-    if !parent.public_ingress() {
-        let status = private_status(state.inspection(), installation, &parent)?;
-        if status["credential_refresh_due"] == true || status["certificate_expired"] == true {
-            return Err("Private generation renewal is due but its automatic replacement policy is not implemented; preserve the selected generation and scoped authority".into());
-        }
-        return report(
-            &parent,
-            false,
-            false,
-            false,
-            false,
-            parent
-                .imported_foundation()
-                .then_some("customer_managed_foundation_credentials"),
-            None,
-        );
-    }
-    let current = candidate_for_binding(state.inspection(), installation, &parent)?;
+    parent: &GenerationBinding,
+    current: &AcmeCandidate,
+) -> Result<OrderWork> {
     // ARI reads have their own durable cadence/backoff and cannot sign or order.
-    let schedule = renewal::refresh_for_candidate(state, &current)?;
+    let schedule = renewal::refresh_for_candidate(state, current)?;
     let due = schedule.is_due()?;
     let mut allocation_due = due;
     let mut due_receipt = schedule.receipt_sha256().to_owned();
-    let known = cycles(state.inspection(), installation, &current)?;
+    let known = cycles(state.inspection(), installation, current)?;
     let mut permit = known.latest;
     let mut candidate = None;
-    let mut acme = None;
     let mut blocker = None;
     let mut terminal_predecessor = None;
     let mut withdraw_terminal = false;
@@ -390,13 +391,114 @@ pub(crate) fn reconcile_locked(
         permit = Some(RenewalPermit::admit_due(
             state,
             installation,
-            &parent,
-            &current,
+            parent,
+            current,
             &due_receipt,
             known.maximum,
             terminal_predecessor,
         )?);
     }
+    Ok(OrderWork {
+        permit,
+        candidate,
+        blocker,
+        withdraw_terminal,
+    })
+}
+
+/// A stale, completed local producer does not grant a new ACME order by
+/// itself. Reuse an admitted live leaf, or enter exactly the normal selected
+/// candidate's due/known-order policy through the factual native capability.
+pub(super) fn candidate_for_recovery(
+    installation: &Path,
+    docker: &Path,
+    state: &mut LockedMaintenance,
+    parent: &GenerationBinding,
+    previous: &GenerationBinding,
+    baseline: &GenerationRecoveryBaseline,
+) -> Result<AcmeCandidate> {
+    baseline.require_selected(state.inspection(), installation)?;
+    require(binding(state.inspection(), installation)? == *parent)?;
+    let selected = candidate_for_binding(state.inspection(), installation, parent)?;
+    let previous = candidate_for_binding(state.inspection(), installation, previous)?;
+    let at = now()?;
+    let same_leaf = previous.enrolment_receipt_sha256() == selected.enrolment_receipt_sha256();
+    if if same_leaf {
+        expires(&previous)? > at
+    } else {
+        new_leaf_usable(&previous, at)?
+    } {
+        return Ok(previous);
+    }
+    if expires(&selected)? > at {
+        return Ok(selected);
+    }
+    let OrderWork {
+        permit,
+        candidate,
+        blocker,
+        withdraw_terminal,
+        ..
+    } = prepare_order_work(installation, state, parent, &selected)?;
+    if let Some(candidate) = candidate {
+        return Ok(candidate);
+    }
+    if blocker.is_some() && !withdraw_terminal {
+        return Err(format!("Generation recovery retains its native baseline while public certificate renewal is blocked: {}", blocker.ok_or(REFUSED)?));
+    }
+    let permit = permit.ok_or(REFUSED)?;
+    let context = installer_acme_host::maintenance_context(state.inspection())?;
+    let inputs = HostInputs {
+        docker,
+        installation,
+        bundle: &context.bundle,
+        infrastructure: &context.infrastructure,
+        services_image: &context.services_image,
+        operator_sha256: &context.operator_sha256,
+    };
+    let outcome =
+        installer_acme_host::renew_for_generation_recovery(&inputs, state, baseline, &permit)?;
+    let Some(candidate) = outcome.candidate else {
+        return Err("Generation recovery is waiting for its retained ACME order; the authenticated native baseline and exact order outcome were preserved".into());
+    };
+    require(new_leaf_usable(&candidate, now()?)?)?;
+    Ok(candidate)
+}
+
+pub(crate) fn reconcile_locked(
+    installation: &Path,
+    docker: &Path,
+    state: &mut LockedMaintenance,
+) -> Result<GenerationMaintenanceReport> {
+    crate::installer_lifecycle::require_running_intent(state, installation, docker)?;
+    installer_root_retirement::require_no_pending_for_generation(state.inspection())?;
+    reconcile_pending_locked(installation, docker, state)?;
+    let parent = binding(state.inspection(), installation)?;
+    if !parent.public_ingress() {
+        let status = private_status(state.inspection(), installation, &parent)?;
+        if status["credential_refresh_due"] == true || status["certificate_expired"] == true {
+            return Err("Private generation renewal is due but its automatic replacement policy is not implemented; preserve the selected generation and scoped authority".into());
+        }
+        return report(
+            &parent,
+            false,
+            false,
+            false,
+            false,
+            parent
+                .imported_foundation()
+                .then_some("customer_managed_foundation_credentials"),
+            None,
+        );
+    }
+    let current = candidate_for_binding(state.inspection(), installation, &parent)?;
+    let OrderWork {
+        permit,
+        mut candidate,
+        mut blocker,
+        withdraw_terminal,
+    } = prepare_order_work(installation, state, &parent, &current)?;
+    let mut acme = None;
     let metadata = parent
         .public_ingress_metadata(installation)?
         .ok_or(REFUSED)?;

@@ -34,6 +34,15 @@ def asset(items,approved,receipt):
 def receive(*,client,authorization,inventory,receipt,descriptor,output,harness_source_sha,
             run_id,run_attempt,controller_user_id,clock=time.time,sleep=time.sleep):
     auth,inv,consumed=read_record(authorization),read_record(inventory),read_record(receipt)
+    source_pins = None
+    def exact_source_pins():
+        result={}
+        for path,name in [(authorization,'installer-candidate-authorization.json'),
+            (receipt,'installer-controller-consumption.json'),(inventory,'installer-inventory.json')]:
+            for suffix in runner.dispatch.SUFFIXES:
+                result[name+suffix]=runner.dispatch.private_file(Path(str(path)+suffix),1048576 if suffix else 65536)[0]
+        r.validate_candidate_evidence(result)
+        return result
     recorded=r.decode(consumed);when=recorded.get('consumed_at');r.positive(when)
     r.require(when<=int(clock())<when+7200,'checkpoint return window expired')
     # Historical consumption binding only: no renewed execution authorization.
@@ -65,9 +74,14 @@ def receive(*,client,authorization,inventory,receipt,descriptor,output,harness_s
         r.require(asset(client.request('GET',endpoint+'/assets?per_page=100'),approved,consumed)==selected,'checkpoint changed during download')
         value=r.decode(raw)
         runner.validate(value,context=context,target=target,authorization=a,receipt=consumed,inventory=i)
+        if value['schema']==runner.SCHEMA_V5:
+            if source_pins is None:source_pins=exact_source_pins()
+            r.require(value['authenticated_evidence_sha256']==source_pins,'returned checkpoint authenticated files differ')
         r.require(when<=value['observed_at']<=int(clock())<deadline,'checkpoint timing differs')
         r.require(read_record(authorization)==auth and read_record(inventory)==inv and read_record(receipt)==consumed,
             'checkpoint local inputs changed')
+        if source_pins is not None:r.require(exact_source_pins()==source_pins,'returned checkpoint proof files changed')
+        r.candidate_hosting.check_file(grant,authorization.parent)
         evidence=dict(schema='elevenid.installer-acceptance-checkpoint-transport/v1',release_id=owned['id'],
             checkpoint_sha256=r.digest(raw),receipt_sha256=r.digest(consumed),context_sha256=r.candidate_context_sha256(context),
             controller_user_id=approved,verified_at=int(clock()),asset={k:selected[k] for k in ('id','name','size','digest','created_at','updated_at')},

@@ -210,21 +210,26 @@ pub(crate) fn require_runtime_model(
     require(binding.sequence() > 0)?;
     // Reading an immediate predecessor is deliberately nonrecursive: the
     // binding owner has already walked and verified the immutable ancestry.
-    let parent = generation::read_recorded_sequence(installation, binding.sequence() - 1)?;
-    let bytes = read(installation, &record_name(binding.sequence(), "intent"))?;
+    let parent = generation::read_recorded_attempt(
+        installation,
+        binding.sequence() - 1,
+        binding.parent_attempt(),
+    )?;
+    let bytes = read(installation, &binding.record_name("intent"))?;
     let intent: Value = decode(&bytes)?;
     let previous: SavedSession =
         serde_json::from_value(intent["parent_session"].clone()).map_err(|_| REFUSED)?;
     let recorded = if parent.sequence() == 0 {
         read(installation, installer_doctor::SESSION_RECORD)?
     } else {
-        read(installation, &record_name(parent.sequence(), "session"))?
+        read(installation, &parent.record_name("session"))?
     };
     let recorded: SavedSession = decode(&recorded)?;
     require(
         encode(&previous)? == encode(&recorded)?
             && intent["parent_binding_sha256"] == parent.sha256()?
             && intent["sequence"] == binding.sequence()
+            && intent.get("attempt").and_then(Value::as_u64).unwrap_or(0) == binding.attempt()
             && previous.configuration_sha256 == installer_compose::model_sha256(&previous.model)?
             && intent["helper_configuration_sha256"]
                 == installer_compose::model_sha256(&intent["helper_model"])?,

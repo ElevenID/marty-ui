@@ -8,6 +8,7 @@ authorize launch, dispatch, qualification, or release admission.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -17,13 +18,18 @@ import time
 
 from installer_candidate_controller import ControllerLease, _directory
 import installer_candidate_qemu_observe as observer
-from installer_candidate_vm_policy import GUEST_USER, PACKAGES
+from installer_candidate_vm_policy import (
+    GUEST_USER, PACKAGES, ROOTLESS_UID, ROOTLESS_PROFILES, ROOTLESS_PACKAGES,
+    ROOTLESS_GUEST_DIRECTORY, ROOTLESS_ASSETS_SHA256, ROOTLESS_SEED_FIELDS,
+    rootless_assets, rootless_seed_fields, seed_profile,
+)
 from installer_candidate_vm_create import _bytes, _read_record, _write
 from installer_candidate_vm_runtime import _runtime_parent, _same_path, verify_transfer
 from installer_host_probe import command
 import installer_release as release
 
 SCHEMA = "elevenid.installer-vm-seed/v1"
+ROOTLESS_SCHEMA = "elevenid.installer-vm-seed/v2"
 KEYGEN = Path("/usr/bin/ssh-keygen")
 LOCALDS = Path("/usr/bin/cloud-localds")
 CLOUD_INIT = Path("/usr/bin/cloud-init")
@@ -125,7 +131,92 @@ def _install_media(runtime_fd: int, raw: bytes, gid: int) -> tuple[int, os.stat_
         raise
 
 
-def _cloud_config(controller_public: str, host_public: str, host_private: str) -> bytes:
+def _rootless_cloud_config(controller_public: str, host_public: str,
+                          host_private: str, resource_profile: str) -> bytes:
+    """Render setup only for a newly created, explicitly selected disposable VM.
+
+    This does not run anything on the controller or an existing SSH/AWS guest.
+    Missing user-namespace/AppArmor/cgroup prerequisites stop cloud-init; no
+    force option, unconfined profile or global security sysctl is supplied.
+    """
+    rootless_seed_fields(resource_profile)
+    directory = ROOTLESS_GUEST_DIRECTORY
+    assets = rootless_assets()
+    files = [dict(path=directory + "/" + name, owner="root:root",
+                  permissions="0755" if name.endswith(".sh") else "0644",
+                  encoding="b64", content=base64.b64encode(raw).decode("ascii"))
+             for name, raw in assets.items()]
+    files.append(dict(path=f"/etc/systemd/system/user@{ROOTLESS_UID}.service.d/delegate.conf",
+                      owner="root:root", permissions="0644",
+                      content="[Service]\nDelegate=cpu cpuset io memory pids\n"))
+    # This prerequisite check is generated guest code, not a host-side action.
+    check = "\n".join([
+        "import hashlib, os, pathlib, pwd, stat, subprocess",
+        f"uid={ROOTLESS_UID}",
+        "account=pwd.getpwnam('installer')",
+        "assert account.pw_uid==uid and account.pw_dir=='/home/installer'",
+        "home=pathlib.Path(account.pw_dir); info=home.lstat()",
+        "assert home.resolve()==home and stat.S_ISDIR(info.st_mode) and info.st_uid==uid and stat.S_IMODE(info.st_mode)==0o700",
+        "assert 'docker' not in subprocess.check_output(['/usr/bin/id','-Gn','installer'],text=True).split()",
+        f"packages={ROOTLESS_PACKAGES!r}",
+        "for name, version in packages.items():",
+        "    assert subprocess.check_output(['/usr/bin/dpkg-query','-W','-f=${Status}\\t${Version}',name],text=True)=='install ok installed\\t'+version",
+        "for name in ('subuid','subgid'):",
+        "    ranges=[]",
+        "    for line in pathlib.Path('/etc/'+name).read_text().splitlines():",
+        "        user, first, count=line.split(':'); first=int(first); count=int(count)",
+        "        assert first>uid and count>0",
+        "        ranges.append((user,first,first+count))",
+        "    ours=[entry for entry in ranges if entry[0] in ('installer',str(uid))]",
+        "    assert len(ours)==1 and ours[0][2]-ours[0][1]>=65536",
+        "    assert all(entry is ours[0] or entry[2]<=ours[0][1] or entry[1]>=ours[0][2] for entry in ranges)",
+        "assert 'memory' in pathlib.Path('/sys/fs/cgroup/cgroup.controllers').read_text().split()",
+        "assert pathlib.Path('/etc/apparmor.d/rootlesskit').is_file()",
+        f"assets={ROOTLESS_ASSETS_SHA256!r}",
+        f"directory=pathlib.Path({directory!r})",
+        "for name, digest in assets.items():",
+        "    path=directory/name; info=path.lstat()",
+        "    assert stat.S_ISREG(info.st_mode) and info.st_uid==0 and not info.st_mode&0o022",
+        "    assert hashlib.sha256(path.read_bytes()).hexdigest()==digest",
+    ])
+    user_env = ["/usr/sbin/runuser", "-u", GUEST_USER, "--", "/usr/bin/env", "-i",
+                "HOME=/home/installer", "USER=installer", "LOGNAME=installer",
+                "PATH=" + directory + ":/usr/sbin:/usr/bin:/sbin:/bin",
+                f"XDG_RUNTIME_DIR=/run/user/{ROOTLESS_UID}",
+                f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{ROOTLESS_UID}/bus"]
+    config = dict(
+        users=[dict(name=GUEST_USER, uid=ROOTLESS_UID, lock_passwd=True, sudo=False,
+                    groups=[], homedir="/home/installer", shell="/bin/bash",
+                    ssh_authorized_keys=[controller_public])],
+        ssh_pwauth=False, disable_root=True, allow_public_ssh_keys=False,
+        ssh_deletekeys=True, ssh_genkeytypes=["ed25519"],
+        ssh_keys=dict(ed25519_private=host_private, ed25519_public=host_public),
+        package_update=True, package_upgrade=False,
+        packages=[[name, version] for name, version in ROOTLESS_PACKAGES.items()],
+        write_files=files,
+        runcmd=["set -eu",
+                ["/usr/bin/chmod", "0700", "/home/installer"],
+                ["/usr/bin/python3", "-I", "-c", check],
+                ["/usr/bin/systemctl", "disable", "--now", "docker.service", "docker.socket"],
+                ["/usr/bin/ln", "-s", "/usr/bin/docker", directory + "/docker"],
+                ["/usr/bin/systemctl", "daemon-reload"],
+                ["/usr/bin/loginctl", "enable-linger", GUEST_USER],
+                ["/usr/bin/systemctl", "start", f"user@{ROOTLESS_UID}.service"],
+                [*user_env, "/usr/bin/systemctl", "--user", "show-environment"],
+                [*user_env, directory + "/dockerd-rootless-setuptool.sh", "install"],
+                [*user_env, "/usr/bin/systemctl", "--user", "is-active", "docker"],
+                ["/usr/bin/systemctl", "enable", "--now", "ssh"]],
+    )
+    raw = ("#cloud-config\n" + json.dumps(config, indent=2) + "\n").encode("ascii")
+    release.require(len(raw) <= 65536, "VM cloud-init configuration oversized")
+    return raw
+
+
+def _cloud_config(controller_public: str, host_public: str, host_private: str,
+                  *, resource_profile: str | None = None) -> bytes:
+    if resource_profile is not None:
+        return _rootless_cloud_config(controller_public, host_public, host_private,
+                                     resource_profile)
     # All variable scalars are constrained by _public_key/_private_key.
     lines = ["#cloud-config", "users:", "  - name: installer",
              "    lock_passwd: true", "    sudo: ALL=(ALL) NOPASSWD:ALL",
@@ -160,9 +251,12 @@ def _keypair(control: Path, basename: str) -> tuple[str, str]:
 
 
 def prepare(source: Path, registry: Path, vm_parent: Path, runtime_parent: Path, *,
-            vm_id: str, ssh_port: int) -> dict:
+            vm_id: str, ssh_port: int, resource_profile: str | None = None) -> dict:
     release.require(os.geteuid() == 0 and type(ssh_port) is int
                     and 1024 <= ssh_port <= 65535, "VM seed request invalid")
+    selection = rootless_seed_fields(resource_profile) if resource_profile is not None else {}
+    if selection:
+        rootless_assets()  # Refuse missing/substituted source before any intent.
     for path in (KEYGEN, LOCALDS, CLOUD_INIT):
         _tool(path)
     transfer = verify_transfer(source, registry, vm_parent, runtime_parent, vm_id=vm_id)
@@ -180,13 +274,16 @@ def prepare(source: Path, registry: Path, vm_parent: Path, runtime_parent: Path,
             try:
                 _same_path(runtime_parent, parent_fd, _runtime_parent)
                 _same_path(registry, lease.parent, _directory)
-                intent = dict(schema=SCHEMA, phase="intent", vm_id=vm_id,
+                intent = dict(schema=ROOTLESS_SCHEMA if selection else SCHEMA,
+                              phase="intent", vm_id=vm_id,
                               runtime_receipt_sha256=release.digest(runtime_raw),
                               control_dir=str(registry / (vm_id + ".control")),
                               runtime_dir=str(runtime_dir), ssh_port=ssh_port,
-                              guest_user=GUEST_USER, packages=PACKAGES,
+                              guest_user=GUEST_USER,
+                              packages=ROOTLESS_PACKAGES if selection else PACKAGES,
                               started_at=int(time.time()), qualified=False,
                               launch_authorized=False)
+                intent.update(selection)
                 intent_raw = _write(lease.parent, vm_id + ".seed-intent.json", intent)
                 _same_path(registry, lease.parent, _directory)
                 control_name = vm_id + ".control"
@@ -202,7 +299,8 @@ def prepare(source: Path, registry: Path, vm_parent: Path, runtime_parent: Path,
                         host_public, host_private_hash = _keypair(
                             control_dir, "guest_host_ed25519")
                         host_private = _private_key(_bytes(control_dir / "guest_host_ed25519", 8192))
-                        user_data = _cloud_config(controller_public, host_public, host_private)
+                        user_data = _cloud_config(controller_public, host_public, host_private,
+                                                  resource_profile=resource_profile)
                         metadata = ("instance-id: " + vm_id + "\nlocal-hostname: marty-vm-"
                                     + vm_id[:8] + "\n").encode("ascii")
                         known_hosts = ("[127.0.0.1]:" + str(ssh_port) + " "
@@ -288,6 +386,9 @@ def verify_seed(source: Path, registry: Path, vm_parent: Path,
         base = {"schema", "phase", "vm_id", "runtime_receipt_sha256", "control_dir",
                 "runtime_dir", "ssh_port", "guest_user", "packages", "started_at",
                 "qualified", "launch_authorized"}
+        resource_profile = seed_profile(intent)
+        if resource_profile is not None:
+            base |= ROOTLESS_SEED_FIELDS
         release.exact(intent, base, "VM seed intent")
         release.exact(receipt, base | {"intent_sha256", "control_dir_device",
                                       "control_dir_inode", "seed_device", "seed_inode",
@@ -296,7 +397,7 @@ def verify_seed(source: Path, registry: Path, vm_parent: Path,
                                       "controller_public_sha256", "guest_host_public_sha256",
                                       "controller_private_sha256", "guest_host_private_sha256",
                                       "seeded_at"}, "VM seed receipt")
-        release.require(intent["schema"] == receipt["schema"] == SCHEMA
+        release.require(intent["schema"] == receipt["schema"]
                         and intent["phase"] == "intent" and receipt["phase"] == "seeded"
                         and intent["vm_id"] == vm_id
                         and intent["runtime_receipt_sha256"] == release.digest(runtime_raw)
@@ -305,7 +406,7 @@ def verify_seed(source: Path, registry: Path, vm_parent: Path,
                         and type(intent["ssh_port"]) is int
                         and 1024 <= intent["ssh_port"] <= 65535
                         and intent["guest_user"] == GUEST_USER
-                        and intent["packages"] == PACKAGES
+                        and intent["packages"] == (ROOTLESS_PACKAGES if resource_profile else PACKAGES)
                         and type(intent["started_at"]) is int
                         and type(receipt["seeded_at"]) is int
                         and 0 < intent["started_at"] <= receipt["seeded_at"]
@@ -335,7 +436,7 @@ def verify_seed(source: Path, registry: Path, vm_parent: Path,
             expected_meta = ("instance-id: " + vm_id + "\nlocal-hostname: marty-vm-"
                              + vm_id[:8] + "\n").encode("ascii")
             release.require(user_data == _cloud_config(controller_public, host_public,
-                                                        host_private)
+                                                        host_private, resource_profile=resource_profile)
                             and metadata == expected_meta and known_hosts == expected_hosts
                             and release.digest(controller_private)
                             == receipt["controller_private_sha256"]
@@ -428,6 +529,7 @@ def main() -> int:
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--vm-id", required=True)
     parser.add_argument("--ssh-port", type=int)
+    parser.add_argument("--resource-profile", choices=sorted(ROOTLESS_PROFILES))
     parser.add_argument("--verify-only", action="store_true")
     args = parser.parse_args()
     try:
@@ -436,10 +538,14 @@ def main() -> int:
                                   args.runtime_parent, vm_id=args.vm_id)
             release.require(args.ssh_port is None or args.ssh_port == receipt["ssh_port"],
                             "VM seed SSH port differs")
+            release.require(args.resource_profile is None
+                            or args.resource_profile == seed_profile(receipt),
+                            "VM seed resource profile differs")
         else:
             release.require(args.ssh_port is not None, "VM seed SSH port required")
             prepare(args.source, args.registry, args.vm_parent, args.runtime_parent,
-                    vm_id=args.vm_id, ssh_port=args.ssh_port)
+                    vm_id=args.vm_id, ssh_port=args.ssh_port,
+                    resource_profile=args.resource_profile)
     except (ValueError, OSError, KeyError, TypeError, UnicodeError, json.JSONDecodeError):
         parser.exit(1, "VM seed refused or uncertain; retain all intent, media and keys.\n")
     return 0

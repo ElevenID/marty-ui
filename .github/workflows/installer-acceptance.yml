@@ -33,6 +33,16 @@ on:
         description: Exact installation nightly tag recorded in its inventory
         required: true
         type: string
+      hosting_input:
+        description: Exact public hosting JSON for a v2 grant; explicit ACME terms agreement required
+        required: false
+        type: string
+        default: ''
+      acme_staging_roots:
+        description: Explicit PEM trust anchors only for CA staging; artifact phase is independent
+        required: false
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -267,13 +277,39 @@ jobs:
           BUILD_SOURCE_SHA: ${{ inputs.source_sha }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           PHASE: ${{ inputs.phase }}
+          HOSTING_INPUT: ${{ inputs.hosting_input }}
+          ACME_STAGING_ROOTS: ${{ inputs.acme_staging_roots }}
         shell: bash
         run: |
           set -euo pipefail
           umask 077
           base="$RUNNER_TEMP/installer-staged-grant"
           chmod 700 "$base/inputs"
-          python scripts/installer_candidate_authorize.py \
+          python - <<'PY'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          import installer_candidate_hosting as hosting
+          from installer_candidate_authorize import write_exclusive
+          raw = os.environ.get('HOSTING_INPUT', '').encode('utf-8')
+          roots = os.environ.get('ACME_STAGING_ROOTS', '').encode('utf-8') or None
+          output = Path(os.environ['RUNNER_TEMP']) / 'installer-staged-grant/grant'
+          if raw:
+              hosting.from_bytes(raw, staging_roots=roots)
+              write_exclusive(output / hosting.NAME, raw)
+              if roots is not None:
+                  write_exclusive(output / hosting.ROOTS_NAME, roots)
+          else:
+              hosting.require(roots is None, 'staging trust requires explicit hosting input')
+          PY
+          hosting_flags=()
+          if test -f "$base/grant/hosting-input.json"; then
+            hosting_flags+=(--hosting-input "$base/grant/hosting-input.json")
+          fi
+          if test -f "$base/grant/acme-staging-roots.pem"; then
+            hosting_flags+=(--acme-staging-roots "$base/grant/acme-staging-roots.pem")
+          fi
+          python scripts/installer_candidate_authorize.py "${hosting_flags[@]}" \
             --assets "$base/inputs" --acceptance-run "$base/context/acceptance-run.json" \
             --gh "$base/tools/gh_2.103.2_linux_amd64/bin/gh" --cosign "$base/tools/cosign" \
             --source-sha "$BUILD_SOURCE_SHA" --release-tag "$RELEASE_TAG" \
@@ -346,6 +382,8 @@ jobs:
             ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json.sigstore.json
             ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json.provenance.jsonl
             ${{ runner.temp }}/installer-staged-grant/grant/controller-transport.json
+            ${{ runner.temp }}/installer-staged-grant/grant/hosting-input.json
+            ${{ runner.temp }}/installer-staged-grant/grant/acme-staging-roots.pem
           if-no-files-found: error
           retention-days: 1
       - name: Receive the approved controller's durable consumption receipt
@@ -421,6 +459,8 @@ jobs:
             ${{ runner.temp }}/installer-staged-grant/grant/controller-consumption.json.provenance.jsonl
             ${{ runner.temp }}/installer-staged-grant/grant/controller-consumption.json.transport.json
             ${{ runner.temp }}/installer-staged-grant/grant/controller-transport.json
+            ${{ runner.temp }}/installer-staged-grant/grant/hosting-input.json
+            ${{ runner.temp }}/installer-staged-grant/grant/acme-staging-roots.pem
           if-no-files-found: error
           retention-days: 1
       - name: Receive same-invocation installed probe checkpoint

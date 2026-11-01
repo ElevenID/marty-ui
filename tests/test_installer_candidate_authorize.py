@@ -8,6 +8,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import installer_candidate_authorize as a
 import installer_release as r
 
+
+def test_versioned_authorizer_derives_exact_input_bytes_and_preserves_explicit_terms(inputs):
+    options, calls, _ = inputs
+    fixture = json.loads((Path(__file__).resolve().parents[1] / 'rust/crates/deployment-catalog/tests/fixtures/installer-candidate-hosting-v2.json').read_text())[1]
+    source = options['assets'] / 'customer-hosting.json'
+    source.write_bytes(fixture['hosting_input'].encode()); source.chmod(0o600)
+    result = a.authorize(**options, hosting_input=source)
+    assert result['schema'] == r.CANDIDATE_SCHEMA_V2
+    assert result['hosting'] == r.candidate_hosting.from_bytes(source.read_bytes())
+    assert (options['output'].parent / r.candidate_hosting.NAME).read_bytes() == source.read_bytes()
+    assert len(calls) == 10
+
+
+def test_hosting_replacement_during_verifier_is_refused_before_grant_write(inputs):
+    options, _, _ = inputs
+    fixture = json.loads((Path(__file__).resolve().parents[1] / 'rust/crates/deployment-catalog/tests/fixtures/installer-candidate-hosting-v2.json').read_text())[1]
+    source = options['assets'] / 'customer-hosting.json'
+    source.write_bytes(fixture['hosting_input'].encode()); source.chmod(0o600)
+    original = options['runner']
+    changed = False
+    def substitute(argv):
+        nonlocal changed
+        if not changed:
+            raw = source.read_bytes(); source.rename(source.with_suffix('.old'))
+            source.write_bytes(raw); source.chmod(0o600); changed = True
+        return original(argv)
+    options['runner'] = substitute
+    with pytest.raises(ValueError, match='hosting file changed'):
+        a.authorize(**options, hosting_input=source)
+    assert not options['output'].exists()
+
 @pytest.fixture
 def inputs(tmp_path):
     tmp_path.chmod(0o700)

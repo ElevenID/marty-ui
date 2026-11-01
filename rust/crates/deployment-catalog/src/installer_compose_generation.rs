@@ -234,6 +234,112 @@ impl ComposeSession {
         )
     }
 
+    /// Quiesce only the already-authorized replacement consumers before a
+    /// stale-attempt baseline is captured. Infrastructure and all setup jobs
+    /// are excluded. A missing consumer is completed later with no-start.
+    pub(crate) fn stop_generation_consumers(
+        &self,
+        state: &mut LockedMaintenance,
+        operation: &str,
+    ) -> Result<Option<ComposeReceipt>> {
+        let replacing = self.generation_roles(GenerationOperation::Activate)?;
+        require(replacing.iter().all(|role| {
+            !["openbao", "openbao-unseal", "installer-acme-http01"].contains(&role.as_str())
+        }))?;
+        let before = self.observe_transition(false, Some(&replacing))?;
+        let rows = self.status()?;
+        require(completed_setups(&before, &rows))?;
+        let selected: BTreeSet<_> = replacing
+            .iter()
+            .filter(|role| before.containers.contains_key(*role))
+            .cloned()
+            .collect();
+        if selected.is_empty() {
+            return Ok(None);
+        }
+        let mut command = vec!["stop", "--timeout", "60"];
+        command.extend(selected.iter().map(String::as_str));
+        let mut writer = Evidence::Maintenance(state, Some(RuntimeOperationOwner::Generation));
+        self.generation_intent(
+            &mut writer,
+            operation,
+            &command,
+            &before,
+            &selected.iter().cloned().collect::<Vec<_>>(),
+        )?;
+        let result = self.compose(&command, false, Duration::from_secs(300));
+        let resources = self.observe_transition(false, Some(&replacing));
+        let statuses = self.status();
+        let complete = matches!((&resources, &statuses), (Ok(resources), Ok(rows))
+            if generation_runtime_observation(resources, rows, &selected, &replacing, true));
+        self.receipt(
+            &mut writer,
+            operation,
+            &result,
+            complete,
+            resources,
+            statuses,
+        )
+        .map(Some)
+    }
+
+    /// Record an exact owned census for supersession. Runtime services may be
+    /// stopped; this is a native read, never an activation or health claim.
+    /// The caller authenticates the preceding create-only transaction first.
+    pub(crate) fn checkpoint_generation_baseline(
+        mut self,
+        state: &mut LockedMaintenance,
+        operation: &str,
+        stopped: &BTreeSet<String>,
+    ) -> Result<ComposeReceipt> {
+        require(
+            !self.cleanup_only
+                && self.generation_transition.is_none()
+                && self.inputs.prior.is_some()
+                && self.inputs.services.is_empty()
+                && stopped.iter().all(|role| {
+                    self.prior()
+                        .containers
+                        .get(role)
+                        .is_some_and(|identity| !identity.setup)
+                        && !["openbao", "openbao-unseal", "installer-acme-http01"]
+                            .contains(&role.as_str())
+                }),
+        )?;
+        self.observe(false)?;
+        self.bindings = self
+            .inputs
+            .files
+            .iter()
+            .chain(std::iter::once(&self.inputs.environment))
+            .chain(&self.inputs.bound_inputs)
+            .map(|file| (file.path.clone(), file.sha256.clone()))
+            .collect();
+        self.recheck()?;
+        let mut writer = Evidence::Maintenance(state, Some(RuntimeOperationOwner::Generation));
+        self.begin(
+            &mut writer,
+            operation,
+            &["ps", "--all", "--no-trunc", "--format", "json"],
+        )?;
+        let resources = self.observe(false);
+        let statuses = self.status();
+        let result = statuses
+            .as_ref()
+            .map(|_| String::new())
+            .map_err(Clone::clone);
+        let complete = matches!((&resources, &statuses), (Ok(resources), Ok(rows))
+            if generation_baseline_observation(resources, rows, stopped));
+        self.receipt(
+            &mut writer,
+            operation,
+            &result,
+            complete,
+            resources,
+            statuses,
+        )
+    }
+
     fn generation_intent(
         &self,
         writer: &mut Evidence<'_>,
@@ -494,6 +600,25 @@ impl ComposeSession {
             statuses,
         )
     }
+}
+
+fn generation_baseline_observation(
+    resources: &ProjectResources,
+    rows: &[Value],
+    stopped: &BTreeSet<String>,
+) -> bool {
+    completed_setups(resources, rows)
+        && rows.iter().all(|row| {
+            row["Service"].as_str().is_some_and(|role| {
+                resources.containers.get(role).is_some_and(|identity| {
+                    identity.setup
+                        || row["State"].as_str().is_some_and(|state| {
+                            ["created", "exited", "running"].contains(&state)
+                                && (!stopped.contains(role) || state != "running")
+                        })
+                })
+            })
+        })
 }
 
 fn generation_runtime_observation(

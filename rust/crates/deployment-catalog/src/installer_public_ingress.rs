@@ -119,6 +119,10 @@ fn is_zero(value: &u64) -> bool {
 #[serde(deny_unknown_fields)]
 struct Successor {
     sequence: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    attempt: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    parent_attempt: u64,
     parent_binding_sha256: String,
     input_sha256: BTreeMap<String, String>,
     input_observed_at: u64,
@@ -261,8 +265,11 @@ impl PublicIngressPlan {
         self.require_recorded_candidate(state)?;
         if let Some(successor) = &self.0.successor {
             let path = crate::installer_generation_maintenance::installation_path(state)?;
-            let parent =
-                crate::installer_generation_binding::load_sequence(&path, successor.sequence - 1)?;
+            let parent = crate::installer_generation_binding::load_attempt(
+                &path,
+                successor.sequence - 1,
+                successor.parent_attempt,
+            )?;
             self.require_parent(&path, &parent)?;
         }
         Ok(())
@@ -270,17 +277,24 @@ impl PublicIngressPlan {
     pub(crate) fn record_name(&self) -> String {
         self.0.successor.as_ref().map_or_else(
             || PUBLIC_INGRESS_PLAN_RECORD.into(),
-            |value| format!("generation-{:020}-public-ingress-plan.json", value.sequence),
+            |value| {
+                crate::installer_generation_maintenance::attempt::Attempt::new(
+                    value.sequence,
+                    value.attempt,
+                )
+                .record("public-ingress-plan")
+            },
         )
     }
     pub(crate) fn enrolment_cycle(&self) -> u64 {
         self.0.enrolment_cycle
     }
-    pub(crate) fn from_successor(
+    pub(crate) fn from_successor_attempt(
         state: &LockedInspection,
         installation: &Path,
         candidate: &AcmeCandidate,
         parent: &crate::installer_generation_binding::GenerationBinding,
+        attempt: u64,
     ) -> Result<Self> {
         require(candidate.environment() == AcmeEnvironment::Production && parent.public_ingress())?;
         state.require_path_binding(installation)?;
@@ -301,6 +315,8 @@ impl PublicIngressPlan {
             .collect::<Result<BTreeMap<_, _>>>()?;
         plan.0.successor = Some(Successor {
             sequence: parent.sequence().checked_add(1).ok_or(REFUSED)?,
+            attempt,
+            parent_attempt: parent.attempt(),
             parent_binding_sha256: parent.sha256()?,
             input_sha256,
             input_observed_at: ingress.token_observed_at,
@@ -317,9 +333,10 @@ impl PublicIngressPlan {
         require(self.0.successor.is_some())?;
         self.require_recorded_candidate(state.inspection())?;
         let path = crate::installer_generation_maintenance::installation_path(state.inspection())?;
-        let parent = crate::installer_generation_binding::load_sequence(
+        let parent = crate::installer_generation_binding::load_attempt(
             &path,
             self.0.successor.as_ref().ok_or(REFUSED)?.sequence - 1,
+            self.0.successor.as_ref().ok_or(REFUSED)?.parent_attempt,
         )?;
         self.require_parent(&path, &parent)?;
         let name = self.record_name();
@@ -366,6 +383,7 @@ impl PublicIngressPlan {
         require(
             parent.public_ingress()
                 && parent.sequence().checked_add(1) == Some(expected.sequence)
+                && parent.attempt() == expected.parent_attempt
                 && parent.sha256()? == expected.parent_binding_sha256
                 && parent.installation_id == self.0.installation_id
                 && metadata == &expected.ingress,
@@ -486,6 +504,7 @@ impl PublicIngressPlan {
         if let Some(previous) = &self.0.successor {
             require(
                 previous.sequence > 0
+                    && (previous.sequence > 1 || previous.parent_attempt == 0)
                     && valid_digest(&previous.parent_binding_sha256)
                     && previous
                         .input_sha256

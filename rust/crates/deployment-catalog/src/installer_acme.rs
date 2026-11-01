@@ -55,8 +55,11 @@ const SHORTLIVED_MAXIMUM_SECONDS: u64 = 160 * 3600;
 mod recurrent;
 pub use recurrent::retained_candidate;
 pub(crate) use recurrent::{
+    require_lineage as require_retained_lineage, retained_candidate_material,
     retained_csr_for_renewal, run_initial_rollover_locked, run_renewal_locked,
 };
+#[path = "installer_acme_initial_terminal.rs"]
+pub(crate) mod initial_terminal;
 #[path = "installer_acme_terminal.rs"]
 mod terminal;
 pub(crate) use terminal::{
@@ -575,6 +578,11 @@ fn terminal_with_response(
     next.next_poll_at = None;
     next.pending_challenge = None;
     next.terminal_retry = terminal::observation(state.inspection(), saved, code, hints, observed)?;
+    next.initial_terminal_retry = if next.terminal_retry.is_none() {
+        initial_terminal::observation(state.inspection(), saved, code, hints, observed)?
+    } else {
+        None
+    };
     saved.append(state, next, observed)?;
     withdraw(state, inputs, saved)?;
     terminal::confirm_withdrawal(state, inputs, saved)?;
@@ -614,6 +622,7 @@ async fn drive(
             None => Ledger::begin(state, binding, observed)?,
         };
     require(signer.public_key() == inputs.account_key.public_sec1())?;
+    recurrent::require_lineage(state.inspection(), &saved)?;
     require(observed.saturating_add(120) >= saved.timing_observed_at())?;
     let other_environment = if saved.binding.environment == AcmeEnvironment::Staging {
         AcmeEnvironment::Production
@@ -849,7 +858,6 @@ async fn drive(
                     .ok_or(REFUSED)?;
                     require(
                         prior.digest == renewal.prior_enrolment_receipt_sha256
-                            && prior.state.stage == Stage::Complete
                             && prior.state.order.as_ref().ok_or(REFUSED)?.url != retained.url,
                     )?;
                 }
@@ -1003,18 +1011,7 @@ async fn drive(
         Ok(value) => value,
         Err(_) => return terminal(state, inputs, &mut saved, "certificate_refused"),
     };
-    if let Some(renewal) = &saved.binding.renewal {
-        let prior = Ledger::load_cycle(
-            state.inspection(),
-            saved.binding.environment,
-            renewal.prior_cycle,
-        )?
-        .ok_or(REFUSED)?;
-        require(
-            prior.digest == renewal.prior_enrolment_receipt_sha256
-                && prior.state.stage == Stage::Complete,
-        )?;
-        let previous = &prior.state.certificate.as_ref().ok_or(REFUSED)?.metadata;
+    if let Some(previous) = recurrent::previous_certificate_metadata(state.inspection(), &saved)? {
         if certificate.metadata()["leaf_der_sha256"] == previous["leaf_der_sha256"]
             || certificate.metadata()["not_after"]
                 .as_u64()

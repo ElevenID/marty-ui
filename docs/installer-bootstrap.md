@@ -118,23 +118,31 @@ establish deployment readiness or channel availability.
 
 The controller's incomplete checkpoint records its resource profile separately
 from functional qualification and load characterization. The default
-`startup-8gib` profile has a 7 GiB guest-visible preflight floor to allow kernel
-reservations on a nominal 8 GiB host. Both Docker and guest RAM measurements are
-retained; the controller must independently establish the nominal instance size.
-Passing this guard does not prove startup, throughput, or a supported load limit.
-The explicit `qualification-32gib` profile preserves the historical acceptance
-preflight, and the signed release gate still requires every functional and
-recovery case. Engineering measurements and startup checkpoints cannot replace
-that evidence.
+`rootless-startup-8gib` profile requires at least 7 GiB of measured guest-visible
+and Docker RAM and 20 GiB free on Docker's data filesystem. The separately named
+`rootless-functional-recovery-8gib` contract uses the same resource floors and
+requires every functional, negative and recovery assertion; it is not permanently
+tied to the historical 32 GiB profile. The explicit `qualification-32gib` and
+legacy v1 reports retain their previous meaning. None of these resource guards
+establishes startup success, throughput or a supported load limit.
+
+The signed acceptance-only entry now uses the same nonroot/rootless boundary and
+can bind exact configured DNS/IP hosting through a versioned authorization. It
+retains all nine authenticated proof-file digests and uses the existing storage
+canary. A controller can target an independently prepared AWS guest directly over
+pinned SSH, including a host with recorded caches or unrelated stacks. QEMU is
+optional. See [signed rootless acceptance](installer-signed-rootless-acceptance.md)
+for the exact input custody, profiles and evidence versions.
 
 Current trust observations use the configured HTTPS origin, the separately
 bound local probe address, the certificate's public-ingress or backend scope,
 and the selected generation's evidence. A local probe verifies TLS and OIDC
 discovery using the configured authority while connecting to the recorded local
-listener. It does not observe the external proxy, public reachability, browser
-trust, or login. The checkpoint leaves installation readiness, functional
-qualification, and load characterization false. The formal acceptance-only
-installation entry remains held until its rootless dispatch path is qualified.
+listener. It does not observe public reachability, browser trust or login.
+The checkpoint leaves installation readiness, functional qualification and load
+characterization false. Full installed browser/recovery/root-retirement proof
+writers and native adapters are still missing, and the qualified report producer
+refuses with those named blockers. Normal `Ready` completion remains held.
 
 ## Platform adapters
 

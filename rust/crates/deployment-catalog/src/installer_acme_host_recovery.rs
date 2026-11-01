@@ -5,6 +5,21 @@ use crate::{installer_compose::RuntimeOperationOwner, installer_state::LockedMai
 
 const SERVICES: [&str; 3] = ["openbao", "openbao-unseal", RESPONDER];
 
+fn require_selection(
+    model: &Value,
+    selected: &[String],
+    dependencies: &BTreeSet<String>,
+) -> Result<()> {
+    let expected: BTreeSet<_> = SERVICES.map(str::to_owned).into();
+    let services = model["services"].as_object().ok_or(REFUSED)?;
+    require(
+        selected.len() == SERVICES.len()
+            && selected.iter().cloned().collect::<BTreeSet<_>>() == expected
+            && *dependencies == expected
+            && expected.iter().all(|role| services.contains_key(role)),
+    )
+}
+
 fn needs_start(resources: &ProjectResources, statuses: &[Value]) -> Result<bool> {
     require(statuses.len() == resources.containers.len())?;
     let mut seen = BTreeSet::new();
@@ -74,16 +89,12 @@ pub(super) fn recover_runtime(
     }
     let mut selected = inputs.clone();
     selected.services = SERVICES.map(str::to_owned).into();
-    let session = ComposeSession::new(context.docker, &binding, selected.clone())?;
+    let session = ComposeSession::new_runtime_recovery(context.docker, &binding, selected.clone())?;
     session.require_runtime_selection()?;
-    require(
-        session.model()["services"]
-            .as_object()
-            .ok_or(REFUSED)?
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>()
-            == SERVICES.into_iter().collect(),
+    require_selection(
+        session.model(),
+        &selected.services,
+        &session.runtime_selection_roles()?,
     )?;
     let responder = serde_json::json!({"services": {(RESPONDER):session.model()["services"][RESPONDER].clone()}});
     responder_model(
@@ -125,6 +136,33 @@ mod tests {
     use super::*;
     use crate::installer_compose::{ContainerIdentity, SetupExecution};
     use serde_json::json;
+
+    #[test]
+    fn full_model_retains_ingress_and_setup_admission_but_recovery_selects_exact_infrastructure() {
+        let mut model = json!({"services":{
+            "openbao":{},"openbao-unseal":{},"installer-acme-http01":{},
+            "installer-ingress":{},"ui":{},"installer-acme-custody":{}
+        }});
+        let selected: Vec<_> = SERVICES.map(str::to_owned).into();
+        let dependencies: BTreeSet<_> = selected.iter().cloned().collect();
+        require_selection(&model, &selected, &dependencies).unwrap();
+        for extra in ["ui", "installer-ingress", CUSTODY] {
+            let mut changed = dependencies.clone();
+            changed.insert(extra.into());
+            assert!(require_selection(&model, &selected, &changed).is_err());
+            assert!(require_selection(
+                &model,
+                &changed.iter().cloned().collect::<Vec<_>>(),
+                &changed
+            )
+            .is_err());
+        }
+        let mut duplicated = selected.clone();
+        duplicated.push("openbao".into());
+        assert!(require_selection(&model, &duplicated, &dependencies).is_err());
+        model["services"].as_object_mut().unwrap().remove("openbao");
+        assert!(require_selection(&model, &selected, &dependencies).is_err());
+    }
 
     fn observed() -> (ProjectResources, Vec<Value>) {
         let mut resources = ProjectResources::default();

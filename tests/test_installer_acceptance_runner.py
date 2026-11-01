@@ -112,7 +112,8 @@ def candidate(tmp_path,monkeypatch):
     args=dict(output=output,assets=tmp_path/'assets',grants=tmp_path/'grants',context_file=tmp_path/'context',
         target_file=tmp_path/'target',ledger=tmp_path/'ledger',gh=tmp_path/'gh',cosign=tmp_path/'cosign',
         ssh=Path('/usr/bin/ssh'),scp=Path('/usr/bin/scp'),key=tmp_path/'key',known_hosts=tmp_path/'hosts',
-        host='127.0.0.1',port=2222,user='installer',home='/home/installer',clock=lambda:100000,execute=execute,candidate_dispatch=dispatch)
+        host='127.0.0.1',port=2222,user='installer',home='/home/installer',clock=lambda:100000,execute=execute,candidate_dispatch=dispatch,
+        resource_profile=a.STARTUP_PROFILE)
     return args,calls,context,target,auth,receipt,inv
 
 
@@ -138,6 +139,60 @@ def test_real_probe_before_dispatch_and_never_claims_acceptance(candidate):
     assert (args['output']/a.NAME).exists() and not (args['output']/'installer-acceptance.json').exists()
     with pytest.raises(FileExistsError):a.run(**args)
     assert len(calls)==8
+
+
+
+@pytest.mark.parametrize('mutation',[None,'uid','proof'])
+def test_versioned_checkpoint_binds_real_probe_uid_and_authenticated_file_digests(candidate,monkeypatch,mutation):
+    sys.path.insert(0,str(Path(__file__).resolve().parent))
+    from test_installer_host_admission import observed_rootless_host_with_neighbors
+    args,calls,context,target,auth,receipt,inv=candidate
+    files={}
+    for directory,source,raw in [(args['grants'],'candidate-authorization.json',auth),
+        (args['grants'],'controller-consumption.json',receipt),(args['assets'],'installer-inventory.json',inv)]:
+        directory.mkdir(mode=0o700,exist_ok=True)
+        for suffix in a.dispatch.SUFFIXES:
+            path=directory/(source+suffix)
+            data=raw if not suffix else ('synthetic proof '+source+suffix).encode()
+            path.write_bytes(data);path.chmod(0o600)
+            files[path]=(r.digest(data),len(data))
+    pins=a.authenticated_source_digests(files,args['assets'],args['grants'])
+    monkeypatch.setattr(a.dispatch,'verify',lambda **_: (auth,receipt,inv,files))
+    original=args['execute']
+    host_value=observed_rootless_host_with_neighbors()
+    def execute(argv,**kwargs):
+        if ' status --install-dir ' in argv[-1]:
+            value=r.decode(original(argv,**kwargs))
+            value['journal']['scope']['authenticated_evidence_sha256']=dict(pins)
+            if mutation=='uid':value['journal']['runtime']['docker_host']='unix:///run/user/1001/docker.sock'
+            if mutation=='proof':value['journal']['scope']['authenticated_evidence_sha256']['installer-controller-consumption.json']='f'*64
+            return r.encode(value)
+        if 'installer-host-probe' in argv[-1]:
+            calls.append(('probe',argv,kwargs));return r.encode(host_value)
+        return original(argv,**kwargs)
+    args.update(resource_profile=a.ROOTLESS_STARTUP_PROFILE,execute=execute)
+    result=a.run(**args)
+    assert result['schema']==a.SCHEMA_V5 and result['host_preflight']=='passed'
+    assert result['authenticated_evidence_sha256']==pins
+    assert result['host_runtime']['uid']==1000
+    assert result['host_resources_sha256']==r.digest(r.encode(host_value['resources']))
+    assert result['installation_ready'] is result['acceptance'] is result['functional_recovery_qualified'] is False
+    assert set(result['cases'])==set(a.qualification.FUNCTIONAL_CASES)
+    assert all(result['cases'][case]=='blocked' for case in result['cases'] if case!='artifact-verification')
+    assert result['trust_inspection']==('verified_public_record' if mutation is None else 'unavailable')
+
+
+def test_selected_generation_evidence_requires_one_sequence_and_one_positive_attempt():
+    kinds={'intent','public-ingress-plan','helper','candidate','binding','activation-intent','activation','session','selection'}
+    base={'application-generation-current.json':'a'*64}
+    for attempt in [None,1,99]:
+        prefix='generation-'+f'{3:020}-'+('' if attempt is None else f'attempt-{attempt:020}-')
+        proof={**base,**{prefix+kind+'.json':'b'*64 for kind in kinds}}
+        a.selected_generation_evidence(proof)
+        for bad_prefix in ['generation-'+f'{4:020}-', 'generation-'+f'{3:020}-attempt-{0:020}-',
+                           'generation-'+f'{3:020}-attempt-{2:020}-']:
+            mixed=dict(proof);mixed.pop(prefix+'binding.json');mixed[bad_prefix+'binding.json']='b'*64
+            with pytest.raises(ValueError):a.selected_generation_evidence(mixed)
 
 
 def test_8gib_startup_checkpoint_never_becomes_functional_or_load_evidence(candidate):
@@ -514,3 +569,37 @@ def test_post_dispatch_custody_change_preserves_uncertainty_without_checkpoint(c
     with pytest.raises(ValueError):a.run(**args)
     assert (args['output']/'runner-intent.json').exists()
     assert not (args['output']/a.NAME).exists()
+
+
+@pytest.mark.parametrize('public,mutation', [(False, value) for value in (None,'origin','input-bytes','trust-class')]
+    + [(True, value) for value in (None,'origin','input-bytes','trust-class','ip-alias','staging')])
+def test_signed_hosting_readback_binds_origin_raw_input_source_and_public_alias(public, mutation):
+    fixture=json.loads((Path(__file__).resolve().parents[1]/
+        'rust/crates/deployment-catalog/tests/fixtures/installer-candidate-hosting-v2.json').read_text())
+    binding=r.decode(fixture[1 if public else 0]['authorization'].encode())['hosting']
+    binding['public_entry_origin']='https://8.8.4.4'
+    value=public_trust() if public else trust()
+    value.update(schema='elevenid.installer-trust-info/v5',origin=binding['public_origin'],
+                 trust_source='mozilla-public-roots' if public else 'configured-ca')
+    value['evidence_sha256']['hosting-input.json']=binding['input_sha256']
+    if public:
+        value['public_certificate_admission']['dns_names']=['marty.example.com']
+        value['public_certificate_admission']['ip_addresses']=['8.8.4.4']
+    journal=dict(installation_id=value['installation_id'],hosting_selection_sha256='b'*64)
+    if mutation=='origin':binding['public_origin']='https://different.example.com'
+    elif mutation=='input-bytes':binding['input_sha256']='f'*64
+    elif mutation=='trust-class':
+        binding['certificate_source']='managed-ca' if public else 'acme'
+        binding['acme_environment']=None if public else 'production'
+        binding['acme_terms_url']=None if public else 'https://letsencrypt.org/documents/fixture-terms.pdf'
+    elif mutation=='ip-alias':
+        binding['public_entry_origin']='https://8.8.8.8'
+    elif mutation=='staging':
+        binding['acme_environment']='staging'
+        binding['staging_trust']={'sha256':'f'*64,'size_bytes':128}
+    target={'installation_id':value['installation_id']}
+    if mutation is None:
+        assert a.trust_observation(r.encode(value),target,100000,journal=journal,bound_hosting=binding)==value
+    else:
+        with pytest.raises(ValueError):
+            a.trust_observation(r.encode(value),target,100000,journal=journal,bound_hosting=binding)
