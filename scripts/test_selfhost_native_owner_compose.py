@@ -281,7 +281,8 @@ def assert_models(approved, actual, *, interpolated=False):
     """Check the complete current KMS-only model against its reviewed snapshot."""
     expected = deepcopy(approved)
     # Keep the approved snapshot and its hash frozen. Admit only the exact
-    # hosting separation, memory ceilings and Keycloak heap setting reviewed;
+    # hosting separation, memory ceilings, Keycloak heap setting and eager
+    # provider startup dependencies reviewed;
     # the whole-model comparison below still rejects every other drift.
     # Synthetic interpolation uses the default profile; Compose omits the two
     # beta-tunnel services and their unused secret before this comparison.
@@ -358,6 +359,14 @@ def assert_models(approved, actual, *, interpolated=False):
     envelope_path = f"/run/secrets/{envelope}"
     assert issuance["environment"]["SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE"] == envelope_path
     assert [item["source"] for item in issuance["secrets"]].count(envelope) == 1
+    for consumer, provider in (
+        ("flow", "trust-profile"),
+        ("flow", "deployment-profile"),
+        ("auth", "applicant"),
+    ):
+        dependencies = expected["services"][consumer]["depends_on"]
+        assert provider not in dependencies
+        dependencies[provider] = {"condition": "service_healthy", "required": True}
     assert expected == actual, "Unreviewed self-host model change:\n" + "".join(
         difflib.unified_diff(
             json.dumps(expected, sort_keys=True, indent=2).splitlines(keepends=True),
