@@ -2328,7 +2328,6 @@ fn current_issuer_key_is_vc_bound(
 mod current_issuer_validation_tests {
     use super::*;
     use axum::{body::Body, http::Request};
-    use p256::ecdsa::signature::Signer;
     use tower::ServiceExt;
 
     fn check(name: &str, status: &str) -> validation::ValidationCheck {
@@ -2356,42 +2355,38 @@ mod current_issuer_validation_tests {
             "Signer capability",
             "pass"
         )]));
-        let signer = p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into())
-            .expect("fixed test-only signing key");
-        let point = signer.verifying_key().to_sec1_point(false);
-        let public = point.as_bytes();
+        // Fixed public ECDSA vector for the server-owned challenge; tests never sign.
         let jwk = json!({"kty":"EC", "crv":"P-256",
-            "x": URL_SAFE_NO_PAD.encode(&public[1..33]),
-            "y": URL_SAFE_NO_PAD.encode(&public[33..65])});
+            "x":"jlM7b6C_e0YluzBmfAH7YH75-LioD-9bMAYocDGHsqM",
+            "y":"c-sdveAzGDZtBp-DpvWQAFPHNjPLBBshxV4ahsH0ALQ"});
         let payload = b"marty-current-issuer-service-readiness-v1";
-        let signature: p256::ecdsa::Signature = signer.sign(payload);
-        let signature = signature.to_der();
+        let signature = hex::decode(concat!(
+            "3045022018c28b956d1557b85154a8e9bd077adb21f4df0f9876f12f97fd9373a4d72f0f",
+            "022100bbab5fba0e276f3026e344c0b16aebd56db96fd1d756375cac3086745f52e6f5"
+        ))
+        .expect("fixed public DER signature");
         assert!(verify_current_issuer_signature(
             &jwk,
             payload,
-            signature.as_bytes()
+            signature.as_slice()
         ));
         assert!(!verify_current_issuer_signature(
             &jwk,
             payload,
             b"not-a-signature"
         ));
-        let wrong_signer = p256::ecdsa::SigningKey::from_bytes((&[8u8; 32]).into())
-            .expect("second fixed test-only signing key");
-        let wrong_point = wrong_signer.verifying_key().to_sec1_point(false);
-        let wrong_public = wrong_point.as_bytes();
         let wrong_jwk = json!({"kty":"EC", "crv":"P-256",
-            "x": URL_SAFE_NO_PAD.encode(&wrong_public[1..33]),
-            "y": URL_SAFE_NO_PAD.encode(&wrong_public[33..65])});
+            "x":"Ytl3nb7psFNAQnQtOrVMrcHSOJgPzpfbtN2dwdtvs5M",
+            "y":"rVrMvZHp2CRP8V13EWfO4KLtUfa752p42lQKag8JlX4"});
         assert!(!verify_current_issuer_signature(
             &wrong_jwk,
             payload,
-            signature.as_bytes()
+            signature.as_slice()
         ));
         assert!(!verify_current_issuer_signature(
             &json!({"kty":"EC","crv":"P-256","x":"AA","y":"AA"}),
             payload,
-            signature.as_bytes()
+            signature.as_slice()
         ));
     }
 
