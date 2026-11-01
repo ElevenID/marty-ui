@@ -8,7 +8,7 @@ import re
 import subprocess
 import time
 import uuid
-from scoped_native_runtime import JOURNAL_FILES, JOURNAL_RESPONSE_MAXIMUM
+from scoped_native_runtime import JOURNAL_FILES, JOURNAL_RESPONSE_MAXIMUM, daemon_source
 
 ENGINE = "3dbbbe66-1c98-4e0c-b0a6-f927c05e7341"
 IMAGE = "sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1"
@@ -44,6 +44,13 @@ def exact_capabilities(values, expected):
 
 def exact_security_options(values):
     require(values in (["no-new-privileges"], ["no-new-privileges:true"]), "DESKTOP_JOURNAL_SECURITY_SCOPE")
+
+
+def exact_readonly_host_source(host_source, actual_source):
+    host_source = host_source.replace("\\", "/")
+    require(host_source.startswith("C:/Users/maree/.codex/private/")
+            and daemon_source(actual_source) == daemon_source(host_source),
+            "DESKTOP_JOURNAL_HELPER_HOST_SOURCE")
 
 
 def helper_arguments(spec, run_id, name, command, readonly_files=(), *, root_setup=False):
@@ -157,8 +164,7 @@ class DesktopPrivateJournalTransport:
             require(sha(source["path"]) == source["sha256"], "DESKTOP_JOURNAL_WORKER_SOURCE_CHANGED")
             match = [m for m in mounts if m["Destination"] == source["alias"]]
             require(len(match) == 1 and match[0]["Type"] == "bind" and match[0]["RW"] is False, "DESKTOP_JOURNAL_HELPER_READONLY_FILE")
-            host_source = source["path"].replace("\\", "/")
-            require(host_source.startswith("C:/Users/maree/.codex/private/") and match[0]["Source"] == "/run/desktop/mnt/host/c/" + host_source[3:], "DESKTOP_JOURNAL_HELPER_HOST_SOURCE")
+            exact_readonly_host_source(source["path"], match[0]["Source"])
         self._record("created", {"containerId": cid, "name": name, "mounts": mounts, "rootSetup": root_setup})
         self._command(["start", cid])
         deadline = time.monotonic() + 30
