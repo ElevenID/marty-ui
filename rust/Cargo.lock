@@ -5107,6 +5107,8 @@ version = "0.1.0"
 name = "marty-service-runtime"
 version = "0.1.0"
 dependencies = [
+ "http 1.5.0",
+ "marty-api-key-policy",
  "marty-crypto",
  "mmf-aws-kms",
  "mmf-platform",

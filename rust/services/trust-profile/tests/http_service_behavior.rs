@@ -1193,3 +1193,110 @@ async fn machine_activation_retains_registry_readiness_and_suspension_can_disabl
         TrustProfileStatus::Suspended
     );
 }
+
+#[tokio::test]
+async fn issuer_and_relationship_shared_fields_keep_scope_patch_and_atomic_refusals() {
+    let app = service();
+    let response = request(app.clone(), "POST", "/v1/issuer-entities", Some(json!({
+        "organization_id":"org-1", "issuer_id":"did:example:shared-fields", "display_name":"Original",
+        "description":"Keep until cleared", "metadata":{"note":"public"}
+    }))).await;
+    assert_eq!(response.status(), 200);
+    let issuer = body(response).await;
+    let issuer_uri = format!("/v1/issuer-entities/{}", issuer["id"].as_str().unwrap());
+    let renamed = request(
+        app.clone(),
+        "PATCH",
+        &issuer_uri,
+        Some(json!({"organization_id":"org-1","display_name":"Renamed"})),
+    )
+    .await;
+    assert_eq!(renamed.status(), 200);
+    assert_eq!(body(renamed).await["description"], "Keep until cleared");
+    let cleared = request(
+        app.clone(),
+        "PATCH",
+        &issuer_uri,
+        Some(json!({"organization_id":"org-1","description":null})),
+    )
+    .await;
+    assert_eq!(cleared.status(), 200);
+    assert!(body(cleared).await.get("description").is_none());
+    let before = body(request(app.clone(), "GET", &issuer_uri, None).await).await;
+    for (patch, status) in [
+        (json!({"organization_id":"org-1"}), 422),
+        (json!({"description":null}), 422),
+        (json!({"organization_id":"org-1","unknown":true}), 422),
+        (
+            json!({"organization_id":"other","display_name":"Forbidden"}),
+            404,
+        ),
+        (
+            json!({"organization_id":"org-1","compliance_status":"REVOKED"}),
+            422,
+        ),
+    ] {
+        assert_eq!(
+            request(app.clone(), "PATCH", &issuer_uri, Some(patch))
+                .await
+                .status(),
+            status
+        );
+        assert_eq!(
+            body(request(app.clone(), "GET", &issuer_uri, None).await).await,
+            before
+        );
+    }
+    let created = request(
+        app.clone(),
+        "POST",
+        "/v1/trust-profiles",
+        Some(
+            json!({"organization_id":"org-1","name":"Relationships","supported_formats":["mdoc"]}),
+        ),
+    )
+    .await;
+    assert_eq!(created.status(), 200);
+    let profile = body(created).await;
+    let list_uri = format!(
+        "/v1/trust-profiles/{}/issuers",
+        profile["id"].as_str().unwrap()
+    );
+    let attached = request(
+        app.clone(),
+        "POST",
+        &list_uri,
+        Some(json!({"issuer_id":issuer["id"]})),
+    )
+    .await;
+    assert_eq!(attached.status(), 200);
+    let relationship = body(attached).await;
+    let uri = format!("{}/{}", list_uri, relationship["id"].as_str().unwrap());
+    let updated = request(
+        app.clone(),
+        "PATCH",
+        &uri,
+        Some(json!({"trust_level":50,"metadata":{"note":"kept"}})),
+    )
+    .await;
+    assert_eq!(updated.status(), 200);
+    assert_eq!(body(updated).await["trust_level"], 50);
+    let before = body(request(app.clone(), "GET", &list_uri, None).await).await;
+    for patch in [
+        json!({}),
+        json!({"unknown":true}),
+        json!({"trust_level":null}),
+        json!({"trust_level":101}),
+    ] {
+        assert_eq!(
+            request(app.clone(), "PATCH", &uri, Some(patch))
+                .await
+                .status(),
+            422
+        );
+        assert_eq!(
+            body(request(app.clone(), "GET", &list_uri, None).await).await,
+            before
+        );
+    }
+}
