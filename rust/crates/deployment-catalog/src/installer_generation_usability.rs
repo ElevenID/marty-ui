@@ -107,13 +107,10 @@ pub(crate) fn current_startup_usability(
         &view.journal().runtime().ok_or(REFUSED)?.engine_id,
     )?
     .ok_or(REFUSED)?;
+    // load_verified authenticates the selected generation's application model.
+    // The separately authenticated maintenance session also retains setup roles
+    // with original secret inputs, so it has a different secret closure.
     let saved = installer_doctor::load_session(view, installation)?;
-    generation::verify_model(
-        installation,
-        &binding,
-        &saved.model,
-        binding.network_id.as_deref(),
-    )?;
     let pending = tx::has_pending_activation(view, installation, &binding)?;
     let material = if pending {
         None
@@ -165,6 +162,10 @@ pub(crate) fn current_startup_usability(
     view.require_unchanged()?;
     Ok(result)
 }
+
+#[cfg(test)]
+#[path = "installer_generation_usability_session_tests.rs"]
+mod session_tests;
 
 #[cfg(test)]
 mod tests {
