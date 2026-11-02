@@ -114,9 +114,11 @@ async function requireCurrentIssuerServiceReady(page, {
   const template = await requireJson(page,
     `/v1/credential-templates/${encodeURIComponent(credentialTemplateId)}`,
     {}, 'Load pre-offer Credential Template');
+  const issuerFormat = template?.credential_payload_format === 'w3c_vcdm_v2_sd_jwt'
+    ? 'SD_JWT_VC' : template?.credential_payload_format;
   if (template?.id !== credentialTemplateId || template.organization_id !== organizationId
       || String(template.status || '').toUpperCase() !== 'ACTIVE'
-      || !['VC_JWT', 'SD_JWT_VC'].includes(template.credential_payload_format)
+      || !['VC_JWT', 'SD_JWT_VC'].includes(issuerFormat)
       || typeof template.issuer_did !== 'string' || !template.issuer_did
       || (issuerDid && template.issuer_did !== issuerDid)) {
     throw new Error('Pre-offer issuer tuple does not match the ACTIVE Credential Template');
@@ -124,11 +126,11 @@ async function requireCurrentIssuerServiceReady(page, {
   const response = await browserJson(page,
     `/v1/signing-keys/config/validate-current?organization_id=${encodeURIComponent(organizationId)}`,
     { method: 'POST', body: JSON.stringify({ organization_id: organizationId,
-      issuer_did: template.issuer_did, credential_format: template.credential_payload_format }) });
+      issuer_did: template.issuer_did, credential_format: issuerFormat }) });
   const ready = response.body;
   if (!response.ok || ready?.ok !== true || ready.organization_id !== organizationId
       || ready.issuer_did !== template.issuer_did
-      || ready.credential_format !== template.credential_payload_format
+      || ready.credential_format !== issuerFormat
       || ready.key_purpose !== 'vc_jwt_issuer' || ready.algorithm !== 'ES256'
       || ready.key_read !== true || ready.signer_capable !== true
       || ready.signature_verified !== true
@@ -137,7 +139,7 @@ async function requireCurrentIssuerServiceReady(page, {
     throw new Error(`Stored issuer signing service is unavailable before offer (HTTP ${response.status})`);
   }
   return { serviceId: ready.service_id, keyReference: ready.key_reference,
-    issuerDid: ready.issuer_did, credentialFormat: ready.credential_format };
+    issuerDid: ready.issuer_did, credentialFormat: issuerFormat };
 }
 
 async function selectOrganization(page, { organizationId, consoleOrigin }) {

@@ -43,6 +43,12 @@ test('stored issuer service readiness binds the active tuple before any offer', 
   assert.deepEqual(JSON.parse(page.requests[1].requestOptions.body), {
     organization_id: 'org-1', issuer_did: tuple.issuerDid, credential_format: 'SD_JWT_VC',
   });
+  const d04 = fakePage([{ok:true,status:200,body:{...template,credential_payload_format:'w3c_vcdm_v2_sd_jwt'}},
+    {ok:true,status:200,body:ready}]);
+  assert.equal((await requireCurrentIssuerServiceReady(d04,tuple)).credentialFormat,'SD_JWT_VC');
+  assert.equal(JSON.parse(d04.requests[1].requestOptions.body).credential_format,'SD_JWT_VC');
+  await assert.rejects(requireCurrentIssuerServiceReady(fakePage([{ok:true,status:200,
+    body:{...template,credential_payload_format:'unknown_format'}}]),tuple),/issuer tuple/);
   await assert.rejects(requireCurrentIssuerServiceReady(fakePage([
     { ok: true, status: 200, body: template }, { ok: false, status: 503, body: { ok: false } },
   ]), tuple), /unavailable before offer/);
