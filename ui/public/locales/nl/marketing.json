@@ -1,80 +1,81 @@
 {
   "valueProposition": {
-    "headline": "Identiteitsverificatie is niet genoeg.",
-    "subheadline": "Bouw verifieerbare identiteitsinfrastructuur.",
-    "extendedSubheadline": "Geef uit, verifieer en beheer referenties—gebouwd voor EUDI Wallets, Open Badges en enterprise vertrouwen.",
-    "primaryCTA": "Gratis starten",
-    "secondaryCTA": "Waarom verifieerbare identiteit"
+    "headline": "Marty: identiteitsprocessen die u zelf beheert.",
+    "subheadline": "Richt vertrouwen in rond uw proces.",
+    "extendedSubheadline": "Kies een afgebakende toepassing, test met synthetische gegevens en beheer de afgesproken installatie zelf of met uw gekozen partner.",
+    "primaryCTA": "Ontwikkelaarsdocumentatie bekijken",
+    "secondaryCTA": "Verificatie-API bekijken",
+    "supporting": "Draagbare credentials, verificatie van aanvragers en documenten, en Travel Trust."
   },
   "idvComparison": {
-    "title": "Van IDV naar verifieerbare identiteit",
-    "takeaway": "ElevenID LLC vervangt herhaalde verificatie door herbruikbaar vertrouwen.",
+    "title": "Plan de vertrouwensuitwisseling",
+    "takeaway": "Bepaal welke vragen uw proces moet beantwoorden en beoordeel de gekozen implementatie.",
     "traditional": {
-      "title": "Traditionele IDV",
-      "oneTimeChecks": "Eenmalige documentcontroles",
-      "vendorControlled": "Door leverancier gecontroleerde identiteitsgegevens",
-      "biometric": "Biometrische beslissingsuitvoer",
-      "closedAPIs": "Gesloten, propriëtaire API's",
-      "manualTrust": "Handmatige vertrouwensconfiguratie",
-      "reVerification": "Hernieuwde verificatie overal"
+      "title": "Te beantwoorden vragen",
+      "oneTimeChecks": "Welke claim moet worden gecontroleerd?",
+      "vendorControlled": "Wie beheert gegevens en sleutels?",
+      "biometric": "Hoe is de aanbieder aan de credential gekoppeld?",
+      "closedAPIs": "Welke interfaces en profielen zijn nodig?",
+      "manualTrust": "Welke uitgevers en regels worden vertrouwd?",
+      "reVerification": "Wanneer kan een credential worden hergebruikt?"
     },
     "elevenid": {
-      "title": "ElevenID LLC",
-      "reusable": "Herbruikbare verifieerbare referenties",
-      "holderControlled": "Door houder gecontroleerde digitale portemonnees",
-      "cryptographic": "Cryptografische bewijzen",
-      "openStandards": "Open standaarden (W3C VC, OID4VC, ISO)",
-      "governedTrust": "Bestuurde vertrouwensregisters",
-      "reuseAcross": "Identiteitshergebruik over ecosystemen heen"
+      "title": "Marty-evaluatie",
+      "reusable": "Gedefinieerde credential- en documentinvoer",
+      "holderControlled": "Beheer door klant of gekozen partner",
+      "cryptographic": "Profielspecifieke tests van houderbinding",
+      "openStandards": "Gedocumenteerde interfaces en geteste combinaties",
+      "governedTrust": "Expliciete configuratie van uitgevers en beleid",
+      "reuseAcross": "Hergebruik beoordeeld binnen een afgesproken proces"
     }
   },
   "eudiOpenBadges": {
-    "title": "Gebouwd voor EUDI Wallets en verifieerbare referenties",
-    "verifyCredentials": "Verifieer verifieerbare referenties—niet alleen documenten.",
-    "trustIssuers": "Vertrouw uitgevers—niet databases.",
-    "walletFirst": "Wallet-first door ontwerp—EUDI-klaar.",
-    "quote": "IDV-platforms stoppen bij een eenmalige beslissing. ElevenID LLC produceert cryptografisch verifieerbare resultaten die kunnen worden hergebruikt over portemonnees, ecosystemen en vertrouwensregisters heen."
+    "title": "Onderzoek de samenwerking tussen wallets en credentials",
+    "verifyCredentials": "Bepaal het benodigde credentialformaat en presentatieprofiel.",
+    "trustIssuers": "Bepaal vertrouwde uitgevers en acceptatieregels.",
+    "walletFirst": "Test de gekozen wallets samen met de geselecteerde versie.",
+    "quote": "Een standaard is een vertrekpunt. Controleer de exacte versie en het profiel; compatibiliteit en conformiteit vereisen eigen bewijs."
   },
   "organizationOutcomes": {
-    "title": "Waarom dit belangrijk is voor organisaties",
-    "reduceKYC": "Verminder herhaalde KYC-kosten met herbruikbare referenties",
-    "eudiReady": "Bereid u voor op EUDI Wallet-acceptatie",
-    "avoidLockIn": "Vermijd vendor lock-in met open standaarden",
-    "supportBadges": "Ondersteun Open Badges, personeelsreferenties en overheids-ID's in één systeem"
+    "title": "Wat u kunt beoordelen",
+    "reduceKYC": "Onderzoek hergebruik van credentials in een afgesproken proces",
+    "eudiReady": "Beoordeel reisdocumenten en regels voor de reis",
+    "avoidLockIn": "Maak controles van aanvragers en documenten expliciet",
+    "supportBadges": "Beheerd door klant of partner"
   },
   "audienceRouting": {
     "title": "Kies uw pad",
-    "subtitle": "Kies uw toegangspunt—enterprise, overheid of ontwikkelaars.",
+    "subtitle": "Verken Marty rechtstreeks of via een partner of OEM-integratie.",
     "enterprise": {
       "title": "Enterprise",
-      "description": "Verminder herhaalde KYC, schakel partnerinteroperabiliteit in en beheer vertrouwen op schaal.",
+      "description": "Bepaal een nuttig credential- of documentproces en het verantwoordelijke team.",
       "cta": "Verken Enterprise"
     },
     "government": {
       "title": "Overheid",
-      "description": "EUDI-klare infrastructuur voor ISO-referenties, vertrouwenslijsten en gereguleerde acceptatie.",
+      "description": "Beoordeel vertrouwensbronnen, vereiste profielen en installatievoorwaarden.",
       "cta": "Verken Overheid"
     },
     "developers": {
       "title": "Ontwikkelaars",
-      "description": "Docs, SDK's en quickstarts voor VC-uitgifte en -verificatie.",
+      "description": "Bekijk API’s, broncode en integratievereisten voor het gekozen proces.",
       "cta": "Lees documentatie"
     }
   },
   "proofStrip": {
-    "title": "Gebouwd op bewezen fundamenten",
-    "interoperability": "Interoperabiliteit",
-    "offlineVerification": "Offline verificatie",
-    "deployment": "Implementatie",
+    "title": "Een duidelijk product en beheermodel",
+    "interoperability": "Reikwijdte",
+    "offlineVerification": "Evaluatie",
+    "deployment": "Beheer",
     "keySecurity": "Sleutelbeveiliging",
-    "compliance": "Naleving"
+    "compliance": "Bewijs"
   },
   "infrastructure": {
-    "title": "Waarom infrastructuur prijzen per controle verslaat",
-    "commodity": "Verificatie wordt een commodity",
-    "orchestration": "Vertrouwensorkestratie neemt toe in waarde",
-    "reusable": "Herbruikbare referenties verlagen langetermijnkosten",
-    "preventLockIn": "Standaarden voorkomen vendor lock-in"
+    "title": "Begin met een nuttig proces",
+    "commodity": "Spreek invoer, vertrouwensbronnen en verwachte uitkomst af",
+    "orchestration": "Beheerd door klant of partner",
+    "reusable": "Eerst evalueren met synthetische gegevens",
+    "preventLockIn": "Breid de scope uit wanneer bewijs dat ondersteunt"
   },
   "landingPage": {
     "loading": "Laden...",
@@ -82,15 +83,15 @@
     "features": {
       "issuance": {
         "title": "Uitgifte",
-        "description": "Geef op standaarden gebaseerde referenties uit met cryptografische handtekeningen en beleidshandhaving."
+        "description": "Bepaal het benodigde credentialformaat en presentatieprofiel."
       },
       "verification": {
         "title": "Verificatie",
-        "description": "Verifieer referenties tegen vertrouwensankers met intrekkingscontrole en selectieve openbaarmaking."
+        "description": "Bepaal vertrouwde uitgevers en acceptatieregels."
       },
       "governance": {
         "title": "Bestuur",
-        "description": "Beheer vertrouwen, beleid en implementatie centraal—zonder verificatiecode te wijzigen."
+        "description": "Expliciete configuratie van vertrouwen en sleutels"
       }
     },
     "identityProblem": {
@@ -105,8 +106,8 @@
     },
     "solvesIt": {
       "title": "Hoe ElevenID LLC dit oplost",
-      "intro": "Bestuur identiteit met vier primitieven: vertrouwensprofielen, referentiesjablonen, presentatiebeleid en flows.",
-      "subheading": "Beleid is configuratie, geen code. Eindpunten voeren centraal bestuurde vertrouwens- en openbaarmakingsregels uit zonder herimplementatie."
+      "intro": "Spreek invoer, vertrouwensbronnen en verwachte uitkomst af",
+      "subheading": "Een standaard is een vertrekpunt. Controleer de exacte versie en het profiel; compatibiliteit en conformiteit vereisen eigen bewijs."
     },
     "howItWorks": {
       "title": "Hoe het werkt",
@@ -115,17 +116,17 @@
     },
     "standards": {
       "title": "Op standaarden gebaseerde architectuur",
-      "subtitle": "Standaarden zijn geen integraties. Ze zijn het product.",
-      "description": "Deze lagen stellen ElevenID LLC in staat om samen te werken over overheden, portemonnees en ondernemingen heen zonder aangepaste integraties.",
+      "subtitle": "Standaarden sturen het ontwerp. Tests tonen compatibiliteit aan.",
+      "description": "Een standaard is een vertrekpunt. Controleer de exacte versie en het profiel; compatibiliteit en conformiteit vereisen eigen bewijs.",
       "cta": "Verken standaarden"
     },
     "startFirst": {
       "title": "Wat doet u eerst?",
-      "description": "Kies een startpunt. U kunt uitbreiden naar een volledig ecosysteem wanneer u klaar bent.",
+      "description": "Kies een afgebakende toepassing, test met synthetische gegevens en beheer de afgesproken installatie zelf of met uw gekozen partner.",
       "cards": {
         "verify": {
           "title": "Referenties verifiëren",
-          "description": "Verifieer EUDI-portemonnees, Open Badges en ISO-referenties."
+          "description": "Bepaal het benodigde credentialformaat en presentatieprofiel."
         },
         "issue": {
           "title": "Referenties uitgeven",
@@ -133,53 +134,53 @@
         },
         "offline": {
           "title": "Offline / faciliteit",
-          "description": "Verifieer bij controlepunten met beperkte connectiviteit."
+          "description": "Offline- en headless-profielen moeten worden gevalideerd"
         },
         "wallet": {
           "title": "Wallet-ervaring",
-          "description": "Geef gebruikers een portemonnee om referenties te bewaren en te presenteren."
+          "description": "Test de gekozen wallets samen met de geselecteerde versie."
         }
       },
       "notSure": "Niet zeker?",
       "startWithVerificationApi": "Begin met verificatie-API"
     },
     "products": {
-      "title": "Producten & mogelijkheden",
-      "description": "Een compleet platform—van uitgifte tot verificatie en bestuur.",
+      "title": "Marty-componenten",
+      "description": "Onderdelen van één Marty-product. Beschikbaarheid en scope hangen af van de gekozen versie en overeenkomst.",
       "viewDetails": "Details bekijken",
-      "viewAll": "Alle producten bekijken"
+      "viewAll": "Marty-componenten bekijken"
     },
     "trustSignals": {
-      "title": "Enterprise-grade infrastructuur",
+      "title": "Beoordeling van beveiliging en installatie",
       "security": {
         "title": "Beveiliging",
-        "item1": "Enterprise-grade cryptografische validatie",
-        "item2": "PKI en intrekkingsbeheer",
-        "item3": "HSM en key vault-integratie"
+        "item1": "Expliciete configuratie van vertrouwen en sleutels",
+        "item2": "Test handtekeningen, geldigheid en foutafhandeling",
+        "item3": "Beoordeel sleutelopslag voor de gekozen installatie"
       },
       "infrastructure": {
         "title": "Infrastructuur",
-        "item1": "Offline-first mogelijkheid (72h cache)",
-        "item2": "Hoge beschikbaarheid SaaS-implementatie",
-        "item3": "Zelf-gehoste opties voor soevereiniteit",
-        "item4": "Horizontale schaalbaarheid en load balancing",
-        "item5": "Gebouwd met AI-ondersteunde ontwikkelingsworkflows om hoge kwaliteit tegen lagere kosten te handhaven."
+        "item1": "Beheerd door klant of partner",
+        "item2": "Installatievereisten voor de specifieke versie",
+        "item3": "Offline- en headless-profielen moeten worden gevalideerd",
+        "item4": "Geen inbegrepen productiebeheer of beschikbaarheids-SLA",
+        "item5": "Gebruik de gedocumenteerde kanalen voor fouten en kwetsbaarheden"
       },
       "compliance": {
-        "title": "Naleving",
-        "item1": "Implementeert ICAO 9303",
-        "item2": "Implementeert ISO 18013-5 (mDoc)",
-        "item3": "AVG en privacy by design",
-        "item4": "Selectieve openbaarmaking en gegevensminimalisatie"
+        "title": "Acceptatievereisten",
+        "item1": "Bepaal het benodigde credentialformaat en presentatieprofiel.",
+        "item2": "Bewijs voor de specifieke versie",
+        "item3": "Keur verwerking van echte gegevens afzonderlijk goed",
+        "item4": "Bevestig acceptatievereisten met de verantwoordelijke organisatie"
       }
     },
     "proofStrip": {
       "claims": {
-        "w3c": "W3C VC / SD-JWT / OID4VP",
-        "offlineCache": "72-uurs offline cache",
-        "deployment": "SaaS + Zelf-gehost",
-        "keySecurity": "HSM / Vault-integratie",
-        "auditLogs": "Onveranderlijke auditlogboeken"
+        "w3c": "Eén Marty-product, drie toepassingen",
+        "offlineCache": "Eerst evalueren met synthetische gegevens",
+        "deployment": "Beheerd door klant of partner",
+        "keySecurity": "Expliciete configuratie van vertrouwen en sleutels",
+        "auditLogs": "Bewijs voor de specifieke versie"
       }
     },
     "portals": {
@@ -189,12 +190,19 @@
     },
     "footer": {
       "title": "Klaar om te beginnen?",
-      "description": "Begin gratis, of vergelijk plannen voor uw organisatie.",
-      "viewPricing": "Bekijk prijzen"
+      "description": "Bekijk de documentatie en een synthetische demonstratie en bespreek daarna het benodigde proces en de installatie.",
+      "viewPricing": "Commerciële scope bekijken",
+      "descriptionComingSoon": "Bekijk de documentatie en een synthetische demonstratie en bespreek daarna het benodigde proces en de installatie."
     },
     "orientation": {
       "title": "Nieuw bij verifieerbare identiteit?",
       "cta": "Hoe het werkt"
     }
+  },
+  "protocol": {
+    "heroTitle": "Gebaseerd op een open conceptprotocol",
+    "badge": "Open conceptprotocol",
+    "standardsSubtitle": "Een standaard is een vertrekpunt. Controleer de exacte versie en het profiel; compatibiliteit en conformiteit vereisen eigen bewijs.",
+    "componentsSubtitle": "Een standaard is een vertrekpunt. Controleer de exacte versie en het profiel; compatibiliteit en conformiteit vereisen eigen bewijs."
   }
 }

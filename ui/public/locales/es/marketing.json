@@ -1,73 +1,74 @@
 {
   "valueProposition": {
-    "headline": "La verificación de identidad no es suficiente.",
-    "subheadline": "Construye infraestructura de identidad verificable.",
-    "extendedSubheadline": "Emite, verifica y gobierna credenciales: diseñado para carteras EUDI, Open Badges y confianza empresarial.",
-    "primaryCTA": "Empezar gratis",
-    "secondaryCTA": "Por qué la identidad verificable"
+    "headline": "Marty: flujos de identidad que tú operas.",
+    "subheadline": "Construye confianza en tu flujo de trabajo.",
+    "extendedSubheadline": "Define un caso de uso, evalúalo con datos sintéticos y opera el despliegue acordado con tu equipo o un socio elegido.",
+    "primaryCTA": "Explorar la documentación",
+    "secondaryCTA": "Ver la API de verificación",
+    "supporting": "Credenciales portables, verificación de solicitantes y documentos, y Travel Trust."
   },
   "idvComparison": {
-    "title": "De IDV a identidad verificable",
-    "takeaway": "ElevenID LLC reemplaza verificaciones repetidas por confianza reutilizable.",
+    "title": "Planifica el intercambio de confianza",
+    "takeaway": "Define qué debe resolver tu flujo y después evalúa la implementación elegida.",
     "traditional": {
-      "title": "IDV tradicional",
-      "oneTimeChecks": "Verificaciones de documentos puntuales",
-      "vendorControlled": "Datos de identidad controlados por el proveedor",
-      "biometric": "Resultados de decisión biométrica",
-      "closedAPIs": "APIs cerradas y propietarias",
-      "manualTrust": "Configuración manual de confianza",
-      "reVerification": "Reverificación en todas partes"
+      "title": "Preguntas por resolver",
+      "oneTimeChecks": "¿Qué afirmación debe verificarse?",
+      "vendorControlled": "¿Quién opera los datos y las claves?",
+      "biometric": "¿Cómo se vincula al presentador con la credencial?",
+      "closedAPIs": "¿Qué interfaces y perfiles se necesitan?",
+      "manualTrust": "¿Qué emisores y reglas son de confianza?",
+      "reVerification": "¿Cuándo puede reutilizarse una credencial?"
     },
     "elevenid": {
-      "title": "ElevenID LLC",
-      "reusable": "Credenciales verificables reutilizables",
-      "holderControlled": "Carteras digitales controladas por el titular",
-      "cryptographic": "Pruebas criptográficas",
-      "openStandards": "Estándares abiertos (W3C VC, OID4VC, ISO)",
-      "governedTrust": "Registros de confianza gobernados",
-      "reuseAcross": "Reutilización de identidad entre ecosistemas"
+      "title": "Evaluación de Marty",
+      "reusable": "Entradas de credenciales y documentos definidas",
+      "holderControlled": "Operación por el cliente o su socio elegido",
+      "cryptographic": "Pruebas de vinculación del titular según el perfil",
+      "openStandards": "Interfaces documentadas y combinaciones probadas",
+      "governedTrust": "Configuración explícita de confianza y políticas",
+      "reuseAcross": "Reutilización evaluada en un flujo acordado"
     }
   },
   "eudiOpenBadges": {
-    "title": "Diseñado para carteras EUDI y credenciales verificables",
-    "verifyCredentials": "Verifica credenciales verificables—no solo documentos.",
-    "trustIssuers": "Confía en emisores—no en bases de datos.",
-    "walletFirst": "Wallet-first por diseño—listo para EUDI.",
-    "quote": "Las plataformas de IDV se quedan en una decisión puntual. ElevenID LLC produce resultados criptográficamente verificables que pueden reutilizarse en carteras, ecosistemas y registros de confianza."
+    "title": "Explora la interoperabilidad de carteras y credenciales",
+    "verifyCredentials": "Define el formato y el perfil de presentación necesarios.",
+    "trustIssuers": "Identifica emisores de confianza y reglas de aceptación.",
+    "walletFirst": "Prueba las carteras elegidas con la versión seleccionada.",
+    "quote": "Nombrar un estándar es solo el inicio. Revisa la versión y el perfil concretos; la compatibilidad y la conformidad requieren pruebas propias."
   },
   "audienceRouting": {
     "title": "Elige tu camino",
-    "subtitle": "Selecciona tu punto de entrada: empresa, gobierno o desarrolladores.",
+    "subtitle": "Explora Marty directamente o mediante un socio o una integración OEM.",
     "enterprise": {
       "title": "Empresa",
-      "description": "Reduce KYC repetido, habilita interoperabilidad con socios y gobierna la confianza a escala.",
+      "description": "Define un flujo útil de credenciales o documentos y el equipo que lo operará.",
       "cta": "Explorar empresa"
     },
     "government": {
       "title": "Gobierno",
-      "description": "Infraestructura lista para EUDI para credenciales ISO, listas de confianza y aceptación regulada.",
+      "description": "Revisa fuentes de confianza, perfiles requeridos y restricciones del despliegue.",
       "cta": "Explorar gobierno"
     },
     "developers": {
       "title": "Desarrolladores",
-      "description": "Docs, SDKs y guías rápidas para emisión y verificación de VC.",
+      "description": "Revisa las API, el código y los requisitos de integración del flujo elegido.",
       "cta": "Leer documentación"
     }
   },
   "organizationOutcomes": {
-    "title": "Por qué esto importa a las organizaciones",
-    "reduceKYC": "Reduce los costes de KYC repetido con credenciales reutilizables",
-    "eudiReady": "Prepárate para la aceptación de la cartera EUDI",
-    "avoidLockIn": "Evita el lock-in del proveedor con estándares abiertos",
-    "supportBadges": "Soporta Open Badges, credenciales laborales e IDs gubernamentales en un solo sistema"
+    "title": "Qué puedes evaluar",
+    "reduceKYC": "Evalúa la reutilización de credenciales en un flujo acordado",
+    "eudiReady": "Evalúa la confianza en documentos de viaje y las reglas del trayecto",
+    "avoidLockIn": "Define las verificaciones de solicitantes y documentos",
+    "supportBadges": "Operado por el cliente o su socio"
   },
   "proofStrip": {
-    "title": "Construido sobre bases probadas",
-    "interoperability": "Interoperabilidad",
-    "offlineVerification": "Verificación sin conexión",
-    "deployment": "Despliegue",
+    "title": "Un producto y modelo operativo definidos",
+    "interoperability": "Alcance",
+    "offlineVerification": "Evaluación",
+    "deployment": "Operación",
     "keySecurity": "Seguridad de claves",
-    "compliance": "Cumplimiento"
+    "compliance": "Evidencia"
   },
   "landingPage": {
     "loading": "Cargando...",
@@ -75,15 +76,15 @@
     "features": {
       "issuance": {
         "title": "Emisión",
-        "description": "Emite credenciales basadas en estándares con firmas criptográficas y aplicación de políticas."
+        "description": "Define el formato y el perfil de presentación necesarios."
       },
       "verification": {
         "title": "Verificación",
-        "description": "Verifica credenciales contra anclas de confianza con comprobación de revocación y divulgación selectiva."
+        "description": "Identifica emisores de confianza y reglas de aceptación."
       },
       "governance": {
         "title": "Gobernanza",
-        "description": "Gestiona confianza, políticas y despliegue de forma centralizada—sin cambiar el código del verificador."
+        "description": "Configuración explícita de confianza y claves"
       }
     },
     "identityProblem": {
@@ -98,8 +99,8 @@
     },
     "solvesIt": {
       "title": "Cómo lo resuelve ElevenID LLC",
-      "intro": "Gobierna la identidad con cuatro primitivas: perfiles de confianza, plantillas de credenciales, políticas de presentación y flujos.",
-      "subheading": "Las políticas son configuración, no código. Los endpoints ejecutan reglas de confianza y divulgación gobernadas centralmente sin re-despliegue."
+      "intro": "Acuerda entradas, fuentes de confianza y resultado esperado",
+      "subheading": "Nombrar un estándar es solo el inicio. Revisa la versión y el perfil concretos; la compatibilidad y la conformidad requieren pruebas propias."
     },
     "howItWorks": {
       "title": "Cómo funciona",
@@ -108,17 +109,17 @@
     },
     "standards": {
       "title": "Arquitectura basada en estándares",
-      "subtitle": "Los estándares no son integraciones. Son el producto.",
-      "description": "Estas capas permiten que ElevenID LLC interopere entre gobiernos, carteras y empresas sin integraciones a medida.",
+      "subtitle": "Los estándares guían el diseño. Las pruebas demuestran la compatibilidad.",
+      "description": "Nombrar un estándar es solo el inicio. Revisa la versión y el perfil concretos; la compatibilidad y la conformidad requieren pruebas propias.",
       "cta": "Explorar estándares"
     },
     "startFirst": {
       "title": "¿Qué estás haciendo primero?",
-      "description": "Elige un punto de partida. Luego puedes ampliar a un ecosistema completo cuando estés listo.",
+      "description": "Define un caso de uso, evalúalo con datos sintéticos y opera el despliegue acordado con tu equipo o un socio elegido.",
       "cards": {
         "verify": {
           "title": "Verificar credenciales",
-          "description": "Verifica carteras EUDI, Open Badges y credenciales ISO."
+          "description": "Define el formato y el perfil de presentación necesarios."
         },
         "issue": {
           "title": "Emitir credenciales",
@@ -126,53 +127,53 @@
         },
         "offline": {
           "title": "Sin conexión / instalaciones",
-          "description": "Verifica en puntos de control con conectividad limitada."
+          "description": "Los perfiles sin conexión y sin interfaz requieren validación"
         },
         "wallet": {
           "title": "Experiencia de cartera",
-          "description": "Ofrece a los usuarios una cartera para guardar y presentar credenciales."
+          "description": "Prueba las carteras elegidas con la versión seleccionada."
         }
       },
       "notSure": "¿No estás seguro?",
       "startWithVerificationApi": "Empieza con la API de verificación"
     },
     "products": {
-      "title": "Productos y capacidades",
-      "description": "Una plataforma completa: desde emisión hasta verificación y gobernanza.",
+      "title": "Componentes de Marty",
+      "description": "Componentes de un solo producto Marty. La disponibilidad y el alcance dependen de la versión y del acuerdo.",
       "viewDetails": "Ver detalles",
-      "viewAll": "Ver todos los productos"
+      "viewAll": "Explorar componentes de Marty"
     },
     "trustSignals": {
-      "title": "Infraestructura de nivel empresarial",
+      "title": "Revisión de seguridad y despliegue",
       "security": {
         "title": "Seguridad",
-        "item1": "Validación criptográfica de nivel empresarial",
-        "item2": "Gestión de PKI y revocación",
-        "item3": "Integración con HSM y bóveda de claves"
+        "item1": "Configuración explícita de confianza y claves",
+        "item2": "Prueba firmas, vencimiento y gestión de errores",
+        "item3": "Revisa el almacenamiento de claves del despliegue"
       },
       "infrastructure": {
         "title": "Infraestructura",
-        "item1": "Capacidad offline-first (caché de 72h)",
-        "item2": "Despliegue SaaS de alta disponibilidad",
-        "item3": "Opciones self-hosted para soberanía",
-        "item4": "Escalado horizontal y balanceo de carga",
-        "item5": "Desarrollado con flujos asistidos por IA para mantener alta calidad a menor coste."
+        "item1": "Operado por el cliente o su socio",
+        "item2": "Requisitos de instalación de la versión concreta",
+        "item3": "Los perfiles sin conexión y sin interfaz requieren validación",
+        "item4": "No incluye operación de producción ni SLA de disponibilidad",
+        "item5": "Usa los canales documentados para incidencias y vulnerabilidades"
       },
       "compliance": {
-        "title": "Cumplimiento",
-        "item1": "Implementa ICAO 9303",
-        "item2": "Implementa ISO 18013-5 (mDoc)",
-        "item3": "GDPR y privacidad por diseño",
-        "item4": "Divulgación selectiva y minimización de datos"
+        "title": "Requisitos de aceptación",
+        "item1": "Define el formato y el perfil de presentación necesarios.",
+        "item2": "Evidencia de la versión concreta",
+        "item3": "Aprueba por separado el uso de datos reales",
+        "item4": "Confirma los requisitos con la organización responsable"
       }
     },
     "proofStrip": {
       "claims": {
-        "w3c": "W3C VC / SD-JWT / OID4VP",
-        "offlineCache": "Caché offline de 72 horas",
-        "deployment": "SaaS + Self-hosted",
-        "keySecurity": "Integración HSM / Vault",
-        "auditLogs": "Registros de auditoría inmutables"
+        "w3c": "Un producto Marty, tres casos de uso",
+        "offlineCache": "Primero, evaluación con datos sintéticos",
+        "deployment": "Operado por el cliente o su socio",
+        "keySecurity": "Configuración explícita de confianza y claves",
+        "auditLogs": "Evidencia de la versión concreta"
       }
     },
     "portals": {
@@ -182,12 +183,26 @@
     },
     "footer": {
       "title": "¿Listo para empezar?",
-      "description": "Empieza gratis o compara planes para tu organización.",
-      "viewPricing": "Ver precios"
+      "description": "Explora la documentación y una demostración sintética; después define el flujo y despliegue necesarios.",
+      "viewPricing": "Revisar el alcance comercial",
+      "descriptionComingSoon": "Explora la documentación y una demostración sintética; después define el flujo y despliegue necesarios."
     },
     "orientation": {
       "title": "¿Nuevo en identidad verificable?",
       "cta": "Cómo funciona"
     }
+  },
+  "protocol": {
+    "heroTitle": "Basado en un protocolo abierto en borrador",
+    "badge": "Protocolo abierto en borrador",
+    "standardsSubtitle": "Nombrar un estándar es solo el inicio. Revisa la versión y el perfil concretos; la compatibilidad y la conformidad requieren pruebas propias.",
+    "componentsSubtitle": "Nombrar un estándar es solo el inicio. Revisa la versión y el perfil concretos; la compatibilidad y la conformidad requieren pruebas propias."
+  },
+  "infrastructure": {
+    "title": "Empieza con un flujo útil",
+    "commodity": "Acuerda entradas, fuentes de confianza y resultado esperado",
+    "orchestration": "Operado por el cliente o su socio",
+    "reusable": "Primero, evaluación con datos sintéticos",
+    "preventLockIn": "Amplía el alcance cuando las pruebas lo respalden"
   }
 }

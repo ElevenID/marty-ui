@@ -32,7 +32,7 @@ function StandardsPage() {
       {/* SEO Meta Tags */}
       <SEOHead
         title="Identity Standards & Interoperability"
-        description="Standards-based verifiable identity infrastructure built on ISO 18013-5, W3C VC, EUDI Wallet, OpenID4VP, and Open Badges. Portable, interoperable, and future-proof."
+        description="Understand the standards and profiles relevant to Marty. Evaluate compatibility, conformance, and acceptance requirements for the exact release and integration."
         canonicalPath="/standards"
         keywords={['identity standards', 'ISO 18013-5', 'W3C Verifiable Credentials', 'EUDI Wallet', 'OpenID4VP', 'Open Badges', 'interoperability']}
       />
@@ -62,17 +62,16 @@ function StandardsPage() {
           Why Standards Matter for Your Organization
         </Typography>
         <Typography variant="body1" paragraph sx={{ fontSize: '1.05rem', lineHeight: 1.7 }}>
-          Standards aren&apos;t just technical specifications—they&apos;re the foundation for interoperable, 
-          future-proof identity infrastructure.
+          Standards give issuers, holders, and verifiers a common vocabulary.
+          Practical compatibility still depends on the version, profile, implementation, and operating environment.
         </Typography>
         <Typography variant="body1" paragraph sx={{ fontSize: '1.05rem', lineHeight: 1.7 }}>
-          <strong>Standards prevent vendor lock-in.</strong> When you build on international standards like ISO 18013 
-          and W3C Verifiable Credentials, your credentials work across different wallets, issuers, and verifiers—not 
-          just within one vendor&apos;s ecosystem.
+          <strong>Standards support portability.</strong> Test the specific wallet, issuer, and verifier combination.
+          A shared standard name alone does not demonstrate that two systems interoperate.
         </Typography>
         <Typography variant="body1" paragraph sx={{ fontSize: '1.05rem', lineHeight: 1.7 }}>
-          <strong>Standards reduce risk.</strong> Government regulations (like eIDAS 2.0 in the EU) are increasingly 
-          mandating standards-based identity systems. Building on standards today means compliance tomorrow.
+          <strong>Acceptance requirements need their own review.</strong> A standard reference or protocol mapping
+          is not certification, regulatory approval, or an assurance that a deployment meets an organization&apos;s obligations.
         </Typography>
         <Typography variant="body1" sx={{ fontSize: '1.05rem', lineHeight: 1.7 }}>
           <strong>Standards save engineering time.</strong> Instead of building custom protocols for credential 
@@ -179,18 +178,16 @@ function StandardsPage() {
           Standards-First Architecture
         </Typography>
         <Typography variant="body1" sx={{ maxWidth: 800, mx: 'auto', mb: 2 }}>
-          ElevenID LLC isn&apos;t a proprietary identity system—it&apos;s infrastructure that implements 
-          international standards. Your credentials work across vendors, jurisdictions, 
-          and use cases.
+          Marty uses versioned protocol and credential concepts. Review the selected release,
+          profile, and executed evidence before making an interoperability or production commitment.
         </Typography>
         <Typography variant="body2" sx={{ maxWidth: 700, mx: 'auto', mb: 3, opacity: 0.9 }}>
           Standards define the rules; ElevenID LLC enforces them through centrally governed policies 
           executed consistently across APIs, wallets, and devices.
         </Typography>
         <Typography variant="body2" sx={{ maxWidth: 700, mx: 'auto', mb: 3, opacity: 0.85 }}>
-          These standards are now unified in the <strong>Marty Identity Protocol (MIP)</strong>—an open, 
-          vendor-neutral specification that formalizes how trust, credentials, policies, and deployment 
-          work together.
+          The <strong>Marty Identity Protocol (MIP)</strong> is an open draft specification for trust,
+          credentials, policies, and deployment. Its mappings have their own status and do not certify a product or deployment.
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
           <Button

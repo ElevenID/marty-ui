@@ -40,7 +40,7 @@ function ProtocolPage() {
   return (
     <Box>
       <SEOHead
-        title="Marty Identity Protocol (MIP) — Open Standard"
+        title="Marty Identity Protocol (MIP) — Open Draft"
         description="MIP is a vendor-neutral, open specification for cryptographically verifiable digital identity management. Explore the interactive protocol map and learning curriculum."
         canonicalPath="/protocol"
         keywords={['Marty Identity Protocol', 'MIP', 'open standard', 'verifiable credentials', 'digital identity', 'open source', 'identity protocol']}
@@ -61,7 +61,7 @@ function ProtocolPage() {
       >
         <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1, mb: 2, flexWrap: 'wrap' }}>
           <Chip
-            label={t('protocol.badge', 'Open Standard')}
+            label={t('protocol.badge', 'Open Draft Protocol')}
             sx={{ bgcolor: 'rgba(255,255,255,0.15)', color: 'white', fontWeight: 700 }}
           />
           <Chip
@@ -82,7 +82,7 @@ function ProtocolPage() {
           fontWeight={800}
           sx={{ fontSize: { xs: '2rem', md: '2.75rem' } }}
         >
-          {t('protocol.heroTitle', 'Built on an Open Standard')}
+          {t('protocol.heroTitle', 'Built around an Open Draft Protocol')}
         </Typography>
         <Typography
           variant="h6"
@@ -265,7 +265,7 @@ function ProtocolPage() {
           {t('protocol.sectionStandards', 'Standards Alignment')}
         </Typography>
         <Typography variant="body1" color="text.secondary" textAlign="center" sx={{ mb: 4, maxWidth: 800, mx: 'auto' }}>
-          {t('protocol.standardsSubtitle', 'MIP unifies international identity standards into a single interoperability layer.')}
+          {t('protocol.standardsSubtitle', 'Review the exact release and profile. Protocol mappings do not certify a product or deployment.')}
         </Typography>
 
         <Grid container spacing={2} sx={{ maxWidth: 900, mx: 'auto' }}>
