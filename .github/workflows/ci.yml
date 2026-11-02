@@ -993,6 +993,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          # The PR merge ref may move after this event; checkout the immutable event SHA.
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Prefer cached Docker Hub images without restarting the runner daemon
         if: matrix.lane != 'renewal-unit'
