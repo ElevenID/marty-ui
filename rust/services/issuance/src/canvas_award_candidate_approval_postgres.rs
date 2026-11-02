@@ -1051,20 +1051,7 @@ fn has_canvas_marker(integration: &Value) -> bool {
     let Some(canvas) = integration.get("canvas").and_then(Value::as_object) else {
         return false;
     };
-    canvas_object_has_marker(canvas)
-}
-
-fn canvas_object_has_marker(canvas: &serde_json::Map<String, Value>) -> bool {
-    [
-        "canvas_platform_id",
-        "canvas_program_binding_id",
-        "canvas_account_id",
-    ]
-    .iter()
-    .any(|name| !text(canvas.get(*name)).is_empty())
-        || text(canvas.get("source"))
-            .to_ascii_lowercase()
-            .starts_with("canvas")
+    crate::canvas_issuance_guard::has_canvas_marker(canvas)
 }
 
 fn optional_text(value: Option<&Value>) -> Option<String> {
@@ -1099,6 +1086,42 @@ fn map_candidate_approval_error(
         }
         CanvasAwardCandidateApprovalError::ReadinessDrift => {
             CanvasApplicationApprovalError::NotReady
+        }
+    }
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::*;
+
+    #[test]
+    fn integration_marker_preserves_shape_text_and_prefix_admission() {
+        for integration in [
+            json!(null),
+            json!([]),
+            json!({}),
+            json!({"canvas":null}),
+            json!({"canvas":"canvas"}),
+            json!({"canvas":[]}),
+            json!({"canvas":{"source":"not-canvas","canvas_account_id":"  "}}),
+        ] {
+            assert!(!has_canvas_marker(&integration), "{integration}");
+        }
+        for field in [
+            "canvas_platform_id",
+            "canvas_program_binding_id",
+            "canvas_account_id",
+        ] {
+            for value in [json!(" id "), json!(7), json!(false), json!([]), json!({})] {
+                let integration = json!({"canvas":{field:value}});
+                assert!(has_canvas_marker(&integration), "{integration}");
+            }
+            for value in [json!(null), json!(" \t")] {
+                assert!(!has_canvas_marker(&json!({"canvas":{field:value}})));
+            }
+        }
+        for source in ["CANVAS", " Canvas-legacy ", "canvasAnything"] {
+            assert!(has_canvas_marker(&json!({"canvas":{"source":source}})));
         }
     }
 }

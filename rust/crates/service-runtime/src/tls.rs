@@ -352,6 +352,22 @@ impl From<OpenBaoTlsIdentityFiles> for RemoteTlsIdentityFiles {
     }
 }
 
+/// Assemble optional mutual TLS without changing caller admission or bounds.
+pub async fn workload_server_acceptor(
+    files: Option<&WorkloadTlsFiles>,
+    max_handshakes: usize,
+    timeout: Duration,
+) -> Result<Option<KeylessGrpcTlsAcceptor>, PlatformError> {
+    let Some(files) = files else {
+        return Ok(None);
+    };
+    let acceptor = files
+        .identity
+        .grpc_acceptor(&files.ca_certificate, max_handshakes, timeout)
+        .await?;
+    Ok(Some(acceptor))
+}
+
 impl WorkloadTlsFiles {
     /// Existing workload-client spelling and assembly shared by profile services.
     /// Callers choose whether their deployment requires an identity.

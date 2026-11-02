@@ -6,15 +6,15 @@
 use std::{env, fs, time::Duration};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use marty_service_contracts::integration_secret::{
+    valid_identity, MAX_CIPHERTEXT_BYTES, MAX_SECRET_BYTES, SCHEMA,
+};
 use reqwest::{Certificate, Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{PgConnection, Row};
 use zeroize::Zeroizing;
 
-const SCHEMA: &str = "marty.integration-secret-envelope/v1";
-const MAX_SECRET_BYTES: usize = 64 * 1024;
-const MAX_CIPHERTEXT_BYTES: usize = 200 * 1024;
 const MAX_STORED_BYTES: usize = MAX_CIPHERTEXT_BYTES + 1024;
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 
@@ -355,16 +355,6 @@ fn parse_envelope(value: Value) -> Result<Envelope, KmsIntegrationSecretError> {
         return Err(KmsIntegrationSecretError::InvalidEnvelope);
     }
     Ok(envelope)
-}
-
-fn valid_identity(organization_id: &str, secret_id: &str, provider: &str, purpose: &str) -> bool {
-    [organization_id, secret_id, provider, purpose]
-        .iter()
-        .all(|part| !part.trim().is_empty())
-        && organization_id.len() <= 256
-        && secret_id.len() <= 256
-        && provider.len() <= 80
-        && purpose.len() <= 80
 }
 
 #[cfg(test)]
