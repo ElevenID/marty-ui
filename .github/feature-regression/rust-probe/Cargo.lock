@@ -3720,6 +3720,7 @@ dependencies = [
  "marty-platform-clock",
  "marty-response-compat",
  "marty-schema-startup",
+ "marty-service-contracts",
  "marty-service-runtime",
  "marty-signing-grant",
  "marty-verification",
@@ -3851,6 +3852,10 @@ dependencies = [
 
 [[package]]
 name = "marty-schema-startup"
+version = "0.1.0"
+
+[[package]]
+name = "marty-service-contracts"
 version = "0.1.0"
 
 [[package]]
