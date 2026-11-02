@@ -1618,7 +1618,7 @@ function validateAuthoritativeEvidenceHeads(facts, requirements) {
   return heads;
 }
 
-async function validateAndActivateBinding(marty, bindingId) {
+async function validateAndActivateBinding(marty, bindingId, beforeActivation = () => {}) {
   const deadline = Date.now() + READINESS_TIMEOUT_MS;
   let validation = null;
   while (Date.now() < deadline) {
@@ -1635,6 +1635,7 @@ async function validateAndActivateBinding(marty, bindingId) {
     fail('binding_readiness_blocked', `Canvas binding readiness is blocked by: ${codes || 'unknown'}.`);
   }
   validateReadinessSnapshot(validation);
+  await beforeActivation();
   const activation = await marty.post(`/v1/integrations/canvas/program-bindings/${encodeURIComponent(bindingId)}/activate`, {}, [200]);
   validateReadinessSnapshot(activation, { requireActive: true });
   requireCondition(activation.config_version === validation.config_version, 'binding_readiness_version_changed', 'Canvas binding configuration changed between validation and activation.');
@@ -2377,7 +2378,8 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
 
     const binding = await createProgramBinding(marty, platformId, templates, fixtures, runSuffix);
     requireCondition(binding?.id, 'canvas_binding_create_failed', 'Marty did not create the typed Canvas program binding.');
-    state.binding=binding;owned.martyBindingId=String(binding.id);persistOwned();
+    state.binding=binding;owned.martyBindingId=String(binding.id);
+    owned.martyBindingActivationAttempted=false;persistOwned();
 
     markActive('instructor_deep_linking');
     const externalAssignment = await performInstructorDeepLinking(adminPage, adminCanvas, fixtures, String(tool.id), martyOrigin);
@@ -2396,7 +2398,9 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     markActive('standard_lti_13_install');
     const activationJobBaseline = await rosterJobBaseline(marty, organizationId, binding.id);
     state.bindingActivationPossible=true;owned.martyBindingActivationPossible=true;persistOwned();
-    const {activation}=await validateAndActivateBinding(marty, binding.id);
+    const {activation}=await validateAndActivateBinding(marty, binding.id,()=>{
+      owned.martyBindingActivationAttempted=true;persistOwned();
+    });
     const activationAt=await activatedRosterJobTimestamp(marty, organizationId, platformId,
       binding.id, activation.config_version);
     pass('standard_lti_13_install', `Stock Canvas installed LTI 1.3 and all ${BLOCKING_READINESS_CHECK_CODES.length} production blocking readiness checks passed.`);
@@ -2577,7 +2581,11 @@ async function reconcileCanvasPrelaunchApplicationAbsence(state) {
   const prefix=`?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`;
   const jobs=await completeBindingJobInventory(state.marty,organizationId,bindingId);
   const candidates=await state.marty.get(`/v1/integrations/canvas/canvas-award-candidates${prefix}`);
-  requireCondition(jobs.length>0 && Array.isArray(candidates) && candidates.length<100,
+  const noActivationAndNoJobs=state.owned?.martyBindingActivationAttempted===false
+    && Object.hasOwn(ownedBinding,'activated_at') && ownedBinding.activated_at===null
+    && jobs.length===0 && Array.isArray(candidates) && candidates.length===0;
+  requireCondition((jobs.length>0||noActivationAndNoJobs)
+    && Array.isArray(candidates) && candidates.length<100,
     'canvas_background_application_uncertain','Owned Canvas background inventory is incomplete.');
   requireCondition(jobs.every(job=>job.organization_id===organizationId&&job.binding_id===bindingId
     && job.platform_id===state.platformId&&job.target_type==='background_roster'

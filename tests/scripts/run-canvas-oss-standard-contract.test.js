@@ -42,6 +42,7 @@ const {
   readCompleteScopedJobInventory,
   waitForLatestRosterJob,
   activatedRosterJobTimestamp,
+  validateAndActivateBinding,
   reconcileCanvasPrelaunchApplicationAbsence,
   requireCanvasSetupMutationReconciliation,
   retireCanvasOwnedReferences,
@@ -138,6 +139,64 @@ test('prelaunch cleanup accepts only terminal owned roster with no application o
     target_type:'background_roster',application_id:null,status:'succeeded'})));
   await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
     error=>error.code==='canvas_roster_job_inventory_incomplete');
+});
+
+test('prelaunch cleanup accepts zero jobs only with durable proof activation was never attempted', async () => {
+  const org='org-1',binding='binding-1',platform='platform-1';
+  const candidates=[];let activatedAt=null,includeActivatedAt=true;
+  const state={bindingActivationPossible:true,binding:{id:binding},organizationId:org,
+    platformId:platform,runSuffix:'owned-run-1',owned:{martyBindingId:binding,
+      martyBindingActivationAttempted:false},marty:{
+      async get(path){
+        if(path.includes('/program-bindings/'))return {id:binding,organization_id:org,
+          platform_id:platform,display_name:'Portable Canvas badge owned-run-1',
+          enabled:false,...(includeActivatedAt?{activated_at:activatedAt}:{})};
+        return path.includes('canvas-sync-jobs')?[]:candidates;
+      },
+      async post(path){assert.match(path,/\/deactivate$/);activatedAt=null;},
+    }};
+  await reconcileCanvasPrelaunchApplicationAbsence(state);
+  assert.equal(state.prelaunchAbsenceConfirmed,true);
+  for(const marker of [undefined,true]){
+    state.prelaunchAbsenceConfirmed=false;
+    state.owned.martyBindingActivationAttempted=marker;
+    await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+      error=>error.code==='canvas_background_application_uncertain');
+  }
+  state.owned.martyBindingActivationAttempted=false;
+  candidates.push({id:'foreign',organization_id:org,binding_id:binding,
+    application_id:'foreign-app',status:'pending_claim'});
+  await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+    error=>error.code==='canvas_background_application_uncertain');
+  candidates.length=0;state.owned.martyLearnerLaunchIntent=true;
+  await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+    error=>error.code==='canvas_background_application_uncertain');
+  state.owned.martyLearnerLaunchIntent=false;activatedAt=NOW;
+  await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+    error=>error.code==='canvas_background_application_uncertain');
+  activatedAt=null;includeActivatedAt=false;
+  await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+    error=>error.code==='canvas_background_application_uncertain');
+});
+
+test('binding activation persists its intent before the activation POST', async () => {
+  const events=[],timestamp='2026-07-15T06:00:00.000Z';
+  const checks=BLOCKING_READINESS_CHECK_CODES.map(code=>({code,blocking:true,status:'ready',
+    component:'canvas',timestamp}));
+  const validation={ready:true,valid:true,config_version:1,evaluated_at:timestamp,checks};
+  const marty={async post(path){
+    if(path.endsWith('/validate')){events.push('validate');return validation;}
+    assert.match(path,/\/activate$/);events.push('activate');
+    assert.deepEqual(events,['validate','durable-intent','activate']);
+    return {...validation,active:true};
+  }};
+  await validateAndActivateBinding(marty,'owned-binding',()=>{events.push('durable-intent');});
+  assert.deepEqual(events,['validate','durable-intent','activate']);
+  events.length=0;
+  await assert.rejects(validateAndActivateBinding(marty,'owned-binding',()=>{
+    events.push('intent-write-failed');throw Error('durability failure');
+  }),/durability failure/);
+  assert.deepEqual(events,['validate','intent-write-failed']);
 });
 
 test('Canvas secret retirement requires authorized collection metadata, never detail GET 404', async () => {
