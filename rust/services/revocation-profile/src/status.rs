@@ -19,6 +19,15 @@ pub enum StatusListFormat {
 }
 
 impl StatusListFormat {
+    /// Canonical wire and persistence name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bitstring => "bitstring",
+            Self::TokenStatusList => "token_status_list",
+        }
+    }
+
     pub fn mechanism(self) -> &'static str {
         match self {
             Self::Bitstring => "bitstring-status-list",
@@ -335,6 +344,33 @@ impl StatusRepository for InMemoryStatusRepository {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn format_names_match_storage_and_remain_distinct_from_mechanisms() {
+        for (format, name, mechanism) in [
+            (
+                StatusListFormat::Bitstring,
+                "bitstring",
+                "bitstring-status-list",
+            ),
+            (
+                StatusListFormat::TokenStatusList,
+                "token_status_list",
+                "token-status-list",
+            ),
+        ] {
+            assert_eq!(format.as_str(), name);
+            assert_eq!(format.mechanism(), mechanism);
+            assert_eq!(serde_json::to_value(format).unwrap(), name);
+            assert_eq!(
+                serde_json::from_value::<StatusListFormat>(serde_json::json!(name)).unwrap(),
+                format
+            );
+            assert!(
+                serde_json::from_value::<StatusListFormat>(serde_json::json!(mechanism)).is_err()
+            );
+        }
+    }
+
     use super::*;
     use marty_status::W3C_MIN_STATUS_LIST_BITS;
 

@@ -160,6 +160,22 @@ pub enum CredentialTransactionStatus {
     Revoked,
 }
 
+impl CredentialTransactionStatus {
+    /// Canonical wire and persistence name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Authorized => "authorized",
+            Self::Signing => "signing",
+            Self::Issued => "issued",
+            Self::Failed => "failed",
+            Self::Expired => "expired",
+            Self::Revoked => "revoked",
+        }
+    }
+}
+
 impl TryFrom<&str> for CredentialTransactionStatus {
     type Error = CredentialIssuanceError;
 
@@ -1419,6 +1435,29 @@ impl CredentialIssuanceError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn transaction_names_round_trip_the_persisted_contract() {
+        use super::CredentialTransactionStatus;
+        for (status, expected) in [
+            (CredentialTransactionStatus::Pending, "pending"),
+            (CredentialTransactionStatus::Authorized, "authorized"),
+            (CredentialTransactionStatus::Signing, "signing"),
+            (CredentialTransactionStatus::Issued, "issued"),
+            (CredentialTransactionStatus::Failed, "failed"),
+            (CredentialTransactionStatus::Expired, "expired"),
+            (CredentialTransactionStatus::Revoked, "revoked"),
+        ] {
+            assert_eq!(status.as_str(), expected);
+            assert_eq!(
+                CredentialTransactionStatus::try_from(expected).unwrap(),
+                status
+            );
+        }
+        for invalid in ["", "Pending", " pending", "unknown"] {
+            assert!(CredentialTransactionStatus::try_from(invalid).is_err());
+        }
+    }
+
     use serde_json::{json, Map, Value};
 
     use super::{

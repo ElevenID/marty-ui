@@ -13,8 +13,8 @@ use crate::{
     },
     canvas_issuance_guard::{
         credential_snapshot, evaluate_canvas_approval_snapshot, evaluate_canvas_offer_snapshot,
-        required_credential_claims_present, resolved_issuer_matches, CanvasGuardConfig,
-        CanvasGuardSnapshot,
+        required_credential_claims_present, resolved_issuer_matches, trimmed_json_text,
+        CanvasGuardConfig, CanvasGuardSnapshot,
     },
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::CanvasLtiExperienceSessionContext,
@@ -526,19 +526,21 @@ pub fn plan_canvas_award_approval(
     let template = &snapshot.application_template;
     let binding = &snapshot.binding;
     let binding_id = context.canvas_program_binding_id.as_deref()?;
-    if text(current.get("id")) != application.id
-        || text(current.get("organization_id")) != application.organization_id
-        || !text(current.get("status")).eq_ignore_ascii_case("pending")
-        || text(current.get("application_template_id")) != application.application_template_id
-        || text(template.get("id")) != application.application_template_id
-        || text(template.get("organization_id")) != application.organization_id
-        || !text(template.get("status")).eq_ignore_ascii_case("active")
-        || text(binding.get("id")) != binding_id
-        || text(binding.get("organization_id")) != application.organization_id
-        || text(binding.get("platform_id")) != context.canvas_platform_id
-        || text(binding.get("application_template_id")) != application.application_template_id
-        || text(template.get("credential_template_id"))
-            != text(binding.get("credential_template_id"))
+    if trimmed_json_text(current.get("id")) != application.id
+        || trimmed_json_text(current.get("organization_id")) != application.organization_id
+        || !trimmed_json_text(current.get("status")).eq_ignore_ascii_case("pending")
+        || trimmed_json_text(current.get("application_template_id"))
+            != application.application_template_id
+        || trimmed_json_text(template.get("id")) != application.application_template_id
+        || trimmed_json_text(template.get("organization_id")) != application.organization_id
+        || !trimmed_json_text(template.get("status")).eq_ignore_ascii_case("active")
+        || trimmed_json_text(binding.get("id")) != binding_id
+        || trimmed_json_text(binding.get("organization_id")) != application.organization_id
+        || trimmed_json_text(binding.get("platform_id")) != context.canvas_platform_id
+        || trimmed_json_text(binding.get("application_template_id"))
+            != application.application_template_id
+        || trimmed_json_text(template.get("credential_template_id"))
+            != trimmed_json_text(binding.get("credential_template_id"))
         || (plan.canvas_user_id.is_some() && !snapshot.identity_still_linked)
         || !canvas_auto_approval_ready(binding, now, guard_config.readiness_max_age)
     {
@@ -612,17 +614,17 @@ fn plan_canvas_management_transaction(
     now: chrono::DateTime<chrono::Utc>,
     required_status: &str,
 ) -> Option<CredentialTransaction> {
-    let organization_id = text(application.get("organization_id"));
-    let application_id = text(application.get("id"));
+    let organization_id = trimmed_json_text(application.get("organization_id"));
+    let application_id = trimmed_json_text(application.get("id"));
     if organization_id.is_empty()
         || application_id.is_empty()
-        || !text(application.get("status")).eq_ignore_ascii_case(required_status)
+        || !trimmed_json_text(application.get("status")).eq_ignore_ascii_case(required_status)
     {
         return None;
     }
     let credential = credential_snapshot(binding, &organization_id).ok()?;
-    let credential_type = text(credential.get("credential_type"));
-    let credential_payload_format = text(credential.get("credential_payload_format"));
+    let credential_type = trimmed_json_text(credential.get("credential_type"));
+    let credential_payload_format = trimmed_json_text(credential.get("credential_payload_format"));
     let revocation_profile_id = optional_text(credential.get("revocation_profile_id"));
     let issuer_did = optional_text(credential.get("issuer_did"));
     let issuer_algorithm = optional_text(credential.get("issuer_algorithm"));
@@ -649,7 +651,7 @@ fn plan_canvas_management_transaction(
     let validity = credential.get("validity_rules").and_then(Value::as_object);
     build_canvas_approval_transaction(
         application,
-        text(binding.get("credential_template_id")),
+        trimmed_json_text(binding.get("credential_template_id")),
         seed,
         now,
         claims,
@@ -817,11 +819,11 @@ fn build_canvas_approval_transaction(
     context: CanvasApprovalCredentialContext,
     required_status: &str,
 ) -> Option<CredentialTransaction> {
-    let organization_id = text(application.get("organization_id"));
-    let application_id = text(application.get("id"));
+    let organization_id = trimmed_json_text(application.get("organization_id"));
+    let application_id = trimmed_json_text(application.get("id"));
     if organization_id.is_empty()
         || application_id.is_empty()
-        || !text(application.get("status")).eq_ignore_ascii_case(required_status)
+        || !trimmed_json_text(application.get("status")).eq_ignore_ascii_case(required_status)
         || credential_template_id.is_empty()
     {
         return None;
@@ -998,7 +1000,7 @@ fn kms_issuer_context_matches(binding: &Map<String, Value>, issuer: &IssuerConte
                     && value.starts_with(&format!("{}#", issuer.issuer_did))
             })
         && issuer.public_jwk.as_ref().is_some_and(Value::is_object)
-        && !text(signing_key_reference).is_empty()
+        && !trimmed_json_text(signing_key_reference).is_empty()
 }
 
 fn required_kms_issuer_context(issuer: &IssuerContext) -> bool {
@@ -1029,19 +1031,20 @@ fn required_kms_issuer_context(issuer: &IssuerContext) -> bool {
         raw.and_then(|value| value.get("verification_method_id")),
         profile.and_then(|value| value.get("verification_method_id")),
     ]);
-    profile.is_none_or(|profile| text(profile.get("status")).eq_ignore_ascii_case("active"))
-        && profile_id == issuer.issuer_profile_id
+    profile.is_none_or(|profile| {
+        trimmed_json_text(profile.get("status")).eq_ignore_ascii_case("active")
+    }) && profile_id == issuer.issuer_profile_id
         && issuer_did == issuer.issuer_did
         && algorithm == issuer.algorithm
         && signing_service_id == issuer.signing_service_id
         && issuer.verification_method_id.as_deref() == Some(verification_method.as_str())
-        && !text(signing_key_reference).is_empty()
+        && !trimmed_json_text(signing_key_reference).is_empty()
 }
 
 fn first_text(values: &[Option<&Value>]) -> String {
     values
         .iter()
-        .map(|value| text(*value))
+        .map(|value| trimmed_json_text(*value))
         .find(|value| !value.is_empty())
         .unwrap_or_default()
 }
@@ -1133,7 +1136,7 @@ fn string_array(value: Option<&Value>) -> Vec<String> {
         .map(|values| {
             values
                 .iter()
-                .map(|value| text(Some(value)))
+                .map(|value| trimmed_json_text(Some(value)))
                 .filter(|value| !value.is_empty())
                 .collect()
         })
@@ -1141,16 +1144,8 @@ fn string_array(value: Option<&Value>) -> Vec<String> {
 }
 
 fn optional_text(value: Option<&Value>) -> Option<String> {
-    let value = text(value);
+    let value = trimmed_json_text(value);
     (!value.is_empty()).then_some(value)
-}
-
-fn text(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(value)) => value.trim().to_owned(),
-        Some(Value::Null) | None => String::new(),
-        Some(value) => value.to_string().trim_matches('"').trim().to_owned(),
-    }
 }
 
 #[cfg(test)]
