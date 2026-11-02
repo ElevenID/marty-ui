@@ -1,6 +1,12 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {sessionIsolation,cancelOwnedLogin,expiredOffer,freshLoginRecovery,assertions,SUPPORTED,retireLoginFlow}=require('./dev-test-wallet-contract');
+const {sessionIsolation,cancelOwnedLogin,expiredOffer,freshLoginRecovery,assertions,SUPPORTED,retireLoginFlow,safeAssertionSite}=require('./dev-test-wallet-contract');
+test('assertion site emits only an allowed source location',()=>{
+ const error={name:'AssertionError',stack:'AssertionError: secret offer URI\n    at completeIssue (C:\\private\\tests\\scripts\\audit-beta-membership-support.js:216:12)\n    at another (C:\\private\\else.js:1:2)'};
+ assert.equal(safeAssertionSite(error),'audit-beta-membership-support.js:216');
+ assert.equal(safeAssertionSite({name:'AssertionError',stack:'AssertionError: secret\n    at x (C:\\private\\secret.js:1:2)'}),null);
+ assert.equal(safeAssertionSite({name:'Error',stack:error.stack}),null);
+});
 function holders({leak=false,resetOther=false,allowWrong=false,allowEmpty=false}={}){
  const data={a:['credential-a'],b:['credential-b']};
  function holder(id){const row={session:{origin:'http://127.0.0.1:8790',evidence:{runId:id,sessionId:id,instanceId:'same-owned-instance'},assertOwned:async()=>{}}};

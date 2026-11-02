@@ -84,6 +84,17 @@ function freshLoginRecovery(cancelled,recovered){
  assert(recovered.authenticated===true&&recovered.browserFinalizeVerified===true,'FRESH_LOGIN_NOT_VERIFIED');
  return true;
 }
+function safeAssertionSite(error){
+ if(error?.name!=='AssertionError'||typeof error.stack!=='string')return null;
+ const allowed=new Set(['audit-beta-membership-support','beta-membership-support-contract',
+  'dev-test-wallet-contract','audit-beta-first-party-dev-test-wallet']);
+ for(const frame of error.stack.split('\n').slice(1)){
+  if(!/^\s*at\s/.test(frame))continue;
+  const match=frame.match(/(?:^|[\\/])([a-z-]+)\.js:(\d+):\d+\)?\s*$/);
+  if(match&&allowed.has(match[1]))return `${match[1]}.js:${Number(match[2])}`;
+ }
+ return null;
+}
 async function expiredOffer({issuance,prerequisite,readOffer,exchangeCachedCode,receiveExpired,
  inventoryAfter,noIssuedCredential,now=Date.now,delay}){
  const window=expiryWindow(issuance.transaction,issuance.application,prerequisite,now());
@@ -116,4 +127,4 @@ function coreAssertions(report){
 function assertions(report){
  return Object.fromEntries(REQUIRED.map(key=>[key,report.checks?.[key]===true]));
 }
-module.exports={coreAssertions,REQUIRED,SUPPORTED,assertions,cancelOwnedLogin,expiredOffer,freshLoginRecovery,inventory,inventoryIds,sessionIsolation,retireLoginFlow};
+module.exports={coreAssertions,REQUIRED,SUPPORTED,assertions,cancelOwnedLogin,expiredOffer,freshLoginRecovery,inventory,inventoryIds,sessionIsolation,retireLoginFlow,safeAssertionSite};

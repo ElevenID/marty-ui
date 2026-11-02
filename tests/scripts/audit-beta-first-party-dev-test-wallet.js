@@ -122,7 +122,8 @@ async function main(env=process.env){
   report.checks.harness_cancel_no_login=true;
   stage='FRESH_LOGIN_RECOVERY';report.recoveryLogin=await positive(a);
   report.checks.fresh_nonce_login_recovery=contract.freshLoginRecovery(report.cancellation,report.recoveryLogin);
- }catch(error){report.errors.push({stage,code:/^[A-Z][A-Z0-9_]{2,79}$/.test(error.message)?error.message:'DEV_TEST_CONTRACT_FAILED',type:error.name});}
+ }catch(error){report.errors.push({stage,code:/^[A-Z][A-Z0-9_]{2,79}$/.test(error.message)?error.message:'DEV_TEST_CONTRACT_FAILED',type:error.name,
+  ...(contract.safeAssertionSite(error)?{assertionSite:contract.safeAssertionSite(error)}:{})});}
  finally{
   for(const entry of flows){try{assert(entry.owned,'Unresolved Flow creation');const route='/v1/flows/instances/'+entry.owned.id;
    const result=await contract.retireLoginFlow({binding:entry.binding,readInstance:()=>requireJson(operator,route),
