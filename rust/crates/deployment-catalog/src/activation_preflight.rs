@@ -237,6 +237,16 @@ pub async fn renewal_inventory(bao: &OpenBaoHttp, context: &Value) -> Result<Vec
     }
     Ok(names)
 }
+
+fn same_enrolled_policies(mut observed: Vec<String>, enrolled: &[String]) -> bool {
+    // Enrollment is retained in policy-name order; live checks follow token
+    // filenames. Compare sorted copies while preserving exact multiplicity.
+    let mut enrolled = enrolled.to_vec();
+    observed.sort_unstable();
+    enrolled.sort_unstable();
+    observed == enrolled
+}
+
 /// Completed installer enrollment already proved the original tokens and
 /// bound their exact hashes before any CA wait. Validate every new token live
 /// while preserving original certificate SPKI and issuer at the recorded time.
@@ -264,7 +274,7 @@ pub(crate) async fn enrolled_replacement(
     authority(bao, authority_token, false).await?;
     let checks = json!({"token":authority_token,"old":new,"new":new,"minimum_ttl":3600,
         "require_orphan_new":true,"require_orphan_old":true,"replacement":null,"retiring":false});
-    if tokens(bao, &checks).await? != enrolled_policies {
+    if !same_enrolled_policies(tokens(bao, &checks).await?, enrolled_policies) {
         return Err("replacement token policies differ from completed renewal enrollment");
     }
     certificates(bao, &checks).await?;
@@ -443,3 +453,7 @@ pub async fn certificates(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "activation_preflight_tests.rs"]
+mod tests;
