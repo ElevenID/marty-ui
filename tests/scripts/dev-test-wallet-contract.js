@@ -91,7 +91,8 @@ function safeAssertionSite(error){
  for(const frame of error.stack.split('\n').slice(1)){
   if(!/^\s*at\s/.test(frame))continue;
   const match=frame.match(/(?:^|[\\/])([a-z-]+)\.js:(\d+):\d+\)?\s*$/);
-  if(match&&allowed.has(match[1]))return `${match[1]}.js:${Number(match[2])}`;
+  const line=match?Number(match[2]):null;
+  if(match&&allowed.has(match[1])&&Number.isSafeInteger(line)&&line>0&&line<=10000)return `${match[1]}.js:${line}`;
  }
  return null;
 }
