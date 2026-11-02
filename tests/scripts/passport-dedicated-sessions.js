@@ -57,7 +57,7 @@ async function prepare(input,state){
  const selected=observed.binding.roles.filter(row=>row.role==='issuance-native');check(selected.length===1,'PASSPORT_SELECTED_SERVICE_MISSING');
  state.stage='BOUND_INPUTS';
  const email=bound(input.adminEmail).toString('utf8').trim(),password=bound(input.adminPassword).toString('utf8').trim();
- check(email.endsWith('@example.test')&&password.length>0,'PASSPORT_GOVERNED_CREDENTIALS_REQUIRED');
+ check(/^[^\s@]+@[^\s@]+$/.test(email)&&password.length>0,'PASSPORT_GOVERNED_CREDENTIALS_REQUIRED');
  bound(input.nativeEnvironment);const environment=Object.create(null);
  require('./verify-beta-waltid-acceptance').loadEnvFile(input.nativeEnvironment.path,environment);
  const service=environment.GRPC_SERVICE_TOKEN,operator=environment.PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN;

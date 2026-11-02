@@ -6,7 +6,7 @@ function fixture(t,mode){
  const parent=path.join(root,'.codex/private/beta-v258-deployment-20261019');fs.mkdirSync(parent,{recursive:true});
  const recorder=path.join(root,'recorder'),driver=path.join(root,'driver');fs.mkdirSync(recorder);fs.mkdirSync(path.join(driver,'tests/scripts'),{recursive:true});
  let onAbort;const counts={disposed:0,jobs:0,observations:0,browsers:0,logins:0,retired:0,closed:0,released:0,inspections:0};
- const service='s'.repeat(64),operator='o'.repeat(64),email='owned-admin@example.test';
+ const service='s'.repeat(64),operator='o'.repeat(64),email='owned-admin@example.invalid';
  const ref=(name,text)=>{const file=path.join(root,name);fs.writeFileSync(file,text);return {path:file,sha256:digest(Buffer.from(text))};};
  const profile=ref('profile.json','{}'),input={schema:'marty.passport-dedicated-session-input/v1',runId:randomUUID(),
   recorderRepository:recorder,recorderRevision:'a'.repeat(40),driverRevision:'b'.repeat(40),imageSourceId:'c'.repeat(40),
@@ -68,7 +68,7 @@ function fixture(t,mode){
  return {run:()=>module.exports.prepareDedicatedPassportFixture(input),counts,input,parent};
 }
 
-test('fresh producer writes exact v3 custody only after three distinct governed sessions',async t=>{
+test('fresh producer accepts a bound non-example-domain Admin and requires three exact governed sessions',async t=>{
  const f=fixture(t,'success'),result=await f.run();assert.equal(result.dedicatedSessions,3);assert.equal(result.functionalRunPerformed,false);
  const value=JSON.parse(fs.readFileSync(result.privateFixture));assert.equal(value.schema,'marty.passport-fresh-private/v3');
  assert.equal(new Set([value.custody.cscaSession,value.custody.dscSession,value.custody.flowSession]).size,3);
