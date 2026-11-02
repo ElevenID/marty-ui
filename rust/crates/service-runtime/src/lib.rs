@@ -7,6 +7,7 @@ pub mod workload;
 pub mod forwarded_principal;
 
 pub mod config;
+pub mod grpc_request;
 mod secret_kms;
 mod tls;
 pub use secret_kms::{SecretKmsNames, SecretKmsSelection};

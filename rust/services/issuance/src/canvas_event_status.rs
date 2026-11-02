@@ -126,14 +126,7 @@ fn optional_object_list(
 }
 
 fn json_value_is_python_falsy(value: &Value) -> bool {
-    match value {
-        Value::Null | Value::Bool(false) => true,
-        Value::Number(value) => value.as_f64() == Some(0.0),
-        Value::String(value) => value.is_empty(),
-        Value::Array(value) => value.is_empty(),
-        Value::Object(value) => value.is_empty(),
-        Value::Bool(true) => false,
-    }
+    !crate::python_value::python_truthy(value)
 }
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]

@@ -857,10 +857,15 @@ fn managed_openbao_key_active(data: &Value) -> bool {
 }
 
 pub(crate) fn managed_public_key_algorithm(jwk: &Value) -> Option<&'static str> {
-    match (
+    public_key_algorithm(
         jwk.get("kty").and_then(Value::as_str),
         jwk.get("crv").and_then(Value::as_str),
-    ) {
+    )
+}
+
+/// Classify public metadata without changing caller key validation or algorithm policy.
+pub(crate) fn public_key_algorithm(kty: Option<&str>, crv: Option<&str>) -> Option<&'static str> {
+    match (kty, crv) {
         (Some("EC"), Some("P-256")) => Some("ES256"),
         (Some("EC"), Some("P-384")) => Some("ES384"),
         (Some("EC"), Some("P-521")) => Some("ES512"),
@@ -1502,6 +1507,32 @@ fn safe_provider_detail(body: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_key_algorithm_classifies_metadata_without_changing_validation_policy() {
+        for (jwk, expected) in [
+            (json!({"kty":"EC", "crv":"P-256"}), Some("ES256")),
+            (json!({"kty":"EC", "crv":"P-384"}), Some("ES384")),
+            (json!({"kty":"EC", "crv":"P-521"}), Some("ES512")),
+            (json!({"kty":"RSA"}), Some("RS256")),
+            (
+                json!({"kty":"RSA", "crv":"ignored-by-existing-policy"}),
+                Some("RS256"),
+            ),
+            (json!({"kty":"OKP", "crv":"Ed25519"}), Some("EdDSA")),
+            (json!({"kty":"OKP", "crv":"X25519"}), None),
+            (json!({"kty":"EC", "crv":"secp256k1"}), None),
+            (json!({"kty":"EC", "crv":256}), None),
+            (json!({"kty":"EC"}), None),
+            (json!({"kty":"ec", "crv":"P-256"}), None),
+            (json!({"kty":true, "crv":"P-256"}), None),
+            (json!({}), None),
+            (json!(null), None),
+            (json!([]), None),
+        ] {
+            assert_eq!(managed_public_key_algorithm(&jwk), expected, "{jwk}");
+        }
+    }
 
     #[tokio::test]
     async fn provider_http_does_not_forward_vault_token_to_redirect_target() {

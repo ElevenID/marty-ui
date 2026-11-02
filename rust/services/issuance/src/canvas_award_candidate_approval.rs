@@ -104,6 +104,35 @@ pub struct CanvasApplicationApprovalSnapshot {
     pub existing_transaction: Option<CredentialTransaction>,
 }
 
+/// Keep the approval snapshot allowlist independent of stored binding records.
+pub(crate) fn project_approval_binding(binding: &Map<String, Value>) -> Map<String, Value> {
+    const FIELDS: &[&str] = &[
+        "id",
+        "organization_id",
+        "platform_id",
+        "application_template_id",
+        "credential_template_id",
+        "approval_policy_set_id",
+        "auto_approve_on_evidence",
+        "evidence_requirements",
+        "feature_flags",
+        "enabled",
+        "config_version",
+        "validated_config_version",
+        "readiness_checks",
+        "readiness_validated_at",
+        "credential_template_snapshot",
+        "activated_at",
+        "archived_at",
+    ];
+    Map::from_iter(FIELDS.iter().filter_map(|field| {
+        binding
+            .get(*field)
+            .cloned()
+            .map(|value| ((*field).to_owned(), value))
+    }))
+}
+
 impl fmt::Debug for CanvasApplicationApprovalSnapshot {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1271,5 +1300,47 @@ mod legacy_planner_tests {
         assert_eq!(reused.id, "existing-transaction");
         assert_eq!(reused.pre_authorized_code, "existing-code");
         assert_eq!(reused.credential_template_id, "credential-template-1");
+    }
+}
+
+#[cfg(test)]
+mod binding_projection_contract_tests {
+    use super::project_approval_binding;
+    use serde_json::json;
+
+    #[test]
+    fn approval_binding_keeps_the_admitted_fields_and_nested_values_only() {
+        let expected = json!({
+            "id": "binding", "organization_id": "tenant", "platform_id": "platform",
+            "application_template_id": "application-template", "credential_template_id": "credential-template",
+            "approval_policy_set_id": null, "auto_approve_on_evidence": false,
+            "evidence_requirements": [{"kind": "course"}], "feature_flags": {"enabled": true},
+            "enabled": true, "config_version": 2, "validated_config_version": 1,
+            "readiness_checks": {"issuer": true}, "readiness_validated_at": null,
+            "credential_template_snapshot": {"claims": {"nested": [null, false]}},
+            "activated_at": "activation", "archived_at": null
+        });
+        let mut source = expected.as_object().unwrap().clone();
+        source.insert("private_runtime_state".into(), json!({"excluded": true}));
+        source.insert("unknown_future_field".into(), json!("excluded"));
+        let before = source.clone();
+        assert_eq!(
+            project_approval_binding(&source),
+            *expected.as_object().unwrap()
+        );
+        assert_eq!(source, before);
+    }
+
+    #[test]
+    fn approval_binding_preserves_null_without_inventing_omitted_fields() {
+        let input = json!({"id": "binding", "enabled": false, "readiness_validated_at": null, "unknown": null});
+        let projected = project_approval_binding(input.as_object().unwrap());
+        assert_eq!(
+            projected,
+            *json!({"id": "binding", "enabled": false, "readiness_validated_at": null})
+                .as_object()
+                .unwrap()
+        );
+        assert!(!projected.contains_key("archived_at"));
     }
 }

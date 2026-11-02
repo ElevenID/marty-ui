@@ -11,6 +11,8 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 use url::Url;
 
+use crate::python_value::python_truthy as truthy;
+
 use crate::{
     canvas_management::CanvasScopeDiscoveryRequest,
     canvas_oauth::{CanvasCatalogToken, CanvasOAuthError, CanvasOAuthService},
@@ -411,17 +413,6 @@ fn scope_item(raw: &Map<String, Value>, item_type: &str) -> Option<CanvasScopeIt
     })
 }
 
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64() != Some(0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    }
-}
-
 fn scalar_string(value: &Value) -> Option<String> {
     match value {
         Value::String(value) => Some(value.clone()),
@@ -667,5 +658,35 @@ mod tests {
             })
         );
         server.abort();
+    }
+}
+
+#[cfg(test)]
+mod shared_truthiness_contract_tests {
+    use super::truthy;
+    use serde_json::json;
+
+    #[test]
+    fn catalog_truthiness_keeps_python_shapes_and_arbitrary_precision_numbers() {
+        for (value, expected) in [
+            (json!(null), false),
+            (json!(false), false),
+            (json!(true), true),
+            (json!(0), false),
+            (json!(-0.0), false),
+            (json!(-2), true),
+            (json!(0.25), true),
+            (json!(""), false),
+            (json!(" "), true),
+            (json!("false"), true),
+            (json!([]), false),
+            (json!([false]), true),
+            (json!({}), false),
+            (json!({"present": null}), true),
+        ] {
+            assert_eq!(truthy(&value), expected, "{value}");
+        }
+        let huge = serde_json::from_str("1e400").unwrap();
+        assert!(truthy(&huge));
     }
 }

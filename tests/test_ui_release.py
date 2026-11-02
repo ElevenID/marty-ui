@@ -6,8 +6,13 @@ import copy
 import json
 import os
 import re
+import shutil
+import socket
+import struct
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -215,7 +220,8 @@ def test_all_customer_producers_check_the_image_audience():
 
 
 @pytest.mark.parametrize("case", ["valid", "bare-spa", "customer-portal", "wrong-product-page",
-                                  "unrendered-product", "unprerendered-home"])
+                                  "unrendered-product", "unprerendered-home",
+                                  "startup-reset", "persistent-reset"])
 def test_production_smoke_requires_rendered_marketing_pages(tmp_path, case):
     workflow = yaml.safe_load((ROOT / release.WORKFLOW).read_text())
     smoke = next(step["run"] for step in workflow["jobs"]["release"]["steps"]
@@ -263,6 +269,54 @@ output = sys.argv[sys.argv.index('--output') + 1]
 Path(output).write_bytes((Path(os.environ['SMOKE_FIXTURES']) / name).read_bytes())
 """,
     }
+    listener = None
+    server = None
+    stopped = threading.Event()
+    requests = []
+    if case in ("startup-reset", "persistent-reset"):
+        # Use real curl so this reproduces Docker's accepted-then-reset startup
+        # connection, rather than simulating the retry options in a curl stub.
+        curl = shutil.which("curl")
+        assert curl is not None, "the production readiness regression requires curl"
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(0.1)
+        origin = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        mocks["curl"] = f"""import os, sys
+args = [arg.replace('http://127.0.0.1:18080', {origin!r}) for arg in sys.argv[1:]]
+os.execv({curl!r}, [{curl!r}, *args])
+"""
+
+        def serve():
+            while not stopped.is_set():
+                try:
+                    connection, _ = listener.accept()
+                except socket.timeout:
+                    continue
+                with connection:
+                    connection.settimeout(2)
+                    request = b""
+                    while b"\r\n\r\n" not in request:
+                        chunk = connection.recv(4096)
+                        if not chunk:
+                            break
+                        request += chunk
+                    path = request.split(b" ")[1].decode("ascii")
+                    requests.append(path)
+                    if case == "persistent-reset" or len(requests) == 1:
+                        connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                                              struct.pack("ii", 1, 0))
+                        continue
+                    name = {"/": "homepage.html", "/product/": "product.html",
+                            "/marty-ui-release.json": "metadata.json"}[path]
+                    body = (fixtures / name).read_bytes()
+                    headers = (f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n"
+                               "Connection: close\r\n\r\n").encode("ascii")
+                    connection.sendall(headers + body)
+
+        server = threading.Thread(target=serve, daemon=True)
+        server.start()
     for name, body in mocks.items():
         executable = binaries / name
         executable.write_text(f"#!{sys.executable}\n" + body)
@@ -271,9 +325,28 @@ Path(output).write_bytes((Path(os.environ['SMOKE_FIXTURES']) / name).read_bytes(
     (tmp_path / "production-web").mkdir()
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    result = subprocess.run(["bash", "-c", smoke], cwd=tmp_path, text=True, capture_output=True,
-        env={"PATH": str(binaries) + os.pathsep + os.environ["PATH"],
-             "RUNNER_TEMP": str(runtime), "SMOKE_FIXTURES": str(fixtures),
-             "IMAGE": release.PUBLIC_IMAGE, "DIGEST": IMAGE_DIGEST,
-             "VERSION": "1.2.3", "GITHUB_SHA": SOURCE})
-    assert (result.returncode == 0) == (case == "valid"), result.stderr
+    started = time.monotonic()
+    try:
+        result = subprocess.run(["bash", "-c", smoke], cwd=tmp_path, text=True, capture_output=True,
+            timeout=45,
+            env={"PATH": str(binaries) + os.pathsep + os.environ["PATH"],
+                 "RUNNER_TEMP": str(runtime), "SMOKE_FIXTURES": str(fixtures),
+                 "IMAGE": release.PUBLIC_IMAGE, "DIGEST": IMAGE_DIGEST,
+                 "VERSION": "1.2.3", "GITHUB_SHA": SOURCE})
+    finally:
+        stopped.set()
+        if server is not None:
+            server.join(timeout=3)
+            assert not server.is_alive()
+        if listener is not None:
+            listener.close()
+    elapsed = time.monotonic() - started
+    assert (result.returncode == 0) == (case in ("valid", "startup-reset")), result.stderr
+    if case == "startup-reset":
+        assert requests == ["/", "/", "/product/", "/marty-ui-release.json"]
+        assert "curl: (56)" in result.stderr
+        assert (runtime / "production-homepage.html").read_bytes() == (fixtures / "homepage.html").read_bytes()
+    elif case == "persistent-reset":
+        assert result.returncode == 56, result.stderr
+        assert len(requests) > 1 and set(requests) == {"/"}
+        assert 25 <= elapsed < 40
