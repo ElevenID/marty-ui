@@ -37,6 +37,7 @@ test = true
 mmf-aws-kms.workspace = true
 marty-mdoc-status-binding = { path = "../../crates/mdoc-status-binding" }
 marty-service-runtime = { path = "../../crates/service-runtime" }
+marty-service-contracts = { path = "../../crates/service-contracts" }
 marty-claim-collection.workspace = true
 axum.workspace = true
 async-trait.workspace = true

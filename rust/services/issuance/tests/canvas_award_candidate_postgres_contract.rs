@@ -1936,6 +1936,166 @@ async fn exercise_legacy_ingest_postgres_contract(pool: &sqlx::PgPool) {
         .unwrap(),
         0
     );
+    exercise_legacy_replay_claim_contract(pool).await;
+}
+
+async fn exercise_legacy_replay_claim_contract(pool: &sqlx::PgPool) {
+    use marty_issuance_service::canvas_legacy_ingest::{
+        CanvasEvidenceEvent, CanvasLegacyApplicationSnapshot, CanvasLegacyCommit,
+        CanvasLegacyCommitOutcome, CanvasLegacyIngestRepository,
+    };
+    let repository = PostgresCanvasLegacyIngestRepository::new(pool.clone());
+    let baseline = now() - chrono::Duration::hours(1);
+    let snapshot = CanvasLegacyApplicationSnapshot {
+        application: Default::default(),
+        application_template: None,
+        platform: Default::default(),
+        binding: Default::default(),
+        evidence_facts: vec![],
+        policy_set: None,
+        existing_transaction: None,
+    };
+    for (index, (incoming_hash, status, expected)) in [
+        ("stored", "evidence_received", None),
+        (
+            "different",
+            "evidence_received",
+            Some(CanvasLegacyIngestError::ReplayPayloadConflict),
+        ),
+        (
+            "stored",
+            "processed",
+            Some(CanvasLegacyIngestError::ReplayFlowConflict),
+        ),
+        (
+            "different",
+            "processed",
+            Some(CanvasLegacyIngestError::ReplayPayloadConflict),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = format!("replay-claim-contract-{index}");
+        let response = json!({"retained":"response", "unknown": [null, {"value":7}]});
+        sqlx::query(
+            "INSERT INTO issuance_service.canvas_event_receipts
+            (id,provider_event_id,organization_id,credential_template_id,canvas_account_id,
+             payload_hash,issuance_response,status,first_seen_at,last_seen_at)
+            VALUES ($1,$1,'org-replay','template-replay','account-replay','stored',$2,$3,$4,$4)",
+        )
+        .bind(&id)
+        .bind(&response)
+        .bind(status)
+        .bind(baseline)
+        .execute(pool)
+        .await
+        .unwrap();
+        let event = CanvasEvidenceEvent {
+            canvas_event_id: id.clone(),
+            organization_id: Some("org-replay".into()),
+            credential_template_id: Some("template-replay".into()),
+            canvas_account_id: "account-replay".into(),
+            canvas_course_id: String::new(),
+            canvas_course_name: String::new(),
+            canvas_enrollment_id: String::new(),
+            canvas_user_id: String::new(),
+            learner_email: String::new(),
+            learner_name: None,
+            learner_given_name: None,
+            learner_family_name: None,
+            achievement_name: String::new(),
+            achievement_description: None,
+            completion_at: String::new(),
+            application_id: "not-used-for-an-existing-receipt".into(),
+            evidence_type: String::new(),
+            canvas_assignment_id: None,
+            canvas_module_id: None,
+            canvas_quiz_id: None,
+            submitted: None,
+            completed: None,
+            passed: None,
+            score: None,
+            score_percent: None,
+            roles: None,
+            membership_status: None,
+            eligible: None,
+        };
+        let replay = repository.replay(&event, incoming_hash, now()).await;
+        if let Some(expected) = expected.as_ref() {
+            assert_eq!(&replay.unwrap_err(), expected);
+        } else {
+            assert_eq!(replay.unwrap().response, response);
+        }
+        let seen: DateTime<Utc> = sqlx::query_scalar(
+            "SELECT last_seen_at FROM issuance_service.canvas_event_receipts WHERE id=$1",
+        )
+        .bind(&id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(seen, if expected.is_none() { now() } else { baseline });
+        sqlx::query(
+            "UPDATE issuance_service.canvas_event_receipts SET last_seen_at=$2 WHERE id=$1",
+        )
+        .bind(&id)
+        .bind(baseline)
+        .execute(pool)
+        .await
+        .unwrap();
+        // Model the lost-claim race: a previously loaded new snapshot now finds
+        // an existing receipt. The adapter must return even conflicting receipts
+        // for service-level rejection, and commit timestamps only for valid ones.
+        let commit = CanvasLegacyCommit {
+            event,
+            application: Default::default(),
+            requirements: vec![],
+            evaluate_policy: false,
+            payload_hash: incoming_hash.into(),
+            receipt_id: format!("unused-{id}"),
+            audit_source: "test",
+            verification_method: "test",
+            fact: json!({}),
+            safe_fact: json!({}),
+            mip_primitives: json!({}),
+            evidence: json!({}),
+            evidence_submission: json!({}),
+            evaluated_policy_decision: None,
+            policy_decision: None,
+            transaction: None,
+            approval_failure: None,
+            now: now(),
+        };
+        let CanvasLegacyCommitOutcome::Replay(receipt) =
+            repository.commit(&snapshot, &commit).await.unwrap()
+        else {
+            panic!("existing composite receipt must return replay")
+        };
+        assert_eq!(receipt.response, response);
+        assert_eq!(receipt.payload_hash, "stored");
+        assert_eq!(receipt.status, status);
+        let seen: DateTime<Utc> = sqlx::query_scalar(
+            "SELECT last_seen_at FROM issuance_service.canvas_event_receipts WHERE id=$1",
+        )
+        .bind(&id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(seen, if expected.is_none() { now() } else { baseline });
+        let unused: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM issuance_service.canvas_event_receipts WHERE id=$1",
+        )
+        .bind(&commit.receipt_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(unused, 0);
+        sqlx::query("DELETE FROM issuance_service.canvas_event_receipts WHERE id=$1")
+            .bind(&id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
 }
 
 async fn manual_contract_head(pool: &sqlx::PgPool, application_id: &str, id: &str, score: i64) {

@@ -8,6 +8,9 @@ use axum::{
     Json,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use marty_service_contracts::integration_secret::{
+    valid_identity, MAX_CIPHERTEXT_BYTES, MAX_SECRET_BYTES, SCHEMA,
+};
 use marty_service_runtime::{SecretKmsNames, SecretKmsSelection};
 use mmf_aws_kms::{AwsKmsKey, KeyCapability};
 use serde::{Deserialize, Serialize};
@@ -16,11 +19,8 @@ use thiserror::Error;
 
 use crate::flow_envelope::OpenBaoEnvelopeProvider;
 
-const SCHEMA: &str = "marty.integration-secret-envelope/v1";
 const KEY_ID: &str = "integration-secret-envelope-marty-aes256";
-const MAX_SECRET_BYTES: usize = 64 * 1024;
 const MAX_ENVELOPE_BYTES: usize = 96 * 1024;
-const MAX_CIPHERTEXT_BYTES: usize = 200 * 1024;
 const AWS_MAX_BOUND_PLAINTEXT_BYTES: usize = 4096;
 
 /// The platform's storage authority. Ciphertext and tenant requests never
@@ -168,16 +168,6 @@ impl IntoResponse for IntegrationSecretEnvelopeError {
         }
         (status, Json(body)).into_response()
     }
-}
-
-fn valid_identity(organization_id: &str, secret_id: &str, provider: &str, purpose: &str) -> bool {
-    [organization_id, secret_id, provider, purpose]
-        .iter()
-        .all(|part| !part.trim().is_empty())
-        && organization_id.len() <= 256
-        && secret_id.len() <= 256
-        && provider.len() <= 80
-        && purpose.len() <= 80
 }
 
 fn prepare(request: &EncryptRequest) -> Result<Vec<u8>, IntegrationSecretEnvelopeError> {

@@ -13,7 +13,8 @@ mod tls;
 pub use secret_kms::{SecretKmsNames, SecretKmsSelection};
 pub use tls::RemoteTlsIdentityFiles as GrpcServerTls;
 pub use tls::{
-    RemoteTlsIdentityFiles, TlsConfigError, TlsConfigErrorKind, TlsIdentityNames, WorkloadTlsFiles,
+    workload_server_acceptor, RemoteTlsIdentityFiles, TlsConfigError, TlsConfigErrorKind,
+    TlsIdentityNames, WorkloadTlsFiles,
 };
 
 use mmf_platform::KeylessGrpcTlsAcceptor;

@@ -307,7 +307,7 @@ impl CanvasLegacyIngestRepository for PostgresCanvasLegacyIngestRepository {
             .map_err(legacy_repository_error)?
             .ok_or(CanvasLegacyIngestError::RepositoryUnavailable)?;
         let receipt = stored_receipt(&row).map_err(map_stored_error)?;
-        ensure_replay_matches(&receipt, payload_hash)?;
+        crate::canvas_legacy_ingest::validate_replay(&receipt, payload_hash)?;
         sqlx::query(
             "UPDATE issuance_service.canvas_event_receipts SET last_seen_at = $3
              WHERE canvas_account_id = $1 AND provider_event_id = $2",
@@ -389,7 +389,7 @@ async fn commit_atomic(
             .await
             .map_err(legacy_repository_error)?;
         let receipt = stored_receipt(&row).map_err(map_stored_error)?;
-        if ensure_replay_matches(&receipt, &commit.payload_hash).is_ok() {
+        if crate::canvas_legacy_ingest::validate_replay(&receipt, &commit.payload_hash).is_ok() {
             sqlx::query(
                 "UPDATE issuance_service.canvas_event_receipts SET last_seen_at = $3
                  WHERE canvas_account_id = $1 AND provider_event_id = $2",
@@ -1036,19 +1036,6 @@ fn stored_receipt(row: &PgRow) -> Result<CanvasLegacyStoredReceipt, CanvasLegacy
         status: row.try_get("status").map_err(repository_error)?,
         response: row.try_get("issuance_response").map_err(repository_error)?,
     })
-}
-
-fn ensure_replay_matches(
-    receipt: &CanvasLegacyStoredReceipt,
-    payload_hash: &str,
-) -> Result<(), CanvasLegacyIngestError> {
-    if receipt.payload_hash != payload_hash {
-        return Err(CanvasLegacyIngestError::ReplayPayloadConflict);
-    }
-    if receipt.status != "evidence_received" {
-        return Err(CanvasLegacyIngestError::ReplayFlowConflict);
-    }
-    Ok(())
 }
 
 fn timestamp(value: Option<&Value>) -> Result<DateTime<Utc>, CanvasLegacyIngestError> {

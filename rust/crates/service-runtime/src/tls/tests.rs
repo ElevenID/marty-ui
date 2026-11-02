@@ -2,6 +2,31 @@ use std::collections::BTreeMap;
 
 use super::*;
 
+#[tokio::test]
+async fn absent_workload_identity_keeps_optional_acceptor_behavior() {
+    for (limit, timeout) in [(64, Duration::from_secs(15)), (0, Duration::ZERO)] {
+        assert!(workload_server_acceptor(None, limit, timeout)
+            .await
+            .unwrap()
+            .is_none());
+    }
+}
+
+#[tokio::test]
+async fn configured_workload_providers_fail_closed_on_missing_public_files() {
+    for values in [openbao(), aws()] {
+        let files = WorkloadTlsFiles {
+            ca_certificate: PathBuf::from("/nonexistent/marty-workload-peer-ca.pem"),
+            identity: parse(&values).unwrap().unwrap(),
+        };
+        assert!(
+            workload_server_acceptor(Some(&files), 64, Duration::from_secs(15))
+                .await
+                .is_err()
+        );
+    }
+}
+
 const ARN: &str = "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012";
 
 fn aws() -> BTreeMap<String, String> {
