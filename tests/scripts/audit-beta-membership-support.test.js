@@ -30,6 +30,22 @@ function fixture() {
     expiry: { isolatedDeployment: true, expectedServerOfferTtlSeconds: 60, maximumWaitSeconds: 120 } };
 }
 
+test('two owned applicants must have distinct profiles and accounts with bounded form data', () => {
+  const f=fixture();f.secondaryApplicant={id:uuid(16),email:'second@example.test',
+    formData:{email:'second@example.test',role:'applicant'}};
+  assert.equal(validateFixture(f,'expired-offer'),f);
+  const {secondaryApplicant,...primaryFixture}=f;
+  assert.equal(validateFixture({...primaryFixture,applicant:secondaryApplicant},'expired-offer').applicant.id,
+    secondaryApplicant.id);
+  for(const change of [secondary=>{secondary.id=f.applicant.id;},
+    secondary=>{secondary.email=f.applicant.email;},
+    secondary=>{secondary.formData.email=f.applicant.email;},
+    secondary=>{secondary.formData.password='forbidden';}]){
+    const changed=structuredClone(f);change(changed.secondaryApplicant);
+    assert.throws(()=>validateFixture(changed,'expired-offer'));
+  }
+});
+
 function issuerSetup(binding) {
   return {
     credential: { id: binding.credentialTemplateId, organization_id: binding.organizationId, status: 'ACTIVE',

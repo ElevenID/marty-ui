@@ -52,24 +52,32 @@ function validateExpiryPrerequisite(expiry) {
 
 function validateFixture(fixture, lane) {
   assert.ok(['expired-offer', 'untrusted-issuer'].includes(lane), 'Explicit D05 supporting lane required');
-  objectKeys(fixture, ['schemaVersion', 'kind', 'synthetic', 'authorization', 'applicant', 'trusted', 'foreign', 'login', 'expiry'], 'fixture');
+  objectKeys(fixture, ['schemaVersion', 'kind', 'synthetic', 'authorization', 'applicant', 'secondaryApplicant', 'trusted', 'foreign', 'login', 'expiry'], 'fixture');
   assert.equal(fixture.schemaVersion, 1);
   assert.equal(fixture.kind, 'membership-support-fixture');
   assert.equal(fixture.synthetic, true, 'Only explicitly synthetic applicant fixtures are supported');
   assert.equal(fixture.authorization, 'PREPROVISIONED_DEMO_FIXTURE', 'Preprovisioned demo fixture authorization is required');
-  objectKeys(fixture.applicant, ['id', 'email', 'formData'], 'applicant');
-  assert.match(fixture.applicant.id || '', UUID, 'Applicant ID must be explicit');
-  requiredText(fixture.applicant.email, 'Applicant email');
-  const form = fixture.applicant.formData;
-  assert.ok(form && typeof form === 'object' && !Array.isArray(form) && Object.keys(form).length <= 50,
-    'A bounded synthetic application form is required');
-  for (const [key, value] of Object.entries(form)) {
-    assert.ok(/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key)
-      && !/(password|secret|token|private.?key|authorization|cookie)/i.test(key), 'Fixture form must not contain secrets');
-    assert.ok(typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
-      || (typeof value === 'string' && value.length <= 512), 'Synthetic form values must be bounded scalars');
+  function validateApplicant(applicant, label) {
+    objectKeys(applicant, ['id', 'email', 'formData'], label);
+    assert.match(applicant.id || '', UUID, `${label} ID must be explicit`);
+    requiredText(applicant.email, `${label} email`);
+    const form = applicant.formData;
+    assert.ok(form && typeof form === 'object' && !Array.isArray(form) && Object.keys(form).length <= 50,
+      'A bounded synthetic application form is required');
+    for (const [key, value] of Object.entries(form)) {
+      assert.ok(/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key)
+        && !/(password|secret|token|private.?key|authorization|cookie)/i.test(key), 'Fixture form must not contain secrets');
+      assert.ok(typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
+        || (typeof value === 'string' && value.length <= 512), 'Synthetic form values must be bounded scalars');
+    }
+    if (Object.hasOwn(form, 'email')) assert.equal(form.email, applicant.email, 'Form email must match the existing applicant');
   }
-  if (Object.hasOwn(form, 'email')) assert.equal(form.email, fixture.applicant.email, 'Form email must match the existing applicant');
+  validateApplicant(fixture.applicant, 'Applicant');
+  if (fixture.secondaryApplicant) {
+    validateApplicant(fixture.secondaryApplicant, 'Secondary applicant');
+    assert.notEqual(fixture.secondaryApplicant.id, fixture.applicant.id, 'Distinct synthetic applicant profiles are required');
+    assert.notEqual(fixture.secondaryApplicant.email, fixture.applicant.email, 'Distinct synthetic applicant accounts are required');
+  }
   const issuerFields = ['organizationId', 'credentialTemplateId', 'applicationTemplateId', 'trustProfileId',
     'issuerEntityId', 'issuerDid', 'credentialFormat', 'credentialConfigurationId'];
   if (lane === 'untrusted-issuer') assert.ok(fixture.foreign, 'The authorized foreign issuer fixture is required');

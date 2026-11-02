@@ -71,6 +71,8 @@ async function prepareFixture(artifactDir, env, lane, evidence) {
   // Validate before copying; private/provider credentials are not fixture data.
   const proposed = validateFixture(JSON.parse(bytes.toString('utf8')), lane);
   assert.equal(proposed.applicant.email, env.TEST_APPLICANT_EMAIL, 'Fixture must name the existing synthetic applicant account');
+  if (env.TEST_SECONDARY_APPLICANT_EMAIL) assert.equal(proposed.secondaryApplicant?.email,
+    env.TEST_SECONDARY_APPLICANT_EMAIL, 'Fixture must name the second owned synthetic applicant account');
   fs.writeFileSync(path.join(artifactDir, FIXTURE_FILE), bytes, { flag: 'wx', mode: 0o600 });
   const actualBytes = await evidence.readFixture(FIXTURE_FILE);
   assert.equal(sha256(actualBytes), sha256(bytes), 'Recorder fixture bytes changed before sealing');
