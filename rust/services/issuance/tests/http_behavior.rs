@@ -819,6 +819,10 @@ fn transaction_record(value: &Value) -> IssuanceTransactionRecord {
             .expect("pre-authorized code")
             .to_owned(),
         credential_type: value["credential_type"].as_str().map(str::to_owned),
+        credential_payload_format: value["credential_payload_format"]
+            .as_str()
+            .expect("credential payload format")
+            .to_owned(),
         created_at: optional_time("created_at").expect("created at"),
         expires_at: optional_time("expires_at").expect("expires at"),
         issued_at: optional_time("issued_at"),

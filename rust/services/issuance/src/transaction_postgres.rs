@@ -11,7 +11,8 @@ macro_rules! transaction_query {
     ($predicate:literal) => {
         concat!(
             "SELECT id, organization_id, credential_template_id, applicant_id, application_id,
-                    subject_did, status, pre_auth_code, credential_type, created_at, expires_at,
+                    subject_did, status, pre_auth_code, credential_type, credential_payload_format,
+                    created_at, expires_at,
                     issued_at, revoked_at, revocation_reason
              FROM issuance_service.issuance_transactions ",
             $predicate
@@ -84,6 +85,7 @@ fn transaction_row(row: PgRow) -> Result<IssuanceTransactionRecord, TransactionR
         status: TransactionStatus::try_from(status.as_str())?,
         pre_auth_code: get(&row, "pre_auth_code")?,
         credential_type: get(&row, "credential_type")?,
+        credential_payload_format: get(&row, "credential_payload_format")?,
         created_at: get::<DateTime<Utc>>(&row, "created_at")?,
         expires_at: get::<DateTime<Utc>>(&row, "expires_at")?,
         issued_at: get::<Option<DateTime<Utc>>>(&row, "issued_at")?,
