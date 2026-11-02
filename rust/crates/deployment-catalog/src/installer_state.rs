@@ -20,6 +20,7 @@ use std::{
         unix::{ffi::OsStrExt, fs::MetadataExt},
     },
     path::{Component, Path},
+    time::{Duration, Instant},
 };
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -578,14 +579,49 @@ impl Drop for LockedDirectory {
     }
 }
 pub(crate) fn lock(directory: File) -> Result<LockedDirectory> {
-    if unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err(error("installation is locked"));
+    lock_with_wait(directory, None)?.ok_or_else(|| "installation lock unexpectedly deferred".into())
+}
+
+/// Only the scheduled lifecycle entry point opts into waiting. Keep the same
+/// held directory and exclusive lock; neither contention nor EINTR permits a
+/// journal read or an operation without acquiring it.
+fn lock_with_wait(directory: File, wait: Option<Duration>) -> Result<Option<LockedDirectory>> {
+    let started = Instant::now();
+    let mut last_error: Option<std::io::Error> = None;
+    loop {
+        if let (Some(limit), Some(cause)) = (wait, last_error.as_ref()) {
+            if started.elapsed() >= limit {
+                return if cause.kind() == std::io::ErrorKind::WouldBlock {
+                    Ok(None)
+                } else {
+                    Err(format!("installation is locked: {cause}"))
+                };
+            }
+        }
+        if unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(Some(LockedDirectory {
+                file: directory,
+                owner_pid: unsafe { libc::getpid() },
+                unlock_on_drop: true,
+            }));
+        }
+        let cause = std::io::Error::last_os_error();
+        let Some(limit) = wait else {
+            return Err(format!("installation is locked: {cause}"));
+        };
+        if !matches!(
+            cause.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+        ) {
+            return Err(format!("installation is locked: {cause}"));
+        }
+        last_error = Some(cause);
+        std::thread::sleep(
+            limit
+                .saturating_sub(started.elapsed())
+                .min(Duration::from_millis(50)),
+        );
     }
-    Ok(LockedDirectory {
-        file: directory,
-        owner_pid: unsafe { libc::getpid() },
-        unlock_on_drop: true,
-    })
 }
 fn read(directory: &File) -> Result<Journal> {
     let file = open_at(directory, &name(JOURNAL), libc::O_PATH, 0)?;
@@ -759,12 +795,24 @@ impl LockedInspection {
         Ok(())
     }
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_with_lock_wait(path, None)?
+            .ok_or_else(|| "installation lock unexpectedly deferred".into())
+    }
+    fn open_with_lock_wait(path: &Path, wait: Option<Duration>) -> Result<Option<Self>> {
         let (ancestor, leaf) = parent(path)?;
         let directory = open_at(&ancestor, &leaf, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
         private(&directory, true)?;
-        let directory = lock(directory)?;
+        let Some(directory) = lock_with_wait(directory, wait)? else {
+            return Ok(None);
+        };
         let journal = read(&directory)?;
-        Ok(Self { directory, journal })
+        let inspection = Self { directory, journal };
+        if wait.is_some() {
+            // A caller may have waited while the installation path changed.
+            // Rebind it to the held inode before permitting any scheduled work.
+            inspection.require_path_binding(path)?;
+        }
+        Ok(Some(inspection))
     }
     pub fn journal(&self) -> &Journal {
         &self.journal
@@ -941,6 +989,14 @@ impl LockedMaintenance {
             inspection: LockedInspection::open(path)?,
             poisoned: false,
         })
+    }
+    pub(crate) fn open_waiting(path: &Path, wait: Duration) -> Result<Option<Self>> {
+        Ok(
+            LockedInspection::open_with_lock_wait(path, Some(wait))?.map(|inspection| Self {
+                inspection,
+                poisoned: false,
+            }),
+        )
     }
     pub(crate) fn journal(&self) -> &Journal {
         self.inspection.journal()
@@ -3177,6 +3233,79 @@ mod tests {
         assert!(outcome.is_err());
         assert!(inherited.is_some());
         assert!(lock(File::open(root.path()).unwrap()).is_ok());
+    }
+    #[test]
+    fn scheduled_lock_wait_acquires_only_after_the_actual_owner_releases() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join("installation");
+        let owner = InstallerState::create(&path, identity()).unwrap();
+        let waiting_path = path.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            done_tx
+                .send(LockedMaintenance::open_waiting(
+                    &waiting_path,
+                    Duration::from_secs(5),
+                ))
+                .unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(matches!(
+            done_rx.recv_timeout(Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert!(LockedInspection::open(&path).is_err());
+        drop(owner);
+        let acquired = done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        waiter.join().unwrap();
+        assert_eq!(acquired.journal().identity(), &identity());
+        assert!(LockedInspection::open(&path).is_err());
+        drop(acquired);
+        assert!(LockedInspection::open(&path).is_ok());
+    }
+    #[test]
+    fn scheduled_lock_wait_exhaustion_preserves_the_owner_and_journal() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join("installation");
+        let owner = InstallerState::create(&path, identity()).unwrap();
+        let before = std::fs::read(path.join(JOURNAL)).unwrap();
+        assert!(
+            LockedMaintenance::open_waiting(&path, Duration::from_millis(20))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(std::fs::read(path.join(JOURNAL)).unwrap(), before);
+        assert!(LockedInspection::open(&path).is_err());
+        drop(owner);
+        assert!(LockedInspection::open(&path).is_ok());
+    }
+    #[test]
+    fn scheduled_lock_wait_does_not_hide_descriptor_permissions_or_journal_errors() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let directory = File::open(root.path()).unwrap();
+        let path_only =
+            open_at(&directory, &name("."), libc::O_PATH | libc::O_DIRECTORY, 0).unwrap();
+        // flock on O_PATH is EBADF, not contention. It must not become a defer.
+        assert!(lock_with_wait(path_only, Some(Duration::from_secs(1))).is_err());
+        let path = root.path().join("installation");
+        let owner = InstallerState::create(&path, identity()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(LockedMaintenance::open_waiting(&path, Duration::ZERO).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        drop(owner);
+        std::fs::write(path.join(JOURNAL), b"invalid journal").unwrap();
+        assert!(LockedMaintenance::open_waiting(&path, Duration::from_secs(1)).is_err());
+        // The error after acquisition still releases the lock.
+        assert!(lock(File::open(&path).unwrap()).is_ok());
     }
     #[test]
     fn different_process_guard_drop_does_not_unlock_parent_description() {

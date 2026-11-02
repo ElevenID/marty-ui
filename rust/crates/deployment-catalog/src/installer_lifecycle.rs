@@ -21,6 +21,7 @@ use std::{
         unix::{ffi::OsStrExt, fs::MetadataExt},
     },
     path::{Component, Path, PathBuf},
+    time::Duration,
 };
 
 type Result<T> = std::result::Result<T, String>;
@@ -29,6 +30,7 @@ const CONFIGURATION_SCHEMA: &str = "elevenid.installer-lifecycle-configuration/v
 const INTENT_SCHEMA: &str = "elevenid.installer-lifecycle-intent/v2";
 const REFUSED: &str = "Installer lifecycle could not establish its next postcondition; preserve the installation-scoped units, intent and operation evidence";
 const MAX_INTENTS: usize = 10000;
+const SCHEDULED_LOCK_WAIT: Duration = Duration::from_secs(30);
 
 fn require(ok: bool) -> Result<()> {
     if ok {
@@ -56,6 +58,7 @@ struct Arguments {
     action: Action,
     installation: PathBuf,
     docker: PathBuf,
+    scheduled: bool,
 }
 
 fn path_text(path: &Path) -> Result<&str> {
@@ -98,14 +101,21 @@ fn arguments(args: &[String]) -> Result<Arguments> {
         Some("pause") => Action::Pause,
         Some("resume") => Action::Resume,
         Some("security-seal") => Action::SecuritySeal,
-        _ => return Err("Expected lifecycle export|install|status|boot|shutdown|check|maintain|pause|resume|security-seal --install-dir ABS [--docker-bin ABS]".into()),
+        _ => return Err("Expected lifecycle export|install|status|boot|shutdown|check|maintain|pause|resume|security-seal --install-dir ABS [--docker-bin ABS] [--scheduled (check|maintain only)]".into()),
     };
-    require((args.len() - 1).is_multiple_of(2))?;
     let mut values = BTreeMap::new();
-    for pair in args[1..].chunks_exact(2) {
+    let mut scheduled = false;
+    let mut options = args[1..].iter();
+    while let Some(option) = options.next() {
+        if option == "--scheduled" {
+            require(!scheduled && matches!(action, Action::Check | Action::Maintain))?;
+            scheduled = true;
+            continue;
+        }
+        let value = options.next().ok_or(REFUSED)?;
         require(
-            ["--install-dir", "--docker-bin"].contains(&pair[0].as_str())
-                && values.insert(pair[0].as_str(), pair[1].as_str()).is_none(),
+            ["--install-dir", "--docker-bin"].contains(&option.as_str())
+                && values.insert(option.as_str(), value.as_str()).is_none(),
         )?;
     }
     let installation = PathBuf::from(*values.get("--install-dir").ok_or(REFUSED)?);
@@ -116,6 +126,7 @@ fn arguments(args: &[String]) -> Result<Arguments> {
         action,
         installation,
         docker,
+        scheduled,
     })
 }
 
@@ -240,7 +251,7 @@ ExecStart={}\nExecStop={}\n\n[Install]\nWantedBy=default.target\n",
     let check_text = format!(
         "# Read-only validation; no renewal, restart or recovery action.\n\
 [Unit]\nDescription=Marty deployment check {id}\nAfter=docker.service {boot}\n\n\
-[Service]\nType=oneshot\nNoNewPrivileges=yes\nUMask=0077\nTimeoutStartSec=150\nExecStart={}\n",
+[Service]\nType=oneshot\nNoNewPrivileges=yes\nUMask=0077\nTimeoutStartSec=180\nExecStart={} \"--scheduled\"\n",
         command(configuration, "check")?
     );
     let timer_text = format!(
@@ -251,7 +262,7 @@ ExecStart={}\nExecStop={}\n\n[Install]\nWantedBy=default.target\n",
     let maintenance_text = format!(
         "# Bounded operator reconciliation under the installation lock.\n\
 [Unit]\nDescription=Marty maintenance {id}\nWants=docker.service\nAfter=docker.service {boot}\n\n\
-[Service]\nType=oneshot\nNoNewPrivileges=yes\nUMask=0077\nTimeoutStartSec=1800\nExecStart={}\n",
+[Service]\nType=oneshot\nNoNewPrivileges=yes\nUMask=0077\nTimeoutStartSec=1830\nExecStart={} \"--scheduled\"\n",
         command(configuration, "maintain")?
     );
     let maintenance_timer_text = format!(
@@ -1062,8 +1073,31 @@ pub(crate) fn require_recorded_running_intent(
 }
 
 pub fn run(args: &[String]) -> Result<String> {
+    run_with_lock_wait(args, SCHEDULED_LOCK_WAIT)
+}
+
+fn run_with_lock_wait(args: &[String], scheduled_wait: Duration) -> Result<String> {
     let args = arguments(args)?;
-    let mut state = LockedMaintenance::open(&args.installation)?;
+    let mut state = if args.scheduled {
+        let Some(state) = LockedMaintenance::open_waiting(&args.installation, scheduled_wait)?
+        else {
+            // There is no installation observation without the lock. A busy
+            // schedule is deferred, never reported as validation or recovery.
+            return serde_json::to_string(&json!({
+                "schema":"elevenid.installer-lifecycle/v2",
+                "operation":if args.action == Action::Check { "check" } else { "maintain" },
+                "scheduled":true,"installation_ready":false,
+                "runtime_observed":false,"qualification":"not_assessed",
+                "result":{"outcome":"deferred","reason":"installation_lock_busy",
+                    "lock_wait_seconds":scheduled_wait.as_secs(),"operation_performed":false,
+                    "docker_invoked":false,"intent_modified":false}
+            }))
+            .map_err(|_| REFUSED.into());
+        };
+        state
+    } else {
+        LockedMaintenance::open(&args.installation)?
+    };
     let prerequisites = installer_runtime::observe_user_systemd_prerequisites(&args.installation);
     let mut report = json!({"schema":"elevenid.installer-lifecycle/v2", "installation_id":state.journal().installation_id(),
         "systemd_controlled":false, "systemd_enablement_observed":false, "installation_ready":false,

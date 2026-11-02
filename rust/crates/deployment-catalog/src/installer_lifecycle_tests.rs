@@ -144,6 +144,95 @@ fn arguments_are_closed_and_paths_cannot_inject_unit_directives() {
 }
 
 #[test]
+fn scheduled_mode_is_explicit_and_only_available_to_periodic_actions() {
+    for action in [
+        "export",
+        "install",
+        "status",
+        "boot",
+        "shutdown",
+        "check",
+        "maintain",
+        "pause",
+        "resume",
+        "security-seal",
+    ] {
+        let mut args = vec![
+            action.into(),
+            "--install-dir".into(),
+            "/private/install".into(),
+        ];
+        assert!(!arguments(&args).unwrap().scheduled);
+        args.push("--scheduled".into());
+        if ["check", "maintain"].contains(&action) {
+            assert!(arguments(&args).unwrap().scheduled);
+            args.push("--scheduled".into());
+            assert!(arguments(&args).is_err());
+        } else {
+            assert!(arguments(&args).is_err(), "{action}");
+        }
+    }
+}
+
+#[test]
+fn scheduled_defer_has_no_unguarded_observation_or_operation() {
+    let (_parent, path, owner, _configuration) = fixture();
+    let before = std::fs::read(path.join("installation.json")).unwrap();
+    let evidence_before: Vec<_> = std::fs::read_dir(path.join("evidence"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    for action in ["check", "maintain"] {
+        let mut args = vec![
+            action.into(),
+            "--install-dir".into(),
+            path.to_str().unwrap().into(),
+            "--docker-bin".into(),
+            "/definitely-not-an-executable".into(),
+        ];
+        // Ordinary invocations still fail immediately, even when the test's
+        // scheduled budget is nonzero.
+        assert!(run_with_lock_wait(&args, Duration::from_secs(1))
+            .err()
+            .unwrap()
+            .starts_with("installation is locked:"));
+        args.push("--scheduled".into());
+        let result: Value =
+            serde_json::from_str(&run_with_lock_wait(&args, Duration::ZERO).unwrap()).unwrap();
+        assert_eq!(result["operation"], action);
+        assert_eq!(result["result"]["outcome"], "deferred");
+        assert_eq!(result["result"]["operation_performed"], false);
+        assert_eq!(result["result"]["docker_invoked"], false);
+        assert_eq!(result["result"]["intent_modified"], false);
+        assert_eq!(result["runtime_observed"], false);
+        assert_eq!(result["installation_ready"], false);
+        assert!(result.get("installation_id").is_none());
+        assert!(result.get("desired_state").is_none());
+    }
+    assert_eq!(
+        std::fs::read(path.join("installation.json")).unwrap(),
+        before
+    );
+    let evidence_after: Vec<_> = std::fs::read_dir(path.join("evidence"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(evidence_after, evidence_before);
+    drop(owner);
+    std::fs::write(path.join("installation.json"), b"invalid journal").unwrap();
+    assert!(run_with_lock_wait(
+        &[
+            "check".into(),
+            "--install-dir".into(),
+            path.to_str().unwrap().into(),
+            "--scheduled".into(),
+        ],
+        Duration::ZERO
+    )
+    .is_err());
+}
+
+#[test]
 fn generated_units_bind_exact_retained_argv_and_escape_systemd_expansions() {
     let (_parent, _path, _state, configuration) = fixture();
     let units = render_units(&configuration).unwrap();
@@ -171,9 +260,10 @@ fn generated_units_bind_exact_retained_argv_and_escape_systemd_expansions() {
     assert!(!boot.contains("Requires=docker.service"));
     assert!(!boot.contains("PartOf=docker.service"));
     assert!(check.contains(&format!(
-        "ExecStart={}\n",
+        "ExecStart={} \"--scheduled\"\n",
         command(&configuration, "check").unwrap()
     )));
+    assert!(check.contains("TimeoutStartSec=180\n"));
     assert!(check.contains(&format!("After=docker.service {boot_name}\n")));
     assert!(!check.contains("Requires="));
     assert!(!check.contains("PartOf="));
@@ -181,17 +271,20 @@ fn generated_units_bind_exact_retained_argv_and_escape_systemd_expansions() {
     assert!(timer.contains("OnCalendar=*-*-* *:00/5:00\nPersistent=true\n"));
     assert!(timer.contains(&format!("Unit={check_name}\n")));
     assert!(maintenance.contains(&format!(
-        "ExecStart={}\n",
+        "ExecStart={} \"--scheduled\"\n",
         command(&configuration, "maintain").unwrap()
     )));
     assert!(maintenance.contains(&format!("After=docker.service {boot_name}\n")));
     assert!(
-        maintenance.contains("Type=oneshot\nNoNewPrivileges=yes\nUMask=0077\nTimeoutStartSec=1800")
+        maintenance.contains("Type=oneshot\nNoNewPrivileges=yes\nUMask=0077\nTimeoutStartSec=1830")
     );
     assert!(!maintenance.contains("RemainAfterExit="));
     assert!(!maintenance.contains("Restart="));
     assert!(maintenance_timer.contains("OnCalendar=*-*-* *:00/5:00\nPersistent=true\n"));
     assert!(maintenance_timer.contains(&format!("Unit={maintenance_name}\n")));
+    assert!(!boot.contains("--scheduled"));
+    assert!(!timer.contains("--scheduled"));
+    assert!(!maintenance_timer.contains("--scheduled"));
     for text in units.values() {
         for absent in ["EnvironmentFile=", "TOKEN=", "PASSWORD="] {
             assert!(!text.contains(absent), "unexpected {absent}");
