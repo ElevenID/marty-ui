@@ -46,7 +46,25 @@ foreign records, broken intent chains, or changed paths are refused.
 | `lifecycle-marty-UUID-maintenance.service` | One bounded recovery and credential-maintenance invocation. |
 | `lifecycle-marty-UUID-maintenance.timer` | Run maintenance every five minutes with persistent catch-up and up to 30 seconds of jitter. |
 
-The JSON output always gives an exact `next_actions.manual_recovery_command`.
+The generated check and maintenance commands include `--scheduled`. Only those
+two actions accept it. They wait up to 30 seconds, measured by a monotonic
+clock, for the same exclusive installation lock. A still-busy lock returns an
+explicit `result.outcome: deferred` with no journal observation, Docker call,
+intent change, validation success, or readiness claim. A later timer activation
+can try again; the deferred invocation does not retry an operation that has
+already begun. Other lock errors, unsafe paths or permissions, and corrupt
+journals remain failures. Ordinary commands without `--scheduled` retain
+immediate lock refusal, including status and manual lifecycle controls.
+
+The check service's 180-second start limit reserves 150 seconds for its work
+and 30 seconds for lock acquisition. Maintenance reserves its existing
+1800-second work budget plus the same 30-second wait, for a total of 1830
+seconds. These limits do not change the installation's durable intent or any
+external trial deadline. Existing installed units remain pinned to their
+original operator and recorded bytes; they are not rewritten by this change.
+
+Export, install, and configured status return an exact
+`next_actions.manual_recovery_command`.
 Manual recovery does not require lingering or persistent user-service enablement;
 it still requires the retained Docker engine to be accessible and running to be
 intended. Export, install, and status observe the user-manager prerequisites
