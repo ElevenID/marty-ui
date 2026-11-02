@@ -377,6 +377,7 @@ def validate_resume(
     stack_lock: Path,
     claim_run_id: str,
     required_state: str | None = None,
+    require_qualified: bool = False,
 ) -> dict[str, object]:
     claim = validate_claim(value)
     _require(claim["repository"] == repository, "resume repository changed")
@@ -388,6 +389,9 @@ def validate_resume(
     )
     if required_state is not None:
         _require(claim["state"] == required_state, "resume transaction state changed")
+    if require_qualified:
+        _require(claim["state"] in {"qualified", "promoting", "promoted"},
+                 "installer requires a qualified transaction")
     return claim
 
 
@@ -602,6 +606,7 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--stack-lock", type=Path, required=True)
     validate.add_argument("--claim-run-id", required=True)
     validate.add_argument("--required-state")
+    validate.add_argument("--require-qualified", action="store_true")
     validate.add_argument("--output", type=Path, required=True)
 
     digests = subparsers.add_parser("record-digests")
@@ -665,6 +670,7 @@ def main(args: argparse.Namespace) -> None:
             stack_lock=args.stack_lock,
             claim_run_id=args.claim_run_id,
             required_state=args.required_state,
+            require_qualified=args.require_qualified,
         )
     elif args.command == "record-digests":
         value = record_digests(

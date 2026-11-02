@@ -1221,7 +1221,9 @@ async fn management_contract(storage_type: &str) {
         StatusCode::CONFLICT,
         "an active binding cannot yield cleanup proof"
     );
-    eprintln!("canvas_binding_application_inventory_pg_assertions_passed storage_type={storage_type}");
+    eprintln!(
+        "canvas_binding_application_inventory_pg_assertions_passed storage_type={storage_type}"
+    );
 }
 
 async fn assert_roster_cursor_storage(pool: &sqlx::PgPool) {

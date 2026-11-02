@@ -491,7 +491,7 @@ def verify_kms_custody(evidence: Path, signature: Path, public_key: Path,
     ):
         selector = {"issuer_did": did, "key_purpose": purpose,
                     "credential_format": "SD_JWT_VC", "algorithm": "ES256"}
-        reference = managed_reference(environment["SELFHOST_ORG_ID"], purpose)
+        reference = managed_reference(environment["SELFHOST_ORG_ID"], purpose, did)
         if (not isinstance(proof, dict)
                 or set(proof) != {"profile_selector", "key_reference", "key_version"}
                 or proof["profile_selector"] != selector
