@@ -750,7 +750,11 @@ FLOW_RENDERER_RUNPY_EDGES = {
         "scripts/test_beta_application_image_compose.py",
     ),
     "scripts/test_canvas_worker_compose_render.py": ("scripts/conformance_stack.py",),
-    "scripts/conformance_stack.py": ("scripts/conformance_native.py",),
+    "scripts/conformance_stack.py": (
+        "scripts/local_native_functional_binding.py",
+        "scripts/conformance_native.py",
+    ),
+    "scripts/local_native_functional_binding.py": (),
     "scripts/validate_beta_didcomm_configuration.py": (),
     "scripts/prepare_official_beta_release.py": ("scripts/kms_core_release.py",),
     "scripts/kms_core_release.py": (),

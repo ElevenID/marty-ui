@@ -164,7 +164,7 @@ impl InitiationOfferProjector {
             id: transaction.id,
             organization_id: transaction.organization_id,
             credential_template_id: transaction.credential_template_id,
-            status: transaction_status(response_status).to_owned(),
+            status: response_status.as_str().to_owned(),
             credential_offer_uri,
             credential_offer_uris,
             credential_offer_labels,
@@ -277,18 +277,6 @@ pub enum InitiationOfferProjectionError {
     InvalidIssuerBaseUrl,
     #[error("credential offer is unavailable")]
     OfferUnavailable,
-}
-
-fn transaction_status(status: CredentialTransactionStatus) -> &'static str {
-    match status {
-        CredentialTransactionStatus::Pending => "pending",
-        CredentialTransactionStatus::Authorized => "authorized",
-        CredentialTransactionStatus::Signing => "signing",
-        CredentialTransactionStatus::Issued => "issued",
-        CredentialTransactionStatus::Failed => "failed",
-        CredentialTransactionStatus::Expired => "expired",
-        CredentialTransactionStatus::Revoked => "revoked",
-    }
 }
 
 pub(crate) fn python_quote(value: &str) -> String {

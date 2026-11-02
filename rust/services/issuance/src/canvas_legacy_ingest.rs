@@ -778,7 +778,7 @@ fn verify_signature(
     Ok(())
 }
 
-fn validate_replay(
+pub(crate) fn validate_replay(
     receipt: &CanvasLegacyStoredReceipt,
     payload_hash: &str,
 ) -> Result<(), CanvasLegacyIngestError> {
@@ -1899,6 +1899,40 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+
+    #[test]
+    fn replay_requires_matching_payload_then_exact_success_status() {
+        for (stored_hash, status, expected) in [
+            ("payload", "evidence_received", Ok(())),
+            (
+                "other",
+                "evidence_received",
+                Err(CanvasLegacyIngestError::ReplayPayloadConflict),
+            ),
+            (
+                "payload",
+                "processed",
+                Err(CanvasLegacyIngestError::ReplayFlowConflict),
+            ),
+            (
+                "other",
+                "processed",
+                Err(CanvasLegacyIngestError::ReplayPayloadConflict),
+            ),
+            (
+                "payload",
+                "Evidence_Received",
+                Err(CanvasLegacyIngestError::ReplayFlowConflict),
+            ),
+        ] {
+            let receipt = CanvasLegacyStoredReceipt {
+                payload_hash: stored_hash.into(),
+                status: status.into(),
+                response: json!({"preserved": [null, {"replayed": false}]}),
+            };
+            assert_eq!(validate_replay(&receipt, "payload"), expected);
+        }
+    }
 
     #[test]
     fn config_debug_redacts_the_webhook_secret() {

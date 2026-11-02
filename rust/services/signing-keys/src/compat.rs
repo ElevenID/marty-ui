@@ -2042,17 +2042,10 @@ fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
 }
 
 fn algorithm_for_jwk(jwk: &Map<String, Value>) -> Option<&'static str> {
-    match (
+    kms::public_key_algorithm(
         jwk.get("kty").and_then(Value::as_str),
         jwk.get("crv").and_then(Value::as_str),
-    ) {
-        (Some("EC"), Some("P-256")) => Some("ES256"),
-        (Some("EC"), Some("P-384")) => Some("ES384"),
-        (Some("EC"), Some("P-521")) => Some("ES512"),
-        (Some("RSA"), _) => Some("RS256"),
-        (Some("OKP"), Some("Ed25519")) => Some("EdDSA"),
-        _ => None,
-    }
+    )
 }
 
 fn validate_public_key_algorithm(

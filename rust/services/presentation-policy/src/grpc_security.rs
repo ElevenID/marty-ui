@@ -57,18 +57,12 @@ impl PresentationGrpcSecurity {
     pub async fn server_tls_acceptor(
         &self,
     ) -> Result<Option<KeylessGrpcTlsAcceptor>, PresentationGrpcSecurityError> {
-        let Some(files) = &self.server_tls else {
-            return Ok(None);
-        };
-        let acceptor = files
-            .identity
-            .grpc_acceptor(
-                &files.ca_certificate,
-                64,
-                std::time::Duration::from_secs(15),
-            )
-            .await?;
-        Ok(Some(acceptor))
+        Ok(marty_service_runtime::workload_server_acceptor(
+            self.server_tls.as_ref(),
+            64,
+            std::time::Duration::from_secs(15),
+        )
+        .await?)
     }
 
     pub fn authorize<T>(&self, request: &Request<T>, method: &str) -> Result<(), Status> {
