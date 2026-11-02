@@ -26,7 +26,8 @@ CURRENT_ISSUER_READY_PROFILE = "current-issuer-ready-two-role"
 CURRENT_ISSUER_POLICY_PROFILE = "current-issuer-policy-signing-only"
 CURRENT_ISSUER_POLICY_COMPACT_PROFILE = "current-issuer-policy-signing-compact"
 CURRENT_ISSUER_POLICY_PROFILES = (CURRENT_ISSUER_POLICY_PROFILE, CURRENT_ISSUER_POLICY_COMPACT_PROFILE)
-CURRENT_ISSUER_READY_PROFILES = (CURRENT_ISSUER_READY_PROFILE, *CURRENT_ISSUER_POLICY_PROFILES)
+ISSUANCE_OFFER_PROFILE = "d05-issuance-offer-format-only"
+CURRENT_ISSUER_READY_PROFILES = (CURRENT_ISSUER_READY_PROFILE, *CURRENT_ISSUER_POLICY_PROFILES, ISSUANCE_OFFER_PROFILE)
 OFFICIAL_PROFILES = (OFFICIAL_PROFILE, LATEST_OFFICIAL_PROFILE)
 LATEST_FREEZE_SHA256 = "075a9bafaf27bd31acfe8372c3172e04cf584120882018ff327e71044b69a5c1"
 OFFICIAL_FREEZE_SHA256 = "b77d6883f51bc1d3cf19d6cfa76fe567477c7d27e32134e05007c9104e49c941"
@@ -217,7 +218,19 @@ focused_status=$?
 set -e
 printf '%s\n' "$focused_status" > /out/focused-rust-test.exit-code
 test "$focused_status" -eq 0
-""" if profile in CURRENT_ISSUER_POLICY_PROFILES else "")
+""" if profile in CURRENT_ISSUER_POLICY_PROFILES else "") + ("""set +e
+cargo test -p marty-issuance-service --lib public_offer_uses_the_same_format_specific_configuration_id_as_application_offers --locked --offline -j1 > /out/issuance-lib-test.stdout.txt 2> /out/issuance-lib-test.stderr.txt
+issuance_lib_status=$?
+set -e
+printf '%s\n' "$issuance_lib_status" > /out/issuance-lib-test.exit-code
+test "$issuance_lib_status" -eq 0
+set +e
+cargo test -p marty-issuance-service --test http_behavior native_offer_transaction_reads_match_the_python_oracle_contract --locked --offline -j1 > /out/issuance-http-test.stdout.txt 2> /out/issuance-http-test.stderr.txt
+issuance_http_status=$?
+set -e
+printf '%s\n' "$issuance_http_status" > /out/issuance-http-test.exit-code
+test "$issuance_http_status" -eq 0
+""" if profile == ISSUANCE_OFFER_PROFILE else "")
 
 
 def focused_rust_test_receipt(output, prefix, name, expected_passes):
@@ -582,6 +595,13 @@ def finish(prepared_ref, helper, git, profile=None):
         if profile in CURRENT_ISSUER_POLICY_PROFILES:
             result["focusedRustTest"] = focused_rust_test_receipt(
                 output, "focused-rust-test", "current_issuer_validation_tests::", 4)
+        if profile == ISSUANCE_OFFER_PROFILE:
+            result["focusedRustTests"] = [
+                focused_rust_test_receipt(output, "issuance-lib-test",
+                    "public_offer_uses_the_same_format_specific_configuration_id_as_application_offers", 1),
+                focused_rust_test_receipt(output, "issuance-http-test",
+                    "native_offer_transaction_reads_match_the_python_oracle_contract", 1),
+            ]
         if profile in OFFICIAL_PROFILES:
             require(len(artifacts) == 29, "OFFICIAL_NATIVE_BINARY_COVERAGE_CHANGED")
             result.update(state="PASSED", source=scope["uiRevision"], canonicalAllServices=True,
