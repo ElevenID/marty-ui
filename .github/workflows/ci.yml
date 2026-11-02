@@ -1029,10 +1029,79 @@ jobs:
           echo "MARTY_RUST_CI_POSTGRES_ID=$postgres_id" >> "$GITHUB_ENV"
           echo "MARTY_RUST_CI_REDIS_ID=$redis_id" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        id: rust_contract_builder
         if: matrix.lane != 'renewal-unit'
         with:
           driver-opts: image=${{ env.MARTY_CI_BUILDKIT_IMAGE }}
           buildkitd-config: .github/buildkit-ci-mirror.toml
+      - name: Record selfhost disk before public image
+        if: matrix.lane == 'selfhost'
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/rust-build-evidence"
+          mkdir -p "$evidence"
+          df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP" > "$evidence/selfhost-before-image-df.txt"
+          for directory in "$GITHUB_WORKSPACE/rust/target" "${CARGO_HOME:-$HOME/.cargo}"; do
+            if [[ -d "$directory" && ! -L "$directory" ]]; then
+              timeout 20s du -sk --one-file-system -- "$directory" >> "$evidence/selfhost-before-image-du.txt" ||
+                printf 'size unavailable within telemetry bound\n' >> "$evidence/selfhost-before-image-du.txt"
+            fi
+          done
+      - name: Expose public image compiler cache credentials
+        if: matrix.lane == 'selfhost'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            const url = process.env.ACTIONS_RESULTS_URL;
+            if (!token || !url) throw new Error('GitHub compiler cache credentials are unavailable');
+            core.setSecret(token);
+            core.exportVariable('SCCACHE_GHA_RUNTIME_TOKEN', token);
+            core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
+            core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
+      - name: Build public selfhost image
+        id: public_selfhost_image
+        if: matrix.lane == 'selfhost'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          builder: ${{ steps.rust_contract_builder.outputs.name }}
+          context: .
+          file: services/Dockerfile
+          load: true
+          push: false
+          tags: marty-selfhost-public:contract
+          provenance: false
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            SERVICE_NAME=issuance_native
+          cache-from: type=gha,scope=marty-ui-public-services
+          secret-envs: |
+            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
+            sccache_url=SCCACHE_GHA_CACHE_URL
+            sccache_mode=SCCACHE_GHA_RW_MODE
+      - name: Retire completed selfhost builder cache
+        if: matrix.lane == 'selfhost'
+        shell: bash
+        env:
+          SELFHOST_BUILDER: ${{ steps.rust_contract_builder.outputs.name }}
+          EXPECTED_SELFHOST_IMAGE: ${{ steps.public_selfhost_image.outputs.imageid }}
+        run: |
+          set -euo pipefail
+          [[ "$SELFHOST_BUILDER" =~ ^builder-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]
+          [[ "$EXPECTED_SELFHOST_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]]
+          image_id="$(docker image inspect --format '{{.Id}}' marty-selfhost-public:contract)"
+          [[ "$image_id" == "$EXPECTED_SELFHOST_IMAGE" ]]
+          evidence="$RUNNER_TEMP/rust-build-evidence"
+          df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP" > "$evidence/selfhost-image-loaded-df.txt"
+          timeout 30s docker buildx du --builder "$SELFHOST_BUILDER" > "$evidence/selfhost-builder-du.txt" ||
+            printf 'cache size unavailable within telemetry bound\n' >> "$evidence/selfhost-builder-du.txt"
+          # The job-created builder completed this exact image. Keep the loaded
+          # image and acceptance outputs; only its unused cache is reclaimable.
+          timeout 120s docker buildx prune --builder "$SELFHOST_BUILDER" --all --force > "$evidence/selfhost-builder-prune.txt"
+          [[ "$(docker image inspect --format '{{.Id}}' marty-selfhost-public:contract)" == "$image_id" ]]
+          df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP" > "$evidence/selfhost-after-builder-prune-df.txt"
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -1317,6 +1386,15 @@ jobs:
             rm -f "$stats_file.tmp"
             echo 'Optional compiler cache stats unavailable; Rust validation remains authoritative.'
           fi
+      - name: Record selfhost acceptance compile disk
+        if: matrix.lane == 'selfhost'
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/rust-build-evidence"
+          df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP" > "$evidence/selfhost-after-acceptance-compile-df.txt"
+          timeout 20s du -sk --one-file-system -- "$GITHUB_WORKSPACE/rust/target" > "$evidence/selfhost-after-acceptance-compile-du.txt" ||
+            printf 'size unavailable within telemetry bound\n' >> "$evidence/selfhost-after-acceptance-compile-du.txt"
       - name: Require unprivileged installer recovery fixtures
         if: matrix.lane == 'contracts'
         timeout-minutes: 10
@@ -1472,37 +1550,6 @@ jobs:
         working-directory: rust
         shell: bash
         run: python3 ../scripts/ci/run-db-contract-groups.py preflights
-      - name: Expose public image compiler cache credentials
-        if: matrix.lane == 'selfhost'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
-        with:
-          script: |
-            const token = process.env.ACTIONS_RUNTIME_TOKEN;
-            const url = process.env.ACTIONS_RESULTS_URL;
-            if (!token || !url) throw new Error('GitHub compiler cache credentials are unavailable');
-            core.setSecret(token);
-            core.exportVariable('SCCACHE_GHA_RUNTIME_TOKEN', token);
-            core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
-            core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
-      - name: Build public selfhost image
-        if: matrix.lane == 'selfhost'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
-        with:
-          context: .
-          file: services/Dockerfile
-          load: true
-          push: false
-          tags: marty-selfhost-public:contract
-          provenance: false
-          build-args: |
-            MARTY_RELEASE_VERSION=ci
-            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
-            SERVICE_NAME=issuance_native
-          cache-from: type=gha,scope=marty-ui-public-services
-          secret-envs: |
-            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
-            sccache_url=SCCACHE_GHA_CACHE_URL
-            sccache_mode=SCCACHE_GHA_RW_MODE
       - name: Prepare public selfhost image loader acceptance
         if: matrix.lane == 'selfhost'
         shell: bash
