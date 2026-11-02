@@ -7,7 +7,9 @@ use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
 use tracing::error;
 
 use crate::{
-    canvas_award_candidate_approval::CanvasApplicationApprovalSnapshot,
+    canvas_award_candidate_approval::{
+        project_approval_binding, CanvasApplicationApprovalSnapshot,
+    },
     canvas_award_candidate_approval_postgres::reserve_management_canvas_issuance_in_transaction,
     canvas_award_candidate_postgres::record_fact_and_policy_in_transaction,
     canvas_issuance_guard::LIST_CURRENT_FACTS,
@@ -564,7 +566,7 @@ async fn commit_atomic(
                 application: approval_application,
                 application_template: approval_template(template),
                 platform: snapshot.platform.clone(),
-                binding: approval_binding(&snapshot.binding),
+                binding: project_approval_binding(&snapshot.binding),
                 existing_transaction: snapshot.existing_transaction.clone(),
             };
             let transaction_id = reserve_management_canvas_issuance_in_transaction(
@@ -913,31 +915,6 @@ async fn lock_dependencies(
         return Err(CanvasLegacyIngestError::SnapshotChanged);
     }
     Ok(())
-}
-
-fn approval_binding(binding: &Map<String, Value>) -> Map<String, Value> {
-    project(
-        binding,
-        &[
-            "id",
-            "organization_id",
-            "platform_id",
-            "application_template_id",
-            "credential_template_id",
-            "approval_policy_set_id",
-            "auto_approve_on_evidence",
-            "evidence_requirements",
-            "feature_flags",
-            "enabled",
-            "config_version",
-            "validated_config_version",
-            "readiness_checks",
-            "readiness_validated_at",
-            "credential_template_snapshot",
-            "activated_at",
-            "archived_at",
-        ],
-    )
 }
 
 fn approval_template(template: &Map<String, Value>) -> Map<String, Value> {

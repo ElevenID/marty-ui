@@ -13,6 +13,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::python_value::python_truthy;
+
 use crate::{
     canvas_award_candidate::python_canonical_json,
     canvas_issuance_guard::validated_requirements,
@@ -1208,16 +1210,5 @@ fn canvas_number(value: Option<&Value>) -> Option<f64> {
         Some(Value::Number(value)) => value.as_f64(),
         Some(Value::String(value)) => value.trim().parse().ok(),
         _ => None,
-    }
-}
-
-fn python_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64() != Some(0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
     }
 }
