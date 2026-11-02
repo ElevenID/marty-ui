@@ -5,12 +5,13 @@ use crate::{
     operator_files::{private_directory, private_file, write_private},
 };
 use marty_openbao_http::OpenBaoHttp;
-use marty_selfhost_identity::SELFHOST_ROLES;
+use marty_selfhost_identity::{origin::PublicOrigin, SELFHOST_ROLES};
 use reqwest::{Method, StatusCode};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    net::IpAddr,
     path::Path,
 };
 
@@ -143,8 +144,21 @@ fn names(value: &Value) -> Result<Vec<String>> {
         .iter()
         .map(|v| v.as_str().map(str::to_owned).ok_or(REFUSAL))
         .collect::<Result<_>>()?;
-    if names.len() != 21
-        || names.iter().collect::<BTreeSet<_>>().len() != 21
+    let ingress = names
+        .iter()
+        .filter(|name| name.starts_with("installer-ingress-"))
+        .collect::<Vec<_>>();
+    let valid_ingress = ingress.len() == 1
+        && ingress[0]
+            .strip_prefix("installer-ingress-")
+            .is_some_and(|suffix| {
+                suffix.len() == 32
+                    && suffix
+                        .bytes()
+                        .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+            });
+    if !((names.len() == 21 && ingress.is_empty()) || (names.len() == 22 && valid_ingress))
+        || names.iter().collect::<BTreeSet<_>>().len() != names.len()
         || names.iter().any(|v| {
             v.is_empty()
                 || v.len() > 160
@@ -167,8 +181,153 @@ fn signer_acl() -> String {
     .join("\n")
         + "\n"
 }
-fn renewal_acl(names: &[String], rotate: bool) -> Result<String> {
+/// Derive the installation identity only from the retained, read-only PKI role.
+/// IP literals in allowed_domains are metadata for the ACL, not an OpenBao IP
+/// SAN restriction. Legacy workload-only renewal never enters this path.
+fn ingress_sign_acl(name: &str, role: &Value) -> Result<String> {
+    let domains = role["allowed_domains"].as_array().ok_or(REFUSAL)?;
+    if !(1..=2).contains(&domains.len()) {
+        return Err(REFUSAL);
+    }
+    let common = domains[0].as_str().ok_or(REFUSAL)?;
+    let address = common.parse::<IpAddr>().ok();
+    let authority = match address {
+        Some(IpAddr::V6(ip)) => format!("[{ip}]"),
+        _ => common.to_owned(),
+    };
+    let origin = PublicOrigin::parse(&format!("https://{authority}")).map_err(|_| REFUSAL)?;
+    let dns = origin.dns_name().unwrap_or("");
+    if origin
+        .ip_address()
+        .is_some_and(|ip| ip.to_string() != common)
+        || (address.is_none() && dns != common)
+    {
+        return Err(REFUSAL);
+    }
+    let allow_ip = role["allow_ip_sans"].as_bool().ok_or(REFUSAL)?;
+    let entry_ip = domains
+        .get(1)
+        .map(|value| {
+            let text = value.as_str().ok_or(REFUSAL)?;
+            let ip: IpAddr = text.parse().map_err(|_| REFUSAL)?;
+            if ip.to_string() != text
+                || ip.is_loopback()
+                || dns == "localhost"
+                || origin.did_web_authority().is_err()
+            {
+                return Err(REFUSAL);
+            }
+            Ok(ip)
+        })
+        .transpose()?;
+    let ip = match (origin.ip_address(), dns, allow_ip, entry_ip) {
+        (Some(ip), "", true, None) => ip.to_string(),
+        (None, "localhost", true, None) => "127.0.0.1".into(),
+        (None, _, false, None) => String::new(),
+        (None, _, true, Some(ip)) => ip.to_string(),
+        _ => return Err(REFUSAL),
+    };
+    // CSR-provided identities must never override these explicit parameters.
+    // Validate the role before any bootstrap mutation and again at each login.
+    for (field, expected) in [
+        ("allow_any_name", json!(false)),
+        ("allow_localhost", json!(dns == "localhost")),
+        ("allow_bare_domains", json!(true)),
+        ("allow_subdomains", json!(false)),
+        ("allow_glob_domains", json!(false)),
+        ("allow_wildcard_certificates", json!(false)),
+        ("server_flag", json!(true)),
+        ("client_flag", json!(false)),
+        ("key_type", json!("ec")),
+        ("key_bits", json!(256)),
+        ("max_ttl", json!(28800)),
+        ("use_csr_common_name", json!(false)),
+        ("use_csr_sans", json!(false)),
+        (
+            "cn_validations",
+            json!([if dns.is_empty() {
+                "disabled"
+            } else {
+                "hostname"
+            }]),
+        ),
+    ] {
+        if role[field] != expected {
+            return Err(REFUSAL);
+        }
+    }
+    let common = serde_json::to_string(common).map_err(|_| REFUSAL)?;
+    let dns = serde_json::to_string(dns).map_err(|_| REFUSAL)?;
+    let ip = serde_json::to_string(&ip).map_err(|_| REFUSAL)?;
+    // Required parameters close the API-default gap. No wildcard key or value
+    // is allowed: callers cannot add URI/other SANs, reuse CSR SANs, or extend
+    // certificate lifetime. The CSR remains the only unconstrained value.
+    Ok(format!(
+        "path \"{name}/sign/localhost\" {{\n  capabilities = [\"update\"]\n  required_parameters = [\"csr\", \"common_name\", \"alt_names\", \"ip_sans\", \"exclude_cn_from_sans\", \"ttl\"]\n  allowed_parameters = {{\n    \"csr\" = []\n    \"common_name\" = [{common}]\n    \"alt_names\" = [{dns}]\n    \"ip_sans\" = [{ip}]\n    \"exclude_cn_from_sans\" = [true]\n    \"ttl\" = [\"8h\"]\n  }}\n}}"
+    ))
+}
+
+async fn renewal_context(
+    bao: &OpenBaoHttp,
+    role: Role,
+    token: &str,
+    policy_names: &[String],
+    context: &Value,
+) -> Result<Value> {
+    let mut context = context.clone();
+    let public_ingress = public_ingress_context(role, policy_names, &context)?;
+    if role == Role::Renewal {
+        if let Some(name) = policy_names
+            .iter()
+            .find(|name| name.starts_with("installer-ingress-"))
+        {
+            if public_ingress {
+                // The public source carries an already admitted certificate.
+                // Its TLS token owner never needs a private-CA role or CSR.
+                return Ok(context);
+            }
+            let response = request(
+                bao,
+                Method::GET,
+                &format!("{name}/roles/localhost"),
+                None,
+                Some(token),
+            )
+            .await?;
+            ingress_sign_acl(name, &response["data"])?;
+            context["ingress_role"] = response["data"].clone();
+        }
+    }
+    Ok(context)
+}
+
+fn public_ingress_context(role: Role, names: &[String], context: &Value) -> Result<bool> {
+    match context.get("ingress_certificate_source") {
+        None => Ok(false),
+        Some(value)
+            if value == "acme"
+                && role == Role::Renewal
+                && names.len() == 22
+                && names
+                    .iter()
+                    .filter(|name| name.starts_with("installer-ingress-"))
+                    .count()
+                    == 1 =>
+        {
+            Ok(true)
+        }
+        _ => Err(REFUSAL),
+    }
+}
+
+fn renewal_acl(
+    names: &[String],
+    rotate: bool,
+    ingress_role: &Value,
+    public_ingress: bool,
+) -> Result<String> {
     let mut paths: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    let mut ingress = None;
     for (path, caps) in [
         ("sys/mounts", vec!["read"]),
         ("sys/mounts/transit", vec!["read"]),
@@ -199,6 +358,24 @@ fn renewal_acl(names: &[String], rotate: bool) -> Result<String> {
             return Err(REFUSAL);
         }
         paths.insert(format!("sys/policies/acl/{name}"), vec!["read"]);
+        if name.starts_with("installer-ingress-") {
+            if public_ingress {
+                paths.insert(format!("transit/keys/{name}"), vec!["read"]);
+                continue;
+            }
+            // Reuse the reviewed leaf-policy inventory as the installation
+            // scope. This grants CSR issuance for its retained version-one
+            // key and CA, never creation, export, rotation, or policy mutation.
+            for (path, caps) in [
+                (format!("transit/keys/{name}"), vec!["read"]),
+                (format!("transit/keys/{name}/csr"), vec!["update"]),
+                (format!("{name}/cert/ca"), vec!["read"]),
+                (format!("{name}/roles/localhost"), vec!["read"]),
+            ] {
+                paths.insert(path, caps);
+            }
+            ingress = Some(ingress_sign_acl(name, ingress_role)?);
+        }
     }
     for role in SELFHOST_ROLES {
         paths.insert(format!("transit/keys/{}", role.key_name), vec!["read"]);
@@ -229,20 +406,30 @@ fn renewal_acl(names: &[String], rotate: bool) -> Result<String> {
             );
         }
     }
-    Ok(paths
+    let mut acl = paths
         .iter()
         .map(|(p, c)| line(p, c))
         .collect::<Vec<_>>()
-        .join("\n"))
+        .join("\n");
+    if let Some(ingress) = ingress {
+        acl.push('\n');
+        acl.push_str(&ingress);
+    }
+    Ok(acl)
 }
 pub fn policy(role: Role, context: &Value) -> Result<String> {
     let spec = role.spec();
     match role {
         Role::Renewal | Role::CaRotation => {
             let names = names(&context["names"])?;
+            if role == Role::CaRotation && names.len() != 21 {
+                return Err(REFUSAL);
+            }
             let base = renewal_acl(
                 &names,
                 role == Role::Renewal && context["allow_secret_id_rotation"] != false,
+                &context["ingress_role"],
+                public_ingress_context(role, &names, context)?,
             )?;
             if role == Role::Renewal {
                 // Renewal operators must retire their own short-lived login
@@ -500,6 +687,7 @@ async fn validated_login(
             denial(bao, token, Method::GET, "sys/storage/raft/snapshot", None).await?;
         }
         Role::Renewal | Role::CaRotation => {
+            let context = renewal_context(bao, role, token, &policy_names, context).await?;
             if request(
                 bao,
                 Method::GET,
@@ -508,7 +696,7 @@ async fn validated_login(
                 Some(token),
             )
             .await?["data"]["policy"]
-                != policy(role, context)?
+                != policy(role, &context)?
             {
                 return Err(REFUSAL);
             }
@@ -954,7 +1142,8 @@ fn signer_metadata(metadata: &Value) -> Result<()> {
     crate::operator::custody_signer(metadata, true).map(|_| ())
 }
 /// Current-generation validation stays at its existing owner before entering this
-/// shared transaction. Context names are that owner's reviewed 21-policy receipt.
+/// shared transaction. Context names are that owner's reviewed leaf-policy
+/// receipt: 21 legacy scopes, or those scopes plus one managed ingress scope.
 pub async fn bootstrap(
     bao: &OpenBaoHttp,
     role: Role,
@@ -979,6 +1168,10 @@ pub async fn bootstrap(
     } else {
         vec![]
     };
+    let context = renewal_context(bao, role, token, &policy_names, context).await?;
+    // Validate the complete identity-bound policy while the transaction is
+    // still read-only, so an ambiguous role cannot leave a partial authority.
+    let expected_policy = policy(role, &context)?;
     if [Role::Audit, Role::Evidence].contains(&role) {
         if role == Role::Evidence {
             signer_metadata(
@@ -1055,7 +1248,7 @@ pub async fn bootstrap(
             let allowed=if role==Role::Renewal {json!(policy_names)}else{json!([leaf_policy(role)])};
             request(bao,Method::POST,&format!("auth/token/roles/{leaf}"),Some(&json!({"allowed_policies":allowed,"disallowed_policies":["default","root"],"orphan":true,"token_no_default_policy":true,"token_explicit_max_ttl":if ttl==3600 {"1h"}else{"8h"},"token_type":"service"})),Some(token)).await?;
         }
-        request(bao,Method::PUT,&format!("sys/policies/acl/{}",spec.policy),Some(&json!({"policy":policy(role,context)?})),Some(token)).await?;
+        request(bao,Method::PUT,&format!("sys/policies/acl/{}",spec.policy),Some(&json!({"policy":expected_policy})),Some(token)).await?;
         request(bao,Method::POST,&format!("auth/{}/role/{}",spec.mount,spec.role),Some(&json!({"bind_secret_id":true,"secret_id_num_uses":0,"secret_id_ttl":0,"token_policies":[spec.policy],"token_no_default_policy":true,"token_ttl":if spec.short {"1h"}else{"8h"},"token_max_ttl":if spec.short {"1h"}else{"24h"},"token_type":"service"})),Some(token)).await?;
         let role_data=request(bao,Method::GET,&format!("auth/{}/role/{}/role-id",spec.mount,spec.role),None,Some(token)).await?;
         let secret_data=request(bao,Method::POST,&format!("auth/{}/role/{}/secret-id",spec.mount,spec.role),Some(&json!({})),Some(token)).await?;
@@ -1063,7 +1256,7 @@ pub async fn bootstrap(
         if role!=Role::Renewal && (role_id.len()<20 || secret_id.len()<20) {return Err(REFUSAL);}
         write_private(&output.join(spec.role_file),role_id,512)?; write_private(&output.join(spec.secret_file),secret_id,512)?;
         if let Some(file)=spec.names_file {let mut sorted=policy_names.clone(); sorted.sort(); write_private(&output.join(file),&serde_json::to_string(&sorted).map_err(|_|REFUSAL)?,4096)?;}
-        if role!=Role::Renewal {login(bao,role,&output,context).await?;}
+        if role!=Role::Renewal {login(bao,role,&output,&context).await?;}
         Ok(())
     }.await;
     if work.is_err() {
@@ -1169,4 +1362,228 @@ pub async fn mint(
     }
     verified?;
     Ok(leaf.to_owned())
+}
+
+#[cfg(test)]
+mod ingress_renewal_policy_tests {
+    use super::*;
+
+    fn workload_names() -> Vec<String> {
+        (0..21)
+            .map(|index| format!("workload-leaf-{index:02}"))
+            .collect()
+    }
+
+    fn ingress_role(common: &str, allow_ip: bool) -> Value {
+        json!({
+            "allowed_domains":[common],"allow_ip_sans":allow_ip,
+            "allow_any_name":false,"allow_localhost":common=="localhost",
+            "allow_bare_domains":true,"allow_subdomains":false,
+            "allow_glob_domains":false,"allow_wildcard_certificates":false,
+            "server_flag":true,"client_flag":false,"key_type":"ec","key_bits":256,
+            "max_ttl":28800,"use_csr_common_name":false,"use_csr_sans":false,
+            "cn_validations":[if common.parse::<IpAddr>().is_ok() {"disabled"} else {"hostname"}]
+        })
+    }
+
+    #[test]
+    fn renewal_extends_only_one_exact_installation_scope() {
+        let name = "installer-ingress-12345678123442348234123456789abc";
+        let mut inventory = workload_names();
+        assert!(names(&json!(inventory)).is_ok());
+        let legacy = policy(Role::Renewal, &json!({"names":inventory})).unwrap();
+        assert!(!legacy.contains("installer-ingress-"));
+        inventory.push(name.into());
+        assert!(names(&json!(inventory)).is_ok());
+        assert!(policy(Role::Renewal, &json!({"names":inventory})).is_err());
+        let role = ingress_role("localhost", true);
+        let acl = policy(
+            Role::Renewal,
+            &json!({"names":inventory,"ingress_role":role}),
+        )
+        .unwrap();
+        for (path, caps) in [
+            (format!("transit/keys/{name}"), vec!["read"]),
+            (format!("transit/keys/{name}/csr"), vec!["update"]),
+            (format!("{name}/cert/ca"), vec!["read"]),
+            (format!("{name}/roles/localhost"), vec!["read"]),
+        ] {
+            assert!(acl.contains(&line(&path, &caps)));
+        }
+        assert!(acl.contains(&ingress_sign_acl(name, &role).unwrap()));
+        assert!(!acl.contains(&line(&format!("{name}/sign/localhost"), &["update"])));
+        for forbidden in [
+            "/rotate",
+            "transit/export/",
+            "transit/backup/",
+            "root/generate",
+            "installer-ingress-*",
+        ] {
+            assert!(!acl.contains(forbidden));
+        }
+        assert!(policy(Role::CaRotation, &json!({"names":inventory})).is_err());
+        inventory.push("installer-ingress-aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa".into());
+        assert!(names(&json!(inventory)).is_err());
+    }
+
+    #[test]
+    fn public_renewal_keeps_tls_custody_readback_without_certificate_issuance() {
+        let name = "installer-ingress-12345678123442348234123456789abc";
+        let mut inventory = workload_names();
+        inventory.push(name.into());
+        let context = json!({"names":inventory, "ingress_certificate_source":"acme"});
+        let acl = policy(Role::Renewal, &context).unwrap();
+        assert!(acl.contains(&line(&format!("transit/keys/{name}"), &["read"])));
+        assert!(acl.contains(&line(&format!("sys/policies/acl/{name}"), &["read"])));
+        assert!(acl.contains(&line("auth/token/create/selfhost-renew-leaf", &["update"])));
+        for path in [
+            format!("transit/keys/{name}/csr"),
+            format!("transit/sign/{name}"),
+            format!("{name}/cert/ca"),
+            format!("{name}/roles/localhost"),
+            format!("{name}/sign/localhost"),
+            format!("transit/keys/{name}/rotate"),
+            format!("transit/export/signing-key/{name}"),
+        ] {
+            assert!(!acl.contains(&format!("path {path:?}")), "{path}");
+        }
+        for marker in [
+            json!("staging"),
+            json!("managed-ca"),
+            json!(true),
+            json!(null),
+        ] {
+            let mut bad = context.clone();
+            bad["ingress_certificate_source"] = marker;
+            assert!(policy(Role::Renewal, &bad).is_err());
+        }
+        assert!(policy(Role::CaRotation, &context).is_err());
+        assert!(policy(
+            Role::Renewal,
+            &json!({"names":workload_names(),
+            "ingress_certificate_source":"acme"})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn renewal_binds_every_ingress_signing_parameter_to_retained_role_identity() {
+        let name = "installer-ingress-12345678123442348234123456789abc";
+        for (common, dns, ip, allow_ip) in [
+            ("marty.example.com", "marty.example.com", "", false),
+            ("203.0.113.10", "", "203.0.113.10", true),
+            ("2001:db8::10", "", "2001:db8::10", true),
+            ("localhost", "localhost", "127.0.0.1", true),
+        ] {
+            let acl = ingress_sign_acl(name, &ingress_role(common, allow_ip)).unwrap();
+            assert!(acl.contains("required_parameters = [\"csr\", \"common_name\", \"alt_names\", \"ip_sans\", \"exclude_cn_from_sans\", \"ttl\"]"));
+            assert!(acl.contains(&format!("\"common_name\" = [{:?}]", common)));
+            assert!(acl.contains(&format!("\"alt_names\" = [{:?}]", dns)));
+            assert!(acl.contains(&format!("\"ip_sans\" = [{:?}]", ip)));
+            assert!(acl.contains("\"exclude_cn_from_sans\" = [true]"));
+            assert!(acl.contains("\"ttl\" = [\"8h\"]"));
+            assert!(!acl.contains('*'));
+        }
+        let inventory = workload_names();
+        let legacy = policy(Role::Renewal, &json!({"names":inventory})).unwrap();
+        assert_eq!(
+            legacy,
+            policy(
+                Role::Renewal,
+                &json!({"names":inventory,"ingress_role":{"invalid":true}})
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn renewal_rejects_ambiguous_or_broadened_ingress_role_before_policy_creation() {
+        let name = "installer-ingress-12345678123442348234123456789abc";
+        for common in [
+            "MARTY.example.com",
+            "*.example.com",
+            "example.com:443",
+            "example.com/path",
+            "203.000.113.10",
+            "2001:db8:0:0:0:0:0:10",
+        ] {
+            assert!(ingress_sign_acl(name, &ingress_role(common, false)).is_err());
+        }
+        for (field, value) in [
+            ("allowed_domains", json!([])),
+            (
+                "allowed_domains",
+                json!(["marty.example.com", "foreign.example.com"]),
+            ),
+            ("allow_ip_sans", json!(true)),
+            ("allow_any_name", json!(true)),
+            ("allow_subdomains", json!(true)),
+            ("allow_glob_domains", json!(true)),
+            ("allow_wildcard_certificates", json!(true)),
+            ("use_csr_sans", json!(true)),
+            ("use_csr_common_name", json!(true)),
+            ("max_ttl", json!(86400)),
+            ("cn_validations", json!(["disabled"])),
+        ] {
+            let mut role = ingress_role("marty.example.com", false);
+            role[field] = value;
+            assert!(ingress_sign_acl(name, &role).is_err(), "{field}");
+        }
+        assert!(ingress_sign_acl(name, &ingress_role("203.0.113.10", false)).is_err());
+    }
+
+    #[test]
+    fn renewal_preserves_one_explicit_ip_alias_in_the_retained_role() {
+        let name = "installer-ingress-12345678123442348234123456789abc";
+        for ip in ["203.0.113.10", "2001:db8::10"] {
+            let mut role = ingress_role("marty.example.com", true);
+            role["allowed_domains"] = json!(["marty.example.com", ip]);
+            let acl = ingress_sign_acl(name, &role).unwrap();
+            assert!(acl.contains("\"common_name\" = [\"marty.example.com\"]"));
+            assert!(acl.contains("\"alt_names\" = [\"marty.example.com\"]"));
+            assert!(acl.contains(&format!("\"ip_sans\" = [{ip:?}]")));
+            assert!(!acl.contains('*'));
+            role["allow_ip_sans"] = json!(false);
+            assert!(ingress_sign_acl(name, &role).is_err());
+        }
+        for (dns, aliases) in [
+            (
+                "marty.example.com",
+                json!(["marty.example.com", "127.0.0.1"]),
+            ),
+            (
+                "marty.example.com",
+                json!(["marty.example.com", "2001:db8:0:0:0:0:0:10"]),
+            ),
+            (
+                "marty.example.com",
+                json!(["marty.example.com", "203.0.113.10", "203.0.113.11"]),
+            ),
+            ("marty", json!(["marty", "203.0.113.10"])),
+            ("localhost", json!(["localhost", "203.0.113.10"])),
+            ("203.0.113.10", json!(["203.0.113.10", "203.0.113.11"])),
+        ] {
+            let mut role = ingress_role(dns, true);
+            role["allowed_domains"] = aliases;
+            assert!(ingress_sign_acl(name, &role).is_err(), "{role}");
+        }
+    }
+
+    #[test]
+    fn renewal_refuses_ambiguous_or_missing_ingress_scope() {
+        for additional in [
+            "foreign-key",
+            "installer-ingress-*",
+            "installer-ingress-../other",
+            "installer-ingress-1234",
+            "installer-ingress-AAAAAAAAAAAA4AAA8AAAAAAAAAAAAAAA",
+        ] {
+            let mut inventory = workload_names();
+            inventory.push(additional.into());
+            assert!(names(&json!(inventory)).is_err());
+        }
+        let mut inventory = workload_names();
+        inventory[0] = "installer-ingress-12345678123442348234123456789abc".into();
+        assert!(names(&json!(inventory)).is_err());
+    }
 }

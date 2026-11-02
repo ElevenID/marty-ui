@@ -11,6 +11,8 @@ import uuid
 
 from installer_candidate_vm_launch_evidence import bind_provisioned_launch
 from installer_candidate_vm_live_observe import bind_pre_dispatch
+from installer_candidate_vm_guest_readiness import ROOTLESS_FACT_FIELDS, validate_rootless_facts
+from installer_candidate_vm_policy import ROOTLESS_UID, seed_profile
 import installer_release as release
 
 RECORDS = {
@@ -46,9 +48,15 @@ def bind_target(records: dict[str, bytes], initial_raw: bytes, current: dict,
     creation = release.decode(records["creation_receipt"])
     runtime = release.decode(records["runtime_receipt"])
     seed = release.decode(records["seed_receipt"])
+    resource_profile = seed_profile(seed)
     launch = release.decode(records["launch_receipt"])
     guest = current["guest"]
-    release.exact(guest, GUEST_FIELDS, "VM guest readiness")
+    release.exact(guest, GUEST_FIELDS | (ROOTLESS_FACT_FIELDS if resource_profile else set()),
+                  "VM guest readiness")
+    if resource_profile:
+        validate_rootless_facts(guest, resource_profile)
+        release.require(type(guest["guest_uid"]) is int and guest["guest_uid"] == ROOTLESS_UID,
+                        "VM rootless guest UID differs")
     engine = guest["docker_engine_id"]
     identities = {
         "vm_id": launch["vm_id"],
@@ -85,7 +93,7 @@ def bind_target(records: dict[str, bytes], initial_raw: bytes, current: dict,
     disk_id = release.digest(release.encode(dict(
         vm_id=launch["vm_id"], path=disk_path,
         device=runtime["disk_device"], inode=runtime["disk_inode"])))
-    return dict(
+    result = dict(
         target=dict(guest_id=launch["vm_id"], disk_id=disk_id,
                     engine_id=engine, installation_id=installation_id),
         ssh=dict(host="127.0.0.1", port=seed["ssh_port"],
@@ -97,3 +105,6 @@ def bind_target(records: dict[str, bytes], initial_raw: bytes, current: dict,
         pre_dispatch_sha256=release.digest(release.encode(current)),
         qualified=False, dispatch_authorized=False,
     )
+    if resource_profile:
+        result.update({key: guest[key] for key in ROOTLESS_FACT_FIELDS})
+    return result

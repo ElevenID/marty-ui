@@ -1317,6 +1317,33 @@ specific operational context; prepare a concrete reviewed operation first.
 
 ## Current source status and evidence retention
 
+### AWS and optional OpenBao deployment work
+
+Preserve the existing multi-service Signing Keys registry, provider dispatcher,
+issuer profiles and DID resolution. The installer registers existing AWS keys
+through the same authenticated configuration, validation and resolution APIs as
+the console, with revision-checked writes that retain unrelated registrations.
+Provider capability metadata describes implemented operations; registration
+preflight does not establish signing permission or installed qualification.
+New automatic DID verification-method identifiers hide provider coordinates;
+existing published methods and explicit identity bindings remain stable.
+
+The attach-existing operation uses an organization API key on an owned running
+installation. Fresh AWS foundation selection accepts preprovisioned keys,
+public certificates, external OIDC and separate workload identities. It uses
+the existing installer lifecycle and Organization credential owner for a scoped
+first-boot registration, followed by revocation and a public API rejection check.
+Shared MMF adapters supply AWS signing, TLS, grant MACs and secret envelopes.
+Registered DIDComm operation bindings reuse the existing OpenBao extension and
+signing-grant authorization; unavailable authcrypt fails without an anoncrypt
+downgrade. See [the installer inputs](compose-installer.md#preprovisioned-aws-foundation).
+
+AWS-only readiness still requires a fresh installed journey with the selected
+OIDC client, isolated IAM identities, certificate and credential refresh, and
+recovery checks. The earlier existing-key EC2 probe does not qualify that
+foundation. Hybrid readiness additionally qualifies the enabled extension
+operations. Source and fixture checks do not establish installed acceptance.
+
 The protected KMS consumer changes landed as UI #1192
 (`62607e860e3fe57abef39e29dfb59ae1c8bbd2a8`) and Credentials #313
 (`7ac622015a220992fbae84177a1518fec7b75849`). Core v0.2.2 is the

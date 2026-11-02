@@ -1,0 +1,379 @@
+"""Synthetic orchestration controls; no Docker, PG or beta qualification."""
+import json
+from pathlib import Path
+import sys
+from urllib.parse import parse_qs, urlsplit
+import pytest
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import rehearse_native_schema_commands as rehearsal
+
+
+def fixture(tmp_path):
+    admin = tmp_path / "admin.url"
+    admin.write_text("postgres://postgres:SYNTHETIC_PASSWORD@postgres/marty")
+    from scoped_native_runtime import ref
+    inputs = {"runId": "11111111-1111-4111-8111-111111111111", "binaries": {"flow": {}, "issuance-native": {}},
+              "databaseAdminUrl": ref(admin), "buildReceipt": {"sha256": "a" * 64},
+              "executables": {}, "metadataModule": {}, "sqlSources": {}, "migrationSetSha256": "b" * 64, "databaseNetwork": "fixture"}
+    selection = tmp_path / "selection.json"
+    selection.write_text(json.dumps(rehearsal.expected_synthetic_selection(inputs)))
+    inputs["selection"] = ref(selection)
+    return rehearsal.Rehearsal({"root": tmp_path}, inputs)
+
+
+def test_fixture_never_claims_authoritative_journal_or_beta_profile(tmp_path):
+    value = fixture(tmp_path)
+    value.persist()
+    assert value.state["schema"] == "marty.synthetic-native-schema-rehearsal/v1"
+    assert value.state["betaDatabaseAccessed"] is False
+    assert value.state["durableAuthorityClaimed"] is False
+    assert value.state["sourceSqlBetaGuardSettingsAreSynthetic"] is True
+    assert json.loads((tmp_path / "rehearsal-state.json").read_text())["durableAuthorityClaimed"] is False
+
+
+def test_fixture_bootstrap_uses_same_cli_with_owned_app_role(tmp_path):
+    value = fixture(tmp_path)
+    value.bootstrap = True
+    assert parse_qs(urlsplit(value.database_url("migrate")).query) == {"options[role]": ["marty"]}
+    value.bootstrap = False
+    assert parse_qs(urlsplit(value.database_url("migrate")).query) == {"options[role]": ["postgres"]}
+    assert parse_qs(urlsplit(value.database_url("verify-owned-schema")).query) == {"options[role]": ["marty"]}
+
+
+def test_beta_postgres_is_refused_before_container_inspection(tmp_path):
+    value = fixture(tmp_path)
+    value.pg_cid = "f37ec29f5810b5ec0564ed47658c092eb73ed68496044d155ea75549a375745d"
+    value.i["databaseNetwork"] = "marty-schema-rehearsal-" + value.fixture_run
+    calls = []
+    value.command = lambda args: calls.append(args) or (rehearsal.ENGINE + "\n").encode()
+    with pytest.raises(ValueError, match="OWNED_FIXTURE_NOT_STARTED"):
+        value.guard()
+    assert len(calls) == 1 and calls[0][1] == "info"
+
+
+def test_expected_negative_requires_actual_acl_reason_not_generic_exit1(tmp_path):
+    value = fixture(tmp_path)
+    value.state["pendingContainerId"] = "a" * 64
+    value.command_index = 7
+    value.stage_intent = lambda name: setattr(value, "stage", name)
+    (tmp_path / "negative-database-command-7.stderr").write_text("password authentication failed")
+    def failure(*args):
+        raise ValueError("DATABASE_COMMAND_NONZERO_RECONCILE")
+    value.schema = failure
+    value.validate_schema = lambda *args, **kwargs: pytest.fail("Wrong-cause failure must not be relabeled/retired as an expected rejection")
+    with pytest.raises(ValueError, match="EXPECTED_ACL_OR_ROLE_DENIAL_NOT_OBSERVED"):
+        value.schema_stage("negative", "issuance-native", "verify-owned-schema", expect_failure=True)
+
+
+def test_rehearsal_is_not_armed_and_stages_are_exact():
+    assert rehearsal.DISPATCH_ENABLED is False
+    assert len(set(rehearsal.STAGES)) == len(rehearsal.STAGES) == 23
+    assert "reject-flow-before-acl" in rehearsal.STAGES and "reject-admin-issuer" in rehearsal.STAGES
+
+
+def test_rehearsal_business_sql_asset_paths_exist_in_actual_source():
+    root = Path(__file__).resolve().parents[1]
+    assert len(rehearsal.MIGRATION_FILES) == 3
+    assert all((root / name).is_file() for name in rehearsal.MIGRATION_FILES)
+
+
+def test_closed_python_export_resolves_lazy_operational_sql_import(tmp_path):
+    import subprocess
+    root = Path(__file__).resolve().parents[1]
+    for name in rehearsal.OPERATOR_FILES:
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((root / name).read_bytes())
+    code = "import sys;sys.path.insert(0,sys.argv[1]);from rehearse_native_schema_commands import operational_sql_sources;assert len(operational_sql_sources())==10"
+    subprocess.run([sys.executable, "-I", "-c", code, str(tmp_path / "scripts")], check=True)
+
+
+def test_cleanup_refuses_same_live_controller_before_any_command(tmp_path, monkeypatch):
+    value = fixture(tmp_path)
+    value.g["inputSha256"] = "a" * 64
+    identity = {"pid": 123, "creationFileTime": 456, "running": True}
+    monkeypatch.setattr(rehearsal, "process_identity", lambda pid: identity)
+    value.command = lambda *args: pytest.fail("Live controller must block all Docker operations")
+    with pytest.raises(ValueError, match="ORIGINAL_REHEARSAL_CONTROLLER_STILL_LIVE"):
+        value.cleanup({"inputsSha256": "a" * 64, "controllerIdentity": identity}, "22222222-2222-4222-8222-222222222222")
+
+
+def test_cleanup_effect_requires_fresh_exact_engine(tmp_path):
+    value = fixture(tmp_path)
+    calls = []
+    value.command = lambda args: calls.append(args) or b"FOREIGN_ENGINE"
+    with pytest.raises(ValueError, match="ENGINE_CHANGED"):
+        value.cleanup_effect(["docker", "rm", "owned"])
+    assert len(calls) == 1 and calls[0][1] == "info"
+
+
+def test_cleanup_refuses_foreign_network_before_container_actions(tmp_path, monkeypatch):
+    value = fixture(tmp_path)
+    value.i["databaseNetwork"] = "marty-schema-rehearsal-" + value.fixture_run
+    value.g.update(inputSha256="a" * 64, save=lambda *args: {})
+    monkeypatch.setattr(rehearsal, "process_identity", lambda pid: None)
+    calls = []
+    def command(args):
+        calls.append(args)
+        if args[1] == "info":
+            return rehearsal.ENGINE.encode()
+        if args[1:3] == ["network", "ls"]:
+            return b"a" * 64
+        if args[1:3] == ["network", "inspect"]:
+            return json.dumps([{"Name": value.i["databaseNetwork"], "Internal": True, "Labels": {"elevenid.owner": "foreign"}}]).encode()
+        pytest.fail("Foreign network must block container actions")
+    value.command = command
+    with pytest.raises(ValueError, match="OWNED_NETWORK_RECONCILIATION_REFUSED"):
+        value.cleanup({"inputsSha256": "a" * 64, "controllerIdentity": {"pid": 123, "creationFileTime": 456}, "state": {}}, "22222222-2222-4222-8222-222222222222")
+    assert not any(args[1] in ("stop", "rm", "create", "start") for args in calls)
+
+
+def test_actual_operator_arming_normalizes_only_unique_assignment():
+    raw = Path(rehearsal.__file__).read_bytes()
+    enabled = raw.replace(b"\nDISPATCH_ENABLED = False\n", b"\nDISPATCH_ENABLED = True\n", 1)
+    assert enabled != raw and rehearsal.disabled_operator_source(enabled) == raw
+    with pytest.raises(ValueError, match="ONLY_DISPATCH_FLAG_MAY_CHANGE"):
+        rehearsal.disabled_operator_source(enabled + b"\nDISPATCH_ENABLED = True\n")
+
+
+def test_cleanup_refuses_recreated_known_helper_generation(tmp_path):
+    value = fixture(tmp_path)
+    failure = {"state": {"pendingStage": "migrate-flow", "pendingContainerId": "a" * 64}}
+    with pytest.raises(ValueError, match="KNOWN_HELPER_CID_CHANGED"):
+        value.cleanup_generation("migrate-flow", "b" * 64, failure)
+    value.cleanup_generation("migrate-flow", "a" * 64, failure)
+    with pytest.raises(ValueError, match="NON_PENDING_HELPER"):
+        value.cleanup_generation("bootstrap-flow", "a" * 64, failure)
+
+
+def test_cleanup_refuses_extra_network_and_binds_created_default(tmp_path):
+    value = fixture(tmp_path)
+    value.i["databaseNetwork"] = "owned"
+    value.network_id = "a" * 64
+    row = {"NetworkSettings": {"Networks": {"owned": {"NetworkID": value.network_id}, "beta": {"NetworkID": "b" * 64}}},
+           "State": {"Status": "running", "Running": True, "Pid": 123}}
+    value.command = lambda *args: pytest.fail("Extra network must fail before network read/effect")
+    with pytest.raises(ValueError, match="CLEANUP_EXTRA_OR_MISSING_NETWORK"):
+        value.cleanup_network(row)
+    del row["NetworkSettings"]["Networks"]["beta"]
+    row["NetworkSettings"]["Networks"]["owned"]["NetworkID"] = ""
+    with pytest.raises(ValueError, match="CLEANUP_NETWORK_ID_CHANGED"):
+        value.cleanup_network(row)
+    row["State"] = {"Status": "created", "Running": False, "Pid": 0}
+    value.command = lambda args: json.dumps([{"Id": value.network_id, "Name": "owned", "Internal": True,
+        "Labels": {"elevenid.owner": rehearsal.OWNER, "elevenid.run": value.fixture_run}}]).encode()
+    value.cleanup_network(row)
+
+
+@pytest.mark.parametrize("stdout,code,expected", [(b"4000000000", 0, "PHYSICAL_4GIB_REQUIRED"), (b"unknown", 1, "PHYSICAL_CAPACITY_UNKNOWN")])
+def test_capacity_persists_actual_sample_before_refusal(monkeypatch, stdout, code, expected):
+    from types import SimpleNamespace
+    result = SimpleNamespace(stdout=stdout, stderr=b"bounded diagnostic", returncode=code,
+        observation={"failures": [], "timedOut": False})
+    monkeypatch.setattr(rehearsal, "bounded_run", lambda *args, **kwargs: result)
+    saved = []
+    context = {"env": {}, "save": lambda name, value: saved.append((name, value)) or {"sha256": "actual"}}
+    with pytest.raises(ValueError, match=expected):
+        rehearsal.capacity(context, {"executables": {"powershell": {"path": "not-executed"}}})
+    assert len(saved) == 1 and saved[0][1]["stdout"] == stdout.decode()
+    assert saved[0][1]["exitCode"] == code and saved[0][1]["requiredPhysicalBytes"] == 4294967296
+    assert context["capacityObservation"] == {"sha256": "actual"}
+
+
+def test_private_failure_diagnostic_retains_bounded_cause_without_locals():
+    try:
+        try:
+            raise ValueError("EXACT_PRIVATE_REASON" + "x" * 5000)
+        except ValueError as cause:
+            raise RuntimeError("OUTER_REASON") from cause
+    except RuntimeError as error:
+        diagnostic = rehearsal.private_failure_diagnostic(error)
+    assert diagnostic["privateOnly"] is True
+    assert [row["errorClass"] for row in diagnostic["causes"]] == ["RuntimeError", "ValueError"]
+    assert diagnostic["causes"][1]["message"].startswith("EXACT_PRIVATE_REASON")
+    assert len(diagnostic["causes"][1]["message"]) == 2048
+    assert all(set(frame) == {"file", "line", "function"} for row in diagnostic["causes"] for frame in row["frames"])
+
+
+def test_private_exclusive_file_roundtrip_beyond_windows_max_path(tmp_path):
+    import os
+    parent = tmp_path
+    while len(str(parent)) < 280:
+        parent = parent / ("owned-private-" + "x" * 24)
+    native = Path("\\\\?\\" + str(parent.absolute())) if os.name == "nt" else parent
+    native.mkdir(parents=True)
+    target = parent / "owned-receipt.json"
+    bound = rehearsal.write_private_bytes(target, b"PRIVATE_SYNTHETIC_CONTROL")
+    assert len(str(target)) > 260
+    assert rehearsal.read_ref(bound).read_bytes() == b"PRIVATE_SYNTHETIC_CONTROL"
+    with pytest.raises(FileExistsError):
+        rehearsal.write_private_bytes(target, b"MUST_NOT_OVERWRITE")
+    assert rehearsal.read_ref(bound).read_bytes() == b"PRIVATE_SYNTHETIC_CONTROL"
+
+
+def test_explicit_recovery_preserves_resource_scope_and_sql_assets():
+    from copy import deepcopy
+    keys = ("schema", "runId", "privateRoot", "sourceRevision", "coreRevision", "postgresName", "databaseNetwork",
+        "stageIds", "buildReceipt", "binaries", "executables", "dockerConfig", "dockerConfigFiles", "guardModules", "guardFiles", "migrationSetSha256")
+    prior = {key: key for key in keys}
+    prior.update(sqlSources={"fixed.sql": {"sha256": "a" * 64}}, migrationSources={"fixed.rs": {"sha256": "b" * 64}})
+    inputs = deepcopy(prior)
+    inputs["recoveryFrom"] = {"sha256": "old-input"}
+    rehearsal.validate_recovery_scope(inputs, prior)
+    inputs["runId"] = "different-resource-generation"
+    with pytest.raises(ValueError, match="EXACT_FAILED_RESOURCE_SCOPE_REQUIRED"):
+        rehearsal.validate_recovery_scope(inputs, prior)
+    inputs["runId"] = prior["runId"]
+    inputs["sqlSources"]["fixed.sql"]["sha256"] = "c" * 64
+    with pytest.raises(ValueError, match="RECOVERY_SOURCE_ASSETS_CHANGED"):
+        rehearsal.validate_recovery_scope(inputs, prior)
+
+
+def test_missing_selection_contract_refuses_before_helper_dispatch(tmp_path):
+    value = fixture(tmp_path)
+    del value.i["selection"]
+    value.command = lambda *args: pytest.fail("Missing selection must refuse before dispatch")
+    with pytest.raises(ValueError, match="FROZEN_SCHEMA_ADAPTER_INPUT_CONTRACT_REQUIRED"):
+        value.schema("flow", "migrate")
+
+
+def test_real_inherited_schema_boundary_returns_build_bound_selection(tmp_path):
+    from types import SimpleNamespace
+    from scoped_native_database import IMAGE
+    from scoped_native_runtime import ref, daemon_source
+    value = fixture(tmp_path)
+    binary = tmp_path / "synthetic-flow-elf"
+    binary.write_bytes(b"UNIT_TRANSPORT_ONLY_NOT_A_REAL_ELF")
+    value.i["binaries"]["flow"] = ref(binary)
+    selection_file = Path(value.i["selection"]["path"])
+    selection_file.write_text(json.dumps(rehearsal.expected_synthetic_selection(value.i)))
+    value.i["selection"] = ref(selection_file)
+    value.selection = rehearsal.schema_input_contract(value.i)
+    value.i.update(databaseNetwork="marty-schema-rehearsal-" + value.fixture_run, databaseNetworkId="c" * 64)
+    value.network_id = "c" * 64
+    value.pg_cid = "d" * 64
+    value.identity = {"containerId": value.pg_cid, "systemIdentifier": "SYNTHETIC", "databaseOid": "123"}
+    value.bootstrap = True
+    cid = "e" * 64
+    config = {"User": "10001:10001", "Entrypoint": ["/usr/local/bin/marty-flow"], "Cmd": ["migrate"],
+        "Labels": {"elevenid.owner": "native-maintenance-schema", "elevenid.run": value.i["runId"]},
+        "Env": ["DATABASE_URL=" + value.database_url("migrate")]}
+    helper = {"Id": cid, "Name": "/marty-native-schema-" + value.i["runId"] + "-flow-migrate", "Image": IMAGE,
+        "Config": config, "HostConfig": {"ReadonlyRootfs": True, "Privileged": False, "Memory": 268435456,
+            "MemorySwap": 268435456, "NanoCpus": 250000000, "NetworkMode": value.i["databaseNetwork"],
+            "CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges:true"], "RestartPolicy": {"Name": "no"}},
+        "Mounts": [{"Type": "bind", "RW": False, "Destination": "/usr/local/bin/marty-flow", "Source": daemon_source(binary)}],
+        "State": {"Status": "created", "Running": False, "Paused": False, "OOMKilled": False, "Pid": 0, "ExitCode": 0}}
+    pg = {"Id": value.pg_cid, "Image": rehearsal.PG_IMAGE,
+        "Config": {"Labels": {"elevenid.owner": rehearsal.OWNER, "elevenid.run": value.fixture_run}},
+        "State": {"Running": True, "Paused": False},
+        "NetworkSettings": {"Networks": {value.i["databaseNetwork"]: {"NetworkID": value.network_id, "Aliases": ["postgres"]}}}}
+    calls = []
+    def command(args):
+        value.command_index += 1
+        calls.append(args)
+        if args[1] == "create":
+            return cid.encode()
+        if args[1] == "info":
+            return rehearsal.ENGINE.encode()
+        if args[1:3] == ["image", "inspect"]:
+            return json.dumps([{"Config": {"Env": []}}]).encode()
+        if args[1] == "inspect":
+            return json.dumps([helper if args[2] == cid else pg]).encode()
+        if args[1] in ("rm", "ps"):
+            return b""
+        pytest.fail("Unexpected mock transport operation")
+    def result(args):
+        assert args == ["docker", "start", "--attach", cid]
+        helper["State"]["Status"] = "exited"
+        return SimpleNamespace(stdout=b"SYNTHETIC_MIGRATED", stderr=b"")
+    def save_bytes(name, raw):
+        output = tmp_path / name
+        return rehearsal.write_private_bytes(output, raw)
+    value.command, value.result = command, result
+    value.g.update(save_bytes=save_bytes, save=lambda name, row: save_bytes(name, json.dumps(row).encode()))
+    row = value.schema("flow", "migrate")
+    assert row["selectionSha256"] == value.i["selection"]["sha256"]
+    assert row["selectionSha256"] != value.i["buildReceipt"]["sha256"]
+    assert row["sourceRevision"] == rehearsal.SOURCE and row["coreRevision"] == rehearsal.CORE
+    assert row["containerId"] == cid and row["exitCode"] == 0
+    assert any(args[1] == "create" for args in calls)
+
+    # The negative-control path validates terminal evidence, then retirement
+    # validates it again. Both observations must survive exclusive writes.
+    value.validate_schema(cid, created=False)
+    value.retire_schema_helper(cid)
+    terminal_snapshots = list(tmp_path.glob("schema-" + cid + "-terminal-*.json"))
+    assert len(terminal_snapshots) == 2
+    assert all(json.loads(p.read_bytes())["State"]["Status"] == "exited" for p in terminal_snapshots)
+    assert value.state["pendingContainerId"] is None
+
+
+def test_fresh_fixture_reuses_production_bootstrap_order_and_closed_cleanup_inventory():
+    from qualify_selfhost_migrations import NATIVE_BINARIES
+    from scoped_native_database import NativeDatabasePhase
+    assert tuple(rehearsal.SYNTHETIC_SCHEMA_BINARIES[role] for role in rehearsal.BOOTSTRAP_ROLES) == NATIVE_BINARIES
+    assert NATIVE_BINARIES == ("marty-organization", "marty-credential-template", "marty-device-registration", "marty-issuance-service")
+    assert set(NativeDatabasePhase.SCHEMA_BINARIES) == {"flow", "issuance-native"}
+    bootstrap = [stage for stage in rehearsal.STAGES if stage.startswith("bootstrap-")]
+    assert bootstrap == ["bootstrap-flow", *("bootstrap-" + role for role in rehearsal.BOOTSTRAP_ROLES)]
+    assert len(rehearsal.SCHEMA_STAGE_OPERATIONS) == 12
+    assert all(rehearsal.SCHEMA_STAGE_OPERATIONS[stage][1] == "migrate" for stage in bootstrap)
+    assert rehearsal.STAGES.index("bootstrap-organization") < rehearsal.STAGES.index("bootstrap-credential-template") < rehearsal.STAGES.index("bootstrap-issuance-native") < rehearsal.STAGES.index("install")
+
+
+def test_real_rehearsal_dispatches_canonical_prerequisites_before_fence(tmp_path):
+    from qualify_selfhost_migrations import NATIVE_BINARIES
+    value = fixture(tmp_path)
+    value.create_fixture = lambda: None
+    observed = []
+    value.schema_stage = lambda stage, role, command, **kw: observed.append((stage, role, command, kw))
+    class StopBeforeFirstSql(Exception):
+        pass
+    def first_sql(stage, name, **kwargs):
+        assert stage == "install"
+        raise StopBeforeFirstSql
+    value.sql_stage = first_sql
+    with pytest.raises(StopBeforeFirstSql):
+        value.run()
+    assert [value.SCHEMA_BINARIES[role] for _, role, _, _ in observed] == ["marty-flow", *NATIVE_BINARIES]
+    assert all(command == "migrate" and kw == {"bootstrap": True} for _, _, command, kw in observed)
+
+
+@pytest.mark.parametrize("exact_cause", [True, False])
+def test_fixture_trigger_negative_requires_exact_refusal_then_source_recheck(tmp_path, exact_cause):
+    import base64
+    value = fixture(tmp_path)
+    control = "unknown-trigger"
+    stage = "reject-trigger-" + control
+    value.i["stageIds"] = {stage: "22222222-2222-4222-8222-222222222222"}
+    source_path = Path(__file__).resolve().parents[1] / rehearsal.FENCE_NEGATIVE_SOURCES[control]
+    value.i["operatorFiles"] = {rehearsal.FENCE_NEGATIVE_SOURCES[control]: rehearsal.ref(source_path)}
+    value.i["sqlSources"] = {"passport-beta-fence-verify.sql": {"sha256": "f" * 64}}
+    value.pg_cid = "c" * 64
+    value.command_index = 5
+    value.guard = lambda: None
+    value.target_settings = lambda: {}
+    value.node = lambda *args, **kwargs: {"stdin": base64.b64encode(b"SOURCE_BOUND_VERIFIER").decode(), "pgOptions": "fixed", "argv": ["psql"]}
+    restored = []
+    value.sql = lambda name: restored.append(name) or {"state": "exited", "exitCode": 0}
+    def save_bytes(name, raw):
+        output = tmp_path / name
+        output.write_bytes(raw)
+        return rehearsal.ref(output)
+    value.g.update(save_bytes=save_bytes, save=lambda name, row: save_bytes(name, json.dumps(row).encode()))
+    def rejected(args, *, input):
+        assert input.startswith(b"-- Synthetic fixture only.") and b"BEGIN;" in input
+        assert b"SOURCE_BOUND_VERIFIER" in input and input.endswith(b"ROLLBACK;\n")
+        name = stage + "-database-command-5"
+        (tmp_path / (name + ".terminal.json")).write_text(json.dumps({"exitCode": 3, "observation": {"timedOut": False, "failures": []}}))
+        (tmp_path / (name + ".stderr")).write_bytes(b"passport fence trigger inventory changed" if exact_cause else b"unrelated permission failure")
+        raise ValueError("DATABASE_COMMAND_NONZERO_RECONCILE")
+    value.result = rejected
+    if exact_cause:
+        value.fence_negative(control)
+        assert restored == ["passport-beta-fence-verify.sql"] and value.fence_rejections == [control]
+    else:
+        with pytest.raises(ValueError, match="EXACT_TRIGGER_CONTROL_REFUSAL_REQUIRED"):
+            value.fence_negative(control)
+        assert not restored and not value.fence_rejections

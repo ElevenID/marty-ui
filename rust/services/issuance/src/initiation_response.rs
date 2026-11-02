@@ -47,8 +47,12 @@ pub trait InitiationDidcommDelivery: Send + Sync {
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
-#[error("DIDComm delivery failed")]
-pub struct InitiationDidcommDeliveryError;
+pub enum InitiationDidcommDeliveryError {
+    #[error("DIDComm delivery failed")]
+    Unavailable,
+    #[error("DIDComm authcrypt capability is unavailable")]
+    CapabilityUnavailable,
+}
 
 #[derive(Clone)]
 pub struct InitiationOfferProjector {
@@ -124,7 +128,7 @@ impl InitiationOfferProjector {
                 .and_then(serde_json::Value::as_str);
             let uri = if variant == Some("didcomm_v2") {
                 self.didcomm_uri(&transaction, request, &mut response_status)
-                    .await
+                    .await?
             } else {
                 let configuration_id = credential_configuration_id_for_format(
                     credential_type,
@@ -160,7 +164,7 @@ impl InitiationOfferProjector {
             id: transaction.id,
             organization_id: transaction.organization_id,
             credential_template_id: transaction.credential_template_id,
-            status: transaction_status(response_status).to_owned(),
+            status: response_status.as_str().to_owned(),
             credential_offer_uri,
             credential_offer_uris,
             credential_offer_labels,
@@ -198,7 +202,7 @@ impl InitiationOfferProjector {
         transaction: &CredentialTransaction,
         request: &InitiationRequest,
         response_status: &mut CredentialTransactionStatus,
-    ) -> String {
+    ) -> Result<String, InitiationOfferProjectionError> {
         let holder_did = request
             .holder_did
             .as_deref()
@@ -237,7 +241,7 @@ impl InitiationOfferProjector {
                     {
                         *response_status = CredentialTransactionStatus::Issued;
                     }
-                    return format!("didcomm://{}", receipt.service_endpoint);
+                    return Ok(format!("didcomm://{}", receipt.service_endpoint));
                 }
                 Ok(_) => {
                     warn!(
@@ -246,7 +250,10 @@ impl InitiationOfferProjector {
                         "DIDComm auto-delivery failed"
                     );
                 }
-                Err(_) => {
+                Err(InitiationDidcommDeliveryError::CapabilityUnavailable) => {
+                    return Err(InitiationOfferProjectionError::DidcommCapabilityUnavailable)
+                }
+                Err(InitiationDidcommDeliveryError::Unavailable) => {
                     warn!(
                         didcomm_owner = "automatic",
                         didcomm_outcome = "unavailable",
@@ -255,28 +262,21 @@ impl InitiationOfferProjector {
                 }
             }
         }
-        format!("didcomm://pending?transaction_id={}", transaction.id)
+        Ok(format!(
+            "didcomm://pending?transaction_id={}",
+            transaction.id
+        ))
     }
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum InitiationOfferProjectionError {
+    #[error("DIDComm authcrypt requires a registered OpenBao extension")]
+    DidcommCapabilityUnavailable,
     #[error("issuer base URL is required")]
     InvalidIssuerBaseUrl,
     #[error("credential offer is unavailable")]
     OfferUnavailable,
-}
-
-fn transaction_status(status: CredentialTransactionStatus) -> &'static str {
-    match status {
-        CredentialTransactionStatus::Pending => "pending",
-        CredentialTransactionStatus::Authorized => "authorized",
-        CredentialTransactionStatus::Signing => "signing",
-        CredentialTransactionStatus::Issued => "issued",
-        CredentialTransactionStatus::Failed => "failed",
-        CredentialTransactionStatus::Expired => "expired",
-        CredentialTransactionStatus::Revoked => "revoked",
-    }
 }
 
 pub(crate) fn python_quote(value: &str) -> String {
@@ -426,7 +426,7 @@ mod tests {
         let projector = InitiationOfferProjector::new(
             "https://issuer.example",
             Arc::new(TestDidcomm {
-                receipt: Err(InitiationDidcommDeliveryError),
+                receipt: Err(InitiationDidcommDeliveryError::Unavailable),
             }),
         )
         .unwrap();
@@ -445,6 +445,29 @@ mod tests {
             "didcomm://pending?transaction_id=transaction-1"
         );
         assert_eq!(response.status, "pending");
+    }
+
+    #[tokio::test]
+    async fn unsupported_authcrypt_is_not_projected_as_a_successful_pending_offer() {
+        let projector = InitiationOfferProjector::new(
+            "https://issuer.example",
+            Arc::new(TestDidcomm {
+                receipt: Err(InitiationDidcommDeliveryError::CapabilityUnavailable),
+            }),
+        )
+        .unwrap();
+        let result = projector
+            .project(
+                reservation(vec![
+                    json!({"wallet_id":"didcomm", "format_variant":"didcomm_v2"}),
+                ]),
+                &request(),
+            )
+            .await;
+        assert_eq!(
+            result,
+            Err(InitiationOfferProjectionError::DidcommCapabilityUnavailable)
+        );
     }
 
     #[tokio::test]

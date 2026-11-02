@@ -21,10 +21,17 @@ use crate::managed_holder_key::{
 #[derive(Clone)]
 struct HolderState {
     device_key: Arc<str>,
-    provider: OpenBaoManagedHolderKeys,
+    provider: Option<OpenBaoManagedHolderKeys>,
 }
 
 pub fn router(device_key: String, provider: OpenBaoManagedHolderKeys) -> Router {
+    router_with_optional_provider(device_key, Some(provider))
+}
+
+pub fn router_with_optional_provider(
+    device_key: String,
+    provider: Option<OpenBaoManagedHolderKeys>,
+) -> Router {
     let state = HolderState {
         device_key: Arc::from(device_key),
         provider,
@@ -65,6 +72,17 @@ async fn device_auth(State(state): State<HolderState>, request: Request, next: N
     next.run(request).await
 }
 
+fn capability_unavailable() -> Response {
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(json!({
+            "code":"capability_unavailable", "capability":"managed_holder_key_lifecycle",
+            "detail":"Managed holder keys require a configured compatible remote provider"
+        })),
+    )
+        .into_response()
+}
+
 fn operation_error(error: HolderKeyError) -> Response {
     let status = match error {
         HolderKeyError::Invalid => StatusCode::UNPROCESSABLE_ENTITY,
@@ -77,7 +95,10 @@ async fn create(
     State(state): State<HolderState>,
     Json(request): Json<CreateHolderKeyRequest>,
 ) -> Response {
-    match state.provider.create(request).await {
+    let Some(provider) = state.provider.as_ref() else {
+        return capability_unavailable();
+    };
+    match provider.create(request).await {
         Ok(metadata) => (StatusCode::OK, Json(metadata)).into_response(),
         Err(error) => operation_error(error),
     }
@@ -87,14 +108,20 @@ async fn sign(
     State(state): State<HolderState>,
     Json(request): Json<SignHolderKeyRequest>,
 ) -> Response {
-    match state.provider.sign(request).await {
+    let Some(provider) = state.provider.as_ref() else {
+        return capability_unavailable();
+    };
+    match provider.sign(request).await {
         Ok(signature) => (StatusCode::OK, Json(signature)).into_response(),
         Err(error) => operation_error(error),
     }
 }
 
 async fn revoke(State(state): State<HolderState>, Json(scope): Json<HolderKeyScope>) -> Response {
-    match state.provider.revoke(scope).await {
+    let Some(provider) = state.provider.as_ref() else {
+        return capability_unavailable();
+    };
+    match provider.revoke(scope).await {
         Ok(()) => (StatusCode::OK, Json(json!({"ok":true}))).into_response(),
         Err(error) => operation_error(error),
     }
@@ -105,6 +132,47 @@ mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn absent_holder_capability_requires_device_authority() {
+        let key = "dedicated-device-registration-key-32-chars";
+        let app = router_with_optional_provider(key.into(), None);
+        let body = json!({
+            "scope": {"organization_id":"org-a", "registration_id":"reg-a",
+                "purpose":"holder_binding", "provider_reference":"cred-holder-unavailable"},
+            "algorithm":"ES256"
+        });
+        for authorized in [false, true] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/internal/device-registration/holder-keys/create")
+                .header("content-type", "application/json");
+            if authorized {
+                request = request.header("x-device-registration-key", key);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::from(body.to_string())).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if authorized {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                } else {
+                    StatusCode::UNAUTHORIZED
+                }
+            );
+            if authorized {
+                let bytes = axum::body::to_bytes(response.into_body(), 2048)
+                    .await
+                    .unwrap();
+                let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(value["code"], "capability_unavailable");
+                assert_eq!(value["capability"], "managed_holder_key_lifecycle");
+            }
+        }
+    }
 
     #[tokio::test]
     async fn dedicated_credential_and_scope_fail_before_openbao() {

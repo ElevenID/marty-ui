@@ -193,7 +193,17 @@ impl From<NativeInitiationDidcommDeliveryError> for InitiationDidcommHttpError {
 impl IntoResponse for InitiationDidcommHttpError {
     fn into_response(self) -> Response {
         let (status, detail) = self.failure();
-        (status, Json(json!({"detail": detail}))).into_response()
+        let mut body = json!({"detail": detail});
+        if matches!(
+            self,
+            Self::Delivery(NativeInitiationDidcommDeliveryError::Prerequisite(
+                NativeDidcommError::CapabilityUnavailable
+            ))
+        ) {
+            body["code"] = json!("capability_unavailable");
+            body["capability"] = json!("didcomm_authcrypt");
+        }
+        (status, Json(body)).into_response()
     }
 }
 
@@ -263,6 +273,10 @@ impl InitiationDidcommHttpError {
             }
             Self::Delivery(NativeInitiationDidcommDeliveryError::Prerequisite(reason)) => {
                 match reason {
+                    NativeDidcommError::CapabilityUnavailable => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "DIDComm authcrypt requires a registered OpenBao extension",
+                    ),
                     NativeDidcommError::MissingEndpoint => (
                         StatusCode::UNPROCESSABLE_ENTITY,
                         "Holder DID has no DIDComm service endpoint",
@@ -323,6 +337,23 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn missing_authcrypt_extension_has_a_fixed_capability_error() {
+        let response = InitiationDidcommHttpError::Delivery(
+            NativeInitiationDidcommDeliveryError::Prerequisite(
+                NativeDidcommError::CapabilityUnavailable,
+            ),
+        )
+        .into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["code"], "capability_unavailable");
+        assert_eq!(body["capability"], "didcomm_authcrypt");
+    }
 
     #[test]
     fn shared_authentication_keeps_didcomm_tenant_policy() {

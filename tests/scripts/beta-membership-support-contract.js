@@ -31,9 +31,14 @@ function requiredText(value, label) {
 }
 
 function validateExpiryPrerequisite(expiry) {
-  objectKeys(expiry, ['isolatedDeployment', 'expectedServerOfferTtlSeconds', 'maximumWaitSeconds'], 'expiry');
-  assert.equal(expiry.isolatedDeployment, true,
-    'Expired-offer lane requires an explicitly isolated short-lived deployment');
+  objectKeys(expiry, ['isolatedDeployment', 'mode', 'expectedServerOfferTtlSeconds', 'maximumWaitSeconds'], 'expiry');
+  if (expiry.mode === 'PER_OWNED_OFFER') {
+    assert.equal(expiry.isolatedDeployment, undefined, 'Per-offer lifetime does not change a deployment default');
+  } else {
+    assert.equal(expiry.mode, undefined, 'Unknown expiry mode');
+    assert.equal(expiry.isolatedDeployment, true,
+      'Expired-offer lane requires an explicitly isolated short-lived deployment');
+  }
   assert.ok(Number.isInteger(expiry.expectedServerOfferTtlSeconds)
     && expiry.expectedServerOfferTtlSeconds >= 60 && expiry.expectedServerOfferTtlSeconds <= MAX_OFFER_TTL_SECONDS
     && expiry.expectedServerOfferTtlSeconds % 60 === 0,
@@ -47,24 +52,32 @@ function validateExpiryPrerequisite(expiry) {
 
 function validateFixture(fixture, lane) {
   assert.ok(['expired-offer', 'untrusted-issuer'].includes(lane), 'Explicit D05 supporting lane required');
-  objectKeys(fixture, ['schemaVersion', 'kind', 'synthetic', 'authorization', 'applicant', 'trusted', 'foreign', 'login', 'expiry'], 'fixture');
+  objectKeys(fixture, ['schemaVersion', 'kind', 'synthetic', 'authorization', 'applicant', 'secondaryApplicant', 'trusted', 'foreign', 'login', 'expiry'], 'fixture');
   assert.equal(fixture.schemaVersion, 1);
   assert.equal(fixture.kind, 'membership-support-fixture');
   assert.equal(fixture.synthetic, true, 'Only explicitly synthetic applicant fixtures are supported');
   assert.equal(fixture.authorization, 'PREPROVISIONED_DEMO_FIXTURE', 'Preprovisioned demo fixture authorization is required');
-  objectKeys(fixture.applicant, ['id', 'email', 'formData'], 'applicant');
-  assert.match(fixture.applicant.id || '', UUID, 'Applicant ID must be explicit');
-  requiredText(fixture.applicant.email, 'Applicant email');
-  const form = fixture.applicant.formData;
-  assert.ok(form && typeof form === 'object' && !Array.isArray(form) && Object.keys(form).length <= 50,
-    'A bounded synthetic application form is required');
-  for (const [key, value] of Object.entries(form)) {
-    assert.ok(/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key)
-      && !/(password|secret|token|private.?key|authorization|cookie)/i.test(key), 'Fixture form must not contain secrets');
-    assert.ok(typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
-      || (typeof value === 'string' && value.length <= 512), 'Synthetic form values must be bounded scalars');
+  function validateApplicant(applicant, label) {
+    objectKeys(applicant, ['id', 'email', 'formData'], label);
+    assert.match(applicant.id || '', UUID, `${label} ID must be explicit`);
+    requiredText(applicant.email, `${label} email`);
+    const form = applicant.formData;
+    assert.ok(form && typeof form === 'object' && !Array.isArray(form) && Object.keys(form).length <= 50,
+      'A bounded synthetic application form is required');
+    for (const [key, value] of Object.entries(form)) {
+      assert.ok(/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key)
+        && !/(password|secret|token|private.?key|authorization|cookie)/i.test(key), 'Fixture form must not contain secrets');
+      assert.ok(typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
+        || (typeof value === 'string' && value.length <= 512), 'Synthetic form values must be bounded scalars');
+    }
+    if (Object.hasOwn(form, 'email')) assert.equal(form.email, applicant.email, 'Form email must match the existing applicant');
   }
-  if (Object.hasOwn(form, 'email')) assert.equal(form.email, fixture.applicant.email, 'Form email must match the existing applicant');
+  validateApplicant(fixture.applicant, 'Applicant');
+  if (fixture.secondaryApplicant) {
+    validateApplicant(fixture.secondaryApplicant, 'Secondary applicant');
+    assert.notEqual(fixture.secondaryApplicant.id, fixture.applicant.id, 'Distinct synthetic applicant profiles are required');
+    assert.notEqual(fixture.secondaryApplicant.email, fixture.applicant.email, 'Distinct synthetic applicant accounts are required');
+  }
   const issuerFields = ['organizationId', 'credentialTemplateId', 'applicationTemplateId', 'trustProfileId',
     'issuerEntityId', 'issuerDid', 'credentialFormat', 'credentialConfigurationId'];
   if (lane === 'untrusted-issuer') assert.ok(fixture.foreign, 'The authorized foreign issuer fixture is required');
@@ -195,7 +208,7 @@ function expiryWindow(transaction, application, prerequisite, nowMs = Date.now()
     'Actual public transaction and application expiry timestamps are required');
   assert.equal(applicationExpiry, expires, 'Application offer expiry does not match its transaction');
   assert.ok(Math.abs((expires - created) / 1000 - prerequisite.expectedServerOfferTtlSeconds) <= 1,
-    'Actual server offer TTL differs from the declared isolated deployment; cancel the owned transaction');
+    'Actual server offer TTL differs from the declared lifetime; cancel the owned transaction');
   assert.ok(expires > nowMs && expires - nowMs + 1000 <= prerequisite.maximumWaitSeconds * 1000,
     'Actual expiry is not within the explicit bounded recording window');
   return { createdAt: transaction.created_at, expiresAt: transaction.expires_at,
@@ -218,7 +231,7 @@ async function awaitNaturalExpiry({ readOffer, window, now = Date.now, delay = (
   throw new Error('Server did not report natural offer expiration within the explicit maximum wait');
 }
 
-function loginInstanceBinding(details, instance, fixture, origin) {
+function loginInstanceOwnership(details, instance, fixture, origin, window) {
   requiredText(details?.nonce, 'Credential login nonce');
   requiredText(details?.href, 'Credential login wallet link');
   const request = new URL(details?.dcApiRequestUrl, origin);
@@ -227,11 +240,35 @@ function loginInstanceBinding(details, instance, fixture, origin) {
   assert.ok(match && UUID.test(match[1]), 'Login page must expose its native Flow request instance');
   assert.equal(instance?.id, match[1]);
   assert.equal(instance.organization_id, fixture.login.organizationId);
-  assert.equal(instance.context_data?.presentation_policy_id, fixture.login.presentationPolicyId);
-  assert.equal(instance.context_data?.trust_profile_id, fixture.login.trustProfileId);
-  assert.equal(instance.context_data?.oid4vp_issuer_did, fixture.login.verifierDid);
+  const callback=new URL(instance.context_data?.callback_url);
+  assert.equal(callback.pathname,'/internal/v1/auth/credential-verified',
+    'Login Flow must use the native credential verification callback');
+  const callbackNonces=callback.searchParams.getAll('nonce');
+  assert.equal(callbackNonces.length,1,'Login Flow callback must contain one Auth nonce');
+  assert.ok(callbackNonces[0]===details.nonce,'Login Flow callback nonce must belong to the current page');
+  if(window){const created=Date.parse(instance.created_at);
+    assert(Number.isFinite(created)&&created>=window.afterMs&&created<=window.beforeMs,
+      'Login Flow must belong to the current owned start window');}
   return { instanceId: instance.id, organizationId: instance.organization_id, presentationPolicyId: fixture.login.presentationPolicyId,
-    trustProfileId: fixture.login.trustProfileId, nonceSha256: hash(details.nonce) };
+    contextPolicyPresent:Object.hasOwn(instance.context_data||{},'presentation_policy_id'),
+    contextPolicyId: instance.context_data?.presentation_policy_id ?? null,
+    trustProfileId: fixture.login.trustProfileId,
+    contextTrustProfilePresent:Object.hasOwn(instance.context_data||{},'trust_profile_id'),
+    contextTrustProfileId: instance.context_data?.trust_profile_id ?? null,
+    nonceSha256: hash(details.nonce) };
+}
+
+function loginInstanceBinding(details, instance, fixture, origin, policyProof) {
+  const binding=loginInstanceOwnership(details, instance, fixture, origin);
+  assert.equal(binding.contextPolicyId,fixture.login.presentationPolicyId);
+  assert.equal(policyProof?.policyId, fixture.login.presentationPolicyId);
+  assert.equal(policyProof.trustProfileId, fixture.login.trustProfileId);
+  assert(Object.hasOwn(instance.context_data||{},'trust_profile_id'),
+    'Login Flow must expose its trust override state');
+  assert.equal(binding.contextTrustProfileId===null || binding.contextTrustProfileId===fixture.login.trustProfileId,true,
+    'Login Flow cannot override the governed policy trust profile');
+  assert.equal(instance.context_data?.oid4vp_issuer_did, fixture.login.verifierDid);
+  return binding;
 }
 
 function nativeLoginResult(result, binding, fixture, issuerDid, allowed) {
@@ -267,5 +304,5 @@ function assertions(lane, checks) {
 }
 
 module.exports = { GRANT, MAX_EXPIRY_WAIT_SECONDS, MAX_OFFER_TTL_SECONDS, assertions, awaitNaturalExpiry,
-  credentialContract, expiryWindow, hash, loginInstanceBinding, nativeLoginResult, validateFixture,
+  credentialContract, expiryWindow, hash, loginInstanceBinding, loginInstanceOwnership, nativeLoginResult, validateFixture,
   validateIssuerSetup, validateLoginSetup };

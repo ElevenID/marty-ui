@@ -25,6 +25,30 @@ def selected():
 
 
 class SigningCasBuildTests(unittest.TestCase):
+    def test_header_successor_is_exact_signer_only_without_changing_historical_scope(self):
+        successor = profiles.SIGNING_CAS_NO_TRANSFORM
+        self.assertEqual(successor.ui_revision, "9b1efd21163dadeff7cf1ced5fe47c5e046d2121")
+        self.assertEqual(dict(successor.roles), {"signing-keys": "marty-signing-keys"})
+        argv = build.cargo_arguments(successor.name)
+        self.assertEqual(argv, ["cargo", "build", "--locked", "--offline", "--message-format=json",
+                                "-p", "marty-signing-keys", "--bin", "marty-signing-keys"])
+        self.assertIn("assert len(services)==1", build.render_recipe(successor.name))
+        self.assertEqual(profiles.SIGNING_CAS.ui_revision, "3b862bebdd2cc0707d9a38f6df55db198b6be417")
+        self.assertEqual(len(profiles.SIGNING_CAS.roles), 2)
+
+    def test_header_successor_rejects_gateway_or_old_source(self):
+        successor = profiles.SIGNING_CAS_NO_TRANSFORM
+        plan = selected()
+        plan.update(buildProfile=successor.name, uiRevision=successor.ui_revision,
+                    roleBinaries=dict(successor.roles))
+        shared.selected_sources(plan, successor.name)
+        for edit in (lambda p: p["roleBinaries"].update(gateway="marty-gateway"),
+                     lambda p: p.update(uiRevision=profiles.SIGNING_CAS.ui_revision)):
+            invalid = copy.deepcopy(plan)
+            edit(invalid)
+            with self.assertRaises(ValueError):
+                shared.selected_sources(invalid, successor.name)
+
     def test_exact_profile_cannot_expand_roles_sources_or_authority(self):
         plan = selected()
         shared.selected_sources(plan, profiles.SIGNING_CAS.name)

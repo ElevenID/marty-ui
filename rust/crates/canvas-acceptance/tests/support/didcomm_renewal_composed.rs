@@ -637,7 +637,7 @@ pub(super) async fn run_private_ip_refusal(pool: &PgPool) {
             None
         };
         let mode_policy = if authenticated {
-            json!({"mode":"authcrypt","sender_key_ref":remote_sender.as_ref().unwrap().reference})
+            json!({"mode":"authcrypt"})
         } else {
             json!({"mode":"anoncrypt"})
         };
@@ -677,7 +677,7 @@ pub(super) async fn run_private_ip_refusal(pool: &PgPool) {
                         let envelope =
                             NativeDidcommEnvelope::new(None, None, Some(policy.to_str().unwrap()));
                         if let Some(sender) = &remote_sender {
-                            envelope.with_remote_kms(sender.client())
+                            envelope.with_registered_kms(sender.client())
                         } else {
                             envelope
                         }

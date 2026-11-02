@@ -18,7 +18,6 @@ services:
       - signing_keys_integration_secret_key
       - token_hmac_key
       - grpc_service_token
-      - didcomm_issuance_openbao_token
       - openbao_tls_ca_cert
       - sign_grant_mint_issuance_credential_token
       - sign_grant_mint_issuance_canvas_token
@@ -38,7 +37,6 @@ services:
       - signing_keys_integration_secret_key
       - token_hmac_key
       - grpc_service_token
-      - didcomm_issuance_openbao_token
       - sign_grant_mint_issuance_credential_token
       - sign_grant_mint_issuance_canvas_token
       - sign_grant_mint_issuance_readiness_token

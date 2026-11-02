@@ -12,23 +12,64 @@ from scoped_native_runtime import (CORE_REVISION, UI_REVISION, ROLE_BINARIES,
 
 SQL_FILES = ("passport-beta-db-maintenance-start.sql", "passport-beta-batch-acl-finalize.sql",
     "passport-beta-db-enable-app-login.sql", "passport-beta-rust-owner-transition.sql", "passport-beta-rust-owner-verify.sql")
-SQL_SHA256 = {'passport-beta-db-maintenance-start.sql': '0129b6047f8ad3db2fa271f4b275bca6160b68c3bb6625dcc3937aba6f241608', 'passport-beta-batch-acl-finalize.sql': '5cca0125986da948eb5a684fc1ea24e349e680c967a6ff1e837659f4b22ee2ff', 'passport-beta-db-enable-app-login.sql': '4f30d51de9978ce1c9c62c41fc4a8fb600b4b275d1c82535ffcf0f67a1001720', 'passport-beta-rust-owner-transition.sql': '2cc812c71a6abc7db72f701ef83f51514ba620cfcba9af1f62025b3164bbe01a', 'passport-beta-rust-owner-verify.sql': '3c098a5d6b13f95a63bdabdf5a029b119563ea7045ffe3cbb870f12d97386f0d'}
+SQL_SHA256 = {'passport-beta-db-maintenance-start.sql': '0129b6047f8ad3db2fa271f4b275bca6160b68c3bb6625dcc3937aba6f241608', 'passport-beta-batch-acl-finalize.sql': '5cca0125986da948eb5a684fc1ea24e349e680c967a6ff1e837659f4b22ee2ff', 'passport-beta-db-enable-app-login.sql': '4f30d51de9978ce1c9c62c41fc4a8fb600b4b275d1c82535ffcf0f67a1001720', 'passport-beta-rust-owner-transition.sql': '2cc812c71a6abc7db72f701ef83f51514ba620cfcba9af1f62025b3164bbe01a', 'passport-beta-rust-owner-verify.sql': 'ce0f770268d1043248cfa8a5fd039fa8db4b9e6a367804870670378684e73047'}
 FLOW_MUTABLE_COLUMNS = frozenset(("status", "claim_token", "claim_expires_at", "updated_at"))
 
-def binary_overlay(binaries):
-    require(set(binaries) == set(ROLE_BINARIES), "EXACT_THREE_ROLE_BINARIES_REQUIRED")
+def overlay_roles(profile=None, selected_roles=None):
+    if profile is None:
+        require(selected_roles is None, "LEGACY_THREE_ROLE_SCOPE_REQUIRED")
+        return ROLE_BINARIES
+    if profile == "native-devtest-passport-four-role":
+        from scoped_native_maintenance import ROLE_BINARIES as FOUR_ROLES
+        require(selected_roles is None or len(selected_roles) == 4
+                and set(selected_roles) == set(FOUR_ROLES), "EXACT_FOUR_ROLE_SCOPE_REQUIRED")
+        return FOUR_ROLES
+    if profile == "d12-passport-canonical-subset":
+        require(selected_roles is None or len(selected_roles) == 3
+                and set(selected_roles) == set(ROLE_BINARIES), "EXACT_D12_THREE_ROLE_SCOPE_REQUIRED")
+        return ROLE_BINARIES
+    from scoped_native_profiles import reviewed_profile
+    roles = dict(reviewed_profile(profile).roles)
+    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", "canvas-issuer-scoped-jobs"), "UNREVIEWED_OVERLAY_PROFILE")
+    selected = set(roles) if selected_roles is None else set(selected_roles)
+    require(selected and selected.issubset(roles) and (selected_roles is None or len(selected) == len(selected_roles)), "EXACT_SELECTED_OVERLAY_ROLES_REQUIRED")
+    return {role: binary for role, binary in roles.items() if role in selected}
+
+
+def binary_overlay(binaries, profile=None, selected_roles=None, before=None):
+    roles = overlay_roles(profile, selected_roles)
+    require(set(binaries) == set(overlay_roles(profile)), "EXACT_PROFILE_BINARIES_REQUIRED")
+    if profile is not None:
+        require(isinstance(before, dict), "EXISTING_MODEL_REQUIRED_FOR_BINARY_SOURCE_ONLY")
+        services = {}
+        for role, binary in roles.items():
+            mounts = before.get("services", {}).get(role, {}).get("volumes", [])
+            require(len({m["target"] for m in mounts}) == len(mounts), "DUPLICATE_MOUNT_TARGET")
+            matches = [m for m in mounts if m["target"] == "/usr/local/bin/" + binary]
+            require(len(matches) == 1 and matches[0]["type"] == "bind" and matches[0].get("read_only") is True, "EXISTING_READ_ONLY_EXECUTABLE_BIND_REQUIRED")
+            mount = deepcopy(matches[0])
+            mount["source"] = str(read_ref(binaries[role], 512 * 1024 * 1024))
+            services[role] = {"volumes": [mount]}
+            if profile == "native-devtest-passport-four-role" and role == "applicant":
+                require(before["services"][role].get("user") == "0:0", "EXACT_APPLICANT_PREIMAGE_USER_REQUIRED")
+                services[role]["user"] = "10001:10001"
+        return {"services": services}
+    require(before is None, "LEGACY_THREE_ROLE_SCOPE_REQUIRED")
     return {"services": {role: {"volumes": [{"type": "bind", "source": str(read_ref(binaries[role], 512 * 1024 * 1024)),
         "target": "/usr/local/bin/" + binary, "read_only": True, "bind": {"create_host_path": False}}]}
-        for role, binary in ROLE_BINARIES.items()}}
+        for role, binary in roles.items()}}
 
-def validate_delta(before, after, binaries):
-    require(set(binaries) == set(ROLE_BINARIES), "EXACT_THREE_ROLE_BINARIES_REQUIRED")
+
+def validate_delta(before, after, binaries, profile=None, selected_roles=None):
+    roles = overlay_roles(profile, selected_roles)
+    require(set(binaries) == set(overlay_roles(profile)), "EXACT_PROFILE_BINARIES_REQUIRED")
     require({k: v for k, v in before.items() if k != "services"} == {k: v for k, v in after.items() if k != "services"}, "PROJECT_SETTINGS_CHANGED")
     require(set(before["services"]) == set(after["services"]), "SERVICE_SET_CHANGED")
+    require(set(roles).issubset(before["services"]), "SELECTED_SERVICE_MISSING")
     for role, service in before["services"].items():
         old, new = deepcopy(service), deepcopy(after["services"][role])
-        if role in ROLE_BINARIES:
-            target = "/usr/local/bin/" + ROLE_BINARIES[role]
+        if role in roles:
+            target = "/usr/local/bin/" + roles[role]
             a, b = old.pop("volumes", []), new.pop("volumes", [])
             require(len({v["target"] for v in a}) == len(a) and len({v["target"] for v in b}) == len(b), "DUPLICATE_MOUNT_TARGET")
             a, b = {v["target"]: v for v in a}, {v["target"]: v for v in b}
@@ -39,24 +80,33 @@ def validate_delta(before, after, binaries):
             x.pop("source")
             source = y.pop("source")
             require(daemon_source(source) == daemon_source(binaries[role]["path"]) and x == y, "EXECUTABLE_BIND_CHANGED_OUTSIDE_SOURCE")
+        if profile == "native-devtest-passport-four-role" and role == "applicant":
+            require(old.pop("user", None) == "0:0" and new.pop("user", None) == "10001:10001",
+                    "EXACT_APPLICANT_USER_TRANSITION_REQUIRED")
         require(old == new, "UNRELATED_SERVICE_SETTINGS_CHANGED:" + role)
 
-def maintenance_contract(plan):
-    selected_sources(plan)
+
+def maintenance_contract(plan, profile=None):
+    selected_sources(plan, profile)
     require(set(plan.get("databaseClientRoles", [])) == MARTY_CLIENTS, "EXACT_BROADER_DATABASE_CLIENT_SCOPE_REQUIRED")
     require(plan.get("requiresSeparateMaintenanceReview") is True, "BROAD_MAINTENANCE_NOT_ACKNOWLEDGED")
     require(set(plan.get("migrationNames", [])) == set(MIGRATIONS), "EXACT_MIGRATION_SET_REQUIRED")
     require(plan.get("issuance0009LedgerCheckRequired") is True, "MDOC_PREREQUISITE_LEDGER_CHECK_REQUIRED")
-    require(set(plan.get("sqlFiles", {})) == set(SQL_FILES), "EXISTING_FENCED_SQL_SEQUENCE_REQUIRED")
+    expected_sql = SQL_SHA256
+    if profile == "native-devtest-passport-four-role":
+        from scoped_native_maintenance import operational_sql_sources
+        expected_sql = operational_sql_sources()
+    require(set(plan.get("sqlFiles", {})) == set(expected_sql), "EXISTING_FENCED_SQL_SEQUENCE_REQUIRED")
     for name, bound in plan["sqlFiles"].items():
-        require(bound["sha256"] == SQL_SHA256[name], "SOURCE_BOUND_FENCED_SQL_CHANGED")
+        require(bound["sha256"] == expected_sql[name], "SOURCE_BOUND_FENCED_SQL_CHANGED")
         file = read_ref(bound)
         require(file.name == name, "SQL_ALIAS_CHANGED")
     require(plan.get("noHistoricalJobMutation") is True and plan.get("noAutomaticRollback") is True, "RETAINED_DATA_AND_ROLLBACK_CUSTODY_REQUIRED")
 
 def validate_fenced_observation(observed, expected):
-    # These facts must come from the existing privileged source-bound SQL reader,
-    # not an operator setting flags. The wrapper pins that reader and receipt.
+    # Legacy DTO-shape validation only: this function establishes no provenance.
+    # The latest four-role path instead requires actual catalog + SQL receipts
+    # bound to its original operation journal in native-maintenance-runtime.js.
     require(observed["databaseIdentity"] == expected["databaseIdentity"], "DATABASE_IDENTITY_CHANGED")
     require(observed.get("phase") == "fully_fenced" and observed.get("fenceEpoch") == expected["fenceEpoch"] and type(observed.get("fenceEpoch")) is int and observed["fenceEpoch"] > 0, "FENCED_EPOCH_REQUIRED")
     require(type(observed.get("activeMartyConnections")) is int and type(observed.get("activeMigratorConnections")) is int, "EXACT_CONNECTION_COUNTS_REQUIRED")
@@ -101,10 +151,15 @@ def validate_runtime_after(before, after, binaries, maintenance_restart_roles):
         "scope": "FUNCTIONAL_ONLY", "releaseQualified": False, "recordingQualified": False,
         "acceptedByExistingFunctionalRuntimeV2": False}
 
-def compose_recreate_arguments(frozen_arguments, overlay_path):
+def compose_recreate_arguments(frozen_arguments, overlay_path, profile=None, selected_roles=None, *, no_start=False):
     # Existing operator invokes this only AFTER reviewed maintenance/SQL/backup
     # gates, while holding the host operation lock. It is not an apply function.
-    require(frozen_arguments[:4] == ["docker", "compose", "-p", "elevenid-beta"], "FROZEN_BETA_COMPOSE_ARGUMENTS_REQUIRED")
+    require(frozen_arguments[:4] in (["docker", "compose", "-p", "elevenid-beta"],
+                                     ["docker", "compose", "--project-name", "elevenid-beta"]), "FROZEN_BETA_COMPOSE_ARGUMENTS_REQUIRED")
+    require(isinstance(no_start, bool) and (not no_start or profile in
+            ("canvas-issuer-scoped-jobs", "d12-passport-canonical-subset", "native-devtest-passport-four-role")), "REVIEWED_NO_START_PROFILE_REQUIRED")
+    require(profile not in ("d12-passport-canonical-subset", "native-devtest-passport-four-role") or no_start, "D12_CREATE_BEFORE_INSPECTION_REQUIRED")
+    require(overlay_path is not None or no_start, "OVERLAY_PATH_REQUIRED")
     require(len(frozen_arguments) >= 8 and len(frozen_arguments[4:]) % 2 == 0, "EXACT_BASE_COMPOSE_GRAMMAR_REQUIRED")
     counts = {"--project-directory": 0, "--env-file": 0, "-f": 0}
     for flag, value in zip(frozen_arguments[4::2], frozen_arguments[5::2]):
@@ -115,4 +170,7 @@ def compose_recreate_arguments(frozen_arguments, overlay_path):
         require(all(part not in (".", "..") for part in normalized.split("/")), "TRAVERSING_COMPOSE_INPUT")
         counts[flag] += 1
     require(counts["--project-directory"] == 1 and counts["-f"] >= 1, "EXACT_COMPOSE_PROJECT_DIRECTORY_REQUIRED")
-    return [*frozen_arguments, "-f", str(overlay_path), "up", "--detach", "--no-build", "--no-deps", "--pull", "never", "--force-recreate", "flow", "issuance-native", "gateway"]
+    roles = ["flow", "issuance-native", "gateway"] if profile is None else list(overlay_roles(profile, selected_roles))
+    require(profile is not None or selected_roles is None, "LEGACY_THREE_ROLE_SCOPE_REQUIRED")
+    extra = ["-f", str(overlay_path)] if overlay_path is not None else []
+    return [*frozen_arguments, *extra, "up", "--no-start" if no_start else "--detach", "--no-build", "--no-deps", "--pull", "never", "--force-recreate", *roles]

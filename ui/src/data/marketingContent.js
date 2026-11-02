@@ -417,7 +417,7 @@ export const DEPLOYMENT_MODELS = {
   subtitle: 'Production runs with your organization or a partner you select. Agree the workflow, release, and operating responsibilities before deployment.',
   questions: [
     { question: 'Who runs production?', answer: 'Your organization or your chosen partner owns hosting, keys, access, backups, monitoring, and day-to-day operations.' },
-    { question: 'What infrastructure do I need?', answer: 'Review the requirements for the selected release. The current installer path targets Linux amd64 with local rootful Docker and Compose; other profiles need their own validation.' },
+    { question: 'What infrastructure do I need?', answer: 'Review the requirements and admission status for the exact release. Current source targets a regular Linux amd64 user with a pre-existing user-owned rootless Docker Engine and Compose. Other operating systems and architectures are unsupported by this installer path.' },
     { question: 'How do we start?', answer: 'Review a relevant demonstration, define the scope, and evaluate with synthetic data. Real data and production each need their own approval.' },
   ],
   modes: [

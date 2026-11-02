@@ -6,6 +6,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const http = require('node:http');
 
 const {
   canvasLaunchErrorSummary,
@@ -38,8 +39,10 @@ const {
   validateReadinessSnapshot,
   verifyCompactJws,
   rosterJobBaseline,
+  readCompleteScopedJobInventory,
   waitForLatestRosterJob,
   activatedRosterJobTimestamp,
+  validateAndActivateBinding,
   reconcileCanvasPrelaunchApplicationAbsence,
   requireCanvasSetupMutationReconciliation,
   retireCanvasOwnedReferences,
@@ -77,6 +80,24 @@ test('roster baseline rejects a foreign organization and an incomplete inventory
   const full = Array.from({ length: 500 }, (_, id) => ({ id: String(id), organization_id: 'org-1', binding_id: 'foreign' }));
   await assert.rejects(rosterJobBaseline({ get: async () => full }, 'org-1', 'binding-1'),
     error => error.code === 'canvas_roster_job_inventory_incomplete');
+});
+
+test('scoped inventory proves the exact binding, bounded completeness and unique IDs',async()=>{
+  let rows=[{id:'job-1',organization_id:'org-1',binding_id:'binding-1'}],seen;
+  const marty={get:async route=>{seen=route;return rows}};
+  assert.equal((await readCompleteScopedJobInventory(marty,'org-1','binding-1')).length,1);
+  assert.match(seen,/organization_id=org-1&binding_id=binding-1&limit=500$/);
+  for(const bad of [[{...rows[0],organization_id:'foreign'}],[{...rows[0],binding_id:'foreign'}],
+    [rows[0],rows[0]],Array.from({length:500},(_,i)=>({...rows[0],id:String(i)}))]){
+    rows=bad;await assert.rejects(readCompleteScopedJobInventory(marty,'org-1','binding-1'),
+      error=>error.code==='canvas_roster_job_inventory_incomplete');
+  }
+});
+
+test('caller completeness booleans cannot bypass the old backend organization-window guard',async()=>{
+  const marty={scopedJobInventory:true,jobInventoryComplete:true,get:async()=>Array.from({length:500},(_,i)=>({
+    id:String(i),organization_id:'org-1',binding_id:'foreign'}))};
+  await assert.rejects(rosterJobBaseline(marty,'org-1','binding-1'),error=>error.code==='canvas_roster_job_inventory_incomplete');
 });
 
 test('prelaunch cleanup accepts only terminal owned roster with no application or claim', async () => {
@@ -118,6 +139,64 @@ test('prelaunch cleanup accepts only terminal owned roster with no application o
     target_type:'background_roster',application_id:null,status:'succeeded'})));
   await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
     error=>error.code==='canvas_roster_job_inventory_incomplete');
+});
+
+test('prelaunch cleanup accepts zero jobs only with durable proof activation was never attempted', async () => {
+  const org='org-1',binding='binding-1',platform='platform-1';
+  const candidates=[];let activatedAt=null,includeActivatedAt=true;
+  const state={bindingActivationPossible:true,binding:{id:binding},organizationId:org,
+    platformId:platform,runSuffix:'owned-run-1',owned:{martyBindingId:binding,
+      martyBindingActivationAttempted:false},marty:{
+      async get(path){
+        if(path.includes('/program-bindings/'))return {id:binding,organization_id:org,
+          platform_id:platform,display_name:'Portable Canvas badge owned-run-1',
+          enabled:false,...(includeActivatedAt?{activated_at:activatedAt}:{})};
+        return path.includes('canvas-sync-jobs')?[]:candidates;
+      },
+      async post(path){assert.match(path,/\/deactivate$/);activatedAt=null;},
+    }};
+  await reconcileCanvasPrelaunchApplicationAbsence(state);
+  assert.equal(state.prelaunchAbsenceConfirmed,true);
+  for(const marker of [undefined,true]){
+    state.prelaunchAbsenceConfirmed=false;
+    state.owned.martyBindingActivationAttempted=marker;
+    await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+      error=>error.code==='canvas_background_application_uncertain');
+  }
+  state.owned.martyBindingActivationAttempted=false;
+  candidates.push({id:'foreign',organization_id:org,binding_id:binding,
+    application_id:'foreign-app',status:'pending_claim'});
+  await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+    error=>error.code==='canvas_background_application_uncertain');
+  candidates.length=0;state.owned.martyLearnerLaunchIntent=true;
+  await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+    error=>error.code==='canvas_background_application_uncertain');
+  state.owned.martyLearnerLaunchIntent=false;activatedAt=NOW;
+  await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+    error=>error.code==='canvas_background_application_uncertain');
+  activatedAt=null;includeActivatedAt=false;
+  await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+    error=>error.code==='canvas_background_application_uncertain');
+});
+
+test('binding activation persists its intent before the activation POST', async () => {
+  const events=[],timestamp='2026-07-15T06:00:00.000Z';
+  const checks=BLOCKING_READINESS_CHECK_CODES.map(code=>({code,blocking:true,status:'ready',
+    component:'canvas',timestamp}));
+  const validation={ready:true,valid:true,config_version:1,evaluated_at:timestamp,checks};
+  const marty={async post(path){
+    if(path.endsWith('/validate')){events.push('validate');return validation;}
+    assert.match(path,/\/activate$/);events.push('activate');
+    assert.deepEqual(events,['validate','durable-intent','activate']);
+    return {...validation,active:true};
+  }};
+  await validateAndActivateBinding(marty,'owned-binding',()=>{events.push('durable-intent');});
+  assert.deepEqual(events,['validate','durable-intent','activate']);
+  events.length=0;
+  await assert.rejects(validateAndActivateBinding(marty,'owned-binding',()=>{
+    events.push('intent-write-failed');throw Error('durability failure');
+  }),/durability failure/);
+  assert.deepEqual(events,['validate','intent-write-failed']);
 });
 
 test('Canvas secret retirement requires authorized collection metadata, never detail GET 404', async () => {
@@ -242,58 +321,81 @@ test('Canvas learner fixtures have fresh bounded synthetic identities for each r
   assert.throws(() => freshCanvasLearnerEmail('person@example.com', 'owned-run-0001'), /synthetic mailbox/);
 });
 
-test('learning template selection rejects employee and membership badges and foreign bindings', async () => {
-  const claims = ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context']
-    .map(name => ({ name }));
+function nativeBadgeSelectionFixtures() {
   const credential = { id: 'learning', organization_id: 'org-1', status: 'ACTIVE',
-    credential_type: 'OpenBadgeCredential', claims };
-  const application = { id: 'application', organization_id: 'org-1', status: 'ACTIVE', credential_template_id: 'learning' };
-  function client(c, a) { return { get: async path => {
-    const row = path.startsWith('/v1/credential-templates') ? c : a;
-    return path.includes('?') ? [row] : row;
-  } }; }
-  const select = (c, a, selectors = {}) => selectProductionBadgeTemplates(client(c, a), 'org-1', selectors);
-  assert.equal((await select(credential, application)).credential.id, 'learning');
-  assert.equal((await select(credential, application, { applicationTemplateId: 'application', credentialTemplateId: 'learning' })).credential.id, 'learning');
-  await assert.rejects(select(credential, application, { credentialTemplateId: 'different' }), /Exactly one active Open Badge/);
+    credential_type: 'OpenBadgeCredential', credential_payload_format: 'SD_JWT_VC',
+    compliance_profile_id: 'profile-1',
+    claims: ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context']
+      .map(name => ({ name })) };
+  const application = { id: 'application', organization_id: 'org-1', status: 'ACTIVE',
+    credential_template_id: 'learning' };
+  const compliance = { id: 'profile-1', organization_id: 'org-1', status: 'ACTIVE',
+    is_system: false, discoverable: true, credential_format: 'SD_JWT_VC',
+    issuance_protocol: 'OID4VCI_PRE_AUTH' };
+  return { credential, application, compliance };
+}
+
+test('native Canvas badge selection requires SD-JWT and compatible compliance', async () => {
+  const { credential, application, compliance } = nativeBadgeSelectionFixtures();
+  const client = (c = credential, a = application, p = compliance) => ({ get: async raw => {
+    const row = raw.startsWith('/v1/compliance-profiles/') ? p
+      : raw.startsWith('/v1/credential-templates') ? c : a;
+    return raw.includes('?') ? [row] : row;
+  } });
+  assert.equal((await selectProductionBadgeTemplates(client(), 'org-1')).credential.id, 'learning');
+  assert.equal((await selectProductionBadgeTemplates(client(), 'org-1', {
+    applicationTemplateId: 'application', credentialTemplateId: 'learning',
+  })).application.id, 'application');
   for (const c of [
     { ...credential, credential_type: 'EmployeeBadge' },
-    { ...credential, credential_type: 'open_badge', claims: [{ name: 'email' }] },
+    { ...credential, credential_payload_format: 'VC_JWT' },
+    { ...credential, claims: credential.claims.slice(0, 5) },
     { ...credential, organization_id: 'foreign' },
-  ]) await assert.rejects(select(c, application), /Exactly one active Open Badge/);
-  await assert.rejects(select(credential,
-    { ...application, organization_id: 'foreign' }), /Exactly one active Open Badge/);
+    { ...credential, compliance_profile_id: null },
+  ]) await assert.rejects(selectProductionBadgeTemplates(client(c), 'org-1'), /Exactly one active Open Badge/);
+  await assert.rejects(selectProductionBadgeTemplates(client(credential,
+    { ...application, organization_id: 'foreign' }), 'org-1'), /Exactly one active Open Badge/);
+  for (const p of [
+    { ...compliance, organization_id: 'foreign' },
+    { ...compliance, status: 'DRAFT' },
+    { ...compliance, discoverable: false },
+    { ...compliance, credential_format: 'VC_JWT' },
+    { ...compliance, issuance_protocol: 'OID4VCI_AUTH' },
+  ]) await assert.rejects(selectProductionBadgeTemplates(client(credential, application, p), 'org-1'),
+    /Selected Open Badge compliance profile/);
 });
 
-test('explicit learning template selection reads exact resources beyond collection first pages', async () => {
+test('explicit native badge selection reads exact resources beyond collection first pages', async () => {
+  const { credential, application, compliance } = nativeBadgeSelectionFixtures();
   const calls = [];
-  const credential = { id: 'learning', organization_id: 'org-1', status: 'ACTIVE', credential_type: 'OpenBadgeCredential',
-    claims: ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context'].map(name => ({ name })) };
-  const application = { id: 'application', organization_id: 'org-1', status: 'ACTIVE', credential_template_id: 'learning' };
-  const marty = { get: async path => {
-    calls.push(path);
-    if (path === '/v1/application-templates/application') return application;
-    if (path === '/v1/credential-templates/learning') return credential;
+  const marty = { get: async raw => {
+    calls.push(raw);
+    if (raw === '/v1/application-templates/application') return application;
+    if (raw === '/v1/credential-templates/learning') return credential;
+    if (raw === '/v1/compliance-profiles/profile-1') return compliance;
     assert.fail('Exact selected resources must not depend on a collection first page');
   } };
-  assert.equal((await selectProductionBadgeTemplates(marty, 'org-1', { applicationTemplateId: 'application' })).credential.id, 'learning');
-  assert.deepEqual(calls, ['/v1/application-templates/application', '/v1/credential-templates/learning']);
+  assert.equal((await selectProductionBadgeTemplates(marty, 'org-1', {
+    applicationTemplateId: 'application',
+  })).credential.id, 'learning');
+  assert.deepEqual(calls, ['/v1/application-templates/application', '/v1/credential-templates/learning',
+    '/v1/compliance-profiles/profile-1']);
 });
 
-test('unconfigured learning selection pages inventories and rejects repeated pages', async () => {
-  const credential = { id: 'learning', organization_id: 'org-1', status: 'ACTIVE', credential_type: 'OpenBadgeCredential',
-    claims: ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context'].map(name => ({ name })) };
-  const application = { id: 'application', organization_id: 'org-1', status: 'ACTIVE', credential_template_id: 'learning' };
-  const old = Array.from({ length: 100 }, (_, index) => ({ id: 'old-' + index, status: 'DEPRECATED', organization_id: 'org-1' }));
+test('unconfigured native badge selection pages inventories and rejects repeated pages', async () => {
+  const { credential, application, compliance } = nativeBadgeSelectionFixtures();
+  const old = Array.from({ length: 100 }, (_, index) => ({ id: 'old-' + index,
+    status: 'DEPRECATED', organization_id: 'org-1' }));
   const client = repeated => ({ get: async raw => {
+    if (raw === '/v1/compliance-profiles/profile-1') return compliance;
     const url = new URL(raw, 'https://unit.invalid');
     assert.equal(url.searchParams.get('limit'), '100');
     if (url.searchParams.get('offset') === '0' || repeated) return old;
     assert.equal(url.searchParams.get('offset'), '100');
     return [url.pathname.includes('credential-templates') ? credential : application];
   } });
-  assert.equal((await selectProductionBadgeTemplates(client(false), 'org-1', {})).application.id, 'application');
-  await assert.rejects(selectProductionBadgeTemplates(client(true), 'org-1', {}), /repeated or omitted/);
+  assert.equal((await selectProductionBadgeTemplates(client(false), 'org-1')).application.id, 'application');
+  await assert.rejects(selectProductionBadgeTemplates(client(true), 'org-1'), /repeated or omitted/);
 });
 
 test('pipeline prerequisites read the explicit mounted artifact directory and reject changed bootstrap evidence', async t => {
@@ -323,10 +425,28 @@ test('pipeline prerequisites read the explicit mounted artifact directory and re
   }));
   const original = global.fetch;
   t.after(() => { global.fetch = original; });
-  global.fetch = async () => new Response(JSON.stringify({ marty_ui_sha: 'c'.repeat(40) }), { status: 200 });
+  const publicKey = { kty: 'RSA', alg: 'RS256', kid: 'did:web:beta.elevenidllc.com:orgs:marty#lti', n: 'AQ', e: 'AQAB' };
+  let toolJwks = { status: 200, keys: [publicKey] };
+  global.fetch = async (url) => {
+    const route = new URL(url).pathname;
+    if (route === '/.well-known/marty-release') return new Response(JSON.stringify({ marty_ui_sha: 'c'.repeat(40) }), { status: 200 });
+    if (route === '/v1/integrations/canvas/lti/jwks') return new Response(JSON.stringify({ keys: toolJwks.keys }), { status: toolJwks.status });
+    return new Response('', { status: 200 });
+  };
   const ledger = new ObservationLedger(NOW);
   await observePipelinePrerequisites(ledger, 'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory);
   assert.equal(ledger.entries.get('stock_lifecycle_bootstrap_only').status, 'passed');
+  assert.equal(ledger.entries.get('standard_lti_13_install').status, 'not_run');
+  assert.equal(ledger.toJSON().cases.length, CASE_IDS.length);
+  toolJwks = { status: 200, keys: [publicKey, { ...publicKey, kid: publicKey.kid + '-foreign', d: 'private' }] };
+  await assert.rejects(observePipelinePrerequisites(new ObservationLedger(NOW),
+    'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory),
+  error => error.code === 'canvas_lti_tool_jwks_invalid');
+  toolJwks = { status: 503, keys: [] };
+  await assert.rejects(observePipelinePrerequisites(new ObservationLedger(NOW),
+    'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory),
+  error => error.code === 'canvas_lti_tool_signer_unavailable');
+  toolJwks = { status: 200, keys: [publicKey] };
   const invalid = [
     value => { delete value.forbidden_operation_counts; },
     value => { value.forbidden_operation_counts = {}; },
@@ -379,13 +499,13 @@ function compactEs256(privateKey, payload) {
   return `${signingInput}.${signature.toString('base64url')}`;
 }
 
-function localCredentialExchange(t, vct) {
+function localCredentialExchange(t, vct, format = 'dc+sd-jwt') {
   const origin = 'https://beta.elevenidllc.com';
   const issuer = `${origin}/org/org-1`;
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const offer = {
     credential_issuer: issuer,
-    credential_configuration_ids: ['OpenBadgeCredential#sd-jwt'],
+    credential_configuration_ids: [format === 'jwt_vc_json' ? 'OpenBadgeCredential' : 'OpenBadgeCredential#sd-jwt'],
     grants: { 'urn:ietf:params:oauth:grant-type:pre-authorized_code': { 'pre-authorized_code': 'local-test-offer' } },
   };
   const offerUri = `openid-credential-offer://?credential_offer=${encodeURIComponent(JSON.stringify(offer))}`;
@@ -408,12 +528,17 @@ function localCredentialExchange(t, vct) {
     } else if (href === `${origin}/v1/issuance/credential`) {
       const proof = JSON.parse(options.body).proofs.jwt[0];
       const proofHeader = JSON.parse(Buffer.from(proof.split('.')[0], 'base64url').toString('utf8'));
-      const compact = compactEs256(privateKey, {
+      const compact = compactEs256(privateKey, format === 'jwt_vc_json' ? {
+        iss: 'did:web:issuer.example',
+        vc: { type: ['VerifiableCredential', 'OpenBadgeCredential'],
+          credentialSubject: { achievement: { id: vct } } },
+        cnf: { jwk: proofHeader.jwk },
+      } : {
         iss: 'did:web:issuer.example',
         vct,
         cnf: { jwk: proofHeader.jwk },
       });
-      body = { credentials: [{ format: 'dc+sd-jwt', credential: compact }] };
+      body = { credentials: [{ format, credential: compact }] };
     } else if (href === 'https://issuer.example/.well-known/did.json') {
       body = {
         id: 'did:web:issuer.example',
@@ -430,15 +555,38 @@ function localCredentialExchange(t, vct) {
 
 test('credential receipt accepts the exact template VCT with a verified signature and holder binding', async (t) => {
   const fixture = localCredentialExchange(t, 'urn:example:OpenBadgeCredential');
-  const result = await receiveAndVerifyCredential(fixture.offerUri, { vct: 'urn:example:OpenBadgeCredential' }, fixture.origin);
+  const result = await receiveAndVerifyCredential(fixture.offerUri, {
+    vct: 'urn:example:OpenBadgeCredential', credential_payload_format: 'SD_JWT_VC',
+  }, fixture.origin);
   assert.equal(result.payload.vct, 'urn:example:OpenBadgeCredential');
   assert.equal(fixture.requests.length, 5);
 });
 
+test('credential receipt accepts the signed Open Badge VC-JWT type and achievement binding', async (t) => {
+  const achievement = 'https://issuer.example/achievements/canvas';
+  const fixture = localCredentialExchange(t, achievement, 'jwt_vc_json');
+  const result = await receiveAndVerifyCredential(fixture.offerUri, {
+    vct: achievement, credential_type: 'OpenBadgeCredential', credential_payload_format: 'VC_JWT',
+    issuer_did: 'did:web:issuer.example',
+  }, fixture.origin);
+  assert.deepEqual(result.payload.vc.type, ['VerifiableCredential', 'OpenBadgeCredential']);
+  assert.equal(result.payload.vc.credentialSubject.achievement.id, achievement);
+  assert.equal(fixture.requests.length, 5);
+});
+
+test('credential receipt rejects a VC-JWT achievement unrelated to the selected template', async (t) => {
+  const fixture = localCredentialExchange(t, 'https://issuer.example/achievements/other', 'jwt_vc_json');
+  await assert.rejects(receiveAndVerifyCredential(fixture.offerUri, {
+    vct: 'https://issuer.example/achievements/canvas', credential_type: 'OpenBadgeCredential',
+    credential_payload_format: 'VC_JWT', issuer_did: 'did:web:issuer.example',
+  }, fixture.origin), (error) => error instanceof ContractFailure && error.code === 'open_badge_type_mismatch');
+  assert.equal(fixture.requests.length, 5);
+});
+
 for (const [name, actualVct, template] of [
-  ['unrelated VCT when the template has no legacy credential_type', 'urn:example:UnrelatedCredential', { vct: 'urn:example:OpenBadgeCredential' }],
-  ['missing signed VCT', undefined, { vct: 'urn:example:OpenBadgeCredential' }],
-  ['substring matching the legacy credential_type', 'urn:example:NotOpenBadgeCredential', { vct: 'urn:example:OpenBadgeCredential', credential_type: 'OpenBadgeCredential' }],
+  ['unrelated VCT when the template has no legacy credential_type', 'urn:example:UnrelatedCredential', { vct: 'urn:example:OpenBadgeCredential', credential_payload_format: 'SD_JWT_VC' }],
+  ['missing signed VCT', undefined, { vct: 'urn:example:OpenBadgeCredential', credential_payload_format: 'SD_JWT_VC' }],
+  ['substring matching the legacy credential_type', 'urn:example:NotOpenBadgeCredential', { vct: 'urn:example:OpenBadgeCredential', credential_type: 'OpenBadgeCredential', credential_payload_format: 'SD_JWT_VC' }],
 ]) {
   test(`credential receipt rejects ${name} even with a valid signature and holder binding`, async (t) => {
     const fixture = localCredentialExchange(t, actualVct);
@@ -1039,6 +1187,94 @@ test('capture session cleanup distinguishes deleted learner denial from real adm
   assert.deepEqual(calls,['admin'],'Observer persistence failure cannot prevent authority retirement');
   let originalHeader;const beta={cookies:async()=>[{name:'sessionId',value:'CONTROLLED_OWNED_SESSION'}],request:{post:async()=>({status:()=>303}),get:async(_,options)=>{originalHeader=options.headers.Cookie;return {status:()=>200,json:async()=>({authenticated:false,user:null})}}}};
   assert.equal((await retireCanvasBetaSession(beta,custody)).oldCookieAuthenticated,false);assert.equal(originalHeader,'sessionId=CONTROLLED_OWNED_SESSION');
+});
+
+test('cancelled browser cannot prevent bounded original-cookie Canvas admin logout',async t=>{
+  const {createCanvasCaptureCustody,retireCanvasCaptureSessions}=require('./run-canvas-oss-standard-contract');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'canvas-cancelled-session-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const custody=createCanvasCaptureCustody('33333333-3333-4333-8333-333333333333',directory);
+  const cookies=[{name:'_csrf_token',value:'OWNED_CSRF',domain:'canvas-test.elevenidllc.com',path:'/',secure:true}];
+  custody.retain('canvasAdminSession',JSON.stringify(cookies));
+  let reads=0,logouts=0,disposed=false;
+  const requestFactory={newContext:async options=>{
+    assert.deepEqual(options.storageState,{cookies:[],origins:[]});assert.equal(options.ignoreHTTPSErrors,false);
+    return {get:async(_,request)=>{assert.equal(request.headers.Cookie,'_csrf_token=OWNED_CSRF');return {status:()=>++reads>=3?401:200};},
+      delete:async(_,request)=>{assert.equal(request.headers.Cookie,'_csrf_token=OWNED_CSRF');logouts++;return {status:()=>302};},
+      dispose:async()=>{disposed=true;}};
+  }};
+  const cancelled={cookies:async()=>{throw Error('BROWSER_CONTEXT_ABORTED');}};
+  const result=await retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',
+    adminContext:cancelled,custody,sessionRequestFactory:requestFactory});
+  assert.equal(result.canvasAdminSession.logoutStatus,302);assert.equal(result.canvasAdminSession.probes.at(-1).status,401);
+  assert.equal(logouts,1);assert.equal(disposed,true);assert.equal(custody.retire(),true);
+});
+
+test('partial setup retained session is reconciled; unknown transport keeps custody',async t=>{
+  const {createCanvasCaptureCustody,retireCanvasCaptureSessions}=require('./run-canvas-oss-standard-contract');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'canvas-partial-session-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const run='44444444-4444-4444-8444-444444444444',custody=createCanvasCaptureCustody(run,directory);
+  custody.retain('canvasAdminSession',JSON.stringify([{name:'_csrf_token',value:'OWNED_CSRF',domain:'canvas-test.elevenidllc.com',path:'/',secure:true}]));
+  let logout=false;
+  const failedFactory={newContext:async()=>({get:async()=>{throw Error('UNKNOWN_TRANSPORT');},
+    delete:async()=>{logout=true;throw Error('UNEXPECTED_LOGOUT');},dispose:async()=>{}})};
+  await assert.rejects(retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',
+    custody,sessionRequestFactory:failedFactory}),error=>error.code==='canvas_capture_sessions_incomplete');
+  assert.equal(logout,false);assert.equal(custody.hasRetained('canvasAdminSession'),true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(directory,run+'.custody.json'),'utf8')).state,'OPEN');
+});
+
+test('ambiguous logout transport never repeats logout or retires custody',async t=>{
+  const {createCanvasCaptureCustody,retireCanvasCaptureSessions}=require('./run-canvas-oss-standard-contract');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'canvas-ambiguous-session-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const run='55555555-5555-4555-8555-555555555555',custody=createCanvasCaptureCustody(run,directory);
+  custody.retain('canvasAdminSession',JSON.stringify([{name:'_csrf_token',value:'OWNED_CSRF',domain:'canvas-test.elevenidllc.com',path:'/',secure:true}]));
+  let logouts=0;
+  const requestFactory={newContext:async()=>({get:async()=>({status:()=>200}),
+    delete:async()=>{logouts++;throw Error('UNKNOWN_LOGOUT_TRANSPORT');},dispose:async()=>{}})};
+  await assert.rejects(retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',
+    custody,sessionRequestFactory:requestFactory}),error=>error.code==='canvas_capture_sessions_incomplete');
+  assert.equal(logouts,1);assert.equal(custody.hasRetained('canvasAdminSession'),true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(directory,run+'.custody.json'),'utf8')).state,'OPEN');
+});
+
+test('post-logout 403 cannot retire original-cookie Canvas custody',async t=>{
+  const {createCanvasCaptureCustody,retireCanvasCaptureSessions}=require('./run-canvas-oss-standard-contract');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'canvas-403-session-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const run='66666666-6666-4666-8666-666666666666',custody=createCanvasCaptureCustody(run,directory);
+  custody.retain('canvasAdminSession',JSON.stringify([{name:'_csrf_token',value:'OWNED_CSRF',domain:'canvas-test.elevenidllc.com',path:'/',secure:true}]));
+  let reads=0,logouts=0;
+  const requestFactory={newContext:async()=>({get:async()=>{const status=++reads===1?200:403;return {status:()=>status};},
+    delete:async()=>{logouts++;return {status:()=>302};},dispose:async()=>{}})};
+  await assert.rejects(retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',
+    custody,sessionRequestFactory:requestFactory}),error=>error.code==='canvas_capture_sessions_incomplete');
+  assert.equal(logouts,1);assert.equal(reads,3);
+  assert.equal(custody.hasRetained('canvasAdminSession'),true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(directory,run+'.custody.json'),'utf8')).state,'OPEN');
+});
+
+test('isolated request keeps the original cookie across logout Set-Cookie',async t=>{
+  const {createOriginalCookieSessionContext}=require('./run-canvas-oss-standard-contract');
+  const {request}=require('@playwright/test');
+  let valid=true;const received=[];
+  const server=http.createServer((req,res)=>{
+    received.push({method:req.method,cookie:req.headers.cookie||''});
+    if(req.method==='DELETE'){valid=false;res.writeHead(302,{Location:'/login','Set-Cookie':'session=; Max-Age=0; Path=/'});res.end();return;}
+    res.writeHead(valid?200:401,{'Content-Type':'application/json'});res.end('{}');
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const origin=`http://127.0.0.1:${server.address().port}`;
+  const {isolated,session}=await createOriginalCookieSessionContext(request,[{name:'session',value:'OWNED_OLD'}]);
+  try{
+    assert.equal((await session.request.get(origin+'/profile',{maxRedirects:0})).status(),200);
+    assert.equal((await session.request.delete(origin+'/logout',{maxRedirects:0})).status(),302);
+    assert.equal((await session.request.get(origin+'/profile',{maxRedirects:0})).status(),401);
+    assert.deepEqual(received.map(row=>row.cookie),['session=OWNED_OLD','session=OWNED_OLD','session=OWNED_OLD']);
+  }finally{await isolated.dispose();}
 });
 
 

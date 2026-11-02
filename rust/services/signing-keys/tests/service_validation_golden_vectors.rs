@@ -27,5 +27,6 @@ async fn rust_matches_language_neutral_service_validation_vectors() {
             vector.name
         );
         assert!(!result.validated_at.is_empty(), "{} timestamp", vector.name);
+        assert_eq!(result.basis, "configuration", "{} basis", vector.name);
     }
 }

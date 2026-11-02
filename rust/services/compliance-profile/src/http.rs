@@ -9,20 +9,23 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use marty_service_runtime::forwarded_principal::{
+    ForwardedPrincipalAdmission, ForwardedPrincipalError,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 #[derive(Clone)]
 pub struct ComplianceHttpState {
     pub service: Arc<ComplianceService>,
-    service_authenticator: Option<Arc<mmf_security::ServiceTokenAuthenticator>>,
+    principal_admission: ForwardedPrincipalAdmission,
 }
 
 impl ComplianceHttpState {
     pub fn new(service: Arc<ComplianceService>) -> Self {
         Self {
             service,
-            service_authenticator: None,
+            principal_admission: ForwardedPrincipalAdmission::default(),
         }
     }
 
@@ -30,50 +33,39 @@ impl ComplianceHttpState {
         mut self,
         token: Option<String>,
     ) -> Result<Self, mmf_security::SecurityError> {
-        self.service_authenticator = token
-            .map(|token| {
-                mmf_security::ServiceTokenAuthenticator::new(Some(token), true).map(Arc::new)
-            })
-            .transpose()?;
+        self.principal_admission = ForwardedPrincipalAdmission::new(token)?;
         Ok(self)
     }
 
     fn authenticate_service(&self, headers: &HeaderMap) -> Result<(), ApiError> {
-        match &self.service_authenticator {
-            Some(authenticator) => authenticator
-                .authenticate(header(headers, "x-service-token"))
-                .map_err(|_| {
-                    ComplianceError::Unauthorized("Service authentication required".into()).into()
-                }),
-            None => {
-                Err(ComplianceError::Unauthorized("Service authentication required".into()).into())
-            }
-        }
+        self.principal_admission
+            .authenticate_service(headers)
+            .map_err(|_| {
+                ComplianceError::Unauthorized("Service authentication required".into()).into()
+            })
     }
 
     fn for_request(&self, headers: &HeaderMap) -> Result<ComplianceService, ApiError> {
-        let is_key =
-            headers.contains_key("x-api-key-id") || headers.contains_key("x-api-key-scopes");
-        if !is_key {
-            return Ok(self.service.as_ref().clone());
+        match self
+            .principal_admission
+            .gateway_actor(headers)
+            .map_err(|error| {
+                ComplianceError::Unauthorized(
+                    match error {
+                        ForwardedPrincipalError::ServiceAuthentication => {
+                            "Service authentication required"
+                        }
+                        ForwardedPrincipalError::InvalidPrincipal => "Invalid gateway principal",
+                    }
+                    .into(),
+                )
+            })? {
+            None => Ok(self.service.as_ref().clone()),
+            Some(actor) => Ok(self.service.for_gateway_api_key(actor)),
         }
-        self.authenticate_service(headers)?;
-        let actor = marty_api_key_policy::GatewayApiKeyActor::parse(
-            header(headers, "x-api-key-id").unwrap_or_default(),
-            header(headers, "x-organization-id").unwrap_or_default(),
-            header(headers, "x-api-key-scopes").unwrap_or_default(),
-        )
-        .map_err(|_| ComplianceError::Unauthorized("Invalid gateway principal".into()))?;
-        Ok(self.service.for_gateway_api_key(actor))
     }
 }
 
-fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-}
 enum ApiError {
     Domain(ComplianceError),
     Validation,

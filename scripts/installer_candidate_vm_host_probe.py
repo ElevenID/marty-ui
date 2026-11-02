@@ -14,7 +14,9 @@ import tempfile
 
 from installer_candidate_controller import _directory
 from installer_candidate_vm_create import _bytes
-from installer_candidate_vm_guest_readiness import GUEST_USER
+from installer_candidate_vm_guest_readiness import (
+    GUEST_USER, ROOTLESS_FACT_FIELDS, validate_rootless_facts,
+)
 from installer_candidate_vm_runtime import _same_path
 import installer_candidate_dispatch as dispatch
 from installer_host_probe import command
@@ -30,6 +32,12 @@ def probe(binding: dict, harness_source_sha: str, *, run=command) -> bytes:
                     and binding.get("dispatch_authorized") is False,
                     "root diagnostic VM binding required")
     selected_binding = release.encode(binding)
+    resource_profile = binding.get("resource_profile")
+    if resource_profile is not None:
+        validate_rootless_facts(binding, resource_profile)
+    else:
+        release.require(not (set(binding) & ROOTLESS_FACT_FIELDS),
+                        "VM probe contains an incomplete rootless selection")
     ssh = binding.get("ssh")
     release.exact(ssh, {"host", "port", "user", "control_dir",
                         "controller_key_sha256", "known_hosts_sha256"},
@@ -79,6 +87,20 @@ def probe(binding: dict, harness_source_sha: str, *, run=command) -> bytes:
         unchanged()
         release.require(type(raw) is bytes and 0 < len(raw) <= 65536,
                         "VM host observation output invalid")
+        if resource_profile is not None:
+            observed = release.decode(raw)
+            release.require(observed.get("schema") == "elevenid.installer-host-observation/v2"
+                            and observed.get("acceptance") is False
+                            and observed.get("engine_id") == binding["target"]["engine_id"],
+                            "VM rootless host probe identity differs")
+            facts = dict({key: observed[key] for key in ROOTLESS_FACT_FIELDS - {"resource_profile"}},
+                         resource_profile=resource_profile)
+            validate_rootless_facts(facts, resource_profile)
+            release.require(all(facts[key] == binding[key]
+                                for key in ROOTLESS_FACT_FIELDS - {"docker_data_filesystem"})
+                            and facts["docker_data_filesystem"]["device"]
+                            == binding["docker_data_filesystem"]["device"],
+                            "VM rootless host probe runtime changed")
         return raw
     finally:
         os.close(held)

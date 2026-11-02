@@ -2,6 +2,7 @@ name: marty-selfhost-openbao
 
 services:
   openbao-tls-init:
+    mem_limit: ${MARTY_OPENBAO_TLS_INIT_MEMORY_LIMIT:-512m}
     image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
     entrypoint: ["/usr/local/bin/selfhost-tls-init"]
     volumes:
@@ -11,6 +12,7 @@ services:
     restart: "no"
 
   openbao:
+    mem_limit: ${MARTY_OPENBAO_MEMORY_LIMIT:-512m}
     image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
     command:
       - server
@@ -34,6 +36,7 @@ services:
     restart: unless-stopped
 
   openbao-unseal:
+    mem_limit: ${MARTY_OPENBAO_UNSEAL_MEMORY_LIMIT:-512m}
     image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
     entrypoint: ["/usr/local/bin/selfhost-unseal"]
     environment:
@@ -51,6 +54,7 @@ services:
     restart: unless-stopped
 
   openbao-bootstrap:
+    mem_limit: ${MARTY_OPENBAO_BOOTSTRAP_MEMORY_LIMIT:-512m}
     image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
     profiles: ["kms-init"]
     entrypoint: ["/bin/sh", "/scripts/openbao-selfhost-init.sh"]

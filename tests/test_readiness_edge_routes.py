@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -72,10 +74,14 @@ def test_beta_keycloak_publishes_the_canonical_https_issuer_without_proxy_header
 
 
 def test_selfhost_edge_healthchecks_use_readiness() -> None:
-    contents = _text("docker-compose.selfhost.prod.yml")
-
-    assert contents.count("http://127.0.0.1/ready") >= 2
-    assert "http://127.0.0.1/health" not in contents
+    for relative_path, service in (
+        ("docker-compose.selfhost.prod.yml", "edge"),
+        ("docker-compose.selfhost.cloudflare-legacy.yml", "tunnel-nginx-proxy"),
+    ):
+        model = yaml.safe_load(_text(relative_path))
+        healthcheck = model["services"][service]["healthcheck"]["test"]
+        assert "http://127.0.0.1/ready" in healthcheck, relative_path
+        assert "http://127.0.0.1/health" not in healthcheck, relative_path
 
 
 def test_gateway_container_healthchecks_use_dependency_readiness() -> None:

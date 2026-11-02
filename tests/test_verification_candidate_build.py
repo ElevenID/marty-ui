@@ -117,6 +117,8 @@ def write_oci_archive(
     extra_members: dict[str, bytes] | None = None,
     extra_directories: list[str] | None = None,
     uncompressed_layer_override: bytes | None = None,
+    runtime_config: dict[str, object] | None = None,
+    image_annotations: dict[str, str] | None = None,
 ) -> tuple[str, str]:
     layer_tar_buffer = io.BytesIO()
     with tarfile.open(fileobj=layer_tar_buffer, mode="w") as layer_archive:
@@ -162,6 +164,8 @@ def write_oci_archive(
         },
     }
     config_value.update(config_platform_qualifiers or {})
+    if runtime_config is not None:
+        config_value["config"].update(runtime_config)
     config = candidate.canonical_json(config_value)
     config_descriptor = descriptor(config, config_media_type or candidate.OCI_CONFIG)
     config_descriptor["size"] = int(config_descriptor["size"]) + config_size_delta
@@ -181,7 +185,8 @@ def write_oci_archive(
     manifest = candidate.canonical_json(manifest_value)
     manifest_descriptor_fields: dict[str, object] = {
         "annotations": {
-            "org.opencontainers.image.ref.name": archive_tag or f"candidate-{commit}"
+            "org.opencontainers.image.ref.name": archive_tag or f"candidate-{commit}",
+            **(image_annotations or {}),
         }
     }
     if not omit_platform:
@@ -211,7 +216,8 @@ def write_oci_archive(
         nested_descriptor_fields: dict[str, object] = {
             "annotations": {
                 "org.opencontainers.image.ref.name": archive_tag
-                or f"candidate-{commit}"
+                or f"candidate-{commit}",
+                **(image_annotations or {}),
             }
         }
         if top_index_platform is not None:
@@ -1575,25 +1581,26 @@ def test_finalize_rejects_a_rebound_dockerfile(tmp_path: Path) -> None:
         candidate.finalize(args)
 
 
+@pytest.mark.parametrize(
+    "profile", [candidate.VERIFICATION_PROFILE, candidate.SIGNING_KEYS_DEVELOPMENT_PROFILE]
+)
 def test_buildx_archive_is_validated_and_consumed_by_supported_backend(
     tmp_path: Path,
     containerd_buildx_backend: None,
+    profile: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del containerd_buildx_backend
     commit = hashlib.sha1(
         str(tmp_path).encode("utf-8"), usedforsecurity=False
     ).hexdigest()
-    version = f"0.0.0-candidate.{commit[:12]}"
-    build_reference = f"{candidate.LOCAL_IMAGE_REPOSITORY}:candidate-{commit}"
-    archive_tag = f"candidate-{commit}"
-    archive_reference = f"{archive_tag}:latest"
-    verified_reference = f"{candidate.LOCAL_IMAGE_REPOSITORY}:verified-{commit}"
-    cleanup_references = {
-        archive_reference,
-        build_reference,
-        verified_reference,
-    }
-    dockerfile = tmp_path / "Dockerfile"
+    signing_development = profile == candidate.SIGNING_KEYS_DEVELOPMENT_PROFILE
+    context = tmp_path / "source"
+    context.mkdir()
+    dockerfile = context / (
+        "rust/services/signing-keys/Dockerfile" if signing_development else "Dockerfile"
+    )
+    dockerfile.parent.mkdir(parents=True, exist_ok=True)
     dockerfile.write_text(
         """FROM scratch
 ARG MARTY_RELEASE_VERSION
@@ -1609,8 +1616,57 @@ COPY candidate-payload /usr/local/bin/marty-verification-service
 """,
         encoding="utf-8",
     )
-    (tmp_path / "candidate-payload").write_bytes(b"representative Rust service\n")
+    if signing_development:
+        dockerfile.write_text(
+            """# syntax=docker/dockerfile:1.7
+FROM scratch
+ARG MARTY_RELEASE_VERSION
+ARG MARTY_UI_SHA
+ARG CARGO_BUILD_JOBS=1
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \\
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \\
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \\
+    SIGNING_KEYS_SERVICE_PORT=8017 RUST_LOG=info \\
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} MARTY_UI_SHA=${MARTY_UI_SHA}
+COPY candidate-payload /usr/local/bin/marty-signing-keys
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/marty-signing-keys"]
+""",
+            encoding="utf-8",
+        )
+    (context / "candidate-payload").write_bytes(b"representative Rust service\n")
+    if signing_development:
+        for arguments in (
+            ["init", "-q"],
+            ["add", "."],
+            ["-c", "user.name=Installer Test", "-c", "user.email=installer-test@example.invalid",
+             "commit", "--no-gpg-sign", "-qm", "synthetic native import fixture"],
+            ["remote", "add", "origin", "https://example.invalid/installer-test.git"],
+        ):
+            subprocess.run(["git", "-C", str(context), *arguments], check=True, capture_output=True, timeout=15)
+        commit = subprocess.run(
+            ["git", "-C", str(context), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True, timeout=15,
+        ).stdout.strip()
+    version = (
+        f"unsigned-installer-development-{commit}"
+        if signing_development else f"0.0.0-candidate.{commit[:12]}"
+    )
+    archive_tag = (
+        f"installer-development-signing-keys-{commit}"
+        if signing_development else f"candidate-{commit}"
+    )
+    repository = (
+        candidate.SIGNING_KEYS_DEVELOPMENT_REPOSITORY
+        if signing_development else candidate.LOCAL_IMAGE_REPOSITORY
+    )
+    build_reference = f"{repository}:{archive_tag}"
+    archive_reference = f"{archive_tag}:latest"
+    verified_reference = f"{candidate.LOCAL_IMAGE_REPOSITORY}:verified-{commit}"
+    cleanup_references = {archive_reference, build_reference, verified_reference}
     archive = tmp_path / "buildx-candidate.oci.tar"
+    metadata_path = tmp_path / "buildx-metadata.json"
     try:
         result = subprocess.run(
             [
@@ -1618,33 +1674,51 @@ COPY candidate-payload /usr/local/bin/marty-verification-service
                 "buildx",
                 "build",
                 "--file",
-                str(dockerfile),
+                str(dockerfile.relative_to(context)),
                 "--tag",
                 build_reference,
                 "--platform",
                 "linux/amd64",
                 "--build-arg",
-                "SERVICE_NAME=verification",
+                "CARGO_BUILD_JOBS=1" if signing_development else "SERVICE_NAME=verification",
                 "--build-arg",
                 f"MARTY_RELEASE_VERSION={version}",
                 "--build-arg",
                 f"MARTY_UI_SHA={commit}",
                 "--provenance=false",
+                "--sbom=false",
+                "--metadata-file",
+                str(metadata_path),
                 "--output",
                 f"type=oci,dest={archive},compression=gzip,force-compression=true",
-                str(tmp_path),
+                ".",
             ],
             check=False,
             capture_output=True,
             text=True,
             timeout=120,
+            cwd=context,
+            env={**os.environ, "BUILDX_METADATA_PROVENANCE": "max", "BUILDX_GIT_CHECK_DIRTY": "1"},
         )
         assert result.returncode == 0, result.stderr
         image = candidate.inspect_oci_archive(
             archive,
             commit=commit,
             version=version,
+            profile=profile,
         )
+        if signing_development:
+            monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+            import prepare_installer_development_signing_image as development
+
+            receipt = development.prepare(
+                source_root=context,
+                source_sha=commit,
+                archive=archive,
+                build_metadata=metadata_path,
+                output=tmp_path / "development-image-binding.json",
+            )
+            assert receipt["manifest_digest"] == image["digest"]
         assert image["archive_tag"] == archive_tag
         cleanup_references.update({image["digest"], image["config_digest"]})
 

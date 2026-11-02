@@ -14,6 +14,7 @@ marty-api-key-policy = { path = "../../crates/api-key-policy" }
 async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true
+libc = "0.2"
 marty-key-material-policy = { path = "../../crates/key-material-policy" }
 mmf-data.workspace = true
 mmf-core.workspace = true

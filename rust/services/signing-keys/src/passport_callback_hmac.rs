@@ -116,16 +116,24 @@ pub enum CallbackKmsError {
     InvalidSignature,
     #[error("KMS passport callback signer is unavailable.")]
     Unavailable,
+    #[error("Passport callback verification requires a configured compatible remote provider.")]
+    CapabilityUnavailable,
 }
 
 impl IntoResponse for CallbackKmsError {
     fn into_response(self) -> Response {
         let status = match self {
+            Self::CapabilityUnavailable => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Unauthorized | Self::InvalidSignature => StatusCode::UNAUTHORIZED,
             Self::InvalidEvent => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
         };
-        (status, Json(json!({"detail": self.to_string()}))).into_response()
+        let mut body = json!({"detail": self.to_string()});
+        if matches!(self, Self::CapabilityUnavailable) {
+            body["code"] = json!("capability_unavailable");
+            body["capability"] = json!("passport_callback_verification");
+        }
+        (status, Json(body)).into_response()
     }
 }
 

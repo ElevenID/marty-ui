@@ -101,6 +101,8 @@ spec:
                   key: SIGNING_KEYS_OPENBAO_TOKEN
             - name: SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE
               value: /run/secrets/signing-grant-verify/token
+            - name: DIDCOMM_KMS_TOKEN_FILE
+              value: /run/secrets/didcomm-kms/token
             - name: PUBLIC_DOMAIN
               valueFrom:
                 configMapKeyRef:
@@ -123,6 +125,9 @@ spec:
               readOnly: true
             - name: signing-grant-verify
               mountPath: /run/secrets/signing-grant-verify
+              readOnly: true
+            - name: didcomm-kms-token
+              mountPath: /run/secrets/didcomm-kms
               readOnly: true
           resources:
             requests:
@@ -161,6 +166,12 @@ spec:
             secretName: marty-secrets
             items:
               - key: SIGNING_KEYS_GRANT_VERIFY_TOKEN
+                path: token
+        - name: didcomm-kms-token
+          secret:
+            secretName: marty-secrets
+            items:
+              - key: DIDCOMM_ISSUANCE_OPENBAO_TOKEN
                 path: token
 ---
 apiVersion: v1

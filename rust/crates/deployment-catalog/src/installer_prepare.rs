@@ -1,6 +1,10 @@
 //! Execute the authenticated release download/extraction stage. No Docker or
 //! remote provisioning occurs here. Caller exclusively owns private staging,
 //! retains it on error, and persists returned evidence before runtime mutation.
+//! The caller passes the same VerificationTools transaction used for selection:
+//! repeated authentication rechecks exact bytes and policy without rerunning
+//! standard verifiers for an unchanged successful subject. Admission and all
+//! content, operator, channel and expiry bindings below remain independent.
 #![cfg(target_os = "linux")]
 
 use crate::{

@@ -72,7 +72,7 @@ def policy(source: Path) -> list[str]:
             and value["platform"] == "linux/amd64" and value["signer_workflow"] == WORKFLOW,
             "nightly asset policy changed")
     files = value["signed_inputs"]
-    require(len(files) == 19 and len(set(files)) == len(files)
+    require(len(files) == 18 and len(set(files)) == len(files)
             and {"install.sh", "installer-inventory.json"}.issubset(files)
             and all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]+", name) for name in files),
             "invalid nightly release inventory")
@@ -212,12 +212,21 @@ def publish(assets: Path, source: Path, tag: str, run_id: str, gh: Path) -> None
     published = json.loads(command("gh", "api", f"repos/{REPOSITORY}/releases/tags/{tag}"))
     require(published["prerelease"] is True and published["draft"] is False
             and published["tag_name"] == tag, "nightly release tier differs")
-    require(len(published["assets"]) == len(list(assets.iterdir()))
-            and {item["name"] for item in published["assets"]} == {p.name for p in assets.iterdir()}
-            and all(item["state"] == "uploaded" and item["size"] > 0 for item in published["assets"]),
+    # Optional hosting artifacts have their own exact signatures/provenance and
+    # are published after this core. Their absence never blocks a core consumer.
+    from hosting_addon import ASSETS as ADDON_ASSETS
+    optional = {name + suffix for name in ADDON_ASSETS
+                for suffix in ("", ".sigstore.json", ".provenance.jsonl")}
+    core = {p.name for p in assets.iterdir()}
+    published_names = [item["name"] for item in published["assets"]]
+    require(len(set(published_names)) == len(published_names)
+            and core <= set(published_names) <= core | optional
+            and all(item["state"] == "uploaded" and item["size"] > 0
+                    for item in published["assets"] if item["name"] in core),
             "published nightly asset inventory differs")
     with tempfile.TemporaryDirectory(prefix="nightly-published-") as directory:
-        command("gh", "release", "download", tag, "--repo", REPOSITORY, "--dir", directory)
+        patterns = [argument for name in sorted(core) for argument in ("--pattern", name)]
+        command("gh", "release", "download", tag, "--repo", REPOSITORY, "--dir", directory, *patterns)
         require(all(file_digest(Path(directory) / path.name) == file_digest(path)
                     for path in assets.iterdir()), "published nightly asset bytes differ")
     print(published["html_url"])

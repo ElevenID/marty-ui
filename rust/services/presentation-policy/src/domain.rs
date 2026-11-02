@@ -15,6 +15,19 @@ pub enum PolicyStatus {
     Archived,
 }
 
+impl PolicyStatus {
+    /// Canonical wire and persistence name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Active => "active",
+            Self::Suspended => "suspended",
+            Self::Archived => "archived",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConstraintType {
@@ -313,4 +326,29 @@ pub fn evaluate_verified_facts_json(request_json: &str) -> Result<String, Policy
     let result = marty_verification::policy::evaluate_service_policy(request)
         .map_err(|error| PolicyDomainError::Native(error.to_string()))?;
     serde_json::to_string(&result).map_err(|error| PolicyDomainError::Native(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PolicyStatus;
+
+    #[test]
+    fn policy_names_match_the_serialized_contract() {
+        for (status, expected) in [
+            (PolicyStatus::Draft, "draft"),
+            (PolicyStatus::Active, "active"),
+            (PolicyStatus::Suspended, "suspended"),
+            (PolicyStatus::Archived, "archived"),
+        ] {
+            assert_eq!(status.as_str(), expected);
+            assert_eq!(serde_json::to_value(status).unwrap(), expected);
+            assert_eq!(
+                serde_json::from_value::<PolicyStatus>(serde_json::json!(expected)).unwrap(),
+                status
+            );
+        }
+        for invalid in ["", "Draft", " active", "unknown"] {
+            assert!(serde_json::from_value::<PolicyStatus>(serde_json::json!(invalid)).is_err());
+        }
+    }
 }

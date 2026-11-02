@@ -4,6 +4,7 @@ from copy import deepcopy
 import hashlib
 import os
 from pathlib import Path
+import re
 import runpy
 import subprocess
 
@@ -27,11 +28,23 @@ def test_auth_login_uses_bootstrapped_organization_issuer_did():
     model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
     services = model["services"]
     expected = (
-        "did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:"
-        "${MARTY_ORG_SLUG:-marty}"
+        "${MARTY_ISSUER_DID:-did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:"
+        "${MARTY_ORG_SLUG:-marty}}"
     )
     assert services["auth"]["environment"]["CREDENTIAL_LOGIN_ISSUER_DID"] == expected
     assert services["flow"]["environment"]["OID4VP_ISSUER_DID"] == expected
+
+
+@pytest.mark.parametrize("owner,setting", [
+    ("auth", "CREDENTIAL_LOGIN_ISSUER_DID"),
+    ("flow", "OID4VP_ISSUER_DID"),
+    ("issuance-native", "MARTY_ISSUER_DID"),
+])
+def test_preservation_gate_rejects_issuer_identity_drift(rendered_models, owner, setting):
+    approved, current = deepcopy(rendered_models)
+    current["services"][owner]["environment"][setting] = "did:web:unreviewed.example"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
 
 
 def test_flow_waits_for_both_issuance_peers_without_a_startup_cycle():
@@ -119,12 +132,41 @@ def test_reference_identity_and_descriptor_closure():
     data = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "ae230c9efa87ac076f171208d8fc265f3441e6991e36377525c6ba0f54248ec9"
+        == GATE["APPROVED_SHA256"]
     )
     import json
 
     descriptor = json.loads((ROOT / "deploy-config/bundles/selfhost.json").read_text())
     assert "docker-compose.service.issuance-native-runtime.yml" in descriptor["assets"]
+
+
+def test_required_inputs_preserve_historical_and_current_contracts():
+    approved = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8")
+    current = (ROOT / GATE["GATE"]["BASE"]).read_text(encoding="utf-8")
+    historical, required = GATE["required_input_sets"](approved, current)
+    assert len(historical) == 63
+    assert len(required) == 10
+    assert "BAO_ADDR" in historical - required
+    assert "PUBLIC_DOMAIN" in required
+
+
+@pytest.mark.parametrize("fault", ["dropped", "added"])
+def test_required_inputs_reject_unrelated_changes(fault):
+    approved = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8")
+    current = (ROOT / GATE["GATE"]["BASE"]).read_text(encoding="utf-8")
+    if fault == "dropped":
+        changed, count = re.subn(
+            r"\$\{PUBLIC_DOMAIN:\?[^}]*\}", "${PUBLIC_DOMAIN:-}", current
+        )
+    else:
+        changed, count = re.subn(
+            r"\$\{MARTY_ORG_SLUG:-[^}]*\}",
+            "${MARTY_ORG_SLUG:?unreviewed required input}",
+            current,
+        )
+    assert count > 0
+    with pytest.raises(AssertionError, match="Unreviewed required self-host inputs"):
+        GATE["required_input_sets"](approved, changed)
 
 
 @pytest.fixture(scope="module")
@@ -135,6 +177,88 @@ def rendered_models():
     after = render(GATE["GATE"]["BASE"])
     GATE["assert_models"](before, after)
     return before, after
+
+
+def test_core_hosting_separates_optional_connectors_from_the_frozen_model(rendered_models):
+    approved, current = rendered_models
+    for section, names in (
+        ("services", {"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"}),
+        ("secrets", {"cloudflare_tunnel_token", "cloudflare_beta_tunnel_token"}),
+    ):
+        assert names <= set(approved[section])
+        assert not names & set(current[section])
+    assert current["services"]["gateway"]["environment"]["GATEWAY_OBSERVE_CLIENT_IP"] == (
+        "${GATEWAY_OBSERVE_CLIENT_IP:-true}"
+    )
+
+
+def test_web_selection_changes_only_the_reviewed_ui_inputs(rendered_models):
+    approved, current = rendered_models
+    original = approved["services"]["ui"]
+    selected = current["services"]["ui"]
+    assert "UI_ENABLED_SECTIONS" not in original["environment"]
+    assert original["healthcheck"]["test"][-1] == "http://127.0.0.1:80/"
+    assert selected["environment"] == {
+        **original["environment"],
+        "UI_ENABLED_SECTIONS": "${UI_ENABLED_SECTIONS-public,console}",
+    }
+    assert selected["healthcheck"] == {
+        **original["healthcheck"],
+        "test": [*original["healthcheck"]["test"][:-1], "http://127.0.0.1:80/healthz"],
+    }
+
+
+@pytest.mark.parametrize("path,replacement", [
+    (("environment", "UI_ENABLED_SECTIONS"), None),
+    (("environment", "UI_ENABLED_SECTIONS"), "${UI_ENABLED_SECTIONS-none}"),
+    (("environment", "UI_ENABLED_SECTIONS"), "${UI_ENABLED_SECTIONS:-public,console}"),
+    (("environment", "UI_ENABLED_SECTIONS"), "public,console"),
+    (("environment", "UI_PRODUCTION_MARKETING"), "true"),
+    (("healthcheck", "test", -1), "http://127.0.0.1:80/"),
+    (("healthcheck", "test", -1), "http://127.0.0.1:80/console"),
+    (("healthcheck", "test"), ["CMD-SHELL", "true"]),
+    (("healthcheck", "disable"), True),
+    (("healthcheck", "interval"), "1h"),
+])
+def test_web_selection_gate_rejects_defaults_bypass_and_healthcheck_drift(
+    rendered_models, path, replacement,
+):
+    approved, current = deepcopy(rendered_models)
+    target = current["services"]["ui"]
+    for key in path[:-1]:
+        target = target[key]
+    if replacement is None:
+        del target[path[-1]]
+    else:
+        target[path[-1]] = replacement
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
+def test_web_selection_cannot_change_another_service_environment(rendered_models):
+    approved, current = deepcopy(rendered_models)
+    current["services"]["gateway"]["environment"]["UI_ENABLED_SECTIONS"] = "none"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
+@pytest.mark.parametrize("fault", ["connector", "token", "gateway-default", "gateway-missing"])
+def test_core_hosting_gate_rejects_optional_owner_or_gateway_default_drift(rendered_models, fault):
+    approved, current = deepcopy(rendered_models)
+    if fault == "connector":
+        current["services"]["cloudflared"] = deepcopy(approved["services"]["cloudflared"])
+    elif fault == "token":
+        current["secrets"]["cloudflare_tunnel_token"] = deepcopy(
+            approved["secrets"]["cloudflare_tunnel_token"]
+        )
+    elif fault == "gateway-default":
+        current["services"]["gateway"]["environment"]["GATEWAY_OBSERVE_CLIENT_IP"] = (
+            "${GATEWAY_OBSERVE_CLIENT_IP:-false}"
+        )
+    else:
+        del current["services"]["gateway"]["environment"]["GATEWAY_OBSERVE_CLIENT_IP"]
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
 
 
 def test_ordinary_migration_cannot_provision_kms(rendered_models):

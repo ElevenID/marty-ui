@@ -42,6 +42,7 @@ def render(
         {
             "MARTY_SERVICES_IMAGE": IMAGE,
             "MARTY_ISSUANCE_IMAGE": IMAGE,
+            "MARTY_KEYCLOAK_KMS_IMAGE": IMAGE,
             "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "physical-provider-reference",
             "PASSPORT_PROVIDER_HMAC_KEY_VERSION": "1",
             "PASSPORT_PROVIDER_INGRESS_SERVICE_URL": provider_ingress_url,

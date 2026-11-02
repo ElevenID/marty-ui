@@ -34,8 +34,10 @@ path = "src/bin/passport_provider_ingress.rs"
 test = true
 
 [dependencies]
+mmf-aws-kms.workspace = true
 marty-mdoc-status-binding = { path = "../../crates/mdoc-status-binding" }
 marty-service-runtime = { path = "../../crates/service-runtime" }
+marty-service-contracts = { path = "../../crates/service-contracts" }
 marty-claim-collection.workspace = true
 axum.workspace = true
 async-trait.workspace = true
@@ -104,6 +106,7 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+marty-signing-keys = { path = "../signing-keys" }
 tokio = { workspace = true, features = ["test-util"] }
 axum-server.workspace = true
 affinidi-messaging-didcomm.workspace = true

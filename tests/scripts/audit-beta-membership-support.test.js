@@ -6,10 +6,10 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const {
-  GRANT, assertions, awaitNaturalExpiry, expiryWindow, loginInstanceBinding, nativeLoginResult,
+  GRANT, assertions, awaitNaturalExpiry, expiryWindow, loginInstanceBinding, loginInstanceOwnership, nativeLoginResult,
   validateFixture, validateIssuerSetup, validateLoginSetup,
 } = require('./beta-membership-support-contract');
-const { createSupportController, guards, main, prepareFixture } = require('./audit-beta-membership-support');
+const { createSupportController, guards, main, prepareFixture,startLogin,rebindLoginInstance } = require('./audit-beta-membership-support');
 
 const uuid = (n) => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const ORIGIN = 'https://service.example.test';
@@ -29,6 +29,22 @@ function fixture() {
       verifierDid: 'did:web:verifier.example.test', vct: VCT },
     expiry: { isolatedDeployment: true, expectedServerOfferTtlSeconds: 60, maximumWaitSeconds: 120 } };
 }
+
+test('two owned applicants must have distinct profiles and accounts with bounded form data', () => {
+  const f=fixture();f.secondaryApplicant={id:uuid(16),email:'second@example.test',
+    formData:{email:'second@example.test',role:'applicant'}};
+  assert.equal(validateFixture(f,'expired-offer'),f);
+  const {secondaryApplicant,...primaryFixture}=f;
+  assert.equal(validateFixture({...primaryFixture,applicant:secondaryApplicant},'expired-offer').applicant.id,
+    secondaryApplicant.id);
+  for(const change of [secondary=>{secondary.id=f.applicant.id;},
+    secondary=>{secondary.email=f.applicant.email;},
+    secondary=>{secondary.formData.email=f.applicant.email;},
+    secondary=>{secondary.formData.password='forbidden';}]){
+    const changed=structuredClone(f);change(changed.secondaryApplicant);
+    assert.throws(()=>validateFixture(changed,'expired-offer'));
+  }
+});
 
 function issuerSetup(binding) {
   return {
@@ -83,6 +99,17 @@ function fakeService(f = fixture(), options = {}) {
     if (route === '/v1/revocation-profiles') return reply([setups[0].revocation]);
     if (route === `/v1/presentation-policies/${f.login.presentationPolicyId}`) return reply(login.policy);
     if (route === '/v1/signing-keys/config') return reply({ default_service_id: uuid(19), format_defaults: {}, type_defaults: {} });
+    if (route === '/v1/signing-keys/config/validate-current' && method === 'POST') {
+      const body = JSON.parse(requestOptions.body);
+      const bound = setups.find((item) => item.credential.issuer_did === body.issuer_did
+        && item.credential.credential_payload_format === body.credential_format);
+      if (!bound || body.organization_id !== bound.credential.organization_id) return reply({ ok: false }, 403);
+      if (options.signerUnavailable) return reply({ ok: false, signer_capable: false }, 503);
+      return reply({ ok: true, organization_id: body.organization_id, issuer_did: body.issuer_did,
+        credential_format: body.credential_format, service_id: uuid(19), key_reference: 'issuer-key',
+        key_purpose: 'vc_jwt_issuer', algorithm: 'ES256', key_read: true, signer_capable: true,
+        signature_verified: true });
+    }
     if (route.startsWith('/.well-known/openid-credential-issuer/org/')) return reply({ credential_issuer: `${ORIGIN}/org/${f.trusted.organizationId}` });
     if (route === '/v1/me/applications' && method === 'GET') return reply({ items: applications, total: applications.length, offset: 0, limit: 500 });
     if (route === '/v1/me/applications' && method === 'POST') {
@@ -147,6 +174,16 @@ test('expired-offer preflight requires an explicit isolated short server TTL bef
   }
 });
 
+test('expired stored signing grant stops before application or offer creation', async () => {
+  const f = fixture();
+  const { controller, requests, applications, transactions } = fakeService(f, { signerUnavailable: true });
+  await controller.preflight();
+  await assert.rejects(controller.issue(f.trusted, 'first'), /unavailable before offer/);
+  assert.equal(applications.length, 0);
+  assert.equal(transactions.length, 0);
+  assert.ok(!requests.some((request) => request.path === '/v1/me/applications' && request.method === 'POST'));
+});
+
 test('fixture cannot smuggle provider secrets or replace the authorized foreign/trusted binding', () => {
   for (const change of [
     (f) => { f.providerToken = 'not-a-real-token'; },
@@ -170,6 +207,10 @@ test('fixture preflight consumes actual public identity tuples and ignores unrel
 test('login preflight rejects dynamic or already-trusted foreign issuer configuration without changing it', () => {
   const f = fixture(); const observed = loginSetup(f);
   assert.equal(validateLoginSetup(f, observed, 'untrusted-issuer').policyId, f.login.presentationPolicyId);
+  const noProfile=structuredClone(observed);noProfile.policy.trust_profile_id=null;
+  assert.throws(()=>validateLoginSetup(f,noProfile,'untrusted-issuer'));
+  const noCredentials=structuredClone(observed);noCredentials.policy.credential_requirements=[];
+  assert.throws(()=>validateLoginSetup(f,noCredentials,'untrusted-issuer'));
   observed.trust.trust_sources = [{ registry_url: 'https://registry.example.test' }];
   assert.throws(() => validateLoginSetup(f, observed, 'untrusted-issuer'), /explicit local trust profile/);
   observed.trust.trust_sources = []; observed.trust.allowed_issuers.push(f.foreign.issuerDid);
@@ -263,6 +304,23 @@ test('same-application reissue rejects foreign, active, ambiguous, issued, or un
   await assert.rejects(service.controller.reissue({ ...issuance, owned: { ...issuance.owned } }, f.trusted), /captured by this controller/);
   await assert.rejects(service.controller.reissue(issuance, f.foreign), /cannot change.*binding/);
   assert.equal(service.requests.length, before);
+});
+
+test('failed signer readiness preserves the exact retired offer and application before reissue', async () => {
+  const f = fixture();
+  const options = { signerUnavailable: false };
+  const service = fakeService(f, options);
+  await service.controller.preflight();
+  const expired = await service.controller.issue(f.trusted, 'expired-offer');
+  await service.controller.cleanupOne(expired.owned);
+  options.signerUnavailable = true;
+  await assert.rejects(service.controller.reissue(expired, f.trusted), /unavailable before offer/);
+  assert.equal(service.transactions.length, 1);
+  assert.equal(service.transactions[0].status, 'revoked');
+  assert.equal(service.credentials.length, 0);
+  assert.equal(service.applications[0].status, 'OFFERED');
+  assert.equal(service.controller.ownedApplications[0], expired.owned);
+  assert.equal(service.requests.filter(({ path }) => path.endsWith('/issue')).length, 1);
 });
 
 test('reissued credential retirement preserves the same application and freshly proves the old canceled offer', async () => {
@@ -470,16 +528,41 @@ test('untrusted evidence requires the exact native instance and authenticated fo
 });
 
 test('actual login page Flow binding rejects changed org, policy, trust and request origin', () => {
-  const f = fixture(); const details = { nonce: 'fixture-login-nonce', href: 'openid4vp://?request_uri=fixture',
+  const f = fixture(),proof=validateLoginSetup(f,loginSetup(f),'untrusted-issuer'); const details = { nonce: 'fixture-login-nonce', href: 'openid4vp://?request_uri=fixture',
     dcApiRequestUrl: `/v1/flows/instances/${uuid(30)}/request?transport=dc_api` };
   const instance = { id: uuid(30), organization_id: f.login.organizationId, context_data: {
-    presentation_policy_id: f.login.presentationPolicyId, trust_profile_id: f.login.trustProfileId, oid4vp_issuer_did: f.login.verifierDid } };
-  assert.equal(loginInstanceBinding(details, instance, f, ORIGIN).instanceId, uuid(30));
-  assert.throws(() => loginInstanceBinding({ ...details, dcApiRequestUrl: `https://foreign.example.test${details.dcApiRequestUrl}` }, instance, f, ORIGIN));
+    presentation_policy_id: f.login.presentationPolicyId, trust_profile_id: f.login.trustProfileId,
+    callback_url:'http://auth.internal/internal/v1/auth/credential-verified?nonce=fixture-login-nonce',
+    oid4vp_issuer_did: f.login.verifierDid } };
+  assert.equal(loginInstanceBinding(details, instance, f, ORIGIN,proof).instanceId, uuid(30));
+  const policyOwned=structuredClone(instance);policyOwned.context_data.trust_profile_id=null;
+  assert.equal(loginInstanceBinding(details,policyOwned,f,ORIGIN,proof).contextTrustProfileId,null);
+  const missingOverride=structuredClone(policyOwned);delete missingOverride.context_data.trust_profile_id;
+  assert.throws(()=>loginInstanceBinding(details,missingOverride,f,ORIGIN,proof));
+  const ownedMissing=JSON.parse(JSON.stringify(loginInstanceOwnership(details,missingOverride,f,ORIGIN)));
+  assert.equal(ownedMissing.contextTrustProfilePresent,false);
+  assert.equal(ownedMissing.contextTrustProfileId,null);
+  assert.throws(()=>loginInstanceBinding(details,policyOwned,f,ORIGIN,{...proof,trustProfileId:uuid(99)}));
+  assert.throws(() => loginInstanceBinding({ ...details, dcApiRequestUrl: `https://foreign.example.test${details.dcApiRequestUrl}` }, instance, f, ORIGIN,proof));
   for (const field of ['presentation_policy_id', 'trust_profile_id', 'oid4vp_issuer_did']) {
     const copy = structuredClone(instance); copy.context_data[field] = 'foreign';
-    assert.throws(() => loginInstanceBinding(details, copy, f, ORIGIN));
+    assert.throws(() => loginInstanceBinding(details, copy, f, ORIGIN,proof));
   }
+  const start=Date.now();instance.created_at=new Date(start).toISOString();
+  assert.equal(loginInstanceOwnership(details,instance,f,ORIGIN,{afterMs:start-1000,beforeMs:start+1000}).instanceId,instance.id);
+  for(const callbackUrl of ['http://auth.internal/internal/v1/auth/credential-verified?nonce=foreign',
+    'http://auth.internal/internal/v1/auth/credential-verified',
+    'http://auth.internal/internal/v1/auth/credential-verified?nonce=fixture-login-nonce&nonce=fixture-login-nonce',
+    'http://auth.internal/internal/v1/auth/wrong?nonce=fixture-login-nonce']){
+    const changed=structuredClone(instance);changed.context_data.callback_url=callbackUrl;
+    assert.throws(()=>loginInstanceOwnership(details,changed,f,ORIGIN,{afterMs:start-1000,beforeMs:start+1000}),error=>{
+      assert.equal(error.message.includes('fixture-login-nonce'),false);
+      assert.equal(error.message.includes('nonce=foreign'),false);
+      return true;
+    });
+  }
+  instance.created_at=new Date(start-60000).toISOString();
+  assert.throws(()=>loginInstanceOwnership(details,instance,f,ORIGIN,{afterMs:start-1000,beforeMs:start+1000}));
 });
 
 test('aggregates require actual recovery, native trust result and cleanup in both no-video lanes', () => {
@@ -541,4 +624,69 @@ test('a preflight-blocked functional run writes both JSON receipts without crede
     process.exitCode = previousExitCode;
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+test('shared login hook journals before navigation and acknowledges only exact server binding',async()=>{
+ const f=fixture(),events=[],instance={id:uuid(30),organization_id:f.login.organizationId,context_data:{
+   presentation_policy_id:f.login.presentationPolicyId,trust_profile_id:null,oid4vp_issuer_did:f.login.verifierDid,
+   callback_url:'http://auth.internal/internal/v1/auth/credential-verified?nonce=PRIVATE_NONCE'},created_at:new Date().toISOString()};
+ const authPage={goto:async()=>events.push('navigation'),evaluate:async()=>({nonce:'PRIVATE_NONCE',href:'PRIVATE_WALLET_LINK',
+  dcApiRequestUrl:ORIGIN+'/v1/flows/instances/'+instance.id+'/request'})};
+  const service=fakeService(f);const operator={evaluate:async(callback,request)=>request.requestPath===`/v1/flows/instances/${instance.id}`
+    ?{ok:true,status:200,body:instance}:service.page.evaluate(callback,request)};
+ const flowHooks={beforeStart:async()=>events.push('intent'),acknowledge:async({binding})=>{assert.equal(binding.instanceId,instance.id);events.push('ack');}};
+ await startLogin({authPage,operator,fixture:f,origin:ORIGIN,flowHooks});assert.deepEqual(events,['intent','navigation','ack']);
+  events.length=0;instance.context_data.trust_profile_id=uuid(999);
+ await assert.rejects(startLogin({authPage,operator,fixture:f,origin:ORIGIN,flowHooks}));
+  assert.deepEqual(events,['intent','navigation','ack']);
+  events.length=0;instance.context_data.trust_profile_id=null;instance.context_data.presentation_policy_id=uuid(999);
+  await assert.rejects(startLogin({authPage,operator,fixture:f,origin:ORIGIN,flowHooks}));
+  assert.deepEqual(events,['intent','navigation','ack']);
+  events.length=0;instance.organization_id=uuid(999);
+  await assert.rejects(startLogin({authPage,operator,fixture:f,origin:ORIGIN,flowHooks}));
+  assert.deepEqual(events,['intent','navigation']);
+  instance.organization_id=f.login.organizationId;
+  instance.context_data.presentation_policy_id=f.login.presentationPolicyId;
+  for(const callbackUrl of ['http://auth.internal/internal/v1/auth/credential-verified?nonce=foreign',
+    'http://auth.internal/internal/v1/auth/credential-verified',
+    'http://auth.internal/internal/v1/auth/credential-verified?nonce=PRIVATE_NONCE&nonce=PRIVATE_NONCE']){
+    events.length=0;instance.context_data.callback_url=callbackUrl;
+    await assert.rejects(startLogin({authPage,operator,fixture:f,origin:ORIGIN,flowHooks}));
+    assert.deepEqual(events,['intent','navigation']);
+  }
+});
+
+test('post-presentation Flow binding retains fresh effective policy trust and rejects changed authority',async()=>{
+  const f=fixture(),service=fakeService(f),instance={id:uuid(30),organization_id:f.login.organizationId,
+    context_data:{presentation_policy_id:f.login.presentationPolicyId,trust_profile_id:null,oid4vp_issuer_did:f.login.verifierDid,
+      callback_url:'http://auth.internal/internal/v1/auth/credential-verified?nonce=PRIVATE_NONCE'}};
+  const route=`/v1/flows/instances/${instance.id}`;
+  const operator={evaluate:async(callback,request)=>request.requestPath===route
+    ?{ok:true,status:200,body:instance}:service.page.evaluate(callback,request)};
+  const details={nonce:'PRIVATE_NONCE',href:'PRIVATE_WALLET_LINK',dcApiRequestUrl:ORIGIN+route+'/request'};
+  const loginAuthority=structuredClone(service.login);
+  loginAuthority.issuers=service.setups.flatMap(setup=>setup.issuers);
+  const args={details,instancePath:route,operator,fixture:f,origin:ORIGIN,loginAuthority,lane:'expired-offer'};
+  assert.equal((await rebindLoginInstance(args)).contextTrustProfileId,null);
+  instance.context_data.trust_profile_id=uuid(999);
+  await assert.rejects(rebindLoginInstance(args));
+  instance.context_data.trust_profile_id=null;service.login.policy.trust_profile_id=null;
+  await assert.rejects(rebindLoginInstance(args));
+});
+
+test('dedicated owned expiry offer uses optional server TTL; recovery preserves configured defaults', async () => {
+  const f=fixture(); delete f.expiry.isolatedDeployment; f.expiry.mode='PER_OWNED_OFFER';
+  validateFixture(f,'expired-offer');
+  const invalid=structuredClone(f);invalid.expiry.mode='CALLER_TRUST';assert.throws(()=>validateFixture(invalid,'expired-offer'));
+  const service=fakeService(f); await service.controller.preflight();
+  await assert.rejects(service.controller.issue(f.trusted,'invalid-ttl',{offerTtlSeconds:1}));
+  assert.equal(service.applications.length,0);
+  const short=await service.controller.issue(f.trusted,'dedicated-expiry',{offerTtlSeconds:60});
+  let issues=service.requests.filter(r=>r.path.endsWith('/issue'));
+  assert.deepEqual(JSON.parse(issues[0].body),{offer_ttl_seconds:60});
+  await service.controller.cleanupOne(short.owned);
+  await service.controller.reissue(short,f.trusted);
+  issues=service.requests.filter(r=>r.path.endsWith('/issue'));
+  assert.equal(issues.length,2); assert.equal(issues[1].body,undefined);
 });

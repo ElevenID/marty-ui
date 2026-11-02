@@ -376,7 +376,7 @@ impl NotificationRepository for PgNotificationRepository {
     async fn save_webhook(&self, item: WebhookEndpoint) -> Result<(), RepositoryError> {
         let envelope = item
             .secret_envelope
-            .filter(|value| value.starts_with("vault:"))
+            .filter(|value| crate::webhook::storable_webhook_ciphertext(value))
             .ok_or_else(|| invalid("plaintext-only webhook persistence is forbidden"))?;
         let hint = item
             .secret_hint

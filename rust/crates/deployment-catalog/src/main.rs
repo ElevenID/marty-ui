@@ -254,6 +254,64 @@ fn print_plan(plan: &Value) {
 
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|arg| arg == "installer-rootless-canary-helper")
+    {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_rootless_canary_helper::run(&args[1..]);
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal rootless canary helper requires Linux".into());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "restore-rootless-canary")
+    {
+        if args.len() != 5 || args[1] != "--installation" || args[3] != "--docker-bin" {
+            return Err(
+                "rootless canary restore requires exact installation and Docker executable".into(),
+            );
+        }
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_rootless_storage_canary::restore_interrupted(
+            &PathBuf::from(&args[2]),
+            &PathBuf::from(&args[4]),
+        );
+        #[cfg(not(target_os = "linux"))]
+        return Err("rootless canary restore requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| {
+        matches!(
+            arg.as_str(),
+            "installer-acme-custody-provision" | "installer-acme-credentials-provision"
+        )
+    }) {
+        if args.len() != 5 || args[1] != "--installation-id" || args[3] != "--plan-sha256" {
+            return Err("internal ACME bootstrap requires an owned container invocation".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|_| "cannot start ACME bootstrap runtime")?;
+            let count = if args[0] == "installer-acme-custody-provision" {
+                runtime.block_on(
+                    marty_deployment_catalog::installer_acme_bootstrap::provision_custody(
+                        &args[2], &args[4],
+                    ),
+                )?
+            } else {
+                runtime.block_on(
+                    marty_deployment_catalog::installer_acme_bootstrap::provision_credentials(
+                        &args[2], &args[4],
+                    ),
+                )?
+            };
+            println!("{}", serde_json::json!({"outputs_written":count}));
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal ACME bootstrap requires Linux".into());
+    }
     if args.first().is_some_and(|arg| {
         matches!(
             arg.as_str(),
@@ -415,6 +473,12 @@ fn run() -> Result<(), String> {
         println!("{}", env!("MARTY_DEPLOY_BUILD_IDENTITY"));
         return Ok(());
     }
+    if args.first().is_some_and(|arg| arg == "kms") {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_kms::run(&args[1..]);
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer KMS registration currently requires Linux".into());
+    }
     if args.first().is_some_and(|arg| arg == "trust-info") {
         if args.len() != 3 || args[1] != "--install-dir" {
             return Err("usage: marty-deploy trust-info --install-dir ABSOLUTE_PATH".into());
@@ -433,6 +497,21 @@ fn run() -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         return Err("installer trust information currently requires Linux".into());
     }
+    if args.first().is_some_and(|arg| arg == "startup-observe") {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_startup_observation::run(&args[1..]);
+        #[cfg(not(target_os = "linux"))]
+        return Err("signed startup observation requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "acme") {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_command::acme(
+            &args[1..],
+            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+        );
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer ACME status currently requires Linux".into());
+    }
     if args.first().is_some_and(|arg| arg == "status") {
         if args.len() != 3 || args[1] != "--install-dir" {
             return Err("usage: marty-deploy status --install-dir ABSOLUTE_PATH".into());
@@ -443,7 +522,7 @@ fn run() -> Result<(), String> {
                 std::path::Path::new(&args[2]),
             )?;
             let journal = inspection.journal();
-            let cleanup = inspection.cleanup_status()?;
+            let cleanup = marty_deployment_catalog::installer_uninstall::status(&inspection)?;
             inspection.require_unchanged()?;
             println!(
                 "{}",
@@ -494,18 +573,15 @@ fn run() -> Result<(), String> {
             )?;
             let docker =
                 std::path::Path::new(args.get(4).map(String::as_str).unwrap_or("/usr/bin/docker"));
-            let runner = marty_deployment_catalog::installer_runtime::DockerRunner::new(
-                docker,
-                &runtime.docker_host,
-                &runtime.engine_id,
-                directory,
+            let runner = marty_deployment_catalog::installer_runtime::DockerRunner::from_binding(
+                docker, runtime, directory,
             )?;
             let observation = runner.preflight()?;
-            let cleanup = inspection.cleanup_status()?;
+            let cleanup = marty_deployment_catalog::installer_uninstall::status(&inspection)?;
             let services = marty_deployment_catalog::installer_doctor::services(
                 &inspection,
                 directory,
-                &runner,
+                docker,
             )?;
             inspection.require_unchanged()?;
             println!(
@@ -532,6 +608,54 @@ fn run() -> Result<(), String> {
         }
         #[cfg(not(target_os = "linux"))]
         return Err("installer logs currently requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "lifecycle") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_lifecycle::run(&args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer lifecycle currently requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "root-retirement") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_root_retirement::run(&args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("initial OpenBao root retirement currently requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "start") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_uninstall::start(&args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer start currently requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "stop") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_uninstall::stop(&args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer stop currently requires Linux".into());
     }
     if args.first().is_some_and(|arg| arg == "uninstall") {
         #[cfg(target_os = "linux")]

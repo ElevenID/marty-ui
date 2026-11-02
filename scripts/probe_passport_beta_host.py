@@ -181,7 +181,60 @@ def production_attachment_sha256(
                                    separators=(",", ":")).encode()).hexdigest()
 
 
-def production_snapshot(runner: Callable[[list[str]], str] = run) -> dict[str, Any]:
+def production_off_projection(record: dict[str, Any]) -> dict[str, Any]:
+    """Value-free exact retained identity for an explicitly authorized OFF baseline."""
+    state, config = record.get("State"), record.get("Config")
+    if not isinstance(state, dict) or not isinstance(config, dict):
+        raise HostProbeError("Production OFF identity is incomplete")
+    labels = config.get("Labels") or {}
+    project, service = labels.get("com.docker.compose.project"), labels.get("com.docker.compose.service")
+    if (project not in PRODUCTION_PROJECTS or not isinstance(service, str) or not service
+            or not re.fullmatch(r"[a-f0-9]{64}", str(record.get("Id", "")))
+            or not re.fullmatch(r"sha256:[a-f0-9]{64}", str(record.get("Image", "")))
+            or state.get("Running") is not False or state.get("Status") not in ("exited", "created")
+            or state.get("Pid") != 0 or state.get("Restarting") is not False
+            or state.get("Paused") is not False or state.get("OOMKilled") is not False):
+        raise HostProbeError("Production is not in the exact expected OFF state")
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    fields = ("Name", "Image", "Config", "HostConfig", "Mounts", "NetworkSettings", "RestartCount")
+    if any(key not in record for key in fields):
+        raise HostProbeError("Production OFF configuration is incomplete")
+    mounts = record["Mounts"]
+    if (not isinstance(mounts, list) or any(not isinstance(mount, dict)
+            or not isinstance(mount.get("Destination"), str) or not mount["Destination"] for mount in mounts)
+            or len({mount["Destination"] for mount in mounts}) != len(mounts)):
+        raise HostProbeError("Production OFF mounts are malformed or repeated")
+    # Docker inspect does not promise Mounts ordering. Retain every mount field;
+    # command, environment, bind-option and other ordered arrays stay exact.
+    configuration = {key: record[key] for key in fields}
+    configuration["Mounts"] = sorted(mounts, key=lambda mount: mount["Destination"])
+    return {"id": record["Id"], "image": record["Image"], "project": project, "service": service,
+            "configurationSha256": digest(configuration), "stateSha256": digest(state)}
+
+
+def production_snapshot(runner: Callable[[list[str]], str] = run, *,
+                        expected_off: dict[str, Any] | None = None) -> dict[str, Any]:
+    if expected_off is not None:
+        if (set(expected_off) != {"schema", "mode", "rows"}
+                or expected_off["schema"] != "marty.passport-production-baseline/v1"
+                or expected_off["mode"] != "EXPECTED_OFF" or not isinstance(expected_off["rows"], list)):
+            raise HostProbeError("Explicit production OFF baseline is invalid")
+        rows, counts = [], {}
+        for project in PRODUCTION_PROJECTS:
+            selected = ids(project, runner)
+            if not selected:
+                raise HostProbeError("Expected OFF production project is missing")
+            counts[project] = len(selected)
+            rows.extend(production_off_projection(inspect(cid, runner)) for cid in selected)
+        rows.sort(key=lambda row: row["id"])
+        expected = expected_off["rows"]
+        if (len({row["id"] for row in rows}) != len(rows) or rows != expected):
+            raise HostProbeError("Production OFF identity, configuration or state changed")
+        encoded = json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()
+        return {"sha256": hashlib.sha256(encoded).hexdigest(), "container_counts": counts,
+                "mode": "EXPECTED_OFF"}
+
     projected = []
     counts = {}
     for project in PRODUCTION_PROJECTS:

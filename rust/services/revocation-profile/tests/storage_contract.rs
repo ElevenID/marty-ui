@@ -11,6 +11,119 @@ use uuid::Uuid;
 
 #[tokio::test]
 #[ignore = "requires MARTY_TEST_POSTGRES_URL"]
+async fn postgres_allocation_formats_keep_their_released_names() {
+    use marty_revocation_profile::repository::StatusIndexReservation;
+
+    let pool = PgPool::connect(&std::env::var("MARTY_TEST_POSTGRES_URL").unwrap())
+        .await
+        .unwrap();
+    let organization_id = format!("org-format-{}", Uuid::new_v4());
+    migrate_and_seed(&pool, &organization_id, "https://status.example.test")
+        .await
+        .unwrap();
+    let repository = PgProfileRepository::from_pool(pool.clone());
+    let profile = RevocationProfile::new(organization_id.clone(), "formats".into(), None);
+    repository.save(profile.clone()).await.unwrap();
+    for (format, expected) in [
+        (StatusListFormat::Bitstring, "bitstring"),
+        (StatusListFormat::TokenStatusList, "token_status_list"),
+    ] {
+        let reservation = StatusIndexReservation {
+            credential_id: Uuid::new_v4().to_string(),
+            organization_id: organization_id.clone(),
+            profile_id: profile.id.clone(),
+            format,
+            size: 131_072,
+            legacy_floor: 0,
+        };
+        assert_eq!(
+            repository
+                .reserve_status_index(reservation.clone())
+                .await
+                .unwrap(),
+            0
+        );
+        let stored: String = sqlx::query_scalar(
+            "SELECT status_list_format FROM revocation_profile_service.status_list_allocations WHERE credential_id = $1",
+        )
+        .bind(&reservation.credential_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored, expected);
+        let restarted = PgProfileRepository::from_pool(pool.clone());
+        assert_eq!(
+            restarted
+                .reserve_status_index(reservation.clone())
+                .await
+                .unwrap(),
+            0
+        );
+        let mut conflicting = reservation;
+        conflicting.format = match format {
+            StatusListFormat::Bitstring => StatusListFormat::TokenStatusList,
+            StatusListFormat::TokenStatusList => StatusListFormat::Bitstring,
+        };
+        assert!(restarted.reserve_status_index(conflicting).await.is_err());
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires MARTY_TEST_REDIS_URL"]
+async fn redis_format_keys_and_records_keep_their_released_names() {
+    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").unwrap();
+    let prefix = format!("marty:test:formats:{}", Uuid::new_v4());
+    let repository = RedisStatusRepository::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_key_prefix(prefix.clone());
+    let mut connection = redis::Client::open(redis_url.as_str())
+        .unwrap()
+        .get_multiplexed_async_connection()
+        .await
+        .unwrap();
+    for (format, expected, status) in [
+        (StatusListFormat::Bitstring, "bitstring", 1),
+        (StatusListFormat::TokenStatusList, "token_status_list", 255),
+    ] {
+        repository
+            .set_status("scope", format, 131_072, 0, status)
+            .await
+            .unwrap();
+        let key = format!("{prefix}:{{scope}}:status_list:{expected}");
+        let raw: String = redis::cmd("GET")
+            .arg(&key)
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        let mut stored: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(stored["format"], expected);
+        let restarted = RedisStatusRepository::connect(&redis_url)
+            .await
+            .unwrap()
+            .with_key_prefix(prefix.clone());
+        let restored = restarted
+            .get_or_create("scope", format, 131_072)
+            .await
+            .unwrap();
+        assert_eq!(restored.format, format);
+        assert_eq!(restored.get(0).unwrap(), status);
+        stored["format"] = serde_json::json!("unknown");
+        let _: () = redis::cmd("SET")
+            .arg(&key)
+            .arg(stored.to_string())
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        assert!(restarted
+            .get_or_create("scope", format, 131_072)
+            .await
+            .is_err());
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires MARTY_TEST_POSTGRES_URL"]
 async fn postgres_preserves_the_released_profile_schema() {
     let database_url = std::env::var("MARTY_TEST_POSTGRES_URL").expect("test PostgreSQL URL");
     let pool = PgPool::connect(&database_url).await.unwrap();

@@ -552,8 +552,8 @@ timed canvas_serial worker_deadline python3 "$obligation_runner" --name canvas_w
 run_historical_serial_tests
 
 # The packaged renewal cases need an actual non-exportable X25519 sender. Keep
-# root authority in this acceptance process; the native binary gets only the
-# exact-version read/pack token file provisioned by the Rust fixture.
+# root authority in this acceptance process; the registered Signing Keys owner
+# receives the exact-version token. Issuance gets HTTPS plus its grant mint token.
 kms_config=$(mktemp "${RUNNER_TEMP:?}/canvas-kms.XXXXXX")
 kms_ca_dir=$(mktemp -d "${RUNNER_TEMP:?}/canvas-kms-ca.XXXXXX")
 kms_ca_file="$kms_ca_dir/ca.crt"
@@ -583,11 +583,11 @@ grep -q -- 'BEGIN CERTIFICATE' "$kms_ca_file"
 ! grep -q -- 'PRIVATE KEY' "$kms_ca_file"
 scoped_signer_test='scoped_transit_signer_verifies_without_key_read_authority'
 "$composition_executable" --list --ignored | grep -Fx "$scoped_signer_test: test"
-timed canvas_serial kms_scoped_signer env MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" python3 "$obligation_runner" --name canvas_composition_acceptance --owner canvas -- "$composition_executable" "$scoped_signer_test" --ignored --exact --nocapture --test-threads=1
+timed canvas_serial kms_scoped_signer env MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" BAO_ADDR="$kms_url" BAO_CACERT="$kms_ca_file" python3 "$obligation_runner" --name canvas_composition_acceptance --owner canvas -- "$composition_executable" "$scoped_signer_test" --ignored --exact --nocapture --test-threads=1
 # This published-process probe covers the full frozen JSON corpus and has a
 # fixed 120-second deadline. Keep other Canvas tests off this runner while it
 # runs; contention must not turn its contract into an intermittent timeout.
-timed canvas_serial json_consumer env MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" python3 "$obligation_runner" --name canvas_composition_acceptance --owner canvas -- "$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1
+timed canvas_serial json_consumer env MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" BAO_ADDR="$kms_url" BAO_CACERT="$kms_ca_file" python3 "$obligation_runner" --name canvas_composition_acceptance --owner canvas -- "$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1
 # Each target owns its disposable database and process fixtures. Keep their
 # output separate, normally wait for all owners to finish cleanup, and fail
 # if any suite fails. The serial SQL-logging positive control stays outside
@@ -637,7 +637,7 @@ if (( selfhost_delegated == 0 )); then
   selfhost_relay_pid=$!
 fi
 composition_started=$(python3 -c 'import time; print(time.monotonic_ns())')
-MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" python3 "$obligation_runner" --name canvas_composition_acceptance --owner canvas -- "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
+MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" BAO_ADDR="$kms_url" BAO_CACERT="$kms_ca_file" python3 "$obligation_runner" --name canvas_composition_acceptance --owner canvas -- "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
 composition_pid=$!
 relay_target_timing "$composition_pid" "$composition_log" "$composition_end" composition &
 composition_relay_pid=$!

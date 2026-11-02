@@ -1,6 +1,8 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hmac::{Hmac, Mac};
 use marty_openbao_http::OpenBaoHttp;
+use marty_service_runtime::{SecretKmsNames, SecretKmsSelection};
+use mmf_aws_kms::{AwsKmsConfig, AwsKmsError, AwsKmsKey};
 use reqwest::{redirect::Policy, Client, StatusCode};
 use serde_json::{Map, Value};
 use sha2::Sha256;
@@ -9,10 +11,12 @@ use std::{
     env, fs,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::Path,
+    sync::Arc,
     time::Duration,
 };
 use thiserror::Error;
 use tokio::net::lookup_host;
+use tokio::sync::OnceCell;
 use url::{Host, Url};
 
 pub const WEBHOOK_SECRET_ENVELOPE_KEY_ID: &str = "notification-webhook-envelope-marty-aes256";
@@ -287,6 +291,15 @@ pub fn encode_bound_webhook_secret(
     webhook_id: &str,
     secret: &str,
 ) -> Result<String, WebhookError> {
+    bound_webhook_secret_bytes(organization_id, webhook_id, secret)
+        .map(|bytes| STANDARD.encode(bytes))
+}
+
+fn bound_webhook_secret_bytes(
+    organization_id: &str,
+    webhook_id: &str,
+    secret: &str,
+) -> Result<Vec<u8>, WebhookError> {
     if organization_id.is_empty() || webhook_id.is_empty() {
         return Err(WebhookError::InvalidEnvelope(
             "Webhook secret binding is incomplete".into(),
@@ -304,9 +317,8 @@ pub fn encode_bound_webhook_secret(
         ("secret", secret),
         ("webhook_id", webhook_id),
     ]);
-    let encoded = serde_json::to_vec(&document)
-        .map_err(|error| WebhookError::InvalidEnvelope(error.to_string()))?;
-    Ok(STANDARD.encode(encoded))
+    serde_json::to_vec(&document)
+        .map_err(|_| WebhookError::InvalidEnvelope("Webhook secret encoding failed".into()))
 }
 
 pub fn decode_bound_webhook_secret(
@@ -317,7 +329,15 @@ pub fn decode_bound_webhook_secret(
     let decoded = STANDARD.decode(plaintext).map_err(|_| {
         WebhookError::InvalidEnvelope("Webhook secret envelope plaintext is malformed".into())
     })?;
-    let document: BTreeMap<String, Value> = serde_json::from_slice(&decoded).map_err(|_| {
+    decode_bound_webhook_secret_bytes(&decoded, organization_id, webhook_id)
+}
+
+fn decode_bound_webhook_secret_bytes(
+    plaintext: &[u8],
+    organization_id: &str,
+    webhook_id: &str,
+) -> Result<String, WebhookError> {
+    let document: BTreeMap<String, Value> = serde_json::from_slice(plaintext).map_err(|_| {
         WebhookError::InvalidEnvelope("Webhook secret envelope plaintext is malformed".into())
     })?;
     let expected = [
@@ -351,16 +371,218 @@ pub fn decode_bound_webhook_secret(
     Ok(secret.to_owned())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WebhookSecretEnvelope {
+    provider: WebhookSecretProvider,
+}
+
+#[derive(Clone)]
+enum WebhookSecretProvider {
+    OpenBao(OpenBaoWebhookSecretEnvelope),
+    AwsKms(AwsWebhookSecretEnvelope),
+}
+
+impl std::fmt::Debug for WebhookSecretEnvelope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match &self.provider {
+            WebhookSecretProvider::OpenBao(_) => "WebhookSecretEnvelope::OpenBao(..)",
+            WebhookSecretProvider::AwsKms(_) => "WebhookSecretEnvelope::AwsKms(..)",
+        })
+    }
+}
+
+#[derive(Clone)]
+struct AwsWebhookSecretEnvelope {
+    config: AwsKmsConfig,
+    key_arn: String,
+    client: Arc<OnceCell<AwsKmsKey>>,
+}
+
+impl AwsWebhookSecretEnvelope {
+    async fn key(&self) -> Result<&AwsKmsKey, WebhookError> {
+        self.client
+            .get_or_try_init(|| async {
+                AwsKmsKey::connect(self.config.clone(), self.key_arn.clone())
+                    .await
+                    .map_err(aws_envelope_error)
+            })
+            .await
+    }
+}
+
+fn aws_envelope_error(error: AwsKmsError) -> WebhookError {
+    match error {
+        AwsKmsError::InvalidCiphertext | AwsKmsError::InvalidInput => {
+            WebhookError::InvalidEnvelope("Webhook secret ciphertext or value is invalid".into())
+        }
+        _ => {
+            WebhookError::EnvelopeUnavailable("AWS webhook secret operation is unavailable".into())
+        }
+    }
+}
+
+fn aws_envelope_context() -> BTreeMap<String, String> {
+    // AWS logs the context. Tenant, webhook and secret values remain only in
+    // the encrypted document whose exact binding is checked after decryption.
+    BTreeMap::from([(
+        "marty-envelope-schema".into(),
+        WEBHOOK_SECRET_ENVELOPE_SCHEMA.into(),
+    )])
+}
+
+/// Storage accepts the existing Vault envelope and only the shared, canonical
+/// AWS codec. This check never chooses the provider used for decryption.
+pub(crate) fn storable_webhook_ciphertext(ciphertext: &str) -> bool {
+    ciphertext.starts_with("vault:") || mmf_aws_kms::decode_ciphertext(ciphertext).is_ok()
+}
+
+impl WebhookSecretEnvelope {
+    pub fn from_environment() -> Result<Self, WebhookError> {
+        let mut settings = BTreeMap::new();
+        for name in [
+            "NOTIFICATION_SECRET_KMS_PROVIDER",
+            "NOTIFICATION_SECRET_AWS_REGION",
+            "NOTIFICATION_SECRET_AWS_KEY_ARN",
+            "NOTIFICATION_OPENBAO_TOKEN",
+            "NOTIFICATION_OPENBAO_TOKEN_FILE",
+            "NOTIFICATION_OPENBAO_CA_CERT_FILE",
+        ] {
+            match env::var(name) {
+                Ok(value) => {
+                    settings.insert(name, value);
+                }
+                Err(env::VarError::NotPresent) => {}
+                Err(env::VarError::NotUnicode(_)) => {
+                    return Err(WebhookError::EnvelopeUnavailable(
+                        "Notification secret KMS configuration is invalid".into(),
+                    ));
+                }
+            }
+        }
+        let selected = SecretKmsSelection::from_values(
+            |name| settings.get(name).map(String::as_str),
+            SecretKmsNames {
+                prefix: "NOTIFICATION_SECRET",
+                openbao_fields: &[
+                    "NOTIFICATION_OPENBAO_TOKEN",
+                    "NOTIFICATION_OPENBAO_TOKEN_FILE",
+                    "NOTIFICATION_OPENBAO_CA_CERT_FILE",
+                ],
+            },
+            Duration::from_secs(8),
+        )
+        .map_err(WebhookError::EnvelopeUnavailable)?;
+        let provider = match selected {
+            SecretKmsSelection::OpenBao => {
+                WebhookSecretProvider::OpenBao(OpenBaoWebhookSecretEnvelope::from_environment()?)
+            }
+            SecretKmsSelection::AwsKms { config, key_arn } => {
+                WebhookSecretProvider::AwsKms(AwsWebhookSecretEnvelope {
+                    config,
+                    key_arn,
+                    client: Arc::new(OnceCell::new()),
+                })
+            }
+        };
+        Ok(Self { provider })
+    }
+
+    pub async fn check_ready(&self) -> Result<(), WebhookError> {
+        match &self.provider {
+            WebhookSecretProvider::OpenBao(provider) => provider.check_ready().await,
+            WebhookSecretProvider::AwsKms(provider) => {
+                // Prove both permissions with an ephemeral bound challenge;
+                // metadata alone cannot establish encryption readiness.
+                tokio::time::timeout(provider.config.request_timeout, async {
+                    let challenge = generate_webhook_secret();
+                    let ciphertext = self
+                        .wrap("notification-readiness", "kms", &challenge)
+                        .await?;
+                    let actual = self
+                        .unwrap("notification-readiness", "kms", &ciphertext)
+                        .await?;
+                    if actual != challenge {
+                        return Err(WebhookError::EnvelopeUnavailable(
+                            "AWS webhook secret readiness challenge did not match".into(),
+                        ));
+                    }
+                    Ok(())
+                })
+                .await
+                .map_err(|_| {
+                    WebhookError::EnvelopeUnavailable(
+                        "AWS webhook secret readiness timed out".into(),
+                    )
+                })?
+            }
+        }
+    }
+
+    pub async fn wrap(
+        &self,
+        organization_id: &str,
+        webhook_id: &str,
+        secret: &str,
+    ) -> Result<String, WebhookError> {
+        match &self.provider {
+            WebhookSecretProvider::OpenBao(provider) => {
+                provider.wrap(organization_id, webhook_id, secret).await
+            }
+            WebhookSecretProvider::AwsKms(provider) => {
+                let plaintext = bound_webhook_secret_bytes(organization_id, webhook_id, secret)?;
+                if plaintext.len() > 4096 {
+                    return Err(WebhookError::InvalidEnvelope(
+                        "Bound webhook secret exceeds the AWS KMS plaintext limit".into(),
+                    ));
+                }
+                let ciphertext = provider
+                    .key()
+                    .await?
+                    .encrypt(&plaintext, &aws_envelope_context())
+                    .await
+                    .map_err(aws_envelope_error)?;
+                mmf_aws_kms::encode_ciphertext(&ciphertext).map_err(aws_envelope_error)
+            }
+        }
+    }
+
+    pub async fn unwrap(
+        &self,
+        organization_id: &str,
+        webhook_id: &str,
+        ciphertext: &str,
+    ) -> Result<String, WebhookError> {
+        match &self.provider {
+            WebhookSecretProvider::OpenBao(provider) => {
+                provider
+                    .unwrap(organization_id, webhook_id, ciphertext)
+                    .await
+            }
+            WebhookSecretProvider::AwsKms(provider) => {
+                let ciphertext =
+                    mmf_aws_kms::decode_ciphertext(ciphertext).map_err(aws_envelope_error)?;
+                let plaintext = provider
+                    .key()
+                    .await?
+                    .decrypt(&ciphertext, &aws_envelope_context())
+                    .await
+                    .map_err(aws_envelope_error)?;
+                decode_bound_webhook_secret_bytes(&plaintext, organization_id, webhook_id)
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct OpenBaoWebhookSecretEnvelope {
     bao_addr: String,
     bao_token: String,
     key_id: String,
     client: Client,
 }
 
-impl WebhookSecretEnvelope {
-    pub fn from_environment() -> Result<Self, WebhookError> {
+impl OpenBaoWebhookSecretEnvelope {
+    fn from_environment() -> Result<Self, WebhookError> {
         let bao_addr = env::var("BAO_ADDR").unwrap_or_default().trim().to_owned();
         let token = read_secret_value("NOTIFICATION_OPENBAO_TOKEN")?;
         if token.is_empty() {
@@ -518,3 +740,6 @@ pub fn pinned_client(hostname: &str, addresses: &[SocketAddr]) -> Result<Client,
         .build()
         .map_err(|_| WebhookError::destination("WEBHOOK_DESTINATION_UNAVAILABLE", true))
 }
+
+#[cfg(test)]
+mod tests;

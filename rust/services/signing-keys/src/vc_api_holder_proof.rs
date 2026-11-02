@@ -48,6 +48,8 @@ pub struct OpenBaoHolderProofProvider {
 
 #[derive(Debug, Error)]
 pub enum HolderProofError {
+    #[error("Ephemeral holder proofs require a configured compatible remote provider")]
+    CapabilityUnavailable,
     #[error("VC-API holder proof provider is unavailable")]
     Unavailable,
     #[error("VC-API holder proof request is invalid")]
@@ -59,7 +61,9 @@ pub enum HolderProofError {
 impl OpenBaoHolderProofProvider {
     pub fn from_environment() -> Result<Self, HolderProofError> {
         let config = Config::from_env().map_err(|_| HolderProofError::Unavailable)?;
-        let endpoint = config.bao_addr.ok_or(HolderProofError::Unavailable)?;
+        let endpoint = config
+            .bao_addr
+            .ok_or(HolderProofError::CapabilityUnavailable)?;
         let token = config.bao_token.ok_or(HolderProofError::Unavailable)?;
         let issuer_base_url =
             env::var("ISSUER_BASE_URL").map_err(|_| HolderProofError::Unavailable)?;

@@ -45,9 +45,9 @@ def test_new_roles_are_digest_only_signed_and_not_promoted() -> None:
     assert preflight < first_build
     assert "to_entries | map(select" in steps[preflight]["run"]
     images = [step for step in steps if step.get("uses", "").startswith("docker/build-push-action@")]
-    assert len(images) == 2
+    assert len(images) == 1
     assert {step["with"]["file"] for step in images} == {
-        "docker/ui.Dockerfile", "docker/cloudflared-wrapper.Dockerfile",
+        "docker/ui.Dockerfile",
     }
     for step in images:
         assert "push-by-digest=true" in step["with"]["outputs"]
@@ -60,7 +60,7 @@ def test_new_roles_are_digest_only_signed_and_not_promoted() -> None:
     assert "SELFHOST_PUBLIC_PROFILE=${{ inputs.selfhost_public_profile }}" in ui["with"]["build-args"]
     assert "NGINX_CONFIG=nginx.spa.conf" in ui["with"]["build-args"]
     assert len([step for step in steps if step.get("uses", "").startswith(
-        "actions/attest-build-provenance@")]) == 2
+        "actions/attest-build-provenance@")]) == 1
     assert any("cosign sign" in step.get("run", "") for step in steps)
     assert all("imagetools create" not in step.get("run", "") for step in steps)
 

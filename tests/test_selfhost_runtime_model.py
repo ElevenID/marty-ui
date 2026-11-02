@@ -223,7 +223,19 @@ def assert_public_image_loader_connected(reader):
     assert step["if"] == "matrix.lane == 'selfhost'"
     assert step["shell"] == "bash"
     body = step["run"]
-    build = steps[index - 1]
+    builds = [
+        (position, candidate) for position, candidate in enumerate(steps)
+        if candidate.get("name") == "Build public selfhost image"
+    ]
+    assert len(builds) == 1
+    build_index, build = builds[0]
+    names = [candidate.get("name") for candidate in steps]
+    cache_index = names.index("Retire completed selfhost builder cache")
+    cache = steps[cache_index]
+    assert build_index < cache_index < names.index("Compile reusable Rust test executables") < index
+    assert cache["if"] == "matrix.lane == 'selfhost'"
+    assert build["with"]["builder"] == cache["env"]["SELFHOST_BUILDER"]
+    assert cache["env"]["EXPECTED_SELFHOST_IMAGE"] == "${{ steps.public_selfhost_image.outputs.imageid }}"
     assert build["if"] == "matrix.lane == 'selfhost'"
     assert build["name"] == "Build public selfhost image"
     assert build["with"]["file"] == "services/Dockerfile"

@@ -21,6 +21,49 @@ def write(path: Path, value: dict) -> None:
         stream.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def nightly_trial_guide(candidate: dict) -> str:
+    """Describe only the experimental root-free candidate path in this source."""
+    tag = candidate["tag"]
+    return (
+        f"# Marty {tag} experimental root-free candidate\n\n"
+        "This exact candidate attempts a rootless storage ownership canary and then\n"
+        "stack provisioning with required read-only validation. It can fail at any stage;\n"
+        "it grants neither installer admission nor production Ready status. The live\n"
+        "rootless canary still requires qualification before this command is advertised\n"
+        "to outside testers. Normal admitted installation remains held.\n\n"
+        "On a disposable Linux amd64 VM with a pre-existing user-owned rootless daemon:\n\n"
+        f"/usr/bin/setpriv --no-new-privs -- bash -o pipefail -c 'curl -fsSL "
+        f"https://github.com/ElevenID/marty-ui/releases/download/{tag}/install.sh | "
+        f"sh -s -- --candidate-test {tag}'\n\n"
+        "Trusted setpriv, Bash, curl, Docker client and Compose are prerequisites. The\n"
+        "entire pipeline inherits no-new-privileges; a failed download is nonzero.\n"
+        "No source checkout, organization credentials, edited installation path or\n"
+        "separate download package is needed. The installer never uses sudo, installs\n"
+        "OS packages, starts a daemon, or falls back to a rootful socket. It uses\n"
+        "private temporary verification-tool and Docker-config files.\n\n"
+        "The initial HTTPS script executes before its own bytes are independently\n"
+        "verified. It authenticates signed inventory and operator before operator\n"
+        "execution. The operator can write private state/evidence before it verifies\n"
+        "remaining payloads; payload checks precede Docker runtime provisioning.\n"
+        "The canary records an exact image pull intent before acquisition, tests a\n"
+        "reversible rootless ownership transition, and stops on uncertainty. It may\n"
+        "pull images, create exact helper containers, and retain state/data; ordinary\n"
+        "uninstall retains credentials, images and the Redis volume. No auto-purge.\n\n"
+        "For an interrupted foreign-owned canary, preserve the installation and use\n"
+        "the retained operator's recovery-only command after checking both absolute\n"
+        "paths (the Docker path below is an example):\n\n"
+        "Recovery only: /usr/bin/setpriv --no-new-privs -- /absolute/retained/installation/marty-deploy "
+        "restore-rootless-canary --installation /absolute/retained/installation "
+        "--docker-bin /usr/bin/docker\n\n"
+        "Recovery does not resume provisioning or grant Ready. A consumed one-shot\n"
+        "retry may require manual review. Reset the disposable VM after feedback.\n\n"
+        "Send the first error and exit status, OS/architecture, RAM/disk and Docker/\n"
+        "Compose versions to your inviter or https://github.com/ElevenID/marty-ui/issues/1350.\n"
+        "Use disposable data; keep secret values and raw credential diagnostics private.\n\n"
+        f"Source: {candidate['source_sha']}\nProducer run: {candidate['build_run_id']}\n"
+    )
+
+
 def package(source: Path, candidate_path: Path, packager: Path, output: Path,
             compose_executable: Path | None = None) -> None:
     source = source.resolve(strict=True)
@@ -53,26 +96,8 @@ def package(source: Path, candidate_path: Path, packager: Path, output: Path,
     receipt = output / "prepared-selfhost-bundle.json"
     write(receipt, record(archive, lock_path, transaction, candidate["source_sha"], candidate["build_run_id"]))
     write(output / "prepared-selfhost-product-descriptor.json", produce(archive, lock_path, transaction, receipt))
-    guide = (
-        f"# Marty {candidate['tag']} installation-test nightly\n\n"
-        "This experimental Linux amd64 bundle is for disposable installation testing.\n"
-        "The nightly runtime happy path and artifact checks do not establish a supported\n"
-        "self-host installation or production readiness. Use disposable identities and data.\n\n"
-        f"Source: {candidate['source_sha']}\nProducer run: {candidate['build_run_id']}\n\n"
-        "To attempt the signed, unqualified candidate through the installer on a\n"
-        "disposable Linux amd64 host, run:\n\n"
-        f"curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/{candidate['tag']}/install.sh | "
-        f"sh -s -- --candidate-test {candidate['tag']} --install-dir /absolute/disposable/path\n\n"
-        "This test path does not grant admission or Ready status. Preserve its\n"
-        "installation path and redacted diagnostics if it exits nonzero.\n\n"
-        "Verify the signed release inventory, then SHA256SUMS before extraction.\n"
-        "Use this exact source revision and its docs/selfhost-disposable-qualification-runbook.md.\n"
-        "The six preparation assets and SHA256SUMS can be passed unchanged to\n"
-        "scripts/stage_selfhost_disposable_preview.py --with-operator-password.\n"
-        "Install the matching signed marty-deploy operator before the sudo KMS steps.\n"
-        "Record failures and redacted diagnostics; keep credential files private.\n"
-    )
-    (output / "SELFHOST-PREVIEW-README.md").write_text(guide, encoding="utf-8")
+    (output / "SELFHOST-PREVIEW-README.md").write_text(
+        nightly_trial_guide(candidate), encoding="utf-8")
     with (output / "SHA256SUMS").open("x", encoding="ascii") as stream:
         for name in sorted(ASSETS):
             stream.write(hashlib.sha256((output / name).read_bytes()).hexdigest() + "  " + name + "\n")

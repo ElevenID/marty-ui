@@ -47,12 +47,12 @@
         "capabilities": {
           "discover_keys": false,
           "sign": true,
-          "rotate_keys": true,
-          "upload_public_keys": true,
+          "rotate_keys": false,
+          "upload_public_keys": false,
           "delete_keys": false,
           "multiple_key_references": true,
           "public_key_export": true,
-          "hardware_attestation": true,
+          "hardware_attestation": false,
           "supported_algorithms": ["ES256", "ES384", "ES512", "RS256"]
         },
         "signature_encoding": "algorithm-dependent",

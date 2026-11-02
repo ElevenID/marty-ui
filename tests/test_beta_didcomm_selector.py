@@ -22,7 +22,7 @@ def validator():
 def model(enabled):
     services = {
         name: {"environment": {"UNRELATED_SECRET": "synthetic-private-value"}}
-        for name in ("issuance", "issuance-native", "gateway")
+        for name in ("issuance", "issuance-native", "gateway", "signing-keys")
     }
     services["issuance"]["environment"].update(
         DIDCOMM_DELIVERY_OWNER="native",
@@ -34,66 +34,51 @@ def model(enabled):
     services["issuance"]["healthcheck"] = {
         "test": ["CMD", "curl", "--fail", "http://localhost:8005/ready"]
     }
-    if enabled:
-        native = services["issuance-native"]
-        native["environment"].update(
-            DIDCOMM_ENCRYPTION_POLICY_FILE="/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json",
-            DIDCOMM_KMS_ADDR="http://openbao:8200",
-            DIDCOMM_KMS_TOKEN_FILE="/run/secrets/didcomm-kms/openbao-token",
-        )
-        native["volumes"] = [
-            {
-                "type": "bind",
-                "source": f"/synthetic-owned-policy/{name}",
-                "target": f"/run/secrets/didcomm-authcrypt/{name}",
-                "read_only": True,
-                "bind": {"create_host_path": False},
-            }
-            for name in ("didcomm-encryption-policy.json",)
-        ]
-        native["volumes"].append(
-            {
-                "type": "volume",
-                "source": "didcomm_issuance_token",
-                "target": "/run/secrets/didcomm-kms",
-                "read_only": True,
-            }
-        )
-        native["depends_on"] = {
-            "openbao-init": {"condition": "service_completed_successfully"}
-        }
-        image = "synthetic.invalid/openbao-didcomm@sha256:" + "a" * 64
-        services["openbao"] = {
-            "image": image,
-            "command": ["server", "-dev", "-config", "/bao/config/didcomm-plugin.hcl"],
-            "volumes": [
-                {
-                    "type": "bind",
-                    "source": "/synthetic/docker/openbao-didcomm-dev.hcl",
-                    "target": "/bao/config/didcomm-plugin.hcl",
-                    "read_only": True,
-                    "bind": {"create_host_path": False},
-                }
-            ],
-        }
-        services["openbao-init"] = {
-            "image": image,
-            "environment": {
-                "DIDCOMM_KMS_PLUGIN_REQUIRED": "true",
-                "DIDCOMM_ISSUANCE_TOKEN_FILE": "/run/didcomm-token/openbao-token",
-            },
-            "volumes": [
-                {
-                    "type": "volume",
-                    "source": "didcomm_issuance_token",
-                    "target": "/run/didcomm-token",
-                }
-            ],
-        }
-    return {
-        "services": services,
-        "volumes": {"didcomm_issuance_token": {}} if enabled else {},
+    native, signing = services["issuance-native"], services["signing-keys"]
+    native["environment"].update(
+        INTEGRATION_SECRET_KMS_URL="https://signing-keys:8018/internal",
+        INTEGRATION_SECRET_KMS_CA_FILE="/run/secrets/dev_integration_secret_ca",
+        SIGNING_KEYS_ISSUER_SIGN_KEY="synthetic-distinct-issuer-authority",
+        ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE="/bao/issuance-credential-grant/token",
+        BAO_ADDR="https://openbao:8200", BAO_CACERT="/bao/public-ca/ca.crt",
+    )
+    signing["environment"].update(
+        DIDCOMM_KMS_TOKEN_FILE="/bao/didcomm-issuance-token/token",
+        SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE="/bao/verify-grant/token",
+        SIGNING_KEYS_ISSUER_SIGN_KEY="synthetic-distinct-issuer-authority",
+        SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE="/run/secrets/dev_integration_secret_server_cert",
+        BAO_ADDR="https://openbao:8200", BAO_CACERT="/bao/public-ca/ca.crt",
+    )
+    def volume(source, target, read_only=True):
+        return {"type": "volume", "source": source, "target": target, "read_only": read_only}
+    native["volumes"] = [
+        volume("openbao_public_ca", "/bao/public-ca"),
+        volume("openbao_issuance_credential_grant", "/bao/issuance-credential-grant"),
+    ]
+    signing["volumes"] = [
+        volume("openbao_public_ca", "/bao/public-ca"),
+        volume("openbao_verify_grant", "/bao/verify-grant"),
+        volume("openbao_didcomm_issuance_token", "/bao/didcomm-issuance-token"),
+    ]
+    signing["depends_on"] = {"openbao-init": {"condition": "service_completed_successfully"}}
+    image = "synthetic.invalid/openbao-didcomm@sha256:" + "a" * 64
+    services["openbao"] = {"image": image}
+    services["openbao-init"] = {
+        "image": image,
+        "environment": {
+            "DIDCOMM_KMS_PLUGIN_REQUIRED": "true",
+            "BAO_DIDCOMM_ISSUANCE_TOKEN_FILE": "/bao/didcomm-issuance-token/token",
+        },
+        "volumes": [volume("openbao_didcomm_issuance_token", "/bao/didcomm-issuance-token", False)],
     }
+    if enabled:
+        native["environment"]["DIDCOMM_ENCRYPTION_POLICY_FILE"] = "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json"
+        native["volumes"].insert(0, {
+            "type": "bind", "source": "/synthetic-owned-policy/didcomm-encryption-policy.json",
+            "target": "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json",
+            "read_only": True, "bind": {"create_host_path": False},
+        })
+    return {"services": services, "volumes": {"openbao_didcomm_issuance_token": {}}}
 
 
 @pytest.mark.parametrize(
@@ -147,34 +132,20 @@ def test_validator_requires_native_dependency_and_retained_readiness(
 
 
 def https_model(enabled):
-    candidate = model(enabled)
-    native = candidate['services']['issuance-native']
-    native['environment'].update(
-        DIDCOMM_KMS_ADDR='https://openbao:8200',
-        DIDCOMM_KMS_CA_CERT_FILE='/bao/public-ca/ca.crt',
-        DIDCOMM_KMS_TOKEN_FILE='/bao/didcomm-issuance-token/token',
-    )
-    native['volumes'] = [mount for mount in native.get('volumes', [])
-                         if mount['target'] != '/run/secrets/didcomm-kms'] + [
-        {'type': 'volume', 'source': source, 'target': target, 'read_only': True}
-        for source, target in (
-            ('openbao_public_ca', '/bao/public-ca'),
-            ('openbao_didcomm_issuance_token', '/bao/didcomm-issuance-token'),
-        )
-    ]
-    return candidate
+    return model(enabled)
 
 
 @pytest.mark.parametrize('mutation', ['http', 'missing_ca', 'writable_token', 'legacy_custody'])
 def test_compose_gate_requires_current_tls_custody(validator, mutation):
     candidate = https_model(False)
     native = candidate['services']['issuance-native']
+    signing = candidate['services']['signing-keys']
     if mutation == 'http':
-        native['environment']['DIDCOMM_KMS_ADDR'] = 'http://openbao:8200'
+        native['environment']['INTEGRATION_SECRET_KMS_URL'] = 'http://signing-keys:8018/internal'
     elif mutation == 'missing_ca':
         native['volumes'] = native['volumes'][1:]
     elif mutation == 'writable_token':
-        native['volumes'][-1]['read_only'] = False
+        signing['volumes'][-1]['read_only'] = False
     else:
         candidate['services']['issuance']['environment']['DIDCOMM_KMS_TOKEN_FILE'] = '/foreign/token'
     with pytest.raises(validator['DidcommConfigurationError']):
@@ -240,6 +211,10 @@ def test_validator_captures_actual_model_with_closed_output(validator, enabled, 
         "missing-init-dependency",
         "missing-mint",
         "stock-openbao",
+        "missing-grant",
+        "missing-verifier",
+        "wrong-api-authority",
+        "native-direct-custody",
         "malformed",
     ),
 )
@@ -273,29 +248,37 @@ def test_invalid_native_kms_custody_fails_closed_without_secret_values(validator
             candidate["services"]["issuance-native"]["volumes"]
         )
     elif case == "wrong-token-path":
-        candidate["services"]["issuance-native"]["environment"][
+        candidate["services"]["signing-keys"]["environment"][
             "DIDCOMM_KMS_TOKEN_FILE"
         ] = "synthetic-private-value"
     elif case == "writable-token-volume":
-        candidate["services"]["issuance-native"]["volumes"][1]["read_only"] = False
+        candidate["services"]["signing-keys"]["volumes"][-1]["read_only"] = False
     elif case == "wrong-token-volume":
-        candidate["services"]["issuance-native"]["volumes"][1]["source"] = (
+        candidate["services"]["signing-keys"]["volumes"][-1]["source"] = (
             "synthetic-private-value"
         )
     elif case == "token-mounted-into-gateway":
         candidate["services"]["gateway"]["volumes"] = [
-            deepcopy(candidate["services"]["issuance-native"]["volumes"][1])
+            deepcopy(candidate["services"]["signing-keys"]["volumes"][-1])
         ]
     elif case == "external-token-volume":
-        candidate["volumes"]["didcomm_issuance_token"] = {"external": True}
+        candidate["volumes"]["openbao_didcomm_issuance_token"] = {"external": True}
     elif case == "missing-init-dependency":
-        candidate["services"]["issuance-native"]["depends_on"].clear()
+        candidate["services"]["signing-keys"]["depends_on"].clear()
     elif case == "missing-mint":
         candidate["services"]["openbao-init"]["environment"].pop(
-            "DIDCOMM_ISSUANCE_TOKEN_FILE"
+            "BAO_DIDCOMM_ISSUANCE_TOKEN_FILE"
         )
     elif case == "stock-openbao":
         candidate["services"]["openbao"]["image"] = "quay.io/openbao/openbao:2"
+    elif case == "missing-grant":
+        candidate["services"]["issuance-native"]["environment"].pop("ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE")
+    elif case == "missing-verifier":
+        candidate["services"]["signing-keys"]["environment"].pop("SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE")
+    elif case == "wrong-api-authority":
+        candidate["services"]["issuance-native"]["environment"]["SIGNING_KEYS_ISSUER_SIGN_KEY"] = "different"
+    elif case == "native-direct-custody":
+        candidate["services"]["issuance-native"]["environment"]["DIDCOMM_KMS_TOKEN_FILE"] = "/foreign/token"
     else:
         candidate = {"services": "synthetic-private-value"}
     with pytest.raises(validator["DidcommConfigurationError"]) as error:

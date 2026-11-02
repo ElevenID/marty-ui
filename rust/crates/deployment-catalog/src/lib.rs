@@ -7,12 +7,18 @@ mod compose_model;
 mod deployment_admission;
 mod deployment_environment;
 mod deployment_lifecycle;
+pub mod installer_acme;
+pub mod installer_acme_bootstrap;
+pub mod installer_acme_certificates;
+pub mod installer_acme_configuration;
+pub mod installer_acme_credentials;
+pub mod installer_acme_custody;
+pub mod installer_acme_host;
+pub(crate) mod installer_acme_preparation;
+pub mod installer_acme_renewal;
+pub(crate) mod installer_acme_state;
 pub mod installer_application;
 pub mod installer_application_env;
-pub mod installer_application_graph;
-pub mod installer_application_model;
-pub mod installer_application_observation;
-pub mod installer_application_start;
 pub mod installer_artifacts;
 pub mod installer_bundle;
 #[cfg(target_os = "linux")]
@@ -20,43 +26,81 @@ pub mod installer_candidate_command;
 pub mod installer_candidate_nonce;
 pub mod installer_candidate_prepare;
 pub mod installer_command;
+pub mod installer_compose;
+#[cfg(all(test, target_os = "linux"))]
+mod installer_compose_development_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod installer_compose_engine_tests;
+#[cfg(target_os = "linux")]
+mod installer_compose_plugin;
 #[cfg(target_os = "linux")]
 mod installer_container;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_creation_identity;
+#[cfg(all(target_os = "linux", feature = "installer-development"))]
+pub(crate) mod installer_development_image;
 pub mod installer_doctor;
 pub mod installer_fetch;
+pub(crate) mod installer_foundation;
+pub(crate) mod installer_foundation_registration;
 pub mod installer_generation;
 pub mod installer_generation_binding;
 pub mod installer_generation_host;
+pub(crate) mod installer_generation_maintenance;
+mod installer_health;
+mod installer_helper_output;
 #[cfg(target_os = "linux")]
 mod installer_host_fs;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_host_snapshot;
 pub mod installer_host_storage_inventory;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_host_tree_observer;
+pub mod installer_hosting;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_hosting_addon;
 pub mod installer_ingress;
 pub mod installer_ingress_config;
-pub mod installer_ingress_model;
 pub mod installer_ingress_outputs;
 pub mod installer_ingress_provision;
+mod installer_jobs;
 mod installer_json;
 pub mod installer_keycloak;
 pub mod installer_keycloak_bridge;
+#[cfg(target_os = "linux")]
+pub mod installer_kms;
+pub mod installer_lifecycle;
 pub mod installer_logs;
+pub mod installer_managed_renewal;
 pub mod installer_openbao;
+pub(crate) mod installer_openbao_control;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_openbao_owner_transition;
+pub(crate) mod installer_openbao_recovery;
+pub(crate) mod installer_openbao_seal;
 pub mod installer_prepare;
+pub mod installer_public_ingress;
 pub(crate) mod installer_purge_host;
 #[allow(dead_code)] // No production caller until the purge coordinator is reviewed.
 pub(crate) mod installer_purge_ledger;
-#[allow(dead_code)] // Dormant until the reviewed purge coordinator supplies durable intent.
-pub(crate) mod installer_purge_volume;
 pub mod installer_release;
 pub mod installer_renewal;
 pub mod installer_renewal_bootstrap;
+pub mod installer_root_retirement;
+#[cfg(target_os = "linux")]
+pub mod installer_rootless_canary_helper;
+#[cfg(target_os = "linux")]
+pub mod installer_rootless_storage_canary;
 pub mod installer_runtime;
+#[cfg(target_os = "linux")]
+pub mod installer_startup_observation;
 pub mod installer_state;
 pub mod installer_tls;
 pub mod installer_tls_outputs;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_top_level_census;
+#[cfg(target_os = "linux")]
+mod installer_transport;
 pub mod installer_trust;
 pub mod installer_uninstall;
 pub mod installer_validation;

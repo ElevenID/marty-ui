@@ -3,11 +3,15 @@
 //! non-idempotent operation; a crashed provisioning attempt requires reconciliation.
 #![cfg(target_os = "linux")]
 
-use crate::installer_creation_identity::{NewInstallation, RECEIPT as CREATION_RECEIPT};
+use crate::installer_creation_identity::{
+    ApplicationHandles, NewApplicationStorage, NewCredentials, NewInstallation, NewOpenBaoState,
+    APPLICATION_RECEIPT, CREDENTIAL_RECEIPT, OPENBAO_OWNER_TRANSITION_RECEIPT,
+    OPENBAO_STATE_RECEIPT, RECEIPT as CREATION_RECEIPT,
+};
+use crate::installer_openbao_owner_transition::{self, Evidence as OpenBaoOwnerEvidence};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
     ffi::CString,
     fs::File,
     io::{Read, Write},
@@ -16,6 +20,7 @@ use std::{
         unix::{ffi::OsStrExt, fs::MetadataExt},
     },
     path::{Component, Path},
+    time::{Duration, Instant},
 };
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -42,6 +47,11 @@ pub const SCALAR_SECRETS: [&str; 17] = [
     "signing_keys_issuer_sign_key",
     "signing_keys_service_sign_gateway_key",
     "token_hmac_key",
+];
+pub(crate) const LOCAL_AUTH_SCALAR_SECRETS: [&str; 3] = [
+    "keycloak_admin_password",
+    "keycloak_db_password",
+    "marty_api_client_secret",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,12 +91,29 @@ pub enum Phase {
 /// Immutable local daemon/port selection, committed before any Docker mutation.
 /// The runtime must re-observe this engine ID before every mutation. This is
 /// intent, not evidence that containers or networks exist or are owned.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeProfile {
+    #[default]
+    Rootful,
+    Rootless,
+}
+
+impl RuntimeProfile {
+    fn is_rootful(&self) -> bool {
+        *self == Self::Rootful
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeBinding {
     pub docker_host: String,
     pub engine_id: String,
     pub openbao_port: u16,
+    // Omitted for historical rootful journals, preserving their exact bytes.
+    #[serde(default, skip_serializing_if = "RuntimeProfile::is_rootful")]
+    pub profile: RuntimeProfile,
 }
 impl RuntimeBinding {
     pub fn validate(&self) -> Result<()> {
@@ -108,6 +135,12 @@ impl RuntimeBinding {
                 .unwrap()
                 .is_match(&self.engine_id)
             || self.openbao_port < 1024
+            || (self.profile == RuntimeProfile::Rootless
+                && (unsafe { libc::geteuid() } == 0
+                    || self.docker_host
+                        != format!("unix:///run/user/{}/docker.sock", unsafe {
+                            libc::geteuid()
+                        })))
         {
             return Err("invalid local installer runtime binding".into());
         }
@@ -122,13 +155,43 @@ pub struct AcceptanceScope {
     pub authorization_sha256: String,
     pub context_sha256: String,
     pub consumption_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authenticated_evidence_sha256: Option<std::collections::BTreeMap<String, String>>,
 }
+pub(crate) const ACCEPTANCE_AUTHENTICATED_EVIDENCE: [&str; 9] = [
+    "installer-candidate-authorization.json",
+    "installer-candidate-authorization.json.sigstore.json",
+    "installer-candidate-authorization.json.provenance.jsonl",
+    "installer-controller-consumption.json",
+    "installer-controller-consumption.json.sigstore.json",
+    "installer-controller-consumption.json.provenance.jsonl",
+    "installer-inventory.json",
+    "installer-inventory.json.sigstore.json",
+    "installer-inventory.json.provenance.jsonl",
+];
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CandidateTestScope {
     pub inventory_sha256: String,
     pub build_run_id: u64,
     pub build_run_attempt: u64,
+}
+#[cfg(feature = "installer-development")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnsignedDevelopmentScope {
+    pub fixture: CandidateTestScope,
+    pub artifact_sha256: String,
+}
+#[cfg(feature = "installer-development")]
+impl UnsignedDevelopmentScope {
+    fn validate(&self) -> Result<()> {
+        self.fixture.validate()?;
+        if !crate::installer_development_image::digest(&self.artifact_sha256, 64) {
+            return Err("invalid unsigned development image scope".into());
+        }
+        Ok(())
+    }
 }
 impl CandidateTestScope {
     fn validate(&self) -> Result<()> {
@@ -146,6 +209,15 @@ impl CandidateTestScope {
     }
 }
 impl AcceptanceScope {
+    pub(crate) fn authenticated_evidence(
+        &self,
+    ) -> Result<&std::collections::BTreeMap<String, String>> {
+        self.validate()?;
+        self.authenticated_evidence_sha256
+            .as_ref()
+            .ok_or_else(|| "historical acceptance scope has no authenticated file binding".into())
+    }
+
     fn validate(&self) -> Result<()> {
         for value in [
             &self.authorization_sha256,
@@ -158,6 +230,21 @@ impl AcceptanceScope {
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
             {
                 return Err("invalid acceptance execution scope".into());
+            }
+        }
+        if let Some(evidence) = &self.authenticated_evidence_sha256 {
+            if evidence.len() != ACCEPTANCE_AUTHENTICATED_EVIDENCE.len()
+                || ACCEPTANCE_AUTHENTICATED_EVIDENCE
+                    .iter()
+                    .any(|name| !evidence.contains_key(*name))
+                || evidence.values().any(|value| {
+                    value.len() != 64
+                        || !value
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                })
+            {
+                return Err("invalid authenticated acceptance evidence binding".into());
             }
         }
         Ok(())
@@ -173,6 +260,8 @@ pub enum ExecutionScope {
     Unclassified,
     AcceptanceOnly(AcceptanceScope),
     CandidateTest(CandidateTestScope),
+    #[cfg(feature = "installer-development")]
+    UnsignedDevelopment(UnsignedDevelopmentScope),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,6 +276,10 @@ pub struct Journal {
     runtime: Option<RuntimeBinding>,
     #[serde(default)]
     scope: ExecutionScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hosting_selection_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hosting_addon_sha256: Option<String>,
 }
 impl Journal {
     pub fn installation_id(&self) -> uuid::Uuid {
@@ -207,17 +300,54 @@ impl Journal {
     pub fn execution_scope(&self) -> &ExecutionScope {
         &self.scope
     }
+    pub fn hosting_selection_sha256(&self) -> Option<&str> {
+        self.hosting_selection_sha256.as_deref()
+    }
+    pub fn hosting_addon_sha256(&self) -> Option<&str> {
+        self.hosting_addon_sha256.as_deref()
+    }
     pub fn compose_project(&self) -> String {
         format!("marty-install-{}", self.installation_id.simple())
     }
     fn validate(&self) -> Result<()> {
         self.identity.validate()?;
+        if self.hosting_selection_sha256.as_ref().is_some_and(|value| {
+            self.phase == Phase::Initialized
+                || value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        }) {
+            return Err("invalid hosting selection binding".into());
+        }
+        if self.hosting_addon_sha256.as_ref().is_some_and(|value| {
+            self.hosting_selection_sha256.is_none()
+                || value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        }) {
+            return Err("invalid hosting add-on binding".into());
+        }
         match &self.scope {
             ExecutionScope::AcceptanceOnly(scope) => scope.validate()?,
             ExecutionScope::CandidateTest(scope) => {
                 scope.validate()?;
                 if self.identity.inventory_sha256 != format!("sha256:{}", scope.inventory_sha256) {
                     return Err("candidate test inventory identity differs".into());
+                }
+            }
+            #[cfg(feature = "installer-development")]
+            ExecutionScope::UnsignedDevelopment(scope) => {
+                scope.validate()?;
+                if self.identity.inventory_sha256
+                    != format!("sha256:{}", scope.fixture.inventory_sha256)
+                    || self
+                        .runtime
+                        .as_ref()
+                        .is_none_or(|runtime| runtime.profile != RuntimeProfile::Rootless)
+                {
+                    return Err("unsigned development fixture or runtime identity differs".into());
                 }
             }
             ExecutionScope::Unclassified => {}
@@ -279,6 +409,71 @@ fn private(file: &File, directory: bool) -> Result<()> {
         || (!directory && (!m.is_file() || m.nlink() != 1))
     {
         return Err("installation state is not private, owned, ordinary data".into());
+    }
+    Ok(())
+}
+
+/// Host ownership for the applicant directory. A nonroot installer shares its
+/// nonzero effective host group; a root installer provisions image group 10001.
+/// Container supplemental groups must use the runtime projection below.
+pub fn applicant_state_gid() -> Result<u32> {
+    let uid = unsafe { libc::geteuid() };
+    let gid = if uid == 0 {
+        10001
+    } else {
+        unsafe { libc::getegid() }
+    };
+    if gid == 0 {
+        return Err("applicant state requires a nonroot group".into());
+    }
+    Ok(gid)
+}
+
+/// A validated namespace projection, not an arbitrary numeric group override.
+/// Host ownership and the container's supplemental group are distinct values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ApplicantContainerGroup {
+    host_gid: u32,
+    container_gid: u32,
+}
+
+impl ApplicantContainerGroup {
+    pub fn host_gid(self) -> u32 {
+        self.host_gid
+    }
+
+    pub fn container_gid(self) -> u32 {
+        self.container_gid
+    }
+}
+
+/// Project the reviewed host group into a previously observed local runtime.
+/// Rootless qualification proves namespace group zero maps to the ordinary
+/// installer group. The image retains its nonroot user and primary group;
+/// supplemental group zero here is not host group zero. Rootful behavior keeps
+/// the existing host group, including ordinary callers of a rootful daemon.
+pub fn applicant_container_group(binding: &RuntimeBinding) -> Result<ApplicantContainerGroup> {
+    binding.validate()?;
+    let host_gid = applicant_state_gid()?;
+    Ok(ApplicantContainerGroup {
+        host_gid,
+        container_gid: match binding.profile {
+            RuntimeProfile::Rootful => host_gid,
+            RuntimeProfile::Rootless => 0,
+        },
+    })
+}
+
+fn require_applicant_storage(directory: &File, gid: u32) -> Result<()> {
+    let metadata = directory
+        .metadata()
+        .map_err(|_| "inspect applicant state ownership")?;
+    if metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.gid() != gid
+        || metadata.mode() & 0o7777 != 0o2770
+        || !metadata.is_dir()
+    {
+        return Err("applicant state ownership differs from the reviewed contract".into());
     }
     Ok(())
 }
@@ -384,14 +579,49 @@ impl Drop for LockedDirectory {
     }
 }
 pub(crate) fn lock(directory: File) -> Result<LockedDirectory> {
-    if unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err(error("installation is locked"));
+    lock_with_wait(directory, None)?.ok_or_else(|| "installation lock unexpectedly deferred".into())
+}
+
+/// Only the scheduled lifecycle entry point opts into waiting. Keep the same
+/// held directory and exclusive lock; neither contention nor EINTR permits a
+/// journal read or an operation without acquiring it.
+fn lock_with_wait(directory: File, wait: Option<Duration>) -> Result<Option<LockedDirectory>> {
+    let started = Instant::now();
+    let mut last_error: Option<std::io::Error> = None;
+    loop {
+        if let (Some(limit), Some(cause)) = (wait, last_error.as_ref()) {
+            if started.elapsed() >= limit {
+                return if cause.kind() == std::io::ErrorKind::WouldBlock {
+                    Ok(None)
+                } else {
+                    Err(format!("installation is locked: {cause}"))
+                };
+            }
+        }
+        if unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(Some(LockedDirectory {
+                file: directory,
+                owner_pid: unsafe { libc::getpid() },
+                unlock_on_drop: true,
+            }));
+        }
+        let cause = std::io::Error::last_os_error();
+        let Some(limit) = wait else {
+            return Err(format!("installation is locked: {cause}"));
+        };
+        if !matches!(
+            cause.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+        ) {
+            return Err(format!("installation is locked: {cause}"));
+        }
+        last_error = Some(cause);
+        std::thread::sleep(
+            limit
+                .saturating_sub(started.elapsed())
+                .min(Duration::from_millis(50)),
+        );
     }
-    Ok(LockedDirectory {
-        file: directory,
-        owner_pid: unsafe { libc::getpid() },
-        unlock_on_drop: true,
-    })
 }
 fn read(directory: &File) -> Result<Journal> {
     let file = open_at(directory, &name(JOURNAL), libc::O_PATH, 0)?;
@@ -418,60 +648,6 @@ pub struct LockedInspection {
     journal: Journal,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum CleanupState {
-    NotStarted,
-    InProgress,
-    Completed,
-}
-/// Summary of durable cleanup records, never an observation of current Docker
-/// resources. The installation journal remains historical and unchanged.
-#[derive(Debug, Serialize)]
-pub struct CleanupStatus {
-    pub state: CleanupState,
-    pub runtime_observed: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data_retained: Option<bool>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CleanupResource {
-    role: String,
-    container_id: String,
-    bao: bool,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CleanupPlanRecord {
-    schema: String,
-    installation_id: String,
-    engine_id: String,
-    project: String,
-    network_id: String,
-    network_name: String,
-    retained_redis_volume: Option<String>,
-    #[serde(default)]
-    absent_redis_volume: Option<String>,
-    resources: Vec<CleanupResource>,
-    source_hashes: BTreeMap<String, String>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CleanupResultRecord {
-    schema: String,
-    installation_id: String,
-    engine_id: String,
-    containers_removed: u32,
-    network_removed: bool,
-    host_data_retained: bool,
-    credentials_retained: bool,
-    images_retained: bool,
-    redis_volume_retained: Option<String>,
-    #[serde(default)]
-    redis_volume_absent: Option<String>,
-    installation_ready: bool,
-}
 fn cleanup_open_optional(
     directory: &File,
     entry: &str,
@@ -499,215 +675,38 @@ fn cleanup_open_optional(
         reopen_regular(&file)?
     }))
 }
-type CleanupRecords = (Option<Vec<u8>>, Option<Vec<u8>>);
-fn cleanup_records(directory: &File) -> Result<CleanupRecords> {
+// Presence alone blocks provisioning replay. Old cleanup markers remain a
+// refusal boundary, without preserving their obsolete service/resource catalog.
+fn maintenance_started(directory: &File) -> Result<bool> {
     let Some(evidence) = cleanup_open_optional(directory, "evidence", true)? else {
-        return Ok((None, None));
+        return Ok(false);
     };
-    let mut records = Vec::new();
-    for entry in ["uninstall-plan.json", "uninstall-result.json"] {
-        let bytes = if let Some(file) = cleanup_open_optional(&evidence, entry, false)? {
-            let mut bytes = Vec::new();
-            file.take(LIMIT + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| "cleanup evidence cannot be read")?;
-            if bytes.is_empty() || bytes.len() as u64 > LIMIT {
-                return Err("cleanup evidence exceeds bounds".into());
-            }
-            Some(bytes)
-        } else {
-            None
-        };
-        records.push(bytes);
-    }
-    let result = records.pop().unwrap();
-    let plan = records.pop().unwrap();
-    Ok((plan, result))
-}
-fn cleanup_hex(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-fn cleanup_summary(
-    journal: &Journal,
-    plan: Option<&[u8]>,
-    result: Option<&[u8]>,
-) -> Result<CleanupStatus> {
-    const INVALID: &str = "cleanup evidence is invalid or differs from installation identity";
-    let Some(plan) = plan else {
-        if result.is_some() {
-            return Err(INVALID.into());
-        }
-        return Ok(CleanupStatus {
-            state: CleanupState::NotStarted,
-            runtime_observed: false,
-            data_retained: None,
-        });
-    };
-    let plan: CleanupPlanRecord = serde_json::from_slice(plan).map_err(|_| INVALID)?;
-    let pre_application = plan.schema == "elevenid.installer-uninstall-pre-application-plan/v1";
-    let count = if pre_application { 4 } else { 34 };
-    let binding = journal.runtime().ok_or(INVALID)?;
-    let project = journal.compose_project();
-    let roles: BTreeSet<_> = plan.resources.iter().map(|r| r.role.as_str()).collect();
-    let identifiers: BTreeSet<_> = plan
-        .resources
-        .iter()
-        .map(|r| r.container_id.as_str())
-        .collect();
-    let bao: BTreeSet<_> = plan
-        .resources
-        .iter()
-        .filter(|r| r.bao)
-        .map(|r| r.role.as_str())
-        .collect();
-    let mut expected_sources = BTreeSet::from([
-        "evidence/application-plan.json",
-        "evidence/application-compose.json",
-        "evidence/application-created-resources.json",
-        "root/openbao-created.json",
-        "root/openbao-compose-model.json",
-        "evidence/keycloak-container-removed.json",
-        "evidence/tls-container-removed.json",
-        "evidence/ingress-container-removed.json",
-    ]);
-    if plan
-        .source_hashes
-        .contains_key("evidence/renewal-container-removed.json")
-    {
-        expected_sources.insert("evidence/renewal-container-removed.json");
-    }
-    if plan
-        .source_hashes
-        .contains_key("evidence/generation-container-removed.json")
-    {
-        if !expected_sources.contains("evidence/renewal-container-removed.json") {
-            return Err("generation cleanup lacks renewal authority evidence".into());
-        }
-        expected_sources.insert("evidence/generation-container-removed.json");
-    }
-    if plan
-        .source_hashes
-        .contains_key("evidence/application-generation.json")
-    {
-        if !expected_sources.contains("evidence/generation-container-removed.json") {
-            return Err("application generation cleanup lacks candidate evidence".into());
-        }
-        expected_sources.insert("evidence/application-generation.json");
-        expected_sources.insert("evidence/application-generation-pending.json");
-        expected_sources.insert("evidence/application-generation-selection.json");
-    }
-    if pre_application {
-        expected_sources.remove("evidence/application-created-resources.json");
-        expected_sources.insert("evidence/application-start-intent.json");
-        for (removed, completed) in [
-            (
-                "evidence/keycloak-container-removed.json",
-                "evidence/keycloak-result.json",
-            ),
-            (
-                "evidence/tls-container-removed.json",
-                "evidence/tls-result.json",
-            ),
-            (
-                "evidence/ingress-container-removed.json",
-                "evidence/ingress-result.json",
-            ),
-            (
-                "evidence/renewal-container-removed.json",
-                "evidence/renewal-result.json",
-            ),
-            (
-                "evidence/generation-container-removed.json",
-                "evidence/generation-result.json",
-            ),
-        ] {
-            if expected_sources.contains(removed) {
-                expected_sources.insert(completed);
-            }
+    for entry in [
+        "lifecycle-configuration.json",
+        "acme-staging-000000.json",
+        "acme-production-000000.json",
+        "acme-custody-staging-intent.json",
+        "acme-custody-production-intent.json",
+        "acme-credentials-staging-intent.json",
+        "acme-credentials-production-intent.json",
+        "uninstall-plan.json",
+        "uninstall-result.json",
+        "uninstall-compose-stop-intent.json",
+        "uninstall-compose-stop-result.json",
+        "uninstall-compose-down-intent.json",
+        "uninstall-compose-down-result.json",
+        "uninstall-compose-start-0001-intent.json",
+        "uninstall-compose-start-0001-result.json",
+        "uninstall-compose-stop-0001-intent.json",
+        "uninstall-compose-stop-0001-result.json",
+        "uninstall-compose-down-0001-intent.json",
+        "uninstall-compose-down-0001-result.json",
+    ] {
+        if cleanup_open_optional(&evidence, entry, false)?.is_some() {
+            return Ok(true);
         }
     }
-    let redis = format!("{project}_redis-socket");
-    let volume_valid = if pre_application {
-        plan.retained_redis_volume.is_none()
-            && plan.absent_redis_volume.as_deref() == Some(redis.as_str())
-    } else {
-        plan.retained_redis_volume.as_deref() == Some(redis.as_str())
-            && plan.absent_redis_volume.is_none()
-    };
-    if (!pre_application && plan.schema != "elevenid.installer-uninstall-plan/v1")
-        || (pre_application && journal.phase() != Phase::Provisioning)
-        || plan.installation_id != journal.installation_id().to_string()
-        || plan.engine_id != binding.engine_id
-        || plan.project != project
-        || !cleanup_hex(&plan.network_id)
-        || plan.network_name != format!("{project}-bao_default")
-        || !volume_valid
-        || plan.resources.len() != count
-        || roles.len() != count
-        || identifiers.len() != count
-        || !identifiers.iter().all(|s| cleanup_hex(s))
-        || bao
-            != BTreeSet::from([
-                "openbao",
-                "openbao-bootstrap",
-                "openbao-tls-init",
-                "openbao-unseal",
-            ])
-        || plan.resources.iter().any(|r| {
-            r.role.is_empty()
-                || r.role.len() > 128
-                || !r
-                    .role
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        })
-        || plan
-            .source_hashes
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>()
-            != expected_sources
-        || !plan.source_hashes.values().all(|s| cleanup_hex(s))
-    {
-        return Err(INVALID.into());
-    }
-    let state = if let Some(bytes) = result {
-        let result: CleanupResultRecord = serde_json::from_slice(bytes).map_err(|_| INVALID)?;
-        if result.schema
-            != if pre_application {
-                "elevenid.installer-uninstall-pre-application-result/v1"
-            } else {
-                "elevenid.installer-uninstall-result/v1"
-            }
-            || result.installation_id != plan.installation_id
-            || result.engine_id != plan.engine_id
-            || result.containers_removed as usize != plan.resources.len()
-            || !result.network_removed
-            || !result.host_data_retained
-            || !result.credentials_retained
-            || !result.images_retained
-            || result.redis_volume_retained != plan.retained_redis_volume
-            || result.redis_volume_absent != plan.absent_redis_volume
-            || result.installation_ready
-        {
-            return Err(INVALID.into());
-        }
-        CleanupState::Completed
-    } else {
-        CleanupState::InProgress
-    };
-    let retained = if state == CleanupState::Completed {
-        Some(true)
-    } else {
-        None
-    };
-    Ok(CleanupStatus {
-        state,
-        runtime_observed: false,
-        data_retained: retained,
-    })
+    Ok(false)
 }
 impl LockedInspection {
     /// Append one bounded private diagnostic report; never replace lifecycle evidence.
@@ -796,12 +795,24 @@ impl LockedInspection {
         Ok(())
     }
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_with_lock_wait(path, None)?
+            .ok_or_else(|| "installation lock unexpectedly deferred".into())
+    }
+    fn open_with_lock_wait(path: &Path, wait: Option<Duration>) -> Result<Option<Self>> {
         let (ancestor, leaf) = parent(path)?;
         let directory = open_at(&ancestor, &leaf, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
         private(&directory, true)?;
-        let directory = lock(directory)?;
+        let Some(directory) = lock_with_wait(directory, wait)? else {
+            return Ok(None);
+        };
         let journal = read(&directory)?;
-        Ok(Self { directory, journal })
+        let inspection = Self { directory, journal };
+        if wait.is_some() {
+            // A caller may have waited while the installation path changed.
+            // Rebind it to the held inode before permitting any scheduled work.
+            inspection.require_path_binding(path)?;
+        }
+        Ok(Some(inspection))
     }
     pub fn journal(&self) -> &Journal {
         &self.journal
@@ -809,13 +820,6 @@ impl LockedInspection {
     /// The held descriptor keeps read-only inventory walks inside this installation.
     pub(crate) fn installation_directory(&self) -> &File {
         &self.directory
-    }
-    pub fn cleanup_status(&self) -> Result<CleanupStatus> {
-        self.require_unchanged()?;
-        let (plan, result) = cleanup_records(&self.directory)?;
-        let summary = cleanup_summary(&self.journal, plan.as_deref(), result.as_deref())?;
-        self.require_unchanged()?;
-        Ok(summary)
     }
     /// Read credentials for diagnostic filtering without following user paths.
     /// Root-created scoped outputs may be readable immutable files; private
@@ -973,7 +977,7 @@ impl LockedInspection {
     }
 }
 
-/// Exclusive cleanup access with append-only receipts. This deliberately has no
+/// Exclusive maintenance access with append-only receipts. This deliberately has no
 /// phase-advance or provisioning-resume API, including for uncertain journals.
 pub(crate) struct LockedMaintenance {
     inspection: LockedInspection,
@@ -985,6 +989,14 @@ impl LockedMaintenance {
             inspection: LockedInspection::open(path)?,
             poisoned: false,
         })
+    }
+    pub(crate) fn open_waiting(path: &Path, wait: Duration) -> Result<Option<Self>> {
+        Ok(
+            LockedInspection::open_with_lock_wait(path, Some(wait))?.map(|inspection| Self {
+                inspection,
+                poisoned: false,
+            }),
+        )
     }
     pub(crate) fn journal(&self) -> &Journal {
         self.inspection.journal()
@@ -999,6 +1011,21 @@ impl LockedMaintenance {
             return Err("uncertain maintenance receipt; reopen and reconcile".into());
         }
         self.inspection.require_unchanged()
+    }
+    /// The owning component performs one authenticated atomic publication.
+    /// An error or panic after entering this boundary keeps the writer poisoned
+    /// and its lock held, so an uncertain rename cannot be followed by another
+    /// mutation in the same invocation. Reopening requires reconciliation.
+    pub(crate) fn with_atomic_publication<T>(
+        &mut self,
+        operation: impl FnOnce(&LockedInspection) -> Result<T>,
+    ) -> Result<T> {
+        self.require_unchanged()?;
+        self.poisoned = true;
+        let result = operation(&self.inspection)?;
+        self.inspection.require_unchanged()?;
+        self.poisoned = false;
+        Ok(result)
     }
     fn entry(entry: &str) -> Result<CString> {
         if !regex::Regex::new(r"\A[a-z0-9][a-z0-9._-]{0,127}\z")
@@ -1050,16 +1077,24 @@ impl LockedMaintenance {
         self.require_unchanged()?;
         Ok(Some(bytes))
     }
-    pub(crate) fn read_record(&self, entry: &str) -> Result<Option<Vec<u8>>> {
-        self.read_optional(&self.inspection.directory, entry)
-    }
     pub(crate) fn read_evidence(&self, entry: &str) -> Result<Option<Vec<u8>>> {
         self.read_optional(&self.evidence()?, entry)
     }
     pub(crate) fn write_evidence_exclusive(&mut self, entry: &str, bytes: &[u8]) -> Result<()> {
         self.require_unchanged()?;
         let filename = Self::entry(entry)?;
-        if !entry.starts_with("uninstall-") || bytes.is_empty() || bytes.len() > 4 * 1024 * 1024 {
+        if !(entry.starts_with("uninstall-")
+            || entry.starts_with("lifecycle-")
+            || entry.starts_with("acme-")
+            || entry.starts_with("generation-")
+            || entry.starts_with("health-")
+            || entry.starts_with("openbao-tls-recovery-")
+            || entry.starts_with("openbao-root-retirement-")
+            || entry.starts_with("rootless-canary-")
+            || entry.starts_with("kms-registration-"))
+            || bytes.is_empty()
+            || bytes.len() > 4 * 1024 * 1024
+        {
             return Err("invalid maintenance evidence".into());
         }
         let directory = self.evidence()?;
@@ -1080,6 +1115,107 @@ impl LockedMaintenance {
         self.poisoned = false;
         Ok(())
     }
+
+    /// The health observer has one bounded checkpoint and one recoverable
+    /// pending publication. This is deliberately not a generic evidence
+    /// overwrite facility. The policy reader authenticates the checkpoint's
+    /// installation, sequence and predecessor before calling this method.
+    pub(crate) fn publish_health_checkpoint(
+        &mut self,
+        expected: Option<&[u8]>,
+        bytes: &[u8],
+    ) -> Result<()> {
+        self.publish_health_checkpoint_observed(expected, bytes, || {})
+    }
+
+    fn require_held_evidence(&self, held: &File) -> Result<()> {
+        self.inspection.require_unchanged()?;
+        let current = open_at(
+            &self.inspection.directory,
+            &name("evidence"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&current, true)?;
+        private(held, true)?;
+        let current = current
+            .metadata()
+            .map_err(|_| "cannot observe evidence directory")?;
+        let held = held
+            .metadata()
+            .map_err(|_| "cannot observe held evidence directory")?;
+        if (
+            current.dev(),
+            current.ino(),
+            current.uid(),
+            current.gid(),
+            current.mode(),
+        ) != (held.dev(), held.ino(), held.uid(), held.gid(), held.mode())
+        {
+            return Err("evidence directory binding changed".into());
+        }
+        Ok(())
+    }
+
+    fn publish_health_checkpoint_observed(
+        &mut self,
+        expected: Option<&[u8]>,
+        bytes: &[u8],
+        mut publication_boundary: impl FnMut(),
+    ) -> Result<()> {
+        const CURRENT: &str = "health-checkpoint.json";
+        const NEXT: &str = "health-checkpoint-next.json";
+        if bytes.is_empty() || bytes.len() > 262144 {
+            return Err("health checkpoint exceeds its bound".into());
+        }
+        let directory = self.evidence()?;
+        if self.read_optional(&directory, CURRENT)?.as_deref() != expected {
+            return Err("health checkpoint changed".into());
+        }
+        if let Some(pending) = self.read_optional(&directory, NEXT)? {
+            if pending != bytes {
+                return Err("pending health checkpoint requires reconciliation".into());
+            }
+        } else {
+            self.write_evidence_exclusive(NEXT, bytes)?;
+        }
+        if self.read_optional(&directory, CURRENT)?.as_deref() != expected
+            || self.read_optional(&directory, NEXT)?.as_deref() != Some(bytes)
+        {
+            return Err("health checkpoint publication changed".into());
+        }
+        publication_boundary();
+        self.require_held_evidence(&directory)?;
+        self.poisoned = true;
+        let mode = if expected.is_none() {
+            crate::installer_host_fs::RenameMode::NoReplace
+        } else {
+            crate::installer_host_fs::RenameMode::Replace
+        };
+        if crate::installer_host_fs::rename_at(
+            &directory,
+            &name(NEXT),
+            &directory,
+            &name(CURRENT),
+            mode,
+        )
+        .is_err()
+        {
+            return Err("health checkpoint publication uncertain".into());
+        }
+        directory
+            .sync_all()
+            .map_err(|_| "health checkpoint durability uncertain")?;
+        publication_boundary();
+        self.require_held_evidence(&directory)?;
+        self.inspection.require_unchanged()?;
+        self.poisoned = false;
+        if self.read_optional(&directory, CURRENT)?.as_deref() != Some(bytes) {
+            self.poisoned = true;
+            return Err("published health checkpoint changed".into());
+        }
+        Ok(())
+    }
 }
 
 pub struct InstallerState {
@@ -1089,6 +1225,12 @@ pub struct InstallerState {
     /// In-memory capture exists only for a newly created normal installation.
     /// Resumed and legacy installations can never reconstruct creation proof.
     creation: Option<NewInstallation>,
+    /// Captured only while this fresh normal installer owns the creation chain.
+    credential_creation: Option<NewCredentials>,
+    /// Four application roots can be recorded only by their original writer.
+    application_creation: Option<NewApplicationStorage>,
+    /// The OpenBao state root must be captured at its exclusive creation.
+    openbao_creation: Option<NewOpenBaoState>,
 }
 impl InstallerState {
     /// Borrow the writer's lock for diagnostics without reacquiring or unlocking it.
@@ -1114,6 +1256,37 @@ impl InstallerState {
         };
         let result = operation(&view);
         view.require_unchanged()?;
+        result
+    }
+    /// Run a scoped maintenance transaction under the fresh installer's lock.
+    /// A panic, uncertain append or changed journal poisons the writer. The
+    /// borrowed descriptor cannot unlock the original installation guard.
+    pub(crate) fn with_maintenance<T>(
+        &mut self,
+        operation: impl FnOnce(&mut LockedMaintenance) -> Result<T>,
+    ) -> Result<T> {
+        if self.poisoned || read(&self.directory)? != self.journal {
+            return Err("uncertain installation cannot enter maintenance".into());
+        }
+        let mut view = LockedMaintenance {
+            inspection: LockedInspection {
+                directory: LockedDirectory {
+                    file: self
+                        .directory
+                        .file
+                        .try_clone()
+                        .map_err(|_| "cannot borrow installation lock")?,
+                    owner_pid: self.directory.owner_pid,
+                    unlock_on_drop: false,
+                },
+                journal: self.journal.clone(),
+            },
+            poisoned: false,
+        };
+        self.poisoned = true;
+        let result = operation(&mut view);
+        view.require_unchanged()?;
+        self.poisoned = false;
         result
     }
     /// Preserve the caller's authenticated release operator for recovery after
@@ -1185,22 +1358,14 @@ impl InstallerState {
         // Publish authenticated bytes while still non-executable. A crash before
         // chmod leaves a safe, non-executable final file requiring reconciliation.
         // NOREPLACE also rejects existing links and leaves partial mode 0600.
-        if unsafe {
-            // Call the Linux syscall directly: some musl versions do not export
-            // a renameat2 libc wrapper. Preserve atomic NOREPLACE semantics;
-            // unsupported kernels fail closed instead of falling back to rename.
-            libc::syscall(
-                libc::SYS_renameat2,
-                self.directory.as_raw_fd(),
-                partial.as_ptr(),
-                self.directory.as_raw_fd(),
-                target.as_ptr(),
-                libc::RENAME_NOREPLACE,
-            )
-        } != 0
-        {
-            return Err(error("publish operator without replacement"));
-        }
+        crate::installer_host_fs::rename_at(
+            &self.directory,
+            &partial,
+            &self.directory,
+            &target,
+            crate::installer_host_fs::RenameMode::NoReplace,
+        )
+        .map_err(|failure| format!("publish operator without replacement: {failure}"))?;
         self.directory
             .sync_all()
             .map_err(|_| "persist published operator name")?;
@@ -1229,6 +1394,10 @@ impl InstallerState {
                 "downloads",
                 "evidence",
                 "openbao-state",
+                "openbao-control",
+                "openbao-seal",
+                "acme-custody-transfer",
+                "acme-credentials-transfer",
                 "keycloak-output",
                 "tls-output",
                 "ingress-output",
@@ -1238,6 +1407,7 @@ impl InstallerState {
                 "generation-identity",
                 "generation-transfer",
                 "application-generation",
+                "organization-bootstrap-output",
             ]
             .contains(&entry)
         {
@@ -1263,8 +1433,83 @@ impl InstallerState {
                 creation.capture(entry, &child)?;
             }
         }
+        if entry == "evidence" {
+            if let Some(creation) = &mut self.credential_creation {
+                creation.capture_evidence(&child)?;
+            }
+            if let Some(creation) = &mut self.application_creation {
+                creation.capture_evidence(&child)?;
+            }
+            if let Some(creation) = &mut self.openbao_creation {
+                creation.capture_evidence(&child)?;
+            }
+        }
+        if entry == "openbao-state" {
+            if let Some(creation) = &mut self.openbao_creation {
+                creation.capture_state(&child)?;
+            }
+        }
         self.poisoned = false;
         Ok(())
+    }
+    /// Create the two private control mounts for a fresh managed OpenBao node.
+    /// Only the socket child may later change to the mapped image owner. The
+    /// installation root, outer directory and credential identity stay private
+    /// to the installer user. Existing directories are never adopted.
+    pub(crate) fn prepare_openbao_control(&mut self) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        self.create_private_directory("openbao-control")?;
+        self.poisoned = true;
+        let control = open_at(
+            &self.directory,
+            &name("openbao-control"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&control, true)?;
+        let mut observed = serde_json::Map::new();
+        for entry in ["socket", "identity"] {
+            if unsafe { libc::mkdirat(control.as_raw_fd(), name(entry).as_ptr(), 0o700) } != 0 {
+                return Err(error("create OpenBao control child"));
+            }
+            let child = open_at(
+                &control,
+                &name(entry),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?;
+            private(&child, true)?;
+            child
+                .sync_all()
+                .map_err(|_| "persist OpenBao control child")?;
+            let metadata = child
+                .metadata()
+                .map_err(|_| "OpenBao control metadata unavailable")?;
+            observed.insert(
+                entry.into(),
+                serde_json::json!({
+                    "device": metadata.dev(), "inode": metadata.ino(),
+                    "owner_uid": metadata.uid(), "owner_gid": metadata.gid(), "mode": 0o700,
+                }),
+            );
+        }
+        control
+            .sync_all()
+            .and_then(|_| self.directory.sync_all())
+            .map_err(|_| "persist OpenBao control directories")?;
+        let metadata = control
+            .metadata()
+            .map_err(|_| "OpenBao control metadata unavailable")?;
+        let receipt = serde_json::to_vec(&serde_json::json!({
+            "schema": "elevenid.installer-openbao-control-created/v1",
+            "installation_id": self.journal.installation_id(),
+            "device": metadata.dev(), "inode": metadata.ino(),
+            "owner_uid": metadata.uid(), "owner_gid": metadata.gid(), "mode": 0o700,
+            "children": observed, "enrolled": false,
+        }))
+        .map_err(|_| "cannot encode OpenBao control creation")?;
+        self.poisoned = false;
+        self.write_evidence("openbao-control-created.json", &receipt)
     }
     /// Persist creation-time identities for only the fresh root and the two
     /// fixed directories created immediately after it. This receipt is local
@@ -1345,6 +1590,24 @@ impl InstallerState {
             self.poisoned = true;
             return Err("creation identity receipt cannot be confirmed".into());
         }
+        if let Some(application_creation) = &mut self.application_creation {
+            if let Err(error) = application_creation.remember_initial_receipt(&bytes) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
+        if let Some(openbao_creation) = &mut self.openbao_creation {
+            if let Err(error) = openbao_creation.remember_initial_receipt(&bytes) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
+        if let Some(credential_creation) = &mut self.credential_creation {
+            if let Err(error) = credential_creation.remember_initial_receipt(bytes) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
         self.creation = None;
         Ok(())
     }
@@ -1406,6 +1669,17 @@ impl InstallerState {
         {
             return Err("shipped operator password policy needs review".into());
         }
+        self.generate_local_scalar_credentials(true)
+    }
+
+    /// External authentication has no local operator or Keycloak password.
+    /// Scalar entropy, exclusive writes and creation receipts share one owner.
+    pub(crate) fn generate_external_auth_credentials(&mut self) -> Result<()> {
+        self.generate_local_scalar_credentials(false)
+    }
+
+    fn generate_local_scalar_credentials(&mut self, local_auth: bool) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
         self.poisoned = true;
         private(&self.directory, true)?;
         if unsafe { libc::mkdirat(self.directory.as_raw_fd(), name("secrets").as_ptr(), 0o700) }
@@ -1425,7 +1699,11 @@ impl InstallerState {
             .map_err(|_| "sync secret directory")?;
         let mut random = File::open("/dev/urandom").map_err(|_| "OS randomness unavailable")?;
         let mut seen = std::collections::BTreeSet::new();
-        for entry in SCALAR_SECRETS.into_iter().chain(["operator-password"]) {
+        let mut operator_output = None;
+        let scalars = SCALAR_SECRETS
+            .into_iter()
+            .filter(|entry| local_auth || !LOCAL_AUTH_SCALAR_SECRETS.contains(entry));
+        for entry in scalars.chain(local_auth.then_some("operator-password")) {
             let mut entropy = [0u8; 32];
             random
                 .read_exact(&mut entropy)
@@ -1457,11 +1735,193 @@ impl InstallerState {
                 return Err(error("set container-readable credential mode"));
             }
             output.sync_all().map_err(|_| "sync credential")?;
+            if operator {
+                operator_output = Some(output);
+            }
         }
         secrets.sync_all().map_err(|_| "sync credentials")?;
         self.directory
             .sync_all()
             .map_err(|_| "sync operator credential")?;
+        if let Some(creation) = &mut self.credential_creation {
+            creation.capture(&secrets, operator_output.as_ref())?;
+        }
+        self.poisoned = false;
+        Ok(())
+    }
+
+    fn optional_operator_password(&self) -> Result<Option<File>> {
+        let fd = unsafe {
+            libc::openat(
+                self.directory.as_raw_fd(),
+                name("operator-password").as_ptr(),
+                libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
+                return Ok(None);
+            }
+            return Err("operator credential observation unavailable".into());
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        private(&file, false)?;
+        Ok(Some(file))
+    }
+
+    /// Record only secrets-directory and optional operator-file creation identity.
+    /// This requires fresh in-memory capture; resume cannot mint provenance.
+    pub(crate) fn persist_credential_creation_receipt(
+        &mut self,
+        installation: &Path,
+    ) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        let creation = match self.credential_creation.as_ref() {
+            Some(creation) => creation.clone(),
+            None if !matches!(self.journal.execution_scope(), ExecutionScope::Unclassified) => {
+                return Ok(());
+            }
+            None => return Err("credential creation identity is unavailable".into()),
+        };
+        let prepared = (|| {
+            self.with_inspection(|view| {
+                view.require_path_binding(installation)?;
+                if view.read_evidence(CREATION_RECEIPT)? != creation.initial_receipt()? {
+                    return Err("initial creation identity receipt changed".into());
+                }
+                Ok(())
+            })?;
+            let evidence = open_at(
+                &self.directory,
+                &name("evidence"),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?;
+            let secrets = open_at(
+                &self.directory,
+                &name("secrets"),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?;
+            let operator = self.optional_operator_password()?;
+            private(&evidence, true)?;
+            private(&secrets, true)?;
+            creation.receipt_bytes(
+                self.journal.installation_id(),
+                &self.journal.identity().source_sha,
+                &self.directory,
+                &evidence,
+                &secrets,
+                operator.as_ref(),
+            )
+        })();
+        let bytes = match prepared {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        self.write_evidence(CREDENTIAL_RECEIPT, &bytes)?;
+        let confirmed = (|| {
+            let evidence = open_at(
+                &self.directory,
+                &name("evidence"),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?;
+            let secrets = open_at(
+                &self.directory,
+                &name("secrets"),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?;
+            let operator = self.optional_operator_password()?;
+            if creation.receipt_bytes(
+                self.journal.installation_id(),
+                &self.journal.identity().source_sha,
+                &self.directory,
+                &evidence,
+                &secrets,
+                operator.as_ref(),
+            )? != bytes
+            {
+                return Err("credential identity changed after receipt write".into());
+            }
+            self.with_inspection(|view| {
+                view.require_path_binding(installation)?;
+                if view.read_evidence(CREDENTIAL_RECEIPT)? != bytes {
+                    return Err("credential identity receipt changed".into());
+                }
+                Ok(())
+            })
+        })();
+        if confirmed.is_err() {
+            self.poisoned = true;
+            return Err("credential identity receipt cannot be confirmed".into());
+        }
+        if let Some(application_creation) = &mut self.application_creation {
+            if let Err(error) = application_creation.remember_credential_receipt(&bytes) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
+        if let Some(openbao_creation) = &mut self.openbao_creation {
+            if let Err(error) = openbao_creation.remember_credential_receipt(&bytes) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
+        self.credential_creation = None;
+        Ok(())
+    }
+
+    /// Import preprovisioned application inputs into the same private scalar
+    /// custody owner. No private keys or rotating web-identity tokens belong
+    /// here; those credentials stay with their external producer.
+    pub(crate) fn stage_application_inputs(
+        &mut self,
+        values: &std::collections::BTreeMap<String, Vec<u8>>,
+    ) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        if values.is_empty()
+            || values.len() > 64
+            || values.iter().any(|(entry, bytes)| {
+                !regex::Regex::new(r"\A[a-z0-9][a-z0-9_-]{0,127}\z")
+                    .unwrap()
+                    .is_match(entry)
+                    || bytes.len() > 65_536
+                    || (bytes.is_empty() && entry != "external_oidc_client_secret")
+                    || bytes.windows(11).any(|value| value == b"PRIVATE KEY")
+            })
+        {
+            return Err("application input import refused".into());
+        }
+        let secrets = open_at(
+            &self.directory,
+            &name("secrets"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&secrets, true)?;
+        self.poisoned = true;
+        for (entry, bytes) in values {
+            let mut file = open_at(
+                &secrets,
+                &name(entry),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+                0o600,
+            )?;
+            private(&file, false)?;
+            file.write_all(bytes)
+                .map_err(|_| "application input import failed")?;
+            if unsafe { libc::fchmod(file.as_raw_fd(), 0o444) } != 0 {
+                return Err("application input projection failed".into());
+            }
+            file.sync_all()
+                .and_then(|_| secrets.sync_all())
+                .map_err(|_| "application input import uncertain")?;
+        }
         self.poisoned = false;
         Ok(())
     }
@@ -1493,12 +1953,24 @@ impl InstallerState {
             Ok(child)
         };
         let state = make(&self.directory, "state")?;
-        for entry in ["postgres", "redis", "applicant"] {
+        for entry in ["postgres", "redis"] {
             make(&state, entry)?;
         }
-        for entry in ["backups", "openbao-exports", "openbao-snapshot-identity"] {
-            make(&self.directory, entry)?;
+        let applicant = make(&state, "applicant")?;
+        let gid = applicant_state_gid()?;
+        if unsafe { libc::fchown(applicant.as_raw_fd(), !0, gid) } != 0
+            || unsafe { libc::fchmod(applicant.as_raw_fd(), 0o2770) } != 0
+        {
+            return Err(error("provision applicant state ownership"));
         }
+        require_applicant_storage(&applicant, gid)?;
+        applicant
+            .sync_all()
+            .and_then(|_| state.sync_all())
+            .map_err(|_| "persist applicant state ownership")?;
+        let backups = make(&self.directory, "backups")?;
+        let exports = make(&self.directory, "openbao-exports")?;
+        let snapshot_identity = make(&self.directory, "openbao-snapshot-identity")?;
         for entry in crate::installer_application_env::OPTIONAL_EMPTY_SECRETS {
             let file = open_at(
                 &secrets,
@@ -1516,7 +1988,321 @@ impl InstallerState {
         secrets
             .sync_all()
             .map_err(|_| "persist application placeholders")?;
+        if let Some(creation) = &mut self.application_creation {
+            creation.capture(&state, &backups, &exports, &snapshot_identity)?;
+        }
         self.poisoned = false;
+        Ok(())
+    }
+
+    /// Reopen the exact held installation child without following links before
+    /// a prepared model can start containers, including after a resumed run.
+    pub fn validate_applicant_storage(&self) -> Result<u32> {
+        private(&self.directory, true)?;
+        let state = open_at(
+            &self.directory,
+            &name("state"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&state, true)?;
+        let applicant = open_at(
+            &state,
+            &name("applicant"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        let gid = applicant_state_gid()?;
+        require_applicant_storage(&applicant, gid)?;
+        Ok(gid)
+    }
+
+    /// Publish only the four fixed application-root creation identities.
+    /// Prior local receipts are compared byte-for-byte; no path is adopted on
+    /// resume, and this receipt grants no deletion authority.
+    pub(crate) fn persist_application_storage_creation_receipt(
+        &mut self,
+        installation: &Path,
+    ) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        let creation = match self.application_creation.as_ref() {
+            Some(creation) => creation.clone(),
+            None if !matches!(self.journal.execution_scope(), ExecutionScope::Unclassified) => {
+                return Ok(());
+            }
+            None => return Err("application root creation identity is unavailable".into()),
+        };
+        let prepared = (|| {
+            let (initial, credentials) = creation.prior_receipts()?;
+            self.with_inspection(|view| {
+                view.require_path_binding(installation)?;
+                if view.read_evidence(CREATION_RECEIPT)? != initial
+                    || view.read_evidence(CREDENTIAL_RECEIPT)? != credentials
+                {
+                    return Err("prior creation identity receipt changed".into());
+                }
+                Ok(())
+            })?;
+            let open = |entry: &str| open_at(&self.directory, &name(entry), libc::O_PATH, 0);
+            let evidence = open("evidence")?;
+            let state = open("state")?;
+            let backups = open("backups")?;
+            let exports = open("openbao-exports")?;
+            let snapshot_identity = open("openbao-snapshot-identity")?;
+            for directory in [&evidence, &state, &backups, &exports, &snapshot_identity] {
+                private(directory, true)?;
+            }
+            creation.receipt_bytes(
+                self.journal.installation_id(),
+                &self.journal.identity().source_sha,
+                ApplicationHandles {
+                    root: &self.directory,
+                    evidence: &evidence,
+                    state: &state,
+                    backups: &backups,
+                    exports: &exports,
+                    snapshot_identity: &snapshot_identity,
+                },
+            )
+        })();
+        let bytes = match prepared {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        self.write_evidence(APPLICATION_RECEIPT, &bytes)?;
+        let confirmed = (|| {
+            let open = |entry: &str| open_at(&self.directory, &name(entry), libc::O_PATH, 0);
+            let evidence = open("evidence")?;
+            let state = open("state")?;
+            let backups = open("backups")?;
+            let exports = open("openbao-exports")?;
+            let snapshot_identity = open("openbao-snapshot-identity")?;
+            if creation.receipt_bytes(
+                self.journal.installation_id(),
+                &self.journal.identity().source_sha,
+                ApplicationHandles {
+                    root: &self.directory,
+                    evidence: &evidence,
+                    state: &state,
+                    backups: &backups,
+                    exports: &exports,
+                    snapshot_identity: &snapshot_identity,
+                },
+            )? != bytes
+            {
+                return Err("application root identity changed after receipt write".into());
+            }
+            self.with_inspection(|view| {
+                view.require_path_binding(installation)?;
+                if view.read_evidence(APPLICATION_RECEIPT)? != bytes {
+                    return Err("application root receipt changed".into());
+                }
+                Ok(())
+            })
+        })();
+        if confirmed.is_err() {
+            self.poisoned = true;
+            return Err("application root identity receipt cannot be confirmed".into());
+        }
+        self.application_creation = None;
+        Ok(())
+    }
+
+    /// Commit the freshly created OpenBao state root before its first writer.
+    /// This local historical receipt is never a deletion grant.
+    pub(crate) fn persist_openbao_state_creation_receipt(
+        &mut self,
+        installation: &Path,
+    ) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        let creation = match self.openbao_creation.as_ref() {
+            Some(creation) => creation.clone(),
+            None if !matches!(self.journal.execution_scope(), ExecutionScope::Unclassified) => {
+                return Ok(());
+            }
+            None => return Err("OpenBao state creation identity is unavailable".into()),
+        };
+        let prepared = (|| {
+            let (initial, credentials) = creation.prior_receipts()?;
+            self.with_inspection(|view| {
+                view.require_path_binding(installation)?;
+                if view.read_evidence(CREATION_RECEIPT)? != initial
+                    || view.read_evidence(CREDENTIAL_RECEIPT)? != credentials
+                {
+                    return Err("prior creation identity receipt changed".into());
+                }
+                Ok(())
+            })?;
+            let evidence = open_at(&self.directory, &name("evidence"), libc::O_PATH, 0)?;
+            let state = open_at(&self.directory, &name("openbao-state"), libc::O_PATH, 0)?;
+            private(&evidence, true)?;
+            private(&state, true)?;
+            creation.receipt_bytes(
+                self.journal.installation_id(),
+                &self.journal.identity().source_sha,
+                &self.directory,
+                &evidence,
+                &state,
+            )
+        })();
+        let bytes = match prepared {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        self.write_evidence(OPENBAO_STATE_RECEIPT, &bytes)?;
+        let confirmed = (|| {
+            let evidence = open_at(&self.directory, &name("evidence"), libc::O_PATH, 0)?;
+            let state = open_at(&self.directory, &name("openbao-state"), libc::O_PATH, 0)?;
+            if creation.receipt_bytes(
+                self.journal.installation_id(),
+                &self.journal.identity().source_sha,
+                &self.directory,
+                &evidence,
+                &state,
+            )? != bytes
+            {
+                return Err("OpenBao state identity changed after receipt write".into());
+            }
+            self.with_inspection(|view| {
+                view.require_path_binding(installation)?;
+                if view.read_evidence(OPENBAO_STATE_RECEIPT)? != bytes {
+                    return Err("OpenBao state receipt changed".into());
+                }
+                Ok(())
+            })
+        })();
+        if confirmed.is_err() {
+            self.poisoned = true;
+            return Err("OpenBao state identity receipt cannot be confirmed".into());
+        }
+        if let Some(creation) = &mut self.openbao_creation {
+            if let Err(error) = creation.remember_state_receipt(&bytes) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    /// Record the exact metadata observed after the retained TLS initializer
+    /// completed. The initial creation receipt remains immutable; this later
+    /// local observation is neither ownership authentication nor deletion grant.
+    pub(crate) fn persist_openbao_owner_transition_receipt(
+        &mut self,
+        installation: &Path,
+        observed_engine_id: &str,
+        image: &str,
+        image_id: &str,
+        container_id: &str,
+        completion_bytes: &[u8],
+    ) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        if !matches!(self.journal.execution_scope(), ExecutionScope::Unclassified) {
+            return Ok(());
+        }
+        let creation = self
+            .openbao_creation
+            .as_ref()
+            .ok_or("fresh OpenBao transition capability unavailable")?
+            .clone();
+        let binding = self
+            .journal
+            .runtime()
+            .ok_or("OpenBao runtime binding absent")?;
+        binding.validate()?;
+        if observed_engine_id != binding.engine_id {
+            self.poisoned = true;
+            return Err("OpenBao engine binding changed".into());
+        }
+        let engine_id = binding.engine_id.clone();
+        let prepare = |this: &Self| -> Result<Vec<u8>> {
+            this.with_inspection(|view| view.require_path_binding(installation))?;
+            let completion = open_at(
+                &this.directory,
+                &name("openbao-completed-openbao-tls-init.json"),
+                libc::O_PATH,
+                0,
+            )?;
+            private(&completion, false)?;
+            let mut bytes = Vec::new();
+            reopen_regular(&completion)?
+                .take(LIMIT + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "OpenBao TLS completion record unavailable")?;
+            if bytes != completion_bytes || bytes.is_empty() || bytes.len() as u64 > LIMIT {
+                return Err("OpenBao TLS completion record changed".into());
+            }
+            let saved = creation.transition_chain()?;
+            let (initial, credential, state_creation) = this.with_inspection(|view| {
+                Ok((
+                    view.read_evidence(CREATION_RECEIPT)?,
+                    view.read_evidence(CREDENTIAL_RECEIPT)?,
+                    view.read_evidence(OPENBAO_STATE_RECEIPT)?,
+                ))
+            })?;
+            if initial != saved.initial_receipt
+                || credential != saved.credential_receipt
+                || state_creation != saved.state_receipt
+            {
+                return Err("OpenBao prior creation receipts changed".into());
+            }
+            let evidence = open_at(&this.directory, &name("evidence"), libc::O_PATH, 0)?;
+            let state = open_at(&this.directory, &name("openbao-state"), libc::O_PATH, 0)?;
+            private(&evidence, true)?;
+            let root_observed = crate::installer_creation_identity::observe(&this.directory)?;
+            let evidence_observed = crate::installer_creation_identity::observe(&evidence)?;
+            let state_observed = crate::installer_creation_identity::observe(&state)?;
+            if root_observed != *saved.root
+                || evidence_observed != *saved.evidence
+                || state_observed.mount_id != saved.state.mount_id
+                || state_observed.identity.dev != saved.state.identity.dev
+                || state_observed.identity.ino != saved.state.identity.ino
+                || state_observed.identity.kind != saved.state.identity.kind
+                || state_observed.identity.mode != saved.state.identity.mode
+            {
+                return Err("OpenBao creation inode changed before owner transition".into());
+            }
+            installer_openbao_owner_transition::receipt_bytes(&OpenBaoOwnerEvidence {
+                initial_bytes: &initial,
+                state_bytes: &state_creation,
+                completion_bytes: &bytes,
+                installation_id: this.journal.installation_id(),
+                source_sha: &this.journal.identity().source_sha,
+                engine_id: &engine_id,
+                image,
+                image_id,
+                container_id,
+                root: &root_observed,
+                evidence: &evidence_observed,
+                state: &state_observed,
+            })
+        };
+        let bytes = match prepare(self) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        self.write_evidence(OPENBAO_OWNER_TRANSITION_RECEIPT, &bytes)?;
+        if prepare(self).as_ref() != Ok(&bytes) {
+            self.poisoned = true;
+            return Err("OpenBao owner transition changed after receipt write".into());
+        }
+        if !matches!(
+            self.with_inspection(|view| view.read_evidence(OPENBAO_OWNER_TRANSITION_RECEIPT)),
+            Ok(confirmed) if confirmed == bytes
+        ) {
+            self.poisoned = true;
+            return Err("OpenBao owner transition receipt cannot be confirmed".into());
+        }
+        self.openbao_creation = None;
         Ok(())
     }
 
@@ -1650,6 +2436,30 @@ impl InstallerState {
             uuid::Uuid::new_v4(),
         )
     }
+    /// Only the opted-in fresh test harness can create this unsigned scope.
+    /// Released CLI entry points cannot select or resume it.
+    #[cfg(all(test, feature = "installer-development"))]
+    pub(crate) fn create_development_with_runtime(
+        path: &Path,
+        identity: Identity,
+        runtime: RuntimeBinding,
+        scope: UnsignedDevelopmentScope,
+    ) -> Result<Self> {
+        runtime.validate()?;
+        scope.validate()?;
+        if runtime.profile != RuntimeProfile::Rootless
+            || identity.inventory_sha256 != format!("sha256:{}", scope.fixture.inventory_sha256)
+        {
+            return Err("unsigned development fixture or runtime identity differs".into());
+        }
+        Self::create_internal(
+            path,
+            identity,
+            Some(runtime),
+            ExecutionScope::UnsignedDevelopment(scope),
+            uuid::Uuid::new_v4(),
+        )
+    }
     fn create_internal(
         path: &Path,
         identity: Identity,
@@ -1671,6 +2481,21 @@ impl InstallerState {
         } else {
             None
         };
+        let credential_creation = if creation.is_some() {
+            Some(NewCredentials::new(&directory)?)
+        } else {
+            None
+        };
+        let application_creation = if creation.is_some() {
+            Some(NewApplicationStorage::new(&directory)?)
+        } else {
+            None
+        };
+        let openbao_creation = if creation.is_some() {
+            Some(NewOpenBaoState::new(&directory)?)
+        } else {
+            None
+        };
         let journal = Journal {
             schema: SCHEMA.into(),
             installation_id,
@@ -1679,12 +2504,17 @@ impl InstallerState {
             revision: 0,
             runtime,
             scope,
+            hosting_selection_sha256: None,
+            hosting_addon_sha256: None,
         };
         let mut state = Self {
             directory,
             journal: journal.clone(),
             poisoned: false,
             creation,
+            credential_creation,
+            application_creation,
+            openbao_creation,
         };
         state.persist(&journal)?;
         Ok(state)
@@ -1706,8 +2536,7 @@ impl InstallerState {
         }
         // Cleanup and provisioning are separate lifecycles. Even a historical
         // Ready journal must never authorize recreation after cleanup begins.
-        let (cleanup_plan, cleanup_result) = cleanup_records(&directory)?;
-        if cleanup_plan.is_some() || cleanup_result.is_some() {
+        if maintenance_started(&directory)? {
             return Err("cleanup has begun; provisioning resume is refused".into());
         }
         if journal.phase == Phase::Provisioning {
@@ -1718,6 +2547,69 @@ impl InstallerState {
             journal,
             poisoned: false,
             creation: None,
+            credential_creation: None,
+            application_creation: None,
+            openbao_creation: None,
+        })
+    }
+
+    /// Continue only the completed pre-ACME boundary while retaining the same
+    /// installation lock. This is not ordinary provisioning replay: the host
+    /// bridge must prove both setup jobs and its immutable prepared receipt,
+    /// and application creation must already have been completed by the
+    /// original writer. No fresh-creation capability is reconstructed.
+    pub(crate) fn continue_acme_enrolment(
+        inspection: LockedInspection,
+        installation: &Path,
+        identity: &Identity,
+    ) -> Result<Self> {
+        const REFUSED: &str = "ACME continuation requires its complete prepared boundary before application generation; preserve partial state for reconciliation";
+        identity.validate()?;
+        inspection.require_path_binding(installation)?;
+        crate::installer_acme_preparation::require_supported_scope(&inspection)?;
+        if inspection.journal.identity() != identity
+            || inspection.journal.phase() != Phase::Provisioning
+            || !inspection
+                .journal
+                .runtime()
+                .is_some_and(|runtime| runtime.profile == RuntimeProfile::Rootless)
+            || !crate::installer_acme_host::continuation_available(&inspection)?
+        {
+            return Err(REFUSED.into());
+        }
+        crate::installer_application::require_acme_preparation(&inspection, installation)?;
+        let evidence = open_at(
+            &inspection.directory,
+            &name("evidence"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&evidence, true)?;
+        for entry in crate::installer_host_fs::file_names(&evidence, REFUSED)? {
+            // Renewal-authority enrollment is part of preparation. Generation,
+            // application activation and lifecycle operations are separate
+            // owners whose uncertain outcomes cannot be replayed here.
+            if entry.starts_with("generation-")
+                || (entry.starts_with("application-") && entry != APPLICATION_RECEIPT)
+                || entry.starts_with("compose-generation-")
+                || entry.starts_with("compose-application-")
+                || entry.starts_with("lifecycle-")
+                || entry.starts_with("uninstall-")
+                || entry == "compose-session.json"
+                || entry == "installer-nginx.conf"
+            {
+                return Err(REFUSED.into());
+            }
+        }
+        inspection.require_path_binding(installation)?;
+        Ok(Self {
+            directory: inspection.directory,
+            journal: inspection.journal,
+            poisoned: false,
+            creation: None,
+            credential_creation: None,
+            application_creation: None,
+            openbao_creation: None,
         })
     }
     pub fn journal(&self) -> &Journal {
@@ -1745,6 +2637,44 @@ impl InstallerState {
         let mut journal = self.journal.clone();
         journal.phase = next;
         journal.revision += 1;
+        self.persist(&journal)?;
+        self.journal = journal;
+        Ok(())
+    }
+    /// Bind a fresh installation's hosting evidence before any ingress side
+    /// effects. The phase revision stays unchanged; absence remains meaningful
+    /// for journals created before hosting configuration was introduced.
+    pub(crate) fn bind_hosting_selection(&mut self, digest: &str) -> Result<()> {
+        self.require_live_phase(Phase::Verified)?;
+        if self.journal.hosting_selection_sha256.is_some()
+            || digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        {
+            return Err("hosting selection can be bound only once".into());
+        }
+        let mut journal = self.journal.clone();
+        journal.hosting_selection_sha256 = Some(digest.into());
+        self.persist(&journal)?;
+        self.journal = journal;
+        Ok(())
+    }
+    /// Optional connector artifacts are independently authenticated and bound
+    /// only after the hosting selection, before provisioning begins.
+    pub(crate) fn bind_hosting_addon(&mut self, digest: &str) -> Result<()> {
+        self.require_live_phase(Phase::Verified)?;
+        if self.journal.hosting_selection_sha256.is_none()
+            || self.journal.hosting_addon_sha256.is_some()
+            || digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        {
+            return Err("hosting add-on can be bound only once after hosting selection".into());
+        }
+        let mut journal = self.journal.clone();
+        journal.hosting_addon_sha256 = Some(digest.into());
         self.persist(&journal)?;
         self.journal = journal;
         Ok(())
@@ -1829,12 +2759,11 @@ mod tests {
         assert!(view.read_evidence("uninstall-plan.json").is_err());
         assert!(view.diagnostic_record("uninstall-plan.json", true).is_err());
         assert!(view.diagnostic_record("root-record.json", false).is_err());
-        assert!(view.cleanup_status().is_err());
+        assert!(maintenance_started(&view.directory).is_err());
         assert!(view.read_operator_password().is_err());
         drop(view);
         let maintenance = LockedMaintenance::open(&path).unwrap();
         assert!(maintenance.read_evidence("uninstall-plan.json").is_err());
-        assert!(maintenance.read_record("root-record.json").is_err());
         drop(maintenance);
         std::fs::remove_file(path.join(JOURNAL)).unwrap();
         fifo(&path.join(JOURNAL));
@@ -1865,6 +2794,97 @@ mod tests {
         assert!(panic.is_err() && LockedInspection::open(&path).is_err());
         drop(state);
         assert!(LockedInspection::open(&path).is_ok());
+    }
+    #[test]
+    fn borrowed_maintenance_preserves_lock_and_propagates_uncertain_writes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("installation");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        state.create_private_directory("evidence").unwrap();
+        let before = std::fs::read(path.join(JOURNAL)).unwrap();
+        state
+            .with_maintenance(|view| {
+                assert!(LockedMaintenance::open(&path).is_err());
+                view.write_evidence_exclusive("acme-staging-000000.json", b"retained intent")
+            })
+            .unwrap();
+        assert!(LockedInspection::open(&path).is_err());
+        let error: Result<()> = state.with_maintenance(|_| Err("validation failed".into()));
+        assert!(error.is_err() && !state.poisoned);
+        assert!(state
+            .with_maintenance(|view| {
+                view.write_evidence_exclusive("acme-staging-000000.json", b"overwrite")
+            })
+            .is_err());
+        assert!(state.poisoned && LockedInspection::open(&path).is_err());
+        assert!(state.advance(Phase::Verified).is_err());
+        assert_eq!(std::fs::read(path.join(JOURNAL)).unwrap(), before);
+        drop(state);
+        let view = LockedMaintenance::open(&path).unwrap();
+        assert_eq!(
+            view.read_evidence("acme-staging-000000.json")
+                .unwrap()
+                .unwrap(),
+            b"retained intent"
+        );
+        drop(view);
+        assert!(InstallerState::resume(&path, &identity()).is_err());
+    }
+    #[test]
+    fn borrowed_maintenance_panic_poisoning_does_not_release_the_writer_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("installation");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<()> = state.with_maintenance(|_| panic!("maintenance interrupted"));
+        }));
+        assert!(panic.is_err() && state.poisoned);
+        assert!(LockedMaintenance::open(&path).is_err());
+        assert!(state.advance(Phase::Verified).is_err());
+        drop(state);
+        assert!(LockedInspection::open(&path).is_ok());
+    }
+    #[test]
+    fn uncertain_generation_publication_cannot_continue_or_release_the_writer_lock() {
+        for panic_after_publication in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("installation");
+            let mut writer = InstallerState::create(&path, identity()).unwrap();
+            writer.create_private_directory("evidence").unwrap();
+            drop(writer);
+            let mut state = LockedMaintenance::open(&path).unwrap();
+            state
+                .with_atomic_publication(|view| view.require_path_binding(&path))
+                .unwrap();
+            assert!(state.require_unchanged().is_ok());
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                state.with_atomic_publication(|view| {
+                    view.require_path_binding(&path)?;
+                    std::fs::write(path.join("evidence/publication-observed"), b"retained")
+                        .map_err(|error| error.to_string())?;
+                    if panic_after_publication {
+                        panic!("interrupted after publication");
+                    }
+                    Err::<(), _>("lost publication response".to_owned())
+                })
+            }));
+            if panic_after_publication {
+                assert!(outcome.is_err());
+            } else {
+                assert!(outcome.unwrap().is_err());
+            }
+            assert!(state.require_unchanged().is_err());
+            assert!(state
+                .write_evidence_exclusive("generation-followup.json", b"{}")
+                .is_err());
+            assert!(LockedInspection::open(&path).is_err());
+            assert_eq!(
+                std::fs::read(path.join("evidence/publication-observed")).unwrap(),
+                b"retained"
+            );
+            drop(state);
+            assert!(LockedInspection::open(&path).is_ok());
+        }
     }
     #[test]
     fn validation_reports_are_private_append_only_and_reject_replaced_paths() {
@@ -1929,6 +2949,47 @@ mod tests {
             authorization_sha256: "a".repeat(64),
             context_sha256: "b".repeat(64),
             consumption_id: "c".repeat(64),
+            authenticated_evidence_sha256: None,
+        }
+    }
+    #[test]
+    fn acceptance_authenticated_evidence_is_closed_and_legacy_bytes_are_preserved() {
+        let legacy = acceptance_scope();
+        legacy.validate().unwrap();
+        let bytes = serde_json::to_vec(&legacy).unwrap();
+        assert!(!String::from_utf8(bytes.clone())
+            .unwrap()
+            .contains("authenticated_evidence"));
+        let restored: AcceptanceScope = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(serde_json::to_vec(&restored).unwrap(), bytes);
+        assert!(restored.authenticated_evidence().is_err());
+        let mut bound = legacy;
+        bound.authenticated_evidence_sha256 = Some(
+            ACCEPTANCE_AUTHENTICATED_EVIDENCE
+                .iter()
+                .map(|name| ((*name).into(), "d".repeat(64)))
+                .collect(),
+        );
+        bound.authenticated_evidence().unwrap();
+        for mutation in ["missing", "extra", "uppercase", "short"] {
+            let mut invalid = bound.clone();
+            let map = invalid.authenticated_evidence_sha256.as_mut().unwrap();
+            match mutation {
+                "missing" => {
+                    map.remove(ACCEPTANCE_AUTHENTICATED_EVIDENCE[0]);
+                }
+                "extra" => {
+                    map.insert("other.json".into(), "d".repeat(64));
+                }
+                "uppercase" => {
+                    map.insert(ACCEPTANCE_AUTHENTICATED_EVIDENCE[0].into(), "D".repeat(64));
+                }
+                "short" => {
+                    map.insert(ACCEPTANCE_AUTHENTICATED_EVIDENCE[0].into(), "d".repeat(63));
+                }
+                _ => unreachable!(),
+            }
+            assert!(invalid.validate().is_err(), "accepted {mutation}");
         }
     }
     fn acceptance_runtime() -> RuntimeBinding {
@@ -1936,6 +2997,34 @@ mod tests {
             docker_host: "unix:///var/run/docker.sock".into(),
             engine_id: "01234567-89ab-cdef".into(),
             openbao_port: 18200,
+            profile: RuntimeProfile::Rootful,
+        }
+    }
+    #[test]
+    fn runtime_profile_preserves_legacy_rootful_bytes_and_requires_explicit_rootless_binding() {
+        let old = br#"{"docker_host":"unix:///var/run/docker.sock","engine_id":"01234567-89ab-cdef","openbao_port":18200}"#;
+        let restored: RuntimeBinding = serde_json::from_slice(old).unwrap();
+        assert_eq!(restored, acceptance_runtime());
+        assert_eq!(serde_json::to_vec(&restored).unwrap(), old);
+        let mut rootless = restored.clone();
+        rootless.profile = RuntimeProfile::Rootless;
+        rootless.docker_host = format!("unix:///run/user/{}/docker.sock", unsafe {
+            libc::geteuid()
+        });
+        if unsafe { libc::geteuid() } == 0 {
+            assert!(rootless.validate().is_err());
+        } else {
+            rootless.validate().unwrap();
+            let bytes = serde_json::to_vec(&rootless).unwrap();
+            assert!(bytes
+                .windows(b"\"profile\":\"rootless\"".len())
+                .any(|w| w == b"\"profile\":\"rootless\""));
+            assert_eq!(
+                serde_json::from_slice::<RuntimeBinding>(&bytes).unwrap(),
+                rootless
+            );
+            rootless.docker_host = "unix:///var/run/docker.sock".into();
+            assert!(rootless.validate().is_err());
         }
     }
     #[test]
@@ -2015,6 +3104,43 @@ mod tests {
             InstallerState::inspect(&path).unwrap().execution_scope(),
             &ExecutionScope::CandidateTest(scope)
         );
+    }
+
+    #[test]
+    #[cfg(not(feature = "installer-development"))]
+    fn released_journal_rejects_unsigned_development_scope() {
+        let scope = serde_json::json!({"kind":"unsigned-development",
+            "fixture":{"inventory_sha256":"b".repeat(64),"build_run_id":42,"build_run_attempt":1},
+            "artifact_sha256":"c".repeat(64)});
+        assert!(serde_json::from_value::<ExecutionScope>(scope).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "installer-development")]
+    fn unsigned_scope_cannot_create_rootful_or_mismatched_fixture_installations() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let scope = UnsignedDevelopmentScope {
+            fixture: CandidateTestScope {
+                inventory_sha256: "b".repeat(64),
+                build_run_id: 42,
+                build_run_attempt: 1,
+            },
+            artifact_sha256: "c".repeat(64),
+        };
+        scope.validate().unwrap();
+        let directory = root.path().join("unsigned");
+        assert!(InstallerState::create_development_with_runtime(
+            &directory,
+            identity(),
+            acceptance_runtime(),
+            scope.clone()
+        )
+        .is_err());
+        assert!(!directory.exists());
+        let mut malformed = scope;
+        malformed.artifact_sha256 = "not-a-digest".into();
+        assert!(malformed.validate().is_err());
     }
     #[test]
     fn acceptance_scope_rejects_invalid_hashes_before_directory_creation() {
@@ -2109,6 +3235,79 @@ mod tests {
         assert!(lock(File::open(root.path()).unwrap()).is_ok());
     }
     #[test]
+    fn scheduled_lock_wait_acquires_only_after_the_actual_owner_releases() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join("installation");
+        let owner = InstallerState::create(&path, identity()).unwrap();
+        let waiting_path = path.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            done_tx
+                .send(LockedMaintenance::open_waiting(
+                    &waiting_path,
+                    Duration::from_secs(5),
+                ))
+                .unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(matches!(
+            done_rx.recv_timeout(Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert!(LockedInspection::open(&path).is_err());
+        drop(owner);
+        let acquired = done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        waiter.join().unwrap();
+        assert_eq!(acquired.journal().identity(), &identity());
+        assert!(LockedInspection::open(&path).is_err());
+        drop(acquired);
+        assert!(LockedInspection::open(&path).is_ok());
+    }
+    #[test]
+    fn scheduled_lock_wait_exhaustion_preserves_the_owner_and_journal() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join("installation");
+        let owner = InstallerState::create(&path, identity()).unwrap();
+        let before = std::fs::read(path.join(JOURNAL)).unwrap();
+        assert!(
+            LockedMaintenance::open_waiting(&path, Duration::from_millis(20))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(std::fs::read(path.join(JOURNAL)).unwrap(), before);
+        assert!(LockedInspection::open(&path).is_err());
+        drop(owner);
+        assert!(LockedInspection::open(&path).is_ok());
+    }
+    #[test]
+    fn scheduled_lock_wait_does_not_hide_descriptor_permissions_or_journal_errors() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let directory = File::open(root.path()).unwrap();
+        let path_only =
+            open_at(&directory, &name("."), libc::O_PATH | libc::O_DIRECTORY, 0).unwrap();
+        // flock on O_PATH is EBADF, not contention. It must not become a defer.
+        assert!(lock_with_wait(path_only, Some(Duration::from_secs(1))).is_err());
+        let path = root.path().join("installation");
+        let owner = InstallerState::create(&path, identity()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(LockedMaintenance::open_waiting(&path, Duration::ZERO).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        drop(owner);
+        std::fs::write(path.join(JOURNAL), b"invalid journal").unwrap();
+        assert!(LockedMaintenance::open_waiting(&path, Duration::from_secs(1)).is_err());
+        // The error after acquisition still releases the lock.
+        assert!(lock(File::open(&path).unwrap()).is_ok());
+    }
+    #[test]
     fn different_process_guard_drop_does_not_unlock_parent_description() {
         let root = tempfile::tempdir().unwrap();
         let mut guard = lock(File::open(root.path()).unwrap()).unwrap();
@@ -2132,237 +3331,136 @@ mod tests {
             inventory_sha256: format!("sha256:{}", "b".repeat(64)),
         }
     }
-    fn cleanup_test_records(journal: &Journal) -> (serde_json::Value, serde_json::Value) {
-        use serde_json::json;
-        let project = journal.compose_project();
-        let mut resources:Vec<_>=(0..30).map(|i|json!({"role":format!("app-{i}"),"container_id":format!("{:064x}",i+1),"bao":false})).collect();
-        for (i, role) in [
-            "openbao",
-            "openbao-unseal",
-            "openbao-bootstrap",
-            "openbao-tls-init",
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            resources.push(json!({"role":role,"container_id":format!("{:064x}",i+40),"bao":true}));
-        }
-        let sources: BTreeMap<_, _> = [
-            "evidence/application-plan.json",
-            "evidence/application-compose.json",
-            "evidence/application-created-resources.json",
-            "root/openbao-created.json",
-            "root/openbao-compose-model.json",
-            "evidence/keycloak-container-removed.json",
-            "evidence/tls-container-removed.json",
-            "evidence/ingress-container-removed.json",
-        ]
-        .into_iter()
-        .map(|s| (s, "a".repeat(64)))
-        .collect();
-        let plan = json!({"schema":"elevenid.installer-uninstall-plan/v1","installation_id":journal.installation_id(),"engine_id":journal.runtime().unwrap().engine_id,"project":project,"network_id":"b".repeat(64),"network_name":format!("{project}-bao_default"),"retained_redis_volume":format!("{project}_redis-socket"),"resources":resources,"source_hashes":sources});
-        let result = json!({"schema":"elevenid.installer-uninstall-result/v1","installation_id":journal.installation_id(),"engine_id":journal.runtime().unwrap().engine_id,"containers_removed":34,"network_removed":true,"host_data_retained":true,"credentials_retained":true,"images_retained":true,"redis_volume_retained":format!("{project}_redis-socket"),"installation_ready":false});
-        (plan, result)
-    }
-    fn cleanup_test_state(path: &Path) -> InstallerState {
-        InstallerState::create_with_runtime(
-            path,
+    #[test]
+    fn missing_fresh_transition_capability_cannot_be_rebuilt_from_disk() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let installation = root.path().join("installation");
+        let mut state = InstallerState::create_with_runtime(
+            &installation,
             identity(),
             RuntimeBinding {
                 docker_host: "unix:///var/run/docker.sock".into(),
                 engine_id: "test-engine".into(),
                 openbao_port: 18200,
+                profile: RuntimeProfile::Rootful,
             },
         )
-        .unwrap()
-    }
-    #[test]
-    fn cleanup_summary_accepts_exact_renewal_receipt_hash_but_no_unknown_sources() {
-        let root = tempfile::tempdir().unwrap();
-        let state = cleanup_test_state(&root.path().join("install"));
-        let (mut plan, result) = cleanup_test_records(state.journal());
-        plan["source_hashes"]["evidence/renewal-container-removed.json"] =
-            serde_json::json!("b".repeat(64));
-        let summary = cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&plan).unwrap()),
-            Some(&serde_json::to_vec(&result).unwrap()),
+        .unwrap();
+        state.create_private_directory("evidence").unwrap();
+        state.create_private_directory("downloads").unwrap();
+        state
+            .persist_initial_creation_receipt(&installation)
+            .unwrap();
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        state
+            .generate_local_credentials(&serde_json::json!({"passwordPolicy": PASSWORD_POLICY}))
+            .unwrap();
+        state
+            .persist_credential_creation_receipt(&installation)
+            .unwrap();
+        state.create_private_directory("openbao-state").unwrap();
+        state
+            .persist_openbao_state_creation_receipt(&installation)
+            .unwrap();
+        state.openbao_creation = None;
+        let container = "c".repeat(64);
+        let completion = serde_json::to_vec(
+            &serde_json::json!({"role":"openbao-tls-init","container_id":container,"exit_code":0}),
         )
         .unwrap();
-        assert_eq!(summary.state, CleanupState::Completed);
-        plan["source_hashes"]["evidence/generation-container-removed.json"] =
-            serde_json::json!("d".repeat(64));
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&plan).unwrap()),
-            None
-        )
-        .is_ok());
-        plan["source_hashes"]["evidence/application-generation.json"] =
-            serde_json::json!("e".repeat(64));
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&plan).unwrap()),
-            None
-        )
-        .is_err());
-        plan["source_hashes"]["evidence/application-generation-pending.json"] =
-            serde_json::json!("f".repeat(64));
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&plan).unwrap()),
-            None
-        )
-        .is_err());
-        plan["source_hashes"]["evidence/application-generation-selection.json"] =
-            serde_json::json!("a".repeat(64));
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&plan).unwrap()),
-            None
-        )
-        .is_ok());
-        let mut missing_candidate = plan.clone();
-        missing_candidate["source_hashes"]
-            .as_object_mut()
-            .unwrap()
-            .remove("evidence/generation-container-removed.json");
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&missing_candidate).unwrap()),
-            None
-        )
-        .is_err());
-        let mut missing_renewal = plan.clone();
-        missing_renewal["source_hashes"]
-            .as_object_mut()
-            .unwrap()
-            .remove("evidence/renewal-container-removed.json");
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&missing_renewal).unwrap()),
-            None
-        )
-        .is_err());
-        plan["source_hashes"]["evidence/unknown-container-removed.json"] =
-            serde_json::json!("c".repeat(64));
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&plan).unwrap()),
-            None
-        )
-        .is_err());
+        let completed = installation.join("openbao-completed-openbao-tls-init.json");
+        std::fs::write(&completed, &completion).unwrap();
+        std::fs::set_permissions(&completed, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let image = format!(
+            "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:{}",
+            "b".repeat(64)
+        );
+        let image_id = format!("sha256:{}", "d".repeat(64));
+        assert!(state
+            .persist_openbao_owner_transition_receipt(
+                &installation,
+                "test-engine",
+                &image,
+                &image_id,
+                &container,
+                &completion
+            )
+            .is_err());
+        assert!(!installation
+            .join("evidence")
+            .join(OPENBAO_OWNER_TRANSITION_RECEIPT)
+            .exists());
+        drop(state);
+        assert!(InstallerState::resume(&installation, &identity()).is_err());
     }
     #[test]
-    fn cleanup_summary_tracks_records_without_changing_historical_ready_journal() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("install");
-        let mut state = cleanup_test_state(&path);
-        for phase in [
-            Phase::Verified,
-            Phase::Provisioning,
-            Phase::Provisioned,
-            Phase::Ready,
+    fn old_and_native_maintenance_markers_block_provisioning_replay() {
+        for entry in [
+            "lifecycle-configuration.json",
+            "acme-staging-000000.json",
+            "acme-production-000000.json",
+            "acme-custody-staging-intent.json",
+            "acme-custody-production-intent.json",
+            "acme-credentials-staging-intent.json",
+            "acme-credentials-production-intent.json",
+            "uninstall-plan.json",
+            "uninstall-result.json",
+            "uninstall-compose-stop-intent.json",
+            "uninstall-compose-stop-result.json",
+            "uninstall-compose-down-intent.json",
+            "uninstall-compose-down-result.json",
+            "uninstall-compose-start-0001-intent.json",
+            "uninstall-compose-start-0001-result.json",
+            "uninstall-compose-stop-0001-intent.json",
+            "uninstall-compose-stop-0001-result.json",
+            "uninstall-compose-down-0001-intent.json",
+            "uninstall-compose-down-0001-result.json",
         ] {
-            state.advance(phase).unwrap();
-        }
-        state.create_private_directory("evidence").unwrap();
-        let (plan, result) = cleanup_test_records(state.journal());
-        state
-            .write_evidence("uninstall-plan.json", &serde_json::to_vec(&plan).unwrap())
-            .unwrap();
-        drop(state);
-        let before = std::fs::read(path.join(JOURNAL)).unwrap();
-        assert!(InstallerState::resume(&path, &identity()).is_err());
-        let inspection = LockedInspection::open(&path).unwrap();
-        let status = inspection.cleanup_status().unwrap();
-        assert_eq!(status.state, CleanupState::InProgress);
-        assert!(!status.runtime_observed);
-        assert!(status.data_retained.is_none());
-        drop(inspection);
-        let mut maintenance = LockedMaintenance::open(&path).unwrap();
-        maintenance
-            .write_evidence_exclusive(
-                "uninstall-result.json",
-                &serde_json::to_vec(&result).unwrap(),
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("install");
+            let mut state = InstallerState::create(&path, identity()).unwrap();
+            state.create_private_directory("evidence").unwrap();
+            drop(state);
+            drop(InstallerState::resume(&path, &identity()).unwrap());
+            let journal = std::fs::read(path.join(JOURNAL)).unwrap();
+            std::fs::write(
+                path.join("evidence").join(entry),
+                b"unparsed uncertain operation",
             )
             .unwrap();
-        drop(maintenance);
-        let inspection = LockedInspection::open(&path).unwrap();
-        let status = inspection.cleanup_status().unwrap();
-        assert_eq!(status.state, CleanupState::Completed);
-        assert_eq!(status.data_retained, Some(true));
-        assert_eq!(inspection.journal().phase(), Phase::Ready);
-        drop(inspection);
-        assert!(InstallerState::resume(&path, &identity()).is_err());
-        assert_eq!(std::fs::read(path.join(JOURNAL)).unwrap(), before);
-    }
-    #[test]
-    fn cleanup_absence_allows_initialized_resume_but_uncertain_records_refuse() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("install");
-        drop(cleanup_test_state(&path));
-        let inspection = LockedInspection::open(&path).unwrap();
-        assert_eq!(
-            inspection.cleanup_status().unwrap().state,
-            CleanupState::NotStarted
-        );
-        drop(inspection);
-        let mut resumed = InstallerState::resume(&path, &identity()).unwrap();
-        resumed.create_private_directory("evidence").unwrap();
-        drop(resumed);
-        let target = path.join("evidence/uninstall-plan.json");
-        std::fs::write(&target, b"malformed").unwrap();
-        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(InstallerState::resume(&path, &identity()).is_err());
-        assert!(LockedInspection::open(&path)
-            .unwrap()
-            .cleanup_status()
-            .is_err());
-        std::fs::remove_file(&target).unwrap();
-        symlink("absent.json", &target).unwrap();
-        assert!(InstallerState::resume(&path, &identity()).is_err());
-        assert!(LockedInspection::open(&path)
-            .unwrap()
-            .cleanup_status()
-            .is_err());
-        std::fs::remove_file(&target).unwrap();
-        std::fs::write(&target, b"{}").unwrap();
-        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(InstallerState::resume(&path, &identity()).is_err());
-    }
-    #[test]
-    fn cleanup_summary_refuses_orphan_result_and_identity_or_binding_changes() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("install");
-        let state = cleanup_test_state(&path);
-        let (plan, result) = cleanup_test_records(state.journal());
-        let encode = |v: &serde_json::Value| serde_json::to_vec(v).unwrap();
-        let valid_plan = encode(&plan);
-        let valid_result = encode(&result);
-        assert!(cleanup_summary(state.journal(), None, Some(&valid_result)).is_err());
-        for (field, value) in [
-            ("installation_id", serde_json::json!(uuid::Uuid::new_v4())),
-            ("engine_id", serde_json::json!("other")),
-            ("project", serde_json::json!("other")),
-            ("network_name", serde_json::json!("other")),
-        ] {
-            let mut bad = plan.clone();
-            bad[field] = value;
-            assert!(cleanup_summary(state.journal(), Some(&encode(&bad)), None).is_err());
-        }
-        for (field, value) in [
-            ("installation_id", serde_json::json!(uuid::Uuid::new_v4())),
-            ("engine_id", serde_json::json!("other")),
-            ("redis_volume_retained", serde_json::json!("other")),
-            ("containers_removed", serde_json::json!(33)),
-            ("host_data_retained", serde_json::json!(false)),
-        ] {
-            let mut bad = result.clone();
-            bad[field] = value;
+            std::fs::set_permissions(
+                path.join("evidence").join(entry),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
             assert!(
-                cleanup_summary(state.journal(), Some(&valid_plan), Some(&encode(&bad))).is_err()
+                InstallerState::resume(&path, &identity()).is_err(),
+                "{entry}"
             );
+            assert_eq!(std::fs::read(path.join(JOURNAL)).unwrap(), journal);
+        }
+    }
+    #[test]
+    fn absent_maintenance_is_distinct_from_link_directory_and_permission_failure() {
+        for kind in ["link", "directory", "permissions"] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("install");
+            let mut state = InstallerState::create(&path, identity()).unwrap();
+            state.create_private_directory("evidence").unwrap();
+            drop(state);
+            let target = path.join("evidence/uninstall-compose-down-intent.json");
+            match kind {
+                "link" => symlink("absent.json", &target).unwrap(),
+                "directory" => std::fs::create_dir(&target).unwrap(),
+                _ => {
+                    std::fs::write(&target, b"{}").unwrap();
+                    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))
+                        .unwrap();
+                }
+            }
+            assert!(InstallerState::resume(&path, &identity()).is_err());
         }
     }
     #[test]
@@ -2421,23 +3519,24 @@ mod tests {
         state.create_private_directory("evidence").unwrap();
         drop(state);
         let maintenance = LockedMaintenance::open(&path).unwrap();
-        assert!(maintenance.read_record("absent.json").unwrap().is_none());
-        assert!(maintenance.read_record("../outside").is_err());
-        symlink("absent.json", path.join("linked.json")).unwrap();
-        assert!(maintenance.read_record("linked.json").is_err());
-        let record = path.join("record.json");
+        assert!(maintenance.read_evidence("absent.json").unwrap().is_none());
+        assert!(maintenance.read_evidence("../outside").is_err());
+        let evidence = path.join("evidence");
+        symlink("absent.json", evidence.join("linked.json")).unwrap();
+        assert!(maintenance.read_evidence("linked.json").is_err());
+        let record = evidence.join("record.json");
         std::fs::write(&record, b"{}").unwrap();
         std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(maintenance.read_record("record.json").is_err());
+        assert!(maintenance.read_evidence("record.json").is_err());
         std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(
-            maintenance.read_record("record.json").unwrap().unwrap(),
+            maintenance.read_evidence("record.json").unwrap().unwrap(),
             b"{}"
         );
-        std::fs::hard_link(&record, path.join("hard.json")).unwrap();
-        assert!(maintenance.read_record("record.json").is_err());
+        std::fs::hard_link(&record, evidence.join("hard.json")).unwrap();
+        assert!(maintenance.read_evidence("record.json").is_err());
         std::fs::write(path.join(JOURNAL), b"{}").unwrap();
-        assert!(maintenance.read_record("absent.json").is_err());
+        assert!(maintenance.read_evidence("absent.json").is_err());
     }
     #[test]
     fn diagnostic_credentials_are_bounded_nofollow_and_protected() {
@@ -2685,6 +3784,7 @@ mod tests {
             docker_host: "unix:///var/run/docker.sock".into(),
             engine_id: "01234567-89ab-cdef".into(),
             openbao_port: 18200,
+            profile: crate::installer_state::RuntimeProfile::Rootful,
         };
         let mut state =
             InstallerState::create_with_runtime(&path, identity(), runtime.clone()).unwrap();
@@ -2693,10 +3793,39 @@ mod tests {
         assert_eq!(project.len(), 46);
         state.advance(Phase::Verified).unwrap();
         drop(state);
+        let raw = std::fs::read(path.join(JOURNAL)).unwrap();
+        assert!(!raw
+            .windows(b"\"profile\"".len())
+            .any(|v| v == b"\"profile\""));
         let state = InstallerState::resume(&path, &identity()).unwrap();
         assert_eq!(state.journal().runtime(), Some(&runtime));
         assert_eq!(state.journal().compose_project(), project);
         assert!(InstallerState::create_with_runtime(&path, identity(), runtime).is_err());
+    }
+    #[test]
+    fn explicit_rootless_runtime_profile_survives_private_journal_reopen() {
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("rootless-intent");
+        let binding = RuntimeBinding {
+            docker_host: format!("unix:///run/user/{}/docker.sock", unsafe {
+                libc::geteuid()
+            }),
+            engine_id: "rootless-engine-identity".into(),
+            openbao_port: 18200,
+            profile: RuntimeProfile::Rootless,
+        };
+        let state =
+            InstallerState::create_with_runtime(&path, identity(), binding.clone()).unwrap();
+        drop(state);
+        let raw = std::fs::read(path.join(JOURNAL)).unwrap();
+        assert!(raw
+            .windows(b"\"profile\":\"rootless\"".len())
+            .any(|v| v == b"\"profile\":\"rootless\""));
+        let resumed = InstallerState::resume(&path, &identity()).unwrap();
+        assert_eq!(resumed.journal().runtime(), Some(&binding));
     }
     #[test]
     fn invalid_runtime_is_refused_before_directory_creation() {
@@ -2713,6 +3842,7 @@ mod tests {
                 docker_host: host.into(),
                 engine_id: "engine-id".into(),
                 openbao_port: 18200,
+                profile: crate::installer_state::RuntimeProfile::Rootful,
             };
             assert!(InstallerState::create_with_runtime(&path, identity(), runtime).is_err());
             assert!(!path.exists());
@@ -2722,10 +3852,44 @@ mod tests {
                 docker_host: "unix:///run/docker.sock".into(),
                 engine_id: engine.into(),
                 openbao_port: port,
+                profile: crate::installer_state::RuntimeProfile::Rootful,
             };
             assert!(InstallerState::create_with_runtime(&path, identity(), runtime).is_err());
             assert!(!path.exists());
         }
+    }
+    #[test]
+    fn openbao_control_is_fresh_private_and_never_adopted() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        state.create_private_directory("evidence").unwrap();
+        assert!(state.prepare_openbao_control().is_err());
+        assert!(!path.join("openbao-control").exists());
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        state.prepare_openbao_control().unwrap();
+        for entry in [
+            "openbao-control",
+            "openbao-control/socket",
+            "openbao-control/identity",
+        ] {
+            let metadata = std::fs::symlink_metadata(path.join(entry)).unwrap();
+            assert!(metadata.is_dir());
+            assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+            assert_eq!(metadata.mode() & 0o7777, 0o700);
+        }
+        let receipt = state
+            .with_inspection(|view| view.read_evidence("openbao-control-created.json"))
+            .unwrap();
+        let receipt: serde_json::Value = serde_json::from_slice(&receipt).unwrap();
+        assert_eq!(
+            receipt["installation_id"],
+            state.journal().installation_id().to_string()
+        );
+        assert_eq!(receipt["enrolled"], false);
+        assert!(state.prepare_openbao_control().is_err());
+        assert!(state.require_live_phase(Phase::Provisioning).is_err());
     }
     #[test]
     fn renewal_directories_are_private_and_never_adopted() {
@@ -2778,6 +3942,7 @@ mod tests {
                 docker_host: "unix:///var/run/docker.sock".into(),
                 engine_id: "engine-id".into(),
                 openbao_port: 18200,
+                profile: crate::installer_state::RuntimeProfile::Rootful,
             },
         )
         .unwrap();
@@ -2874,7 +4039,6 @@ mod tests {
             "state",
             "state/postgres",
             "state/redis",
-            "state/applicant",
             "backups",
             "openbao-exports",
             "openbao-snapshot-identity",
@@ -2883,6 +4047,20 @@ mod tests {
             assert!(metadata.is_dir());
             assert_eq!(metadata.mode() & 0o777, 0o700);
         }
+        let applicant = std::fs::metadata(path.join("state/applicant")).unwrap();
+        assert_eq!(applicant.uid(), unsafe { libc::geteuid() });
+        assert_eq!(applicant.gid(), applicant_state_gid().unwrap());
+        assert_eq!(applicant.mode() & 0o7777, 0o2770);
+        assert_eq!(
+            state.validate_applicant_storage().unwrap(),
+            applicant_state_gid().unwrap()
+        );
+        std::fs::set_permissions(
+            path.join("state/applicant"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert!(state.validate_applicant_storage().is_err());
         for entry in crate::installer_application_env::OPTIONAL_EMPTY_SECRETS {
             let metadata = std::fs::metadata(path.join("secrets").join(entry)).unwrap();
             assert!(metadata.is_file());
@@ -2890,6 +4068,64 @@ mod tests {
             assert_eq!(metadata.mode() & 0o777, 0o444);
         }
         assert!(state.prepare_application_storage().is_err());
+        assert!(state.advance(Phase::Provisioned).is_err());
+    }
+    #[test]
+    fn applicant_container_group_projects_only_a_validated_runtime() {
+        let host_gid = applicant_state_gid().unwrap();
+        let mut binding = RuntimeBinding {
+            docker_host: "unix:///var/run/docker.sock".into(),
+            engine_id: "fixture-engine".into(),
+            openbao_port: 18200,
+            profile: RuntimeProfile::Rootful,
+        };
+        let rootful = applicant_container_group(&binding).unwrap();
+        assert_eq!(rootful.host_gid(), host_gid);
+        assert_eq!(rootful.container_gid(), host_gid);
+        assert_ne!(rootful.container_gid(), 0);
+        if unsafe { libc::geteuid() } == 0 {
+            assert_eq!(rootful.container_gid(), 10001);
+        }
+        binding.profile = RuntimeProfile::Rootless;
+        binding.docker_host = format!("unix:///run/user/{}/docker.sock", unsafe {
+            libc::geteuid()
+        });
+        if unsafe { libc::geteuid() } == 0 {
+            assert!(applicant_container_group(&binding).is_err());
+        } else {
+            let rootless = applicant_container_group(&binding).unwrap();
+            assert_eq!(rootless.host_gid(), host_gid);
+            assert_ne!(rootless.host_gid(), 0);
+            assert_eq!(rootless.container_gid(), 0);
+        }
+        binding.docker_host = "unix:///var/run/docker.sock".into();
+        assert!(applicant_container_group(&binding).is_err());
+        binding.profile = RuntimeProfile::Rootful;
+        binding.engine_id = "bad".into();
+        assert!(applicant_container_group(&binding).is_err());
+    }
+
+    #[test]
+    fn applicant_state_group_is_nonroot_and_legacy_directory_is_not_adopted() {
+        let expected = if unsafe { libc::geteuid() } == 0 {
+            10001
+        } else {
+            unsafe { libc::getegid() }
+        };
+        assert_eq!(applicant_state_gid().unwrap(), expected);
+        assert_ne!(expected, 0);
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        state
+            .generate_local_credentials(&serde_json::json!({"passwordPolicy": PASSWORD_POLICY}))
+            .unwrap();
+        std::fs::create_dir(path.join("state")).unwrap();
+        std::fs::create_dir(path.join("state/applicant")).unwrap();
+        assert!(state.prepare_application_storage().is_err());
+        assert!(path.join("state/applicant").is_dir());
         assert!(state.advance(Phase::Provisioned).is_err());
     }
     #[test]
@@ -3045,6 +4281,73 @@ mod tests {
             match self {
                 Err(e) => e,
                 Ok(_) => panic!("expected refusal"),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod health_checkpoint_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn detached_evidence_never_reports_a_successful_health_publication() {
+        for exchange_at in [1, 2] {
+            let parent = tempfile::tempdir().unwrap();
+            let path = parent.path().join("installation");
+            let mut initial = InstallerState::create_with_runtime(
+                &path,
+                Identity {
+                    source_sha: "a".repeat(40),
+                    release_tag: "v1.2.3".into(),
+                    inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+                },
+                RuntimeBinding {
+                    docker_host: "unix:///var/run/docker.sock".into(),
+                    engine_id: "fixture-engine".into(),
+                    openbao_port: 18443,
+                    profile: RuntimeProfile::Rootful,
+                },
+            )
+            .unwrap();
+            initial.create_private_directory("evidence").unwrap();
+            initial
+                .write_evidence("health-checkpoint.json", b"current")
+                .unwrap();
+            drop(initial);
+            let mut state = LockedMaintenance::open(&path).unwrap();
+            let mut count = 0;
+            let result =
+                state.publish_health_checkpoint_observed(Some(b"current"), b"next", || {
+                    count += 1;
+                    if count == exchange_at {
+                        std::fs::rename(path.join("evidence"), path.join("detached-evidence"))
+                            .unwrap();
+                        std::fs::create_dir(path.join("evidence")).unwrap();
+                        std::fs::set_permissions(
+                            path.join("evidence"),
+                            std::fs::Permissions::from_mode(0o700),
+                        )
+                        .unwrap();
+                        std::fs::write(path.join("evidence/health-checkpoint.json"), b"current")
+                            .unwrap();
+                        std::fs::set_permissions(
+                            path.join("evidence/health-checkpoint.json"),
+                            std::fs::Permissions::from_mode(0o600),
+                        )
+                        .unwrap();
+                    }
+                });
+            assert_eq!(result.unwrap_err(), "evidence directory binding changed");
+            assert_eq!(
+                std::fs::read(path.join("evidence/health-checkpoint.json")).unwrap(),
+                b"current"
+            );
+            // An uncertain publication poisons this writer before any caller
+            // can treat the unchanged live budget as a successful debit.
+            if exchange_at == 2 {
+                assert!(state.require_unchanged().is_err());
             }
         }
     }

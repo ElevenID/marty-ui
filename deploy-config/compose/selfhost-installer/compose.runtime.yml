@@ -1,0 +1,121 @@
+# Ordinary startup/restart uses this AFTER the authenticated installer layer.
+# Setup containers remain as evidence, but are neither selected nor dependencies.
+# A completed/no-restart job is not an exactly-once primitive: do not omit this layer.
+# Keep reset tags on each value; do not depend on tagged mapping-anchor propagation.
+x-completed-job: &completed-job !reset null
+# The maintenance union includes the live unseal service. A completed KMS setup
+# job cannot establish readiness after restart; the OpenBao API can be sealed.
+x-usable-kms: &usable-kms
+  condition: service_healthy
+
+services:
+  keycloak:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+  gateway:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+  auth:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+      keycloak-configurator: *completed-job
+  organization:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+  credential-template:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+  trust-profile:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+  issuance:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+      issuance-migrations: *completed-job
+  issuance-native:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+      issuance-migrations: *completed-job
+  canvas-sync-worker:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+      issuance-migrations: *completed-job
+  applicant:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+  notification:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+      postgres:
+        condition: service_healthy
+  compliance-profile:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+  presentation-policy:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+  deployment-profile:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+  signing-keys:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+  flow:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+  verification:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+  revocation-profile:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+  device-registration:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+      db-migrate: *completed-job
+  event-stream:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+  ui:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms
+  edge:
+    depends_on:
+      kms-initialize: *completed-job
+      openbao-unseal: *usable-kms

@@ -1,10 +1,14 @@
 //! Local plaintext gRPC from Envoy is confined to its loopback network
-//! namespace. The upstream connection uses mTLS with a non-exportable OpenBao
-//! Transit identity and a pinned public CA; no private key enters this process.
+//! namespace. The upstream connection uses mTLS with a non-exportable remote
+//! identity and a pinned public CA; no private key enters this process.
 
-use std::{env, error::Error, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap, env, error::Error, net::SocketAddr, path::PathBuf, sync::Arc,
+    time::Duration,
+};
 
-use mmf_platform::{keyless_grpc_client_config, read_public_certificates, OpenBaoTlsIdentityFiles};
+use marty_service_runtime::{RemoteTlsIdentityFiles, TlsIdentityNames};
+use mmf_platform::{keyless_grpc_client_config, read_public_certificates};
 use rustls::pki_types::ServerName;
 use tokio::{
     io::copy_bidirectional,
@@ -49,20 +53,17 @@ pub async fn run_from_environment() -> Result<(), Box<dyn Error + Send + Sync>> 
         return Err("bridge upstream port must be nonzero".into());
     }
     upstream_name(&host)?;
-    let key_version: u32 = required("KEYLESS_BRIDGE_KMS_KEY_VERSION")?.parse()?;
-    if key_version == 0 {
-        return Err("bridge KMS key version must be positive".into());
-    }
-    let identity = OpenBaoTlsIdentityFiles {
-        certificate_chain_file: PathBuf::from(required("KEYLESS_BRIDGE_CLIENT_CERT_FILE")?),
-        kms_ca_cert_file: PathBuf::from(required("KEYLESS_BRIDGE_KMS_CA_CERT_FILE")?),
-        kms_endpoint: required("KEYLESS_BRIDGE_KMS_ADDR")?,
-        kms_token_file: PathBuf::from(required("KEYLESS_BRIDGE_KMS_TOKEN_FILE")?),
-        kms_key_name: required("KEYLESS_BRIDGE_KMS_KEY_NAME")?,
-        kms_key_version: key_version,
-        request_timeout: CONNECT_TIMEOUT,
-        max_concurrent_signs: 64,
-    };
+    let values = env::vars().collect::<BTreeMap<_, _>>();
+    let mut names = TlsIdentityNames::files("KEYLESS_BRIDGE");
+    names.certificate = "KEYLESS_BRIDGE_CLIENT_CERT_FILE".into();
+    names.private_key = "KEYLESS_BRIDGE_CLIENT_KEY_FILE".into();
+    let identity = RemoteTlsIdentityFiles::from_values(
+        |name| values.get(name).map(String::as_str),
+        names,
+        CONNECT_TIMEOUT,
+        64,
+    )?
+    .ok_or("keyless gRPC bridge requires a remote TLS identity")?;
     let bridge = Bridge::connect(
         identity,
         PathBuf::from(required("KEYLESS_BRIDGE_SERVER_CA_FILE")?),
@@ -87,7 +88,7 @@ pub struct Bridge {
 
 impl Bridge {
     pub async fn connect(
-        identity: OpenBaoTlsIdentityFiles,
+        identity: impl Into<RemoteTlsIdentityFiles>,
         server_ca_file: PathBuf,
         host: String,
         port: u16,
@@ -96,7 +97,7 @@ impl Bridge {
             return Err("bridge upstream port must be nonzero".into());
         }
         let name = upstream_name(&host).map_err(|_| "bridge upstream name is invalid")?;
-        let identity = identity.connect().await?;
+        let identity = identity.into().connect().await?;
         let server_ca = read_public_certificates(&server_ca_file)?;
         Ok(Self {
             tls: TlsConnector::from(keyless_grpc_client_config(&identity, server_ca)?),

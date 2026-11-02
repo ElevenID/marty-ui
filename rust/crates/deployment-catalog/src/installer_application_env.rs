@@ -2,6 +2,8 @@
 //! Does not create accounts, directories, containers, or claim readiness. Caller
 //! authenticates example/Compose bytes and persists parameters before execution.
 #![cfg(target_os = "linux")]
+use crate::installer_state::ApplicantContainerGroup;
+use marty_selfhost_identity::origin::PublicOrigin;
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -23,8 +25,10 @@ pub const OPTIONAL_EMPTY_SECRETS: [&str; 6] = [
 
 pub struct ApplicationParameters {
     pub installation: PathBuf,
+    pub applicant_container_group: ApplicantContainerGroup,
     pub version: String,
     pub origin: String,
+    pub https_listener_port: u16,
     pub gateway_port: u16,
     pub keycloak_port: u16,
     pub edge_port: u16,
@@ -81,12 +85,6 @@ fn safe_path(path: &std::path::Path) -> Result<String> {
     )?;
     Ok(value.into())
 }
-fn origin_port(origin: &str) -> Result<u16> {
-    let port = origin.strip_prefix("https://localhost:").ok_or(REFUSED)?;
-    let number = port.parse::<u16>().map_err(|_| REFUSED)?;
-    require(number >= 1024 && port == number.to_string())?;
-    Ok(number)
-}
 fn required_variables(compose: &str, values: &BTreeMap<String, String>) -> Result<()> {
     require(compose.len() <= 256 * 1024)?;
     let expression = regex::Regex::new(r"\$\{([A-Z][A-Z0-9_]*)(?::\?|\?)[^}]*\}").unwrap();
@@ -107,13 +105,26 @@ fn required_variables(compose: &str, values: &BTreeMap<String, String>) -> Resul
 /// `images` is the authenticated inventory map, including openbao_didcomm_image.
 /// Networking/ingress overlays must preserve this exact public authority and
 /// provide the already-owned OpenBao network alias. Nginx server_name needs the
-/// separate host-only literal localhost; PUBLIC_DOMAIN also feeds KC_HOSTNAME.
+/// separate host-only value; PUBLIC_DOMAIN also feeds KC_HOSTNAME. The public
+/// HTTPS authority is independent of the unprivileged host listener port.
 pub fn render(
     example: &str,
     compose: &str,
     tls_fragment: &str,
     p: &ApplicationParameters,
     images: &BTreeMap<String, String>,
+) -> Result<ApplicationEnvironment> {
+    render_selected(example, compose, tls_fragment, p, images, None, None)
+}
+
+pub(crate) fn render_selected(
+    example: &str,
+    compose: &str,
+    tls_fragment: &str,
+    p: &ApplicationParameters,
+    images: &BTreeMap<String, String>,
+    foundation: Option<&crate::installer_foundation::Selection>,
+    hosting: Option<&crate::installer_hosting::Selection>,
 ) -> Result<ApplicationEnvironment> {
     let baseline = parse(EXAMPLE)?;
     let mut values = parse(example)?;
@@ -123,12 +134,19 @@ pub fn render(
         .filter(|(key, _)| key.contains("_TLS_KMS_KEY_"))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    require(expected_tls.len() == 32 && parse(tls_fragment)? == expected_tls)?;
+    require(
+        expected_tls.len() == 32
+            && if foundation.is_some() {
+                tls_fragment.is_empty()
+            } else {
+                parse(tls_fragment)? == expected_tls
+            },
+    )?;
     crate::installer_release::release_tier(&p.version)?;
     safe_path(&p.installation)?;
-    let https_port = origin_port(&p.origin)?;
+    let origin = PublicOrigin::parse(&p.origin)?;
     let ports = [
-        https_port,
+        p.https_listener_port,
         p.gateway_port,
         p.keycloak_port,
         p.edge_port,
@@ -149,11 +167,18 @@ pub fn render(
     };
     let services = selected("gateway", "services")?;
     require(images.get("signing-keys") == Some(&services))?;
-    let keycloak = selected("keycloak", "keycloak")?;
-    require(images.get("keycloak-configurator") == Some(&keycloak))?;
+    let managed_identity_images = if foundation.is_none() {
+        let keycloak = selected("keycloak", "keycloak")?;
+        require(images.get("keycloak-configurator") == Some(&keycloak))?;
+        Some((
+            keycloak,
+            selected("openbao_didcomm_image", "openbao-didcomm")?,
+        ))
+    } else {
+        None
+    };
     let issuance = selected("issuance", "services")?;
     require(images.get("issuance-native") == Some(&issuance))?;
-    let openbao = selected("openbao_didcomm_image", "openbao-didcomm")?;
     for (key, relative) in [
         ("SELFHOST_SECRET_DIR", "secrets"),
         ("SELFHOST_STATE_DIR", "state"),
@@ -167,12 +192,16 @@ pub fn render(
     ] {
         values.insert(key.into(), safe_path(&p.installation.join(relative))?);
     }
+    values.insert(
+        "APPLICANT_STATE_GID".into(),
+        p.applicant_container_group.container_gid().to_string(),
+    );
     for (key, value) in [
         ("SELFHOST_IMAGE_PREFIX", "ghcr.io/elevenid/marty-ui-oss"),
         ("BAO_ADDR", "https://openbao:8200"),
         ("KEYCLOAK_KMS_ADDR", "https://openbao:8200"),
         ("GRPC_INSECURE_ALLOWED", "false"),
-        ("MARTY_ORG_DOMAIN", "localhost"),
+        ("MARTY_ORG_DOMAIN", origin.host()),
         ("MARTY_ORG_ADMIN_EMAIL", OPERATOR_EMAIL),
         ("KEYCLOAK_SMTP_FROM", "noreply@localhost"),
         ("MARTY_MIGRATION_PROFILE", "selfhost-production"),
@@ -187,16 +216,23 @@ pub fn render(
             "SELFHOST_IMAGE_TAG",
             p.version.strip_prefix('v').ok_or(REFUSED)?.to_owned(),
         ),
-        ("MARTY_OPENBAO_DIDCOMM_IMAGE", openbao),
-        ("MARTY_KEYCLOAK_KMS_IMAGE", keycloak),
         ("MARTY_ISSUANCE_IMAGE", issuance),
-        ("PUBLIC_DOMAIN", format!("localhost:{https_port}")),
+        ("PUBLIC_DOMAIN", origin.authority().into()),
+        (
+            "MARTY_ISSUER_DID",
+            format!("did:web:{}:orgs:marty", origin.did_web_authority()?),
+        ),
+        ("GATEWAY_OBSERVE_CLIENT_IP", "false".into()),
         ("SELFHOST_GATEWAY_HOST_PORT", p.gateway_port.to_string()),
         ("SELFHOST_KEYCLOAK_HOST_PORT", p.keycloak_port.to_string()),
         ("SELFHOST_EDGE_HOST_PORT", p.edge_port.to_string()),
         ("SELFHOST_OPENBAO_HOST_PORT", p.openbao_port.to_string()),
     ] {
         values.insert(key.into(), value);
+    }
+    if let Some((keycloak, openbao)) = managed_identity_images {
+        values.insert("MARTY_KEYCLOAK_KMS_IMAGE".into(), keycloak);
+        values.insert("MARTY_OPENBAO_DIDCOMM_IMAGE".into(), openbao);
     }
     for key in [
         "PUBLIC_API_URL",
@@ -214,6 +250,18 @@ pub fn render(
         ("OIDC_POST_LOGOUT_REDIRECT_URI", "/"),
     ] {
         values.insert(key.into(), format!("{}{suffix}", p.origin));
+    }
+    if let Some(hosting) = hosting {
+        values.insert(
+            "UI_ENABLED_SECTIONS".into(),
+            hosting.enabled_web_sections().into(),
+        );
+        if hosting.enabled_web_sections() == "console" {
+            values.insert(
+                "OIDC_POST_LOGOUT_REDIRECT_URI".into(),
+                format!("{}/console/login", p.origin),
+            );
+        }
     }
     for key in [
         "KEYCLOAK_USER_REGISTRATION_ENABLED",
@@ -253,8 +301,9 @@ pub fn render(
     ] {
         values.insert(key.into(), String::new());
     }
-    // Canonical configurator does not yet mount operator-password or pass its
-    // required password variable; do not synthesize an account or leak it here.
+    if let Some(foundation) = foundation {
+        foundation.apply_environment(&mut values)?;
+    }
     required_variables(compose, &values)?;
     let mut env_bytes = Vec::new();
     for (key, value) in values {
@@ -338,12 +387,24 @@ pub fn select_generation(source: &[u8], installation: &std::path::Path) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn rootful_applicant_group() -> crate::installer_state::ApplicantContainerGroup {
+        use crate::installer_state::{applicant_container_group, RuntimeBinding, RuntimeProfile};
+        applicant_container_group(&RuntimeBinding {
+            docker_host: "unix:///var/run/docker.sock".into(),
+            engine_id: "fixture-engine".into(),
+            openbao_port: 18200,
+            profile: RuntimeProfile::Rootful,
+        })
+        .unwrap()
+    }
     const COMPOSE: &str = include_str!("../../../../docker-compose.selfhost.prod.yml");
     fn parameters() -> ApplicationParameters {
         ApplicationParameters {
             installation: PathBuf::from("/private/marty $literal #path"),
+            applicant_container_group: rootful_applicant_group(),
             version: "v1.2.3".into(),
             origin: "https://localhost:18443".into(),
+            https_listener_port: 18443,
             gateway_port: 18000,
             keycloak_port: 18180,
             edge_port: 19080,
@@ -386,6 +447,8 @@ mod tests {
         let text = String::from_utf8(result.env_bytes).unwrap();
         for expected in [
             "PUBLIC_DOMAIN='localhost:18443'\n",
+            "MARTY_ISSUER_DID='did:web:localhost%3A18443:orgs:marty'\n",
+            "GATEWAY_OBSERVE_CLIENT_IP='false'\n",
             "OIDC_ISSUER_URL_EXTERNAL='https://localhost:18443/realms/11id'\n",
             "SELFHOST_SECRET_DIR='/private/marty $literal #path/secrets'\n",
             "BAO_ADDR='https://openbao:8200'\n",
@@ -402,6 +465,124 @@ mod tests {
         assert_eq!(result.optional_empty_secrets.len(), 6);
     }
     #[test]
+    fn console_only_hosting_keeps_login_and_logout_on_the_enabled_section() {
+        use crate::{
+            installer_hosting,
+            installer_state::{Identity, InstallerState, Phase},
+        };
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join("hosting.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema": "elevenid.installation-hosting/v1", "mode": "local",
+                "public_origin": "https://localhost:18443",
+                "listener": {"bind_address": "127.0.0.1", "port": 18443},
+                "tls": {"termination": "marty-keyless", "certificate_source": "managed-ca"},
+                "web": {"enabled_sections": ["console"]}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut state = InstallerState::create(
+            &root.path().join("installation"),
+            Identity {
+                source_sha: "a".repeat(40),
+                release_tag: "v1.2.3".into(),
+                inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+            },
+        )
+        .unwrap();
+        state.create_private_directory("evidence").unwrap();
+        state.advance(Phase::Verified).unwrap();
+        let selection = installer_hosting::select(
+            installer_hosting::prepare(Some(&path), None).unwrap(),
+            &mut state,
+        )
+        .unwrap();
+        let result = render_selected(
+            EXAMPLE,
+            COMPOSE,
+            &tls(),
+            &parameters(),
+            &images(),
+            None,
+            Some(&selection),
+        )
+        .unwrap();
+        let text = String::from_utf8(result.env_bytes).unwrap();
+        assert!(text.contains("UI_ENABLED_SECTIONS='console'\n"));
+        assert!(text
+            .contains("OIDC_POST_LOGOUT_REDIRECT_URI='https://localhost:18443/console/login'\n"));
+        assert!(text.contains("OIDC_REDIRECT_URI='https://localhost:18443/v1/auth/callback'\n"));
+    }
+    #[test]
+    fn public_origin_propagates_to_urls_oidc_and_cors_without_reusing_443_as_listener() {
+        let mut p = parameters();
+        p.origin = "https://marty.example.com".into();
+        p.https_listener_port = 8443;
+        let result = render(EXAMPLE, COMPOSE, &tls(), &p, &images()).unwrap();
+        let text = String::from_utf8(result.env_bytes).unwrap();
+        for expected in [
+            "PUBLIC_DOMAIN='marty.example.com'\n",
+            "MARTY_ISSUER_DID='did:web:marty.example.com:orgs:marty'\n",
+            "MARTY_ORG_DOMAIN='marty.example.com'\n",
+            "PUBLIC_API_URL='https://marty.example.com'\n",
+            "UI_BASE_URL='https://marty.example.com'\n",
+            "ISSUER_BASE_URL='https://marty.example.com'\n",
+            "CORS_ORIGINS='https://marty.example.com'\n",
+            "OIDC_ISSUER_URL_EXTERNAL='https://marty.example.com/realms/11id'\n",
+            "OIDC_REDIRECT_URI='https://marty.example.com/v1/auth/callback'\n",
+            "OIDC_POST_LOGOUT_REDIRECT_URI='https://marty.example.com/'\n",
+        ] {
+            assert!(text.contains(expected), "missing {expected}");
+        }
+        p.https_listener_port = 443;
+        assert!(render(EXAMPLE, COMPOSE, &tls(), &p, &images()).is_err());
+    }
+    #[test]
+    fn applicant_environment_uses_the_container_group_without_changing_other_inputs() {
+        use crate::installer_state::{applicant_container_group, RuntimeBinding, RuntimeProfile};
+        let mut p = parameters();
+        let rootful = render(EXAMPLE, COMPOSE, &tls(), &p, &images()).unwrap();
+        let rootful_text = String::from_utf8(rootful.env_bytes).unwrap();
+        assert!(rootful_text.contains(&format!(
+            "APPLICANT_STATE_GID='{}'\n",
+            p.applicant_container_group.host_gid()
+        )));
+        let binding = RuntimeBinding {
+            docker_host: format!("unix:///run/user/{}/docker.sock", unsafe {
+                libc::geteuid()
+            }),
+            engine_id: "fixture-engine".into(),
+            openbao_port: 18200,
+            profile: RuntimeProfile::Rootless,
+        };
+        if unsafe { libc::geteuid() } == 0 {
+            assert!(applicant_container_group(&binding).is_err());
+            return;
+        }
+        p.applicant_container_group = applicant_container_group(&binding).unwrap();
+        let rootless = render(EXAMPLE, COMPOSE, &tls(), &p, &images()).unwrap();
+        let rootless_text = String::from_utf8(rootless.env_bytes).unwrap();
+        assert!(rootless_text.contains("APPLICANT_STATE_GID='0'\n"));
+        assert_eq!(
+            rootful_text
+                .lines()
+                .filter(|line| !line.starts_with("APPLICANT_STATE_GID="))
+                .collect::<Vec<_>>(),
+            rootless_text
+                .lines()
+                .filter(|line| !line.starts_with("APPLICANT_STATE_GID="))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn rejects_unsafe_origin_paths_ports_and_versions() {
         for origin in [
             "http://localhost:18443",
@@ -410,7 +591,7 @@ mod tests {
             "https://localhost:18443/",
             "https://user@localhost:18443",
             "https://localhost:18443\nBAD=x",
-            "https://example.com:18443",
+            "https://example.com/path",
         ] {
             let mut p = parameters();
             p.origin = origin.into();

@@ -3,9 +3,18 @@ set -eu
 
 # Build the single KMS-only public service binary set.
 case "${1:-}" in
-  default) shift; set -- ;;
+  default) shift ;;
   *) echo "expected default build mode" >&2; exit 2 ;;
 esac
+
+# Local source builders may request deterministic, offline compiler telemetry.
+# Reject package, feature, profile and arbitrary Cargo overrides.
+for option in "$@"; do
+  case "$option" in
+    --offline|-j1|--message-format=json) ;;
+    *) echo "unsupported default build option" >&2; exit 2 ;;
+  esac
+done
 
 exec cargo build --locked --release "$@" \
   -p marty-event-stream --bin marty-event-stream \
@@ -14,7 +23,7 @@ exec cargo build --locked --release "$@" \
   -p marty-signing-keys --bin marty-signing-keys --bin marty-passport-callback-signer --bin marty-passport-callback-signer-supported \
   -p marty-notification --bin marty-notification \
   -p marty-flow --bin marty-flow \
-  -p marty-organization --bin marty-organization --bin marty-passport-acceptance-api-key \
+  -p marty-organization --bin marty-organization --bin marty-passport-acceptance-api-key --bin marty-installer-organization-api-key \
   -p marty-auth --bin marty-auth \
   -p marty-credential-template --bin marty-credential-template \
   -p marty-presentation-policy --bin marty-presentation-policy --bin marty-verifier-positive-gate \
@@ -24,7 +33,7 @@ exec cargo build --locked --release "$@" \
   -p marty-verification-service --bin marty-verification-service \
   -p marty-issuance-service --bin marty-issuance-service --bin marty-canvas-sync-worker --bin marty-passport-beta-bureau --bin marty-passport-provider-ingress \
   -p marty-canvas-sandbox --bin marty-canvas-sandbox \
-  -p marty-passport-keyless-edge --bin marty-passport-keyless-edge --bin marty-passport-tls-bootstrap --bin marty-oidf-keyless-edge \
+  -p marty-passport-keyless-edge --bin marty-passport-keyless-edge --bin marty-passport-tls-bootstrap --bin marty-oidf-keyless-edge --bin marty-acme-http01 \
   -p marty-keyless-grpc-bridge --bin marty-keyless-grpc-bridge \
   -p marty-deployment-profile --bin marty-deployment-profile \
   -p marty-compliance-profile --bin marty-compliance-profile

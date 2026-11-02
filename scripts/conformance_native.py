@@ -471,7 +471,8 @@ def verify_release(
 
 
 def probe_image(
-    image: str, project: str, *, plan: dict[str, Any] | None, runner=subprocess.run
+    image: str, project: str, *, plan: dict[str, Any] | None,
+    cached_only: bool = False, runner=subprocess.run
 ) -> None:
     """Executable/linker preflight, NOT route/feature acceptance. No app launch."""
     owner = uuid.uuid4().hex
@@ -510,6 +511,7 @@ def probe_image(
             [
                 "docker",
                 "create",
+                *(["--pull", "never"] if cached_only else []),
                 "--name",
                 name,
                 "--label",

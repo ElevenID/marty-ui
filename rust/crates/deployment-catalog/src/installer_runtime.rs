@@ -3,14 +3,17 @@
 //! arguments and must persist resource ownership before using run_checked.
 #![cfg(target_os = "linux")]
 
+use crate::installer_state::{RuntimeBinding, RuntimeProfile};
 use serde::{Deserialize, Serialize};
 use std::{
-    fs,
+    ffi::CString,
+    fs::{self, File},
     io::{ErrorKind, Read},
     os::{
-        fd::AsRawFd,
+        fd::{AsRawFd, FromRawFd},
         unix::{
-            fs::{MetadataExt, PermissionsExt},
+            ffi::OsStrExt,
+            fs::{FileTypeExt, MetadataExt, PermissionsExt},
             process::CommandExt,
         },
     },
@@ -79,6 +82,67 @@ fn endpoint(host: &str) -> Result<()> {
     }
     Ok(())
 }
+struct HeldRootlessSocket(File);
+
+fn endpoint_for_profile(host: &str, profile: RuntimeProfile) -> Result<Option<HeldRootlessSocket>> {
+    endpoint(host)?;
+    if profile == RuntimeProfile::Rootful {
+        return Ok(None);
+    }
+    let uid = unsafe { libc::geteuid() };
+    if uid == 0 || host != format!("unix:///run/user/{uid}/docker.sock") {
+        return Err("rootless Docker socket must belong to the installer user".into());
+    }
+    let path = Path::new(
+        host.strip_prefix("unix://")
+            .ok_or("invalid local Docker endpoint")?,
+    );
+    hold_rootless_socket(path, uid).map(Some)
+}
+fn checked_rootless_socket(path: &Path, uid: u32) -> Result<(u64, u64)> {
+    trusted_ancestors(path)?;
+    let parent = fs::symlink_metadata(path.parent().ok_or("rootless runtime unavailable")?)
+        .map_err(|_| "rootless runtime unavailable")?;
+    let socket = fs::symlink_metadata(path).map_err(|_| "rootless socket unavailable")?;
+    if !parent.is_dir()
+        || parent.file_type().is_symlink()
+        || parent.uid() != uid
+        || parent.mode() & 0o7777 != 0o700
+        || !socket.file_type().is_socket()
+        || socket.uid() != uid
+        || socket.mode() & 0o007 != 0
+    {
+        return Err("rootless Docker socket custody differs".into());
+    }
+    Ok((socket.dev(), socket.ino()))
+}
+fn hold_rootless_socket(path: &Path, uid: u32) -> Result<HeldRootlessSocket> {
+    let named = checked_rootless_socket(path, uid)?;
+    let c_path =
+        CString::new(path.as_os_str().as_bytes()).map_err(|_| "invalid rootless socket")?;
+    let fd = unsafe {
+        libc::open(
+            c_path.as_ptr(),
+            libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err("rootless socket unavailable".into());
+    }
+    let held = HeldRootlessSocket(unsafe { File::from_raw_fd(fd) });
+    let metadata = held
+        .0
+        .metadata()
+        .map_err(|_| "rootless socket unavailable")?;
+    if !metadata.file_type().is_socket()
+        || metadata.uid() != uid
+        || (metadata.dev(), metadata.ino()) != named
+        || checked_rootless_socket(path, uid)? != named
+    {
+        return Err("rootless Docker socket custody differs".into());
+    }
+    Ok(held)
+}
 fn engine_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
@@ -123,7 +187,10 @@ impl OwnedChild {
             .map_err(|_| "runtime process wait failed")?;
         self.reaped = true;
         if !status.success() {
-            return Err("Docker command failed; inspect owned runtime separately".into());
+            return Err(format!(
+                "Docker command failed (exit={:?}); inspect owned runtime separately",
+                status.code()
+            ));
         }
         Ok(())
     }
@@ -164,10 +231,33 @@ fn drain(stream: &mut impl Read, output: &mut Vec<u8>, limit: usize) -> Result<b
     Ok(false)
 }
 
+fn drain_setup(mut stream: impl Read) -> Result<(Vec<u8>, bool)> {
+    let mut result = Vec::new();
+    let mut truncated = false;
+    let mut block = [0u8; 8192];
+    loop {
+        match stream.read(&mut block) {
+            Ok(0) => return Ok((result, truncated)),
+            Ok(n) => {
+                let keep = n.min(MAX_OUTPUT.saturating_sub(result.len()));
+                result.extend_from_slice(&block[..keep]);
+                truncated |= keep < n;
+            }
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => {
+                return Err(
+                    "supervised Compose output unavailable; inspect retained project".into(),
+                );
+            }
+        }
+    }
+}
+
 struct BoundedRunner {
     executable: PathBuf,
     staging: tempfile::TempDir,
     docker_host: Option<String>,
+    user_session_uid: Option<u32>,
 }
 impl BoundedRunner {
     fn new(binary: &Path, host: &str, parent: &Path) -> Result<Self> {
@@ -184,11 +274,73 @@ impl BoundedRunner {
             executable: binary.to_path_buf(),
             staging,
             docker_host: Some(host.into()),
+            user_session_uid: None,
         })
     }
     fn run(&self, args: &[&str], timeout: Duration, limit: usize) -> Result<String> {
         let (output, _) = self.capture(args, timeout, limit)?;
         String::from_utf8(output).map_err(|_| "Docker command returned non-UTF8 output".into())
+    }
+    /// Setup may transfer ownership or mint credentials. The supervising caller
+    /// reserves recovery time; this path never cancels a running Compose client.
+    /// Output remains bounded in memory while excess bytes are drained to EOF.
+    fn run_setup(&self, args: &[&str]) -> Result<String> {
+        executable(&self.executable)?;
+        private_parent(self.staging.path())?;
+        if args.len() > 256 || args.iter().any(|a| a.len() > 16384 || a.contains('\0')) {
+            return Err("runtime arguments exceed bounds".into());
+        }
+        let mut command = Command::new(&self.executable);
+        command
+            .args(args)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", self.staging.path())
+            .env("DOCKER_CONFIG", self.staging.path())
+            .env("XDG_CONFIG_HOME", self.staging.path())
+            .env("XDG_CACHE_HOME", self.staging.path())
+            .env("LANG", "C")
+            .env("LC_ALL", "C")
+            .env(
+                "DOCKER_HOST",
+                self.docker_host
+                    .as_deref()
+                    .ok_or("Docker endpoint unavailable")?,
+            )
+            .current_dir(self.staging.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        let mut child = command
+            .spawn()
+            .map_err(|_| "cannot start supervised Compose job")?;
+        // No OwnedChild: its cancellation-on-drop contract is intentionally
+        // unsuitable for a non-idempotent, possibly in-flight setup operation.
+        let stdout = child.stdout.take().ok_or("setup stdout unavailable")?;
+        let stderr = child.stderr.take().ok_or("setup stderr unavailable")?;
+        let out = std::thread::spawn(move || drain_setup(stdout));
+        let err = std::thread::spawn(move || drain_setup(stderr));
+        let status = loop {
+            match child.wait() {
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                other => break other,
+            }
+        };
+        let output = out.join().map_err(|_| "setup output reader failed")??;
+        let diagnostic = err.join().map_err(|_| "setup diagnostic reader failed")??;
+        let status =
+            status.map_err(|_| "setup client outcome is uncertain; inspect retained evidence")?;
+        if !status.success() {
+            return Err(format!(
+                "Compose setup failed (exit={:?}); inspect private project evidence; no retry was performed",
+                status.code()
+            ));
+        }
+        if output.1 || diagnostic.1 {
+            return Err("Compose setup completed but diagnostic output exceeded the capture bound; inspect retained project before continuing".into());
+        }
+        String::from_utf8(output.0).map_err(|_| "Compose setup returned non-UTF8 output".into())
     }
     fn capture(
         &self,
@@ -217,7 +369,14 @@ impl BoundedRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
-        if let Some(host) = &self.docker_host {
+        if let Some(uid) = self.user_session_uid {
+            command
+                .env("XDG_RUNTIME_DIR", format!("/run/user/{uid}"))
+                .env(
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    format!("unix:path=/run/user/{uid}/bus"),
+                );
+        } else if let Some(host) = &self.docker_host {
             command.env("DOCKER_HOST", host);
         } else {
             command
@@ -276,6 +435,129 @@ impl BoundedRunner {
     }
 }
 
+/// Read-only observations of the prerequisites for reboot-capable rootless
+/// lifecycle units. `None` means unavailable/unparseable, not observed false.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct UserSystemdPrerequisites {
+    pub schema: &'static str,
+    pub uid: u32,
+    pub linger_enabled: Option<bool>,
+    pub docker_unit_loaded: Option<bool>,
+    pub docker_unit_enabled: Option<bool>,
+    pub docker_unit_active: Option<bool>,
+    pub automatically_startable: bool,
+}
+impl UserSystemdPrerequisites {
+    fn unavailable(uid: u32) -> Self {
+        Self {
+            schema: "elevenid.installer-user-systemd-prerequisites/v1",
+            uid,
+            linger_enabled: None,
+            docker_unit_loaded: None,
+            docker_unit_enabled: None,
+            docker_unit_active: None,
+            automatically_startable: false,
+        }
+    }
+}
+
+fn parse_user_docker_unit(output: &str) -> Option<(bool, bool, bool)> {
+    let mut properties = std::collections::BTreeMap::new();
+    for line in output.lines() {
+        let (name, value) = line.split_once('=')?;
+        if !["LoadState", "UnitFileState", "ActiveState"].contains(&name)
+            || properties.insert(name, value).is_some()
+        {
+            return None;
+        }
+    }
+    if properties.len() != 3 {
+        return None;
+    }
+    let loaded = match properties["LoadState"] {
+        "loaded" => true,
+        "not-found" | "error" | "bad-setting" | "masked" | "stub" | "merged" => false,
+        _ => return None,
+    };
+    // An enabled-runtime unit disappears on reboot and is not sufficient.
+    let enabled = match properties["UnitFileState"] {
+        "enabled" => true,
+        "disabled" | "enabled-runtime" | "static" | "indirect" | "linked" | "linked-runtime"
+        | "masked" | "masked-runtime" | "alias" | "generated" | "transient" | "bad" => false,
+        _ => return None,
+    };
+    let active = match properties["ActiveState"] {
+        "active" => true,
+        "inactive" | "failed" | "activating" | "deactivating" | "maintenance" | "reloading"
+        | "refreshing" => false,
+        _ => return None,
+    };
+    Some((loaded, enabled, active))
+}
+
+fn observe_user_systemd_at(
+    uid: u32,
+    loginctl: &Path,
+    systemctl: &Path,
+    parent: &Path,
+) -> UserSystemdPrerequisites {
+    let mut result = UserSystemdPrerequisites::unavailable(uid);
+    if uid == 0 {
+        return result;
+    }
+    let run = |binary: &Path, args: &[&str]| -> Result<String> {
+        let mut runner = BoundedRunner::new(binary, "unix:///var/run/docker.sock", parent)?;
+        runner.docker_host = None;
+        runner.user_session_uid = Some(uid);
+        // Each stream is <=4KiB, bounding combined stdout/stderr to 8KiB.
+        runner.run(args, Duration::from_secs(10), 4096)
+    };
+    let user = uid.to_string();
+    if let Ok(output) = run(
+        loginctl,
+        &["show-user", &user, "--property=Linger", "--value"],
+    ) {
+        result.linger_enabled = match output.trim() {
+            "yes" => Some(true),
+            "no" => Some(false),
+            _ => None,
+        };
+    }
+    if let Ok(output) = run(
+        systemctl,
+        &[
+            "--user",
+            "show",
+            "docker.service",
+            "--property=LoadState",
+            "--property=UnitFileState",
+            "--property=ActiveState",
+        ],
+    ) {
+        if let Some((loaded, enabled, active)) = parse_user_docker_unit(&output) {
+            result.docker_unit_loaded = Some(loaded);
+            result.docker_unit_enabled = Some(enabled);
+            result.docker_unit_active = Some(active);
+        }
+    }
+    result.automatically_startable = result.linger_enabled == Some(true)
+        && result.docker_unit_loaded == Some(true)
+        && result.docker_unit_enabled == Some(true)
+        && result.docker_unit_active == Some(true);
+    result
+}
+
+/// Fixed tools, current euid and exact user-bus environment. This observer has
+/// no caller-supplied argv, environment, UID, executable or mutating operation.
+pub(crate) fn observe_user_systemd_prerequisites(parent: &Path) -> UserSystemdPrerequisites {
+    observe_user_systemd_at(
+        unsafe { libc::geteuid() },
+        Path::new("/usr/bin/loginctl"),
+        Path::new("/usr/bin/systemctl"),
+        parent,
+    )
+}
+
 /// Invoke an already hash-pinned installer verifier with bounded execution and
 /// no inherited credentials/configuration. Only reviewed internal callers may
 /// construct arguments; caller authenticates binary and private input bytes.
@@ -297,6 +579,14 @@ struct DockerInfo {
     architecture: String,
     server_version: String,
     security_options: Vec<String>,
+    // Older rootful journals and test fixtures do not require these fields.
+    // Rootless memory admission below requires all three positive values.
+    #[serde(default)]
+    cgroup_version: Option<String>,
+    #[serde(default)]
+    cgroup_driver: Option<String>,
+    #[serde(default)]
+    memory_limit: Option<bool>,
 }
 #[derive(Debug, Serialize)]
 pub struct DockerObservation {
@@ -313,32 +603,137 @@ fn compose_version_valid(version: &str) -> bool {
             .unwrap()
             .is_match(version)
 }
-fn validate_info(output: &str, expected: &str) -> Result<DockerInfo> {
+fn validate_info_for_profile(
+    output: &str,
+    expected: &str,
+    profile: RuntimeProfile,
+) -> Result<DockerInfo> {
     let info: DockerInfo =
         serde_json::from_str(output).map_err(|_| "Docker info response is invalid")?;
+    let mode = |name: &str| {
+        info.security_options
+            .iter()
+            .any(|value| value == name || value.starts_with(&format!("{name},")))
+    };
+    let rootless = mode("name=rootless");
+    let userns = mode("name=userns");
+    let exact_rootless_count = info
+        .security_options
+        .iter()
+        .filter(|option| option.as_str() == "name=rootless")
+        .count();
+    let rootless_marker_count = info
+        .security_options
+        .iter()
+        .filter(|option| option.as_str() == "name=rootless" || option.starts_with("name=rootless,"))
+        .count();
     if info.id != expected
         || !engine_id(&info.id)
         || info.os != "linux"
         || !matches!(info.architecture.as_str(), "amd64" | "x86_64")
-        || info.security_options.iter().any(|v| {
-            ["name=rootless", "name=userns"]
-                .iter()
-                .any(|name| v == name || v.starts_with(&format!("{name},")))
-        })
+        || match profile {
+            RuntimeProfile::Rootful => rootless || userns,
+            RuntimeProfile::Rootless => {
+                !rootless || exact_rootless_count != 1 || rootless_marker_count != 1 || userns
+            }
+        }
         || info.server_version.is_empty()
         || info.server_version.len() > 128
     {
-        return Err("Docker Engine identity, platform, or rootful policy differs".into());
+        return Err(match profile {
+            RuntimeProfile::Rootful => {
+                "Docker Engine identity, platform, or rootful policy differs"
+            }
+            RuntimeProfile::Rootless => {
+                "Docker Engine identity, platform, or rootless policy differs"
+            }
+        }
+        .into());
+    }
+    if profile == RuntimeProfile::Rootless
+        && (info.cgroup_version.as_deref() != Some("2")
+            || info.cgroup_driver.as_deref() != Some("systemd")
+            || info.memory_limit != Some(true))
+    {
+        // Docker documents that rootless cgroup resource flags can be ignored
+        // without cgroup v2 and systemd. This is a daemon prerequisite check,
+        // not proof of a particular container's eventual kernel cgroup value.
+        return Err(
+            "rootless Docker memory limits require cgroup v2, systemd and memory-limit support"
+                .into(),
+        );
     }
     Ok(info)
+}
+#[cfg(test)]
+fn validate_info(output: &str, expected: &str) -> Result<DockerInfo> {
+    validate_info_for_profile(output, expected, RuntimeProfile::Rootful)
 }
 
 pub struct DockerRunner {
     runner: BoundedRunner,
     expected_engine_id: String,
+    profile: RuntimeProfile,
+    socket_identity: Option<HeldRootlessSocket>,
     deadline: Option<Instant>,
 }
 impl DockerRunner {
+    /// Select the exact profile persisted with this installation. In particular,
+    /// a rootless journal must never be reopened through the rootful constructor.
+    pub fn from_binding(
+        docker_executable: &Path,
+        binding: &RuntimeBinding,
+        private_parent: &Path,
+    ) -> Result<Self> {
+        binding.validate()?;
+        Self::new_for_profile(
+            docker_executable,
+            &binding.docker_host,
+            &binding.engine_id,
+            private_parent,
+            binding.profile,
+        )
+    }
+    fn recheck_endpoint(&self) -> Result<()> {
+        let host = self
+            .runner
+            .docker_host
+            .as_deref()
+            .ok_or("Docker endpoint unavailable")?;
+        match self.profile {
+            RuntimeProfile::Rootful => {
+                endpoint(host)?;
+                if self.socket_identity.is_some() {
+                    return Err("rootless Docker socket changed".into());
+                }
+            }
+            RuntimeProfile::Rootless => {
+                let uid = unsafe { libc::geteuid() };
+                if uid == 0 {
+                    return Err("rootless Docker socket must belong to the installer user".into());
+                }
+                let path = Path::new(
+                    host.strip_prefix("unix://")
+                        .ok_or("invalid local Docker endpoint")?,
+                );
+                let held = self
+                    .socket_identity
+                    .as_ref()
+                    .ok_or("rootless socket unavailable")?;
+                let metadata = held
+                    .0
+                    .metadata()
+                    .map_err(|_| "rootless socket unavailable")?;
+                if !metadata.file_type().is_socket()
+                    || metadata.uid() != uid
+                    || checked_rootless_socket(path, uid)? != (metadata.dev(), metadata.ino())
+                {
+                    return Err("rootless Docker socket changed".into());
+                }
+            }
+        }
+        Ok(())
+    }
     pub(crate) fn with_deadline(mut self, deadline: Instant) -> Self {
         self.deadline = Some(deadline);
         self
@@ -353,46 +748,50 @@ impl DockerRunner {
             None => Ok(limit),
         }
     }
-    /// Bounded application diagnostics for an already validated exact container.
-    /// Callers must scrub both streams and re-observe ownership before output.
-    pub(crate) fn capture_logs(&self, container: &str, tail: u16) -> Result<(String, String)> {
-        if container.len() != 64
-            || !container
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            || !(1..=1000).contains(&tail)
-        {
-            return Err("invalid bounded log request".into());
-        }
-        self.info()?;
-        let (stdout, stderr) = self.runner.capture(
-            &["logs", "--tail", &tail.to_string(), container],
-            Duration::from_secs(30),
-            MAX_OUTPUT,
-        )?;
-        let stdout = String::from_utf8(stdout).map_err(|_| "non-UTF8 application logs refused")?;
-        let stderr = String::from_utf8(stderr).map_err(|_| "non-UTF8 application logs refused")?;
-        self.info()?;
-        Ok((stdout, stderr))
-    }
     pub fn new(
         docker_executable: &Path,
         docker_host: &str,
         expected_engine_id: &str,
         private_parent: &Path,
     ) -> Result<Self> {
+        Self::new_for_profile(
+            docker_executable,
+            docker_host,
+            expected_engine_id,
+            private_parent,
+            RuntimeProfile::Rootful,
+        )
+    }
+    /// Dormant rootless preflight primitive. A future reviewed installer path
+    /// must persist the selected profile before using it for resource changes.
+    pub(crate) fn new_for_profile(
+        docker_executable: &Path,
+        docker_host: &str,
+        expected_engine_id: &str,
+        private_parent: &Path,
+        profile: RuntimeProfile,
+    ) -> Result<Self> {
         if !engine_id(expected_engine_id) {
             return Err("invalid expected Docker Engine identity".into());
         }
+        let socket_identity = endpoint_for_profile(docker_host, profile)?;
+        let runner = BoundedRunner::new(docker_executable, docker_host, private_parent)?;
+        if profile == RuntimeProfile::Rootless {
+            crate::installer_compose_plugin::admit_current_user_compose(runner.staging.path())?;
+        }
         Ok(Self {
-            runner: BoundedRunner::new(docker_executable, docker_host, private_parent)?,
+            runner,
             expected_engine_id: expected_engine_id.into(),
+            profile,
+            socket_identity,
             deadline: None,
         })
     }
     fn info(&self) -> Result<DockerInfo> {
-        let output = self.runner.run(&["info", "--format", "{\"id\":{{json .ID}},\"os\":{{json .OSType}},\"architecture\":{{json .Architecture}},\"server_version\":{{json .ServerVersion}},\"security_options\":{{json .SecurityOptions}}}"], self.budget(Duration::from_secs(30))?, 65536)?;
-        validate_info(&output, &self.expected_engine_id)
+        self.recheck_endpoint()?;
+        let output = self.runner.run(&["info", "--format", "{\"id\":{{json .ID}},\"os\":{{json .OSType}},\"architecture\":{{json .Architecture}},\"server_version\":{{json .ServerVersion}},\"security_options\":{{json .SecurityOptions}},\"cgroup_version\":{{json .CgroupVersion}},\"cgroup_driver\":{{json .CgroupDriver}},\"memory_limit\":{{json .MemoryLimit}}}"], self.budget(Duration::from_secs(30))?, 65536)?;
+        self.recheck_endpoint()?;
+        validate_info_for_profile(&output, &self.expected_engine_id, self.profile)
     }
     /// Read-only Docker checks, using the isolated configuration and fixed socket.
     pub fn preflight(&self) -> Result<DockerObservation> {
@@ -409,6 +808,7 @@ impl DockerRunner {
         if !compose_version_valid(&compose_version) {
             return Err("Docker Compose plugin version unavailable".into());
         }
+        self.recheck_endpoint()?;
         Ok(DockerObservation {
             engine_id: info.id,
             os: info.os,
@@ -424,6 +824,140 @@ impl DockerRunner {
     /// transaction with Docker. No user-controlled global CLI options are allowed.
     pub fn run_checked(&self, args: &[&str]) -> Result<String> {
         self.run_checked_with_timeout(args, COMMAND_TIMEOUT)
+    }
+    /// Fixed local-control operations only. The caller retains the installation
+    /// lock, checks the complete Compose resource receipt, and records intent
+    /// before recovery or HUP. A client timeout does not imply exec exited.
+    pub(crate) fn inspect_openbao_tls(
+        &self,
+        container: &str,
+        installation: &str,
+    ) -> Result<String> {
+        fixed_openbao_arguments(container, installation, None)?;
+        self.fixed_openbao_call(
+            &[
+                "exec",
+                "--user",
+                "0:0",
+                "--workdir",
+                "/",
+                container,
+                "/usr/local/bin/selfhost-tls-inspect",
+                "--installation-id",
+                installation,
+            ],
+            Duration::from_secs(30),
+            65_536,
+        )
+    }
+    pub(crate) fn recover_openbao_tls(
+        &self,
+        container: &str,
+        installation: &str,
+        attempt: &str,
+    ) -> Result<String> {
+        fixed_openbao_arguments(container, installation, Some(attempt))?;
+        self.fixed_openbao_call(
+            &[
+                "exec",
+                "--user",
+                "0:0",
+                "--workdir",
+                "/",
+                container,
+                "/usr/local/bin/selfhost-tls-recover",
+                "--installation-id",
+                installation,
+                "--attempt-id",
+                attempt,
+            ],
+            Duration::from_secs(95),
+            8192,
+        )
+    }
+    pub(crate) fn reload_openbao_tls(&self, container: &str) -> Result<()> {
+        if !fixed_container_id(container) {
+            return Err("OpenBao reload requires the exact retained container ID".into());
+        }
+        let output = self.fixed_openbao_call(
+            &["kill", "--signal=HUP", container],
+            Duration::from_secs(30),
+            1024,
+        )?;
+        if output.trim() != container {
+            return Err("OpenBao reload acknowledgement differs from the owned container".into());
+        }
+        Ok(())
+    }
+    /// Retire only the original bootstrap root for the host's immutable, already
+    /// qualified intent. The helper binds the private original-authority record;
+    /// no root material or arbitrary operation crosses this transport seam.
+    pub(crate) fn retire_openbao_initial_root(
+        &self,
+        container: &str,
+        installation: &str,
+        attempt: &str,
+        intent_sha256: &str,
+    ) -> Result<String> {
+        fixed_openbao_arguments(container, installation, Some(attempt))?;
+        if !fixed_container_id(intent_sha256) {
+            return Err("OpenBao root retirement requires the exact retained intent digest".into());
+        }
+        self.fixed_openbao_call(
+            &[
+                "exec",
+                "--user",
+                "0:0",
+                "--workdir",
+                "/",
+                container,
+                "/usr/local/bin/selfhost-root-retire",
+                "--installation-id",
+                installation,
+                "--attempt-id",
+                attempt,
+                "--intent-sha256",
+                intent_sha256,
+            ],
+            Duration::from_secs(95),
+            8192,
+        )
+    }
+    fn fixed_openbao_call(
+        &self,
+        args: &[&str],
+        timeout: Duration,
+        maximum: usize,
+    ) -> Result<String> {
+        self.info()?;
+        self.recheck_endpoint()?;
+        let result = self.runner.run(args, self.budget(timeout)?, maximum);
+        self.recheck_endpoint()?;
+        self.info()?;
+        result
+    }
+    /// Exclusive installer setup entry point. There is no client timeout,
+    /// automatic signal escalation, or retry for these non-idempotent jobs.
+    pub(crate) fn run_setup_checked(&self, args: &[&str]) -> Result<String> {
+        if args.first() != Some(&"compose")
+            || !args.contains(&"--no-deps")
+            || !args.contains(&"--no-recreate")
+            || !args.contains(&"--exit-code-from")
+            || args.iter().any(|arg| {
+                ["--host", "--context", "--config", "--tls", "--tlsverify"]
+                    .iter()
+                    .any(|key| *arg == *key || arg.starts_with(&format!("{key}=")))
+                    || arg.starts_with("-H")
+                    || arg.starts_with("-c")
+            })
+        {
+            return Err("unapproved supervised Compose setup command".into());
+        }
+        self.info()?;
+        self.recheck_endpoint()?;
+        let result = self.runner.run_setup(args);
+        self.recheck_endpoint()?;
+        result
     }
     /// Internal stage-specific budgets remain finite; never inherit a user's
     /// timeout or let image downloads remove the subprocess cancellation bound.
@@ -462,12 +996,50 @@ impl DockerRunner {
             return Err("unapproved Docker command or endpoint override".into());
         }
         self.info()?;
-        self.runner.run(args, self.budget(timeout)?, MAX_OUTPUT)
+        self.recheck_endpoint()?;
+        let output = self.runner.run(args, self.budget(timeout)?, MAX_OUTPUT)?;
+        self.recheck_endpoint()?;
+        Ok(output)
     }
+}
+
+fn fixed_container_id(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn fixed_openbao_arguments(
+    container: &str,
+    installation: &str,
+    attempt: Option<&str>,
+) -> Result<()> {
+    let uuid = |value: &str| uuid::Uuid::parse_str(value).is_ok_and(|id| id.to_string() == value);
+    if !fixed_container_id(container)
+        || !uuid(installation)
+        || attempt.is_some_and(|value| !uuid(value))
+    {
+        return Err(
+            "OpenBao helper requires exact retained container and operation identities".into(),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::symlink;
+    use std::os::unix::net::UnixListener;
+    #[test]
+    fn supervised_output_is_drained_after_capture_limit_without_cancellation() {
+        let bytes = vec![b'x'; super::MAX_OUTPUT + 8193];
+        let mut cursor = std::io::Cursor::new(bytes);
+        let (prefix, truncated) = super::drain_setup(&mut cursor).unwrap();
+        assert!(truncated);
+        assert_eq!(prefix.len(), super::MAX_OUTPUT);
+        assert_eq!(cursor.position() as usize, super::MAX_OUTPUT + 8193);
+    }
     #[test]
     fn distribution_compose_versions_remain_bounded_metadata() {
         assert!(super::compose_version_valid("2.40.3+ds1-0ubuntu1~24.04.1"));
@@ -500,33 +1072,342 @@ mod tests {
     fn info() -> &'static str {
         r#"{"id":"test-engine","os":"linux","architecture":"x86_64","server_version":"28.0.0","security_options":["name=seccomp,profile=builtin"]}"#
     }
+    fn rootless_info() -> String {
+        r#"{"id":"test-engine","os":"linux","architecture":"x86_64","server_version":"28.0.0","security_options":["name=rootless"],"cgroup_version":"2","cgroup_driver":"systemd","memory_limit":true}"#.into()
+    }
     #[test]
-    fn diagnostic_capture_bounds_arguments_and_keeps_both_streams_private() {
-        let parent = private_temp();
-        let binary = script(parent.path(), &format!(
-            "if [ \"$1\" = info ]; then printf '%s' '{}'; else printf 'stdout-secret'; printf 'stderr-secret' >&2; fi", info()));
-        let docker = DockerRunner::new(
-            &binary,
-            "unix:///var/run/docker.sock",
-            "test-engine",
-            parent.path(),
+    fn user_systemd_observer_is_read_only_and_distinguishes_false_from_unknown() {
+        let d = private_temp();
+        let login = d.path().join("loginctl");
+        let system = d.path().join("systemctl");
+        let common="[ \"$XDG_RUNTIME_DIR\" = /run/user/1000 ] || exit 9\n[ \"$DBUS_SESSION_BUS_ADDRESS\" = unix:path=/run/user/1000/bus ] || exit 9\n[ -z \"$DOCKER_HOST$GH_HOST\" ] || exit 9\n";
+        fs::write(&login,format!("#!/bin/sh\n{common}[ \"$*\" = 'show-user 1000 --property=Linger --value' ] || exit 9\nprintf 'yes\\n'\n")).unwrap();
+        fs::write(&system,format!("#!/bin/sh\n{common}[ \"$*\" = '--user show docker.service --property=LoadState --property=UnitFileState --property=ActiveState' ] || exit 9\nprintf 'LoadState=loaded\\nUnitFileState=enabled\\nActiveState=active\\n'\n")).unwrap();
+        for path in [&login, &system] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let observed = observe_user_systemd_at(1000, &login, &system, d.path());
+        assert_eq!(observed.linger_enabled, Some(true));
+        assert_eq!(observed.docker_unit_enabled, Some(true));
+        assert!(observed.automatically_startable);
+        fs::write(&login, "#!/bin/sh\nprintf 'no\\n'\n").unwrap();
+        fs::write(&system,"#!/bin/sh\nprintf 'LoadState=loaded\\nUnitFileState=enabled-runtime\\nActiveState=inactive\\n'\n").unwrap();
+        let observed = observe_user_systemd_at(1000, &login, &system, d.path());
+        assert_eq!(observed.linger_enabled, Some(false));
+        assert_eq!(observed.docker_unit_enabled, Some(false));
+        assert_eq!(observed.docker_unit_active, Some(false));
+        assert!(!observed.automatically_startable);
+        fs::write(
+            &system,
+            "#!/bin/sh\nprintf 'sensitive stderr must not escape' >&2\nexit 1\n",
         )
         .unwrap();
-        let id = "a".repeat(64);
+        let observed = observe_user_systemd_at(1000, &login, &system, d.path());
+        assert_eq!(observed.linger_enabled, Some(false));
+        assert_eq!(observed.docker_unit_loaded, None);
+        assert!(!serde_json::to_string(&observed)
+            .unwrap()
+            .contains("sensitive"));
+        fs::write(
+            &system,
+            "#!/bin/sh\nprintf '%5000s' 'oversized private diagnostic' >&2\n",
+        )
+        .unwrap();
+        let observed = observe_user_systemd_at(1000, &login, &system, d.path());
+        assert_eq!(observed.docker_unit_loaded, None);
+        assert!(!observed.automatically_startable);
+        assert!(!serde_json::to_string(&observed)
+            .unwrap()
+            .contains("private"));
+        let absent = d.path().join("unavailable-command");
+        let observed = observe_user_systemd_at(1000, &absent, &absent, d.path());
+        assert_eq!(observed.linger_enabled, None);
+        assert_eq!(observed.docker_unit_active, None);
+        assert!(!observed.automatically_startable);
+        for invalid in [
+            "LoadState=loaded\nUnitFileState=enabled\n",
+            "LoadState=loaded\nLoadState=loaded\nUnitFileState=enabled\nActiveState=active\n",
+            "LoadState=loaded\nUnitFileState=unknown\nActiveState=active\n",
+        ] {
+            assert!(parse_user_docker_unit(invalid).is_none());
+        }
         assert_eq!(
-            docker.capture_logs(&id, 10).unwrap(),
-            ("stdout-secret".into(), "stderr-secret".into())
+            observe_user_systemd_at(0, &login, &system, d.path()).linger_enabled,
+            None
         );
-        for tail in [0, 1001] {
-            assert!(docker.capture_logs(&id, tail).is_err());
+    }
+    #[test]
+    fn openbao_control_operations_have_fixed_argv_and_no_generic_exec_or_kill() {
+        let d = private_temp();
+        let log = d.path().join("args");
+        let container = "a".repeat(64);
+        let installation = "11111111-1111-4111-8111-111111111111";
+        let attempt = "22222222-2222-4222-8222-222222222222";
+        let path = script(
+            d.path(),
+            &format!(
+                "if [ \"$1\" = info ]; then printf '%s\\n' '{}'; exit 0; fi\nprintf '%s\\n' \"$@\" >> '{}'\nif [ \"$1\" = kill ]; then printf '%s\\n' \"$3\"; else printf '{{}}\\n'; fi",
+                info(),
+                log.display()
+            ),
+        );
+        let runner = DockerRunner::new(
+            &path,
+            "unix:///var/run/docker.sock",
+            "test-engine",
+            d.path(),
+        )
+        .unwrap();
+        runner
+            .inspect_openbao_tls(&container, installation)
+            .unwrap();
+        runner
+            .recover_openbao_tls(&container, installation, attempt)
+            .unwrap();
+        runner.reload_openbao_tls(&container).unwrap();
+        let intent = "b".repeat(64);
+        runner
+            .retire_openbao_initial_root(&container, installation, attempt, &intent)
+            .unwrap();
+        let expected = format!(
+            "exec\n--user\n0:0\n--workdir\n/\n{container}\n/usr/local/bin/selfhost-tls-inspect\n--installation-id\n{installation}\nexec\n--user\n0:0\n--workdir\n/\n{container}\n/usr/local/bin/selfhost-tls-recover\n--installation-id\n{installation}\n--attempt-id\n{attempt}\nkill\n--signal=HUP\n{container}\nexec\n--user\n0:0\n--workdir\n/\n{container}\n/usr/local/bin/selfhost-root-retire\n--installation-id\n{installation}\n--attempt-id\n{attempt}\n--intent-sha256\n{intent}\n"
+        );
+        assert_eq!(fs::read_to_string(&log).unwrap(), expected);
+        assert!(runner.run_checked(&["exec", &container, "sh"]).is_err());
+        assert!(runner
+            .run_checked(&["kill", "--signal=KILL", &container])
+            .is_err());
+        for invalid in [
+            "openbao",
+            "--privileged",
+            "abc",
+            &"A".repeat(64),
+            &format!("{container}\n"),
+        ] {
+            assert!(runner.inspect_openbao_tls(invalid, installation).is_err());
+            assert!(runner.reload_openbao_tls(invalid).is_err());
+            assert!(runner
+                .retire_openbao_initial_root(invalid, installation, attempt, &intent)
+                .is_err());
+            assert!(runner
+                .retire_openbao_initial_root(&container, installation, attempt, invalid)
+                .is_err());
         }
-        for bad in ["--follow", "name", "../../foreign"] {
-            assert!(docker.capture_logs(bad, 10).is_err());
+        for invalid in [
+            "--env",
+            "../../secret",
+            "11111111-1111-4111-8111-11111111111A",
+            "11111111111141118111111111111111",
+        ] {
+            assert!(runner
+                .recover_openbao_tls(&container, installation, invalid)
+                .is_err());
+            assert!(runner.inspect_openbao_tls(&container, invalid).is_err());
+            assert!(runner
+                .retire_openbao_initial_root(&container, installation, invalid, &intent)
+                .is_err());
+            assert!(runner
+                .retire_openbao_initial_root(&container, invalid, attempt, &intent)
+                .is_err());
         }
-        script(parent.path(), &format!(
-            "if [ \"$1\" = info ]; then printf '%s' '{}'; else printf 'stdout-secret'; printf 'stderr-secret' >&2; exit 9; fi", info()));
-        let error = docker.capture_logs(&id, 10).unwrap_err();
-        assert!(!error.contains("secret"));
+        assert_eq!(fs::read_to_string(&log).unwrap(), expected);
+    }
+    #[test]
+    fn selected_profile_requires_positive_daemon_mode_and_exact_engine() {
+        let rootless = rootless_info();
+        assert!(validate_info_for_profile(info(), "test-engine", RuntimeProfile::Rootful).is_ok());
+        assert!(
+            validate_info_for_profile(&rootless, "test-engine", RuntimeProfile::Rootless).is_ok()
+        );
+        assert!(
+            validate_info_for_profile(info(), "test-engine", RuntimeProfile::Rootless).is_err()
+        );
+        assert!(
+            validate_info_for_profile(&rootless, "test-engine", RuntimeProfile::Rootful).is_err()
+        );
+        assert!(
+            validate_info_for_profile(&rootless, "changed-engine", RuntimeProfile::Rootless)
+                .is_err()
+        );
+        assert!(validate_info_for_profile(
+            &rootless.replace("name=rootless", "name=userns"),
+            "test-engine",
+            RuntimeProfile::Rootless
+        )
+        .is_err());
+        for ambiguous in [
+            rootless.replace("name=rootless", "name=rootless,disabled"),
+            rootless.replace("name=rootless", "name=rootless\",\"name=rootless"),
+            rootless.replace("name=rootless", "name=rootless\",\"name=rootless,disabled"),
+        ] {
+            assert!(
+                validate_info_for_profile(&ambiguous, "test-engine", RuntimeProfile::Rootless)
+                    .is_err()
+            );
+        }
+        assert!(validate_info_for_profile(
+            &rootless.replace("name=rootless", "name=rootless,enabled\",\"name=userns"),
+            "test-engine",
+            RuntimeProfile::Rootless
+        )
+        .is_err());
+        for (field, wrong) in [
+            ("cgroup_version", serde_json::json!("1")),
+            ("cgroup_driver", serde_json::json!("none")),
+            ("cgroup_driver", serde_json::json!("cgroupfs")),
+            ("memory_limit", serde_json::json!(false)),
+            ("memory_limit", serde_json::Value::Null),
+        ] {
+            let mut changed: serde_json::Value = serde_json::from_str(&rootless).unwrap();
+            changed[field] = wrong;
+            assert!(validate_info_for_profile(
+                &changed.to_string(),
+                "test-engine",
+                RuntimeProfile::Rootless
+            )
+            .is_err());
+        }
+        for missing in ["cgroup_version", "cgroup_driver", "memory_limit"] {
+            let mut changed: serde_json::Value = serde_json::from_str(&rootless).unwrap();
+            changed.as_object_mut().unwrap().remove(missing);
+            assert!(validate_info_for_profile(
+                &changed.to_string(),
+                "test-engine",
+                RuntimeProfile::Rootless
+            )
+            .is_err());
+        }
+        let rootful_legacy: serde_json::Value = serde_json::from_str(info()).unwrap();
+        assert!(rootful_legacy.get("cgroup_version").is_none());
+        assert!(validate_info_for_profile(info(), "test-engine", RuntimeProfile::Rootful).is_ok());
+        let rootful_cgroupfs = info().replacen(
+            "\"security_options\":",
+            "\"cgroup_version\":\"1\",\"cgroup_driver\":\"cgroupfs\",\"memory_limit\":false,\"security_options\":",
+            1,
+        );
+        assert!(validate_info_for_profile(
+            &rootful_cgroupfs,
+            "test-engine",
+            RuntimeProfile::Rootful
+        )
+        .is_ok());
+    }
+    #[test]
+    fn rootless_socket_custody_requires_private_owned_parent_and_socket_inode() {
+        let parent = private_temp();
+        let socket = parent.path().join("docker.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o660)).unwrap();
+        let uid = unsafe { libc::geteuid() };
+        let first = checked_rootless_socket(&socket, uid).unwrap();
+        assert_ne!(first.1, 0);
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(checked_rootless_socket(&socket, uid).is_err());
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o660)).unwrap();
+        let replacement = parent.path().join("replacement.sock");
+        let other = UnixListener::bind(&replacement).unwrap();
+        fs::set_permissions(&replacement, fs::Permissions::from_mode(0o660)).unwrap();
+        let second = checked_rootless_socket(&replacement, uid).unwrap();
+        assert_ne!(second, first);
+        fs::rename(&replacement, &socket).unwrap();
+        assert_eq!(checked_rootless_socket(&socket, uid).unwrap(), second);
+        let alias = parent.path().join("alias.sock");
+        symlink(&socket, &alias).unwrap();
+        assert!(checked_rootless_socket(&alias, uid).is_err());
+        fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o750)).unwrap();
+        assert!(checked_rootless_socket(&socket, uid).is_err());
+        drop(listener);
+        drop(other);
+    }
+    #[test]
+    fn rootless_runner_refuses_mode_engine_and_socket_drift_before_next_command() {
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let parent = private_temp();
+        let socket = parent.path().join("docker.sock");
+        let _listener = UnixListener::bind(&socket).unwrap();
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o660)).unwrap();
+        let info_path = parent.path().join("engine-info.json");
+        let rootless = rootless_info();
+        fs::write(&info_path, &rootless).unwrap();
+        let binary = script(
+            parent.path(),
+            r#"case "$1" in
+info) cat "${0%/*}/engine-info.json" ;;
+compose) printf c >> "${0%/*}/compose-calls"; printf '2.40.3\n' ;;
+ps) printf x >> "${0%/*}/resource-calls"; printf 'owned' ;;
+*) exit 9 ;;
+esac"#,
+        );
+        // The production constructor admits only /run/user/<uid>/docker.sock.
+        // Construct the same runner state with a private test socket to prove
+        // the per-command guard without touching any host Docker endpoint.
+        assert!(DockerRunner::new_for_profile(
+            &binary,
+            &format!("unix://{}", socket.display()),
+            "test-engine",
+            parent.path(),
+            RuntimeProfile::Rootless,
+        )
+        .is_err());
+        let docker = DockerRunner {
+            runner: BoundedRunner::new(
+                &binary,
+                &format!("unix://{}", socket.display()),
+                parent.path(),
+            )
+            .unwrap(),
+            expected_engine_id: "test-engine".into(),
+            profile: RuntimeProfile::Rootless,
+            socket_identity: Some(
+                hold_rootless_socket(&socket, unsafe { libc::geteuid() }).unwrap(),
+            ),
+            deadline: None,
+        };
+        assert!(docker.preflight().is_ok());
+        let compose_calls = fs::read(parent.path().join("compose-calls")).unwrap();
+        assert_eq!(docker.run_checked(&["ps"]).unwrap(), "owned");
+        let calls = fs::read(parent.path().join("resource-calls")).unwrap();
+        for changed in [
+            info().to_owned(),
+            rootless.replace("test-engine", "other-engine"),
+            rootless.replace("\"cgroup_version\":\"2\"", "\"cgroup_version\":\"1\""),
+            rootless.replace(
+                "\"cgroup_driver\":\"systemd\"",
+                "\"cgroup_driver\":\"none\"",
+            ),
+            rootless.replace("\"memory_limit\":true", "\"memory_limit\":false"),
+        ] {
+            fs::write(&info_path, changed).unwrap();
+            assert!(docker.preflight().is_err());
+            assert_eq!(
+                fs::read(parent.path().join("compose-calls")).unwrap(),
+                compose_calls
+            );
+            assert!(docker.run_checked(&["ps"]).is_err());
+            assert_eq!(
+                fs::read(parent.path().join("resource-calls")).unwrap(),
+                calls
+            );
+        }
+        fs::write(&info_path, rootless).unwrap();
+        let other_path = parent.path().join("other.sock");
+        let _other = UnixListener::bind(&other_path).unwrap();
+        fs::set_permissions(&other_path, fs::Permissions::from_mode(0o660)).unwrap();
+        fs::rename(&other_path, &socket).unwrap();
+        assert!(docker.run_checked(&["ps"]).is_err());
+        assert_eq!(
+            fs::read(parent.path().join("resource-calls")).unwrap(),
+            calls
+        );
+        let held_fd = docker.socket_identity.as_ref().unwrap().0.as_raw_fd();
+        assert_ne!(
+            unsafe { libc::fcntl(held_fd, libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+        drop(docker);
+        assert_eq!(unsafe { libc::fcntl(held_fd, libc::F_GETFD) }, -1);
     }
     #[test]
     fn refuses_replaceable_executable_and_private_staging_ancestors() {
@@ -697,6 +1578,57 @@ esac"#,
             calls,
             "identity mismatch must refuse before executing the requested command"
         );
+    }
+    #[test]
+    fn preflight_refuses_when_isolated_cli_has_no_compose_plugin() {
+        let parent = private_temp();
+        fs::write(parent.path().join("engine-info.json"), info()).unwrap();
+        let binary = script(
+            parent.path(),
+            "case \"$1\" in info) cat \"${0%/*}/engine-info.json\" ;; compose) exit 42 ;; *) exit 9 ;; esac",
+        );
+        let docker = DockerRunner::new(
+            &binary,
+            "unix:///var/run/docker.sock",
+            "test-engine",
+            parent.path(),
+        )
+        .unwrap();
+        assert!(docker.preflight().is_err());
+        assert!(!parent.path().join("cli-plugins").exists());
+    }
+    #[test]
+    fn persisted_binding_selects_profile_without_rootful_fallback() {
+        let parent = private_temp();
+        let info_path = parent.path().join("engine-info.json");
+        fs::write(&info_path, info()).unwrap();
+        let binary = script(
+            parent.path(),
+            "case \"$1\" in info) cat \"${0%/*}/engine-info.json\" ;; compose) printf '2.39.0\\n' ;; *) exit 9 ;; esac",
+        );
+        // Historical journals omit profile and remain explicitly Rootful.
+        let binding: RuntimeBinding = serde_json::from_value(serde_json::json!({
+            "docker_host": "unix:///var/run/docker.sock",
+            "engine_id": "test-engine",
+            "openbao_port": 18200
+        }))
+        .unwrap();
+        assert_eq!(binding.profile, RuntimeProfile::Rootful);
+        let docker = DockerRunner::from_binding(&binary, &binding, parent.path()).unwrap();
+        assert_eq!(docker.profile, RuntimeProfile::Rootful);
+        assert!(docker.preflight().is_ok());
+        fs::write(
+            &info_path,
+            info().replace("name=seccomp,profile=builtin", "name=rootless"),
+        )
+        .unwrap();
+        assert!(docker.preflight().is_err());
+        let rootless = RuntimeBinding {
+            profile: RuntimeProfile::Rootless,
+            ..binding
+        };
+        // A rootless journal cannot be reopened through the rootful socket.
+        assert!(DockerRunner::from_binding(&binary, &rootless, parent.path()).is_err());
     }
     #[test]
     fn executable_writer_failure_reports_only_os_classification() {

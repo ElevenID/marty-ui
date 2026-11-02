@@ -466,6 +466,7 @@ fn initiation_request(value: InitiateIssuanceRequest) -> Result<ParsedInitiation
     Ok(ParsedInitiationRequest {
         request: InitiationRequest {
             organization_id: value.organization_id,
+            offer_ttl_seconds: value.offer_ttl_seconds,
             credential_template_id: optional(value.credential_template_id),
             application_id: optional(value.application_id),
             applicant_id: optional(value.applicant_id),
@@ -1205,7 +1206,7 @@ mod tests {
             _transaction: &CredentialTransaction,
             _holder_did: &str,
         ) -> Result<InitiationDidcommDeliveryReceipt, InitiationDidcommDeliveryError> {
-            Err(InitiationDidcommDeliveryError)
+            Err(InitiationDidcommDeliveryError::Unavailable)
         }
     }
 
@@ -1253,6 +1254,7 @@ mod tests {
         let initiation = initiation.with_offer_ttl_minutes(45_i64.into());
         let service = candidate.with_initiation(initiation, projector);
         let request = InitiateIssuanceRequest {
+            offer_ttl_seconds: None,
             organization_id: "org-a".into(),
             credential_template_id: "template-a".into(),
             applicant_id: "applicant-a".into(),

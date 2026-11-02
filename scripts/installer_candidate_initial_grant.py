@@ -89,7 +89,8 @@ def acquire(*, client, assets: Path, gh: Path, cosign: Path, output: Path,
                             "initial grant archive digest differs")
             with os.fdopen(archive_fd, "rb", closefd=False) as stream:
                 stream.seek(0)
-                archive_transport.extract_exact(stream, output, held, NAMES)
+                names = archive_transport.initial_archive_names(stream, NAMES)
+                archive_transport.extract_exact(stream, output, held, names)
             again, again_size = archive_transport.hash_fd(archive_fd, chosen["size_in_bytes"])
             release.require(again == digest and again_size == size
                             and os.fstat(archive_fd).st_size == size,
@@ -97,7 +98,7 @@ def acquire(*, client, assets: Path, gh: Path, cosign: Path, output: Path,
         finally:
             os.close(archive_fd)
         dispatch.registry_unchanged(held, output.parent)
-        snapshot = {entry: dispatch.private_file(output / entry, 1048576) for entry in NAMES}
+        snapshot = {entry: dispatch.private_file(output / entry, 1048576) for entry in names}
         authorization = output / "candidate-authorization.json"
         inventory = assets / "installer-inventory.json"
         a, i = uploader.authenticate(authorization, inventory, assets, gh, cosign, runner=verifier)
@@ -135,7 +136,7 @@ def acquire(*, client, assets: Path, gh: Path, cosign: Path, output: Path,
                 build_run_id=build_run_id, build_run_attempt=build_run_attempt) == staged_record,
                 "staged transport identity changed during grant retrieval")
         dispatch.registry_unchanged(held, output.parent)
-        release.require({entry: dispatch.private_file(output / entry, 1048576) for entry in NAMES} == snapshot,
+        release.require({entry: dispatch.private_file(output / entry, 1048576) for entry in names} == snapshot,
                         "initial grant files changed")
         release.require(grant["expires_at"] - int(clock()) > transport.RESERVE,
                         "initial grant expires too soon")

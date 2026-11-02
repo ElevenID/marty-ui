@@ -1,9 +1,11 @@
-//! PostgreSQL, OpenBao, and Redis adapters for the shared bootstrap engine.
+//! PostgreSQL, selected remote KMS, and Redis adapters for the bootstrap engine.
 
 use std::{collections::BTreeMap, env, fs, path::Path, time::Duration};
 
 use chrono::{SecondsFormat, Utc};
 use marty_openbao_http::OpenBaoHttp;
+use marty_service_runtime::SecretKmsSelection;
+use mmf_aws_kms::{AwsKmsConfig, AwsKmsKey, KeyCapability};
 use redis::AsyncCommands;
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{json, Value};
@@ -28,7 +30,10 @@ fn secret(name: &str) -> String {
     fs::read_to_string(file).unwrap_or_default().trim().into()
 }
 
-pub async fn run(verify_only: bool) -> Result<(), RunError> {
+fn environment_values(
+    verify_only: bool,
+    mut read: impl FnMut(&str) -> Result<String, env::VarError>,
+) -> Result<BTreeMap<String, String>, RunError> {
     let names = [
         "DATABASE_URL",
         "BAO_ADDR",
@@ -45,40 +50,77 @@ pub async fn run(verify_only: bool) -> Result<(), RunError> {
         "PASSPORT_DISPOSABLE_ICAO_BOOTSTRAP",
         "PASSPORT_ACCEPTANCE_PROJECT",
         "PASSPORT_ACCEPTANCE_GATEWAY_PORT",
-    ];
-    let mut environment: BTreeMap<String, String> = names
-        .iter()
-        .filter_map(|name| env::var(name).ok().map(|value| ((*name).into(), value)))
-        .collect();
-    for name in [
-        "OPENBAO_SERVICE_TOKEN",
-        "BAO_TOKEN",
+        "NOTIFICATION_SECRET_KMS_PROVIDER",
+        "NOTIFICATION_SECRET_AWS_REGION",
+        "NOTIFICATION_SECRET_AWS_KEY_ARN",
         "NOTIFICATION_OPENBAO_TOKEN",
-    ] {
+        "NOTIFICATION_OPENBAO_TOKEN_FILE",
+        "NOTIFICATION_OPENBAO_CA_CERT_FILE",
+    ];
+    let mut environment = BTreeMap::new();
+    for name in names {
+        match read(name) {
+            Ok(value) => {
+                environment.insert(name.into(), value);
+            }
+            Err(env::VarError::NotUnicode(_))
+                if !verify_only && name.starts_with("NOTIFICATION_") =>
+            {
+                return Err(RunError::Notification(
+                    "Notification KMS configuration must be valid Unicode".into(),
+                ));
+            }
+            Err(_) => {}
+        }
+    }
+    Ok(environment)
+}
+
+pub async fn run(verify_only: bool) -> Result<(), RunError> {
+    let mut environment = environment_values(verify_only, |name| env::var(name))?;
+    for name in ["OPENBAO_SERVICE_TOKEN", "BAO_TOKEN"] {
         environment.insert(name.into(), secret(name));
     }
-    let config = Config {
+    let mut config = Config {
         environment,
         verify_only,
     };
-    let address = config.get("BAO_ADDR");
-    let ca_file = env::var("BAO_CACERT").ok();
-    let transport = OpenBaoHttp::connect(
-        address,
-        ca_file.as_deref().map(Path::new),
-        Duration::from_secs(8),
-    )
-    .map_err(RunError::Identity)?;
-    bootstrap_engine::run(&config, &mut LiveBackend::new(transport.client().clone())).await
+    let client = if verify_only {
+        None
+    } else {
+        let notification = config.notification_kms().map_err(RunError::Notification)?;
+        if notification == SecretKmsSelection::OpenBao {
+            config.environment.insert(
+                "NOTIFICATION_OPENBAO_TOKEN".into(),
+                secret("NOTIFICATION_OPENBAO_TOKEN"),
+            );
+        }
+        let address = config.get("BAO_ADDR");
+        if notification == SecretKmsSelection::OpenBao
+            || (config.enabled("MARTY_KMS_BOOTSTRAP_ENABLED") && !address.is_empty())
+        {
+            let ca_file = env::var("BAO_CACERT").ok();
+            let transport = OpenBaoHttp::connect(
+                address,
+                ca_file.as_deref().map(Path::new),
+                Duration::from_secs(8),
+            )
+            .map_err(RunError::Identity)?;
+            Some(transport.client().clone())
+        } else {
+            None
+        }
+    };
+    bootstrap_engine::run(&config, &mut LiveBackend::new(client)).await
 }
 
 struct LiveBackend {
-    client: Client,
+    client: Option<Client>,
     redis: Option<redis::aio::MultiplexedConnection>,
 }
 
 impl LiveBackend {
-    fn new(client: Client) -> Self {
+    fn new(client: Option<Client>) -> Self {
         Self {
             client,
             redis: None,
@@ -95,6 +137,8 @@ impl LiveBackend {
     ) -> Result<Value, String> {
         let mut request = self
             .client
+            .as_ref()
+            .ok_or("OpenBao bootstrap transport is not configured")?
             .request(
                 method,
                 format!(
@@ -158,11 +202,29 @@ impl LiveBackend {
 #[cfg(test)]
 impl Default for LiveBackend {
     fn default() -> Self {
-        Self::new(Client::new())
+        Self::new(Some(Client::new()))
     }
 }
 
 impl Backend for LiveBackend {
+    async fn notification_aws(
+        &mut self,
+        config: &AwsKmsConfig,
+        key_arn: &str,
+    ) -> Result<(), String> {
+        tokio::time::timeout(config.request_timeout, async {
+            let key = AwsKmsKey::connect(config.clone(), key_arn.into())
+                .await
+                .map_err(|_| "AWS notification KMS is unavailable".to_owned())?;
+            key.validate(KeyCapability::SymmetricEncryption)
+                .await
+                .map(|_| ())
+                .map_err(|_| "AWS notification KMS key is unavailable or unsuitable".to_owned())
+        })
+        .await
+        .map_err(|_| "AWS notification KMS readiness timed out".to_owned())?
+    }
+
     async fn verify_database(&mut self, database_url: &str) -> Result<(), String> {
         let mut connection = PgConnection::connect(database_url)
             .await
@@ -414,11 +476,107 @@ fn decode_json_document(bytes: Option<&[u8]>) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_json_document, LiveBackend, OpenBaoHttp};
-    use crate::bootstrap_engine::{Backend, StampKind};
+    use super::{decode_json_document, environment_values, LiveBackend, OpenBaoHttp};
+    use crate::bootstrap_engine::{Backend, RunError, StampKind};
     use reqwest::Method;
     use serde_json::json;
     use std::{env, path::Path, time::Duration};
+
+    #[test]
+    fn malformed_notification_environment_cannot_silently_select_openbao() {
+        for malformed in [
+            "NOTIFICATION_SECRET_KMS_PROVIDER",
+            "NOTIFICATION_SECRET_AWS_REGION",
+            "NOTIFICATION_SECRET_AWS_KEY_ARN",
+            "NOTIFICATION_OPENBAO_TOKEN_FILE",
+        ] {
+            let read = |name: &str| {
+                if name == malformed {
+                    Err(env::VarError::NotUnicode("redacted-invalid-value".into()))
+                } else {
+                    Err(env::VarError::NotPresent)
+                }
+            };
+            assert!(matches!(
+                environment_values(false, read),
+                Err(RunError::Notification(_))
+            ));
+            // Database-only verification never activates either provider.
+            assert!(environment_values(true, read).unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn aws_notification_readiness_is_read_only_and_checks_native_key_custody() {
+        use axum::{
+            body::{to_bytes, Body},
+            extract::Request,
+            routing::post,
+            Json, Router,
+        };
+        use mmf_aws_kms::{AwsAuth, AwsKmsConfig};
+        use serde_json::Value;
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Mutex,
+        };
+
+        const ARN: &str = "arn:aws:kms:us-east-2:111122223333:key/bootstrap-notification";
+        let native_origin = Arc::new(AtomicBool::new(true));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let handler_origin = native_origin.clone();
+        let handler_calls = calls.clone();
+        let app = Router::new().route(
+            "/",
+            post(move |request: Request<Body>| {
+                let origin = handler_origin.clone();
+                let calls = handler_calls.clone();
+                async move {
+                    assert_eq!(request.headers()["x-amz-target"], "TrentService.DescribeKey");
+                    assert_eq!(
+                        request.headers()["content-type"],
+                        "application/x-amz-json-1.1"
+                    );
+                    let body: Value = serde_json::from_slice(
+                        &to_bytes(request.into_body(), 20_000).await.unwrap(),
+                    )
+                    .unwrap();
+                    calls.lock().unwrap().push(body);
+                    Json(json!({"KeyMetadata": {
+                        "Arn": ARN, "KeyId": "bootstrap-notification",
+                        "Enabled": true, "KeyState": "Enabled",
+                        "KeySpec": "SYMMETRIC_DEFAULT", "KeyUsage": "ENCRYPT_DECRYPT",
+                        "Origin": if origin.load(Ordering::Acquire) { "AWS_KMS" } else { "EXTERNAL" },
+                        "EncryptionAlgorithms": ["SYMMETRIC_DEFAULT"]
+                    }}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async { axum::serve(listener, app).await.unwrap() });
+        let config = AwsKmsConfig {
+            region: "us-east-2".into(),
+            authentication: AwsAuth::AccessKey {
+                access_key_id: "test-only-explicit-key".into(),
+                secret_access_key: "test-only-secret".into(),
+                session_token: None,
+            },
+            endpoint: Some(endpoint),
+            request_timeout: Duration::from_secs(2),
+        };
+        let mut backend = LiveBackend::new(None);
+        backend.notification_aws(&config, ARN).await.unwrap();
+        native_origin.store(false, Ordering::Release);
+        assert!(backend.notification_aws(&config, ARN).await.is_err());
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![json!({"KeyId": ARN}), json!({"KeyId": ARN})]
+        );
+        assert!(backend.client.is_none());
+        assert!(backend.redis.is_none());
+        server.abort();
+    }
 
     #[tokio::test]
     #[ignore = "requires a guarded disposable HTTPS OpenBao instance"]
@@ -432,7 +590,7 @@ mod tests {
         let transport =
             OpenBaoHttp::connect(&address, Some(Path::new(&ca_file)), Duration::from_secs(8))
                 .expect("CA-verified OpenBao transport");
-        let adapter = LiveBackend::new(transport.client().clone());
+        let adapter = LiveBackend::new(Some(transport.client().clone()));
         let root_token = env::var("MARTY_TEST_OPENBAO_ROOT_TOKEN").expect("disposable guard token");
         let nonce =
             env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE").expect("disposable guard nonce");

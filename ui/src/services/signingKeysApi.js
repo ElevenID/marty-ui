@@ -137,9 +137,16 @@ export async function getKeyManagementConfig(params = {}) {
  * @returns {Promise<Object>} Updated configuration
  */
 export async function updateKeyManagementConfig(config) {
+  const revision = config?.config_revision;
+  if (typeof revision !== 'string' || !/^"r-[0-9a-f-]+"$/i.test(revision)) {
+    throw new Error('Reload key management configuration before saving changes.');
+  }
+  const body = withoutOrganizationFields(config);
+  delete body.config_revision;
   return patch(
     withOrganizationQuery(`${BASE_PATH}/config`, config, {}, 'saving key management configuration'),
-    withoutOrganizationFields(config)
+    body,
+    { headers: { 'If-Match': revision } }
   );
 }
 

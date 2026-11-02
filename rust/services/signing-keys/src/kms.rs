@@ -2,11 +2,6 @@
 
 use std::{env, fs, path::Path, time::Duration};
 
-use aws_config::BehaviorVersion;
-use aws_credential_types::Credentials;
-use aws_sdk_kms::config::Region;
-use aws_sdk_kms::primitives::Blob;
-use aws_sdk_kms::types::{MessageType, SigningAlgorithmSpec};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -862,10 +857,15 @@ fn managed_openbao_key_active(data: &Value) -> bool {
 }
 
 pub(crate) fn managed_public_key_algorithm(jwk: &Value) -> Option<&'static str> {
-    match (
+    public_key_algorithm(
         jwk.get("kty").and_then(Value::as_str),
         jwk.get("crv").and_then(Value::as_str),
-    ) {
+    )
+}
+
+/// Classify public metadata without changing caller key validation or algorithm policy.
+pub(crate) fn public_key_algorithm(kty: Option<&str>, crv: Option<&str>) -> Option<&'static str> {
+    match (kty, crv) {
         (Some("EC"), Some("P-256")) => Some("ES256"),
         (Some("EC"), Some("P-384")) => Some("ES384"),
         (Some("EC"), Some("P-521")) => Some("ES512"),
@@ -1508,6 +1508,32 @@ fn safe_provider_detail(body: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn managed_key_algorithm_classifies_metadata_without_changing_validation_policy() {
+        for (jwk, expected) in [
+            (json!({"kty":"EC", "crv":"P-256"}), Some("ES256")),
+            (json!({"kty":"EC", "crv":"P-384"}), Some("ES384")),
+            (json!({"kty":"EC", "crv":"P-521"}), Some("ES512")),
+            (json!({"kty":"RSA"}), Some("RS256")),
+            (
+                json!({"kty":"RSA", "crv":"ignored-by-existing-policy"}),
+                Some("RS256"),
+            ),
+            (json!({"kty":"OKP", "crv":"Ed25519"}), Some("EdDSA")),
+            (json!({"kty":"OKP", "crv":"X25519"}), None),
+            (json!({"kty":"EC", "crv":"secp256k1"}), None),
+            (json!({"kty":"EC", "crv":256}), None),
+            (json!({"kty":"EC"}), None),
+            (json!({"kty":"ec", "crv":"P-256"}), None),
+            (json!({"kty":true, "crv":"P-256"}), None),
+            (json!({}), None),
+            (json!(null), None),
+            (json!([]), None),
+        ] {
+            assert_eq!(managed_public_key_algorithm(&jwk), expected, "{jwk}");
+        }
+    }
+
     #[tokio::test]
     async fn provider_http_does_not_forward_vault_token_to_redirect_target() {
         let (tx, mut received) = tokio::sync::mpsc::unbounded_channel();
@@ -1849,13 +1875,12 @@ mod tests {
     }
 
     #[test]
-    fn aws_signing_requires_a_region_bound_key_arn_and_matching_response() {
+    fn aws_signing_requires_a_region_bound_key_arn() {
         let reference = "arn:aws:kms:us-east-1:111122223333:key/test";
         assert_eq!(
             aws_key_arn(&json!({"key_reference": reference})).unwrap(),
             reference
         );
-        assert!(require_aws_response_key(Some(reference), reference).is_ok());
         for invalid in [
             "alias/movable",
             "arn:aws:kms:us-east-1:111122223333:alias/movable",
@@ -1864,12 +1889,6 @@ mod tests {
         ] {
             assert!(aws_key_arn(&json!({"key_reference": invalid})).is_err());
         }
-        assert!(require_aws_response_key(None, reference).is_err());
-        assert!(require_aws_response_key(
-            Some("arn:aws:kms:us-east-1:111122223333:key/other"),
-            reference
-        )
-        .is_err());
     }
 
     #[tokio::test]

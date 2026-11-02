@@ -9,22 +9,13 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use marty_openbao_http::OpenBaoHttp;
 use reqwest::{Client, Url};
 use serde_json::{json, Value};
-use thiserror::Error;
 
 use crate::SigningOrigin;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESPONSE_BYTES: usize = 8192;
 
-#[derive(Debug, Error, Eq, PartialEq)]
-pub enum TransitGrantError {
-    #[error("signing grant Transit configuration is invalid")]
-    InvalidConfig,
-    #[error("signing grant Transit request failed")]
-    Unavailable,
-    #[error("signing grant Transit response is invalid")]
-    InvalidResponse,
-}
+pub use crate::provider::GrantProviderError as TransitGrantError;
 
 #[derive(Clone)]
 pub struct TransitGrantClient {
@@ -191,6 +182,26 @@ impl TransitGrantClient {
             bytes.extend_from_slice(&chunk);
         }
         serde_json::from_slice(&bytes).map_err(|_| TransitGrantError::InvalidResponse)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::provider::GrantMac for TransitGrantClient {
+    fn origin(&self) -> SigningOrigin {
+        self.origin
+    }
+
+    async fn mint(&self, credential: &str, input: &[u8]) -> Result<String, TransitGrantError> {
+        TransitGrantClient::mint(self, credential, input).await
+    }
+
+    async fn verify(
+        &self,
+        credential: &str,
+        input: &[u8],
+        mac: &str,
+    ) -> Result<bool, TransitGrantError> {
+        TransitGrantClient::verify(self, credential, input, mac).await
     }
 }
 

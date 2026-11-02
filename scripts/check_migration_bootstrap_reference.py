@@ -4,8 +4,8 @@
 The candidate reads one JSON object from stdin with ``name`` and ``input``.
 It writes one JSON object with ``exit_codes``, ``effects``, ``state``, and
 ``error_tags``. All effects are simulated; the harness supplies no live URLs.
-The only expected differences are tenant-bound key names and the managed
-OpenBao service being derived from live inventory instead of stored in Redis.
+Expected differences are tenant-bound key names, opaque IDs on new public DID
+methods, and the managed service being derived from live inventory.
 """
 
 from __future__ import annotations
@@ -75,6 +75,53 @@ def expected_for_case(case: dict) -> dict:
                 service for service in registry.get("services", [])
                 if service.get("id") != "managed-openbao-transit"
             ]
+    initial = _scoped_expected(case["input"].get("initial_redis", {}), organization_id)
+    published_ids = {
+        method.get("id")
+        for document in initial.values() if isinstance(document, dict)
+        for method in document.get("verificationMethod", []) if isinstance(method, dict)
+    }
+    existing_profiles = {
+        profile.get("id")
+        for document in initial.values() if isinstance(document, dict)
+        for profile in document.get("profiles", []) if isinstance(profile, dict)
+    }
+    method_ids = {}
+    documents = expected["state"]["redis"].values()
+    keys = expected["state"]["openbao_keys"]
+    for document in documents:
+        if not isinstance(document, dict):
+            continue
+        for method in document.get("verificationMethod", []):
+            jwk = method.get("publicKeyJwk", {})
+            reference = jwk.get("kid")
+            did = method.get("controller")
+            previous_id = method.get("id")
+            if (previous_id in published_ids or reference not in keys
+                    or not isinstance(did, str)
+                    or not isinstance(previous_id, str)
+                    or not previous_id.startswith(f"{did}#")):
+                continue
+            # Independent reference for the established managed-ID derivation.
+            # This adapts newly seeded methods only; published legacy IDs and
+            # all JWKS kids remain part of the frozen compatibility contract.
+            binding = f"{organization_id}|{did}|managed-openbao-transit|{reference}"
+            method_id = f"{did}#managed-{uuid.uuid5(uuid.NAMESPACE_URL, binding).hex[:20]}"
+            method_ids[previous_id] = method_id
+            method["id"] = method_id
+            method["type"] = "JsonWebKey2020"
+            jwk.pop("kid")
+    for document in documents:
+        if not isinstance(document, dict):
+            continue
+        for relationship in ("assertionMethod", "authentication", "capabilityInvocation", "capabilityDelegation"):
+            if relationship in document:
+                document[relationship] = [method_ids.get(entry, entry) if isinstance(entry, str) else entry
+                                          for entry in document[relationship]]
+        for profile in document.get("profiles", []):
+            if profile.get("id") not in existing_profiles and "verification_method_id" in profile:
+                method_id = profile["verification_method_id"]
+                profile["verification_method_id"] = method_ids.get(method_id, method_id)
     return expected
 
 

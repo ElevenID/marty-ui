@@ -74,7 +74,7 @@ describe('publicSite.public demo routes', () => {
     expect(await screen.findByText(expectedText)).toBeInTheDocument();
   });
 
-  it('omits demo routes from the tester profile without changing the full profile', async () => {
+  it('omits demo routes when explicitly excluded from the public site', async () => {
     renderMarketingRoute('/demos/2026.07.0', false);
     expect(await screen.findByText('Not available')).toBeInTheDocument();
   });

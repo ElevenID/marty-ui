@@ -382,7 +382,7 @@ fn policy_message(policy: &PresentationPolicy) -> Result<PolicyResponse, Status>
         organization_id: policy.organization_id.to_string(),
         name: policy.name.clone(),
         description: policy.description.clone().unwrap_or_default(),
-        status: status_name(policy.status).into(),
+        status: policy.status.as_str().into(),
         display_metadata_json: serialize(&policy.display_metadata)?,
         credential_requirements_json: serialize(&policy.credential_requirements)?,
         alternative_requirements_json: serialize(&policy.alternative_requirements)?,
@@ -493,15 +493,6 @@ fn parse_optional_status(value: &str) -> Result<Option<PolicyStatus>, Status> {
         "suspended" => Ok(Some(PolicyStatus::Suspended)),
         "archived" => Ok(Some(PolicyStatus::Archived)),
         _ => Err(Status::invalid_argument("invalid policy status")),
-    }
-}
-
-fn status_name(status: PolicyStatus) -> &'static str {
-    match status {
-        PolicyStatus::Draft => "draft",
-        PolicyStatus::Active => "active",
-        PolicyStatus::Suspended => "suspended",
-        PolicyStatus::Archived => "archived",
     }
 }
 

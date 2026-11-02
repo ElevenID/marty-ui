@@ -155,9 +155,9 @@ impl PostgresCanvasIssuanceGuard {
         else {
             return Ok(false);
         };
-        let platform_id = text(canvas.get("canvas_platform_id"));
-        let binding_id = text(canvas.get("canvas_program_binding_id"));
-        let application_template_id = text(application.get("application_template_id"));
+        let platform_id = trimmed_json_text(canvas.get("canvas_platform_id"));
+        let binding_id = trimmed_json_text(canvas.get("canvas_program_binding_id"));
+        let application_template_id = trimmed_json_text(application.get("application_template_id"));
         if platform_id.is_empty() || binding_id.is_empty() || application_template_id.is_empty() {
             return Err("canvas_transaction_context_incomplete");
         }
@@ -325,18 +325,18 @@ pub fn evaluate_canvas_guard_snapshot(
     {
         return Err("canvas_rollout_disabled");
     }
-    let platform_id = text(canvas.get("canvas_platform_id"));
-    let binding_id = text(canvas.get("canvas_program_binding_id"));
+    let platform_id = trimmed_json_text(canvas.get("canvas_platform_id"));
+    let binding_id = trimmed_json_text(canvas.get("canvas_program_binding_id"));
     if platform_id.is_empty() || binding_id.is_empty() || transaction.organization_id.is_empty() {
         return Err("canvas_transaction_context_incomplete");
     }
 
     let platform = object(&snapshot.platform, "canvas_resource_ownership_mismatch")?;
     let binding = object(&snapshot.binding, "canvas_resource_ownership_mismatch")?;
-    if text(platform.get("id")) != platform_id
-        || text(binding.get("id")) != binding_id
-        || text(platform.get("organization_id")) != transaction.organization_id
-        || text(binding.get("organization_id")) != transaction.organization_id
+    if trimmed_json_text(platform.get("id")) != platform_id
+        || trimmed_json_text(binding.get("id")) != binding_id
+        || trimmed_json_text(platform.get("organization_id")) != transaction.organization_id
+        || trimmed_json_text(binding.get("organization_id")) != transaction.organization_id
     {
         return Err("canvas_resource_ownership_mismatch");
     }
@@ -418,13 +418,13 @@ fn evaluate_canvas_current_evidence(
         .iter()
         .filter(|requirement| requirement.get("required").and_then(Value::as_bool) != Some(false))
         .collect::<Vec<_>>();
-    let lti_subject = text(canvas.get("lti_subject"));
+    let lti_subject = trimmed_json_text(canvas.get("lti_subject"));
     for requirement in required {
-        let requirement_id = text(requirement.get("requirement_id"));
+        let requirement_id = trimmed_json_text(requirement.get("requirement_id"));
         let candidates = snapshot
             .evidence_facts
             .iter()
-            .filter(|fact| text(fact.get("requirement_id")) == requirement_id)
+            .filter(|fact| trimmed_json_text(fact.get("requirement_id")) == requirement_id)
             .collect::<Vec<_>>();
         if candidates.len() != 1 {
             return Err("required_evidence_head_missing_or_ambiguous");
@@ -513,25 +513,25 @@ fn evaluate_canvas_management_snapshot(
     if !config.enabled || !config.pilot_organizations.contains(organization_id) {
         return Err("canvas_rollout_disabled");
     }
-    if text(application.get("id")) != application_id
-        || text(application.get("organization_id")) != organization_id
+    if trimmed_json_text(application.get("id")) != application_id
+        || trimmed_json_text(application.get("organization_id")) != organization_id
     {
         return Err("canvas_application_not_found");
     }
-    if !text(application.get("status")).eq_ignore_ascii_case(required_status) {
+    if !trimmed_json_text(application.get("status")).eq_ignore_ascii_case(required_status) {
         return Err("canvas_application_invalid_status");
     }
-    let platform_id = text(canvas.get("canvas_platform_id"));
-    let binding_id = text(canvas.get("canvas_program_binding_id"));
+    let platform_id = trimmed_json_text(canvas.get("canvas_platform_id"));
+    let binding_id = trimmed_json_text(canvas.get("canvas_program_binding_id"));
     if platform_id.is_empty() || binding_id.is_empty() || organization_id.is_empty() {
         return Err("canvas_application_not_ready");
     }
     let platform = object(&snapshot.platform, "canvas_application_not_found")?;
     let binding = object(&snapshot.binding, "canvas_application_not_found")?;
-    if text(platform.get("id")) != platform_id
-        || text(binding.get("id")) != binding_id
-        || text(platform.get("organization_id")) != organization_id
-        || text(binding.get("organization_id")) != organization_id
+    if trimmed_json_text(platform.get("id")) != platform_id
+        || trimmed_json_text(binding.get("id")) != binding_id
+        || trimmed_json_text(platform.get("organization_id")) != organization_id
+        || trimmed_json_text(binding.get("organization_id")) != organization_id
     {
         return Err("canvas_application_not_found");
     }
@@ -544,18 +544,22 @@ fn evaluate_canvas_management_snapshot(
         &snapshot.application_template,
         "canvas_application_not_found",
     )?;
-    if text(template.get("id")) != text(application.get("application_template_id"))
-        || text(template.get("id")) != text(binding.get("application_template_id"))
-        || text(template.get("organization_id")) != organization_id
-        || !text(template.get("status")).eq_ignore_ascii_case("active")
-        || text(template.get("credential_template_id"))
-            != text(binding.get("credential_template_id"))
-        || text(binding.get("platform_id")) != text(platform.get("id"))
-        || text(canvas.get("canvas_account_id")) != text(platform.get("canvas_account_id"))
-        || text(canvas.get("application_template_id"))
-            != text(binding.get("application_template_id"))
-        || text(canvas.get("credential_template_id")) != text(binding.get("credential_template_id"))
-        || text(canvas.get("lti_subject")).is_empty()
+    if trimmed_json_text(template.get("id"))
+        != trimmed_json_text(application.get("application_template_id"))
+        || trimmed_json_text(template.get("id"))
+            != trimmed_json_text(binding.get("application_template_id"))
+        || trimmed_json_text(template.get("organization_id")) != organization_id
+        || !trimmed_json_text(template.get("status")).eq_ignore_ascii_case("active")
+        || trimmed_json_text(template.get("credential_template_id"))
+            != trimmed_json_text(binding.get("credential_template_id"))
+        || trimmed_json_text(binding.get("platform_id")) != trimmed_json_text(platform.get("id"))
+        || trimmed_json_text(canvas.get("canvas_account_id"))
+            != trimmed_json_text(platform.get("canvas_account_id"))
+        || trimmed_json_text(canvas.get("application_template_id"))
+            != trimmed_json_text(binding.get("application_template_id"))
+        || trimmed_json_text(canvas.get("credential_template_id"))
+            != trimmed_json_text(binding.get("credential_template_id"))
+        || trimmed_json_text(canvas.get("lti_subject")).is_empty()
         || credential_snapshot(binding, organization_id).is_err()
     {
         return Err("canvas_application_not_ready");
@@ -570,7 +574,7 @@ fn object<'a>(
     value.as_object().ok_or(code)
 }
 
-fn text(value: Option<&Value>) -> String {
+pub(crate) fn trimmed_json_text(value: Option<&Value>) -> String {
     match value {
         Some(Value::String(value)) => value.trim().to_owned(),
         Some(Value::Null) | None => String::new(),
@@ -579,7 +583,7 @@ fn text(value: Option<&Value>) -> String {
 }
 
 fn optional_text(value: Option<&Value>) -> Option<String> {
-    let value = text(value);
+    let value = trimmed_json_text(value);
     (!value.is_empty()).then_some(value)
 }
 
@@ -590,8 +594,8 @@ pub(crate) fn has_canvas_marker(canvas: &Map<String, Value>) -> bool {
         "canvas_account_id",
     ]
     .iter()
-    .any(|name| !text(canvas.get(*name)).is_empty())
-        || text(canvas.get("source"))
+    .any(|name| !trimmed_json_text(canvas.get(*name)).is_empty())
+        || trimmed_json_text(canvas.get("source"))
             .to_ascii_lowercase()
             .starts_with("canvas")
 }
@@ -600,7 +604,7 @@ fn canvas_resources_active(platform: &Map<String, Value>, binding: &Map<String, 
     platform.get("enabled").and_then(Value::as_bool) == Some(true)
         && platform.get("archived_at").is_none_or(Value::is_null)
         && matches!(
-            text(platform.get("registration_status"))
+            trimmed_json_text(platform.get("registration_status"))
                 .to_ascii_lowercase()
                 .as_str(),
             "installed" | "verified"
@@ -653,7 +657,9 @@ pub(crate) fn binding_readiness_is_current(
                 check.as_object().is_some_and(|check| {
                     check.get("blocking").and_then(Value::as_bool) != Some(true)
                         || matches!(
-                            text(check.get("status")).to_ascii_lowercase().as_str(),
+                            trimmed_json_text(check.get("status"))
+                                .to_ascii_lowercase()
+                                .as_str(),
                             "ready" | "not_applicable"
                         )
                 })
@@ -669,13 +675,14 @@ pub(crate) fn credential_snapshot<'a>(
         .get("credential_template_snapshot")
         .and_then(Value::as_object)
         .ok_or("canvas_credential_template_snapshot_mismatch")?;
-    if text(snapshot.get("id")) != text(binding.get("credential_template_id"))
-        || text(snapshot.get("organization_id")) != organization_id
-        || !text(snapshot.get("status")).eq_ignore_ascii_case("active")
+    if trimmed_json_text(snapshot.get("id"))
+        != trimmed_json_text(binding.get("credential_template_id"))
+        || trimmed_json_text(snapshot.get("organization_id")) != organization_id
+        || !trimmed_json_text(snapshot.get("status")).eq_ignore_ascii_case("active")
     {
         return Err("canvas_credential_template_snapshot_mismatch");
     }
-    let credential_type = text(snapshot.get("credential_type"));
+    let credential_type = trimmed_json_text(snapshot.get("credential_type"));
     let normalized = credential_type
         .chars()
         .filter(|character| character.is_ascii_alphanumeric())
@@ -684,11 +691,11 @@ pub(crate) fn credential_snapshot<'a>(
     if !matches!(
         normalized.as_str(),
         "openbadge" | "openbadgev2" | "openbadgev3" | "openbadgecredential"
-    ) || text(snapshot.get("credential_payload_format")).is_empty()
-        || text(snapshot.get("revocation_profile_id")).is_empty()
-        || !text(snapshot.get("issuer_did")).starts_with("did:")
+    ) || trimmed_json_text(snapshot.get("credential_payload_format")).is_empty()
+        || trimmed_json_text(snapshot.get("revocation_profile_id")).is_empty()
+        || !trimmed_json_text(snapshot.get("issuer_did")).starts_with("did:")
         || !matches!(
-            text(snapshot.get("issuer_algorithm")).as_str(),
+            trimmed_json_text(snapshot.get("issuer_algorithm")).as_str(),
             "ES256" | "ES384" | "RS256" | "EdDSA"
         )
     {
@@ -751,33 +758,41 @@ fn binding_transaction_matches(
         .and_then(|value| value.get("renewable"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    transaction.organization_id == text(application.get("organization_id"))
-        && text(application.get("status")).eq_ignore_ascii_case("approved")
-        && text(application.get("issuance_transaction_id")) == transaction.id
-        && text(application.get("application_template_id"))
-            == text(binding.get("application_template_id"))
-        && text(template.get("id")) == text(binding.get("application_template_id"))
-        && text(template.get("organization_id")) == transaction.organization_id
-        && text(template.get("status")).eq_ignore_ascii_case("active")
-        && text(template.get("credential_template_id"))
-            == text(binding.get("credential_template_id"))
-        && transaction.credential_template_id == text(binding.get("credential_template_id"))
-        && text(binding.get("platform_id")) == text(platform.get("id"))
-        && text(canvas.get("canvas_platform_id")) == text(platform.get("id"))
-        && text(canvas.get("canvas_program_binding_id")) == text(binding.get("id"))
-        && text(canvas.get("canvas_account_id")) == text(platform.get("canvas_account_id"))
-        && text(canvas.get("application_template_id"))
-            == text(binding.get("application_template_id"))
-        && text(canvas.get("credential_template_id")) == text(binding.get("credential_template_id"))
-        && !text(canvas.get("lti_subject")).is_empty()
+    transaction.organization_id == trimmed_json_text(application.get("organization_id"))
+        && trimmed_json_text(application.get("status")).eq_ignore_ascii_case("approved")
+        && trimmed_json_text(application.get("issuance_transaction_id")) == transaction.id
+        && trimmed_json_text(application.get("application_template_id"))
+            == trimmed_json_text(binding.get("application_template_id"))
+        && trimmed_json_text(template.get("id"))
+            == trimmed_json_text(binding.get("application_template_id"))
+        && trimmed_json_text(template.get("organization_id")) == transaction.organization_id
+        && trimmed_json_text(template.get("status")).eq_ignore_ascii_case("active")
+        && trimmed_json_text(template.get("credential_template_id"))
+            == trimmed_json_text(binding.get("credential_template_id"))
+        && transaction.credential_template_id
+            == trimmed_json_text(binding.get("credential_template_id"))
+        && trimmed_json_text(binding.get("platform_id")) == trimmed_json_text(platform.get("id"))
+        && trimmed_json_text(canvas.get("canvas_platform_id"))
+            == trimmed_json_text(platform.get("id"))
+        && trimmed_json_text(canvas.get("canvas_program_binding_id"))
+            == trimmed_json_text(binding.get("id"))
+        && trimmed_json_text(canvas.get("canvas_account_id"))
+            == trimmed_json_text(platform.get("canvas_account_id"))
+        && trimmed_json_text(canvas.get("application_template_id"))
+            == trimmed_json_text(binding.get("application_template_id"))
+        && trimmed_json_text(canvas.get("credential_template_id"))
+            == trimmed_json_text(binding.get("credential_template_id"))
+        && !trimmed_json_text(canvas.get("lti_subject")).is_empty()
         && transaction.credential_type.as_deref()
-            == Some(text(expected.get("credential_type")).as_str())
-        && transaction.credential_payload_format == text(expected.get("credential_payload_format"))
+            == Some(trimmed_json_text(expected.get("credential_type")).as_str())
+        && transaction.credential_payload_format
+            == trimmed_json_text(expected.get("credential_payload_format"))
         && transaction.revocation_profile_id.as_deref()
-            == Some(text(expected.get("revocation_profile_id")).as_str())
-        && transaction.issuer_did.as_deref() == Some(text(expected.get("issuer_did")).as_str())
+            == Some(trimmed_json_text(expected.get("revocation_profile_id")).as_str())
+        && transaction.issuer_did.as_deref()
+            == Some(trimmed_json_text(expected.get("issuer_did")).as_str())
         && transaction.issuer_algorithm.as_deref()
-            == Some(text(expected.get("issuer_algorithm")).as_str())
+            == Some(trimmed_json_text(expected.get("issuer_algorithm")).as_str())
         && transaction.validity_days == validity_days
         && transaction.renewable == renewable
         && transaction.renewal_window_days == renewal_window_days
@@ -786,7 +801,8 @@ fn binding_transaction_matches(
             == string_array(expected.get("selective_disclosure_fields"))
         && transaction.zk_predicate_claims == string_array(expected.get("zk_predicate_claims"))
         && required_credential_claims_present(expected, &transaction.claims)
-        && text(transaction.claims.get("_vct")) == text(expected.get("vct"))
+        && trimmed_json_text(transaction.claims.get("_vct"))
+            == trimmed_json_text(expected.get("vct"))
         && transaction
             .issuer_profile_id
             .as_deref()
@@ -804,7 +820,7 @@ fn array(value: Option<&Value>) -> Vec<Value> {
 fn string_array(value: Option<&Value>) -> Vec<String> {
     array(value)
         .iter()
-        .map(|value| text(Some(value)))
+        .map(|value| trimmed_json_text(Some(value)))
         .filter(|value| !value.is_empty())
         .collect()
 }
@@ -828,7 +844,7 @@ pub(crate) fn resolved_issuer_matches(
     else {
         return false;
     };
-    let expected_algorithm = text(expected.get("issuer_algorithm"));
+    let expected_algorithm = trimmed_json_text(expected.get("issuer_algorithm"));
     let actual_algorithm = first_text(&[
         resolved.get("algorithm"),
         profile.get("algorithm"),
@@ -840,18 +856,21 @@ pub(crate) fn resolved_issuer_matches(
     } else {
         actual_algorithm == expected_algorithm
     };
-    text(profile.get("status")).eq_ignore_ascii_case("active")
+    trimmed_json_text(profile.get("status")).eq_ignore_ascii_case("active")
         && first_text(&[
             resolved.get("organization_id"),
             profile.get("organization_id"),
-        ]) == text(expected.get("organization_id"))
+        ]) == trimmed_json_text(expected.get("organization_id"))
         && first_text(&[resolved.get("issuer_did"), profile.get("issuer_did")])
-            == text(expected.get("issuer_did"))
+            == trimmed_json_text(expected.get("issuer_did"))
         && first_text(&[
             resolved.get("verification_method_id"),
             profile.get("verification_method_id"),
         ])
-        .starts_with(&format!("{}#", text(expected.get("issuer_did"))))
+        .starts_with(&format!(
+            "{}#",
+            trimmed_json_text(expected.get("issuer_did"))
+        ))
         && first_text(&[resolved.get("key_purpose"), profile.get("key_purpose")]) == "vc_jwt_issuer"
         && algorithm_matches
         && resolved.get("public_jwk").is_some_and(Value::is_object)
@@ -860,7 +879,7 @@ pub(crate) fn resolved_issuer_matches(
 fn first_text(values: &[Option<&Value>]) -> String {
     values
         .iter()
-        .map(|value| text(*value))
+        .map(|value| trimmed_json_text(*value))
         .find(|value| !value.is_empty())
         .unwrap_or_default()
 }
@@ -895,9 +914,9 @@ pub(crate) fn validated_requirements(
         {
             return Err("canvas_requirements_invalid");
         }
-        let id = text(requirement.get("requirement_id"));
-        let source = text(requirement.get("source"));
-        let fact_type = text(requirement.get("fact_type"));
+        let id = trimmed_json_text(requirement.get("requirement_id"));
+        let source = trimmed_json_text(requirement.get("source"));
+        let fact_type = trimmed_json_text(requirement.get("fact_type"));
         let scope = requirement
             .get("scope")
             .and_then(Value::as_object)
@@ -919,13 +938,13 @@ pub(crate) fn validated_requirements(
         {
             return Err("canvas_requirements_invalid");
         }
-        let course_id = text(scope.get("course_id"));
+        let course_id = trimmed_json_text(scope.get("course_id"));
         let activity_id = first_text(&[
             scope.get("activity_id"),
             scope.get("assignment_id"),
             scope.get("quiz_id"),
         ]);
-        let module_id = text(scope.get("module_id"));
+        let module_id = trimmed_json_text(scope.get("module_id"));
         let line_item_url = first_text(&[scope.get("line_item_url"), scope.get("lineitem_url")]);
         let resource_id = first_text(&[scope.get("resource_id"), scope.get("resourceId")]);
         if course_id.is_empty()
@@ -977,7 +996,7 @@ pub(crate) fn validated_requirements(
             json!({"completed": true})
         };
         normalized.push(json!({
-            "requirement_id": text(requirement.get("requirement_id")),
+            "requirement_id": trimmed_json_text(requirement.get("requirement_id")),
             "source": source,
             "fact_type": fact_type,
             "scope": normalized_scope,
@@ -998,9 +1017,9 @@ pub(crate) fn evaluate_canvas_evidence_policy(
 ) -> Result<Value, &'static str> {
     let request = json!({
         "app": {
-            "id": text(application.get("id")),
-            "organization_id": text(application.get("organization_id")),
-            "status": text(application.get("status")),
+            "id": trimmed_json_text(application.get("id")),
+            "organization_id": trimmed_json_text(application.get("organization_id")),
+            "status": trimmed_json_text(application.get("status")),
         },
         "template": template.map(|template| json!({
             "approval_policy_set_id": optional_text(template.get("approval_policy_set_id")),
@@ -1016,11 +1035,69 @@ pub(crate) fn evaluate_canvas_evidence_policy(
         "facts": facts.iter().map(policy_fact_payload).collect::<Vec<_>>(),
         "policy_set": policy_set,
     });
-    let decision = marty_verification::evidence_policy::evaluate_application_evidence_policy_json(
-        &request.to_string(),
+    parse_canvas_evidence_policy_decision(
+        marty_verification::evidence_policy::evaluate_application_evidence_policy_json(
+            &request.to_string(),
+        ),
     )
-    .map_err(|_| "current_evidence_policy_denied")?;
-    serde_json::from_str(&decision).map_err(|_| "current_evidence_policy_denied")
+}
+
+fn parse_canvas_evidence_policy_decision(
+    response: Result<String, String>,
+) -> Result<Value, &'static str> {
+    let response = response.map_err(|error| {
+        let category = if error.starts_with("invalid evidence policy request:") {
+            "request_parse"
+        } else if error.ends_with("recursion limit reached") {
+            "stack_limit"
+        } else {
+            "engine_error"
+        };
+        trace_canvas_evidence_policy_failure(category, 1, 0);
+        "current_evidence_policy_denied"
+    })?;
+    let decision: Value = serde_json::from_str(&response).map_err(|_| {
+        trace_canvas_evidence_policy_failure("response_parse", 1, 0);
+        "current_evidence_policy_denied"
+    })?;
+    if decision.get("allowed").and_then(Value::as_bool) != Some(true) {
+        let errors = decision
+            .get("errors")
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        let reason_count = decision
+            .get("reasons")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        let category = if errors.iter().any(|error| {
+            error
+                .as_str()
+                .is_some_and(|error| error.ends_with("recursion limit reached"))
+        }) {
+            "stack_limit"
+        } else if errors.is_empty() {
+            "policy_deny"
+        } else {
+            "engine_error"
+        };
+        trace_canvas_evidence_policy_failure(category, errors.len(), reason_count);
+    }
+    Ok(decision)
+}
+
+fn trace_canvas_evidence_policy_failure(
+    category: &'static str,
+    error_count: usize,
+    reason_count: usize,
+) {
+    // Core error/reason text may contain policy or application data. Emit only
+    // a closed category and counts; never the request, response, or raw error.
+    tracing::debug!(
+        policy_failure_category = category,
+        policy_error_count = error_count,
+        policy_reason_count = reason_count,
+        "Canvas evidence policy evaluation failed"
+    );
 }
 
 pub(crate) fn fact_matches(
@@ -1035,26 +1112,29 @@ pub(crate) fn fact_matches(
     let Some(requirement) = requirement.as_object() else {
         return false;
     };
-    if text(fact.get("organization_id")) != text(application.get("organization_id"))
-        || text(fact.get("application_id")) != text(application.get("id"))
-        || text(fact.get("subject_id")) != lti_subject
-        || text(fact.get("provider")) != "canvas"
-        || text(fact.get("requirement_id")) != text(requirement.get("requirement_id"))
-        || text(fact.get("fact_type")) != text(requirement.get("fact_type"))
-        || text(fact.get("source").and_then(|source| source.get("source")))
-            != text(requirement.get("source"))
-        || text(fact.get("logical_key")).is_empty()
-        || text(fact.get("source_revision")).is_empty()
-        || text(fact.get("payload_hash")).is_empty()
+    if trimmed_json_text(fact.get("organization_id"))
+        != trimmed_json_text(application.get("organization_id"))
+        || trimmed_json_text(fact.get("application_id")) != trimmed_json_text(application.get("id"))
+        || trimmed_json_text(fact.get("subject_id")) != lti_subject
+        || trimmed_json_text(fact.get("provider")) != "canvas"
+        || trimmed_json_text(fact.get("requirement_id"))
+            != trimmed_json_text(requirement.get("requirement_id"))
+        || trimmed_json_text(fact.get("fact_type"))
+            != trimmed_json_text(requirement.get("fact_type"))
+        || trimmed_json_text(fact.get("source").and_then(|source| source.get("source")))
+            != trimmed_json_text(requirement.get("source"))
+        || trimmed_json_text(fact.get("logical_key")).is_empty()
+        || trimmed_json_text(fact.get("source_revision")).is_empty()
+        || trimmed_json_text(fact.get("payload_hash")).is_empty()
     {
         return false;
     }
     let expected = requirement.get("scope").and_then(Value::as_object);
     let actual = fact.get("scope").and_then(Value::as_object);
     expected.zip(actual).is_some_and(|(expected, actual)| {
-        expected
-            .iter()
-            .all(|(key, value)| text(actual.get(key)) == text(Some(value)))
+        expected.iter().all(|(key, value)| {
+            trimmed_json_text(actual.get(key)) == trimmed_json_text(Some(value))
+        })
     })
 }
 
@@ -1064,7 +1144,7 @@ pub(crate) fn fact_is_verified_and_fresh(
     max_age: Duration,
 ) -> bool {
     if max_age.is_zero()
-        || !text(
+        || !trimmed_json_text(
             fact.get("verification")
                 .and_then(|value| value.get("status")),
         )
@@ -1085,15 +1165,15 @@ pub(crate) fn fact_is_verified_and_fresh(
 }
 
 pub(crate) fn policy_fact_payload(fact: &Value) -> Value {
-    let id = text(fact.get("id"));
+    let id = trimmed_json_text(fact.get("id"));
     let logical_key = optional_text(fact.get("logical_key")).unwrap_or_else(|| id.clone());
     json!({
         "id": id,
         "logical_key": logical_key,
-        "provider": text(fact.get("provider")),
-        "fact_type": text(fact.get("fact_type")),
-        "subject_id": text(fact.get("subject_id")),
-        "requirement_id": text(fact.get("requirement_id")),
+        "provider": trimmed_json_text(fact.get("provider")),
+        "fact_type": trimmed_json_text(fact.get("fact_type")),
+        "subject_id": trimmed_json_text(fact.get("subject_id")),
+        "requirement_id": trimmed_json_text(fact.get("requirement_id")),
         "scope": fact.get("scope").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
         "assertion": fact.get("assertion").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
         "verification": fact.get("verification").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
@@ -1106,12 +1186,88 @@ pub(crate) fn policy_fact_payload(fact: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn trimmed_json_text_preserves_canvas_conversion_contract() {
+        assert_eq!(trimmed_json_text(None), "");
+        for (value, expected) in [
+            (serde_json::json!(null), ""),
+            (serde_json::json!("  "), ""),
+            (serde_json::json!("\u{2003} award \u{a0}"), "award"),
+            (serde_json::json!(" \"award\" "), "\"award\""),
+            (serde_json::json!(" a\nb "), "a\nb"),
+            (serde_json::json!(false), "false"),
+            (serde_json::json!(true), "true"),
+            (serde_json::json!(0), "0"),
+            (serde_json::json!(-12.5), "-12.5"),
+            (
+                serde_json::json!([true, null, "award"]),
+                "[true,null,\"award\"]",
+            ),
+            (serde_json::json!({"award":false}), "{\"award\":false}"),
+        ] {
+            assert_eq!(trimmed_json_text(Some(&value)), expected, "{value:?}");
+        }
+    }
+
     use std::slice::from_ref;
 
     use chrono::TimeZone;
 
     use super::*;
     use crate::credential::{CredentialTransactionStatus, IssuerContext};
+
+    #[test]
+    fn evidence_policy_diagnostics_preserve_outcomes_without_logging_payloads() {
+        use std::io::{Read, Seek};
+
+        let mut output = tempfile::tempfile().unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(output.try_clone().unwrap())
+            .finish();
+        let secret = "synthetic-policy-application-and-credential-secret";
+        tracing::subscriber::with_default(subscriber, || {
+            for response in [
+                Err(format!("invalid evidence policy request: {secret}")),
+                Err(format!("engine failure: {secret}")),
+                Ok(format!("invalid response {secret}")),
+            ] {
+                assert_eq!(
+                    parse_canvas_evidence_policy_decision(response),
+                    Err("current_evidence_policy_denied")
+                );
+            }
+            for decision in [
+                json!({"allowed":false,"errors":[],"reasons":[secret]}),
+                json!({"allowed":false,"errors":[secret],"reasons":[]}),
+                json!({"allowed":false,"errors":[format!("while evaluating policy `{secret}`: recursion limit reached")],"reasons":[]}),
+                json!({"allowed":true,"errors":[],"reasons":[secret]}),
+            ] {
+                assert_eq!(
+                    parse_canvas_evidence_policy_decision(Ok(decision.to_string())).unwrap(),
+                    decision
+                );
+            }
+        });
+        output.rewind().unwrap();
+        let mut captured = String::new();
+        output.read_to_string(&mut captured).unwrap();
+        assert!(!captured.contains(secret));
+        assert_eq!(captured.lines().count(), 6);
+        for category in [
+            "request_parse",
+            "response_parse",
+            "policy_deny",
+            "engine_error",
+            "stack_limit",
+        ] {
+            assert!(captured.contains(&format!("policy_failure_category=\"{category}\"")));
+        }
+        assert!(captured.contains("policy_error_count=0 policy_reason_count=1"));
+        assert!(captured.contains("policy_error_count=1 policy_reason_count=0"));
+    }
 
     #[test]
     fn evidence_fact_snapshots_compare_complete_content_and_timestamp_instants() {

@@ -3,6 +3,41 @@
 use marty_deployment_catalog::installer_state::{Identity, InstallerState, Phase, RuntimeBinding};
 use serde_json::Value;
 #[test]
+fn kms_registration_cli_is_discoverable_and_rejects_unsafe_arguments_without_echo() {
+    let help = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+        .args(["kms", "register", "--help"])
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--api-key-file"));
+    let sensitive = "never-echo-registration-input";
+    for args in [
+        vec!["kms"],
+        vec!["kms", "register", "--api-key", sensitive],
+        vec!["kms", "register", "--endpoint", sensitive],
+        vec![
+            "kms",
+            "register",
+            "--install-dir",
+            "/missing",
+            "--organization-id",
+            sensitive,
+            "--registration-file",
+            "/missing",
+            "--api-key-file",
+            "/missing",
+        ],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(sensitive));
+    }
+}
+#[test]
 fn trust_info_rejects_mutating_options_without_echoing_them() {
     for args in [
         vec!["trust-info"],
@@ -201,6 +236,28 @@ fn internal_keycloak_bridge_refuses_invalid_nonce_without_output() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("Keycloak bridge input refused"));
 }
 
+fn assert_no_maintenance_history(report: &Value) {
+    assert_eq!(
+        report["cleanup"],
+        serde_json::json!({
+            "operations": {
+                "start": "not_started",
+                "stop": "not_started",
+                "down": "not_started"
+            },
+            "next_operations": {
+                "start": "start-0001",
+                "stop": "stop-0001",
+                "down": "down-0001"
+            },
+            "pending_operations": {},
+            "historical_evidence_only": true,
+            "automatic_retry": false,
+            "host_data_credentials_images_and_named_volumes_retained": true
+        })
+    );
+}
+
 #[test]
 fn persisted_operator_runs_after_bootstrap_storage_is_removed() {
     use sha2::{Digest, Sha256};
@@ -236,7 +293,7 @@ fn persisted_operator_runs_after_bootstrap_storage_is_removed() {
     assert!(output.status.success(), "{:?}", output.stderr);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["runtime_observed"], false);
-    assert_eq!(report["cleanup"]["state"], "not_started");
+    assert_no_maintenance_history(&report);
 }
 
 #[test]
@@ -255,6 +312,7 @@ fn doctor_observes_bound_engine_without_source_or_inherited_context() {
             docker_host: "unix:///var/run/docker.sock".into(),
             engine_id: "test-engine".into(),
             openbao_port: 18200,
+            profile: marty_deployment_catalog::installer_state::RuntimeProfile::Rootful,
         },
     )
     .unwrap();
@@ -298,18 +356,15 @@ esac
     assert_eq!(report["compose_project"], project);
     assert_eq!(report["services_observed"], false);
     assert_eq!(
-        report["service_inspection"]["reason"],
-        "recorded_creation_inventory_incomplete"
-    );
-    assert!(
-        report["service_inspection"]["missing_records"]
-            .as_array()
-            .unwrap()
-            .len()
-            == 5
+        report["service_inspection"],
+        serde_json::json!({
+            "services_observed": false,
+            "reason": "compose_session_incomplete",
+            "installation_ready": false
+        })
     );
     assert_eq!(report["installation_ready"], false);
-    assert_eq!(report["cleanup"]["state"], "not_started");
+    assert_no_maintenance_history(&report);
     let journal_before = std::fs::read(path.join("installation.json")).unwrap();
     let mut saved = Vec::new();
     for _ in 0..2 {
@@ -359,6 +414,10 @@ esac
         "#!/bin/sh\nprintf 'private-backend-diagnostic' >&2\nexit 19\n",
     )
     .unwrap();
+    let output = invoke();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("private-backend-diagnostic"));
     let output = Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
         .args(["validate", "--install-dir"])
         .arg(&path)
@@ -376,6 +435,68 @@ esac
         .file_name()
         .to_string_lossy()
         .starts_with(".installer-command-")));
+}
+
+#[test]
+fn acme_status_is_locked_read_only_and_does_not_claim_a_live_account_or_certificate() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("installation");
+    let mut state = InstallerState::create(
+        &path,
+        Identity {
+            source_sha: "a".repeat(40),
+            release_tag: "v1.2.3".into(),
+            inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+        },
+    )
+    .unwrap();
+    state.create_private_directory("evidence").unwrap();
+    let invoke = || {
+        Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+            .current_dir(root.path())
+            .args(["acme", "status", "--install-dir"])
+            .arg(&path)
+            .env("DOCKER_HOST", "tcp://unrelated.invalid:2375")
+            .output()
+            .unwrap()
+    };
+    let busy = invoke();
+    assert!(!busy.status.success() && busy.stdout.is_empty());
+    let journal = state.journal().clone();
+    drop(state);
+    let before = std::fs::read(path.join("installation.json")).unwrap();
+    let result = invoke();
+    assert!(result.status.success(), "{:?}", result.stderr);
+    let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["schema"], "elevenid.installer-acme-status/v1");
+    assert_eq!(
+        report["installation_id"],
+        journal.installation_id().to_string()
+    );
+    assert_eq!(report["configured"], false);
+    assert_eq!(report["read_only"], true);
+    assert_eq!(report["environments"], serde_json::json!([]));
+    assert_eq!(report["activation_performed"], false);
+    assert_eq!(report["installation_ready"], false);
+    assert_eq!(
+        before,
+        std::fs::read(path.join("installation.json")).unwrap()
+    );
+    assert_eq!(std::fs::read_dir(path.join("evidence")).unwrap().count(), 0);
+    assert!(result.stderr.is_empty());
+    let invalid = Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+        .args([
+            "acme",
+            "status",
+            "--install-dir",
+            "/missing",
+            "--issue",
+            "secret-input",
+        ])
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success() && invalid.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&invalid.stderr).contains("secret-input"));
 }
 
 #[test]

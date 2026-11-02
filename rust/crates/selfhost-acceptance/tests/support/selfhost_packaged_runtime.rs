@@ -577,10 +577,6 @@ fn write_synthetic_secrets(
         ),
         ("issuance_api_key", MANAGEMENT_KEY),
         (
-            "didcomm_issuance_openbao_token",
-            "synthetic-selfhost-didcomm-openbao-token",
-        ),
-        (
             "sign_grant_mint_issuance_credential_token",
             "synthetic-credential-grant-token",
         ),

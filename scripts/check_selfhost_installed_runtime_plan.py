@@ -16,7 +16,7 @@ from check_prepared_selfhost_consumer import check, verify_descriptor
 
 
 EXPECTED_SERVICES = frozenset({
-    "applicant", "auth", "canvas-sync-worker", "cloudflared", "cloudflared-beta",
+    "applicant", "auth", "canvas-sync-worker",
     "compliance-profile", "credential-template", "db-migrate",
     "deployment-profile", "device-registration", "edge", "event-stream", "flow",
     "gateway", "issuance", "issuance-migrations", "issuance-native", "keycloak",
@@ -24,28 +24,28 @@ EXPECTED_SERVICES = frozenset({
     "kms-initialize",
     "presentation-policy", "redis", "revocation-profile",
     "revocation-profile-migrate", "signing-keys", "trust-profile",
-    "tunnel-nginx-proxy", "ui", "verification",
+    "ui", "verification",
 })
-BETA_SERVICES = frozenset({"cloudflared-beta", "tunnel-nginx-proxy"})
+BETA_SERVICES: frozenset[str] = frozenset()
 CONDITIONS = frozenset({"service_healthy", "service_completed_successfully"})
 H, C = "service_healthy", "service_completed_successfully"
 # Reviewed all-profile Compose edge set. An intentional source dependency change
 # must update this contract and its source-render test in the same review.
 EXPECTED_DEPENDENCIES = {
     "applicant": {"db-migrate": C},
-    "auth": {"db-migrate": C, "flow": H, "keycloak-configurator": C, "redis": H},
+    "auth": {"applicant": H, "db-migrate": C, "flow": H,
+             "keycloak-configurator": C, "redis": H},
     "canvas-sync-worker": {"db-migrate": C, "issuance-migrations": C},
-    "cloudflared": {"edge": H},
-    "cloudflared-beta": {"tunnel-nginx-proxy": H},
     "compliance-profile": {"db-migrate": C},
     "credential-template": {"db-migrate": C},
     "db-migrate": {"postgres": H, "redis": H, "revocation-profile-migrate": C},
     "deployment-profile": {"db-migrate": C},
     "device-registration": {"db-migrate": C, "redis": H},
     "edge": {"flow": H, "gateway": H, "keycloak": H, "ui": H},
-    "flow": {"credential-template": H, "db-migrate": C, "issuance": H,
-             "issuance-native": H, "organization": H,
-             "presentation-policy": H, "redis": H},
+    "flow": {"credential-template": H, "db-migrate": C,
+             "deployment-profile": H, "issuance": H, "issuance-native": H,
+             "organization": H, "presentation-policy": H, "redis": H,
+             "trust-profile": H},
     "gateway": {"applicant": H, "auth": H, "compliance-profile": H,
                 "credential-template": H, "deployment-profile": H,
                 "event-stream": H, "flow": H, "issuance": H, "issuance-native": H,
@@ -66,7 +66,6 @@ EXPECTED_DEPENDENCIES = {
     "revocation-profile-migrate": {"postgres": H},
     "signing-keys": {"db-migrate": C, "redis": H},
     "trust-profile": {"db-migrate": C},
-    "tunnel-nginx-proxy": {"edge": H},
     "verification": {"credential-template": H, "presentation-policy": H, "redis": H},
 }
 EXPECTED_ROLE_SECRETS = {
@@ -81,8 +80,6 @@ EXPECTED_ROLE_SECRETS = {
                            "signing_keys_integration_secret_key", "signing_keys_issuer_sign_key",
                            "sign_grant_mint_issuance_canvas_token", "openbao_tls_ca_cert",
                            "workload_identity_ca_cert"},
-    "cloudflared": {"cloudflare_tunnel_token"},
-    "cloudflared-beta": {"cloudflare_beta_tunnel_token"},
     "compliance-profile": {"marty_db_password", "grpc_service_token",
                            "compliance_profile_workload_client_cert",
                            "openbao_tls_ca_cert", "compliance_profile_tls_kms_token",
@@ -116,7 +113,7 @@ EXPECTED_ROLE_SECRETS = {
     "issuance": {"marty_db_password", "openbao_service_token", "openbao_tls_ca_cert",
                  "issuance_api_key",
                  "token_hmac_key", "canvas_credentials_shared_secret", "grpc_service_token",
-                 "didcomm_issuance_openbao_token", "sign_grant_mint_issuance_canvas_token",
+                 "sign_grant_mint_issuance_canvas_token",
                  "sign_grant_mint_issuance_credential_token", "sign_grant_mint_issuance_passport_token",
                  "sign_grant_mint_issuance_readiness_token", "signing_keys_issuer_sign_key",
                  "signing_keys_integration_secret_key",
@@ -124,7 +121,7 @@ EXPECTED_ROLE_SECRETS = {
     "issuance-migrations": {"marty_db_password"},
     "issuance-native": {"marty_db_password", "issuance_api_key",
                         "token_hmac_key", "canvas_credentials_shared_secret", "grpc_service_token",
-                        "didcomm_issuance_openbao_token", "sign_grant_mint_issuance_canvas_token",
+                        "sign_grant_mint_issuance_canvas_token",
                         "sign_grant_mint_issuance_credential_token", "sign_grant_mint_issuance_passport_token",
                         "sign_grant_mint_issuance_readiness_token", "signing_keys_integration_secret_key",
                         "signing_keys_issuer_sign_key", "workload_identity_ca_cert",
@@ -155,6 +152,7 @@ EXPECTED_ROLE_SECRETS = {
                            "openbao_tls_ca_cert", "rp_tls_kms_token"},
     "revocation-profile-migrate": {"marty_db_password"},
     "signing-keys": {"issuance_api_key", "device_registration_signing_keys_key",
+                     "didcomm_issuance_openbao_token",
                      "haip_kms_token", "sign_grant_verify_token",
                      "signing_keys_integration_secret_key", "signing_keys_issuer_sign_key",
                      "signing_keys_openbao_token", "signing_keys_service_sign_gateway_key",

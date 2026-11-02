@@ -6,7 +6,7 @@ use std::{error::Error, net::SocketAddr};
 use axum::{
     body::Body,
     extract::{ConnectInfo, State},
-    http::{header, HeaderMap, HeaderValue, Request, Response, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Uri},
     routing::any,
     Router,
 };
@@ -15,6 +15,7 @@ use hyper_util::rt::TokioIo;
 use marty_passport_keyless_edge::{
     caller_forwarding_header as forwarded, hop_by_hop, keyless_tls_config, required,
 };
+use marty_selfhost_identity::origin::PublicOrigin;
 use tokio::{
     io::copy_bidirectional,
     net::TcpStream,
@@ -28,7 +29,9 @@ struct EdgeState {
     gateway: String,
     keycloak: String,
     ui: String,
+    public_entry_ui: String,
     installer_authority: Option<(String, u16)>,
+    public_entry_origin: Option<PublicOrigin>,
 }
 
 impl Default for EdgeState {
@@ -37,7 +40,9 @@ impl Default for EdgeState {
             gateway: "gateway:8000".into(),
             keycloak: "keycloak:8080".into(),
             ui: "ui:80".into(),
+            public_entry_ui: "ui:80".into(),
             installer_authority: None,
+            public_entry_origin: None,
         }
     }
 }
@@ -49,22 +54,39 @@ impl EdgeState {
         match (profile, origin) {
             (None, None) => Ok(Self::default()),
             (Some("installer"), Some(origin)) => {
-                let port_text = origin
-                    .strip_prefix("https://localhost:")
-                    .ok_or("invalid installer origin")?;
-                let port: u16 = port_text.parse().map_err(|_| "invalid installer origin")?;
-                if port < 1024 || port_text != port.to_string() {
-                    return Err("invalid installer origin");
-                }
+                let origin = PublicOrigin::parse(origin).map_err(|_| "invalid installer origin")?;
                 Ok(Self {
                     gateway: "edge:80".into(),
                     keycloak: "edge:80".into(),
                     ui: "edge:80".into(),
-                    installer_authority: Some((format!("localhost:{port}"), port)),
+                    public_entry_ui: "ui:80".into(),
+                    installer_authority: Some((origin.authority().into(), origin.port())),
+                    public_entry_origin: None,
                 })
             }
             _ => Err("invalid edge profile or missing installer origin"),
         }
+    }
+
+    fn with_public_entry(mut self, value: Option<&str>) -> Result<Self, &'static str> {
+        let Some(value) = value.filter(|value| !value.is_empty()) else {
+            return Ok(self);
+        };
+        let (canonical, _) = self
+            .installer_authority
+            .as_ref()
+            .ok_or("public entry requires installer profile")?;
+        let canonical = PublicOrigin::parse(&format!("https://{canonical}"))
+            .map_err(|_| "invalid canonical origin")?;
+        canonical
+            .did_web_authority()
+            .map_err(|_| "public entry requires DNS identity")?;
+        let entry = PublicOrigin::parse(value).map_err(|_| "invalid public entry origin")?;
+        if canonical.is_loopback() || entry.ip_address().is_none() || entry.is_loopback() {
+            return Err("public entry requires a DNS identity and an explicit non-loopback IP");
+        }
+        self.public_entry_origin = Some(entry);
+        Ok(self)
     }
 }
 
@@ -74,7 +96,13 @@ fn accepted_authority(
     uri: &Uri,
 ) -> Option<(HeaderValue, u16)> {
     let host = headers.get(header::HOST)?.clone();
-    if let Some((expected, port)) = &state.installer_authority {
+    if let Some((canonical, canonical_port)) = &state.installer_authority {
+        let (expected, port) = if host.as_bytes() == canonical.as_bytes() {
+            (canonical.as_str(), *canonical_port)
+        } else {
+            let entry = state.public_entry_origin.as_ref()?;
+            (entry.authority(), entry.port())
+        };
         if headers.get_all(header::HOST).iter().count() != 1
             || host.as_bytes() != expected.as_bytes()
             || uri
@@ -84,13 +112,46 @@ fn accepted_authority(
         {
             return None;
         }
-        return Some((HeaderValue::from_str(expected).ok()?, *port));
+        return Some((HeaderValue::from_str(expected).ok()?, port));
     }
     let authority = host.to_str().ok()?.parse::<http::uri::Authority>().ok()?;
     if authority.as_str().contains('@') || authority.host().is_empty() {
         return None;
     }
     Some((host, authority.port_u16().unwrap_or(443)))
+}
+
+/// The IP alias is only a public entry surface. No authentication, protocol,
+/// readiness, console or API route is admitted through it. Reject alternate
+/// path encodings before a downstream server could normalize them differently.
+fn public_entry_path(path: &str) -> bool {
+    if path.contains(['%', '\\']) || path.split('/').any(|part| part == "." || part == "..") {
+        return false;
+    }
+    if [
+        "/",
+        "/index.html",
+        "/runtime-config.js",
+        "/startup.js",
+        "/config.json",
+        "/manifest.json",
+        "/site.webmanifest",
+        "/favicon.ico",
+        "/favicon.svg",
+        "/favicon-96x96.png",
+        "/apple-touch-icon.png",
+        "/logo192.png",
+        "/logo512.png",
+    ]
+    .contains(&path)
+    {
+        return true;
+    }
+    ["/assets/", "/locales/", "/images/"].iter().any(|prefix| {
+        path.strip_prefix(prefix).is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.split('/').all(|part| !part.is_empty())
+        })
+    })
 }
 
 fn ui_path(path: &str) -> bool {
@@ -151,7 +212,24 @@ async fn proxy(
         return failure(StatusCode::BAD_REQUEST);
     };
     let path = request.uri().path();
-    let upstream = target(path, &state);
+    let public_entry = state
+        .public_entry_origin
+        .as_ref()
+        .is_some_and(|entry| host.as_bytes() == entry.authority().as_bytes());
+    if public_entry
+        && (!public_entry_path(path)
+            || !matches!(*request.method(), Method::GET | Method::HEAD)
+            || request.headers().contains_key(header::UPGRADE))
+    {
+        return failure(StatusCode::NOT_FOUND);
+    }
+    // Bypass API routing entirely for the alias. The static UI reads its
+    // journal-bound runtime config and sends interactive actions to canonical DNS.
+    let upstream = if public_entry {
+        &state.public_entry_ui
+    } else {
+        target(path, &state)
+    };
     let connection = request
         .headers()
         .get(header::CONNECTION)
@@ -176,7 +254,11 @@ async fn proxy(
         .unwrap_or("");
     let mut headers = HeaderMap::new();
     for (name, value) in &parts.headers {
-        if name != header::HOST && !hop_by_hop(name, original_connection) && !forwarded(name) {
+        if name != header::HOST
+            && !hop_by_hop(name, original_connection)
+            && !forwarded(name)
+            && !(public_entry && (name == header::COOKIE || name == header::AUTHORIZATION))
+        {
             headers.append(name, value.clone());
         }
     }
@@ -187,9 +269,14 @@ async fn proxy(
         "x-forwarded-port",
         HeaderValue::from_str(&port.to_string()).expect("validated port"),
     );
-    let client_ip = HeaderValue::from_str(&peer.ip().to_string()).expect("socket IP");
-    headers.insert("x-real-ip", client_ip.clone());
-    headers.insert("x-forwarded-for", client_ip);
+    // Rootless forwarding and external proxies do not establish the original
+    // client's address. The installer deliberately leaves that identity absent
+    // until an explicit, qualified trusted-proxy policy exists.
+    if state.installer_authority.is_none() {
+        let client_ip = HeaderValue::from_str(&peer.ip().to_string()).expect("socket IP");
+        headers.insert("x-real-ip", client_ip.clone());
+        headers.insert("x-forwarded-for", client_ip);
+    }
     if let Some(value) = upgrade_value {
         headers.insert(header::CONNECTION, HeaderValue::from_static("upgrade"));
         headers.insert(header::UPGRADE, value);
@@ -238,7 +325,7 @@ async fn proxy(
         .unwrap_or("");
     let mut headers = HeaderMap::new();
     for (name, value) in &parts.headers {
-        if !hop_by_hop(name, connection) {
+        if !(hop_by_hop(name, connection) || public_entry && name == header::SET_COOKIE) {
             headers.append(name, value.clone());
         }
     }
@@ -261,7 +348,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     let profile = optional("OIDF_EDGE_PROFILE")?;
     let origin = optional("OIDF_EDGE_PUBLIC_ORIGIN")?;
-    let state = EdgeState::configured(profile.as_deref(), origin.as_deref())?;
+    let public_entry = optional("OIDF_EDGE_PUBLIC_ENTRY_ORIGIN")?;
+    let state = EdgeState::configured(profile.as_deref(), origin.as_deref())?
+        .with_public_entry(public_entry.as_deref())?;
     let bind: SocketAddr = required("OIDF_EDGE_BIND")?.parse()?;
     let tls = keyless_tls_config("OIDF_EDGE").await?;
     let app = Router::new().fallback(any(proxy)).with_state(state);
@@ -279,7 +368,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     #[test]
-    fn installer_profile_requires_explicit_canonical_local_https_origin() {
+    fn installer_profile_requires_explicit_canonical_https_origin() {
         assert!(EdgeState::configured(None, None)
             .unwrap()
             .installer_authority
@@ -301,18 +390,29 @@ mod tests {
             "https://localhost:018443",
             "https://localhost:+18443",
             "https://LOCALHOST:18443",
-            "https://127.0.0.1:18443",
             "https://localhost:18443/",
             "https://localhost:18443?query",
             "https://localhost:18443#fragment",
             "https://user@localhost:18443",
             "https://localhost:18443\n",
-            "https://elsewhere:18443",
         ] {
             assert!(
                 EdgeState::configured(Some("installer"), Some(origin)).is_err(),
                 "accepted {origin:?}"
             );
+        }
+        for (origin, authority, port) in [
+            ("https://marty.example.com", "marty.example.com", 443),
+            ("https://203.0.113.10:8443", "203.0.113.10:8443", 8443),
+            ("https://[2001:db8::10]", "[2001:db8::10]", 443),
+        ] {
+            let state = EdgeState::configured(Some("installer"), Some(origin)).unwrap();
+            assert_eq!(state.installer_authority, Some((authority.into(), port)));
+            let mut headers = HeaderMap::new();
+            headers.insert(header::HOST, HeaderValue::from_str(authority).unwrap());
+            assert!(accepted_authority(&state, &headers, &"/health".parse().unwrap()).is_some());
+            headers.insert(header::HOST, HeaderValue::from_static("foreign.example"));
+            assert!(accepted_authority(&state, &headers, &"/health".parse().unwrap()).is_none());
         }
         for (mode, origin) in [
             (None, Some("https://localhost:18443")),
@@ -383,6 +483,175 @@ mod tests {
     }
 
     #[test]
+    fn public_entry_requires_explicit_ip_and_preserves_authority_checks() {
+        let canonical =
+            EdgeState::configured(Some("installer"), Some("https://marty.example.com")).unwrap();
+        for value in ["https://203.0.113.10:8443", "https://[2001:db8::10]:8443"] {
+            let state = canonical.clone().with_public_entry(Some(value)).unwrap();
+            for path in [
+                "/",
+                "/console",
+                "/assets/app.js",
+                "/realms/11id",
+                "/v1/auth/me",
+            ] {
+                assert_eq!(target(path, &state), "edge:80");
+            }
+            let entry = PublicOrigin::parse(value).unwrap();
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::HOST,
+                HeaderValue::from_str(entry.authority()).unwrap(),
+            );
+            assert!(accepted_authority(&state, &headers, &"/".parse().unwrap()).is_some());
+            assert!(accepted_authority(
+                &state,
+                &headers,
+                &"https://marty.example.com/".parse().unwrap()
+            )
+            .is_none());
+            headers.append(
+                header::HOST,
+                HeaderValue::from_str(entry.authority()).unwrap(),
+            );
+            assert!(accepted_authority(&state, &headers, &"/".parse().unwrap()).is_none());
+        }
+        for value in [
+            "https://other.example.com",
+            "https://127.0.0.1:8443",
+            "https://[::1]",
+            "http://203.0.113.10",
+            "https://203.0.113.10/path",
+        ] {
+            assert!(
+                canonical.clone().with_public_entry(Some(value)).is_err(),
+                "{value}"
+            );
+        }
+        assert!(EdgeState::default()
+            .with_public_entry(Some("https://203.0.113.10:8443"))
+            .is_err());
+        assert!(
+            EdgeState::configured(Some("installer"), Some("https://203.0.113.11:8443"))
+                .unwrap()
+                .with_public_entry(Some("https://203.0.113.10:8443"))
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn public_entry_serves_static_assets_without_sessions_or_api_access() {
+        async fn public_ui(request: Request<Body>) -> Response<Body> {
+            assert!(!request.headers().contains_key(header::COOKIE));
+            assert!(!request.headers().contains_key(header::AUTHORIZATION));
+            assert!(!request.headers().contains_key("forwarded"));
+            let mut response = Response::new(Body::from(format!("public|{}", request.uri())));
+            response.headers_mut().append(
+                header::SET_COOKIE,
+                HeaderValue::from_static("unexpected=session; Secure"),
+            );
+            response
+        }
+        let ui_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ui_address = ui_listener.local_addr().unwrap();
+        let ui_task = tokio::spawn(async move {
+            axum::serve(ui_listener, Router::new().fallback(any(public_ui)))
+                .await
+                .unwrap();
+        });
+        let mut state = EdgeState::configured(Some("installer"), Some("https://marty.example.com"))
+            .unwrap()
+            .with_public_entry(Some("https://203.0.113.10:8443"))
+            .unwrap();
+        state.public_entry_ui = ui_address.to_string();
+        // Any accidental API forwarding would fail rather than return the expected rejection.
+        state.gateway = "127.0.0.1:1".into();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let edge_task = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .fallback(any(proxy))
+                    .with_state(state)
+                    .into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        for path in [
+            "/",
+            "/index.html",
+            "/assets/app.js",
+            "/locales/en/common.json",
+            "/images/logo.svg",
+            "/config.json",
+            "/runtime-config.js",
+            "/favicon-96x96.png",
+        ] {
+            let response = client
+                .get(format!("http://{address}{path}"))
+                .header(header::HOST, "203.0.113.10:8443")
+                .header(header::COOKIE, "session=private")
+                .header(header::AUTHORIZATION, "Bearer private")
+                .header("forwarded", "host=foreign;proto=http")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert!(!response.headers().contains_key(header::SET_COOKIE));
+            assert_eq!(response.text().await.unwrap(), format!("public|{path}"));
+        }
+        for path in [
+            "/v1/auth/me",
+            "/realms/11id",
+            "/console",
+            "/ready",
+            "/.well-known/did.json",
+            "/assets/%2e%2e/v1/auth/me",
+            "/assets//secret",
+            "/images/%2fapi",
+        ] {
+            let response = client
+                .get(format!("http://{address}{path}"))
+                .header(header::HOST, "203.0.113.10:8443")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+        let response = client
+            .post(format!("http://{address}/"))
+            .header(header::HOST, "203.0.113.10:8443")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let response = client
+            .get(format!("http://{address}/"))
+            .header(header::HOST, "203.0.113.12:8443")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response = client
+            .get(format!("http://{address}/"))
+            .header(header::HOST, "203.0.113.10:8443")
+            .header(header::UPGRADE, "websocket")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        edge_task.abort();
+        ui_task.abort();
+    }
+
+    #[test]
     fn oidf_route_map_matches_public_origin_contract() {
         let state = EdgeState::default();
         assert_eq!(target("/realms/11id", &state), "keycloak:8080");
@@ -422,6 +691,8 @@ mod tests {
     async fn installer_proxy_forwards_login_assets_with_pinned_origin_headers() {
         async fn upstream(request: Request<Body>) -> String {
             let headers = request.headers();
+            assert!(headers.get("x-forwarded-for").is_none());
+            assert!(headers.get("x-real-ip").is_none());
             format!(
                 "{}|{}|{}|{}|{}|{}",
                 request.uri(),
@@ -476,6 +747,8 @@ mod tests {
             .header("x-forwarded-host", "foreign:443")
             .header("x-forwarded-proto", "http")
             .header("x-forwarded-port", "443")
+            .header("x-forwarded-for", "198.51.100.1")
+            .header("x-real-ip", "198.51.100.1")
             .header("forwarded", "host=foreign;proto=http")
             .send()
             .await
@@ -520,9 +793,11 @@ mod tests {
                     .fallback(any(proxy))
                     .with_state(EdgeState {
                         installer_authority: None,
+                        public_entry_origin: None,
                         gateway: api_address.to_string(),
                         keycloak: api_address.to_string(),
                         ui: ui_address.to_string(),
+                        public_entry_ui: "127.0.0.1:1".into(),
                     })
                     .into_make_service_with_connect_info::<SocketAddr>(),
             )
@@ -586,9 +861,11 @@ mod tests {
         let edge_address = edge_listener.local_addr().unwrap();
         let state = EdgeState {
             installer_authority: None,
+            public_entry_origin: None,
             gateway: upstream_address.to_string(),
             keycloak: upstream_address.to_string(),
             ui: upstream_address.to_string(),
+            public_entry_ui: "127.0.0.1:1".into(),
         };
         let edge_task = tokio::spawn(async move {
             axum::serve(
@@ -659,9 +936,11 @@ mod tests {
                     .fallback(any(proxy))
                     .with_state(EdgeState {
                         installer_authority: None,
+                        public_entry_origin: None,
                         gateway: upstream_address.to_string(),
                         keycloak: "127.0.0.1:1".into(),
                         ui: "127.0.0.1:1".into(),
+                        public_entry_ui: "127.0.0.1:1".into(),
                     })
                     .into_make_service_with_connect_info::<SocketAddr>(),
             )
@@ -719,9 +998,11 @@ mod tests {
                         .fallback(any(proxy))
                         .with_state(EdgeState {
                             installer_authority: None,
+                            public_entry_origin: None,
                             gateway: upstream_address.to_string(),
                             keycloak: upstream_address.to_string(),
                             ui: upstream_address.to_string(),
+                            public_entry_ui: "127.0.0.1:1".into(),
                         })
                         .into_make_service_with_connect_info::<SocketAddr>(),
                 )

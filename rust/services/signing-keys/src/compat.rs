@@ -319,6 +319,8 @@ pub enum CompatibilityError {
     BadRequest(String),
     #[error("Native issuer-profile backend is unavailable.")]
     Unavailable,
+    #[error("The configured KMS cannot encrypt this service credential.")]
+    SecretCapabilityUnavailable,
     #[error("{0}")]
     Invalid(String),
     #[error("{0}")]
@@ -337,10 +339,17 @@ impl IntoResponse for CompatibilityError {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::AmbiguousProfile | Self::Conflict(_) => StatusCode::CONFLICT,
             Self::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
-            Self::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::Invalid(_) | Self::SecretCapabilityUnavailable => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
         };
-        (status, Json(json!({"detail": self.to_string()}))).into_response()
+        let mut body = json!({"detail": self.to_string()});
+        if matches!(self, Self::SecretCapabilityUnavailable) {
+            body["code"] = json!("capability_unavailable");
+            body["capability"] = json!("integration_secret_encryption");
+        }
+        (status, Json(body)).into_response()
     }
 }
 
@@ -1275,15 +1284,12 @@ impl SigningCompatibilityService {
         })
         .await
         .map_err(map_kms_error)?;
-        let mut jwk = extract_provider_jwk(&provider_key).ok_or(CompatibilityError::Unavailable)?;
+        let jwk = extract_provider_jwk(&provider_key).ok_or(CompatibilityError::Unavailable)?;
         validate_public_key_algorithm(
             &jwk,
             Some(required(profile, "algorithm")?),
             "The replacement signing key",
         )?;
-        if service_id == "managed-openbao-transit" {
-            jwk.remove("kid");
-        }
         let key_reference = clean(profile.get("signing_key_reference").and_then(Value::as_str));
         let published = self
             .documents
@@ -1295,15 +1301,10 @@ impl SigningCompatibilityService {
                     public_domain: public_domain.into(),
                     did_id: Some(issuer_did.into()),
                     org_slug: Some(org_slug),
-                    fragment: Some(issuer_did_fragment(
-                        organization_id,
-                        issuer_did,
-                        service_id,
-                        key_reference.as_deref(),
-                    )),
-                    key_reference: (service_id != "managed-openbao-transit")
-                        .then_some(key_reference)
-                        .flatten(),
+                    // The document owner generates the same opaque identifier
+                    // used by direct service publication and strips custody IDs.
+                    fragment: None,
+                    key_reference,
                     cert_pem: None,
                     cert_chain_pem: None,
                     relationship: documents::DidVerificationRelationship::AssertionMethod,
@@ -1773,6 +1774,83 @@ fn selected_algorithm(
     Ok(algorithms.first().copied().unwrap_or("ES256").to_owned())
 }
 
+// Validate the selected VC issuer reference using the same service and
+// ceremony authority as an actual sign. Explicit bindings must be well formed;
+// other supported purposes on this key do not remove VC authority.
+pub(crate) fn authorize_current_issuer_binding(
+    registry: &Value,
+    service: &Map<String, Value>,
+    profile: &Value,
+    organization_id: &str,
+    service_id: &str,
+    key_reference: &str,
+) -> Result<(), CompatibilityError> {
+    for (field, expected) in [
+        ("organization_id", organization_id),
+        ("signing_service_id", service_id),
+        ("signing_key_reference", key_reference),
+        ("key_purpose", "vc_jwt_issuer"),
+        ("algorithm", "ES256"),
+    ] {
+        if profile.get(field).and_then(Value::as_str) != Some(expected) {
+            return Err(CompatibilityError::Conflict(
+                "Active issuer binding changed before validation.".into(),
+            ));
+        }
+    }
+    let binding = registry.pointer(&format!(
+        "/key_reference_purposes/{}/{}",
+        escape_pointer(service_id),
+        escape_pointer(key_reference)
+    ));
+    if let Some(binding) = binding {
+        let purposes = binding
+            .as_array()
+            .filter(|values| !values.is_empty())
+            .ok_or_else(|| {
+                CompatibilityError::Conflict(
+                    "Selected issuer key purpose binding is malformed.".into(),
+                )
+            })?;
+        let mut seen = std::collections::HashSet::new();
+        for purpose in purposes {
+            let Some(purpose) = purpose.as_str() else {
+                return Err(CompatibilityError::Conflict(
+                    "Selected issuer key purpose binding is malformed.".into(),
+                ));
+            };
+            if !crate::domain::key_purposes()
+                .iter()
+                .any(|definition| definition.id == purpose)
+                || !seen.insert(purpose)
+            {
+                return Err(CompatibilityError::Conflict(
+                    "Selected issuer key purpose binding is malformed.".into(),
+                ));
+            }
+        }
+        if !seen.contains("vc_jwt_issuer") {
+            return Err(CompatibilityError::Conflict(
+                "Selected issuer key is not registered for VC signing.".into(),
+            ));
+        }
+    }
+    authorize_signing_binding(
+        registry,
+        service,
+        service_id,
+        Some(key_reference),
+        Some("vc_jwt_issuer"),
+        Some("ES256"),
+    )?;
+    profiles::validate_binding(&ValidateBindingRequest {
+        profile: profile.clone(),
+        service: Value::Object(service.clone()),
+        registry: registry.clone(),
+    })
+    .map_err(map_profile_error)
+}
+
 fn authorize_signing_binding(
     registry: &Value,
     service: &Map<String, Value>,
@@ -1963,40 +2041,11 @@ fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
     crate::domain::managed_key_purposes(reference)
 }
 
-fn issuer_did_fragment(
-    organization_id: &str,
-    issuer_did: &str,
-    service_id: &str,
-    key_reference: Option<&str>,
-) -> String {
-    if service_id == "managed-openbao-transit" {
-        let token = uuid::Uuid::new_v5(
-            &uuid::Uuid::NAMESPACE_URL,
-            format!(
-                "{organization_id}|{issuer_did}|{service_id}|{}",
-                key_reference.unwrap_or_default()
-            )
-            .as_bytes(),
-        )
-        .simple()
-        .to_string();
-        return format!("managed-{}", &token[..20]);
-    }
-    documents::did_fragment(service_id, key_reference)
-}
-
 fn algorithm_for_jwk(jwk: &Map<String, Value>) -> Option<&'static str> {
-    match (
+    kms::public_key_algorithm(
         jwk.get("kty").and_then(Value::as_str),
         jwk.get("crv").and_then(Value::as_str),
-    ) {
-        (Some("EC"), Some("P-256")) => Some("ES256"),
-        (Some("EC"), Some("P-384")) => Some("ES384"),
-        (Some("EC"), Some("P-521")) => Some("ES512"),
-        (Some("RSA"), _) => Some("RS256"),
-        (Some("OKP"), Some("Ed25519")) => Some("EdDSA"),
-        _ => None,
-    }
+    )
 }
 
 fn validate_public_key_algorithm(
@@ -2599,6 +2648,9 @@ fn map_registry_binding_error(error: crate::registry::RegistryError) -> Compatib
             CompatibilityError::PreconditionFailed
         }
         crate::registry::RegistryError::Invalid(detail) => CompatibilityError::Invalid(detail),
+        crate::registry::RegistryError::SecretCapabilityUnavailable => {
+            CompatibilityError::SecretCapabilityUnavailable
+        }
         crate::registry::RegistryError::Storage(_) | crate::registry::RegistryError::Corrupt(_) => {
             CompatibilityError::Unavailable
         }
@@ -2836,53 +2888,6 @@ mod tests {
         .is_err());
     }
 
-    #[test]
-    fn managed_issuer_fragment_is_opaque_scoped_and_legacy_nonmanaged_is_unchanged() {
-        let first = issuer_did_fragment(
-            "org-a",
-            "did:web:issuer.example:orgs:a",
-            "managed-openbao-transit",
-            Some("cred-issuer-internal-key"),
-        );
-        assert_eq!(
-            first,
-            issuer_did_fragment(
-                "org-a",
-                "did:web:issuer.example:orgs:a",
-                "managed-openbao-transit",
-                Some("cred-issuer-internal-key"),
-            )
-        );
-        assert!(!first.contains("internal-key"));
-        assert_ne!(
-            first,
-            issuer_did_fragment(
-                "org-b",
-                "did:web:issuer.example:orgs:a",
-                "managed-openbao-transit",
-                Some("cred-issuer-internal-key"),
-            )
-        );
-        assert_ne!(
-            first,
-            issuer_did_fragment(
-                "org-a",
-                "did:web:issuer.example:orgs:b",
-                "managed-openbao-transit",
-                Some("cred-issuer-internal-key"),
-            )
-        );
-        assert_eq!(
-            issuer_did_fragment(
-                "org-a",
-                "did:web:issuer.example:orgs:a",
-                "service-a",
-                Some("legacy-key")
-            ),
-            documents::did_fragment("service-a", Some("legacy-key"))
-        );
-    }
-
     #[derive(Deserialize)]
     struct Contract {
         schema_version: u8,
@@ -3098,6 +3103,60 @@ mod tests {
                 "managed-key"
             ),
             Err(CompatibilityError::Conflict(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn existing_identity_keeps_its_provider_key_and_published_method_when_defaults_change() {
+        let contract: IdentityContract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-issuer-identity-behavior.json"
+        ))
+        .expect("issuer identity contract");
+        let mut registry = contract.registry.clone();
+        registry["services"].as_array_mut().unwrap().push(json!({
+            "id": "provider-b",
+            "service_type": "aws-kms",
+            "key_reference": "arn:aws:kms:us-east-2:111122223333:key/11111111-2222-3333-4444-555555555555",
+            "key_purposes": ["vc_jwt_issuer"],
+            "credential_formats": ["dc+sd-jwt"],
+            "algorithms": ["ES256"]
+        }));
+        registry["default_service_id"] = json!("provider-b");
+        registry["type_defaults"] = json!({"vc_jwt_issuer": "provider-b"});
+        registry["format_defaults"] = json!({"dc+sd-jwt": "provider-b"});
+        // Even the original registration's default key must not replace the
+        // explicit reference already bound to this issuer profile.
+        registry["services"][0]["key_reference"] = json!("another-default-key");
+        let resolved = resolve_issuer_identity(
+            &contract.profile_document,
+            &registry,
+            &contract.certificates,
+            &contract.did_document,
+            &contract.request,
+        )
+        .await
+        .expect("an existing identity does not follow new defaults");
+        assert_eq!(
+            resolved["issuer_profile"]["signing_service_id"],
+            "service-1"
+        );
+        assert_eq!(resolved["signing_key_reference"], "issuer-key");
+        assert_eq!(
+            resolved["verification_method_id"], "did:web:issuer.example:orgs:acme#issuer-key",
+            "previously published method IDs remain valid"
+        );
+
+        registry["services"].as_array_mut().unwrap().remove(0);
+        assert!(matches!(
+            resolve_issuer_identity(
+                &contract.profile_document,
+                &registry,
+                &contract.certificates,
+                &contract.did_document,
+                &contract.request,
+            )
+            .await,
+            Err(CompatibilityError::NotFound(_))
         ));
     }
 

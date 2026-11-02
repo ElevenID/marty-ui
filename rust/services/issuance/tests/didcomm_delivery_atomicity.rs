@@ -292,11 +292,17 @@ impl DidcommEnvelopePort for LocalEnvelope {
     async fn prepare_encryption(
         &self,
         organization_id: &str,
+        operation_id: &str,
         issuer_did: &str,
         recipient_document: DidDocument,
     ) -> Result<PreparedDidcommEncryption, NativeDidcommError> {
         self.native
-            .prepare_encryption(organization_id, issuer_did, recipient_document)
+            .prepare_encryption(
+                organization_id,
+                operation_id,
+                issuer_did,
+                recipient_document,
+            )
             .await
     }
 

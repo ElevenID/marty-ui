@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -14,6 +15,10 @@ import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse
+
+LOCAL_BINDING = runpy.run_path(str(Path(__file__).with_name("local_native_functional_binding.py")))
+LOCAL_FUNCTIONAL_ROLES = LOCAL_BINDING["ROLES"]
+load_binding = LOCAL_BINDING["load_binding"]
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +36,9 @@ DIDCOMM_AUTHCRYPT_FILE = "docker-compose.profile.issuance-native-authcrypt.yml"
 NATIVE_FILE = "docker-compose.profile.conformance-native.yml"
 NATIVE_IMAGES_FILE = "docker-compose.profile.issuance-native-images.yml"
 NATIVE_CA_FILE = "docker-compose.profile.didcomm-native-conformance.yml"
+LOCAL_SOURCE_MIGRATION_FILE = "docker-compose.profile.conformance-source-migration.yml"
+LOCAL_NATIVE_FUNCTIONAL_FILE = "docker-compose.profile.local-native-functional.yml"
+LOCAL_NATIVE_FUNCTIONAL_ENV = "MARTY_LOCAL_NATIVE_FUNCTIONAL_BINDING"
 ISOLATION_FILE = "docker-compose.profile.conformance.yml"
 PUBLIC_PORT_SERVICES = {"oidf-tls-proxy"}
 ONE_SHOT_SERVICES = {
@@ -90,12 +98,39 @@ def compose_command(
         files.append(NATIVE_FILE)
         if use_ghcr:
             files.append(NATIVE_IMAGES_FILE)
+    migration_binary = os.environ.get("MARTY_CONFORMANCE_SOURCE_MIGRATION_BINARY", "").strip()
+    if migration_binary:
+        expected = os.environ.get("MARTY_CONFORMANCE_SOURCE_MIGRATION_SHA256", "").strip()
+        volume_root = os.environ.get("MARTY_CONFORMANCE_SOURCE_VOLUME_ROOT", "").strip()
+        if not use_ghcr or issuance_owner != "native" or not re.fullmatch(r"[0-9a-f]{64}", expected):
+            raise ValueError("local source migration requires native immutable-image mode and exact digest")
+        if not volume_root or not Path(volume_root).is_absolute() or not Path(migration_binary).is_absolute():
+            raise ValueError("local source migration requires absolute owned-volume paths")
+        root = Path(volume_root).resolve(strict=True)
+        raw_binary = Path(migration_binary)
+        binary = raw_binary.resolve(strict=True)
+        if (raw_binary.is_symlink() or not binary.is_file()
+                or binary.name != "marty-issuance-service" or not binary.is_relative_to(root)):
+            raise ValueError("local source migrator is outside the owned native binary volume")
+        with binary.open("rb") as source:
+            actual = hashlib.file_digest(source, "sha256").hexdigest()
+        if actual != expected:
+            raise ValueError("local source migrator digest changed")
+        files.append(LOCAL_SOURCE_MIGRATION_FILE)
     if include_didcomm_authcrypt:
         if issuance_owner != "native":
             raise ValueError("DIDComm authcrypt requires the native issuance owner")
         files.append(DIDCOMM_AUTHCRYPT_FILE)
     if issuance_owner == "native":
         files.append(NATIVE_CA_FILE)
+    local_binding = os.environ.get(LOCAL_NATIVE_FUNCTIONAL_ENV, "").strip()
+    if local_binding:
+        if not use_ghcr or issuance_owner != "native":
+            raise ValueError("local native functional binding requires cached immutable native images")
+        binaries, _ = load_binding(Path(local_binding))
+        for role, binary in binaries.items():
+            os.environ["MARTY_LOCAL_FUNCTIONAL_" + role.upper().replace("-", "_") + "_BINARY"] = str(binary)
+        files.append(LOCAL_NATIVE_FUNCTIONAL_FILE)
     files.append(ISOLATION_FILE)
     for compose_file in files:
         command.extend(["--file", os.fspath(ROOT / compose_file)])
@@ -169,6 +204,79 @@ def validate_isolation(config: dict[str, Any], project: str) -> list[int]:
                     f"{kind[:-1]} {name} is not scoped to project {project}: {actual}"
                 )
     return published
+
+
+def validate_local_functional_images_and_mounts(config: dict[str, Any], binding_path: Path) -> None:
+    """Refuse pulls, builds, and any binary mount outside the three attested roles."""
+    configured_host = os.environ.get("DOCKER_HOST", "").strip()
+    if configured_host and not configured_host.startswith(("npipe://", "unix://")):
+        raise ValueError("local native functional stack requires a local Docker endpoint")
+    context = subprocess.run(
+        ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
+        capture_output=True, text=True, check=False,
+    )
+    if context.returncode or not context.stdout.strip().startswith(("npipe://", "unix://")):
+        raise ValueError("local native functional stack requires a local Docker context")
+    binaries, attested_image_id = load_binding(binding_path)
+    services = config.get("services", {})
+    expected_sources = {str(path.resolve()) for path in binaries.values()}
+    actual_sources: set[str] = set()
+    for role, binary_name in LOCAL_FUNCTIONAL_ROLES.items():
+        service = services.get(role)
+        if not isinstance(service, dict) or service.get("build"):
+            raise ValueError(f"{role} is not a cached-image service")
+        mounts = [mount for mount in service.get("volumes", []) if isinstance(mount, dict)
+                  and mount.get("target") == f"/usr/local/bin/{binary_name}"]
+        if len(mounts) != 1:
+            raise ValueError(f"{role} has no unique native binary mount")
+        mount = mounts[0]
+        if mount.get("type") != "bind" or mount.get("read_only") is not True:
+            raise ValueError(f"{role} native binary mount is not read-only")
+        source = Path(str(mount.get("source", ""))).resolve()
+        if source != binaries[role].resolve():
+            raise ValueError(f"{role} native binary mount differs from binding")
+        actual_sources.add(str(source))
+    closed_targets = {role: f"/usr/local/bin/{binary}" for role, binary in LOCAL_FUNCTIONAL_ROLES.items()}
+    for service_name, service in services.items():
+        if not isinstance(service, dict):
+            continue
+        for mount in service.get("volumes", []):
+            if isinstance(mount, str) and "/usr/local/bin/marty-" in mount:
+                raise ValueError("local functional stack contains an unreviewed native binary bind")
+            if not isinstance(mount, dict):
+                continue
+            target = mount.get("target")
+            if isinstance(target, str) and target.startswith("/usr/local/bin/marty-"):
+                if closed_targets.get(service_name) != target:
+                    raise ValueError("local functional stack contains an unreviewed native binary bind")
+    if actual_sources != expected_sources:
+        raise ValueError("native binary mount sources are not distinct and exact")
+    image_refs = {service.get("image") for service in services.values() if isinstance(service, dict)}
+    if None in image_refs or any(not isinstance(ref, str) or not re.search(r"@sha256:[0-9a-f]{64}$", ref)
+                              for ref in image_refs):
+        raise ValueError("local functional stack requires immutable image references")
+    image_ids: dict[str, str] = {}
+    for image in sorted(image_refs):
+        inspected = subprocess.run(
+            ["docker", "image", "inspect", image, "--format", "{{.Id}}"],
+            capture_output=True, text=True, check=False,
+        )
+        if inspected.returncode or not re.fullmatch(r"sha256:[0-9a-f]{64}", inspected.stdout.strip()):
+            raise ValueError("a required immutable local image is not cached")
+        image_ids[image] = inspected.stdout.strip()
+    service_images = {services[role]["image"] for role in LOCAL_FUNCTIONAL_ROLES}
+    if len(service_images) != 1 or image_ids[next(iter(service_images))] != attested_image_id:
+        raise ValueError("local native binaries lack the attested services image")
+    image_user = subprocess.run(
+        ["docker", "image", "inspect", next(iter(service_images)), "--format", "{{.Config.User}}"],
+        capture_output=True, text=True, check=False,
+    )
+    if image_user.returncode:
+        raise ValueError("local native services image user cannot be inspected")
+    for role in LOCAL_FUNCTIONAL_ROLES:
+        effective_user = str(services[role].get("user") or image_user.stdout.strip())
+        if effective_user.split(":", 1)[0] != "10001":
+            raise ValueError(f"{role} effective service UID differs from ABI")
 
 
 def public_service_targets(config: dict[str, Any]) -> dict[str, list[int]]:
@@ -262,12 +370,98 @@ def wait_for_one_shots(
         time.sleep(poll_seconds)
 
 
+def source_migration_container_before_up(project: str) -> str | None:
+    """Distinguish a KMS-only resume from a previously run migrator."""
+    selected = subprocess.check_output(
+        ["docker", "ps", "--all", "--no-trunc", "--quiet", "--filter",
+         f"label=com.docker.compose.project={project}", "--filter",
+         "label=com.docker.compose.service=issuance-migrations"],
+        text=True,
+    ).split()
+    if len(selected) > 1 or any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in selected):
+        raise ValueError("prior issuance migration ownership is ambiguous")
+    return selected[0] if selected else None
+
+
+def attest_local_source_migration(
+    project: str, config: dict[str, Any], *, resume: bool = False,
+    preexisting_container_id: str | None = None,
+) -> None:
+    """Record the normal source-built issuance migrator's terminal owned run."""
+    binary_value = os.environ.get("MARTY_CONFORMANCE_SOURCE_MIGRATION_BINARY", "").strip()
+    if not binary_value:
+        return
+    source_revision = os.environ.get("MARTY_CONFORMANCE_SOURCE_REVISION", "").strip()
+    receipt_value = os.environ.get("MARTY_CONFORMANCE_SOURCE_MIGRATION_RECEIPT", "").strip()
+    volume_value = os.environ.get("MARTY_CONFORMANCE_SOURCE_VOLUME_ROOT", "").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", source_revision) or not receipt_value:
+        raise ValueError("local source migrator lacks revision or private receipt binding")
+    if subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip() != source_revision:
+        raise ValueError("local source migrator does not match the running product source")
+    volume = Path(volume_value).resolve(strict=True)
+    receipt = Path(receipt_value)
+    if (not receipt.is_absolute() or receipt.is_symlink()
+            or not receipt.resolve().is_relative_to(volume)):
+        raise ValueError("local migration receipt must be in the owned volume")
+    ids = project_container_ids(project)
+    rows = json.loads(subprocess.check_output(["docker", "inspect", *ids])) if ids else []
+    selected = [row for row in rows if row["Config"]["Labels"].get(
+        "com.docker.compose.project") == project and row["Config"]["Labels"].get(
+        "com.docker.compose.service") == "issuance-migrations"]
+    if len(selected) != 1:
+        raise ValueError("exact owned issuance migration container was not found")
+    row = selected[0]
+    intended = config["services"]["issuance-migrations"]
+    entrypoint = ["/usr/local/bin/marty-issuance-service"]
+    arguments = ["migrate"]
+    mounts = [mount for mount in row["Mounts"] if mount["Destination"] ==
+              "/usr/local/bin/marty-issuance-service"]
+    binary = str(Path(binary_value).resolve(strict=True))
+    with Path(binary).open("rb") as source:
+        terminal_digest = hashlib.file_digest(source, "sha256").hexdigest()
+    if (row["Id"] not in ids
+            or intended.get("entrypoint") != entrypoint or intended.get("command") != arguments
+            or row["Config"].get("Entrypoint") != entrypoint
+            or row["Config"].get("Cmd") != arguments
+            or row.get("Path") != entrypoint[0] or row.get("Args") != arguments
+            or row["State"]["Status"] != "exited" or row["State"]["ExitCode"] != 0
+            or row["State"].get("OOMKilled") is not False
+            or terminal_digest != os.environ["MARTY_CONFORMANCE_SOURCE_MIGRATION_SHA256"]
+            or row["Config"]["Image"] != intended["image"]
+            or len(mounts) != 1 or mounts[0]["RW"]
+            or mounts[0]["Source"] != binary):
+        raise ValueError("source-built issuance migrator did not complete in the owned project")
+    migrations = ROOT / "rust/services/issuance/migrations"
+    inputs = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in sorted(migrations.glob("*.sql"))}
+    if not inputs:
+        raise ValueError("current source has no issuance migration inputs")
+    proof = {"schema": "marty.local-source-issuance-migration/v1",
+             "project": project, "sourceRevision": source_revision,
+             "binarySha256": os.environ["MARTY_CONFORMANCE_SOURCE_MIGRATION_SHA256"],
+             "containerId": row["Id"], "image": row["Config"]["Image"],
+             "exitCode": 0, "migrations": inputs, "releaseQualified": False}
+    if receipt.exists():
+        if (not resume or preexisting_container_id != row["Id"]
+                or json.loads(receipt.read_text(encoding="utf-8")) != proof):
+            raise ValueError("local migration receipt changed or belongs to another operation")
+        return
+    if preexisting_container_id is not None:
+        raise ValueError("prior local migrator lacks its original migration receipt")
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    with receipt.open("x", encoding="utf-8") as output:
+        json.dump(proof, output, sort_keys=True)
+        output.write("\n")
+    receipt.chmod(0o600)
+
+
 def project_container_ids(project: str) -> list[str]:
     completed = subprocess.run(
         [
             "docker",
             "ps",
             "--all",
+            "--no-trunc",
             "--quiet",
             "--filter",
             f"label=com.docker.compose.project={project}",
@@ -455,6 +649,8 @@ def runtime_up_arguments(
 ) -> list[str]:
     """Resume verified KMS custody without repeating its fresh-Raft ceremony."""
     arguments = ["up", "--detach", "--no-build"]
+    if os.environ.get(LOCAL_NATIVE_FUNCTIONAL_ENV, "").strip():
+        arguments.extend(("--pull", "never"))
     if not resume:
         return arguments
     runner = runner or subprocess.run
@@ -526,6 +722,21 @@ def runtime_up_arguments(
         raise ValueError("KMS bootstrap resume verification failed") from None
 
 
+def native_up_plan(native: dict[str, Any], args: argparse.Namespace,
+                   native_image: str, *, local_binding: bool) -> dict[str, Any] | None:
+    """Keep local functional source checks separate from release admission."""
+    if args.local_build or local_binding:
+        native["validate_capabilities"](
+            json.loads((ROOT / native["CAPABILITY_PATH"]).read_text(encoding="utf-8"))
+        )
+        return None
+    if not all((args.stack_manifest, args.stack_checksums, args.release_ui_revision)):
+        raise ValueError("Released native conformance requires stack manifest, checksums and exact release UI revision")
+    return native["verify_release"](
+        args.stack_manifest, args.stack_checksums, args.release_ui_revision, native_image,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -586,6 +797,10 @@ def main() -> int:
     project = validate_project(args.project)
     configure_project_environment(project)
     configure_oidf_internal_tls_port()
+    # Exact-project teardown must work even after disposable binary files vanish.
+    if args.command == "down":
+        os.environ.pop(LOCAL_NATIVE_FUNCTIONAL_ENV, None)
+    local_binding = os.environ.get(LOCAL_NATIVE_FUNCTIONAL_ENV, "").strip()
     command = compose_command(
         project,
         include_haip=args.haip,
@@ -610,6 +825,8 @@ def main() -> int:
         issuance_owner=args.issuance_owner,
     )
     ports = validate_isolation(config, project)
+    if local_binding:
+        validate_local_functional_images_and_mounts(config, Path(local_binding))
     native = None
     if args.issuance_owner == "native":
         native = runpy.run_path(str(ROOT / "scripts/conformance_native.py"))
@@ -631,34 +848,15 @@ def main() -> int:
         return 0
     if args.command == "up":
         assert_ports_available(ports, project, resume=args.resume)
+        prior_migrator = (source_migration_container_before_up(project)
+                          if os.environ.get("MARTY_CONFORMANCE_SOURCE_MIGRATION_BINARY", "").strip()
+                          else None)
         native_plan = None
         native_image = (
             config["services"]["issuance-native"]["image"] if native else None
         )
         if native:
-            if args.local_build:
-                native["validate_capabilities"](
-                    json.loads(
-                        (ROOT / native["CAPABILITY_PATH"]).read_text(encoding="utf-8")
-                    )
-                )
-            else:
-                if not all(
-                    (
-                        args.stack_manifest,
-                        args.stack_checksums,
-                        args.release_ui_revision,
-                    )
-                ):
-                    raise ValueError(
-                        "Released native conformance requires stack manifest, checksums and exact release UI revision"
-                    )
-                native_plan = native["verify_release"](
-                    args.stack_manifest,
-                    args.stack_checksums,
-                    args.release_ui_revision,
-                    native_image,
-                )
+            native_plan = native_up_plan(native, args, native_image, local_binding=bool(local_binding))
         if args.local_build:
             build_result = subprocess.run(
                 [*command, "build", *local_build_arguments()], cwd=ROOT, check=False
@@ -678,6 +876,9 @@ def main() -> int:
             if up_result.returncode:
                 return up_result.returncode
             wait_for_one_shots(command, config)
+            attest_local_source_migration(
+                project, config, resume=args.resume, preexisting_container_id=prior_migrator,
+            )
             return 0
         # Keycloak configuration and database migration are successful
         # one-shot services. Compose --wait reports those intentional exits
@@ -685,16 +886,20 @@ def main() -> int:
         # lifecycle as a local build. Readiness belongs to the suite driver,
         # which probes the real public endpoint before starting a test plan.
         if native:
-            pulled = subprocess.run(
-                ["docker", "pull", native_image],
-                cwd=ROOT,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+            if not local_binding:
+                pulled = subprocess.run(
+                    ["docker", "pull", native_image],
+                    cwd=ROOT,
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                if pulled.returncode:
+                    return pulled.returncode
+            native["probe_image"](
+                native_image, project, plan=native_plan,
+                cached_only=bool(local_binding),
             )
-            if pulled.returncode:
-                return pulled.returncode
-            native["probe_image"](native_image, project, plan=native_plan)
         up_result = subprocess.run(
             [*command, *runtime_up_arguments(command, config, project, resume=args.resume)],
             cwd=ROOT, check=False
@@ -702,6 +907,9 @@ def main() -> int:
         if up_result.returncode:
             return up_result.returncode
         wait_for_one_shots(command, config)
+        attest_local_source_migration(
+            project, config, resume=args.resume, preexisting_container_id=prior_migrator,
+        )
         return 0
     if args.command == "bootstrap-reviewer":
         if not project_container_ids(project):
@@ -715,6 +923,7 @@ def main() -> int:
                 "--detach",
                 "--force-recreate",
                 "--no-deps",
+                *(["--pull", "never", "--no-build"] if local_binding else []),
                 "keycloak-configurator",
             ],
             cwd=ROOT,

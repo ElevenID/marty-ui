@@ -2,11 +2,10 @@ use marty_event_stream::{
     bus::EventBus, config::Config, grpc::EventStreamGrpc, http,
     proto::event_stream_service_server::EventStreamServiceServer,
 };
-use mmf_platform::OpenBaoTlsIdentityFiles;
 use std::{future::Future, pin::Pin, time::Duration};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
-use tokio_stream::{wrappers::TcpListenerStream, StreamExt};
+use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -55,18 +54,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let grpc_listener = TcpListener::bind(config.grpc_addr).await?;
         let tls_acceptor = if let Some(files) = &config.grpc_server_tls {
             Some(
-                OpenBaoTlsIdentityFiles {
-                    certificate_chain_file: files.certificate.clone(),
-                    kms_ca_cert_file: files.kms_ca_certificate.clone(),
-                    kms_endpoint: files.kms_endpoint.clone(),
-                    kms_token_file: files.kms_token_file.clone(),
-                    kms_key_name: files.kms_key_name.clone(),
-                    kms_key_version: files.kms_key_version,
-                    request_timeout: Duration::from_secs(10),
-                    max_concurrent_signs: 64,
-                }
-                .grpc_acceptor_without_client_auth(64, Duration::from_secs(15))
-                .await?,
+                files
+                    .grpc_acceptor_without_client_auth(64, Duration::from_secs(15))
+                    .await?,
             )
         } else {
             None
@@ -77,15 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .add_service(EventStreamServiceServer::new(grpc_service));
         let grpc_server: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
             if let Some(acceptor) = tls_acceptor {
-                let incoming = TcpListenerStream::new(grpc_listener).then(move |connection| {
-                    let acceptor = acceptor.clone();
-                    async move {
-                        match connection {
-                            Ok(stream) => acceptor.accept(stream).await,
-                            Err(error) => Err(error),
-                        }
-                    }
-                });
+                let incoming = marty_service_runtime::keyless_incoming(grpc_listener, acceptor);
                 Box::pin(
                     grpc_router.serve_with_incoming_shutdown(incoming, async move {
                         let _ = grpc_shutdown.recv().await;

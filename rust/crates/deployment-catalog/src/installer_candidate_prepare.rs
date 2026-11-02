@@ -3,6 +3,9 @@
 //! Local candidate preparation alone does not prove public replay. The optional
 //! published fetch helper observes anonymous bytes only when run on the guest;
 //! the controller still must authenticate guest identity and the public release.
+//! Reuse the caller's VerificationTools within one acquisition or preparation
+//! command. Its content/proof/policy cache never supplies candidate authority,
+//! expiry, nonce consumption, public acquisition or runtime admission.
 #![cfg(target_os = "linux")]
 
 use crate::{
@@ -113,6 +116,7 @@ fn bind_public_authorization(
         || authorization.harness_source_sha != expected.harness_source_sha
         || authorization.run_id != expected.run_id
         || authorization.run_attempt != expected.run_attempt
+        || authorization.hosting != expected.hosting
     {
         return Err("published candidate authorization context differs".into());
     }
@@ -419,6 +423,7 @@ mod tests {
             harness_source_sha: parsed.harness_source_sha,
             run_id: parsed.run_id,
             run_attempt: parsed.run_attempt,
+            hosting: parsed.hosting,
         };
         (auth, inventory, expected)
     }

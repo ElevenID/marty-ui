@@ -23,6 +23,31 @@ RUN_ID = "124"
 POLICY = json.loads((ROOT / ".github/stack-tag-policy.json").read_text())
 
 
+def test_nightly_guide_has_one_unedited_rootless_boundary_command():
+    import shlex
+    from package_nightly_installation import nightly_trial_guide
+
+    tag = "v1.2.3-nightly.20261029.123"
+    guide = nightly_trial_guide({"tag": tag, "source_sha": SOURCE, "build_run_id": 123})
+    commands = [line for line in guide.splitlines() if line.startswith("/usr/bin/setpriv ")]
+    assert len(commands) == 1
+    command = shlex.split(commands[0])
+    assert command[:7] == ["/usr/bin/setpriv", "--no-new-privs", "--", "bash", "-o", "pipefail", "-c"]
+    assert command[7:] == [
+        f"curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/{tag}/install.sh | "
+        f"sh -s -- --candidate-test {tag}"
+    ]
+    assert "experimental root-free candidate" in guide
+    assert "Normal admitted installation remains held" in guide
+    assert "rootless storage ownership canary" in guide
+    assert "recovery-only command" in guide
+    assert "restore-rootless-canary" in guide
+    assert "production Ready status" in guide
+    assert "--install-dir" not in guide
+    assert "stage_selfhost_disposable_preview" not in guide
+    assert "sudo KMS" not in guide
+
+
 @pytest.fixture
 def prepared(tmp_path):
     lock_path = tmp_path / "stack-lock.json"
@@ -123,7 +148,7 @@ def test_signed_inventory_fails_closed(prepared, tmp_path, monkeypatch, fault):
         assert not commands
     else:
         assert publishing.verify_signed(assets, ROOT, value["tag"], RUN_ID, gh=tmp_path / "gh") == value
-        assert len(commands) == 19
+        assert len(commands) == 18
         assert all(args[:2] == ("cosign", "verify-blob") for args in commands)
 
 
@@ -266,15 +291,20 @@ def test_manifest_binds_nightly_base_lock_and_has_no_stable_release_identity(pre
         nightly.product_manifest(value, lock, "2026-10-24T12:00:00+00:00")
 
 
-def test_build_plan_reuses_existing_recipes_and_explicit_tester_profile(prepared):
+def test_build_plan_has_only_customer_ui_images_with_explicit_tester_profile(prepared):
     lock, claim, _, _ = prepared
     plan = nightly.build_plan(claim, nightly.read(lock))
     assert {item["role"] for item in plan} == set(nightly.IMAGE_COORDINATES)
     assert all((ROOT / item["dockerfile"]).is_file() for item in plan)
     assert all("MARTY_RELEASE_VERSION=" + claim["version"] in item["build_args"] for item in plan)
-    tester = next(item for item in plan if item["role"] == "ui_selfhost")
-    assert tester["target"] == "selfhost"
-    assert "SELFHOST_PUBLIC_PROFILE=tester" in tester["build_args"]
+    for role in ("ui", "ui_selfhost"):
+        customer = next(item for item in plan if item["role"] == role)
+        assert customer["target"] == "selfhost"
+        assert "UI_VARIANT=selfhost" in customer["build_args"]
+        assert "SELFHOST_PUBLIC_PROFILE=tester" in customer["build_args"]
+        assert "NGINX_CONFIG=nginx.spa.conf" in customer["build_args"]
+        assert "UI_VARIANT=public" not in customer["build_args"]
+    assert not any(item["image"].endswith("/ui-public") for item in plan)
     bad = nightly.read(lock)
     bad["components"][0]["version"] += "\nINJECTED=1"
     with pytest.raises(ValueError, match="multiline"):

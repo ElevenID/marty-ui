@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use http::uri::PathAndQuery;
@@ -16,7 +16,7 @@ use marty_flow::{
 use mmf_platform::{
     read_public_certificates, GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial,
     GrpcTransportSecurity, GrpcTrustMode, KeylessGrpcChannelFactory, KeylessGrpcTransportOptions,
-    KeylessTlsIdentity, OpenBaoTlsIdentityFiles,
+    KeylessTlsIdentity,
 };
 use mmf_security::TenantMembershipProvider;
 use prost::Message;
@@ -30,16 +30,7 @@ const SERVICE_TOKEN_HEADER: &str = "x-service-token";
 const USER_ID_HEADER: &str = "x-user-id";
 const MAX_PROVIDER_JSON_BYTES: usize = 1024 * 1024;
 
-#[derive(Clone, Debug)]
-pub struct WorkloadClientTlsFiles {
-    pub certificate: PathBuf,
-    pub ca_certificate: PathBuf,
-    pub kms_endpoint: String,
-    pub kms_ca_certificate: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
-}
+pub use marty_service_runtime::WorkloadTlsFiles as WorkloadClientTlsFiles;
 
 #[derive(Clone, Debug)]
 pub struct GrpcProviderConfig {
@@ -381,19 +372,13 @@ async fn keyless_setup(
     };
     let ca = read_public_certificates(&files.ca_certificate)
         .map_err(|_| unavailable("workload server CA is invalid"))?;
-    let identity = OpenBaoTlsIdentityFiles {
-        certificate_chain_file: files.certificate.clone(),
-        kms_ca_cert_file: files.kms_ca_certificate.clone(),
-        kms_endpoint: files.kms_endpoint.clone(),
-        kms_token_file: files.kms_token_file.clone(),
-        kms_key_name: files.kms_key_name.clone(),
-        kms_key_version: files.kms_key_version,
-        request_timeout: config.timeout.min(Duration::from_secs(30)),
-        max_concurrent_signs: 64,
-    }
-    .connect()
-    .await
-    .map_err(|_| unavailable("workload remote TLS identity is unavailable"))?;
+    let identity = files
+        .identity
+        .clone()
+        .with_request_timeout(config.timeout.min(Duration::from_secs(30)))
+        .connect()
+        .await
+        .map_err(|_| unavailable("workload remote TLS identity is unavailable"))?;
     Ok(Some((identity, ca)))
 }
 

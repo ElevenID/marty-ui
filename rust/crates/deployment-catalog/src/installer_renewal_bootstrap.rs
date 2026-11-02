@@ -42,8 +42,9 @@ fn require(ok: bool) -> Result<()> {
     }
 }
 
-/// Only the existing workload/Keycloak public certificates and scoped tokens.
-/// No scalar application credentials, ingress token, root or unseal key.
+/// Legacy workload/Keycloak public certificates and scoped tokens.
+/// Retained journals keep this exact inventory; new managed ingress adds only
+/// its public issuer, public leaf, and restricted signer token.
 pub fn current_inputs() -> BTreeSet<String> {
     let mut names = BTreeSet::from(["workload_identity_ca_cert".into()]);
     for role in SELFHOST_ROLES {
@@ -52,6 +53,77 @@ pub fn current_inputs() -> BTreeSet<String> {
     }
     names.extend(crate::installer_keycloak_bridge::OUTPUTS.map(String::from));
     names
+}
+
+pub fn managed_inputs() -> BTreeSet<String> {
+    let mut names = current_inputs();
+    names.extend(
+        crate::installer_ingress_provision::OUTPUTS[..3]
+            .iter()
+            .map(|name| (*name).to_owned()),
+    );
+    names
+}
+
+/// Public certificates have an independently admitted fullchain. The local
+/// ingress CA is not an input to their runtime generation or health checks.
+pub fn public_inputs() -> BTreeSet<String> {
+    let mut names = current_inputs();
+    names.extend(crate::installer_public_ingress::PUBLIC_OUTPUTS.map(String::from));
+    names
+}
+
+pub(crate) fn source_inventory(
+    names: &BTreeSet<String>,
+    public_ingress: bool,
+) -> Result<BTreeSet<String>> {
+    if public_ingress {
+        require(*names == managed_inputs() || *names == public_inputs())?;
+        Ok(public_inputs())
+    } else {
+        Ok(inventory(managed_inventory(names)?))
+    }
+}
+
+pub(crate) fn inventory(managed_ingress: bool) -> BTreeSet<String> {
+    if managed_ingress {
+        managed_inputs()
+    } else {
+        current_inputs()
+    }
+}
+
+pub(crate) fn managed_inventory(names: &BTreeSet<String>) -> Result<bool> {
+    if *names == managed_inputs() {
+        Ok(true)
+    } else if *names == current_inputs() {
+        Ok(false)
+    } else {
+        Err(REFUSED.into())
+    }
+}
+
+pub(crate) fn has_managed_ingress(values: &BTreeMap<String, Vec<u8>>) -> Result<bool> {
+    managed_inventory(&values.keys().cloned().collect())
+}
+
+pub(crate) fn completed_receipt(owner: &str, managed_ingress: bool) -> Value {
+    json!({"schema":if managed_ingress {"elevenid.installer-renewal-bootstrap-result/v2"} else {"elevenid.installer-renewal-bootstrap-result/v1"},
+        "installation_id":owner,"identity_files":IDENTITY_FILES,"policy_count":if managed_ingress {22} else {21},
+        "scoped_login_verified":true,"verification_token_revoked":true,"root_retired":false,"ingress_renewal":managed_ingress})
+}
+
+pub(crate) fn completed_source_receipt(
+    owner: &str,
+    managed_ingress: bool,
+    public_plan_sha256: Option<&str>,
+) -> Value {
+    let mut receipt = completed_receipt(owner, managed_ingress);
+    if let Some(digest) = public_plan_sha256 {
+        receipt["schema"] = json!("elevenid.installer-renewal-bootstrap-result/v3");
+        receipt["public_renewal_authority_plan_sha256"] = json!(digest);
+    }
+    receipt
 }
 
 fn readonly(file: &File) -> Result<()> {
@@ -160,7 +232,14 @@ pub(crate) fn entry(
 }
 
 pub(crate) fn validate_current(values: &BTreeMap<String, Vec<u8>>) -> Result<()> {
-    require(values.keys().cloned().collect::<BTreeSet<_>>() == current_inputs())?;
+    validate_source_current(values, false)
+}
+
+pub(crate) fn validate_source_current(
+    values: &BTreeMap<String, Vec<u8>>,
+    public_ingress: bool,
+) -> Result<()> {
+    source_inventory(&values.keys().cloned().collect(), public_ingress)?;
     let mut tokens = BTreeSet::new();
     for (name, value) in values {
         let value = std::str::from_utf8(value).map_err(|_| REFUSED)?;
@@ -180,17 +259,21 @@ pub(crate) fn validate_current(values: &BTreeMap<String, Vec<u8>>) -> Result<()>
     Ok(())
 }
 
-pub(crate) fn current(dir: &File) -> Result<BTreeMap<String, Vec<u8>>> {
-    require(names(dir)? == current_inputs())?;
+pub(crate) fn current_for_source(
+    dir: &File,
+    public_ingress: bool,
+) -> Result<BTreeMap<String, Vec<u8>>> {
+    let inventory = names(dir)?;
+    source_inventory(&inventory, public_ingress)?;
     let owner = dir.metadata().map_err(|_| REFUSED)?.uid();
-    let values = current_inputs()
+    let values = inventory
         .into_iter()
         .map(|name| {
             let value = entry(dir, &name, &[0, owner], &[0o444], true)?;
             Ok((name, value))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
-    validate_current(&values)?;
+    validate_source_current(&values, public_ingress)?;
     Ok(values)
 }
 
@@ -248,7 +331,13 @@ async fn bootstrap_at(installation_id: &str, output_path: &Path) -> Result<usize
         &[0o444, 0o644],
     )?;
     let inputs = directory(Path::new("/input/current"), false, true)?;
-    let before = current(&inputs)?;
+    let input_owner = inputs.metadata().map_err(|_| REFUSED)?.uid();
+    let public_plan =
+        crate::installer_public_ingress::helper_authority_plan(installation_id, input_owner)?;
+    let public_digest = public_plan.as_ref().map(|plan| plan.sha256()).transpose()?;
+    let before = current_for_source(&inputs, public_plan.is_some())?;
+    let managed_ingress = public_plan.is_some() || has_managed_ingress(&before)?;
+    let ingress_identity = crate::installer_ingress_provision::IngressIdentity::from_environment()?;
     require(
         before
             .values()
@@ -272,14 +361,31 @@ async fn bootstrap_at(installation_id: &str, output_path: &Path) -> Result<usize
     .await
     .map_err(|_| REFUSED)?;
     require(lookup["data"]["policies"] == json!(["root"]))?;
-    let policies = activation_preflight::renewal_inventory(
+    let mut policies = activation_preflight::renewal_inventory(
         &bao,
         &json!({"token":root,"current":"/input/current"}),
     )
     .await
     .map_err(|_| REFUSED)?;
+    if let Some(plan) = &public_plan {
+        policies.push(
+            plan.initial_inventory(&bao, root, installation_id, &before)
+                .await?,
+        );
+    } else if managed_ingress {
+        policies.push(
+            crate::installer_ingress_provision::renewal_inventory(
+                &bao,
+                root,
+                installation_id,
+                &before,
+                &ingress_identity,
+            )
+            .await?,
+        );
+    }
     require(
-        current(&inputs)? == before
+        current_for_source(&inputs, public_plan.is_some())? == before
             && input(Path::new("/input/root.token"), 4096, ROOT_OWNERS, &[0o400])? == root_bytes
             && input(
                 Path::new("/input/ca.crt"),
@@ -288,80 +394,87 @@ async fn bootstrap_at(installation_id: &str, output_path: &Path) -> Result<usize
                 &[0o444, 0o644],
             )? == ca,
     )?;
-    receipt(
-        &output,
-        "pending.json",
-        &json!({"schema":"elevenid.installer-renewal-bootstrap-intent/v1",
-        "installation_id":installation_id,"root_retired":false,"ingress_renewal":false}),
-    )?;
-    let outcome: Result<usize> = async {
-    let identity_name = CString::new("identity").unwrap();
-    if unsafe { libc::mkdirat(output.as_raw_fd(), identity_name.as_ptr(), 0o700) } != 0 {
-        return Err(RECOVERY.into());
+    let mut pending = json!({"schema":if managed_ingress {"elevenid.installer-renewal-bootstrap-intent/v2"} else {"elevenid.installer-renewal-bootstrap-intent/v1"},
+        "installation_id":installation_id,"root_retired":false,"ingress_renewal":managed_ingress});
+    if let Some(digest) = &public_digest {
+        pending["schema"] = json!("elevenid.installer-renewal-bootstrap-intent/v3");
+        pending["public_renewal_authority_plan_sha256"] = json!(digest);
     }
-    output.sync_all().map_err(|_| RECOVERY)?;
+    receipt(&output, "pending.json", &pending)?;
+    let outcome: Result<usize> = async {
+        let identity_name = CString::new("identity").unwrap();
+        if unsafe { libc::mkdirat(output.as_raw_fd(), identity_name.as_ptr(), 0o700) } != 0 {
+            return Err(RECOVERY.into());
+        }
+        output.sync_all().map_err(|_| RECOVERY)?;
         let identity_path = output_path.join("identity");
         let identity = directory(&identity_path, true, false)?;
-    approle::bootstrap(
-        &bao,
-        approle::Role::Renewal,
-            &identity_path,
-        &json!({"root_token":root,"names":policies}),
-    )
-    .await
-    .map_err(|_| RECOVERY)?;
-    identity.sync_all().map_err(|_| RECOVERY)?;
-    require(names(&identity)? == IDENTITY_FILES.map(String::from).into())?;
-    for name in IDENTITY_FILES {
+        let mut context = json!({"root_token":root,"names":policies});
+        let mut login_context = json!({});
+        if public_plan.is_some() {
+            context["ingress_certificate_source"] = json!("acme");
+            login_context["ingress_certificate_source"] = json!("acme");
+        }
+        approle::bootstrap(&bao, approle::Role::Renewal, &identity_path, &context)
+            .await
+            .map_err(|_| RECOVERY)?;
+        identity.sync_all().map_err(|_| RECOVERY)?;
+        require(names(&identity)? == IDENTITY_FILES.map(String::from).into())?;
+        for name in IDENTITY_FILES {
             let value = entry(&identity, name, &[0], &[0o600], false)?;
             require(!value.windows(root.len()).any(|v| v == root.as_bytes()))?;
-    }
-        let login = approle::login(&bao, approle::Role::Renewal, &identity_path, &json!({}))
-        .await
-        .map_err(|_| RECOVERY)?;
-    let transient = login["token"].as_str().ok_or(RECOVERY)?;
-    require(
-        transient != root
-            && (20..=4096).contains(&transient.len())
-            && transient.bytes().all(|b| b.is_ascii_graphic()),
-    )?;
+        }
+        let login = approle::login(&bao, approle::Role::Renewal, &identity_path, &login_context)
+            .await
+            .map_err(|_| RECOVERY)?;
+        let transient = login["token"].as_str().ok_or(RECOVERY)?;
+        require(
+            transient != root
+                && (20..=4096).contains(&transient.len())
+                && transient.bytes().all(|b| b.is_ascii_graphic()),
+        )?;
         // Even a failed authority proof must retire the known verification
         // token. A failed login may instead hide a minted token; that remains
         // an uncertain pending transaction requiring separate recovery.
         let authority = activation_preflight::authority(&bao, transient, false).await;
-    operator_http::request(
-        &bao,
-        Method::POST,
-        "auth/token/revoke-self",
-        None,
-        Some(transient),
-    )
-    .await
-    .map_err(|_| RECOVERY)?;
-    let denial = operator_http::builder(
-        &bao,
-        Method::POST,
-        "auth/token/lookup",
-        Some(&json!({"token":transient})),
-        Some(transient),
-    )
-    .send()
-    .await
-    .map_err(|_| RECOVERY)?;
-    if denial.status() != StatusCode::FORBIDDEN {
-        return Err(RECOVERY.into());
-    }
+        operator_http::request(
+            &bao,
+            Method::POST,
+            "auth/token/revoke-self",
+            None,
+            Some(transient),
+        )
+        .await
+        .map_err(|_| RECOVERY)?;
+        let denial = operator_http::builder(
+            &bao,
+            Method::POST,
+            "auth/token/lookup",
+            Some(&json!({"token":transient})),
+            Some(transient),
+        )
+        .send()
+        .await
+        .map_err(|_| RECOVERY)?;
+        if denial.status() != StatusCode::FORBIDDEN {
+            return Err(RECOVERY.into());
+        }
         authority.map_err(|_| RECOVERY)?;
-    require(current(&inputs)? == before)?;
-    receipt(
-        &output,
-        "completed.json",
-        &json!({"schema":"elevenid.installer-renewal-bootstrap-result/v1",
-        "installation_id":installation_id,"identity_files":IDENTITY_FILES,"policy_count":21,
-        "scoped_login_verified":true,"verification_token_revoked":true,"root_retired":false,"ingress_renewal":false}),
-    )?;
-    Ok(IDENTITY_FILES.len())
-    }.await;
+        require(
+            current_for_source(&inputs, public_plan.is_some())? == before
+                && crate::installer_public_ingress::helper_authority_plan(
+                    installation_id,
+                    input_owner,
+                )? == public_plan,
+        )?;
+        receipt(
+            &output,
+            "completed.json",
+            &completed_source_receipt(installation_id, managed_ingress, public_digest.as_deref()),
+        )?;
+        Ok(IDENTITY_FILES.len())
+    }
+    .await;
     outcome.map_err(|_| RECOVERY.into())
 }
 
@@ -448,27 +561,69 @@ pub async fn bootstrap_transfer(installation_id: &str) -> Result<usize> {
         let output = child(&parent, "output")?;
         require(output.metadata().map_err(|_| RECOVERY)?.uid() == 0)?;
         bootstrap_at(installation_id, Path::new("/transfer/output")).await?;
-        require(names(&output)? == BTreeSet::from(["pending.json".into(), "completed.json".into(), "identity".into()]))?;
+        require(
+            names(&output)?
+                == BTreeSet::from([
+                    "pending.json".into(),
+                    "completed.json".into(),
+                    "identity".into(),
+                ]),
+        )?;
         let identity = directory(Path::new("/transfer/output/identity"), true, false)?;
         require(names(&identity)? == IDENTITY_FILES.map(String::from).into())?;
         let mut values = BTreeMap::new();
         for name in IDENTITY_FILES {
-            values.insert(name.to_owned(), entry(&identity, name, &[0], &[0o600], false)?);
+            values.insert(
+                name.to_owned(),
+                entry(&identity, name, &[0], &[0o600], false)?,
+            );
         }
         for name in ["pending.json", "completed.json"] {
             values.insert(name.into(), entry(&output, name, &[0], &[0o600], false)?);
         }
-        let completed: Value = serde_json::from_slice(&values["completed.json"]).map_err(|_| RECOVERY)?;
-        require(completed == json!({"schema":"elevenid.installer-renewal-bootstrap-result/v1",
-            "installation_id":installation_id,"identity_files":IDENTITY_FILES,"policy_count":21,
-            "scoped_login_verified":true,"verification_token_revoked":true,"root_retired":false,"ingress_renewal":false}))?;
+        let completed: Value =
+            serde_json::from_slice(&values["completed.json"]).map_err(|_| RECOVERY)?;
+        let current_dir = directory(Path::new("/input/current"), false, true)?;
+        let public_plan = crate::installer_public_ingress::helper_authority_plan(
+            installation_id,
+            current_dir.metadata().map_err(|_| RECOVERY)?.uid(),
+        )?;
+        let public_digest = public_plan.as_ref().map(|plan| plan.sha256()).transpose()?;
+        let before = current_for_source(&current_dir, public_plan.is_some())?;
+        require(
+            completed
+                == completed_source_receipt(
+                    installation_id,
+                    public_plan.is_some() || has_managed_ingress(&before)?,
+                    public_digest.as_deref(),
+                ),
+        )?;
         let delivered = child(&parent, "delivered")?;
-        for (name, bytes) in values { deliver_file(&delivered, &name, &bytes, owner.uid(), owner.gid())?; }
-        let after = directory(Path::new("/transfer"), false, false)?.metadata().map_err(|_| RECOVERY)?;
-        require((after.dev(),after.ino(),after.uid(),after.gid(),after.mode()) == (owner.dev(),owner.ino(),owner.uid(),owner.gid(),owner.mode()))?;
+        for (name, bytes) in values {
+            deliver_file(&delivered, &name, &bytes, owner.uid(), owner.gid())?;
+        }
+        let after = directory(Path::new("/transfer"), false, false)?
+            .metadata()
+            .map_err(|_| RECOVERY)?;
+        require(
+            (
+                after.dev(),
+                after.ino(),
+                after.uid(),
+                after.gid(),
+                after.mode(),
+            ) == (
+                owner.dev(),
+                owner.ino(),
+                owner.uid(),
+                owner.gid(),
+                owner.mode(),
+            ),
+        )?;
         deliver_directory(&delivered, &parent, owner.uid(), owner.gid())?;
         Ok(IDENTITY_FILES.len())
-    }.await;
+    }
+    .await;
     result.map_err(|_| RECOVERY.into())
 }
 
@@ -680,6 +835,41 @@ for path in denied:
         }
         assert_eq!(values.len(), 40);
         validate_current(&values).unwrap();
+        assert!(!has_managed_ingress(&values).unwrap());
+        let mut managed = values.clone();
+        for name in crate::installer_ingress_provision::OUTPUTS[..3]
+            .iter()
+            .copied()
+        {
+            managed.insert(
+                name.into(),
+                if name.ends_with("_token") {
+                    b"unique-managed-ingress-token".to_vec()
+                } else {
+                    b"-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----\n".to_vec()
+                },
+            );
+        }
+        validate_current(&managed).unwrap();
+        assert!(has_managed_ingress(&managed).unwrap());
+        assert_eq!(managed.len(), 43);
+        for name in crate::installer_ingress_provision::OUTPUTS[..3]
+            .iter()
+            .copied()
+        {
+            let mut partial = managed.clone();
+            partial.remove(name);
+            assert!(validate_current(&partial).is_err());
+        }
+        managed.insert(
+            "installer_ingress_tls_kms_token".into(),
+            values
+                .values()
+                .find(|value| value.starts_with(b"token-"))
+                .unwrap()
+                .clone(),
+        );
+        assert!(validate_current(&managed).is_err());
         for name in [
             "operator_bootstrap_password",
             "installer_ingress_kms_token",

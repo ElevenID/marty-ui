@@ -248,21 +248,23 @@ pub fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
 fn capabilities(
     algorithms: &'static [&'static str],
     signature_encoding: &'static str,
-    hardware_attestation: bool,
-    key_import: bool,
-    key_delete: bool,
+    key_create: bool,
     key_list: bool,
+    rotation: bool,
 ) -> ProviderCapabilities {
+    // These describe operations implemented by Marty, not every feature sold
+    // by the upstream provider. Key custody/import and attestation evidence are
+    // not implied by successful provider registration.
     ProviderCapabilities {
         supported_algorithms: algorithms,
         signature_encoding,
         public_key_export: true,
-        hardware_attestation,
-        key_import,
-        key_create: true,
-        key_delete,
+        hardware_attestation: false,
+        key_import: false,
+        key_create,
+        key_delete: false,
         key_list,
-        rotation: true,
+        rotation,
     }
 }
 
@@ -274,8 +276,7 @@ pub fn service_capabilities() -> Vec<ServiceCapability> {
             capabilities: capabilities(
                 P521_PROVIDER_ALGORITHMS,
                 ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
-                false,
-                false,
+                true,
                 true,
                 true,
             ),
@@ -287,7 +288,6 @@ pub fn service_capabilities() -> Vec<ServiceCapability> {
                 P521_PROVIDER_ALGORITHMS,
                 ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
                 false,
-                false,
                 true,
                 true,
             ),
@@ -298,8 +298,7 @@ pub fn service_capabilities() -> Vec<ServiceCapability> {
             capabilities: capabilities(
                 CLOUD_RSA_EC,
                 ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
-                true,
-                true,
+                false,
                 false,
                 false,
             ),
@@ -310,10 +309,9 @@ pub fn service_capabilities() -> Vec<ServiceCapability> {
             capabilities: capabilities(
                 CLOUD_RSA_EC,
                 ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
-                true,
-                true,
-                true,
-                true,
+                false,
+                false,
+                false,
             ),
         },
         ServiceCapability {
@@ -322,10 +320,9 @@ pub fn service_capabilities() -> Vec<ServiceCapability> {
             capabilities: capabilities(
                 GCP_ALGORITHMS,
                 ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
-                true,
-                true,
                 false,
-                true,
+                false,
+                false,
             ),
         },
         ServiceCapability {
@@ -375,6 +372,25 @@ mod tests {
                 provider.capabilities.signature_encoding,
                 ALGORITHM_DEPENDENT_SIGNATURE_ENCODING
             );
+        }
+    }
+
+    #[test]
+    fn cloud_registration_does_not_advertise_unimplemented_key_lifecycle() {
+        for provider in service_capabilities().into_iter().filter(|provider| {
+            matches!(
+                provider.service_type_id,
+                "aws-kms" | "azure-key-vault" | "gcp-cloud-kms"
+            )
+        }) {
+            let capabilities = provider.capabilities;
+            assert!(capabilities.public_key_export);
+            assert!(!capabilities.key_create);
+            assert!(!capabilities.key_import);
+            assert!(!capabilities.key_delete);
+            assert!(!capabilities.key_list);
+            assert!(!capabilities.rotation);
+            assert!(!capabilities.hardware_attestation);
         }
     }
 

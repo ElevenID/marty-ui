@@ -13,6 +13,7 @@ name = "contracts"
 path = "tests/contracts.rs"
 
 [dependencies]
+marty-service-runtime = { path = "../../crates/service-runtime" }
 mmf-runtime.workspace = true
 async-trait.workspace = true
 axum.workspace = true

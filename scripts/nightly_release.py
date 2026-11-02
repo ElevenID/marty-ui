@@ -18,13 +18,13 @@ from build_stack_manifest import build_manifest
 from nightly_claim import validate_intake
 from release_transaction import IMAGE_URIS, file_digest
 from stack_tag_gate import classify_release_tag
+from ui_release import build_profile
 
 SCHEMA = "elevenid.nightly-installation-candidate/v1"
 WORKFLOW = ".github/workflows/nightly-release.yml"
 IMAGE_COORDINATES = {
     **IMAGE_URIS,
     "ui_selfhost": "ghcr.io/elevenid/marty-ui-oss/ui-selfhost",
-    "cloudflared_wrapper": "ghcr.io/elevenid/marty-ui-oss/cloudflared-wrapper",
 }
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -73,16 +73,14 @@ def build_plan(claim: dict, lock: dict) -> list[dict]:
         args.update({prefix + "_VERSION": component["version"],
                      prefix + "_URI": artifacts[0]["uri"],
                      prefix + "_DIGEST": artifacts[0]["digest"]})
+    customer_target, customer_args = build_profile("customer", "tester")
     recipes = {
-        "ui": ("docker/ui.Dockerfile", "", {}),
+        "ui": ("docker/ui.Dockerfile", customer_target, customer_args),
         "services": ("services/Dockerfile", "", {"SERVICE_NAME": "gateway"}),
         "migrations": ("services/Dockerfile.migrations", "", {}),
         "openbao_didcomm": ("openbao/didcomm-authcrypt/Dockerfile", "", {}),
         "keycloak": ("keycloak/openbao-provider/Dockerfile", "", {}),
-        "ui_selfhost": ("docker/ui.Dockerfile", "selfhost", {
-            "UI_VARIANT": "selfhost", "SELFHOST_PUBLIC_PROFILE": "tester",
-            "NGINX_CONFIG": "nginx.spa.conf"}),
-        "cloudflared_wrapper": ("docker/cloudflared-wrapper.Dockerfile", "", {}),
+        "ui_selfhost": ("docker/ui.Dockerfile", customer_target, customer_args),
     }
     result = []
     for role, (dockerfile, target, overrides) in recipes.items():
@@ -192,7 +190,7 @@ def image_lock(candidate: dict, model: dict, source: Path, external: dict) -> di
     require(set(services) == names, "nightly Compose service set changed")
     _validate_external_services(services, roles, external)
     role_map = {"services": "services", "db-migrate": "migrations",
-                "ui-selfhost": "ui_selfhost", "cloudflared-wrapper": "cloudflared_wrapper"}
+                "ui-selfhost": "ui_selfhost"}
     resolved = {}
     for name, service in services.items():
         require("build" not in service, "nightly bundle contains a source build")

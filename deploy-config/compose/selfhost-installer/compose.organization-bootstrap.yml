@@ -1,0 +1,52 @@
+# Selected only by the authenticated first-boot installer after Organization
+# startup. Both jobs remain stopped in the ordinary maintenance model.
+x-organization-bootstrap-job: &organization-bootstrap-job
+  image: ${MARTY_INSTALLER_SERVICES_IMAGE:?approved services image required}
+  profiles: [setup]
+  entrypoint: [/usr/local/bin/marty-installer-organization-api-key]
+  user: "0:0"
+  init: true
+  read_only: true
+  restart: "no"
+  mem_limit: 512m
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  environment:
+    AWS_EC2_METADATA_DISABLED: "true"
+  networks: [default]
+  labels:
+    com.elevenid.installer.id: ${MARTY_INSTALLATION_ID:?installation identity required}
+    com.elevenid.installer.phase: setup
+  volumes:
+    - type: bind
+      source: ${MARTY_INSTALLATION_DIR:?}/evidence/organization-bootstrap-request.json
+      target: /input/organization-bootstrap-request.json
+      read_only: true
+      bind: {create_host_path: false}
+    - type: bind
+      source: ${MARTY_INSTALLATION_DIR:?}/evidence/organization-bootstrap-installation.json
+      target: /input/installation.json
+      read_only: true
+      bind: {create_host_path: false}
+    - type: bind
+      source: ${MARTY_INSTALLATION_DIR:?}/evidence/compose-session.json
+      target: /input/compose-session.json
+      read_only: true
+      bind: {create_host_path: false}
+    - type: bind
+      source: ${MARTY_INSTALLATION_DIR:?}/secrets/marty_db_password
+      target: /input/marty-db-password
+      read_only: true
+      bind: {create_host_path: false}
+    - type: bind
+      source: ${MARTY_INSTALLATION_DIR:?}/organization-bootstrap-output
+      target: /output
+      bind: {create_host_path: false}
+
+services:
+  installer-organization-key-issue:
+    <<: *organization-bootstrap-job
+    command: [issue]
+  installer-organization-key-revoke:
+    <<: *organization-bootstrap-job
+    command: [revoke]

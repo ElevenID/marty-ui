@@ -5,7 +5,7 @@
 #![cfg(target_os = "linux")]
 #![allow(dead_code)] // No production caller exists until the purge coordinator is reviewed.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -34,14 +34,15 @@ struct OpenHow {
     resolve: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Kind {
     File,
     Directory,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct HostIdentity {
     pub dev: u64,
     pub ino: u64,
@@ -339,22 +340,14 @@ where
 fn move_to_quarantine(parent: &File, source: &str, quarantine: &File, name: &str) -> Result<()> {
     let source = cstr(source)?;
     let name = cstr(name)?;
-    // The syscall is available on supported Linux kernels even when musl does
-    // not export a renameat2 wrapper. ENOSYS fails closed on older kernels.
-    let status = unsafe {
-        libc::syscall(
-            libc::SYS_renameat2,
-            parent.as_raw_fd(),
-            source.as_ptr(),
-            quarantine.as_raw_fd(),
-            name.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    if status != 0 {
-        return Err(REFUSED.into());
-    }
-    Ok(())
+    crate::installer_host_fs::rename_at(
+        parent,
+        &source,
+        quarantine,
+        &name,
+        crate::installer_host_fs::RenameMode::NoReplace,
+    )
+    .map_err(|_| REFUSED.into())
 }
 fn remove_quarantined(quarantine: &File, name: &str, kind: Kind) -> Result<()> {
     let name = cstr(name)?;

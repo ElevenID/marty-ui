@@ -146,6 +146,8 @@ pub struct PresentationEvaluationResult {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct IssuanceInitiationRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offer_ttl_seconds: Option<u64>,
     pub organization_id: String,
     pub flow_instance_id: String,
     pub credential_template_id: String,

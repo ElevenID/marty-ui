@@ -1,8 +1,8 @@
 /**
  * From IDV to Verifiable Identity Page
  * 
- * Thought-leadership page positioning ElevenID LLC as the evolution beyond
- * traditional identity verification (IDV) platforms
+ * Workflow guide for evaluating credential reuse, customer operation, and
+ * release-specific trust and acceptance requirements
  */
 
 import { Box, Typography, Paper, Card, CardContent, Grid, List, ListItem, ListItemIcon, ListItemText, Divider, Button } from '@mui/material';
@@ -38,43 +38,43 @@ function FromIDVPage() {
   ];
 
   const implementations = [
-    'Issue credentials using W3C VC, SD-JWT, and ISO formats—portable across wallets and ecosystems',
-    'Verify wallet-presented credentials instead of re-running document checks',
-    'Govern trust centrally through auditable trust registries',
-    'Support selective disclosure and data minimization by design',
+    'Define the credential format, issuer, wallet, and presentation profile for the selected workflow',
+    'Test credential reuse under each verifier’s trust, freshness, and acceptance rules',
+    'Configure issuer trust and policy decisions in the customer-operated environment',
+    'Validate the selected disclosure mechanism with synthetic data and applicable rejected cases',
   ];
 
   const audiences = [
     {
       title: 'Governments',
-      urgency: 'Required to accept EUDI wallets—need trust governance now.',
+      urgency: 'Review the credential profiles, acceptance requirements, and operator for the proposed workflow.',
       points: [
-        'EUDI Wallet compatibility',
-        'Cross-border credential acceptance',
+        'Profile-specific wallet evaluation',
+        'Applicable acceptance and procurement requirements',
       ],
     },
     {
       title: 'Enterprises',
-      urgency: 'Re-verification costs are rising—reuse is the only way out.',
+      urgency: 'Identify where credential reuse could improve a defined workflow.',
       points: [
-        'Reduced repeat KYC costs',
-        'Identity reuse across partners',
+        'Evidence for the selected workflow',
+        'Named customer or partner operator',
       ],
     },
     {
       title: 'Platforms & Issuers',
-      urgency: 'Credentials are becoming products—portability matters.',
+      urgency: 'Define the achievement or document check your users need.',
       points: [
         'Workforce and education credentials',
-        'Portable identity products',
+        'Defined component and distribution rights',
       ],
     },
     {
       title: 'Developers',
-      urgency: 'Identity is becoming infrastructure—build once, integrate everywhere.',
+      urgency: 'Review documented interfaces and test the exact release and integration.',
       points: [
-        'Open APIs and SDKs',
-        'Flexible deployment models',
+        'Documented APIs and release scope',
+        'Customer or selected-partner operation',
       ],
     },
   ];
@@ -83,13 +83,13 @@ function FromIDVPage() {
     <Box>
       <SEOHead
         title="Why Verifiable Identity"
-        description="Why traditional identity verification is evolving into verifiable credential infrastructure with reusable trust, standards, and governance."
+        description="Evaluate credential reuse within a defined customer-operated Marty workflow, with release-specific trust, interoperability, and acceptance evidence."
         canonicalPath="/why-verifiable-identity"
         keywords={['identity verification', 'verifiable identity', 'IDV modernization', 'reusable trust infrastructure']}
         structuredData={[
           articleSchema({
             headline: 'Why Verifiable Identity',
-            description: 'Why traditional identity verification is evolving into verifiable credential infrastructure with reusable trust, standards, and governance.',
+            description: 'Evaluate credential reuse within a defined customer-operated Marty workflow, with release-specific trust, interoperability, and acceptance evidence.',
             datePublished: '2024-01-01',
             url: 'https://elevenidllc.com/why-verifiable-identity',
           }),
@@ -111,46 +111,46 @@ function FromIDVPage() {
         }}
       >
         <Typography variant="h3" component="h1" gutterBottom fontWeight="bold">
-          From Identity Verification to Verifiable Identity
+          Plan a Verifiable Identity Workflow
         </Typography>
         <Typography variant="h6" sx={{ maxWidth: 900, mx: 'auto', opacity: 0.95, mb: 2 }}>
-          Traditional identity verification was built for onboarding.
-          Modern digital identity must support <strong>reuse, portability, and trust at scale</strong>.
+          Credential reuse starts with a defined claim, a trusted issuer, and a verifier&apos;s{' '}
+          <strong>acceptance and disclosure requirements</strong>.
         </Typography>
         <Typography variant="body1" sx={{ maxWidth: 900, mx: 'auto', opacity: 0.9 }}>
-          ElevenID LLC provides the infrastructure layer that replaces repeated identity checks with{' '}
-          <strong>cryptographically verifiable credentials</strong> — designed for EUDI Wallets, Open Badges,
-          and enterprise trust ecosystems.
+          Marty is one customer-operated product for <strong>education and workforce credentials,
+          applicant and document verification, and Travel Trust</strong>. Each use case has its own
+          evidence requirements; a result in one does not qualify the others.
         </Typography>
       </Box>
       {/* Section 1 - The IDV Plateau */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold">
-          Identity verification solves onboarding. It does not solve identity.
+          Start with the decision your workflow must make
         </Typography>
         <Typography variant="body1" paragraph sx={{ fontSize: '1.05rem', lineHeight: 1.8 }}>
-          IDV platforms answer one question: &ldquo;Is this person real right now?&rdquo; 
-          They do this well—but verification outcomes aren&apos;t reusable, trust decisions are locked in vendor systems, 
-          and costs scale linearly.
+          Identify the claim or document check, the evidence needed, and the party responsible for the decision.
+          Assess each available implementation against those requirements; capabilities and operating models vary.
         </Typography>
         <Typography variant="body1" paragraph sx={{ fontSize: '1.05rem', lineHeight: 1.8, fontWeight: 500 }}>
-          Digital identity requires something different: credentials that can be issued once and verified anywhere.
+          A reusable credential may support more than one workflow when each verifier accepts its issuer,
+          format, holder-binding mechanism, and current status.
         </Typography>
       </Box>
       <Divider sx={{ my: 8 }} />
       {/* Section 2 - What Changed */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold">
-          Wallets, credentials, and regulation changed the rules
+          Review wallets, formats, and acceptance requirements together
         </Typography>
         <Typography variant="body1" paragraph sx={{ fontSize: '1.05rem', lineHeight: 1.8 }}>
-          Governments and platforms now adopt digital wallets where users hold credentials directly. 
-          Standards like W3C Verifiable Credentials and ISO 18013-5 define how claims are issued, stored, and verified. 
-          The EUDI Wallet requires private-sector verifiers to accept government-issued credentials.
+          Names such as W3C Verifiable Credentials, ISO 18013-5, and EUDI Wallet identify areas to evaluate.
+          Confirm the exact specification, wallet build, presentation profile, and Marty release. The responsible
+          organization must review applicable acceptance requirements; a standard name is not regulatory approval.
         </Typography>
         <Paper elevation={2} sx={{ p: 3, mt: 3, bgcolor: 'primary.light', color: 'primary.contrastText' }}>
           <Typography variant="h6" textAlign="center">
-            Identity decisions must be <strong>verifiable, portable, and interoperable</strong>—not vendor-owned.
+            Record the <strong>tested scope, trust decisions, and known limitations</strong> for each workflow.
           </Typography>
         </Paper>
       </Box>
@@ -158,17 +158,17 @@ function FromIDVPage() {
       {/* Section 3 - The Missing Layer in Most IDV Platforms */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold">
-          The Missing Layer in Most IDV Platforms
+          Make Trust Responsibilities Explicit
         </Typography>
         <Typography variant="h6" color="text.secondary" gutterBottom sx={{ mb: 4 }}>
-          Verification is not enough — trust must be governed
+          Define the evidence and policy behind each decision
         </Typography>
 
         <Typography variant="body1" paragraph sx={{ fontSize: '1.05rem', lineHeight: 1.8 }}>
-          Traditional IDV platforms focus on:
+          Distinguish the questions your workflow asks:
         </Typography>
         <List>
-          {['Document authenticity', 'Biometric matching', 'Fraud detection'].map((item, index) => (
+          {['Which document checks are demonstrated?', 'How is the presenter bound to the evidence?', 'Which trust and acceptance rules apply?'].map((item, index) => (
             <ListItem key={index}>
               <ListItemIcon>
                 <CheckCircleIcon color="action" />
@@ -179,11 +179,12 @@ function FromIDVPage() {
         </List>
 
         <Typography variant="body1" paragraph sx={{ fontSize: '1.05rem', lineHeight: 1.8, mt: 3 }}>
-          What they lack is <strong>identity orchestration</strong>.
+          Keep <strong>structural checks, cryptographic authenticity, and holder binding</strong> distinct.
+          A passing check in one category does not prove the others.
         </Typography>
 
         <Typography variant="body1" paragraph sx={{ fontSize: '1.05rem', lineHeight: 1.8, mb: 3 }}>
-          At scale, digital identity requires four governed primitives:
+          Use these configuration concepts to describe the selected workflow:
         </Typography>
 
         <Grid container spacing={3}>
@@ -204,15 +205,15 @@ function FromIDVPage() {
         </Grid>
 
         <Typography variant="body1" paragraph sx={{ fontSize: '1.05rem', lineHeight: 1.8, mt: 4 }}>
-          These primitives must be orchestrated by <strong>flows</strong> that work across wallets, APIs,
-          kiosks, and offline environments.
+          Connect these concepts through a defined <strong>flow</strong>. Validate its documented interfaces,
+          selected devices, connectivity requirements, and rejected cases against the exact release.
         </Typography>
 
         <Paper elevation={2} sx={{ p: 3, mt: 3, bgcolor: 'grey.100', borderRadius: 2 }}>
           <Typography variant="body1" sx={{ fontSize: '1.05rem', lineHeight: 1.8 }}>
-            <strong>This is the same model used throughout ElevenID LLC.</strong>{' '}
-            Digital identity becomes scalable when trust, policy, and deployment are modeled as configuration—then 
-            orchestrated by flows across wallets, APIs, and devices.
+            <strong>Production operation belongs to your organization or selected partner.</strong>{' '}
+            Agree who installs, monitors, backs up, and maintains the environment. The software offer does not
+            include managed production or guaranteed technical support.
           </Typography>
         </Paper>
       </Box>
@@ -220,14 +221,14 @@ function FromIDVPage() {
       {/* Section 4 - How ElevenID LLC Solves Identity Management */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold">
-          How {branding.branding.appName} Solves Identity Management
+          Evaluate Marty by {branding.branding.appName}
         </Typography>
         <Typography variant="h6" color="text.secondary" gutterBottom sx={{ mb: 4 }}>
-          {branding.branding.appName} is identity infrastructure, not a point solution
+          Select one useful workflow and its evidence requirements
         </Typography>
 
         <Typography variant="body1" paragraph sx={{ fontSize: '1.05rem', lineHeight: 1.8, mb: 3 }}>
-          {branding.branding.appName} implements the missing orchestration layer required for modern digital identity:
+          Use the release documentation and executed tests to evaluate the scope your organization needs:
         </Typography>
 
         <List>
@@ -248,8 +249,9 @@ function FromIDVPage() {
 
         <Paper elevation={2} sx={{ p: 4, mt: 4, bgcolor: 'success.light', color: 'success.contrastText' }}>
           <Typography variant="h6" textAlign="center" fontWeight="bold">
-            Rather than producing a one-time verification decision, {branding.branding.appName} enables{' '}
-            <strong>reusable trust</strong>.
+            Begin with <strong>synthetic data and a bounded workflow</strong>. Real records require accepted
+            customer evaluation and the required security/privacy approvals; production additionally requires
+            applicable signed terms and explicit authorization.
           </Typography>
         </Paper>
       </Box>
@@ -260,7 +262,7 @@ function FromIDVPage() {
           Who This Is For
         </Typography>
         <Typography variant="h6" color="text.secondary" textAlign="center" gutterBottom sx={{ mb: 4 }}>
-          Built for organizations preparing for what comes next
+          Identify the workflow owner, operating team, and acceptance requirements
         </Typography>
 
         <Grid container spacing={4}>
@@ -299,15 +301,15 @@ function FromIDVPage() {
       {/* Section 6 - The Outcome */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
-          The Outcome
+          What the Evaluation Should Establish
         </Typography>
         <Typography variant="h6" color="text.secondary" textAlign="center" gutterBottom sx={{ mb: 4 }}>
-          From one-time verification to reusable, governed identity
+          A recorded result for the exact release, inputs, and operating environment
         </Typography>
 
         <Paper elevation={3} sx={{ p: 4, bgcolor: 'grey.50' }}>
           <Typography variant="h5" sx={{ textAlign: 'center', fontWeight: 'bold', color: 'primary.main', my: 2 }}>
-            Credentials are issued once, then verified anywhere—without re-verification.
+            Demonstrate the agreed workflow and its failure cases. Record what remains unproved before expanding scope.
           </Typography>
         </Paper>
       </Box>
@@ -321,10 +323,11 @@ function FromIDVPage() {
         }}
       >
         <Typography variant="h5" gutterBottom fontWeight="bold">
-          Ready to move beyond traditional IDV?
+          Define your next evaluation
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 4, maxWidth: 600, mx: 'auto' }}>
-          Start with the verification surface, then go deeper into the API and docs when you&apos;re ready to implement.
+          Review the relevant demonstration and documentation, then discuss a bounded annual software license.
+          Price, included scope, component rights, and delivery terms require an agreed offer.
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
           {SHOW_PUBLIC_CTA && <Button
@@ -334,7 +337,7 @@ function FromIDVPage() {
             endIcon={<ArrowForwardIcon />}
             sx={{ px: 4 }}
           >
-            Start Verifying Credentials
+            Explore Developer Docs
           </Button>}
           <Button
             variant="outlined"

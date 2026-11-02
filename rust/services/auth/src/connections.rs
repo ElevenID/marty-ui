@@ -4,8 +4,8 @@ use mmf_data::{CacheBackend, CacheConfig, CacheStore, RedisCache};
 use mmf_messaging::{MessageTransport, PostgresOutboxStore};
 use mmf_platform::{
     GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
-    KeylessGrpcTlsAcceptor, KeylessGrpcTransportOptions, OpenBaoTlsIdentityFiles,
-    OutboundHttpClient, OutboundHttpMethod, OutboundHttpRequest, ReqwestOutboundHttpClient,
+    KeylessGrpcTlsAcceptor, KeylessGrpcTransportOptions, OutboundHttpClient, OutboundHttpMethod,
+    OutboundHttpRequest, ReqwestOutboundHttpClient,
 };
 use mmf_security::RedisRateLimiter;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -104,7 +104,7 @@ impl AuthConnections {
 
         let flow_channel = if let Some(tls) = &config.workload_client_tls {
             let target = config.flow_grpc_target.replacen("http://", "https://", 1);
-            openbao_identity(tls)
+            tls.identity
                 .grpc_channel_connected(
                     &target,
                     &tls.ca_certificate,
@@ -252,24 +252,11 @@ pub async fn workload_server_tls(
     let Some(tls) = &config.workload_server_tls else {
         return Ok(None);
     };
-    openbao_identity(tls)
+    tls.identity
         .grpc_acceptor(&tls.ca_certificate, 64, Duration::from_secs(15))
         .await
         .map(Some)
         .map_err(|error| AuthConnectionError::Grpc(error.to_string()))
-}
-
-fn openbao_identity(tls: &crate::AuthWorkloadClientTlsFiles) -> OpenBaoTlsIdentityFiles {
-    OpenBaoTlsIdentityFiles {
-        certificate_chain_file: tls.certificate.clone(),
-        kms_ca_cert_file: tls.kms_ca_certificate.clone(),
-        kms_endpoint: tls.kms_endpoint.clone(),
-        kms_token_file: tls.kms_token_file.clone(),
-        kms_key_name: tls.kms_key_name.clone(),
-        kms_key_version: tls.kms_key_version,
-        request_timeout: Duration::from_secs(10),
-        max_concurrent_signs: 64,
-    }
 }
 
 async fn probe_http_health(

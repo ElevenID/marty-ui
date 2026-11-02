@@ -42,6 +42,31 @@ def test_frozen_profile_preservation_disposable_and_verify_only():
     assert cases["verify_only"]["state"]["openbao_keys"] == {}
 
 
+def test_expected_public_ids_are_opaque_and_jwks_and_existing_methods_stay_stable():
+    cases = _cases()
+    original = json.dumps(cases, sort_keys=True)
+    org = "00000000-0000-0000-0000-000000000001"
+    did = "did:web:issuer.example:orgs:marty"
+    key = f"org:{org}:signing-key-did-document"
+    expected = comparison.expected_for_case(cases["clean_apply"])
+    document = expected["state"]["redis"][key]
+    first_id = f"{did}#managed-c6d19c087a375cf58795"
+    assert document["verificationMethod"][0]["id"] == first_id
+    assert document["verificationMethod"][0]["type"] == "JsonWebKey2020"
+    assert all("kid" not in method["publicKeyJwk"] for method in document["verificationMethod"])
+    assert first_id in document["assertionMethod"]
+    profiles = expected["state"]["redis"][f"org:{org}:issuer-profiles"]["profiles"]
+    assert profiles[0]["verification_method_id"] == first_id
+    historical = comparison._scoped_expected(cases["clean_apply"]["state"], org)
+    assert expected["state"]["redis"][f"org:{org}:signing-key-jwks"] == historical["redis"][f"org:{org}:signing-key-jwks"]
+    assert profiles[0]["signing_key_reference"] == historical["redis"][f"org:{org}:issuer-profiles"]["profiles"][0]["signing_key_reference"]
+    assert expected["effects"] == comparison._scoped_expected(cases["clean_apply"]["effects"], org)
+    backfilled = comparison.expected_for_case(cases["backfill_mixed_did"])
+    original_method = cases["backfill_mixed_did"]["input"]["initial_redis"][key]["verificationMethod"][0]
+    assert original_method in backfilled["state"]["redis"][key]["verificationMethod"]
+    assert json.dumps(cases, sort_keys=True) == original, "the historical corpus remains unchanged"
+
+
 def test_guarded_shell_runs_notification_after_successful_rust_bootstrap():
     shell = (ROOT / "scripts/run-migrations-with-secrets.sh").read_text(encoding="utf-8")
     ordered = ["set -e", ". /app/load-secrets-env.sh", "require_secret_var MARTY_DB_PASSWORD", "admin_email=", "case \"${admin_email}\" in", "/usr/local/bin/marty-migration-bootstrap", "exec /usr/local/bin/marty-notification --migrate"]

@@ -1,9 +1,12 @@
+import { publicEntryHref } from '../application/routing/publicEntry';
 import { useMemo } from 'react';
 import { Tabs, Tab, Box, Button } from '@mui/material';
 import { Link, useLocation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../hooks/useAuth';
-import { PUBLIC_TABS, SHOW_PUBLIC_CTA } from '@ui-public-config';
+import { IS_SELFHOST_UI, PUBLIC_TABS, SHOW_PUBLIC_CTA } from '@ui-public-config';
+import { isConsolePath } from '../application/routing/appHandoff';
+import { isWebPathEnabled } from '../utils/runtimeConfig';
 
 /**
  * Administrator navigation tabs
@@ -46,12 +49,13 @@ function Navigation() {
 
   // Select tabs based on user type
   const tabs = useMemo(() => {
+    if (IS_SELFHOST_UI) return PUBLIC_TABS;
     if (!isAuthenticated) return PUBLIC_TABS;
     if (isAdministrator) return ADMIN_TABS;
     if (isVendor) return VENDOR_TABS;
     if (isApplicant) return APPLICANT_TABS;
     return PUBLIC_TABS;
-  }, [isAuthenticated, isAdministrator, isVendor, isApplicant]);
+  }, [isAuthenticated, isAdministrator, isVendor, isApplicant]).filter((tab) => isWebPathEnabled(tab.path));
 
   // Find current tab index
   const getCurrentTab = () => {
@@ -109,8 +113,10 @@ function Navigation() {
             <Tab 
               key={tab.path} 
               label={t(tab.labelKey, tab.defaultLabel)} 
-              component={tab.disabled ? undefined : Link}
-              to={tab.disabled ? undefined : tab.path}
+              component={tab.disabled ? undefined : isConsolePath(tab.path) ? 'a' : Link}
+              {...(isConsolePath(tab.path)
+                ? { href: publicEntryHref(tab.disabled ? undefined : tab.path) }
+                : { to: publicEntryHref(tab.disabled ? undefined : tab.path) })}
               disabled={Boolean(tab.disabled)}
               sx={tab.disabled ? {
                 '&.Mui-disabled': {
@@ -128,7 +134,7 @@ function Navigation() {
             variant="contained"
             size="small"
             component={Link}
-            to="/developers"
+            to={publicEntryHref('/developers')}
             sx={{
               ml: 2,
               whiteSpace: 'nowrap',

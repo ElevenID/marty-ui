@@ -1,3 +1,4 @@
+import { publicEntryHref } from '../../application/routing/publicEntry';
 import { Box, Button, Card, CardContent, Chip, Grid, Typography } from '@mui/material';
 import FlightTakeoffIcon from '@mui/icons-material/FlightTakeoff';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
@@ -64,7 +65,7 @@ export default function ProductCapabilitiesSection({ t }) {
                   fullWidth
                   variant="text"
                   component="a"
-                  href="/product"
+                  href={publicEntryHref('/product')}
                   endIcon={<ArrowForwardIcon fontSize="small" />}
                   sx={{ '&:hover': { bgcolor: 'primary.50' } }}
                 >
@@ -81,7 +82,7 @@ export default function ProductCapabilitiesSection({ t }) {
           variant="outlined"
           size="large"
           component="a"
-          href="/product"
+          href={publicEntryHref('/product')}
           endIcon={<ArrowForwardIcon />}
           sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
         >

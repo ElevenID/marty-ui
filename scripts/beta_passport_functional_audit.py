@@ -34,6 +34,41 @@ def local_native_overlay_binding(capture, image_source_id: str) -> dict[str, Any
     """Bind the recorder's canonical live observation, not an imported verifier."""
     receipt = os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_RECEIPT")
     context = getattr(capture, "native_runtime_binding", None)
+    functional_receipt = os.environ.get("DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT")
+    functional = getattr(capture, "functional_runtime_binding", None)
+    require(not (receipt and functional_receipt) and not (context and functional),
+            "Select one recorder-owned passport runtime mode")
+    if functional_receipt:
+        path = Path(functional_receipt)
+        require(context is None and os.environ.get("RECORD_VIDEO") == "0"
+                and isinstance(functional, Mapping)
+                and set(functional) == {"kind", "profileSha256", "receiptSha256", "scope",
+                                        "releaseQualified", "recordingQualified"}
+                and functional["kind"] == "FUNCTIONAL_RUNTIME_V2"
+                and functional["scope"] == "FUNCTIONAL_ONLY"
+                and functional["releaseQualified"] is False
+                and functional["recordingQualified"] is False
+                and all(isinstance(functional[key], str)
+                        and re.fullmatch(r"[a-f0-9]{64}", functional[key])
+                        for key in ("profileSha256", "receiptSha256")),
+                "Passport v2 requires the exact functional-only recorder ACK")
+        require(path.is_absolute() and path.is_file() and not path.is_symlink(),
+                "Passport functional receipt must be regular")
+        with path.open("rb") as stream:
+            raw = stream.read(1024 * 1024 + 1)
+        require(0 < len(raw) <= 1024 * 1024
+                and functional["receiptSha256"] == os.environ.get("DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256")
+                == hashlib.sha256(raw).hexdigest(), "Passport functional receipt changed")
+        observed = json.loads(raw)
+        require(observed.get("schema") == "marty.canvas-functional-runtime-observation/v2"
+                and observed.get("profileSha256") == functional["profileSha256"]
+                and observed.get("scope") == "FUNCTIONAL_ONLY"
+                and observed.get("releaseQualified") is False and observed.get("recordingQualified") is False,
+                "Passport functional observation differs from recorder ACK")
+        # Full actual22 observations remain owned by the recorder before/after
+        # capture. Image markers and simulator deployment checks stay separate.
+        return dict(functional)
+    require(functional is None, "Unexpected functional ACK without selected observation")
     if not receipt:
         require(context is None, "Unexpected native runtime binding without an overlay")
         return None
@@ -146,18 +181,27 @@ def verify_runtime(
     rows = deployment.get("images")
     require(isinstance(rows, list) and all(isinstance(row, dict) for row in rows),
             "Passport deployment image inventory is unavailable")
+    require(all(row.get("image_id") == receipt.get("images", {}).get("services", {}).get("imageId")
+                for row in rows if row.get("service") in ROLES), "Legacy passport services image differs")
+    return _verify_runtime_roles(rows, receipt["sourceRevision"], receipt["sourceId"], observe=observe)
+
+
+def _verify_runtime_roles(rows, source_revision, source_id, *, observe=docker_json):
     bound: dict[str, str] = {}
     for role in ROLES:
         candidates = [row for row in rows if row.get("service") == role]
         require(len(candidates) == 1, "Protected passport role is missing or duplicated: " + role)
         row = candidates[0]
         require(re.fullmatch(r"[0-9a-f]{64}", str(row.get("container_id", "")))
-                and re.fullmatch(r"sha256:[0-9a-f]{64}", str(row.get("image_id", "")))
-                and row["image_id"] == receipt.get("images", {}).get("services", {}).get("imageId"),
+                and re.fullmatch(r"sha256:[0-9a-f]{64}", str(row.get("image_id", ""))),
                 "Protected passport role differs from the exact services image: " + role)
         current = observe("inspect", row["container_id"])
         require(len(current) == 1, "Protected passport role observation is ambiguous: " + role)
         item = current[0]
+        if "started_at" in row:
+            require(item.get("State", {}).get("StartedAt") == row["started_at"]
+                    and item.get("State", {}).get("Pid") == row["host_pid"],
+                    "Current passport role generation changed")
         labels = item.get("Config", {}).get("Labels") or {}
         raw_environment = item.get("Config", {}).get("Env", [])
         require(isinstance(raw_environment, list)
@@ -205,9 +249,52 @@ def verify_runtime(
             and (kms[0].get("Config", {}).get("Labels") or {}).get("com.docker.compose.project") == "elevenid-beta"
             and (kms[0].get("Config", {}).get("Labels") or {}).get("com.docker.compose.service") == "openbao",
             "Protected passport callback network has an unexpected KMS member")
-    return {"sourceRevision": receipt["sourceRevision"], "sourceId": receipt["sourceId"],
+    return {"sourceRevision": source_revision, "sourceId": source_id,
             "containers": bound, "callbackNetworkId": networks[0]["Id"],
             "providerMode": "simulator", "physicalClaim": "not_claimed"}
+
+
+def verify_functional_runtime(capture, observed, manifest, *, observe=docker_json):
+    """Use the existing recorder-owned all-role ACK; never invent a developer receipt."""
+    from scripts.validate_demo_manifests import validate_manifest
+    validate_manifest(manifest)
+    source = manifest.get("demo_application_revision")
+    require(re.fullmatch(r"[a-f0-9]{40}", str(source))
+            and manifest.get("release_ready") is False and manifest.get("public_demo_ready") is False,
+            "Passport current stack must remain unqualified")
+    acknowledgement = local_native_overlay_binding(capture, source)
+    require((acknowledgement or {}).get("kind") == "FUNCTIONAL_RUNTIME_V2",
+            "Current passport runtime requires the recorder-owned functional ACK")
+    require(observed == bound_json({"path": os.environ["DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT"],
+                                    "sha256": acknowledgement["receiptSha256"]}),
+            "Current passport observation differs from its immutable bytes")
+    binding = observed.get("binding", {})
+    require(observed.get("schema") == "marty.canvas-functional-runtime-observation/v2"
+            and observed.get("profileSha256") == acknowledgement["profileSha256"]
+            and binding.get("schema") == "marty.functional-mixed-runtime-binding/v2"
+            and binding.get("scope") == "FUNCTIONAL_ONLY" and binding.get("releaseQualified") is False
+            and binding.get("recordingQualified") is False,
+            "Passport current runtime differs from the acknowledged functional receipt")
+    rows = binding.get("roles")
+    require(isinstance(rows, list), "Current passport role inventory is unavailable")
+    ui = [row for row in rows if row.get("role") == "ui-prod"]
+    require(len(ui) == 1 and ui[0].get("source") == source,
+            "Passport current UI source differs from the bound manifest")
+    selected = []
+    for role in ROLES:
+        candidates = [row for row in rows if row.get("role") == role]
+        require(len(candidates) == 1, "Current passport role is missing or duplicated")
+        row = candidates[0]
+        require(re.fullmatch(r"[a-f0-9]{40}", str(row.get("source"))) is not None,
+                "Current passport role source is unavailable")
+        require(isinstance(row.get("startedAt"), str) and bool(row["startedAt"])
+                and type(row.get("hostPid")) is int and row["hostPid"] > 0,
+                "Current passport role generation is unavailable")
+        selected.append({"service": role, "container_id": row.get("containerId"), "image_id": row.get("imageId"),
+                         "started_at": row["startedAt"], "host_pid": row["hostPid"]})
+    result = _verify_runtime_roles(selected, source, source, observe=observe)
+    result["nativeSources"] = {row["role"]: row["source"] for row in rows if row.get("role") in ROLES}
+    return result
 
 
 class ObservedPassportRequests:
@@ -578,43 +665,61 @@ def _run_bound_capture(capture) -> dict[str, Any]:
     require_direct_beta_transport()
     capture._passport_failure_stage = "ACKNOWLEDGED_INPUTS"
     scenario = capture.inputs.get("scenario")
-    require(capture.inputs.get("origin") == ORIGIN and isinstance(scenario, dict)
-            and set(scenario) == {"runtimeReceipt", "deploymentManifest", "sourceManifest", "stackManifest",
-                                  "privateFixture", "productWorkspace"},
+    require(capture.inputs.get("origin") == ORIGIN and isinstance(scenario, dict),
             "Passport acknowledged operation inputs are incomplete")
-    receipt = bound_json(scenario["runtimeReceipt"])
-    deployment = bound_json(scenario["deploymentManifest"])
-    manifest = bound_json(scenario["sourceManifest"])
-    stack_manifest = bound_json(scenario["stackManifest"])
-    require(Path(receipt.get("deploymentManifest", "")).resolve()
-                == Path(scenario["deploymentManifest"]["path"]).resolve()
-            and Path(receipt.get("sourceManifest", "")).resolve()
-                == Path(scenario["sourceManifest"]["path"]).resolve()
-            and receipt.get("sourceManifestSha256") == scenario["sourceManifest"]["sha256"]
-            and manifest.get("marty_ui_sha") == receipt.get("sourceId"),
-            "Passport product source and deployment manifest bindings differ")
-    require((Path(scenario["deploymentManifest"]["path"]).parent
-                / deployment.get("deployed_demo_manifest", "")).resolve()
-                == Path(scenario["stackManifest"]["path"]).resolve()
-            and deployment.get("deployed_demo_manifest_sha256") == scenario["stackManifest"]["sha256"]
-            and stack_manifest.get("deployment_release_marker") == receipt.get("release")
-            and stack_manifest.get("release_ready") is False
-            and stack_manifest.get("public_demo_ready") is False,
-            "Passport local stack manifest differs from the actual deployment")
-    capture._passport_failure_stage = "COORDINATED_SOURCE"
-    workspace = coordinated_product_workspace(Path(scenario["productWorkspace"]),
-        Path(scenario["sourceManifest"]["path"]))
-    source_manifest.verify_manifest(workspace, Path(scenario["sourceManifest"]["path"]))
-    # On ordinary beta this fails here, before custody is read or any HTTP call:
-    # the simulator profile must have actually been deployed and independently
-    # receipt-bound, never inferred from a services image containing its binary.
-    capture._passport_failure_stage = "PROTECTED_RUNTIME"
-    initial_runtime = verify_runtime(receipt, deployment)
-    overlay_binding = local_native_overlay_binding(capture, receipt["sourceId"])
+    current_runtime = scenario.get("runtimeMode") == "FUNCTIONAL_RUNTIME_V2"
+    if current_runtime:
+        require(set(scenario) == {"runtimeMode", "runtimeReceipt", "stackManifest", "privateFixture", "productionExpectedOff"},
+                "Current passport acknowledged inputs are incomplete")
+        observed = bound_json(scenario["runtimeReceipt"])
+        stack_manifest = bound_json(scenario["stackManifest"])
+        require(scenario["runtimeReceipt"]["path"] == os.environ.get("DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT")
+                and scenario["runtimeReceipt"]["sha256"] == os.environ.get("DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256"),
+                "Passport runtime input differs from the selected recorder observation")
+        initial_runtime = verify_functional_runtime(capture, observed, stack_manifest)
+        product_revision = product_source_id = initial_runtime["sourceId"]
+        release = stack_manifest["deployment_release_marker"]
+        expected_off = bound_json(scenario["productionExpectedOff"])
+    else:
+        require(capture.inputs.get("origin") == ORIGIN and isinstance(scenario, dict)
+                and set(scenario) == {"runtimeReceipt", "deploymentManifest", "sourceManifest", "stackManifest",
+                                      "privateFixture", "productWorkspace"},
+                "Passport acknowledged operation inputs are incomplete")
+        receipt = bound_json(scenario["runtimeReceipt"])
+        deployment = bound_json(scenario["deploymentManifest"])
+        manifest = bound_json(scenario["sourceManifest"])
+        stack_manifest = bound_json(scenario["stackManifest"])
+        require(Path(receipt.get("deploymentManifest", "")).resolve()
+                    == Path(scenario["deploymentManifest"]["path"]).resolve()
+                and Path(receipt.get("sourceManifest", "")).resolve()
+                    == Path(scenario["sourceManifest"]["path"]).resolve()
+                and receipt.get("sourceManifestSha256") == scenario["sourceManifest"]["sha256"]
+                and manifest.get("marty_ui_sha") == receipt.get("sourceId"),
+                "Passport product source and deployment manifest bindings differ")
+        require((Path(scenario["deploymentManifest"]["path"]).parent
+                    / deployment.get("deployed_demo_manifest", "")).resolve()
+                    == Path(scenario["stackManifest"]["path"]).resolve()
+                and deployment.get("deployed_demo_manifest_sha256") == scenario["stackManifest"]["sha256"]
+                and stack_manifest.get("deployment_release_marker") == receipt.get("release")
+                and stack_manifest.get("release_ready") is False
+                and stack_manifest.get("public_demo_ready") is False,
+                "Passport local stack manifest differs from the actual deployment")
+        capture._passport_failure_stage = "COORDINATED_SOURCE"
+        workspace = coordinated_product_workspace(Path(scenario["productWorkspace"]),
+            Path(scenario["sourceManifest"]["path"]))
+        source_manifest.verify_manifest(workspace, Path(scenario["sourceManifest"]["path"]))
+        # On ordinary beta this fails here, before custody is read or any HTTP call:
+        # the simulator profile must have actually been deployed and independently
+        # receipt-bound, never inferred from a services image containing its binary.
+        capture._passport_failure_stage = "PROTECTED_RUNTIME"
+        initial_runtime = verify_runtime(receipt, deployment)
+        product_revision, product_source_id, release = receipt["sourceRevision"], receipt["sourceId"], receipt["release"]
+        expected_off = None
+    overlay_binding = local_native_overlay_binding(capture, product_source_id)
     capture._passport_failure_stage = "PUBLIC_MARKERS"
     public = assert_beta()
-    require(public.get("source_id") == receipt["sourceId"]
-            and public.get("release_version") == receipt["release"],
+    require(public.get("source_id") == product_source_id
+            and public.get("release_version") == release,
             "Public beta markers differ from the protected passport product")
     capture._passport_failure_stage = "PRIVATE_CUSTODY"
     fixture = bound_json(scenario["privateFixture"], private=True)
@@ -640,7 +745,7 @@ def _run_bound_capture(capture) -> dict[str, Any]:
             "Canonical passport operations require three distinct dedicated sessions")
     capture._passport_failure_stage = "PRODUCTION_INVARIANTS"
     try:
-        before = production_snapshot()
+        before = production_snapshot(expected_off=expected_off)
         attachments = production_attachment_sha256()
     except Exception:
         # Session preparation is already an owned beta side effect. A failed
@@ -680,11 +785,14 @@ def _run_bound_capture(capture) -> dict[str, Any]:
         raise
 
     def recheck():
-        for name in ("runtimeReceipt", "deploymentManifest", "sourceManifest", "stackManifest", "privateFixture"):
+        for name in (("runtimeReceipt", "stackManifest", "privateFixture", "productionExpectedOff") if current_runtime else
+                     ("runtimeReceipt", "deploymentManifest", "sourceManifest", "stackManifest", "privateFixture")):
             bound_json(scenario[name], private=name == "privateFixture")
-        require(verify_runtime(receipt, deployment) == initial_runtime,
+        actual_runtime = (verify_functional_runtime(capture, observed, stack_manifest) if current_runtime
+                          else verify_runtime(receipt, deployment))
+        require(actual_runtime == initial_runtime,
                 "Protected passport runtime changed during fresh operations")
-        require(local_native_overlay_binding(capture, receipt["sourceId"]) == overlay_binding,
+        require(local_native_overlay_binding(capture, product_source_id) == overlay_binding,
                 "Local native overlay changed during fresh operations")
         require(assert_beta() == public, "Public beta source changed during fresh operations")
 
@@ -717,7 +825,7 @@ def _run_bound_capture(capture) -> dict[str, Any]:
                                 action, route, payload, session))
                     return ports.flow_request(method, path, body, session)
                 capture._passport_failure_stage = "FRESH_OPERATIONS"
-                result = fresh.exercise(owned_plan, source_commit=receipt["sourceRevision"],
+                result = fresh.exercise(owned_plan, source_commit=product_revision,
                     stack_manifest_sha256=scenario["stackManifest"]["sha256"],
                     csca_session=custody["cscaSession"], dsc_session=custody["dscSession"],
                     flow_session=custody["flowSession"], api_key=api_key,
@@ -786,19 +894,26 @@ def _run_bound_capture(capture) -> dict[str, Any]:
                     finally:
                         browser.close()
     finally:
-        require(production_snapshot() == before and production_attachment_sha256() == attachments,
+        require(production_snapshot(expected_off=expected_off) == before and production_attachment_sha256() == attachments,
                 "Production changed during the fresh passport operation window")
         recheck()
-        source_manifest.verify_manifest(workspace, Path(scenario["sourceManifest"]["path"]))
+        if not current_runtime:
+            source_manifest.verify_manifest(workspace, Path(scenario["sourceManifest"]["path"]))
     capture._passport_failure_stage = "EVIDENCE_COMPLETION"
-    result.update(productRevision=receipt["sourceRevision"], productSourceId=receipt["sourceId"],
-                  effectiveNativeProductRevision=(overlay_binding or {}).get("nativeSourceRevision", receipt["sourceRevision"]),
+    result.update(productRevision=product_revision, productSourceId=product_source_id,
+                  effectiveNativeProductRevision=(None if (overlay_binding or {}).get("kind") == "FUNCTIONAL_RUNTIME_V2"
+                      else (overlay_binding or {}).get("nativeSourceRevision", product_revision)),
                   localOverlayBinding=overlay_binding,
                   productionInvariantPreserved=True,
                   qualification=("LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS" if overlay_binding
                                  else "CURRENT_SOURCE_FUNCTIONAL_OPERATIONS"),
                   ownershipJournalSha256=hashlib.sha256(ownership_path.read_bytes()).hexdigest(),
-                  stackManifestKind="LOCAL_DEPLOYED_DEMO_MANIFEST", signedManifestVerified=False)
+                  stackManifestKind=("SIGNED_NIGHTLY_FUNCTIONAL" if current_runtime else "LOCAL_DEPLOYED_DEMO_MANIFEST"), signedManifestVerified=False)
+    if current_runtime:
+        result["passportRuntimeSources"] = initial_runtime["nativeSources"]
+    if (overlay_binding or {}).get("kind") == "FUNCTIONAL_RUNTIME_V2":
+        result["localFunctionalRuntime"] = {key: overlay_binding[key] for key in
+            ("profileSha256", "receiptSha256", "scope", "releaseQualified", "recordingQualified")}
     output = Path(os.environ["DEMO_ARTIFACT_DIR"]) / "passport-fresh-operations.json"
     require(output.parent.is_dir() and not output.is_symlink() and not output.exists(),
             "Owned passport operation output is unavailable")

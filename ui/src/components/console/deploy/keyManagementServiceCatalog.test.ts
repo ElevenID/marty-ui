@@ -63,6 +63,24 @@ it('preserves existing transit CA trust through config normalization and new reg
   expect(createKeyManagementServicePayload({ service_type: 'openbao-transit' }, normalized.service_type_catalog).ca_cert_file).toBe('')
 })
 
+it('keeps server-reported extensions through default updates without accepting private operation bindings', () => {
+  const extensions = { didcomm_authcrypt: { enabled: true, basis: 'registered_binding' } }
+  const original = {
+    services: [
+      { id: 'extension', service_type: 'openbao-transit', extensions },
+      { id: 'aws', service_type: 'aws-kms' },
+    ],
+    default_service_id: 'extension',
+    did_operation_bindings: { 'did:example:issuer': { private: 'not-a-public-config-field' } },
+  }
+  const payload = createKeyManagementConfigUpdate(original, { default_service_id: 'aws' })
+  expect(payload.services[0].extensions).toEqual(extensions)
+  expect(payload.services[0].extensions).not.toBe(extensions)
+  expect(payload.services[1].extensions).toEqual({})
+  expect(payload).not.toHaveProperty('did_operation_bindings')
+  expect(payload.default_service_id).toBe('aws')
+})
+
 
 it('registration preserves explicit maps and authorizes only the selected key and declared purposes', () => {
   const original = {
@@ -118,6 +136,18 @@ it('default updates preserve explicit maps and reject unregistered defaults with
   expect(original).toEqual(snapshot)
 })
 
+it('preserves an explicit absence of a default when another KMS is registered', () => {
+  const original = { ...routingConfig(), default_service_id: null,
+    config_revision: '"r-e4195bec-8a3a-43d5-828d-c7b5a0c4921c"' }
+  const next = createKeyManagementServicePayload({ id: 'third', service_type: 'aws-kms', key_reference: 'key-three' }, [])
+  const payload = createKeyManagementRegistrationPayload(original, next, false)
+  expect(payload.default_service_id).toBeNull()
+  expect(payload.config_revision).toBe(original.config_revision)
+  expect(payload.services.map((service) => service.id)).toEqual(['first', 'second', 'third'])
+  expect(payload.type_defaults).toEqual(original.type_defaults)
+  expect(payload.key_reference_purposes).toEqual(original.key_reference_purposes)
+})
+
 it('removal prunes only exact removed-service bindings and handles the last default explicitly', () => {
   const original = routingConfig()
   const snapshot = structuredClone(original)
@@ -128,7 +158,7 @@ it('removal prunes only exact removed-service bindings and handles the last defa
   expect(payload.type_defaults).toEqual({ oid4vp_request_signing: 'second' })
   expect(payload.format_defaults).toEqual({ SD_JWT_VC: 'second' })
   expect(createKeyManagementRemovalPayload(payload, 'second')).toEqual({
-    services: [], default_service_id: null, key_reference_purposes: {}, type_defaults: {}, format_defaults: {},
+    config_revision: null, services: [], default_service_id: null, key_reference_purposes: {}, type_defaults: {}, format_defaults: {},
   })
   expect(createKeyManagementRemovalPayload(original, 'second').default_service_id).toBe('first')
   expect(() => createKeyManagementRemovalPayload(original, 'foreign')).toThrow(/registered/)

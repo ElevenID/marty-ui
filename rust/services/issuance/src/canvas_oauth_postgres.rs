@@ -17,7 +17,7 @@ use crate::{
         contains_private_key_value, integration_secret_hint, IntegrationSecretMetadata,
         ManagedIntegrationSecret, NewIntegrationSecret,
     },
-    integration_secret_kms::KmsIntegrationSecretCipher,
+    integration_secret_kms::{KmsIntegrationSecretCipher, KmsIntegrationSecretError},
 };
 
 #[async_trait]
@@ -790,7 +790,7 @@ impl CanvasOAuthSecretVault for PostgresIntegrationSecretVault {
             .storage
             .decrypt(organization_id, secret_id, &provider, &purpose, &encrypted)
             .await
-            .map_err(|_| CanvasOAuthError::SecretUnavailable)?;
+            .map_err(oauth_secret_error)?;
         sqlx::query(
             "UPDATE issuance_service.organization_integration_secrets
              SET last_used_at = clock_timestamp()
@@ -821,7 +821,7 @@ impl CanvasOAuthSecretVault for PostgresIntegrationSecretVault {
                 &secret.value,
             )
             .await
-            .map_err(|_| CanvasOAuthError::SecretUnavailable)?;
+            .map_err(oauth_secret_error)?;
         let hint = integration_secret_hint(&secret.value).unwrap_or_else(|| "...".to_owned());
         sqlx::query(
             "INSERT INTO issuance_service.organization_integration_secrets
@@ -881,7 +881,7 @@ impl CanvasIntegrationSecretRepository for PostgresIntegrationSecretVault {
                 plaintext,
             )
             .await
-            .map_err(|_| CanvasManagementRepositoryError::Unavailable)?;
+            .map_err(secret_management_error)?;
         let row = sqlx::query(
             "INSERT INTO issuance_service.organization_integration_secrets
                 (id, organization_id, name, provider, purpose,
@@ -972,7 +972,7 @@ impl CanvasIntegrationSecretRepository for PostgresIntegrationSecretVault {
                         value,
                     )
                     .await
-                    .map_err(|_| CanvasManagementRepositoryError::Unavailable)?,
+                    .map_err(secret_management_error)?,
             ),
             None => None,
         };
@@ -1015,6 +1015,24 @@ impl CanvasIntegrationSecretRepository for PostgresIntegrationSecretVault {
         .await
         .map(|result| result.rows_affected() == 1)
         .map_err(management_repository_error)
+    }
+}
+
+fn oauth_secret_error(error: KmsIntegrationSecretError) -> CanvasOAuthError {
+    match error {
+        KmsIntegrationSecretError::CapabilityUnavailable => {
+            CanvasOAuthError::SecretCapabilityUnavailable
+        }
+        _ => CanvasOAuthError::SecretUnavailable,
+    }
+}
+
+fn secret_management_error(error: KmsIntegrationSecretError) -> CanvasManagementRepositoryError {
+    match error {
+        KmsIntegrationSecretError::CapabilityUnavailable => {
+            CanvasManagementRepositoryError::SecretCapabilityUnavailable
+        }
+        _ => CanvasManagementRepositoryError::Unavailable,
     }
 }
 
@@ -1217,4 +1235,27 @@ fn repository_error(error: sqlx::Error) -> CanvasOAuthError {
 
 fn repository_failure() -> CanvasOAuthError {
     CanvasOAuthError::RepositoryUnavailable
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oauth_secret_capability_refusal_stays_distinct_from_storage_failure() {
+        assert_eq!(
+            oauth_secret_error(KmsIntegrationSecretError::CapabilityUnavailable),
+            CanvasOAuthError::SecretCapabilityUnavailable
+        );
+        for error in [
+            KmsIntegrationSecretError::Unavailable,
+            KmsIntegrationSecretError::InvalidEnvelope,
+            KmsIntegrationSecretError::StorageUnavailable,
+        ] {
+            assert_eq!(
+                oauth_secret_error(error),
+                CanvasOAuthError::SecretUnavailable
+            );
+        }
+    }
 }

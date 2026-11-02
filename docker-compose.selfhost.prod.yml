@@ -1,3 +1,5 @@
+# Provider-specific fields may be removed by an authenticated foundation layer.
+# Selected runtime owners validate their complete provider configuration.
 name: marty-selfhost-prod
 
 x-runtime-env: &runtime-env
@@ -11,6 +13,7 @@ x-runtime-env: &runtime-env
   UI_BASE_URL: ${UI_BASE_URL:-https://localhost}
   ISSUER_BASE_URL: ${ISSUER_BASE_URL:-https://localhost}
   MARTY_ISSUER_BASE_URL: ${MARTY_ISSUER_BASE_URL:-https://localhost}
+  MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:-}
   ORGANIZATION_CREATION_ENABLED: ${ORGANIZATION_CREATION_ENABLED:-false}
   ES_GRPC_TARGET: https://event-stream:9015
 
@@ -57,7 +60,7 @@ x-issuance-application-env: &issuance-application-env
   SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
   SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
   SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
-  BAO_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for Issuance signing grants}
+  BAO_ADDR: ${BAO_ADDR:-}
   BAO_CACERT: /run/secrets/openbao_tls_ca_cert
   ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE: /run/secrets/sign_grant_mint_issuance_credential_token
   ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: /run/secrets/sign_grant_mint_issuance_canvas_token
@@ -84,6 +87,7 @@ x-issuance-application-env: &issuance-application-env
 
 services:
   postgres:
+    mem_limit: ${MARTY_POSTGRES_MEMORY_LIMIT:-1g}
     image: postgres:15-alpine
     environment:
       POSTGRES_DB: postgres
@@ -109,6 +113,7 @@ services:
     restart: unless-stopped
 
   redis:
+    mem_limit: ${MARTY_REDIS_MEMORY_LIMIT:-512m}
     image: redis:7-alpine
     # The official entrypoint chowns /data (including this project-scoped socket
     # volume) before dropping privileges. The socket mode serves heterogeneous
@@ -130,7 +135,8 @@ services:
     restart: unless-stopped
 
   keycloak:
-    image: ${MARTY_KEYCLOAK_KMS_IMAGE:?MARTY_KEYCLOAK_KMS_IMAGE must pin the remote-key image by digest}
+    mem_limit: ${MARTY_KEYCLOAK_MEMORY_LIMIT:-2g}
+    image: ${MARTY_KEYCLOAK_KMS_IMAGE:-}
     entrypoint: ["/bin/sh", "/scripts/keycloak-selfhost-start.sh"]
     command:
       - start
@@ -142,6 +148,8 @@ services:
     ports:
       - "127.0.0.1:${SELFHOST_KEYCLOAK_HOST_PORT:-18180}:8080"
     environment:
+      # Leave room for metaspace, native buffers, threads and the remote-key provider.
+      JAVA_OPTS_KC_HEAP: "-XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=65"
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
       KEYCLOAK_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_admin_password
       KC_DB: postgres
@@ -161,14 +169,14 @@ services:
       GOOGLE_CLIENT_ID_FILE: /run/secrets/google_client_id
       GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google_client_secret
       MARTY_API_CLIENT_SECRET_FILE: /run/secrets/marty_api_client_secret
-      BAO_ADDR: ${KEYCLOAK_KMS_ADDR:?KEYCLOAK_KMS_ADDR must identify HTTPS OpenBao for Keycloak}
+      BAO_ADDR: ${KEYCLOAK_KMS_ADDR:-}
       BAO_CACERT: /run/secrets/openbao_tls_ca_cert
       BAO_TOKEN_FILE: /run/secrets/keycloak_signing_kms_token
       MARTY_KEYCLOAK_RS256_CERT_DIR: /run/secrets
       MARTY_KEYCLOAK_JWE_TOKEN_DIR: /run/secrets
       MARTY_KEYCLOAK_JWE_MOUNT: didcomm
       MARTY_KEYCLOAK_KMS_KEY_PREFIX: keycloak
-      MARTY_KEYCLOAK_KMS_KEY_VERSION: ${KEYCLOAK_KMS_KEY_VERSION:?KEYCLOAK_KMS_KEY_VERSION must pin the remote signing key version}
+      MARTY_KEYCLOAK_KMS_KEY_VERSION: ${KEYCLOAK_KMS_KEY_VERSION:-}
     secrets:
       - keycloak_admin_password
       - keycloak_db_password
@@ -206,7 +214,8 @@ services:
     restart: unless-stopped
 
   keycloak-configurator:
-    image: ${MARTY_KEYCLOAK_KMS_IMAGE:?MARTY_KEYCLOAK_KMS_IMAGE must pin the remote-key image by digest}
+    mem_limit: ${MARTY_KEYCLOAK_CONFIGURATOR_MEMORY_LIMIT:-512m}
+    image: ${MARTY_KEYCLOAK_KMS_IMAGE:-}
     entrypoint: ["/bin/bash", "/scripts/setup-keycloak-selfhost-production.sh"]
     environment:
       KC_URL: http://keycloak:8080
@@ -227,7 +236,7 @@ services:
       KEYCLOAK_USER_REGISTRATION_ENABLED: ${KEYCLOAK_USER_REGISTRATION_ENABLED:-true}
       KEYCLOAK_VERIFY_EMAIL: ${KEYCLOAK_VERIFY_EMAIL:-true}
       KEYCLOAK_RESET_PASSWORD_ENABLED: ${KEYCLOAK_RESET_PASSWORD_ENABLED:-true}
-      KEYCLOAK_SOCIAL_LOGIN_ENABLED: ${KEYCLOAK_SOCIAL_LOGIN_ENABLED:?KEYCLOAK_SOCIAL_LOGIN_ENABLED must be set}
+      KEYCLOAK_SOCIAL_LOGIN_ENABLED: ${KEYCLOAK_SOCIAL_LOGIN_ENABLED:-}
       KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED: ${KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED:-false}
       KEYCLOAK_SMTP_HOST: ${KEYCLOAK_SMTP_HOST:-}
       KEYCLOAK_SMTP_PORT: ${KEYCLOAK_SMTP_PORT:-587}
@@ -255,6 +264,7 @@ services:
   # Rust owns the revocation-profile schema. Complete this one-shot migration
   # before the remaining shared Alembic graph reads that schema.
   revocation-profile-migrate:
+    mem_limit: ${MARTY_REVOCATION_PROFILE_MIGRATE_MEMORY_LIMIT:-1g}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -277,6 +287,7 @@ services:
     restart: "no"
 
   db-migrate:
+    mem_limit: ${MARTY_DB_MIGRATE_MEMORY_LIMIT:-1g}
     build:
       context: .
       dockerfile: services/Dockerfile.migrations
@@ -317,6 +328,7 @@ services:
   # Explicit one-time KMS/DID provisioning. The ordinary migration and all
   # application restarts never mount or use the privileged bootstrap token.
   kms-initialize:
+    mem_limit: ${MARTY_KMS_INITIALIZE_MEMORY_LIMIT:-512m}
     profiles: [kms-init]
     build:
       context: .
@@ -338,6 +350,7 @@ services:
 
   # Apply the native issuance schema with the same Rust build as the API.
   issuance-migrations:
+    mem_limit: ${MARTY_ISSUANCE_MIGRATIONS_MEMORY_LIMIT:-1g}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -369,6 +382,7 @@ services:
     restart: "no"
 
   gateway:
+    mem_limit: ${MARTY_GATEWAY_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -380,6 +394,7 @@ services:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       GATEWAY_PORT: "8000"
+      GATEWAY_OBSERVE_CLIENT_IP: ${GATEWAY_OBSERVE_CLIENT_IP:-true}
       AUTH_SERVICE_URL: http://auth:8001
       ORGANIZATION_SERVICE_URL: http://organization:8002
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
@@ -409,11 +424,11 @@ services:
       GRPC_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/gateway_workload_client_cert
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: ${GATEWAY_TLS_KMS_ADDR:?GATEWAY_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: ${GATEWAY_TLS_KMS_ADDR:-}
       GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/gateway_tls_kms_token
-      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${GATEWAY_TLS_KMS_KEY_NAME:?GATEWAY_TLS_KMS_KEY_NAME must be set}
-      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: ${GATEWAY_TLS_KMS_KEY_VERSION:?GATEWAY_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${GATEWAY_TLS_KMS_KEY_NAME:-}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: ${GATEWAY_TLS_KMS_KEY_VERSION:-}
       ORG_GRPC_TARGET: https://organization:9002
       ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       ES_GRPC_TARGET: https://event-stream:9015
@@ -482,6 +497,7 @@ services:
     restart: unless-stopped
 
   auth:
+    mem_limit: ${MARTY_AUTH_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -511,7 +527,8 @@ services:
       MARTY_API_CLIENT_ID: ${MARTY_API_CLIENT_ID:-marty-api}
       MARTY_API_CLIENT_SECRET_FILE: /run/secrets/marty_api_client_secret
       CREDENTIAL_LOGIN_POLICY_ID: ${CREDENTIAL_LOGIN_POLICY_ID:-}
-      CREDENTIAL_LOGIN_ISSUER_DID: did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:${MARTY_ORG_SLUG:-marty}
+      CREDENTIAL_LOGIN_TRUST_PROFILE_ID: ${CREDENTIAL_LOGIN_TRUST_PROFILE_ID:-}
+      CREDENTIAL_LOGIN_ISSUER_DID: ${MARTY_ISSUER_DID:-did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:${MARTY_ORG_SLUG:-marty}}
       CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: ${CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER:-true}
       CREDENTIAL_LOGIN_CREATE_USERS: ${CREDENTIAL_LOGIN_CREATE_USERS:-false}
       AUTH_SERVICE_INTERNAL_URL: http://auth:8001
@@ -531,17 +548,17 @@ services:
       ES_GRPC_TARGET: https://event-stream:9015
       AUTH_GRPC_PORT: "9001"
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/auth_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: ${AUTH_TLS_KMS_ADDR:?AUTH_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: ${AUTH_TLS_KMS_ADDR:-}
       GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/auth_tls_kms_token
-      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${AUTH_TLS_KMS_KEY_NAME:?AUTH_TLS_KMS_KEY_NAME must be set}
-      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: ${AUTH_TLS_KMS_KEY_VERSION:?AUTH_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${AUTH_TLS_KMS_KEY_NAME:-}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: ${AUTH_TLS_KMS_KEY_VERSION:-}
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/auth_workload_server_cert
-      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${AUTH_SERVER_TLS_KMS_ADDR:?AUTH_SERVER_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${AUTH_SERVER_TLS_KMS_ADDR:-}
       GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/auth_server_tls_kms_token
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${AUTH_SERVER_TLS_KMS_KEY_NAME:?AUTH_SERVER_TLS_KMS_KEY_NAME must be set}
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${AUTH_SERVER_TLS_KMS_KEY_VERSION:?AUTH_SERVER_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${AUTH_SERVER_TLS_KMS_KEY_NAME:-}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${AUTH_SERVER_TLS_KMS_KEY_VERSION:-}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       FLOW_WEBHOOK_SECRET_FILE: /run/secrets/flow_webhook_secret
     secrets:
@@ -564,6 +581,8 @@ services:
         condition: service_healthy
       keycloak-configurator:
         condition: service_completed_successfully
+      applicant:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 10s
@@ -572,6 +591,7 @@ services:
     restart: unless-stopped
 
   organization:
+    mem_limit: ${MARTY_ORGANIZATION_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -589,11 +609,11 @@ services:
       REDIS_DB_GATEWAY: "2"
       ORG_GRPC_PORT: "9002"
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/org_workload_server_cert
-      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${ORG_TLS_KMS_ADDR:?ORG_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${ORG_TLS_KMS_ADDR:-}
       GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/org_tls_kms_token
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${ORG_TLS_KMS_KEY_NAME:?ORG_TLS_KMS_KEY_NAME must be set}
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${ORG_TLS_KMS_KEY_VERSION:?ORG_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${ORG_TLS_KMS_KEY_NAME:-}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${ORG_TLS_KMS_KEY_VERSION:-}
       ES_GRPC_TARGET: https://event-stream:9015
       ES_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
@@ -617,6 +637,7 @@ services:
     restart: unless-stopped
 
   credential-template:
+    mem_limit: ${MARTY_CREDENTIAL_TEMPLATE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -633,11 +654,11 @@ services:
       RP_GRPC_TARGET: https://revocation-profile:9013
       RP_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/ct_workload_server_cert
-      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${CT_TLS_KMS_ADDR:?CT_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${CT_TLS_KMS_ADDR:-}
       GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/ct_tls_kms_token
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${CT_TLS_KMS_KEY_NAME:?CT_TLS_KMS_KEY_NAME must be set}
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${CT_TLS_KMS_KEY_VERSION:?CT_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${CT_TLS_KMS_KEY_NAME:-}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${CT_TLS_KMS_KEY_VERSION:-}
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       CT_GRPC_PORT: "9003"
@@ -661,6 +682,7 @@ services:
     restart: unless-stopped
 
   trust-profile:
+    mem_limit: ${MARTY_TRUST_PROFILE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -694,6 +716,7 @@ services:
     restart: unless-stopped
 
   issuance:
+    mem_limit: ${MARTY_ISSUANCE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -716,9 +739,6 @@ services:
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       BAO_ADDR: ${BAO_ADDR:-}
       BAO_TOKEN_FILE: /run/secrets/openbao_service_token
-      DIDCOMM_KMS_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}
-      DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm_issuance_openbao_token
-      DIDCOMM_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
       INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
       INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/workload_identity_ca_cert
       SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE: /run/secrets/signing_keys_integration_secret_key
@@ -731,7 +751,6 @@ services:
       - token_hmac_key
       - canvas_credentials_shared_secret
       - grpc_service_token
-      - didcomm_issuance_openbao_token
       - openbao_tls_ca_cert
       - sign_grant_mint_issuance_credential_token
       - sign_grant_mint_issuance_canvas_token
@@ -758,6 +777,7 @@ services:
 
   # Native owner for passport routes; the issuance alias runs the same binary.
   issuance-native:
+    mem_limit: ${MARTY_ISSUANCE_NATIVE_MEMORY_LIMIT:-512m}
     extends:
       file: docker-compose.service.issuance-native-runtime.yml
       service: issuance-native
@@ -766,9 +786,6 @@ services:
     environment:
       <<: *issuance-application-env
       SERVICE_NAME: issuance_native
-      DIDCOMM_KMS_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}
-      DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm_issuance_openbao_token
-      DIDCOMM_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
       INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
       INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/workload_identity_ca_cert
       SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE: /run/secrets/signing_keys_integration_secret_key
@@ -777,11 +794,11 @@ services:
       ISSUANCE_GRPC_ENABLED: "true"
       RP_GRPC_TARGET: https://revocation-profile:9013
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/issuance_workload_server_cert
-      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${ISSUANCE_TLS_KMS_ADDR:?ISSUANCE_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${ISSUANCE_TLS_KMS_ADDR:-}
       GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/issuance_tls_kms_token
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${ISSUANCE_TLS_KMS_KEY_NAME:?ISSUANCE_TLS_KMS_KEY_NAME must be set}
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${ISSUANCE_TLS_KMS_KEY_VERSION:?ISSUANCE_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${ISSUANCE_TLS_KMS_KEY_NAME:-}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${ISSUANCE_TLS_KMS_KEY_VERSION:-}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       CANVAS_MIRROR_WORKER_ENABLED: ${CANVAS_MIRROR_WORKER_ENABLED:-false}
       CANVAS_MIRROR_WORKER_ORGANIZATION_ID: ${CANVAS_MIRROR_WORKER_ORGANIZATION_ID:-}
@@ -812,7 +829,6 @@ services:
       - token_hmac_key
       - canvas_credentials_shared_secret
       - grpc_service_token
-      - didcomm_issuance_openbao_token
       - sign_grant_mint_issuance_credential_token
       - sign_grant_mint_issuance_canvas_token
       - sign_grant_mint_issuance_readiness_token
@@ -827,6 +843,7 @@ services:
 
   # Durable Canvas jobs must never run inside the web-service lifespan.
   canvas-sync-worker:
+    mem_limit: ${MARTY_CANVAS_SYNC_WORKER_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -853,7 +870,7 @@ services:
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
       SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE: /run/secrets/signing_keys_integration_secret_key
-      BAO_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for Canvas signing grants}
+      BAO_ADDR: ${BAO_ADDR:-}
       BAO_CACERT: /run/secrets/openbao_tls_ca_cert
       ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: /run/secrets/sign_grant_mint_issuance_canvas_token
       CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
@@ -896,6 +913,7 @@ services:
     restart: unless-stopped
 
   applicant:
+    mem_limit: ${MARTY_APPLICANT_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -926,7 +944,8 @@ services:
       - type: bind
         source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/applicant
         target: /app/data
-    user: "0:0"
+    group_add:
+      - "${APPLICANT_STATE_GID:?APPLICANT_STATE_GID must match the provisioned state group}"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -938,6 +957,7 @@ services:
     restart: unless-stopped
 
   notification:
+    mem_limit: ${MARTY_NOTIFICATION_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -951,11 +971,11 @@ services:
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       NOTIF_GRPC_PORT: "9007"
       GRPC_TLS_CERT: /run/secrets/notification_workload_server_cert
-      GRPC_TLS_KMS_ADDR: ${NOTIFICATION_TLS_KMS_ADDR:?NOTIFICATION_TLS_KMS_ADDR must be set}
+      GRPC_TLS_KMS_ADDR: ${NOTIFICATION_TLS_KMS_ADDR:-}
       GRPC_TLS_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_TLS_KMS_TOKEN_FILE: /run/secrets/notification_tls_kms_token
-      GRPC_TLS_KMS_KEY_NAME: ${NOTIFICATION_TLS_KMS_KEY_NAME:?NOTIFICATION_TLS_KMS_KEY_NAME must be set}
-      GRPC_TLS_KMS_KEY_VERSION: ${NOTIFICATION_TLS_KMS_KEY_VERSION:?NOTIFICATION_TLS_KMS_KEY_VERSION must be set}
+      GRPC_TLS_KMS_KEY_NAME: ${NOTIFICATION_TLS_KMS_KEY_NAME:-}
+      GRPC_TLS_KMS_KEY_VERSION: ${NOTIFICATION_TLS_KMS_KEY_VERSION:-}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-1025}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
@@ -986,6 +1006,7 @@ services:
     restart: unless-stopped
 
   compliance-profile:
+    mem_limit: ${MARTY_COMPLIANCE_PROFILE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: rust/services/Dockerfile.ci
@@ -1002,11 +1023,11 @@ services:
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: https://organization:9002
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/compliance_profile_workload_client_cert
-      GRPC_WORKLOAD_TLS_KMS_ADDR: ${COMPLIANCE_PROFILE_TLS_KMS_ADDR:?COMPLIANCE_PROFILE_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_KMS_ADDR: ${COMPLIANCE_PROFILE_TLS_KMS_ADDR:-}
       GRPC_WORKLOAD_TLS_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: /run/secrets/compliance_profile_tls_kms_token
-      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: ${COMPLIANCE_PROFILE_TLS_KMS_KEY_NAME:?COMPLIANCE_PROFILE_TLS_KMS_KEY_NAME must be set}
-      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: ${COMPLIANCE_PROFILE_TLS_KMS_KEY_VERSION:?COMPLIANCE_PROFILE_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: ${COMPLIANCE_PROFILE_TLS_KMS_KEY_NAME:-}
+      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: ${COMPLIANCE_PROFILE_TLS_KMS_KEY_VERSION:-}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       RUST_LOG: ${COMPLIANCE_PROFILE_RUST_LOG:-info}
     secrets:
@@ -1027,6 +1048,7 @@ services:
     restart: unless-stopped
 
   presentation-policy:
+    mem_limit: ${MARTY_PRESENTATION_POLICY_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1036,11 +1058,11 @@ services:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert
-      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${PP_TLS_KMS_ADDR:?PP_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${PP_TLS_KMS_ADDR:-}
       GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/pp_tls_kms_token
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${PP_TLS_KMS_KEY_NAME:?PP_TLS_KMS_KEY_NAME must be set}
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${PP_TLS_KMS_KEY_VERSION:?PP_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${PP_TLS_KMS_KEY_NAME:-}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${PP_TLS_KMS_KEY_VERSION:-}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       PRESENTATION_POLICY_SERVICE_PORT: "8009"
       DATABASE_URL_TEMPLATE: *database-url-template
@@ -1079,6 +1101,7 @@ services:
     restart: unless-stopped
 
   deployment-profile:
+    mem_limit: ${MARTY_DEPLOYMENT_PROFILE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: rust/services/Dockerfile.ci
@@ -1095,11 +1118,11 @@ services:
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: https://organization:9002
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/deployment_profile_workload_client_cert
-      GRPC_WORKLOAD_TLS_KMS_ADDR: ${DEPLOYMENT_PROFILE_TLS_KMS_ADDR:?DEPLOYMENT_PROFILE_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_KMS_ADDR: ${DEPLOYMENT_PROFILE_TLS_KMS_ADDR:-}
       GRPC_WORKLOAD_TLS_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: /run/secrets/deployment_profile_tls_kms_token
-      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: ${DEPLOYMENT_PROFILE_TLS_KMS_KEY_NAME:?DEPLOYMENT_PROFILE_TLS_KMS_KEY_NAME must be set}
-      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: ${DEPLOYMENT_PROFILE_TLS_KMS_KEY_VERSION:?DEPLOYMENT_PROFILE_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: ${DEPLOYMENT_PROFILE_TLS_KMS_KEY_NAME:-}
+      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: ${DEPLOYMENT_PROFILE_TLS_KMS_KEY_VERSION:-}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       RUST_LOG: ${DEPLOYMENT_PROFILE_RUST_LOG:-info}
     secrets:
@@ -1120,6 +1143,7 @@ services:
     restart: unless-stopped
 
   signing-keys:
+    mem_limit: ${MARTY_SIGNING_KEYS_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1131,11 +1155,11 @@ services:
       <<: *runtime-env
       SIGNING_KEYS_SERVICE_PORT: "8017"
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/secrets/signing_keys_workload_server_cert
-      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR: ${SIGNING_KEYS_TLS_KMS_ADDR:?SIGNING_KEYS_TLS_KMS_ADDR must be a trusted HTTPS OpenBao origin}
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR: ${SIGNING_KEYS_TLS_KMS_ADDR:-}
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE: /run/secrets/signing_keys_tls_kms_token
-      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME: ${SIGNING_KEYS_TLS_KMS_KEY_NAME:?SIGNING_KEYS_TLS_KMS_KEY_NAME must identify the non-exportable TLS signer}
-      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION: ${SIGNING_KEYS_TLS_KMS_KEY_VERSION:?SIGNING_KEYS_TLS_KMS_KEY_VERSION must pin the TLS signer version}
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME: ${SIGNING_KEYS_TLS_KMS_KEY_NAME:-}
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION: ${SIGNING_KEYS_TLS_KMS_KEY_VERSION:-}
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE: /run/secrets/signing_keys_service_sign_gateway_key
       SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
@@ -1146,6 +1170,7 @@ services:
       BAO_ADDR: ${BAO_ADDR:-}
       BAO_TOKEN_FILE: /run/secrets/signing_keys_openbao_token
       BAO_CACERT: /run/secrets/openbao_tls_ca_cert
+      DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm_issuance_openbao_token
       HAIP_KMS_TOKEN_FILE: /run/secrets/haip_kms_token
       SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE: /run/secrets/sign_grant_verify_token
       RUST_LOG: info
@@ -1156,6 +1181,7 @@ services:
       - signing_keys_integration_secret_key
       - device_registration_signing_keys_key
       - signing_keys_openbao_token
+      - didcomm_issuance_openbao_token
       - haip_kms_token
       - sign_grant_verify_token
       - signing_keys_workload_server_cert
@@ -1175,6 +1201,7 @@ services:
     restart: unless-stopped
 
   flow:
+    mem_limit: ${MARTY_FLOW_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1187,23 +1214,23 @@ services:
       GRPC_INSECURE_ALLOWED: "false"
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/flow_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: ${FLOW_CLIENT_TLS_KMS_ADDR:?FLOW_CLIENT_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: ${FLOW_CLIENT_TLS_KMS_ADDR:-}
       GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/flow_client_tls_kms_token
-      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${FLOW_CLIENT_TLS_KMS_KEY_NAME:?FLOW_CLIENT_TLS_KMS_KEY_NAME must be set}
-      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: ${FLOW_CLIENT_TLS_KMS_KEY_VERSION:?FLOW_CLIENT_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${FLOW_CLIENT_TLS_KMS_KEY_NAME:-}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: ${FLOW_CLIENT_TLS_KMS_KEY_VERSION:-}
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert
-      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${FLOW_SERVER_TLS_KMS_ADDR:?FLOW_SERVER_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${FLOW_SERVER_TLS_KMS_ADDR:-}
       GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/flow_server_tls_kms_token
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${FLOW_SERVER_TLS_KMS_KEY_NAME:?FLOW_SERVER_TLS_KMS_KEY_NAME must be set}
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${FLOW_SERVER_TLS_KMS_KEY_VERSION:?FLOW_SERVER_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${FLOW_SERVER_TLS_KMS_KEY_NAME:-}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${FLOW_SERVER_TLS_KMS_KEY_VERSION:-}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       FLOW_SERVICE_PORT: "8011"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
-      OID4VP_ISSUER_DID: did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:${MARTY_ORG_SLUG:-marty}
+      OID4VP_ISSUER_DID: ${MARTY_ISSUER_DID:-did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:${MARTY_ORG_SLUG:-marty}}
       ORG_GRPC_TARGET: https://organization:9002
       PP_GRPC_TARGET: https://presentation-policy:9009
       CT_GRPC_TARGET: https://credential-template:9003
@@ -1217,7 +1244,7 @@ services:
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
-      BAO_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for Flow signing grants}
+      BAO_ADDR: ${BAO_ADDR:-}
       BAO_CACERT: /run/secrets/openbao_tls_ca_cert
       FLOW_SIGN_GRANT_MINT_TOKEN_FILE: /run/secrets/sign_grant_mint_flow_wallet_token
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
@@ -1261,6 +1288,10 @@ services:
         condition: service_healthy
       issuance-native:
         condition: service_healthy
+      trust-profile:
+        condition: service_healthy
+      deployment-profile:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
       interval: 10s
@@ -1269,6 +1300,7 @@ services:
     restart: unless-stopped
 
   verification:
+    mem_limit: ${MARTY_VERIFICATION_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1280,11 +1312,11 @@ services:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/verification_workload_client_cert
-      GRPC_WORKLOAD_TLS_KMS_ADDR: ${VERIFICATION_TLS_KMS_ADDR:?VERIFICATION_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_KMS_ADDR: ${VERIFICATION_TLS_KMS_ADDR:-}
       GRPC_WORKLOAD_TLS_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: /run/secrets/verification_tls_kms_token
-      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: ${VERIFICATION_TLS_KMS_KEY_NAME:?VERIFICATION_TLS_KMS_KEY_NAME must be set}
-      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: ${VERIFICATION_TLS_KMS_KEY_VERSION:?VERIFICATION_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: ${VERIFICATION_TLS_KMS_KEY_NAME:-}
+      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: ${VERIFICATION_TLS_KMS_KEY_VERSION:-}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       VERIFICATION_SERVICE_PORT: "8012"
       ORG_GRPC_TARGET: https://organization:9002
@@ -1317,6 +1349,7 @@ services:
     restart: unless-stopped
 
   revocation-profile:
+    mem_limit: ${MARTY_REVOCATION_PROFILE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1335,11 +1368,11 @@ services:
       ORG_GRPC_TARGET: https://organization:9002
       ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/rp_workload_server_cert
-      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${RP_TLS_KMS_ADDR:?RP_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${RP_TLS_KMS_ADDR:-}
       GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/rp_tls_kms_token
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${RP_TLS_KMS_KEY_NAME:?RP_TLS_KMS_KEY_NAME must be set}
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${RP_TLS_KMS_KEY_VERSION:?RP_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${RP_TLS_KMS_KEY_NAME:-}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${RP_TLS_KMS_KEY_VERSION:-}
       RP_GRPC_ENABLED: "true"
       RP_GRPC_PORT: "9013"
       RUST_LOG: ${REVOCATION_PROFILE_RUST_LOG:-info}
@@ -1363,6 +1396,7 @@ services:
     restart: unless-stopped
 
   device-registration:
+    mem_limit: ${MARTY_DEVICE_REGISTRATION_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1402,6 +1436,7 @@ services:
     restart: unless-stopped
 
   event-stream:
+    mem_limit: ${MARTY_EVENT_STREAM_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1413,11 +1448,11 @@ services:
       EVENT_STREAM_GRPC_ENABLED: "true"
       EVENT_STREAM_GRPC_PORT: "9015"
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/es_workload_server_cert
-      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${ES_TLS_KMS_ADDR:?ES_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${ES_TLS_KMS_ADDR:-}
       GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
       GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/es_tls_kms_token
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${ES_TLS_KMS_KEY_NAME:?ES_TLS_KMS_KEY_NAME must be set}
-      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${ES_TLS_KMS_KEY_VERSION:?ES_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${ES_TLS_KMS_KEY_NAME:-}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${ES_TLS_KMS_KEY_VERSION:-}
     secrets:
       - grpc_service_token
       - es_workload_server_cert
@@ -1432,10 +1467,12 @@ services:
     restart: unless-stopped
 
   ui:
+    mem_limit: ${MARTY_UI_MEMORY_LIMIT:-1g}
     image: nginx:alpine
     environment:
       GOOGLE_ANALYTICS_MEASUREMENT_ID_FILE: /run/secrets/google_analytics_measurement_id
       GOOGLE_SITE_VERIFICATION_FILE: /run/secrets/google_site_verification
+      UI_ENABLED_SECTIONS: ${UI_ENABLED_SECTIONS-public,console}
     secrets:
       - google_analytics_measurement_id
       - google_site_verification
@@ -1445,7 +1482,7 @@ services:
       - ./scripts/load-secrets-env.sh:/scripts/load-secrets-env.sh:ro
       - ./scripts/ui-selfhost-start.sh:/docker-entrypoint.d/40-ui-selfhost.sh:ro
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/healthz"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -1453,6 +1490,7 @@ services:
     restart: unless-stopped
 
   edge:
+    mem_limit: ${MARTY_EDGE_MEMORY_LIMIT:-512m}
     image: nginx:alpine
     ports:
       - "127.0.0.1:${SELFHOST_EDGE_HOST_PORT:-19080}:80"
@@ -1480,55 +1518,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    restart: unless-stopped
-
-  cloudflared:
-    build:
-      context: .
-      dockerfile: docker/cloudflared-wrapper.Dockerfile
-    entrypoint: ["/bin/sh", "/scripts/cloudflared-selfhost.sh"]
-    environment:
-      CLOUDFLARE_TUNNEL_TOKEN_FILE: /run/secrets/cloudflare_tunnel_token
-    secrets:
-      - cloudflare_tunnel_token
-    volumes:
-      - ./scripts/cloudflared-selfhost.sh:/scripts/cloudflared-selfhost.sh:ro
-    depends_on:
-      edge:
-        condition: service_healthy
-    restart: unless-stopped
-
-  tunnel-nginx-proxy:
-    profiles: ["beta-tunnel"]
-    image: nginx:alpine
-    volumes:
-      - ./docker/tunnel-nginx-proxy.edge.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on:
-      edge:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/ready"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    restart: unless-stopped
-
-  cloudflared-beta:
-    profiles: ["beta-tunnel"]
-    build:
-      context: .
-      dockerfile: docker/cloudflared-wrapper.Dockerfile
-    entrypoint: ["/bin/sh", "/scripts/cloudflared-selfhost.sh"]
-    environment:
-      CLOUDFLARE_TUNNEL_TOKEN_FILE: /run/secrets/cloudflare_beta_tunnel_token
-    secrets:
-      - cloudflare_beta_tunnel_token
-    volumes:
-      - ./scripts/cloudflared-selfhost.sh:/scripts/cloudflared-selfhost.sh:ro
-    depends_on:
-      tunnel-nginx-proxy:
-        condition: service_healthy
     restart: unless-stopped
 
 volumes:
@@ -1681,10 +1670,6 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/haip_kms_token
   notification_openbao_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_openbao_token
-  cloudflare_tunnel_token:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/cloudflare_tunnel_token
-  cloudflare_beta_tunnel_token:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/cloudflare_beta_tunnel_token
   google_client_id:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/google_client_id
   google_client_secret:

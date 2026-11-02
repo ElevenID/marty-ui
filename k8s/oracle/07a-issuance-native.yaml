@@ -255,15 +255,6 @@ spec:
               value: https://signing-keys:8018/internal
             - name: INTEGRATION_SECRET_KMS_CA_FILE
               value: /run/secrets/integration-secret-ca/ca.crt
-            - name: DIDCOMM_KMS_ADDR
-              valueFrom:
-                configMapKeyRef:
-                  name: marty-config
-                  key: BAO_ADDR
-            - name: DIDCOMM_KMS_TOKEN_FILE
-              value: /run/secrets/didcomm-kms/token
-            - name: DIDCOMM_KMS_CA_CERT_FILE
-              value: /run/secrets/issuance-server-kms/ca.crt
             - name: BAO_ADDR
               valueFrom:
                 configMapKeyRef:
@@ -341,9 +332,6 @@ spec:
             - name: issuance-server-kms
               mountPath: /run/secrets/issuance-server-kms
               readOnly: true
-            - name: didcomm-kms-token
-              mountPath: /run/secrets/didcomm-kms
-              readOnly: true
             - name: integration-secret-ca
               mountPath: /run/secrets/integration-secret-ca
               readOnly: true
@@ -381,12 +369,6 @@ spec:
         - name: issuance-server-kms
           secret:
             secretName: issuance-server-kms
-        - name: didcomm-kms-token
-          secret:
-            secretName: marty-secrets
-            items:
-              - key: DIDCOMM_ISSUANCE_OPENBAO_TOKEN
-                path: token
         - name: integration-secret-ca
           secret:
             secretName: signing-keys-integration-secret-ca

@@ -22,10 +22,11 @@ limitation.
 ### Nightly installer bootstrap
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ElevenID/marty-ui/main/install.sh | sh -s -- --channel nightly
+/usr/bin/setpriv --no-new-privs -- bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/ElevenID/marty-ui/main/install.sh | sh -s -- --channel nightly'
 ```
 
-Initially supports Linux amd64 with an accessible Docker Engine and Compose.
+Initially supports a regular Linux amd64 user with a pre-existing user-owned
+rootless Docker Engine and Compose.
 A published, signed admission for the selected release is required; unavailable
 or unqualified releases are refused. Use `--version TAG` instead of `--channel
 nightly` to select an exact admitted version.
@@ -35,6 +36,10 @@ diagnostics and never grants installer admission or Ready status.
 
 See [bootstrap usage and platform support](docs/installer-bootstrap.md) for
 requirements and the boundary between the bootstrap and deployment operations.
+Use the optional `--hosting-file ABSOLUTE_PATH` for direct VM hosting or an
+external proxy, including an explicitly selected Cloudflare Tunnel connector.
+Managed OpenBao and private localhost access remain the defaults. See
+[hosting configuration and browser trust](docs/installer-hosting.md).
 
 ### Local Development (Recommended)
 
@@ -161,11 +166,14 @@ to the specific component/version, test, evidence, and known limitations.
 
 Linux amd64 and API/CLI operation are the initial delivery focus. The
 [console-free source composition](docs/SELFHOST_API_ONLY.md) is not yet a
-qualified distribution in published self-host bundles or installers. Current
-[installer validation](docs/installer-bootstrap.md#deployment-validation)
-reports the credential journey as `SKIP` and retains `installation_ready: false`
-while trust onboarding and installed-journey completion remain open. Passing
-read-only health and metadata checks does not pass those gates.
+qualified distribution in published self-host bundles or installers. Built-in
+[read-only installer validation](docs/installer-bootstrap.md#deployment-validation)
+reports the optional credential journey as `SKIP` and retains
+`installation_ready: false`. The separately recorded disposable journey result
+covers its stated release and workflow; it does not change that validator result
+or grant signed installer admission, independent customer acceptance, or
+production authorization. Read-only health and metadata checks do not establish
+those outcomes either.
 
 Use the exact release's
 [disposable qualification runbook](docs/selfhost-disposable-qualification-runbook.md)

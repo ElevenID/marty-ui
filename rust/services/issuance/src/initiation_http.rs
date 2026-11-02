@@ -58,6 +58,22 @@ impl InitiationHttpService {
         self.initiate_authorized(headers, request).await
     }
 
+    /// Same authority and expiry kernel as initiation, without reservation or projection.
+    pub fn validate_offer_lifetime(
+        &self,
+        headers: &HeaderMap,
+        seconds: u64,
+    ) -> Result<String, InitiationHttpError> {
+        self.authorize(headers)?;
+        reject_direct_signing_headers(headers)?;
+        let organization = header(headers, "X-Organization-ID")
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .ok_or(TransactionReadError::TrustedOrganizationRequired)?;
+        self.initiation.validate_offer_lifetime(seconds)?;
+        Ok(organization.to_owned())
+    }
+
     pub fn authorize(&self, headers: &HeaderMap) -> Result<(), InitiationHttpError> {
         self.security
             .authorize(header(headers, "X-API-Key"))
@@ -127,7 +143,15 @@ impl From<InitiationOfferProjectionError> for InitiationHttpError {
 impl IntoResponse for InitiationHttpError {
     fn into_response(self) -> Response {
         let failure = self.failure();
-        (failure.status, Json(json!({"detail": failure.detail}))).into_response()
+        let mut body = json!({"detail": failure.detail});
+        if matches!(
+            self,
+            Self::Projection(InitiationOfferProjectionError::DidcommCapabilityUnavailable)
+        ) {
+            body["code"] = json!("capability_unavailable");
+            body["capability"] = json!("didcomm_authcrypt");
+        }
+        (failure.status, Json(body)).into_response()
     }
 }
 
@@ -143,6 +167,12 @@ impl InitiationHttpError {
             Self::Security(error) => security_failure(error),
             Self::DirectSigningSelection => failure(422, DIRECT_SIGNING_DETAIL),
             Self::Service(error) => service_failure(error),
+            Self::Projection(InitiationOfferProjectionError::DidcommCapabilityUnavailable) => {
+                failure(
+                    422,
+                    "DIDComm authcrypt requires a registered OpenBao extension",
+                )
+            }
             Self::Projection(_) | Self::Unavailable => {
                 failure(503, "Credential offer projection is unavailable")
             }

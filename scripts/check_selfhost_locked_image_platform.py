@@ -21,23 +21,13 @@ def accepted_repo_digests(ref: str) -> set[str]:
     return accepted
 
 
-def probe(lock_path: Path) -> dict:
-    lock = json.loads(lock_path.read_text(encoding="utf-8"))
-    if not isinstance(lock, dict) or lock.get("schema") != "marty.selfhost-image-lock/v1":
-        raise ValueError("unsupported self-host image lock")
-    services = lock.get("services")
-    if not isinstance(services, dict) or not services:
-        raise ValueError("self-host image lock has no services")
-    if any(not isinstance(name, str) or not name or not isinstance(ref, str)
-           or EXACT_IMAGE.fullmatch(ref) is None for name, ref in services.items()):
-        raise ValueError("self-host image lock requires exact service digests")
-    plugin = lock.get("openbao_didcomm_image")
-    if (not isinstance(plugin, str) or EXACT_IMAGE.fullmatch(plugin) is None
-            or not plugin.startswith("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@")):
-        raise ValueError("self-host image lock requires the exact OpenBao DIDComm image")
-
+def probe_images(references: set[str]) -> dict[str, str]:
+    """Shared exact-image probe for core and independently selected add-ons."""
+    if not references or any(not isinstance(ref, str) or EXACT_IMAGE.fullmatch(ref) is None
+                             for ref in references):
+        raise ValueError("image probe requires exact digests")
     platforms = {}
-    for ref in sorted({*services.values(), plugin}):
+    for ref in sorted(references):
         try:
             subprocess.run(["docker", "pull", "--platform", "linux/amd64", ref],
                            check=True, capture_output=True, text=True)
@@ -56,6 +46,24 @@ def probe(lock_path: Path) -> dict:
                 isinstance(digest, str) and digest in accepted for digest in digests):
             raise ValueError(f"inspected image is not associated with locked digest: {ref}")
         platforms[ref] = "linux/amd64"
+    return platforms
+
+
+def probe(lock_path: Path) -> dict:
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    if not isinstance(lock, dict) or lock.get("schema") != "marty.selfhost-image-lock/v1":
+        raise ValueError("unsupported self-host image lock")
+    services = lock.get("services")
+    if not isinstance(services, dict) or not services:
+        raise ValueError("self-host image lock has no services")
+    if any(not isinstance(name, str) or not name or not isinstance(ref, str)
+           or EXACT_IMAGE.fullmatch(ref) is None for name, ref in services.items()):
+        raise ValueError("self-host image lock requires exact service digests")
+    plugin = lock.get("openbao_didcomm_image")
+    if (not isinstance(plugin, str) or EXACT_IMAGE.fullmatch(plugin) is None
+            or not plugin.startswith("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@")):
+        raise ValueError("self-host image lock requires the exact OpenBao DIDComm image")
+    platforms = probe_images({*services.values(), plugin})
     return {"schema": "marty.selfhost-image-platform-preflight/v1",
             "qualification": "unqualified", "platform": "linux/amd64",
             "services": dict(sorted(services.items())), "images": platforms}

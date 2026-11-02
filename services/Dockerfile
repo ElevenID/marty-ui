@@ -56,6 +56,8 @@ COPY --chmod=644 scripts/ci/public-sccache-stats.awk /usr/local/bin/public-sccac
 FROM rust-service-cache AS rust-service-dependencies
 
 COPY --from=rust-service-planner /build/rust/recipe.json recipe.json
+# Excluded vendored path dependencies are not reconstructed by the chef recipe.
+COPY rust/vendor /build/rust/vendor
 COPY proto /build/proto
 RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=marty-public-cargo-git,target=/usr/local/cargo/git,sharing=locked \
@@ -110,6 +112,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-notification /
 COPY --from=rust-service-builder /build/rust/target/release/marty-flow /usr/local/bin/marty-flow
 COPY --from=rust-service-builder /build/rust/target/release/marty-organization /usr/local/bin/marty-organization
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-acceptance-api-key /usr/local/bin/marty-passport-acceptance-api-key
+COPY --from=rust-service-builder /build/rust/target/release/marty-installer-organization-api-key /usr/local/bin/marty-installer-organization-api-key
 COPY --from=rust-service-builder /build/rust/target/release/marty-auth /usr/local/bin/marty-auth
 COPY --from=rust-service-builder /build/rust/target/release/marty-credential-template /usr/local/bin/marty-credential-template
 COPY --from=rust-service-builder /build/rust/target/release/marty-presentation-policy /usr/local/bin/marty-presentation-policy
@@ -125,6 +128,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-passport-beta-
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-provider-ingress /usr/local/bin/marty-passport-provider-ingress
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-keyless-edge /usr/local/bin/marty-passport-keyless-edge
 COPY --from=rust-service-builder /build/rust/target/release/marty-oidf-keyless-edge /usr/local/bin/marty-oidf-keyless-edge
+COPY --from=rust-service-builder /build/rust/target/release/marty-acme-http01 /usr/local/bin/marty-acme-http01
 COPY --from=rust-service-builder /build/rust/target/release/marty-keyless-grpc-bridge /usr/local/bin/marty-keyless-grpc-bridge
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-tls-bootstrap /usr/local/bin/marty-passport-tls-bootstrap
 COPY --from=rust-service-builder /build/rust/target/release/marty-deployment-profile /usr/local/bin/marty-deployment-profile

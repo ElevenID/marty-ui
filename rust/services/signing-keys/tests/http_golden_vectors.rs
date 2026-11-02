@@ -50,6 +50,11 @@ async fn passport_artifact_transit_routes_require_auth_and_kms() {
             .await
             .unwrap();
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let unauthorized: Value =
+            serde_json::from_slice(&to_bytes(unauthorized.into_body(), 2048).await.unwrap())
+                .unwrap();
+        assert!(unauthorized.get("code").is_none());
+        assert!(unauthorized.get("capability").is_none());
         let unavailable = marty_signing_keys::http::router()
             .oneshot(
                 Request::post(path.as_str())
@@ -60,7 +65,12 @@ async fn passport_artifact_transit_routes_require_auth_and_kms() {
             )
             .await
             .unwrap();
-        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(unavailable.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let unavailable: Value =
+            serde_json::from_slice(&to_bytes(unavailable.into_body(), 2048).await.unwrap())
+                .unwrap();
+        assert_eq!(unavailable["code"], "capability_unavailable");
+        assert_eq!(unavailable["capability"], "passport_artifact_encryption");
     }
 }
 

@@ -2,7 +2,7 @@
 //! This is not an ownership proof for Docker resources or a deletion manifest.
 #![cfg(target_os = "linux")]
 
-use crate::installer_state::{LockedInspection, LockedMaintenance};
+use crate::installer_state::LockedInspection;
 use serde::Serialize;
 use std::{
     ffi::{CString, OsStr},
@@ -216,17 +216,6 @@ fn inspect_held(locked: &LockedInspection, installation: &Path) -> Result<HostSt
 pub fn inspect(installation: &Path) -> Result<HostStorageInventory> {
     let locked = LockedInspection::open(installation)?;
     inspect_held(&locked, installation)
-}
-
-/// Reuse the uninstall transaction's exclusive lock for its read-only preview.
-pub(crate) fn inspect_maintenance(
-    maintenance: &LockedMaintenance,
-    installation: &Path,
-) -> Result<HostStorageInventory> {
-    maintenance.require_unchanged()?;
-    let inventory = inspect_held(maintenance.inspection(), installation)?;
-    maintenance.require_unchanged()?;
-    Ok(inventory)
 }
 
 #[cfg(test)]

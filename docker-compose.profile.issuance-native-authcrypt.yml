@@ -1,5 +1,5 @@
 # Mount only the reference-only authcrypt policy. The base HTTPS Raft graph
-# provisions the scoped DIDComm token and public KMS CA for native Issuance.
+# provisions the scoped DIDComm token for Signing Keys; Issuance uses its HTTPS API.
 x-native-issuance-policy: &native-issuance-policy
   environment:
     DIDCOMM_ENCRYPTION_POLICY_FILE: /run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json

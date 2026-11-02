@@ -237,6 +237,90 @@ pub async fn renewal_inventory(bao: &OpenBaoHttp, context: &Value) -> Result<Vec
     }
     Ok(names)
 }
+
+fn same_enrolled_policies(mut observed: Vec<String>, enrolled: &[String]) -> bool {
+    // Enrollment is retained in policy-name order; live checks follow token
+    // filenames. Compare sorted copies while preserving exact multiplicity.
+    let mut enrolled = enrolled.to_vec();
+    observed.sort_unstable();
+    enrolled.sort_unstable();
+    observed == enrolled
+}
+
+/// Completed installer enrollment already proved the original tokens and
+/// bound their exact hashes before any CA wait. Validate every new token live
+/// while preserving original certificate SPKI and issuer at the recorded time.
+/// The ordinary activation and CA-rotation checks retain their old behavior.
+pub(crate) async fn enrolled_replacement(
+    bao: &OpenBaoHttp,
+    authority_token: &str,
+    old: &Path,
+    new: &Path,
+    enrolled_policies: &[String],
+    original_observed_at: u64,
+) -> Result<()> {
+    if old == new
+        || original_observed_at == 0
+        || enrolled_policies.len() != 21
+        || enrolled_policies
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != 21
+        || enrolled_policies.iter().any(|name| !policy_reference(name))
+    {
+        return Err(REFUSAL);
+    }
+    authority(bao, authority_token, false).await?;
+    let checks = json!({"token":authority_token,"old":new,"new":new,"minimum_ttl":3600,
+        "require_orphan_new":true,"require_orphan_old":true,"replacement":null,"retiring":false});
+    if !same_enrolled_policies(tokens(bao, &checks).await?, enrolled_policies) {
+        return Err("replacement token policies differ from completed renewal enrollment");
+    }
+    certificates(bao, &checks).await?;
+    if certificate_file(&old.join("workload_identity_ca_cert"))?
+        != certificate_file(&new.join("workload_identity_ca_cert"))?
+    {
+        return Err("enrolled renewal changed the retained workload trust anchor");
+    }
+    let issuers = [
+        issuer(bao, authority_token, "workload-pki").await?,
+        issuer(bao, authority_token, "keycloak-pki").await?,
+    ];
+    let leaves = SELFHOST_ROLES
+        .iter()
+        .map(|role| (role.cert_file.to_owned(), 0))
+        .chain(
+            keycloak::REALMS
+                .iter()
+                .map(|realm| (format!("keycloak_{realm}_rs256_cert"), 1)),
+        );
+    for (name, issuer) in leaves {
+        let original = certificate_file(&old.join(&name))?;
+        let replacement = certificate_file(&new.join(&name))?;
+        retained_enrolled_leaf(
+            &original,
+            &replacement,
+            issuers[issuer].as_bytes(),
+            original_observed_at,
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn retained_enrolled_leaf(
+    original: &[u8],
+    replacement: &[u8],
+    issuer: &[u8],
+    observed: u64,
+) -> Result<()> {
+    if observed == 0 || public_spki(original, true)? != public_spki(replacement, true)? {
+        return Err("enrolled renewal replaced a retained remote signing key");
+    }
+    crate::operator_certificates::check_chain_at(original, issuer, Duration::from_secs(observed))
+        .map_err(|_| "original enrolled certificate no longer matches its retained issuer")
+}
+
 async fn issuer(bao: &OpenBaoHttp, token: &str, mount: &str) -> Result<String> {
     let value = request(
         bao,
@@ -369,3 +453,7 @@ pub async fn certificates(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "activation_preflight_tests.rs"]
+mod tests;

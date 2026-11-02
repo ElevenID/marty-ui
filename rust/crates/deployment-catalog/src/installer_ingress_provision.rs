@@ -1,14 +1,15 @@
-//! Fresh, container-only localhost ingress authority. No existing PKI/Transit
+//! Fresh, container-only managed ingress authority. No existing PKI/Transit
 //! resource is adopted or reset; every uncertain mutation requires recovery.
 //! Host orchestration must record intent/container before invoking this helper.
 #![cfg(target_os = "linux")]
 use crate::{
     operator::{public_spki, version_one_custody},
-    operator_certificates::{check_chain, check_lifetime},
+    operator_certificates::{check_chain_at, check_lifetime_at},
     operator_http::{builder, denial, request},
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use marty_openbao_http::OpenBaoHttp;
+use marty_selfhost_identity::origin::PublicOrigin;
 use reqwest::{Method, StatusCode};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -18,6 +19,7 @@ use std::{
     ffi::CString,
     fs::{File, OpenOptions},
     io::{Read, Write},
+    net::IpAddr,
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::fs::{MetadataExt, OpenOptionsExt},
@@ -34,12 +36,130 @@ pub type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str =
     "Ingress provisioning incomplete; preserve owned container and outputs for recovery";
 const TTL: u64 = 28800;
+pub const DNS_ENV: &str = "MARTY_INSTALLER_INGRESS_DNS_NAME";
+pub const IP_ENV: &str = "MARTY_INSTALLER_INGRESS_IP_ADDRESS";
 pub const OUTPUTS: [&str; 4] = [
     "installer_ingress_ca_cert",
     "installer_ingress_tls_cert",
     "installer_ingress_tls_kms_token",
     "installer-ingress.json",
 ];
+#[path = "installer_ingress_renew.rs"]
+mod renewal;
+pub(crate) use renewal::{
+    mint_tls_signer, prove_retained_tls_signer, renew, renewal_inventory,
+    validate_recorded_replacement, validate_retained_private_identity_at,
+};
+
+/// Validated certificate identity, independent of the host listener and port.
+/// A DNS host never gains an implicit IP SAN. The journal-bound public entry
+/// alias can explicitly select one IP alongside DNS; local identity retains
+/// its existing localhost and 127.0.0.1 pair.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct IngressIdentity {
+    dns: Option<String>,
+    ip: Option<IpAddr>,
+}
+impl IngressIdentity {
+    pub fn new(dns: Option<&str>, ip: Option<IpAddr>) -> Result<Self> {
+        require(dns.is_some() || ip.is_some())?;
+        if let Some(dns) = dns {
+            let parsed = PublicOrigin::parse(&format!("https://{dns}")).map_err(|_| REFUSED)?;
+            require(parsed.dns_name() == Some(dns))?;
+        }
+        if let Some(ip) = ip {
+            let authority = match ip {
+                IpAddr::V4(ip) => ip.to_string(),
+                IpAddr::V6(ip) => format!("[{ip}]"),
+            };
+            let parsed =
+                PublicOrigin::parse(&format!("https://{authority}")).map_err(|_| REFUSED)?;
+            require(parsed.ip_address() == Some(ip))?;
+        }
+        if let (Some(dns), Some(ip)) = (dns, ip) {
+            let local = dns == "localhost" && ip == IpAddr::from([127, 0, 0, 1]);
+            let public_entry = dns != "localhost"
+                && !ip.is_loopback()
+                && PublicOrigin::parse(&format!("https://{dns}"))?
+                    .did_web_authority()
+                    .is_ok();
+            require(local || public_entry)?;
+        }
+        Ok(Self {
+            dns: dns.map(str::to_owned),
+            ip,
+        })
+    }
+    pub fn localhost() -> Self {
+        Self {
+            dns: Some("localhost".into()),
+            ip: Some(IpAddr::from([127, 0, 0, 1])),
+        }
+    }
+    pub fn from_environment() -> Result<Self> {
+        match (std::env::var(DNS_ENV), std::env::var(IP_ENV)) {
+            (Err(std::env::VarError::NotPresent), Err(std::env::VarError::NotPresent)) => {
+                Ok(Self::localhost())
+            }
+            (Ok(dns), Ok(ip)) => {
+                let address = if ip.is_empty() {
+                    None
+                } else {
+                    let parsed: IpAddr = ip.parse().map_err(|_| REFUSED)?;
+                    require(parsed.to_string() == ip)?;
+                    Some(parsed)
+                };
+                Self::new((!dns.is_empty()).then_some(dns.as_str()), address)
+            }
+            _ => Err(REFUSED.into()),
+        }
+    }
+    pub fn dns_names(&self) -> Vec<String> {
+        self.dns.iter().cloned().collect()
+    }
+    pub fn ip_addresses(&self) -> Vec<String> {
+        self.ip.iter().map(ToString::to_string).collect()
+    }
+    pub fn common_name(&self) -> String {
+        self.dns
+            .clone()
+            .unwrap_or_else(|| self.ip.expect("validated identity").to_string())
+    }
+    fn role_body(&self) -> Value {
+        // OpenBao's allow_ip_sans only enables IP SANs; it does not restrict
+        // their values. Retain the exact IP literal as immutable role identity
+        // metadata, alongside the native DNS constraint. The renewal AppRole
+        // reconstructs this identity and binds every signing parameter in ACL.
+        let mut domains = vec![self.common_name()];
+        if self.dns.as_deref().is_some_and(|dns| dns != "localhost") {
+            if let Some(ip) = self.ip {
+                domains.push(ip.to_string());
+            }
+        }
+        json!({"allow_any_name":false,"allow_localhost":self.dns.as_deref()==Some("localhost"),
+            "allowed_domains":domains,"allow_bare_domains":true,"allow_subdomains":false,
+            "allow_glob_domains":false,"allow_wildcard_certificates":false,"allow_ip_sans":self.ip.is_some(),
+            "server_flag":true,"client_flag":false,"key_type":"ec","key_bits":256,"max_ttl":"8h",
+            "use_csr_common_name":false,"use_csr_sans":false,
+            "cn_validations":if self.dns.is_some() {vec!["hostname"]} else {vec!["disabled"]}})
+    }
+    fn signing_request(&self, csr: &str) -> Value {
+        json!({"csr":csr,"common_name":self.common_name(),
+            "alt_names":self.dns.as_deref().unwrap_or(""),
+            "ip_sans":self.ip.map(|v|v.to_string()).unwrap_or_default(),
+            "exclude_cn_from_sans":true,"ttl":"8h"})
+    }
+    pub(crate) fn from_metadata(dns: &[String], ip: &[String]) -> Result<Self> {
+        require(dns.len() <= 1 && ip.len() <= 1)?;
+        let address = ip
+            .first()
+            .map(|s| s.parse::<IpAddr>().map_err(|_| REFUSED))
+            .transpose()?;
+        let identity = Self::new(dns.first().map(String::as_str), address)?;
+        require(identity.dns_names() == dns && identity.ip_addresses() == ip)?;
+        Ok(identity)
+    }
+}
 fn require(ok: bool) -> Result<()> {
     if ok {
         Ok(())
@@ -168,9 +288,15 @@ fn p256(cert: &Certificate) -> Result<()> {
     require(key.kty == "EC" && key.crv.as_deref() == Some("P-256"))
 }
 fn check_self_signature(cert: &Certificate) -> Result<()> {
+    check_certificate_signature(cert, cert)
+}
+fn check_certificate_signature(cert: &Certificate, issuer: &Certificate) -> Result<()> {
     let tbs = &cert.tbs_certificate;
-    require(tbs.issuer == tbs.subject && tbs.signature == cert.signature_algorithm)?;
-    let public_alg = tbs
+    require(
+        tbs.issuer == issuer.tbs_certificate.subject && tbs.signature == cert.signature_algorithm,
+    )?;
+    let public_alg = issuer
+        .tbs_certificate
         .subject_public_key_info
         .algorithm
         .to_der()
@@ -179,7 +305,8 @@ fn check_self_signature(cert: &Certificate) -> Result<()> {
     let public_alg = spki::der::asn1::AnyRef::from_der(&public_alg).map_err(|_| REFUSED)?;
     let signature_alg = spki::der::asn1::AnyRef::from_der(&signature_alg).map_err(|_| REFUSED)?;
     let message = tbs.to_der().map_err(|_| REFUSED)?;
-    let public = tbs
+    let public = issuer
+        .tbs_certificate
         .subject_public_key_info
         .subject_public_key
         .as_bytes()
@@ -193,10 +320,10 @@ fn check_self_signature(cert: &Certificate) -> Result<()> {
                 .is_ok()
     }))
 }
-fn check_leaf_profile(cert: &Certificate) -> Result<()> {
+fn check_leaf_profile(cert: &Certificate, identity: &IngressIdentity) -> Result<()> {
     p256(cert)?;
     let tbs = &cert.tbs_certificate;
-    require(tbs.subject.to_string() == "CN=localhost")?;
+    require(tbs.subject.to_string() == format!("CN={}", identity.common_name()))?;
     require(
         tbs.get::<BasicConstraints>()
             .map_err(|_| REFUSED)?
@@ -219,32 +346,41 @@ fn check_leaf_profile(cert: &Certificate) -> Result<()> {
         .map_err(|_| REFUSED)?
         .ok_or(REFUSED)?
         .1;
-    require(san.0.len() == 2)?;
-    let mut dns = false;
-    let mut ip = false;
+    require(
+        san.0.len() == usize::from(identity.dns.is_some()) + usize::from(identity.ip.is_some()),
+    )?;
+    let mut dns = BTreeSet::new();
+    let mut ip = BTreeSet::new();
     for name in &san.0 {
         match name {
-            GeneralName::DnsName(name) if name.as_str() == "localhost" && !dns => dns = true,
-            GeneralName::IpAddress(address) if address.as_bytes() == [127, 0, 0, 1] && !ip => {
-                ip = true
-            }
+            GeneralName::DnsName(name) if dns.insert(name.as_str().to_owned()) => {}
+            GeneralName::IpAddress(address) if ip.insert(address.as_bytes().to_vec()) => {}
             _ => return Err(REFUSED.into()),
         }
     }
-    require(dns && ip)
+    let expected_ip = identity
+        .ip
+        .map(|address| match address {
+            IpAddr::V4(ip) => ip.octets().to_vec(),
+            IpAddr::V6(ip) => ip.octets().to_vec(),
+        })
+        .into_iter()
+        .collect();
+    require(dns == identity.dns_names().into_iter().collect() && ip == expected_ip)
 }
-pub(crate) fn check_certificates(
+pub(crate) fn check_certificates_for(
     ca: &str,
     leaf: &str,
     public: &str,
     name: &str,
     now: u64,
+    identity: &IngressIdentity,
 ) -> Result<(u64, u64)> {
     let root = certificate(ca)?;
     let cert = certificate(leaf)?;
     p256(&root)?;
     check_self_signature(&root)?;
-    check_leaf_profile(&cert)?;
+    check_leaf_profile(&cert, identity)?;
     require(
         root.tbs_certificate.subject.to_string()
             == format!(
@@ -266,8 +402,9 @@ pub(crate) fn check_certificates(
         .1;
     require(usage.key_cert_sign())?;
     require(
-        check_lifetime(ca.as_bytes(), TTL).map_err(|_| REFUSED)?
-            && check_lifetime(leaf.as_bytes(), 3600).map_err(|_| REFUSED)?,
+        check_lifetime_at(ca.as_bytes(), TTL, Duration::from_secs(now)).map_err(|_| REFUSED)?
+            && check_lifetime_at(leaf.as_bytes(), 3600, Duration::from_secs(now))
+                .map_err(|_| REFUSED)?,
     )?;
     let ca_expiry = root
         .tbs_certificate
@@ -285,7 +422,8 @@ pub(crate) fn check_certificates(
         ca_expiry <= now.checked_add(31536000).ok_or(REFUSED)?
             && leaf_expiry <= now.checked_add(TTL).ok_or(REFUSED)?,
     )?;
-    check_chain(leaf.as_bytes(), ca.as_bytes()).map_err(|_| REFUSED)?;
+    check_chain_at(leaf.as_bytes(), ca.as_bytes(), Duration::from_secs(now))
+        .map_err(|_| REFUSED)?;
     require(
         public_spki(leaf.as_bytes(), true).map_err(|_| REFUSED)?
             == public_spki(public.as_bytes(), false).map_err(|_| REFUSED)?,
@@ -440,6 +578,7 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
     let result: Result<usize> = async {
     require(unsafe { libc::geteuid() } == 0)?;
     let name = resource_name(installation_id)?;
+    let identity = IngressIdentity::from_environment()?;
     let root_bytes = read_input(Path::new("/input/root.token"), 4096, true)?;
     let root = std::str::from_utf8(&root_bytes)
         .map_err(|_| REFUSED)?
@@ -516,7 +655,7 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
     version_one_custody(&custody["data"], "ecdsa-p256").map_err(|_| REFUSED)?;
     let public = text(&custody["data"]["keys"]["1"], "public_key")?;
     stage = ProvisionStage::RoleCreate;
-    request(&bao, Method::POST, &format!("{name}/roles/localhost"), Some(&json!({"allow_any_name":false,"allow_localhost":true,"allowed_domains":["localhost"],"allow_bare_domains":true,"allow_subdomains":false,"allow_glob_domains":false,"allow_ip_sans":true,"server_flag":true,"client_flag":false,"key_type":"ec","key_bits":256,"max_ttl":"8h","use_csr_common_name":false,"use_csr_sans":false})), Some(root)).await.map_err(|_| REFUSED)?;
+    request(&bao, Method::POST, &format!("{name}/roles/localhost"), Some(&identity.role_body()), Some(root)).await.map_err(|_| REFUSED)?;
     stage = ProvisionStage::CsrCreate;
     let csr = request(
         &bao,
@@ -528,7 +667,7 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
     .await
     .map_err(|_| REFUSED)?;
     stage = ProvisionStage::CertificateIssue;
-    let leaf = request(&bao, Method::POST, &format!("{name}/sign/localhost"), Some(&json!({"csr":text(&csr["data"],"csr")?,"common_name":"localhost","alt_names":"localhost","ip_sans":"127.0.0.1","ttl":"8h"})), Some(root)).await.map_err(|_| REFUSED)?;
+    let leaf = request(&bao, Method::POST, &format!("{name}/sign/localhost"), Some(&identity.signing_request(text(&csr["data"],"csr")?)), Some(root)).await.map_err(|_| REFUSED)?;
     stage = ProvisionStage::CertificateValidation;
     require(leaf["data"].get("private_key").is_none())?;
     let leaf_pem = text(&leaf["data"], "certificate")?;
@@ -536,7 +675,7 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
         .duration_since(UNIX_EPOCH)
         .map_err(|_| REFUSED)?
         .as_secs();
-    let (ca_expiry, leaf_expiry) = check_certificates(ca_pem, leaf_pem, public, &name, now)?;
+    let (ca_expiry, leaf_expiry) = check_certificates_for(ca_pem, leaf_pem, public, &name, now, &identity)?;
     stage = ProvisionStage::PolicyCreate;
     let policy = signer_policy(&name)?;
     request(
@@ -648,8 +787,8 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
     stage = ProvisionStage::Metadata;
     let ca_der = certificate(ca_pem)?.to_der().map_err(|_| REFUSED)?;
     let leaf_der = certificate(leaf_pem)?.to_der().map_err(|_| REFUSED)?;
-    let metadata = serde_json::to_vec(&json!({"schema":"elevenid.installer-ingress/v1","installation_id":installation_id,
-        "key_name":name,"key_version":1,"pki_mount":name,"dns_names":["localhost"],"ip_addresses":["127.0.0.1"],
+    let metadata = serde_json::to_vec(&json!({"schema":"elevenid.installer-ingress/v2","installation_id":installation_id,
+        "key_name":name,"key_version":1,"pki_mount":name,"dns_names":identity.dns_names(),"ip_addresses":identity.ip_addresses(),
         "ca_der_sha256":format!("{:x}",Sha256::digest(&ca_der)),"certificate_der_sha256":format!("{:x}",Sha256::digest(&leaf_der)),
         "ca_pem_sha256":format!("{:x}",Sha256::digest(ca_pem.as_bytes())),"certificate_pem_sha256":format!("{:x}",Sha256::digest(leaf_pem.as_bytes())),
         "ca_expires_at":ca_expiry,"certificate_expires_at":leaf_expiry,"token_ttl_seconds":token_ttl,"token_observed_at":token_observed_at,
@@ -695,6 +834,76 @@ mod tests {
         assert_eq!(sign_body()["prehashed"], true);
     }
     #[test]
+    fn selected_identity_has_exact_canonical_sans_and_no_implicit_loopback() {
+        let dns = IngressIdentity::new(Some("marty.example.com"), None).unwrap();
+        assert_eq!(dns.dns_names(), ["marty.example.com"]);
+        assert!(dns.ip_addresses().is_empty());
+        assert_eq!(dns.role_body()["allow_ip_sans"], false);
+        assert_eq!(dns.role_body()["allow_subdomains"], false);
+        assert_eq!(
+            dns.role_body()["allowed_domains"],
+            json!(["marty.example.com"])
+        );
+        for address in ["203.0.113.10", "2001:db8::10"] {
+            let ip = IngressIdentity::new(None, Some(address.parse().unwrap())).unwrap();
+            assert!(ip.dns_names().is_empty());
+            assert_eq!(ip.ip_addresses(), [address]);
+            assert_eq!(ip.signing_request("csr")["alt_names"], "");
+            assert_eq!(ip.signing_request("csr")["ip_sans"], address);
+            assert_eq!(ip.signing_request("csr")["exclude_cn_from_sans"], true);
+            assert_eq!(
+                IngressIdentity::from_metadata(&[], &[address.into()]).unwrap(),
+                ip
+            );
+        }
+        assert_eq!(
+            IngressIdentity::new(Some("localhost"), Some("127.0.0.1".parse().unwrap())).unwrap(),
+            IngressIdentity::localhost()
+        );
+        let entry = IngressIdentity::new(
+            Some("marty.example.com"),
+            Some("203.0.113.10".parse().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(entry.dns_names(), ["marty.example.com"]);
+        assert_eq!(entry.ip_addresses(), ["203.0.113.10"]);
+        assert_eq!(entry.signing_request("csr")["ip_sans"], "203.0.113.10");
+        assert_eq!(
+            IngressIdentity::from_metadata(&entry.dns_names(), &entry.ip_addresses()).unwrap(),
+            entry
+        );
+        assert!(IngressIdentity::new(
+            Some("marty.example.com"),
+            Some("127.0.0.1".parse().unwrap())
+        )
+        .is_err());
+        assert!(
+            IngressIdentity::new(Some("localhost"), Some("203.0.113.10".parse().unwrap())).is_err()
+        );
+        assert!(IngressIdentity::new(None, None).is_err());
+        for bad in [
+            "marty.example.com:443",
+            "*.example.com",
+            "example.com/other",
+            "user@example.com",
+            "EXAMPLE.com",
+            "example.com.",
+            "203.0.113.10",
+            "localhost\n",
+        ] {
+            assert!(
+                IngressIdentity::new(Some(bad), None).is_err(),
+                "accepted {bad}"
+            );
+        }
+        assert!(IngressIdentity::from_metadata(&[], &["2001:0db8::10".into()]).is_err());
+        assert!(IngressIdentity::from_metadata(
+            &["one.example.com".into(), "two.example.com".into()],
+            &[]
+        )
+        .is_err());
+    }
+    #[test]
     fn token_contract_refuses_extra_authority_renewal_and_unbounded_lifetime() {
         let name = resource_name(ID).unwrap();
         let valid = json!({"policies":[name],"orphan":true,"renewable":false,"explicit_max_ttl":TTL,"ttl":TTL,"path":"auth/token/create-orphan"});
@@ -723,7 +932,7 @@ mod tests {
         let mut cert = certificate(pem).unwrap();
         p256(&cert).unwrap();
         check_self_signature(&cert).unwrap();
-        assert!(check_leaf_profile(&cert).is_err());
+        assert!(check_leaf_profile(&cert, &IngressIdentity::localhost()).is_err());
         cert.tbs_certificate.subject = "CN=altered".parse().unwrap();
         cert.tbs_certificate.issuer = cert.tbs_certificate.subject.clone();
         assert!(check_self_signature(&cert).is_err());

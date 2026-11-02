@@ -6,7 +6,7 @@ use std::{
 use async_trait::async_trait;
 use marty_auth::{
     KeycloakOidcProvider, OidcAuthorizationRequest, OidcCodeExchange, OidcConfig, OidcHttpClient,
-    OidcLogoutRequest, OidcProvider, PortError,
+    OidcLogoutRequest, OidcProvider, OidcProviderMode, PortError,
 };
 use serde_json::{json, Value};
 use url::Url;
@@ -18,6 +18,7 @@ struct FakeHttp {
     post_response: Mutex<Option<Value>>,
     get_urls: Mutex<Vec<String>>,
     posted_form: Mutex<Vec<(String, String)>>,
+    post_urls: Mutex<Vec<String>>,
 }
 
 #[async_trait]
@@ -46,12 +47,16 @@ impl OidcHttpClient for FakeHttp {
 
     async fn post_form_json_object(
         &self,
-        _url: &str,
+        url: &str,
         form: &[(String, String)],
         _max_bytes: usize,
         _document_name: &str,
     ) -> Result<Value, PortError> {
         *self.posted_form.lock().expect("form lock") = form.to_vec();
+        self.post_urls
+            .lock()
+            .expect("POST lock")
+            .push(url.to_owned());
         self.post_response
             .lock()
             .expect("post lock")
@@ -62,6 +67,8 @@ impl OidcHttpClient for FakeHttp {
 
 fn config() -> OidcConfig {
     OidcConfig {
+        provider_mode: OidcProviderMode::Keycloak,
+        trusted_endpoint_origins: Vec::new(),
         issuer_url: "http://keycloak:8080/realms/marty/".to_owned(),
         external_issuer_url: "https://identity.example/realms/marty/".to_owned(),
         client_id: "marty-ui".to_owned(),
@@ -259,4 +266,378 @@ fn invalid_configuration_fails_closed() {
         .err()
         .expect("empty algorithm list must fail");
     assert_eq!(error.code, "invalid_oidc_configuration");
+}
+
+fn external_config() -> OidcConfig {
+    let mut config = config();
+    config.provider_mode = OidcProviderMode::External;
+    config.issuer_url = "https://identity.example/realms/marty".into();
+    config.external_issuer_url.clone_from(&config.issuer_url);
+    config
+}
+
+fn external_fixture() -> Value {
+    serde_json::from_str(include_str!("fixtures/external_oidc_public_id_tokens.json"))
+        .expect("public external OIDC fixture")
+}
+
+fn external_http() -> Arc<FakeHttp> {
+    let http = Arc::new(FakeHttp::default());
+    *http.discovery.lock().unwrap() = Some(json!({
+        "issuer": "https://identity.example/realms/marty",
+        "authorization_endpoint": "https://identity.example/oauth2/authorize",
+        "token_endpoint": "https://identity.example/oauth2/token",
+        "jwks_uri": "https://identity.example/public/keys",
+        "response_types_supported": ["code"],
+        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+        "code_challenge_methods_supported": ["S256"]
+    }));
+    http.jwks
+        .lock()
+        .unwrap()
+        .push_back(external_fixture()["jwks"].clone());
+    *http.post_response.lock().unwrap() = Some(json!({"access_token": "access", "id_token": "id"}));
+    http
+}
+
+fn authorization_request(registration: bool) -> OidcAuthorizationRequest {
+    OidcAuthorizationRequest {
+        state: "state-1".into(),
+        code_challenge: "challenge".into(),
+        nonce: "nonce-1".into(),
+        redirect_uri: None,
+        registration,
+    }
+}
+
+fn exchange_request() -> OidcCodeExchange {
+    OidcCodeExchange {
+        code: "one-time-code".into(),
+        code_verifier: "verifier".into(),
+        redirect_uri: Some("https://ui.example/v1/auth/callback".into()),
+    }
+}
+
+#[tokio::test]
+async fn external_discovery_drives_existing_code_flow_without_keycloak_urls() {
+    let http = external_http();
+    let provider = KeycloakOidcProvider::new(external_config(), http.clone()).unwrap();
+    assert_eq!(
+        provider
+            .authorization_url(&authorization_request(false))
+            .unwrap_err()
+            .code,
+        "oidc_metadata_unavailable"
+    );
+    provider.health_check().await.unwrap();
+    let login = Url::parse(
+        &provider
+            .authorization_url(&authorization_request(false))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(login.path(), "/oauth2/authorize");
+    let query = login
+        .query_pairs()
+        .collect::<std::collections::HashMap<_, _>>();
+    for (name, value) in [
+        ("response_type", "code"),
+        ("client_id", "marty-ui"),
+        ("state", "state-1"),
+        ("nonce", "nonce-1"),
+        ("code_challenge", "challenge"),
+        ("code_challenge_method", "S256"),
+    ] {
+        assert_eq!(query.get(name).map(AsRef::as_ref), Some(value));
+    }
+    provider.exchange_code(&exchange_request()).await.unwrap();
+    assert_eq!(
+        *http.post_urls.lock().unwrap(),
+        ["https://identity.example/oauth2/token"]
+    );
+    let form = http
+        .posted_form
+        .lock()
+        .unwrap()
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(form["client_secret"], "secret");
+    assert_eq!(form["code_verifier"], "verifier");
+    assert_eq!(form["redirect_uri"], "https://ui.example/v1/auth/callback");
+    assert!(http
+        .get_urls
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|url| !url.contains("protocol/openid-connect")));
+}
+
+#[tokio::test]
+async fn external_registration_and_logout_require_explicit_provider_metadata() {
+    let http = external_http();
+    // This is dynamic client registration, never an end-user signup URL.
+    http.discovery.lock().unwrap().as_mut().unwrap()["registration_endpoint"] =
+        json!("https://identity.example/clients/register");
+    let provider = KeycloakOidcProvider::new(external_config(), http.clone()).unwrap();
+    provider.health_check().await.unwrap();
+    assert_eq!(
+        provider
+            .authorization_url(&authorization_request(true))
+            .unwrap_err()
+            .code,
+        "oidc_registration_unsupported"
+    );
+    let logout = OidcLogoutRequest {
+        id_token: Some("private-id-token".into()),
+        post_logout_redirect_uri: "https://ui.example/".into(),
+    };
+    assert_eq!(provider.logout_url(&logout).unwrap(), None);
+
+    {
+        let mut discovery = http.discovery.lock().unwrap();
+        let discovery = discovery.as_mut().unwrap();
+        discovery["prompt_values_supported"] = json!(["login", "consent", "create"]);
+        discovery["end_session_endpoint"] = json!("https://identity.example/session/end");
+    }
+    http.jwks
+        .lock()
+        .unwrap()
+        .push_back(external_fixture()["jwks"].clone());
+    provider.health_check().await.unwrap();
+    let signup = Url::parse(
+        &provider
+            .authorization_url(&authorization_request(true))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(signup.path(), "/oauth2/authorize");
+    assert!(signup
+        .query_pairs()
+        .any(|(name, value)| name == "prompt" && value == "create"));
+    assert!(!signup.query_pairs().any(|(name, _)| name == "max_age"));
+    let logout = Url::parse(&provider.logout_url(&logout).unwrap().unwrap()).unwrap();
+    assert_eq!(logout.path(), "/session/end");
+    assert!(logout
+        .query_pairs()
+        .any(|(name, value)| name == "id_token_hint" && value == "private-id-token"));
+}
+
+#[tokio::test]
+async fn external_untrusted_metadata_never_receives_code_or_client_secret() {
+    for field in [
+        "authorization_endpoint",
+        "token_endpoint",
+        "jwks_uri",
+        "end_session_endpoint",
+    ] {
+        for url in [
+            "https://attacker.example/collect",
+            "http://identity.example/collect",
+            "https://user:password@identity.example/collect",
+            "https://identity.example/collect#fragment",
+            "https://identity.example/collect?client_id=other",
+        ] {
+            let http = external_http();
+            http.discovery.lock().unwrap().as_mut().unwrap()[field] = json!(url);
+            let provider = KeycloakOidcProvider::new(external_config(), http.clone()).unwrap();
+            assert!(
+                provider.exchange_code(&exchange_request()).await.is_err(),
+                "{field}: {url}"
+            );
+            assert!(http.post_urls.lock().unwrap().is_empty());
+            assert!(http.posted_form.lock().unwrap().is_empty());
+            assert_eq!(http.get_urls.lock().unwrap().len(), 1);
+            assert!(provider
+                .authorization_url(&authorization_request(false))
+                .is_err());
+        }
+    }
+}
+
+#[tokio::test]
+async fn external_explicit_endpoint_origins_are_bounded_and_preserve_exact_issuer() {
+    let http = external_http();
+    {
+        let mut discovery = http.discovery.lock().unwrap();
+        let discovery = discovery.as_mut().unwrap();
+        discovery["authorization_endpoint"] = json!("https://login.example/authorize");
+        discovery["token_endpoint"] = json!("https://login.example/token");
+        discovery["jwks_uri"] = json!("https://keys.example/jwks");
+    }
+    let mut config = external_config();
+    config.trusted_endpoint_origins = vec![
+        "https://login.example/".into(),
+        "https://keys.example".into(),
+    ];
+    let provider = KeycloakOidcProvider::new(config, http.clone()).unwrap();
+    provider.exchange_code(&exchange_request()).await.unwrap();
+    assert_eq!(
+        *http.post_urls.lock().unwrap(),
+        ["https://login.example/token"]
+    );
+    let fixture = external_fixture();
+    let identity = provider
+        .validate_tokens(
+            fixture["tokens"]["verified"].as_str().unwrap(),
+            "opaque-access-token",
+            "nonce-1",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        identity.id_token_claims["iss"],
+        "https://identity.example/realms/marty"
+    );
+    assert_eq!(identity.user_info.sub, "user-1");
+
+    let http = external_http();
+    let mut config = external_config();
+    config.issuer_url.push('/');
+    config.external_issuer_url.push('/');
+    let provider = KeycloakOidcProvider::new(config, http.clone()).unwrap();
+    assert_eq!(
+        provider
+            .exchange_code(&exchange_request())
+            .await
+            .unwrap_err()
+            .code,
+        "oidc_discovery_issuer_mismatch"
+    );
+    assert!(http.post_urls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn external_unsupported_client_authentication_fails_before_post() {
+    for methods in [
+        None,
+        Some(json!(["client_secret_basic"])),
+        Some(json!(["private_key_jwt"])),
+        Some(json!(["none"])),
+        Some(json!([])),
+        Some(json!("client_secret_post")),
+    ] {
+        let http = external_http();
+        {
+            let mut discovery = http.discovery.lock().unwrap();
+            let discovery = discovery.as_mut().unwrap();
+            if let Some(methods) = methods {
+                discovery["token_endpoint_auth_methods_supported"] = methods;
+            } else {
+                discovery
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("token_endpoint_auth_methods_supported");
+            }
+        }
+        let provider = KeycloakOidcProvider::new(external_config(), http.clone()).unwrap();
+        assert!(provider.exchange_code(&exchange_request()).await.is_err());
+        assert!(http.post_urls.lock().unwrap().is_empty());
+        assert_eq!(http.get_urls.lock().unwrap().len(), 1);
+    }
+    let http = external_http();
+    http.discovery.lock().unwrap().as_mut().unwrap()["token_endpoint_auth_methods_supported"] =
+        json!(["none"]);
+    let mut config = external_config();
+    config.client_secret = None;
+    let provider = KeycloakOidcProvider::new(config, http.clone()).unwrap();
+    provider.exchange_code(&exchange_request()).await.unwrap();
+    assert!(!http
+        .posted_form
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(name, _)| name == "client_secret"));
+}
+
+#[tokio::test]
+async fn external_verified_identity_gate_runs_after_signature_nonce_and_issuer_validation() {
+    let fixture = external_fixture();
+    let http = external_http();
+    let provider = KeycloakOidcProvider::new(external_config(), http).unwrap();
+    let verified = fixture["tokens"]["verified"].as_str().unwrap();
+    let identity = provider
+        .validate_tokens(verified, "access", "nonce-1")
+        .await
+        .unwrap();
+    assert!(identity.user_info.email_verified);
+    assert_eq!(identity.user_info.email, "alice@example.com");
+    for case in [
+        "unverified",
+        "missing_verification",
+        "string_verification",
+        "missing_email",
+        "blank_email",
+        "blank_subject",
+    ] {
+        let token = fixture["tokens"][case].as_str().unwrap();
+        assert_eq!(
+            provider
+                .validate_tokens(token, "access", "nonce-1")
+                .await
+                .unwrap_err()
+                .code,
+            "oidc_verified_email_required",
+            "{case}"
+        );
+    }
+    assert_eq!(
+        provider
+            .validate_tokens(verified, "access", "wrong-nonce")
+            .await
+            .unwrap_err()
+            .code,
+        "oidc_token_validation_failed"
+    );
+    let mut tampered = verified.to_owned();
+    let signature = tampered.rfind('.').unwrap() + 1;
+    tampered.replace_range(
+        signature..signature + 1,
+        if &verified[signature..signature + 1] == "A" {
+            "B"
+        } else {
+            "A"
+        },
+    );
+    assert_eq!(
+        provider
+            .validate_tokens(&tampered, "access", "nonce-1")
+            .await
+            .unwrap_err()
+            .code,
+        "oidc_token_validation_failed"
+    );
+}
+
+#[test]
+fn external_configuration_rejects_ambiguous_or_unbounded_endpoint_authority() {
+    for origin in [
+        "http://identity.example",
+        "https://*.example",
+        "https://identity.example/path",
+        "https://identity.example?query=value",
+        "https://identity.example#fragment",
+        "https://user@identity.example",
+    ] {
+        let mut config = external_config();
+        config.trusted_endpoint_origins = vec![origin.into()];
+        assert!(config.validate().is_err(), "{origin}");
+    }
+    let mut duplicate = external_config();
+    duplicate.trusted_endpoint_origins = vec![
+        "https://login.example".into(),
+        "https://login.example/".into(),
+    ];
+    assert!(duplicate.validate().is_err());
+    let mut excessive = external_config();
+    excessive.trusted_endpoint_origins = (0..9)
+        .map(|index| format!("https://login{index}.example"))
+        .collect();
+    assert!(excessive.validate().is_err());
+    let mut split_issuer = external_config();
+    split_issuer.issuer_url = "https://internal.example/issuer".into();
+    assert!(split_issuer.validate().is_err());
+    let mut legacy = config();
+    legacy.trusted_endpoint_origins = vec!["https://login.example".into()];
+    assert!(legacy.validate().is_err());
 }

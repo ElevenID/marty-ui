@@ -1,11 +1,12 @@
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
-use mmf_platform::{KeylessGrpcTlsAcceptor, OpenBaoTlsIdentityFiles, PlatformError};
+use marty_service_runtime::{RemoteTlsIdentityFiles, TlsIdentityNames};
+use mmf_platform::{KeylessGrpcTlsAcceptor, PlatformError};
 
-/// Public TLS files and a versioned, non-exportable OpenBao signing key.
+/// Public TLS files and a pinned, non-exportable remote signing key.
 /// Notification's service-token interceptor remains active in both modes.
 pub struct NotificationGrpcTlsSettings {
-    identity: OpenBaoTlsIdentityFiles,
+    identity: RemoteTlsIdentityFiles,
     client_ca_file: Option<PathBuf>,
 }
 
@@ -18,14 +19,6 @@ impl NotificationGrpcTlsSettings {
         if values.contains_key("GRPC_TLS_KEY") {
             return Err("GRPC_TLS_KEY private-key files are not supported".into());
         }
-        let names = [
-            "GRPC_TLS_CERT",
-            "GRPC_TLS_KMS_ADDR",
-            "GRPC_TLS_KMS_CA_CERT",
-            "GRPC_TLS_KMS_TOKEN_FILE",
-            "GRPC_TLS_KMS_KEY_NAME",
-            "GRPC_TLS_KMS_KEY_VERSION",
-        ];
         let value = |name: &str| {
             values
                 .get(name)
@@ -33,7 +26,12 @@ impl NotificationGrpcTlsSettings {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
         };
-        let configured = names.iter().filter(|name| value(name).is_some()).count();
+        let identity = RemoteTlsIdentityFiles::from_values(
+            |name| values.get(name).map(String::as_str),
+            TlsIdentityNames::new("GRPC_TLS"),
+            Duration::from_secs(10),
+            64,
+        )?;
         let require_client = match value("GRPC_TLS_REQUIRE_CLIENT_AUTH")
             .map(str::to_ascii_lowercase)
             .as_deref()
@@ -43,34 +41,16 @@ impl NotificationGrpcTlsSettings {
             Some(_) => return Err("GRPC_TLS_REQUIRE_CLIENT_AUTH is invalid".into()),
         };
         let client_ca = value("GRPC_TLS_CA_CERT").map(PathBuf::from);
-        if configured == 0 && development && !require_client && client_ca.is_none() {
+        if identity.is_none() && development && !require_client && client_ca.is_none() {
             return Ok(None);
         }
-        if configured != names.len() {
-            return Err(
-                "gRPC TLS requires a public certificate and complete remote KMS identity".into(),
-            );
-        }
+        let identity = identity
+            .ok_or("gRPC TLS requires a public certificate and complete remote KMS identity")?;
         if require_client && client_ca.is_none() {
             return Err("GRPC_TLS_CA_CERT is required for client authentication".into());
         }
-        let version = value(names[5])
-            .unwrap_or_default()
-            .parse::<u32>()
-            .ok()
-            .filter(|version| *version > 0)
-            .ok_or("GRPC_TLS_KMS_KEY_VERSION is invalid")?;
         Ok(Some(Self {
-            identity: OpenBaoTlsIdentityFiles {
-                certificate_chain_file: PathBuf::from(value(names[0]).unwrap_or_default()),
-                kms_endpoint: value(names[1]).unwrap_or_default().into(),
-                kms_ca_cert_file: PathBuf::from(value(names[2]).unwrap_or_default()),
-                kms_token_file: PathBuf::from(value(names[3]).unwrap_or_default()),
-                kms_key_name: value(names[4]).unwrap_or_default().into(),
-                kms_key_version: version,
-                request_timeout: Duration::from_secs(10),
-                max_concurrent_signs: 64,
-            },
+            identity,
             client_ca_file: require_client.then_some(client_ca).flatten(),
         }))
     }
@@ -94,6 +74,30 @@ impl NotificationGrpcTlsSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aws_server_keeps_client_auth_requirement_and_rejects_mixed_provider() {
+        let mut values = vec![
+            ("GRPC_TLS_CERT".into(), "public.pem".into()),
+            ("GRPC_TLS_KMS_PROVIDER".into(), "aws-kms".into()),
+            ("GRPC_TLS_KMS_REGION".into(), "us-east-1".into()),
+            (
+                "GRPC_TLS_KMS_KEY_ARN".into(),
+                "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
+                    .into(),
+            ),
+            ("GRPC_TLS_REQUIRE_CLIENT_AUTH".into(), "true".into()),
+        ];
+        assert!(NotificationGrpcTlsSettings::from_values(values.clone(), false).is_err());
+        values.push(("GRPC_TLS_CA_CERT".into(), "client-ca.pem".into()));
+        let tls = NotificationGrpcTlsSettings::from_values(values.clone(), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(tls.identity.provider(), "aws-kms");
+        assert_eq!(tls.client_ca_file, Some(PathBuf::from("client-ca.pem")));
+        values.push(("GRPC_TLS_KMS_TOKEN_FILE".into(), "old-token".into()));
+        assert!(NotificationGrpcTlsSettings::from_values(values, false).is_err());
+    }
 
     fn configured() -> Vec<(String, String)> {
         [

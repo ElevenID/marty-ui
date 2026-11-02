@@ -7,23 +7,10 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::domain::{service_capabilities, service_type};
+use crate::domain::{key_purposes, service_capabilities, service_type};
 use crate::kms::{self, ProviderRequest};
 
 const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
-const SUPPORTED_ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "RS256", "EdDSA"];
-const KEY_PURPOSES: &[&str] = &[
-    "vc_jwt_issuer",
-    "mdoc_dsc",
-    "x509_doc_signer",
-    "holder_binding",
-    "presentation_signing",
-    "oid4vp_request_signing",
-    "vdsnc_signing",
-    "csca",
-    "jwks_signing",
-    "lti_tool_signing",
-];
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ValidationRequest {
@@ -50,6 +37,7 @@ pub struct ValidationResult {
     pub ok: bool,
     pub checks: Vec<ValidationCheck>,
     pub validated_at: String,
+    pub basis: String,
 }
 
 pub async fn validate(request: ValidationRequest) -> ValidationResult {
@@ -65,6 +53,7 @@ pub async fn validate(request: ValidationRequest) -> ValidationResult {
                 source: "baseline".into(),
             }],
             validated_at: Utc::now().to_rfc3339(),
+            basis: "configuration".into(),
         };
     }
     let payload = normalize_payload(&body);
@@ -72,7 +61,8 @@ pub async fn validate(request: ValidationRequest) -> ValidationResult {
     append_baseline_checks(&payload, &mut checks);
     append_provider_checks(&payload, &mut checks);
 
-    if request.live_probe {
+    let can_probe = !checks.iter().any(|check| check.status == "fail");
+    if request.live_probe && can_probe {
         if payload["protocol"] == "vault-transit-compatible" {
             validate_custom_transit(&payload, &mut checks).await;
         } else if let Some(validator_url) = validator_url(string(&payload, "provider")) {
@@ -86,20 +76,20 @@ pub async fn validate(request: ValidationRequest) -> ValidationResult {
         ok: !checks.iter().any(|check| check.status == "fail"),
         checks,
         validated_at: Utc::now().to_rfc3339(),
+        basis: if request.live_probe && can_probe {
+            "live"
+        } else {
+            "configuration"
+        }
+        .into(),
     }
 }
 
 fn normalize_payload(body: &Value) -> Value {
     let requested_type = trimmed(body.get("service_type")).expect("validated service type");
     let definition = service_type(requested_type);
-    let algorithms = string_list(body.get("algorithms"))
-        .into_iter()
-        .filter(|value| SUPPORTED_ALGORITHMS.contains(&value.as_str()))
-        .collect::<Vec<_>>();
-    let key_purposes = string_list(body.get("key_purposes"))
-        .into_iter()
-        .filter(|value| KEY_PURPOSES.contains(&value.as_str()))
-        .collect::<Vec<_>>();
+    let algorithms = dedupe(string_list(body.get("algorithms")));
+    let key_purposes = dedupe(string_list(body.get("key_purposes")));
     json!({
         "id": trimmed(body.get("id")).unwrap_or_default(),
         "service_type": definition.id,
@@ -136,7 +126,7 @@ fn append_baseline_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
         add(
             checks,
             "Authentication reference",
-            "warning",
+            "fail",
             "Provide a credential or secret reference for this auth mode.",
             "baseline",
         );
@@ -187,18 +177,20 @@ fn append_baseline_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
         );
     }
 
-    let key_purposes = string_list(payload.get("key_purposes"));
-    if !key_purposes.is_empty() && !algorithms.is_empty() {
-        let mut incompatible = Vec::new();
-        for purpose in &key_purposes {
-            for algorithm in &algorithms {
-                if !purpose_algorithms(purpose).contains(&algorithm.as_str())
-                    && !incompatible.contains(algorithm)
-                {
-                    incompatible.push(algorithm.clone());
-                }
-            }
-        }
+    let purposes = string_list(payload.get("key_purposes"));
+    if !purposes.is_empty() {
+        let definitions = key_purposes();
+        let incompatible = purposes
+            .iter()
+            .filter(|purpose| {
+                !definitions.iter().any(|definition| {
+                    definition.id == purpose.as_str()
+                        && algorithms.iter().any(|algorithm| {
+                            definition.allowed_algorithms.contains(&algorithm.as_str())
+                        })
+                })
+            })
+            .collect::<Vec<_>>();
         if incompatible.is_empty() {
             add(
                 checks,
@@ -211,11 +203,14 @@ fn append_baseline_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
             add(
                 checks,
                 "Key purpose algorithm fit",
-                "warning",
+                "fail",
                 format!(
-                    "Algorithm(s) {} may not be suitable for the declared key purpose(s) {}.",
-                    incompatible.join(", "),
-                    key_purposes.join(", ")
+                    "No selected signing algorithm supports declared key purpose(s) {}.",
+                    incompatible
+                        .into_iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
                 "baseline",
             );
@@ -320,11 +315,12 @@ async fn validate_provider_adapter(payload: &Value, checks: &mut Vec<ValidationC
         Ok(result) if result.checks.is_empty() => add(
             checks,
             "Provider connectivity",
-            if result.ok { "pass" } else { "warning" },
+            if result.ok { "pass" } else { "fail" },
             "Adapter live validation completed.",
             "adapter",
         ),
         Ok(result) => {
+            let ok = result.ok;
             for check in result.checks {
                 add(
                     checks,
@@ -343,15 +339,70 @@ async fn validate_provider_adapter(payload: &Value, checks: &mut Vec<ValidationC
                     "adapter",
                 );
             }
+            if !ok && !checks.iter().any(|check| check.status == "fail") {
+                add(
+                    checks,
+                    "Provider connectivity",
+                    "fail",
+                    "Provider live validation did not succeed.",
+                    "adapter",
+                );
+            }
         }
         Err(error) => add(
             checks,
             "Provider connectivity",
-            "warning",
+            "fail",
             format!("Adapter live validation failed unexpectedly: {error}"),
             "adapter",
         ),
     }
+    if payload["service_type"] == "aws-kms" && !checks.iter().any(|check| check.status == "fail") {
+        validate_aws_public_key(payload, checks).await;
+    }
+}
+
+async fn validate_aws_public_key(payload: &Value, checks: &mut Vec<ValidationCheck>) {
+    // Reuse the canonical read-only adapter: this pins the ARN and parses the
+    // public key without creating or importing a key, or producing a signature.
+    let public = match kms::public_key_existing(ProviderRequest {
+        service_config: payload.clone(),
+    })
+    .await
+    {
+        Ok(public) => public,
+        Err(error) => {
+            add(
+                checks,
+                "Signing key compatibility",
+                "fail",
+                error.to_string(),
+                "adapter",
+            );
+            return;
+        }
+    };
+    let algorithms = string_list(payload.get("algorithms"));
+    let supported = string_list(public.get("signing_algorithms"));
+    let public_algorithm = kms::managed_public_key_algorithm(&public["public_jwk"]);
+    let compatible = public["key_usage"] == "SIGN_VERIFY"
+        && !algorithms.is_empty()
+        && algorithms.iter().all(|algorithm| {
+            public_algorithm == Some(algorithm.as_str())
+                && kms::aws_signing_algorithm(algorithm)
+                    .is_ok_and(|native| supported.iter().any(|value| value == native))
+        });
+    add(
+        checks,
+        "Signing key compatibility",
+        if compatible { "pass" } else { "fail" },
+        if compatible {
+            "Public key metadata supports every selected signing algorithm. Runtime signing permission is checked when signing."
+        } else {
+            "AWS KMS key usage or algorithms do not match the requested signing configuration."
+        },
+        "adapter",
+    );
 }
 
 async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationCheck>) {
@@ -549,7 +600,7 @@ async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationChe
             add(
                 checks,
                 "Signer capability",
-                if has_signature { "pass" } else { "warning" },
+                if has_signature { "pass" } else { "fail" },
                 if has_signature {
                     "Provider signed a test payload with the requested key reference."
                 } else {
@@ -575,7 +626,7 @@ async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationChe
         Ok(response) => add(
             checks,
             "Signer capability",
-            "warning",
+            "fail",
             format!(
                 "Provider sign check returned HTTP {}.",
                 response.status().as_u16()
@@ -585,7 +636,7 @@ async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationChe
         Err(error) => add(
             checks,
             "Signer capability",
-            "warning",
+            "fail",
             format!("Provider sign check failed: {error}"),
             "live",
         ),
@@ -610,7 +661,7 @@ async fn validate_bridge(payload: &Value, validator_url: &str, checks: &mut Vec<
             add(
                 checks,
                 "Provider connectivity",
-                "warning",
+                "fail",
                 format!("Could not reach provider validator bridge: {error}"),
                 "live",
             );
@@ -688,12 +739,7 @@ async fn validate_bridge(payload: &Value, validator_url: &str, checks: &mut Vec<
                     "live",
                 );
             } else {
-                append_bridge_failure(
-                    checks,
-                    body.get("detail")
-                        .and_then(Value::as_str)
-                        .unwrap_or("Validator returned a non-success response payload."),
-                );
+                append_bridge_failure(checks, "Validator returned a non-success response payload.");
             }
         }
         Ok(response) => append_bridge_failure(
@@ -714,7 +760,7 @@ fn append_bridge_failure(checks: &mut Vec<ValidationCheck>, detail: &str) {
     add(
         checks,
         "Provider connectivity",
-        "warning",
+        "fail",
         "Provider validator bridge is reachable but validation did not succeed.",
         "live",
     );
@@ -724,7 +770,8 @@ fn append_bridge_failure(checks: &mut Vec<ValidationCheck>, detail: &str) {
 
 fn validator_url(provider: &str) -> Option<String> {
     let name = match provider {
-        "aws" => "AWS_KMS_VALIDATOR_URL",
+        // AWS registration must inspect the pinned key through the same native
+        // adapter and workload identity that runtime operations will use.
         "azure" => "AZURE_KEY_VAULT_VALIDATOR_URL",
         "gcp" => "GCP_CLOUD_KMS_VALIDATOR_URL",
         _ => return None,
@@ -768,7 +815,7 @@ fn provider_client(checks: &mut Vec<ValidationCheck>) -> Option<Client> {
             add(
                 checks,
                 "Provider connectivity",
-                "warning",
+                "fail",
                 "KMS HTTP client is unavailable.",
                 "live",
             );
@@ -803,16 +850,6 @@ fn requires_auth_reference(mode: &str) -> bool {
             | "service_account"
             | "api_key"
     )
-}
-
-fn purpose_algorithms(purpose: &str) -> &'static [&'static str] {
-    match purpose {
-        "mdoc_dsc" | "vdsnc_signing" => &["ES256", "ES384", "EdDSA"],
-        "holder_binding" | "presentation_signing" => &["ES256", "EdDSA"],
-        "oid4vp_request_signing" => &["ES256"],
-        "lti_tool_signing" => &["RS256"],
-        _ => SUPPORTED_ALGORITHMS,
-    }
 }
 
 fn trimmed(value: Option<&Value>) -> Option<&str> {

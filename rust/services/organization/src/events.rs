@@ -77,6 +77,8 @@ pub enum OrganizationEventError {
     MissingField(&'static str),
     #[error("ORGANIZATION.EVENT_INVALID: timestamp precedes Unix epoch")]
     InvalidTimestamp,
+    #[error("ORGANIZATION.EVENT_INVALID: installer API-key actor is invalid")]
+    InvalidInstallerActor,
 }
 
 #[derive(Debug, Error)]
@@ -331,7 +333,7 @@ impl OrganizationEvent {
                 Some(self.text("api_key_id")?.into()),
                 Some(self.text("name")?.into()),
                 Some(self.text("created_by")?.into()),
-                "user",
+                self.api_key_actor_type("created_by")?,
                 "info",
                 format!("API key {} created", self.text("name")?),
             ),
@@ -342,7 +344,7 @@ impl OrganizationEvent {
                 Some(self.text("api_key_id")?.into()),
                 None,
                 Some(self.text("revoked_by")?.into()),
-                "user",
+                self.api_key_actor_type("revoked_by")?,
                 "warning",
                 "API key revoked".into(),
             ),
@@ -363,6 +365,27 @@ impl OrganizationEvent {
             }
         };
         Ok(descriptor)
+    }
+
+    fn api_key_actor_type(
+        &self,
+        actor_field: &'static str,
+    ) -> Result<&'static str, OrganizationEventError> {
+        let Some(installation) = self.data.get("installer_bootstrap_installation_id") else {
+            return Ok("user");
+        };
+        let installation = installation
+            .as_str()
+            .ok_or(OrganizationEventError::InvalidInstallerActor)?;
+        let id = Uuid::parse_str(installation)
+            .map_err(|_| OrganizationEventError::InvalidInstallerActor)?;
+        if id.get_version_num() != 4
+            || id.to_string() != installation
+            || self.text(actor_field)? != format!("installer:{id}")
+        {
+            return Err(OrganizationEventError::InvalidInstallerActor);
+        }
+        Ok("system")
     }
 
     fn role_descriptor(

@@ -36,7 +36,7 @@ KEY_METADATA_FILE = "selfhost-tls-kms-roles.json"
 KEY_ENV_FRAGMENT_FILE = "selfhost-tls-kms.env.fragment"
 KMS_ASSIGNMENT = re.compile(r"([A-Z][A-Z0-9_]*_TLS_KMS_KEY_(?:NAME|VERSION))=([^\r\n]*)\Z")
 KMS_REQUIRED_VARIABLE = re.compile(
-    r"\$\{([A-Z][A-Z0-9_]*_TLS_KMS_KEY_(?:NAME|VERSION)):\?[^}]*\}\Z"
+    r"\$\{([A-Z][A-Z0-9_]*_TLS_KMS_KEY_(?:NAME|VERSION)):(?:\?[^}]*|-)\}\Z"
 )
 # An independent acceptance contract for the fixed disposable bootstrap role
 # names. This is metadata, not a source of key material or a complete env file.

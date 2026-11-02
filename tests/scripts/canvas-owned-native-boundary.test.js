@@ -14,7 +14,18 @@ if(process.env.CANVAS_OWNED_BOUNDARY_CHILD==='1'){
   process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY=path.join(os.tmpdir(),'outside-owned-root');
   assert.throws(()=>stock.requireOwnedNativeExecutionBoundary(evidence),error=>error.code==='canvas_private_custody_missing');
   process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY=recovery;
-  const boundary=stock.requireOwnedNativeExecutionBoundary(evidence);
+  const proof={},wallet={};evidence.canvasJobInventoryProof=proof;evidence.ownedWalletContext=wallet;
+  const Module=require('node:module'),originalLoad=Module._load;let consumed=false;
+  process.env.DEMO_EXECUTION_EVIDENCE_HELPER=path.join(recovery,'externalLiveEvidenceHelper.js');
+  Module._load=function(request,...args){
+   if(request===path.join(recovery,'canvasJobInventoryScope.js'))return {readCanvasJobInventoryScope:(received,owner)=>{
+    assert.equal(received,proof);assert.equal(owner,wallet);consumed=true;return Object.freeze({kind:'CANVAS_SCOPED_JOB_INVENTORY_V1'});
+   }};
+   return originalLoad.call(this,request,...args);
+  };
+  let boundary;
+  try{boundary=stock.requireOwnedNativeExecutionBoundary(evidence);}finally{Module._load=originalLoad;}
+  assert.equal(consumed,true,'Functional boundary must consume the existing opaque proof with its owner');
   assert.equal(boundary.release_qualified,false);assert.equal(boundary.recording_qualified,false);
   assert.equal(boundary.privateRecoveryDirectory,recovery);
   assert.equal(stock.requireSecretFile(name),'SOURCE_ONLY_VALUE');

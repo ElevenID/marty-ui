@@ -7,9 +7,18 @@ rust-version.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = []
+# Only the opted-in fresh installer harness can create this unsigned scope.
+installer-development = []
+
 [dependencies]
+async-trait.workspace = true
+marty-acme-client = { path = "../acme-client" }
 marty-managed-key-reference = { path = "../managed-key-reference" }
 marty-selfhost-identity = { path = "../selfhost-identity" }
+marty-signing-grant = { path = "../signing-grant" }
+mmf-aws-kms.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
 regex.workspace = true
 serde.workspace = true
@@ -30,6 +39,7 @@ url.workspace = true
 icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"] }
 rustls.workspace = true
 rustls-webpki.workspace = true
+webpki-roots.workspace = true
 
 [[bin]]
 name = "marty-deploy"
@@ -39,5 +49,9 @@ path = "src/main.rs"
 libc = "0.2"
 
 [dev-dependencies]
+bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+ring = "0.17"
 tokio-rustls.workspace = true
 marty-selfhost-bundle = { path = "../selfhost-bundle" }

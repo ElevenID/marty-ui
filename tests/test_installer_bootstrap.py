@@ -24,10 +24,29 @@ def run(args=(), source=None):
     return subprocess.run(command, input=source, capture_output=True, text=True, timeout=15, env=environment)
 
 
+def simulated_process(source):
+    """Keep adapter/argument fixtures independent of the host's /proc policy."""
+    target = '    require_rootless_process\n    select_platform'
+    assert source.count(target) == 1
+    source = source.replace(target, '    seen_uid=1000 # synthetic non-root process\n    select_platform')
+    target = '        select_docker_binary\n'
+    assert source.count(target) == 1
+    source = source.replace(target, '        docker_bin=/usr/bin/docker # synthetic pinned client\n')
+    target = '''    isolated_docker() {
+        env -i PATH=/usr/bin:/bin HOME="$stage/home" DOCKER_CONFIG="$stage/config" \\
+            DOCKER_HOST="$docker_endpoint" "$docker_bin" "$@"
+    }'''
+    assert source.count(target) == 1
+    return source.replace(target, '    isolated_docker() { docker "$@"; }')
+
+
 def test_help_does_not_require_docker_or_downloads():
     result = run(["--help"])
     assert result.returncode == 0
     assert "--channel nightly|stable" in result.stdout
+    assert "--foundation-file PATH" in result.stdout
+    assert "--hosting-file PATH" in result.stdout
+    assert "--acme-staging-roots PATH" in result.stdout
 
 
 @pytest.mark.parametrize("args,reason", [
@@ -39,12 +58,22 @@ def test_help_does_not_require_docker_or_downloads():
     (["--candidate-test", "v1.2.3"], "Candidate testing requires an exact nightly tag"),
     (["--candidate-test", "v1.2.3-nightly.20261027.42", "--version", "v1.2.3"], "Choose one"),
     (["--install-dir", "/one", "--install-dir", "/two"], "Repeated"),
+    (["--foundation-file"], "Missing value"),
+    (["--foundation-file", "--yes"], "Missing value"),
+    (["--foundation-file", "/one", "--foundation-file", "/two"], "Repeated foundation"),
+    (["--hosting-file"], "Missing value"),
+    (["--hosting-file", "--yes"], "Missing value"),
+    (["--hosting-file", "/one", "--hosting-file", "/two"], "Repeated hosting"),
+    (["--acme-staging-roots"], "Missing value"),
+    (["--acme-staging-roots", ""], "Missing value"),
+    (["--acme-staging-roots", "--yes"], "Missing value"),
+    (["--acme-staging-roots", "/one", "--acme-staging-roots", "/two"], "Repeated ACME staging roots"),
     (["--skip-verification"], "Unknown option"),
 ])
 def test_invalid_arguments_refused_before_host_mutation(args, reason):
     # Keep argument-policy checks independent of the test runner's actual OS.
     host = 'uname() { case "$1" in -s) echo Linux;; -m) echo x86_64;; esac; }\n'
-    result = run(args, source=host + SCRIPT.read_text())
+    result = run(args, source=simulated_process(host + SCRIPT.read_text()))
     assert result.returncode != 0
     assert reason in result.stderr
 
@@ -61,7 +90,7 @@ docker() {{ echo UNEXPECTED_DOCKER >&2; return 91; }}
 mktemp() {{ echo UNEXPECTED_STAGING >&2; return 91; }}
 curl() {{ echo UNEXPECTED_DOWNLOAD >&2; return 91; }}
 '''
-    result = run(["--version", "v1.2.3"], source=setup + SCRIPT.read_text())
+    result = run(["--version", "v1.2.3"], source=simulated_process(setup + SCRIPT.read_text()))
     assert result.returncode != 0
     assert f"Unsupported platform: {system}/{machine}" in result.stderr
     assert "UNEXPECTED" not in result.stdout + result.stderr
@@ -79,7 +108,7 @@ def test_failed_platform_detection_stops_before_host_actions(failed_option, reas
 id() {{ echo UNEXPECTED_ID >&2; return 91; }}
 curl() {{ echo UNEXPECTED_DOWNLOAD >&2; return 91; }}
 '''
-    result = run(source=setup + SCRIPT.read_text())
+    result = run(source=simulated_process(setup + SCRIPT.read_text()))
     assert result.returncode != 0 and reason in result.stderr
     assert "UNEXPECTED" not in result.stdout + result.stderr
 
@@ -96,15 +125,16 @@ id() {{
     echo 0
 }}
 docker() {{ echo UNEXPECTED_DOCKER >&2; return 91; }}
+select_docker_binary() {{ docker_bin=/usr/bin/docker; }}
 curl() {{ echo UNEXPECTED_DOWNLOAD >&2; return 91; }}
 '''
-    result = run(source=setup + SCRIPT.read_text())
+    result = run(source=simulated_process(setup + SCRIPT.read_text()))
     # Stop at the actual regular-user check after observing the selected adapter.
-    assert result.returncode != 0 and "regular Docker-enabled user" in result.stderr
+    assert result.returncode != 0 and "Rootless installer UID invalid" in result.stderr
     selected = [line.removeprefix("PROFILE:") for line in result.stderr.splitlines()
                 if line.startswith("PROFILE:")]
     assert selected == [
-        "linux/amd64", "marty-deploy-linux-amd64", "linux_preflight", "linux_digest",
+        "linux/amd64", "marty-deploy-linux-amd64", "linux_rootless_preflight", "linux_digest",
         "https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64",
         "020468de7539ce70ef1bceaf7cde2e8c4f2ca6c3afb84642aabc5c97d9fc2a0d", "2255816",
         "https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64",
@@ -173,34 +203,95 @@ def test_candidate_test_authenticates_inventory_and_operator_before_dispatch():
     assert source.index('chmod 700 -- "$stage/marty-deploy"') < dispatch
 
 
+@pytest.mark.parametrize("verb", ["install", "candidate-test"])
+def test_native_handoff_preserves_hosting_path_as_one_opaque_argument(tmp_path, verb):
+    source = SCRIPT.read_text()
+    start = source.index(f"set -- {verb} --version")
+    end = source.index('"$stage/marty-deploy" "$@"', start)
+    handoff = source[start:end]
+    hosting = "/private/hosting file $(literal).json"
+    setup = dict(version="v1.2.3-nightly.20261027.42", stage=str(tmp_path), gh="/private/gh",
+                 docker_endpoint="unix:///run/user/1000/docker.sock", docker_engine_id="engine-1234",
+                 docker_bin="/usr/bin/docker", destination="", foundation_file="", hosting_file=hosting,
+                 acme_staging_roots="", yes="false", channel="nightly")
+    script = "\n".join(f"{key}={shlex.quote(value)}" for key, value in setup.items())
+    result = run(source=script + "\n" + handoff + "\nprintf '%s\\0' \"$@\"\n")
+    assert result.returncode == 0, result.stderr
+    arguments = result.stdout.rstrip("\0").split("\0")
+    assert arguments[0] == verb
+    assert arguments.count("--hosting-file") == 1
+    assert arguments[arguments.index("--hosting-file") + 1] == hosting
+
+
+@pytest.mark.parametrize("verb", ["install", "candidate-test"])
+@pytest.mark.parametrize("roots", [None, "/private/staging roots $(literal); &.pem"])
+def test_staging_roots_parse_and_handoff_preserves_explicit_selection(tmp_path, monkeypatch, verb, roots):
+    source = SCRIPT.read_text()
+    parser_start = source.index("    channel=nightly\n")
+    parser_end = source.index("    require_rootless_process\n", parser_start)
+    handoff_start = source.index(f"set -- {verb} --version")
+    handoff_end = source.index('"$stage/marty-deploy" "$@"', handoff_start)
+    setup = dict(stage=str(tmp_path), gh="/private/gh",
+                 docker_endpoint="unix:///run/user/1000/docker.sock", docker_engine_id="engine-1234",
+                 docker_bin="/usr/bin/docker")
+    script = "fail() { printf '%s\\n' \"$*\" >&2; exit 1; }\n"
+    script += "\n".join(f"{key}={shlex.quote(value)}" for key, value in setup.items()) + "\n"
+    script += source[parser_start:parser_end] + source[handoff_start:handoff_end]
+    script += "\nprintf '%s\\0' \"$@\"\n"
+    args = ["--candidate-test" if verb == "candidate-test" else "--version",
+            "v1.2.3-nightly.20261027.42", "--hosting-file", "/private/hosting.json"]
+    if roots is not None:
+        args += ["--acme-staging-roots", roots]
+    args += ["--yes", "--bootstrap-complete"]
+    monkeypatch.setenv("acme_staging_roots", "/untrusted/inherited-roots.pem")
+    result = run(args, source=script)
+    assert result.returncode == 0, result.stderr
+    arguments = result.stdout.rstrip("\0").split("\0")
+    assert arguments[0] == verb
+    assert arguments.count("--hosting-file") == 1
+    assert arguments[arguments.index("--hosting-file") + 1] == "/private/hosting.json"
+    assert arguments.count("--yes") == 1
+    assert "/untrusted/inherited-roots.pem" not in arguments
+    if roots is None:
+        assert "--acme-staging-roots" not in arguments
+    else:
+        assert arguments.count("--acme-staging-roots") == 1
+        assert arguments[arguments.index("--acme-staging-roots") + 1] == roots
+
+
 @pytest.mark.parametrize("endpoint,security,reason", [
-    ("ssh://example.invalid", "name=seccomp", "remote contexts are refused"),
-    ("tcp://127.0.0.1:2375", "name=seccomp", "remote contexts are refused"),
-    ("unix:///run/user/1000/docker.sock", "name=rootless", "Rootless Docker"),
-    ("unix:///var/run/docker.sock", "name=rootless,detail=true", "Rootless Docker"),
-    ("unix:///var/run/docker.sock", "name=userns", "user namespace remapping"),
-    ("unix:///var/run/docker.sock", "name=userns,remapped=true", "user namespace remapping"),
+    ("ssh://example.invalid", "name=rootless", "Docker endpoint differs"),
+    ("tcp://127.0.0.1:2375", "name=rootless", "Docker endpoint differs"),
+    ("unix:///var/run/docker.sock", "name=rootless", "Docker endpoint differs"),
+    ("", "name=seccomp", "Exact rootless Docker mode required"),
+    ("", "name=rootless,detail=true", "Exact rootless Docker mode required"),
+    ("", "name=userns", "Exact rootless Docker mode required"),
+    ("", "name=rootless\nname=userns", "Ambiguous Docker user namespace mode"),
 ])
 def test_wrong_docker_target_refused_before_download(endpoint, security, reason):
     source = SCRIPT.read_text()
     # Override host observations only; execute the actual argument/preflight code.
     setup = f'''
 unset DOCKER_CONTEXT DOCKER_HOST
+{('DOCKER_HOST=' + shlex.quote(endpoint)) if endpoint else ':'}
 uname() {{ case "$1" in -s) echo Linux;; -m) echo x86_64;; esac; }}
 id() {{ echo 1000; }}
 docker() {{
     case "$1:${{2:-}}" in
-        context:inspect) echo '{endpoint}';;
-        info:--format) echo '{security}';;
+        context:inspect) echo UNEXPECTED_CONTEXT >&2; return 91;;
+        info:--format) printf '%s\n' {shlex.quote(security)};;
         *) return 0;;
     esac
 }}
+select_docker_binary() {{ docker_bin=/usr/bin/docker; }}
 curl() {{ echo UNEXPECTED_DOWNLOAD >&2; return 1; }}
 '''
-    source = source.replace('\nmain "$@" --bootstrap-complete', setup + '\nmain "$@" --bootstrap-complete')
+    source = simulated_process(source.replace('\nmain "$@" --bootstrap-complete',
+                                              setup + '\nmain "$@" --bootstrap-complete'))
     result = run(source=source)
     assert result.returncode != 0 and reason in result.stderr
     assert "UNEXPECTED_DOWNLOAD" not in result.stderr
+    assert "UNEXPECTED_CONTEXT" not in result.stderr
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="requires jq for actual bootstrap JSON policy")

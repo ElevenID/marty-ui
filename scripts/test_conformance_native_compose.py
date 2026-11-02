@@ -227,6 +227,28 @@ def assert_native_inputs(common, base_source):
         assert native[setting] == expression
 
 
+def issuance_configuration_inputs():
+    source = (
+        (ROOT / "rust/services/issuance/src/config.rs")
+        .read_text()
+        .split("#[cfg(test)]")[0]
+    )
+    inputs = set(re.findall(r'"([A-Z][A-Z0-9_]+)"', source))
+    # The shared selector receives a prefix rather than literal environment
+    # names. Expand this reviewed call's inputs instead of treating its prefix
+    # as an environment variable or dropping the remote-custody inventory.
+    prefix = "GRPC_WORKLOAD_TLS_SERVER"
+    assert f'TlsIdentityNames::new("{prefix}")' in source
+    inputs.remove(prefix)
+    inputs.update(f"{prefix}_{suffix}" for suffix in (
+        "CERT", "KMS_ADDR", "KMS_CA_CERT", "KMS_TOKEN_FILE", "KMS_KEY_NAME",
+        "KMS_KEY_VERSION", "KEY", "KEY_FILE", "PRIVATE_KEY", "PRIVATE_KEY_FILE",
+        "KMS_PROVIDER", "KMS_REGION", "KMS_KEY_ARN",
+    ))
+    return inputs
+
+
+
 def complete_common(common, runtime):
     """Resolve the one reviewed structural edge, not arbitrary Compose inputs."""
     assert set(common) == set(runtime) == {"services"}

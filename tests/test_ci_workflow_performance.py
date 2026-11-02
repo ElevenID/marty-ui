@@ -77,15 +77,17 @@ def test_fresh_vm_creation_has_required_root_release_owner() -> None:
     assert command.count("tests/test_installer_candidate_vm_host_probe.py") == 1
     assert command.count("tests/test_installer_candidate_vm_host_preflight.py") == 1
     assert command.count("tests/test_installer_candidate_vm_exchange.py") == 1
+    assert command.count("tests/test_installer_candidate_vm_rootless.py") == 1
     assert command.count("tests/test_installer_engineering_trial.py") == 1
     assert "-p no:cacheprovider --junitxml=" in command
-    for required in ('len(cases) != 108', '("tests", 108)', '("skipped", 0)',
+    for required in ('len(cases) != 158', '("tests", 158)', '("skipped", 0)',
                      '("failures", 0)', '("errors", 0)'):
         assert required in command
 CANVAS_COMPOSITION_COMMAND = (
     'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
     'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '
     'MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" '
+    'BAO_ADDR="$kms_url" BAO_CACERT="$kms_ca_file" '
     'python3 "$obligation_runner" --name canvas_composition_acceptance '
     '--owner canvas -- "$composition_executable" --skip "$serial_composition_test" '
     '"${config_skips[@]}" "${timeout_skips[@]}" --nocapture '
@@ -1984,6 +1986,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Qualify scoped provider callback verification against disposable OpenBao"
     ]["run"]
     assert "document_storage_contract:1" in live_signing
+    assert "didcomm_publication_routes:2" in live_signing
     assert "service_rotation_live_contract" not in live_signing
     assert "vdsnc_registration_live_contract" not in live_signing
     live_openbao = steps[
@@ -2018,7 +2021,12 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         names.index("Compile reusable Rust test executables")
         < names.index("Fail fast on image-free Canvas renewal configuration")
         < names.index("Compile Bookworm-compatible base runtime acceptance")
-        < names.index("Build public selfhost image")
+    )
+    # The selfhost-only image phase is independent of Canvas preflights.
+    assert (
+        names.index("Build public selfhost image")
+        < names.index("Retire completed selfhost builder cache")
+        < names.index("Compile reusable Rust test executables")
     )
     assert (
         names.index("Compile reusable Rust test executables")
@@ -2270,6 +2278,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
         "rust/services/event-stream/Dockerfile": ".dockerignore",
         "rust/services/revocation-profile/Dockerfile": ".dockerignore",
+        "rust/services/signing-keys/Dockerfile": ".dockerignore",
     }
     assert copying_contracts == set(image_contexts), (
         "Review every image context that copies contracts before narrowing this gate"
@@ -2301,6 +2310,31 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
                 line.startswith("!contracts")
                 for line in lines[lines.index(exclusion) + 1 :]
             ), f"Later rule re-includes {exclusion} in {ignore_path}"
+    # Embedded production contracts retain the existing Signing Keys image
+    # owner; reviewing another COPY context must not select unrelated gates.
+    images = workflow["jobs"]["test-rust-service-images"]
+    assert images["if"] == "needs.changes.outputs.rust_runtime == 'true'"
+    signing_image = next(
+        step for step in images["steps"] if step.get("name") == "Build signing-keys image"
+    )
+    assert signing_image["with"]["target"] == "signing_keys"
+    compiler_inputs = [
+        "rust/services/signing-keys/Dockerfile",
+        "contracts/python-text-semantics.json",
+        "contracts/issuer-identity-capabilities-response.json",
+        "contracts/issuer-identity-inspection-response.json",
+    ]
+    assert all((ROOT / path).is_file() for path in compiler_inputs)
+    for selected in _classify_changed_paths(
+        compiler_inputs, tmp_path, include_rust_plan=True
+    ):
+        assert selected == {
+            "all": "false", "ui": "false", "python": "false",
+            "rust": "true", "rust_runtime": "true",
+            "rust_matrix": '["canvas","contracts","selfhost"]',
+            "openbao": "false", "release": "false",
+            "verification": "false", "security": "false",
+        }
     python_only_input_records = {
         "contracts/canvas-worker-provider-recovery-current-inputs.json",
     }
@@ -4300,6 +4334,9 @@ def _assert_no_rust_executable_transfer(steps) -> None:
             "${{ runner.temp }}/marty-owned-runtime-diagnostics/*.*"
         ),
         "Upload Rust build evidence": "${{ runner.temp }}/rust-build-evidence/",
+        "Upload successful PR Rust checkout identity": (
+            "${{ runner.temp }}/pr-rust-checkout-attestation.json"
+        ),
         "Preserve fresh full-main startup attestation": "${{ runner.temp }}/canvas-startup-fresh-run.json",
         "Preserve fresh full-main REST requalification evidence": "${{ runner.temp }}/canvas-rest-fresh-run.json",
     }
@@ -5423,7 +5460,7 @@ def test_every_issuance_and_acceptance_integration_test_remains_registered(
     )
 
 
-def test_service_acceptance_keeps_composition_dependencies_out_of_service_builds() -> (
+def test_service_acceptance_keeps_composition_dependencies_in_test_targets() -> (
     None
 ):
     directory = ROOT / "rust/crates/service-acceptance"
@@ -5440,17 +5477,17 @@ def test_service_acceptance_keeps_composition_dependencies_out_of_service_builds
     assert {"marty-issuance-service", "marty-signing-keys"} <= set(
         acceptance["dev-dependencies"]
     )
-    assert "marty-signing-keys" not in issuance.get("dev-dependencies", {})
+    _assert_signing_keys_fixture_dependency(
+        issuance, workspace["workspace"]["dependencies"], "../signing-keys"
+    )
 
 
-def _dev_dependency_packages(
-    manifest: dict, workspace_dependencies: dict
+def _dependency_packages(
+    manifest: dict, workspace_dependencies: dict, kinds: tuple[str, ...]
 ) -> set[str]:
     tables = []
     for owner in (manifest, *manifest.get("target", {}).values()):
-        tables.extend(
-            owner.get(key, {}) for key in ("dev-dependencies", "dev_dependencies")
-        )
+        tables.extend(owner.get(key, {}) for key in kinds)
     packages = set()
     for dependencies in tables:
         for alias, declaration in dependencies.items():
@@ -5464,7 +5501,29 @@ def _dev_dependency_packages(
     return packages
 
 
-def test_service_dev_dependencies_do_not_reintroduce_cross_service_test_edges() -> (
+def _dev_dependency_packages(
+    manifest: dict, workspace_dependencies: dict
+) -> set[str]:
+    return _dependency_packages(
+        manifest, workspace_dependencies, ("dev-dependencies", "dev_dependencies")
+    )
+
+
+def _assert_signing_keys_fixture_dependency(
+    manifest: dict, workspace_dependencies: dict, path: str
+) -> None:
+    # The real registered DIDComm fixture is shared by live Issuance and Canvas
+    # tests. Its service dependency must never reach production or build scripts,
+    # including renamed, workspace-inherited, or target-specific declarations.
+    assert manifest["dev-dependencies"]["marty-signing-keys"] == {"path": path}
+    assert "marty-signing-keys" not in _dependency_packages(
+        manifest,
+        workspace_dependencies,
+        ("dependencies", "build-dependencies", "build_dependencies"),
+    )
+
+
+def test_service_dev_dependencies_only_allow_registered_didcomm_signing_edge() -> (
     None
 ):
     rust = ROOT / "rust"
@@ -5482,7 +5541,10 @@ def test_service_dev_dependencies_do_not_reintroduce_cross_service_test_edges() 
         for dependency in _dev_dependency_packages(document, workspace_dependencies)
         if dependency in service_packages
     }
-    assert not edges, f"Move cross-service tests to an acceptance package: {sorted(edges)}"
+    assert edges == {("marty-issuance-service", "marty-signing-keys")}, (
+        "Only the shared registered DIDComm fixture may add a service test edge: "
+        f"{sorted(edges)}"
+    )
 
 
 def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> None:
@@ -5520,7 +5582,30 @@ def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> N
     }
 
 
-def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies() -> (
+@pytest.mark.parametrize("kind", ["dependencies", "build-dependencies", "build_dependencies"])
+@pytest.mark.parametrize("target_specific", [False, True])
+def test_signing_keys_fixture_dependency_rejects_production_edges(
+    kind: str, target_specific: bool
+) -> None:
+    manifest = {
+        "dev-dependencies": {"marty-signing-keys": {"path": "../signing-keys"}}
+    }
+    owner = manifest
+    if target_specific:
+        owner = manifest.setdefault("target", {}).setdefault("cfg(unix)", {})
+    owner[kind] = {"renamed_signing_keys": {"workspace": True}}
+    workspace_dependencies = {
+        "renamed_signing_keys": {
+            "package": "marty-signing-keys", "path": "services/signing-keys"
+        }
+    }
+    with pytest.raises(AssertionError):
+        _assert_signing_keys_fixture_dependency(
+            manifest, workspace_dependencies, "../signing-keys"
+        )
+
+
+def test_canvas_acceptance_has_distinct_targets_and_test_only_signing_owner() -> (
     None
 ):
     canvas = tomllib.loads(
@@ -5551,7 +5636,9 @@ def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies
         "tls_openbao_keyless",
         "holder_remote_live_kms",
     }
-    assert "marty-signing-keys" not in canvas["dev-dependencies"]
+    _assert_signing_keys_fixture_dependency(
+        canvas, workspace["workspace"]["dependencies"], "../../services/signing-keys"
+    )
     assert "marty-signing-keys" not in worker["dev-dependencies"]
     assert not {
         "marty-flow",

@@ -5,6 +5,7 @@
 //! writes default.conf, and runs nginx -t. Do not readonly-mount default.conf
 //! while retaining that entrypoint, which unconditionally writes that path.
 #![cfg(target_os = "linux")]
+use marty_selfhost_identity::origin::PublicOrigin;
 
 pub type Result<T> = std::result::Result<T, String>;
 const TEMPLATE: &str = include_str!("../../../../docker/nginx-selfhost.prod.conf.template");
@@ -29,12 +30,13 @@ pub fn render(template: &str, origin: &str) -> Result<String> {
     if text != normalized(TEMPLATE)? {
         return Err(REFUSED.into());
     }
-    let port_text = origin.strip_prefix("https://localhost:").ok_or(REFUSED)?;
-    let port: u16 = port_text.parse().map_err(|_| REFUSED)?;
-    if port < 1024 || port_text != port.to_string() {
-        return Err(REFUSED.into());
-    }
-    let authority = format!("localhost:{port}");
+    let origin = PublicOrigin::parse(origin).map_err(|_| REFUSED)?;
+    let port_text = origin.port().to_string();
+    let authority = origin.authority();
+    let server_name = match origin.ip_address() {
+        Some(std::net::IpAddr::V6(address)) => format!("[{address}]"),
+        _ => origin.host().to_owned(),
+    };
     let mut output = String::new();
     let mut hosts = 0;
     let mut proxies = 0;
@@ -53,15 +55,18 @@ pub fn render(template: &str, origin: &str) -> Result<String> {
                 output.push_str(&format!("{indent}absolute_redirect off;\n"));
             }
             "server_name ${PUBLIC_DOMAIN};" => {
-                output.push_str(&format!("{indent}server_name localhost;\n"))
+                output.push_str(&format!("{indent}server_name {server_name};\n"))
             }
             "proxy_set_header Host $host;" => {
                 hosts += 1;
                 for (name, value) in [
-                    ("Host", authority.as_str()),
-                    ("X-Forwarded-Host", authority.as_str()),
+                    ("Host", authority),
+                    ("X-Forwarded-Host", authority),
                     ("X-Forwarded-Proto", "https"),
-                    ("X-Forwarded-Port", port_text),
+                    ("X-Forwarded-Port", port_text.as_str()),
+                    ("X-Forwarded-For", "\"\""),
+                    ("X-Real-IP", "\"\""),
+                    ("Forwarded", "\"\""),
                 ] {
                     output.push_str(&format!("{indent}proxy_set_header {name} {value};\n"));
                 }
@@ -69,7 +74,9 @@ pub fn render(template: &str, origin: &str) -> Result<String> {
             "proxy_set_header X-Forwarded-Host $host;"
             | "proxy_set_header X-Forwarded-Proto $scheme;"
             | "proxy_set_header X-Forwarded-Proto https;"
-            | "proxy_set_header X-Forwarded-Port 443;" => {}
+            | "proxy_set_header X-Forwarded-Port 443;"
+            | "proxy_set_header X-Real-IP $remote_addr;"
+            | "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" => {}
             _ => {
                 // Exact-source matching above closes this finite substitution
                 // table. Runtime nginx variables ($1, $host, etc.) are untouched.
@@ -83,8 +90,8 @@ pub fn render(template: &str, origin: &str) -> Result<String> {
                     .replace("${KEYCLOAK_UPSTREAM}", "keycloak:8080")
                     // External Canvas is disabled in the installer profile.
                     // These exact origins cannot authorize a foreign frame site.
-                    .replace("${CANVAS_REAL_PUBLIC_HOST}", &authority)
-                    .replace("${CANVAS_SANDBOX_PUBLIC_HOST}", &authority);
+                    .replace("${CANVAS_REAL_PUBLIC_HOST}", authority)
+                    .replace("${CANVAS_SANDBOX_PUBLIC_HOST}", authority);
                 output.push_str(&resolved);
                 output.push('\n');
             }
@@ -122,6 +129,8 @@ mod tests {
         assert!(!output.contains("proxy_set_header Host $host;"));
         assert!(!output.contains("proxy_set_header X-Forwarded-Proto $scheme;"));
         assert!(!output.contains("proxy_set_header X-Forwarded-Port 443;"));
+        assert!(!output.contains("proxy_set_header X-Real-IP $remote_addr;"));
+        assert!(!output.contains("$proxy_add_x_forwarded_for"));
         let mut proxy = false;
         let mut headers = Vec::new();
         for line in output.lines().map(str::trim) {
@@ -136,6 +145,9 @@ mod tests {
                 || line.starts_with("proxy_set_header X-Forwarded-Host ")
                 || line.starts_with("proxy_set_header X-Forwarded-Proto ")
                 || line.starts_with("proxy_set_header X-Forwarded-Port ")
+                || line.starts_with("proxy_set_header X-Forwarded-For ")
+                || line.starts_with("proxy_set_header X-Real-IP ")
+                || line.starts_with("proxy_set_header Forwarded ")
             {
                 headers.push(line);
             }
@@ -146,7 +158,10 @@ mod tests {
                         "proxy_set_header Host localhost:18443;",
                         "proxy_set_header X-Forwarded-Host localhost:18443;",
                         "proxy_set_header X-Forwarded-Proto https;",
-                        "proxy_set_header X-Forwarded-Port 18443;"
+                        "proxy_set_header X-Forwarded-Port 18443;",
+                        "proxy_set_header X-Forwarded-For \"\";",
+                        "proxy_set_header X-Real-IP \"\";",
+                        "proxy_set_header Forwarded \"\";"
                     ]
                 );
                 proxy = false;
@@ -160,7 +175,6 @@ mod tests {
     fn refuses_origin_injection_and_template_drift() {
         for origin in [
             "http://localhost:18443",
-            "https://foreign:18443",
             "https://localhost:443",
             "https://localhost:0",
             "https://localhost:65536",
@@ -181,6 +195,35 @@ mod tests {
             TEMPLATE.replace("${UI_UPSTREAM}", "${UNREVIEWED_UPSTREAM}"),
         ] {
             assert!(render(&drift, "https://localhost:18443").is_err());
+        }
+    }
+    #[test]
+    fn advertised_authority_is_independent_of_the_private_listener() {
+        for (origin, authority, host, port) in [
+            (
+                "https://marty.example.com",
+                "marty.example.com",
+                "marty.example.com",
+                "443",
+            ),
+            (
+                "https://203.0.113.10:8443",
+                "203.0.113.10:8443",
+                "203.0.113.10",
+                "8443",
+            ),
+            (
+                "https://[2001:db8::10]",
+                "[2001:db8::10]",
+                "[2001:db8::10]",
+                "443",
+            ),
+        ] {
+            let output = render(TEMPLATE, origin).unwrap();
+            assert_eq!(route_lines(TEMPLATE), route_lines(&output));
+            assert!(output.contains(&format!("server_name {host};")));
+            assert!(output.contains(&format!("proxy_set_header Host {authority};")));
+            assert!(output.contains(&format!("proxy_set_header X-Forwarded-Port {port};")));
         }
     }
     #[test]

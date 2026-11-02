@@ -224,6 +224,8 @@ class OverlayTests(unittest.TestCase):
                          lambda p: p.update(requiresSeparateMaintenanceReview=False),
                          lambda p: p.update(noHistoricalJobMutation=False),
                          lambda p: p.update(issuance0009LedgerCheckRequired=False),
+                         lambda p: p["sqlFiles"]["passport-beta-rust-owner-verify.sql"].update(
+                             sha256="3c098a5d6b13f95a63bdabdf5a029b119563ea7045ffe3cbb870f12d97386f0d"),
                          lambda p: p["sqlFiles"][overlay.SQL_FILES[0]].update(sha256="c"*64)]:
                 invalid = copy.deepcopy(plan)
                 edit(invalid)

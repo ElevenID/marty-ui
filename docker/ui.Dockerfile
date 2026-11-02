@@ -50,14 +50,16 @@ COPY ui/ .
 
 # Build the application
 RUN { [ "$SELFHOST_PUBLIC_PROFILE" = "full" ] || [ "$SELFHOST_PUBLIC_PROFILE" = "tester" ]; } \
+    && { [ "$UI_VARIANT" = "public" ] || [ "$UI_VARIANT" = "selfhost" ]; } \
     && if [ "$UI_VARIANT" = "selfhost" ]; then bun run build:selfhost && mv dist-selfhost dist-final; else bun run build && mv dist dist-final; fi \
     && if [ "$UI_VARIANT" = "public" ]; then \
       test -s dist-final/index.html \
       && grep -q 'ElevenID' dist-final/index.html \
       && ! grep -q 'Welcome to nginx' dist-final/index.html; \
     fi \
-    && printf '{"component":"ui","release_version":"%s","marty_ui_sha":"%s"}\n' \
-      "$MARTY_RELEASE_VERSION" "$MARTY_UI_SHA" > dist-final/marty-ui-release.json
+    && if [ "$UI_VARIANT" = public ]; then audience=production; else audience=customer; fi \
+    && printf '{"component":"ui","release_version":"%s","marty_ui_sha":"%s","audience":"%s","ui_variant":"%s"}\n' \
+      "$MARTY_RELEASE_VERSION" "$MARTY_UI_SHA" "$audience" "$UI_VARIANT" > dist-final/marty-ui-release.json
 
 # Use nginx to serve the built application
 FROM nginx:1.29.1-alpine@sha256:42a516af16b852e33b7682d5ef8acbd5d13fe08fecadc7ed98605ba5e3b26ab8 AS runtime-base
@@ -93,7 +95,10 @@ ARG UI_VARIANT=public
 ARG NGINX_CONFIG=nginx.prod.conf
 ARG SELFHOST_PUBLIC_PROFILE=full
 RUN test "$UI_VARIANT" = selfhost && test "$NGINX_CONFIG" = nginx.spa.conf
-LABEL io.elevenid.selfhost.public-profile="${SELFHOST_PUBLIC_PROFILE}"
+LABEL io.elevenid.selfhost.public-profile="${SELFHOST_PUBLIC_PROFILE}" \
+      io.elevenid.ui.audience="customer"
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:80/healthz || exit 1
 COPY --from=builder /workspace/marty-ui/ui/dist-final /opt/marty-ui-static
 COPY scripts/load-secrets-env.sh /scripts/load-secrets-env.sh
 COPY scripts/ui-selfhost-start.sh /docker-entrypoint.d/40-ui-selfhost.sh
@@ -111,4 +116,5 @@ RUN chmod +x /docker-entrypoint.d/45-console-api.sh
 FROM runtime-base AS public
 ARG UI_VARIANT=public
 RUN test "$UI_VARIANT" = public
+LABEL io.elevenid.ui.audience="production"
 COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html

@@ -1,8 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@test/utils';
 import userEvent from '@testing-library/user-event';
 
 import LandingPage from '../LandingPage';
+
+const originalUrl = window.location.href;
+afterEach(() => {
+  delete (window as any).__MARTY_RUNTIME_CONFIG__;
+  (globalThis as any).jsdom.reconfigure({ url: originalUrl });
+});
 
 const publicProfile = vi.hoisted(() => ({ showPublicCta: true }));
 
@@ -77,6 +83,22 @@ describe('LandingPage', () => {
     mockUseBranding.mockReturnValue({
       branding: { appName: 'ElevenID LLC' },
     });
+  });
+
+  it('renders the actual public-entry landing content at the IP with canonical navigation', () => {
+    const origin = 'https://203.0.113.10:8443';
+    (globalThis as any).jsdom.reconfigure({ url: `${origin}/` });
+    (window as any).__MARTY_RUNTIME_CONFIG__ = {
+      hosting: { canonicalOrigin: 'https://marty.example.com:8443', publicEntryOrigins: [origin] },
+    };
+    render(<LandingPage />);
+
+    expect(screen.getByText('Enterprise')).toBeInTheDocument();
+    expect(screen.queryByText('Loading...')).not.toBeInTheDocument();
+    expect(screen.getByTestId('get-started-btn')).toHaveAttribute('href', 'https://marty.example.com:8443/developers');
+    expect(document.querySelectorAll('a[href^="/"]')).toHaveLength(0);
+    expect(window.location.href).toBe(`${origin}/`);
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it('omits the developer start-verifying card in the tester profile', () => {
