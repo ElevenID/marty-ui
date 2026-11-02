@@ -597,7 +597,7 @@ def test_flow_inventory_binds_exact_crate_and_shared_roster(monkeypatch) -> None
         entry["sha256"] == INVENTORY.digest(ROOT / entry["path"]) for entry in first_hop
     )
     subgraph = INVENTORY.flow_renderer_subgraph_inputs()
-    assert len(subgraph) == 22
+    assert len(subgraph) == 23
     assert {entry["path"] for entry in subgraph} == {
         *INVENTORY.FLOW_RENDERER_RUNPY_EDGES,
         "docker-compose.base.yml",
@@ -699,7 +699,7 @@ def test_flow_renderer_subgraph_fails_closed_on_edge_and_compose_drift(
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / path, target)
     monkeypatch.setattr(INVENTORY, "ROOT", tmp_path)
-    assert len(INVENTORY.flow_renderer_subgraph_inputs()) == 22
+    assert len(INVENTORY.flow_renderer_subgraph_inputs()) == 23
 
     helper = tmp_path / "scripts/test_beta_application_image_compose.py"
     original = helper.read_text(encoding="utf-8")
