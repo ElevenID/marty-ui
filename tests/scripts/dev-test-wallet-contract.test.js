@@ -34,20 +34,35 @@ test('leaked inventory, wrong-run acceptance, cross-reset, empty-holder presenta
 function cancelFixture(edit={}){
  const calls=[],binding={instanceId:'flow-owned',organizationId:'org',presentationPolicyId:'policy',trustProfileId:'trust',nonceSha256:'a'.repeat(64)};
  let cancelled=false;
- return {calls,binding,readInstance:async()=>({id:edit.foreign?'foreign':binding.instanceId,organization_id:'org',
+ return {calls,binding,origin:'https://beta.example.test',readInstance:async()=>({id:edit.foreign?'foreign':binding.instanceId,organization_id:'org',
   context_data:{presentation_policy_id:'policy',trust_profile_id:'trust'},status:cancelled?'CANCELLED':'AWAITING_WALLET'}),
   beforeCancel:async()=>calls.push('intent'),cancel:async()=>{calls.push('cancel');cancelled=true;return {ok:!edit.noAck};},
-  finalize:async()=>({status:edit.redirect?302:400,setCookie:!!edit.cookie}),readAuth:async()=>({authenticated:!!edit.login})};
+  finalize:async()=>({status:edit.status??(edit.redirect||edit.failureRedirect?302:400),setCookie:!!edit.cookie,
+   location:edit.failureRedirect?'https://beta.example.test/?auth_error=Login+session+expired':edit.redirectLocation||null}),
+  readAuth:async()=>({authenticated:!!edit.login})};
 }
 test('harness cancellation is exact-owned/intent-first and never claims a holder UI button',async()=>{
  const f=cancelFixture(),r=await cancelOwnedLogin(f);assert.deepEqual(f.calls,['intent','cancel']);
  assert.equal(r.kind,'HARNESS_CANCELS_OWNED_FLOW');assert.equal(r.holderClickCancel,'N/A');
+ const failureRedirect=cancelFixture({failureRedirect:true});
+ assert.equal((await cancelOwnedLogin(failureRedirect)).harness_cancel_no_login,true);
  assert.equal(freshLoginRecovery(r,{binding:{instanceId:'new-flow',nonceSha256:'b'.repeat(64)},authenticated:true,browserFinalizeVerified:true}),true);
  for(const binding of [{instanceId:r.flowInstanceId,nonceSha256:'b'.repeat(64)},
   {instanceId:'new-flow',nonceSha256:r.nonceSha256}])assert.throws(()=>freshLoginRecovery(r,{binding,authenticated:true,browserFinalizeVerified:true}));
 });
 test('foreign ownership, unknown cancel ACK, cookie, redirect or unexpected login fail closed',async()=>{
- for(const edit of [{foreign:true},{noAck:true},{cookie:true},{redirect:true},{login:true}]){
+ for(const edit of [{foreign:true},{noAck:true},{cookie:true},{redirect:true},{login:true},
+  {redirect:true,redirectLocation:'https://foreign.example.test/?auth_error=failed'},
+  {redirect:true,redirectLocation:'https://beta.example.test/console/applicant/catalog?auth_method=credential'},
+  {redirect:true,redirectLocation:'https://beta.example.test/'},
+  {redirect:true,redirectLocation:'https://beta.example.test/?auth_error=one&auth_error=two'},
+  {redirect:true,redirectLocation:'https://beta.example.test/?auth_error=failed&auth_error_code=one&auth_error_code=two'},
+  {redirect:true,redirectLocation:'https://user:secret@beta.example.test/?auth_error=failed'},
+  {redirect:true,redirectLocation:'https://beta.example.test/?auth_error=++'},
+  {redirect:true,redirectLocation:'https://beta.example.test/?auth_error=failed#fragment'},
+  {redirect:true,redirectLocation:'https://beta.example.test/?auth_error=failed&auth_method=credential'},
+  {status:301,redirectLocation:'https://beta.example.test/?auth_error=failed'},
+  {status:500}]){
   const f=cancelFixture(edit);await assert.rejects(cancelOwnedLogin(f));if(edit.foreign||edit.login)assert.deepEqual(f.calls,[]);
  }
 });

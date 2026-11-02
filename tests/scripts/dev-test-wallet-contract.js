@@ -52,13 +52,27 @@ async function sessionIsolation({a,b,requestUri,readAuth}){
   emptyHolderPresentationStatus:denied.status(),denialAuthenticated:false,
   supportedOperations:SUPPORTED,keyBoundary:'SHARED_CONFIGURED_SIGNER_SESSION_ISOLATION_ONLY'};
 }
-async function cancelOwnedLogin({binding,readInstance,cancel,finalize,readAuth,beforeCancel}){
+async function cancelOwnedLogin({binding,readInstance,cancel,finalize,readAuth,beforeCancel,origin}){
  const before=await readBoundLoginFlow(binding,readInstance);
  assert(['PENDING','IN_PROGRESS','AWAITING_WALLET'].includes(String(before.status).toUpperCase()),'CANCEL_FLOW_NOT_PENDING');
  assert.equal((await readAuth()).authenticated,false,'CANCEL_REQUIRES_SIGNED_OUT_CONTEXT');
  await beforeCancel();const acknowledgement=await cancel();assert.equal(acknowledgement.ok,true,'FLOW_CANCEL_NOT_ACKNOWLEDGED');
  const after=await readBoundLoginFlow(binding,readInstance);assert.equal(String(after.status).toUpperCase(),'CANCELLED');
- const result=await finalize();assert(!result.setCookie&&![301,302,303,307,308].includes(result.status),'CANCEL_FINALIZED_LOGIN');
+ const result=await finalize();assert(!result.setCookie,'CANCEL_FINALIZED_LOGIN');
+ if(result.status===302){
+  assert.equal(typeof result.location,'string','CANCEL_FAILURE_REDIRECT_REQUIRED');
+  let destination;try{destination=new URL(result.location);}catch{assert.fail('CANCEL_FAILURE_REDIRECT_INVALID');}
+  assert.ok(destination.origin===origin,'CANCEL_FAILURE_REDIRECT_ORIGIN_CHANGED');
+  assert.ok(destination.pathname==='/','CANCEL_FAILURE_REDIRECT_PATH_CHANGED');
+  assert.ok(destination.hash===''&&destination.username===''&&destination.password==='',
+   'CANCEL_FAILURE_REDIRECT_INVALID');
+  const keys=[...destination.searchParams.keys()];
+  assert(keys.every(key=>['auth_error','auth_error_code','auth_error_detail'].includes(key)),
+   'CANCEL_FAILURE_REDIRECT_INVALID');
+  assert(keys.every(key=>destination.searchParams.getAll(key).length===1),'CANCEL_FAILURE_REDIRECT_INVALID');
+  assert.equal(destination.searchParams.getAll('auth_error').length,1,'CANCEL_FAILURE_REDIRECT_REQUIRED');
+  assert.ok(destination.searchParams.get('auth_error')?.trim(),'CANCEL_FAILURE_REDIRECT_REQUIRED');
+ }else assert.equal(result.status,400,'CANCEL_FINALIZED_LOGIN');
  assert.equal((await readAuth()).authenticated,false,'CANCEL_CREATED_LOGIN');
  return {kind:'HARNESS_CANCELS_OWNED_FLOW',harness_cancel_no_login:true,flowInstanceId:binding.instanceId,
   nonceSha256:binding.nonceSha256,terminalStatus:'CANCELLED',holderClickCancel:'N/A'};

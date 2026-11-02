@@ -133,7 +133,11 @@ async function main(env=process.env){
    readInstance:()=>requireJson(operator,denial.instancePath),
    beforeCancel:async()=>{report.cancelIntent={kind:'HARNESS_CANCELS_OWNED_FLOW',instanceId:denial.binding.instanceId};save();},
    cancel:()=>requireJson(operator,denial.instancePath+'/cancel',{method:'POST'}).then(()=>({ok:true})),
-   finalize:async()=>{const r=await denial.context.context.request.get(settings.origin+'/v1/auth/credential-login/finalize?nonce='+encodeURIComponent(denial.details.nonce),{timeout:15000,maxRedirects:0});return {status:r.status(),setCookie:Boolean(r.headers()['set-cookie'])};},
+   finalize:async()=>{const r=await denial.context.context.request.get(settings.origin+'/v1/auth/credential-login/finalize?nonce='+encodeURIComponent(denial.details.nonce),{timeout:15000,maxRedirects:0});
+    const result={status:r.status(),setCookie:Boolean(r.headers()['set-cookie']),location:r.headers().location||null};
+    let destination='NONE';try{const u=new URL(result.location);destination=u.origin===settings.origin&&u.pathname==='/'?'PRIMARY_ROOT':'OTHER';}catch{if(result.location)destination='INVALID';}
+    report.cancellationFinalizeObservation={status:result.status,setCookie:result.setCookie,destination};save();return result;},
+   origin:settings.origin,
    readAuth:()=>support.authMe(denial.context.context,settings.origin)});
   report.checks.harness_cancel_no_login=true;
   stage='FRESH_LOGIN_RECOVERY';report.recoveryLogin=await positive(a);
