@@ -78,6 +78,11 @@ const API_KEY_SCOPES = [
     description: 'Start issuance and verification flows for external integrations.',
   },
   {
+    id: 'templates:read',
+    label: 'Read credential templates',
+    description: 'Read credential template definitions for external integrations.',
+  },
+  {
     id: 'trust:read',
     label: 'Read trust registry',
     description: 'Query trust registries, issuers, and trust anchors.',
