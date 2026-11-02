@@ -7,6 +7,7 @@ const HASH=/^[a-f0-9]{64}$/;
 const POLICIES=Object.freeze({
  service:Object.freeze({field:'serviceNativeOverlay',roles:Object.freeze({gateway:'marty-gateway','signing-keys':'marty-signing-keys'}),source:'5d22484685fc6c8723e419e656252385c0db3654',profile:'current-issuer-ready-two-role'}),
  issuance:Object.freeze({field:'issuanceOfferNativeOverlay',roles:Object.freeze({'issuance-native':'marty-issuance-service'}),source:'e836a700579a1dc0be4894c6bf416c26529d2564',profile:'d05-issuance-offer-format-only',tests:Object.freeze(['public_offer_uses_the_same_format_specific_configuration_id_as_application_offers','native_offer_transaction_reads_match_the_python_oracle_contract'])}),
+ fence:Object.freeze({field:'issuanceFenceNativeOverlay',roles:Object.freeze({'issuance-native':'marty-issuance-service'}),source:'3394c6d816c60584f8c8c5e941c3a22144b67350',profile:'canvas-bootstrap-fence-issuance-only',tests:Object.freeze(['public_offer_uses_the_same_format_specific_configuration_id_as_application_offers','native_offer_transaction_reads_match_the_python_oracle_contract'])}),
 });
 function expectedWithPolicy(profile,{boundJson,verifyBoundFile,expectedRuntime,receiptDigests,applyNativeOverlayRows},policy){
  assert.equal(profile.schema,'marty.functional-mixed-runtime/v2');assert.equal(profile.scope,'FUNCTIONAL_ONLY');
@@ -14,22 +15,32 @@ function expectedWithPolicy(profile,{boundJson,verifyBoundFile,expectedRuntime,r
  assert.deepEqual(Object.keys(profile).sort(),['baseProfile',policy.field,'recordingQualified','releaseQualified','schema','scope'].sort());
  const base=boundJson(profile.baseProfile);
  if(policy===POLICIES.service)assert(base.authNativeOverlay&&!base.serviceNativeOverlay,'Exact Auth mixed predecessor required');
+ else if(policy===POLICIES.fence)assert(base.issuanceOfferNativeOverlay&&!base.issuanceFenceNativeOverlay,'Exact prior Issuance overlay required');
  else assert(base.runtimeResume&&!base.issuanceOfferNativeOverlay,'Exact retained beta predecessor required');
  const prior=expectedRuntime(base);assert.equal(prior.length,22);
  if(policy===POLICIES.issuance){const previous=prior.find(row=>row.role==='issuance-native');
   assert(previous&&previous.kind==='SIGNED_NIGHTLY_IMAGE'&&previous.source==='225818494f4ba716e75df7225d6c43d71b038879');
   assert.equal(previous.binary,'marty-issuance-service');assert.deepEqual(previous.requiredObservation.binaryMounts,[]);}
+ if(policy===POLICIES.fence){const previous=prior.find(row=>row.role==='issuance-native');
+  assert(previous&&previous.kind==='SCOPED_NATIVE_FUNCTIONAL_OVERLAY'&&previous.source===POLICIES.issuance.source);
+  assert.equal(previous.binary,'marty-issuance-service');assert.equal(previous.sha256,'d8c66406134fe638318e9ffb946d81c35eadf29f752720af27ca79949dfd92ff');
+  assert.equal(previous.requiredBinaryMounts?.length,1);}
  const overlay=profile[policy.field];
  assert.deepEqual(Object.keys(overlay).sort(),['buildReceipt','compatibilityPlan','compatibilityResult','deploymentReceipt','preparedSource']);
  const build=boundJson(overlay.buildReceipt),prepared=boundJson(overlay.preparedSource);
  const plan=boundJson(overlay.compatibilityPlan),compatibility=boundJson(overlay.compatibilityResult),deployed=boundJson(overlay.deploymentReceipt);
  assert.equal(build.state,'BUILD_SUCCEEDED');assert.equal(build.exitCode,0);assert.equal(build.oomKilled,false);
  assert.equal(build.uiRevision,policy.source);assert.equal(build.coreRevision,CORE);
- assert.deepEqual(build.roleBinaries,policy.roles);assert.equal(build.preparationSha256,overlay.preparedSource.sha256);
- assert.equal(prepared.sources?.ui?.revision,policy.source);assert.equal(prepared.sources?.core?.revision,CORE);
+ assert.deepEqual(build.roleBinaries,policy.roles);
+ if(policy===POLICIES.fence){const original=boundJson(build.sourceBuildReceipt);
+  assert.equal(build.sourceProof.sha256,overlay.preparedSource.sha256);assert.deepEqual(original.source,prepared);
+  assert.equal(original.state,'BUILD_SUCCEEDED');assert.deepEqual(original.binary,build.binaries['marty-issuance-service']);
+  assert.equal(prepared.uiRevision,policy.source);assert.equal(prepared.coreRevision,CORE);}
+ else{assert.equal(build.preparationSha256,overlay.preparedSource.sha256);
+  assert.equal(prepared.sources?.ui?.revision,policy.source);assert.equal(prepared.sources?.core?.revision,CORE);}
  assert.equal(build.runtimeUidLibrariesValidated,false,'Separate actual-image ABI proof required');
  assert.deepEqual(Object.keys(build.binaries).sort(),Object.values(policy.roles).sort());
- if(policy.tests){assert.equal(build.buildProfile,policy.profile);assert.equal(prepared.buildProfile,policy.profile);
+ if(policy.tests){assert.equal(build.buildProfile,policy.profile);if(policy!==POLICIES.fence)assert.equal(prepared.buildProfile,policy.profile);
   assert.deepEqual(build.focusedRustTests?.map(row=>row.name),policy.tests);
   for(const row of build.focusedRustTests){assert.equal(row.exitCode,0);verifyBoundFile(row.stdout,1024*1024,0);verifyBoundFile(row.stderr,1024*1024,0);
    assert(fs.readFileSync(row.stdout.path,'utf8').includes('test result: ok. 1 passed; 0 failed;'));}}
@@ -54,12 +65,15 @@ function expectedWithPolicy(profile,{boundJson,verifyBoundFile,expectedRuntime,r
  const engine=policy===POLICIES.service?boundJson(base.authNativeOverlay.result).engineId:'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341';
  assert.equal(deployed.engineId,engine);
  for(const flag of ['productionTouched','imagesBuilt','releaseQualified','recordingQualified'])assert.equal(deployed[flag],false);
- const snapshot=boundJson(deployed.beforeRuntimeBinding);assert.equal(snapshot.baseProfileSha256,profile.baseProfile.sha256);
+ const snapshot=boundJson(deployed.beforeRuntimeBinding);
+ if(policy===POLICIES.fence)assert.equal(snapshot.profileSha256,profile.baseProfile.sha256);
+ else assert.equal(snapshot.baseProfileSha256,profile.baseProfile.sha256);
  const before=snapshot.binding;assert.deepEqual(before.receiptDigests,receiptDigests(base));
- if(policy===POLICIES.issuance){const previous=prior.find(row=>row.role==='issuance-native'),beforeRole=before.roles.find(row=>row.role==='issuance-native');
+ if(policy===POLICIES.issuance||policy===POLICIES.fence){const previous=prior.find(row=>row.role==='issuance-native'),beforeRole=before.roles.find(row=>row.role==='issuance-native');
   assert.equal(beforeRole.containerId,previous.requiredContainerId);assert.equal(beforeRole.sha256,previous.sha256);}
  return applyNativeOverlayRows(prior,before,deployed,{roles,source:policy.source,coreSource:CORE,kind:'SCOPED_NATIVE_FUNCTIONAL_OVERLAY',hashes});
 }
 function expected(profile,deps){return expectedWithPolicy(profile,deps,POLICIES.service);}
 function expectedIssuanceOffer(profile,deps){return expectedWithPolicy(profile,deps,POLICIES.issuance);}
-module.exports={expected,expectedIssuanceOffer};
+function expectedIssuanceFence(profile,deps){return expectedWithPolicy(profile,deps,POLICIES.fence);}
+module.exports={expected,expectedIssuanceOffer,expectedIssuanceFence};
