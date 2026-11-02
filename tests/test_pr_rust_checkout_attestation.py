@@ -99,6 +99,7 @@ def test_records_actual_merge_checkout_and_workflow_blob(source, lane: str) -> N
         "event": "pull_request",
         "pull_request_number": 789,
         "pull_request_base_sha": event["pull_request"]["base"]["sha"],
+        "checkout_base_parent_sha": event["pull_request"]["base"]["sha"],
         "pull_request_head_sha": event["pull_request"]["head"]["sha"],
         "checkout_ref": "refs/pull/789/merge",
         "checkout_sha": env["GITHUB_SHA"],
@@ -266,3 +267,106 @@ def test_workflow_preserves_full_merge_group_and_required_gate() -> None:
     assert "${{ github.run_id }}-${{ github.run_attempt }}" in upload["with"]["name"]
     assert "merge_group" in workflow.get("on", workflow.get(True, {}))
     assert "test-rust-services" in jobs["ci-gate"]["needs"]
+
+
+def advance_merge_base(source):
+    repo, env, event = source
+    base_sha = event["pull_request"]["base"]["sha"]
+    head_sha = event["pull_request"]["head"]["sha"]
+    tree = git(repo, "rev-parse", "HEAD^{tree}")
+    actual_base = git(repo, "commit-tree", tree, "-p", base_sha, "-m", "new main base")
+    merge = git(repo, "commit-tree", tree, "-p", actual_base, "-p", head_sha, "-m", "event merge")
+    git(repo, "checkout", "--detach", merge)
+    env["GITHUB_SHA"] = merge
+    env["GITHUB_WORKFLOW_SHA"] = merge
+    return repo, env, event, actual_base
+
+
+def test_records_event_base_separately_from_advanced_actual_merge_parent(source):
+    repo, env, event, actual_base = advance_merge_base(source)
+    record = attestation.build_attestation(env, event, repo)
+    assert record["pull_request_base_sha"] == event["pull_request"]["base"]["sha"]
+    assert record["checkout_base_parent_sha"] == actual_base
+    assert record["checkout_sha"] == env["GITHUB_SHA"]
+
+
+def test_advanced_merge_rejects_wrong_second_parent(source):
+    repo, env, event, _ = advance_merge_base(source)
+    event["pull_request"]["head"]["sha"] = event["pull_request"]["base"]["sha"]
+    with pytest.raises(ValueError, match="head parent mismatch"):
+        attestation.build_attestation(env, event, repo)
+
+
+def test_rejects_existing_nonancestor_event_base(source):
+    repo, env, event, _ = advance_merge_base(source)
+    tree = git(repo, "rev-parse", "HEAD^{tree}")
+    event["pull_request"]["base"]["sha"] = git(repo, "commit-tree", tree, "-m", "unrelated")
+    with pytest.raises(ValueError):
+        attestation.build_attestation(env, event, repo)
+
+
+@pytest.mark.parametrize("parent_count", [1, 3])
+def test_rejects_nonmerge_or_octopus_checkout(source, parent_count):
+    repo, env, event = source
+    tree = git(repo, "rev-parse", "HEAD^{tree}")
+    args = ["commit-tree", tree, "-p", event["pull_request"]["base"]["sha"]]
+    if parent_count == 3:
+        extra = git(repo, "commit-tree", tree, "-m", "extra")
+        args += ["-p", event["pull_request"]["head"]["sha"], "-p", extra]
+    checkout = git(repo, *args, "-m", "malformed merge")
+    git(repo, "checkout", "--detach", checkout)
+    env["GITHUB_SHA"] = checkout
+    with pytest.raises(ValueError, match="exactly two parents"):
+        attestation.build_attestation(env, event, repo)
+
+
+def test_shallow_advanced_merge_fetches_only_immutable_event_shas(
+    source, tmp_path, monkeypatch
+):
+    repo, env, event, actual_base = advance_merge_base(source)
+    shallow = tmp_path / "shallow-advanced"
+    subprocess.run(["git", "clone", "--depth", "1", "--no-local",
+                    repo.resolve().as_uri(), str(shallow)], check=True, capture_output=True)
+    original = attestation.git
+    calls = []
+    def observed_git(repo_arg, *args, **kwargs):
+        if args[0] == "fetch":
+            calls.append((repo_arg, args, kwargs))
+        return original(repo_arg, *args, **kwargs)
+    monkeypatch.setattr(attestation, "git", observed_git)
+    record = attestation.build_attestation(env, event, shallow)
+    assert record["checkout_base_parent_sha"] == actual_base
+    assert calls == [(shallow, ("fetch", "--no-tags", "--no-recurse-submodules",
+                              "--unshallow", "origin", env["GITHUB_SHA"],
+                              event["pull_request"]["base"]["sha"]), {"timeout": 120})]
+
+
+@pytest.mark.parametrize("failure", ["unavailable", "timeout"])
+def test_missing_event_base_or_failed_immutable_fetch_refuses(source, monkeypatch, failure):
+    repo, env, event, _ = advance_merge_base(source)
+    event["pull_request"]["base"]["sha"] = "f" * 40
+    original = attestation.git
+    calls = []
+    def failed_fetch(repo_arg, *args, **kwargs):
+        if args[0] == "fetch":
+            calls.append((repo_arg, args, kwargs))
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+            raise subprocess.CalledProcessError(128, args)
+        return original(repo_arg, *args, **kwargs)
+    monkeypatch.setattr(attestation, "git", failed_fetch)
+    with pytest.raises(ValueError, match="base ancestry unavailable"):
+        attestation.build_attestation(env, event, repo)
+    assert calls == [(repo, ("fetch", "--no-tags", "--no-recurse-submodules", "origin",
+                           env["GITHUB_SHA"], "f" * 40), {"timeout": 120})]
+
+
+def test_rechecks_exact_head_after_ancestry_object_read(source, monkeypatch):
+    repo, env, event, _ = advance_merge_base(source)
+    original = attestation.require_base_ancestry
+    def changed_head(repo_arg, event_base, checkout_base, checkout):
+        original(repo_arg, event_base, checkout_base, checkout)
+        git(repo_arg, "checkout", "--detach", event["pull_request"]["head"]["sha"])
+    monkeypatch.setattr(attestation, "require_base_ancestry", changed_head)
+    with pytest.raises(ValueError, match="HEAD changed during ancestry read"):
+        attestation.build_attestation(env, event, repo)
