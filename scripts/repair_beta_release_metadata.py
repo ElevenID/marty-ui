@@ -433,7 +433,7 @@ class Operation:
             image_ref = self.models[role]["services"][role]["image"]
             image = self.g.observe(["image", "inspect", image_ref], role + "-image")[0]
             require(
-                image_ref in image.get("RepoDigests", []), "SIGNED_IMAGE_NOT_CACHED"
+                self.cached_image_matches(image_ref, image), "SIGNED_IMAGE_NOT_CACHED"
             )
             require(
                 image["Config"]["Labels"].get("org.opencontainers.image.revision")
@@ -525,14 +525,36 @@ class Operation:
                 )
         return values
 
+    def stop_arguments(self, role, cid, signal):
+        return ["kill", "--signal", signal, cid]
+
+    def stop_exit_codes(self, role):
+        return (0,)
+
+    def cached_image_matches(self, reference, row):
+        return reference in row.get("RepoDigests", [])
+
+    def preimage_running(self, role, prefix):
+        return True
+
+    def should_start_created(self, role, prefix):
+        return True
+
     def stop_generation(self, role, cid, model, prefix):
-        row = self.guarded(role, cid, model, True)
+        running = self.preimage_running(role, prefix)
+        row = self.guarded(role, cid, model, running)
+        if not running:
+            require(not row["State"]["Running"] and row["State"]["Pid"] == 0
+                    and not row["State"].get("Restarting")
+                    and not row["State"]["OOMKilled"], "PREIMAGE_NOT_STOPPED")
+            self.save(prefix + "-already-stopped-" + role + ".json", row)
+            return
         signal = "SIGQUIT" if role == "ui-prod" else "SIGTERM"
         self.save(prefix + "-stop-preimage-" + role + ".json", row)
         self.effect(
             prefix + "-stop-" + role,
             lambda: self.g.command(
-                ["kill", "--signal", signal, cid], prefix + "-stop-" + role
+                self.stop_arguments(role, cid, signal), prefix + "-stop-" + role
             ),
         )
         deadline = time.monotonic() + 45
@@ -548,7 +570,7 @@ class Operation:
             if not current["State"]["Running"]:
                 require(
                     current["State"]["Pid"] == 0
-                    and current["State"]["ExitCode"] == 0
+                    and current["State"]["ExitCode"] in self.stop_exit_codes(role)
                     and current["State"]["OOMKilled"] is False,
                     "METADATA_ROLE_NOT_GRACEFULLY_STOPPED",
                 )
@@ -588,6 +610,8 @@ class Operation:
         self.state["newCids"][role] = cid
         self.save(prefix + "-created-" + role + ".json", row)
         self.persist()
+        if not self.should_start_created(role, prefix):
+            return row
         self.effect(
             prefix + "-start-" + role,
             lambda: self.g.command(
@@ -603,7 +627,7 @@ class Operation:
         )
         for role in ROLES:
             previous = load(preflight["before"][role])
-            current = self.g.old_guard(previous, running=True)
+            current = self.g.old_guard(previous, running=self.preimage_running(role, "apply"))
             require(
                 current["NetworkSettings"] == previous["NetworkSettings"],
                 "PREVIEW_ROLE_NETWORK_CHANGED",
@@ -894,7 +918,7 @@ class Operation:
                 role, original, changed, self.marker, self.c["publicManifest"]["path"]
             )
         proof = self.readability(all_ids)
-        old_served = self.public(load(self.c["oldMarker"]), self.c["oldPublicManifest"])
+        old_served = self.original_public()
         snapshots = {
             role: self.save("preflight-before-" + role + ".json", before[role])
             for role in ROLES
@@ -969,6 +993,9 @@ class Operation:
             betaRoleWrites=False,
         )
 
+    def original_public(self):
+        return self.public(load(self.c["oldMarker"]), self.c["oldPublicManifest"])
+
     def recover(self, failed):
         require(
             failed["sourceSha256"] == self.c["sourceSha256"]
@@ -1000,7 +1027,7 @@ class Operation:
             row = self.g.observe(["image", "inspect", image], "recovery-image-" + role)[
                 0
             ]
-            require(image in row.get("RepoDigests", []), "RECOVERY_IMAGE_CHANGED")
+            require(self.cached_image_matches(image, row), "RECOVERY_IMAGE_CHANGED")
             self.g.IMAGE_IDS[image] = row["Id"]
             self.g.IMAGE_CONFIG[image] = row["Config"]
             for network in self.models[role]["networks"].values():
@@ -1055,7 +1082,7 @@ class Operation:
                 )
             else:
                 row = self.g.inspect(self.c["oldCids"][role])
-                if not row["State"]["Running"]:
+                if not row["State"]["Running"] and self.should_start_created(role, "rollback"):
                     self.effect(
                         "rollback-start-original-" + role,
                         lambda: self.g.command(
@@ -1063,7 +1090,7 @@ class Operation:
                         ),
                     )
                     self.healthy(role, row["Id"], self.models[role])
-        served = self.public(load(self.c["oldMarker"]), self.c["oldPublicManifest"])
+        served = self.original_public()
         ids = set(
             self.g.observe_lines(["ps", "-aq", "--no-trunc"], "recovery-all-after")
         )
