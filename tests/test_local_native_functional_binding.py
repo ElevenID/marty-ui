@@ -7,6 +7,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
@@ -220,3 +221,28 @@ def test_rendered_mounts_and_cached_image_are_checked_before_up(tmp_path: Path, 
     assert module.runtime_up_arguments([], {}, "marty-conformance-test", resume=False) == [
         "up", "--detach", "--no-build", "--pull", "never"
     ]
+
+
+def test_local_native_source_check_does_not_claim_release_attestation(tmp_path: Path, monkeypatch) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "conformance_stack_native_plan_test", Path(__file__).resolve().parents[1] / "scripts/conformance_stack.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+    capability = tmp_path / "capabilities.json"
+    capability.write_text('{"capability": "native"}', encoding="utf-8")
+    calls = []
+    native = {
+        "CAPABILITY_PATH": capability.name,
+        "validate_capabilities": lambda value: calls.append(("capabilities", value)),
+        "verify_release": lambda *values: calls.append(("release", values)) or {"qualified": True},
+    }
+    args = Namespace(local_build=False, stack_manifest="manifest", stack_checksums="checksums",
+                     release_ui_revision="a" * 40)
+    assert module.native_up_plan(native, args, "image", local_binding=True) is None
+    assert calls == [("capabilities", {"capability": "native"})]
+    calls.clear()
+    assert module.native_up_plan(native, args, "image", local_binding=False) == {"qualified": True}
+    assert calls == [("release", ("manifest", "checksums", "a" * 40, "image"))]

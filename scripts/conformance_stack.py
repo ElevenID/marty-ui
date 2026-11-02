@@ -720,6 +720,21 @@ def runtime_up_arguments(
         raise ValueError("KMS bootstrap resume verification failed") from None
 
 
+def native_up_plan(native: dict[str, Any], args: argparse.Namespace,
+                   native_image: str, *, local_binding: bool) -> dict[str, Any] | None:
+    """Keep local functional source checks separate from release admission."""
+    if args.local_build or local_binding:
+        native["validate_capabilities"](
+            json.loads((ROOT / native["CAPABILITY_PATH"]).read_text(encoding="utf-8"))
+        )
+        return None
+    if not all((args.stack_manifest, args.stack_checksums, args.release_ui_revision)):
+        raise ValueError("Released native conformance requires stack manifest, checksums and exact release UI revision")
+    return native["verify_release"](
+        args.stack_manifest, args.stack_checksums, args.release_ui_revision, native_image,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -839,29 +854,7 @@ def main() -> int:
             config["services"]["issuance-native"]["image"] if native else None
         )
         if native:
-            if args.local_build:
-                native["validate_capabilities"](
-                    json.loads(
-                        (ROOT / native["CAPABILITY_PATH"]).read_text(encoding="utf-8")
-                    )
-                )
-            else:
-                if not all(
-                    (
-                        args.stack_manifest,
-                        args.stack_checksums,
-                        args.release_ui_revision,
-                    )
-                ):
-                    raise ValueError(
-                        "Released native conformance requires stack manifest, checksums and exact release UI revision"
-                    )
-                native_plan = native["verify_release"](
-                    args.stack_manifest,
-                    args.stack_checksums,
-                    args.release_ui_revision,
-                    native_image,
-                )
+            native_plan = native_up_plan(native, args, native_image, local_binding=bool(local_binding))
         if args.local_build:
             build_result = subprocess.run(
                 [*command, "build", *local_build_arguments()], cwd=ROOT, check=False
