@@ -16,7 +16,7 @@ on:
         required: false
         type: string
       selfhost_public_profile:
-        description: Public UI surface included in the separately built self-host image
+        description: Customer application profile (both exclude production marketing pages)
         required: false
         default: tester
         type: choice
@@ -399,8 +399,12 @@ jobs:
         with:
           context: .
           file: docker/ui.Dockerfile
+          target: selfhost
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
+            UI_VARIANT=selfhost
+            SELFHOST_PUBLIC_PROFILE=${{ inputs.selfhost_public_profile }}
+            NGINX_CONFIG=nginx.spa.conf
             MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
             MARTY_UI_SHA=${{ github.sha }}
             MARTY_API_CORE_VERSION=${{ needs.validate-stack.outputs.api_core_version }}
@@ -994,29 +998,27 @@ jobs:
             fi
           done < <(jq -r '.components[].artifacts[] | select(.type == "oci") | .uri + "@" + .digest' stack-manifest.json)
       - name: Smoke-test UI image
+        working-directory: marty-ui
         env:
           UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
         shell: bash
         run: |
-          docker run --rm -d --name marty-ui-smoke -p 18080:80 "$IMAGE@$UI_DIGEST"
-          homepage="$(mktemp)"
-          trap 'docker rm -f marty-ui-smoke >/dev/null 2>&1 || true; rm -f "$homepage"' EXIT
-          for _ in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:18080/ --output "$homepage"; then
-              if grep --quiet 'Welcome to nginx' "$homepage"; then
-                echo "UI image contains the default Nginx homepage"
-                exit 1
-              fi
-              if grep --quiet 'ElevenID' "$homepage"; then
-                exit 0
-              fi
-              echo "UI image homepage is missing ElevenID content"
-              exit 1
-            fi
-            sleep 1
-          done
-          docker logs marty-ui-smoke
-          exit 1
+          set -euo pipefail
+          metadata="$(mktemp)"
+          trap 'docker rm -f marty-ui-smoke >/dev/null 2>&1 || true; rm -f "$metadata"' EXIT
+          test "$(docker inspect --format '{{ index .Config.Labels "io.elevenid.ui.audience" }}' "$IMAGE@$UI_DIGEST")" = customer
+          docker run --rm --entrypoint cat "$IMAGE@$UI_DIGEST" \
+            /opt/marty-ui-static/marty-ui-release.json > "$metadata"
+          python scripts/ui_release.py check-image --audience customer \
+            --source-sha "$SOURCE_SHA" --version "$VERSION" --image-metadata "$metadata"
+          docker run --rm -d --name marty-ui-smoke -e UI_ENABLED_SECTIONS=none \
+            -p 127.0.0.1:18080:80 "$IMAGE@$UI_DIGEST"
+          curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 \
+            http://127.0.0.1:18080/healthz
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18080/)" = 404
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18080/console/)" = 404
       - name: Install the released test interface
         working-directory: integration-tests
         env:
@@ -1699,10 +1701,19 @@ jobs:
       - id: digests
         env:
           UI_DIGEST: ${{ steps.ui.outputs.digest }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
           [[ "$UI_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull "$SELFHOST_UI_IMAGE@$UI_DIGEST"
+          test "$(docker inspect --format '{{ index .Config.Labels "io.elevenid.ui.audience" }}' "$SELFHOST_UI_IMAGE@$UI_DIGEST")" = customer
+          docker run --rm --entrypoint cat "$SELFHOST_UI_IMAGE@$UI_DIGEST" \
+            /opt/marty-ui-static/marty-ui-release.json > "$RUNNER_TEMP/ui-metadata.json"
+          python scripts/ui_release.py check-image --audience customer \
+            --source-sha "$SOURCE_SHA" --version "$VERSION" \
+            --image-metadata "$RUNNER_TEMP/ui-metadata.json"
           echo "ui_digest=$UI_DIGEST" >> "$GITHUB_OUTPUT"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:

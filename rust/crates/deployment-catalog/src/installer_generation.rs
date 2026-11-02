@@ -4,8 +4,8 @@
 //! Known login tokens are self-revoked, but orphan leaves intentionally survive.
 #![cfg(target_os = "linux")]
 use crate::{
-    activation_preflight, approle, generation, installer_renewal_bootstrap as fs,
-    keycloak_provision, operator_http,
+    activation_preflight, approle, generation, installer_managed_renewal,
+    installer_renewal_bootstrap as fs, keycloak_provision, operator_http,
 };
 use marty_openbao_http::OpenBaoHttp;
 use reqwest::{Method, StatusCode};
@@ -323,7 +323,58 @@ async fn retire(bao: &OpenBaoHttp, token: &str) -> Result<()> {
     require(response.status() == StatusCode::FORBIDDEN)
 }
 
-/// Fixed mounts only; returns 43 managed or 40 legacy public certificate/scoped-token files staged in
+/// Each fixed input is selected by both its file and digest environment entry.
+/// A partial or competing selection must never fall through to the historical
+/// private producer, which deliberately retains its original validation.
+fn require_source_selection(
+    public: [bool; 2],
+    managed: [bool; 2],
+    public_authority: [bool; 2],
+) -> Result<()> {
+    require(
+        public[0] == public[1]
+            && managed[0] == managed[1]
+            && public_authority[0] == public_authority[1]
+            && !(public[0] && managed[0])
+            && public_authority[0] == public[0],
+    )
+}
+
+fn selected_input(environment: &str, path: &str) -> Result<[bool; 2]> {
+    let present = match std::fs::symlink_metadata(path) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => return Err(REFUSED.into()),
+    };
+    Ok([std::env::var_os(environment).is_some(), present])
+}
+
+fn source_plans(
+    owner: &str,
+    input_owner: u32,
+) -> Result<(
+    Option<crate::installer_public_ingress::PublicIngressPlan>,
+    Option<installer_managed_renewal::ManagedRenewalPlan>,
+)> {
+    use crate::installer_public_ingress as public;
+    require_source_selection(
+        selected_input(public::PLAN_DIGEST_ENV, public::PLAN_INPUT)?,
+        selected_input(
+            installer_managed_renewal::PLAN_DIGEST_ENV,
+            installer_managed_renewal::PLAN_INPUT,
+        )?,
+        selected_input(
+            public::AUTHORITY_PLAN_DIGEST_ENV,
+            public::AUTHORITY_PLAN_INPUT,
+        )?,
+    )?;
+    Ok((
+        public::helper_plan(owner, input_owner)?,
+        installer_managed_renewal::helper_plan(owner, input_owner)?,
+    ))
+}
+
+/// Fixed mounts only; returns 42 public, 43 private-CA or 40 legacy certificate/token files in
 /// /output/generation. No host delivery, activation, old-token revocation or root
 /// retirement. Caller must preserve this entire directory on every failure.
 pub async fn provision(owner: &str) -> Result<usize> {
@@ -334,16 +385,40 @@ async fn provision_at(owner: &str, output_path: &Path) -> Result<usize> {
     require(unsafe { libc::geteuid() } == 0)?;
     fs::validate_id(owner)?;
     let current = fs::directory(Path::new("/input/current"), false, true)?;
-    let before = fs::current(&current)?;
-    let managed_ingress = fs::has_managed_ingress(&before)?;
+    let input_owner = current.metadata().map_err(|_| REFUSED)?.uid();
+    let (public_plan, managed_plan) = source_plans(owner, input_owner)?;
+    let public_digest = public_plan.as_ref().map(|plan| plan.sha256()).transpose()?;
+    let managed_digest = managed_plan
+        .as_ref()
+        .map(|plan| plan.sha256())
+        .transpose()?;
+    let before = fs::current_for_source(&current, public_plan.is_some())?;
+    if let Some(plan) = &public_plan {
+        if before.contains_key("installer_ingress_ca_cert") {
+            plan.require_initial_snapshot(&before)?;
+        }
+    }
+    let managed_ingress = public_plan.is_some() || fs::has_managed_ingress(&before)?;
     let ingress_identity = crate::installer_ingress_provision::IngressIdentity::from_environment()?;
-    let inventory = fs::inventory(managed_ingress);
+    let inventory = output_inventory(&before, public_plan.as_ref())?;
     let file_count = inventory.len();
     let token_count = if managed_ingress { 22 } else { 21 };
-    let changed_count = if managed_ingress { 41 } else { 39 };
+    let changed_count = if let Some(plan) = &public_plan {
+        if before.contains_key("installer_ingress_ca_cert")
+            || before.get("installer_ingress_tls_cert").map(Vec::as_slice)
+                != Some(plan.fullchain_pem().as_bytes())
+        {
+            41
+        } else {
+            40
+        }
+    } else if managed_ingress {
+        41
+    } else {
+        39
+    };
     let identity = fs::directory(Path::new("/input/identity"), false, true)?;
     let credentials = identity_snapshot(&identity)?;
-    let input_owner = current.metadata().map_err(|_| REFUSED)?.uid();
     let identity_owner = identity.metadata().map_err(|_| REFUSED)?.uid();
     require(identity_owner == 0 || identity_owner == input_owner)?;
     let receipt = fs::input(
@@ -353,6 +428,10 @@ async fn provision_at(owner: &str, output_path: &Path) -> Result<usize> {
         &[0o600],
     )?;
     let nonce = original_nonce(&receipt, owner)?;
+    if let Some(plan) = &managed_plan {
+        plan.require_snapshot(owner, &before, &credentials, &receipt)?;
+        require(plan.ingress_identity()? == ingress_identity)?;
+    }
     let ca = fs::input(
         Path::new("/input/ca.crt"),
         65536,
@@ -368,22 +447,28 @@ async fn provision_at(owner: &str, output_path: &Path) -> Result<usize> {
         Duration::from_secs(10),
     )
     .map_err(|_| REFUSED)?;
-    fs::receipt(
-        &output,
-        "pending.json",
-        &json!({"schema":if managed_ingress {"elevenid.installer-generation-intent/v2"} else {"elevenid.installer-generation-intent/v1"},
+    let mut pending = json!({"schema":if managed_ingress {"elevenid.installer-generation-intent/v2"} else {"elevenid.installer-generation-intent/v1"},
         "installation_id":owner,"nonce":nonce,"input_sha256":hashes(&before),"identity_sha256":hashes(&credentials),
-        "keycloak_receipt_sha256":format!("{:x}",Sha256::digest(&receipt)),"root_retired":false,"activated":false}),
-    )?;
+        "keycloak_receipt_sha256":format!("{:x}",Sha256::digest(&receipt)),"root_retired":false,"activated":false});
+    let mut login_context = json!({});
+    if let Some(digest) = &public_digest {
+        pending["schema"] = json!("elevenid.installer-generation-intent/v3");
+        pending["public_ingress_plan_sha256"] = json!(digest);
+        login_context["ingress_certificate_source"] = json!("acme");
+    } else if let Some(digest) = &managed_digest {
+        pending["schema"] = json!("elevenid.installer-generation-intent/v4");
+        pending["managed_renewal_plan_sha256"] = json!(digest);
+    }
+    fs::receipt(&output, "pending.json", &pending)?;
     let outcome: Result<usize> = async {
         // Login may mint before returning an error. No automatic retry is safe.
-        let login = approle::login(&bao,approle::Role::Renewal,Path::new("/input/identity"),&json!({})).await.map_err(|_| RECOVERY)?;
+        let login = approle::login(&bao,approle::Role::Renewal,Path::new("/input/identity"),&login_context).await.map_err(|_| RECOVERY)?;
         let token = login["token"].as_str().ok_or(RECOVERY)?;
         let produced: Result<()> = async {
             binding(Path::new("/input/current"),&current,false,true)?;
             binding(Path::new("/input/identity"),&identity,false,true)?;
             binding(output_path,&output,true,false)?;
-            require(fs::current(&current)? == before && identity_snapshot(&identity)? == credentials)?;
+            require(fs::current_for_source(&current, public_plan.is_some())? == before && identity_snapshot(&identity)? == credentials)?;
             require((20..=256).contains(&token.len()) && token.bytes().all(|v|v.is_ascii_graphic()))?;
             activation_preflight::authority(&bao,token,false).await.map_err(|_| RECOVERY)?;
             write(&output,"authority.token",token.as_bytes())?;
@@ -411,26 +496,51 @@ async fn provision_at(owner: &str, output_path: &Path) -> Result<usize> {
             } else { Path::new("/input/current").to_path_buf() };
             require(generation::stage(&workload_source,&output_path.join("tls"),&output_path.join("keycloak"),&output_path.join("generation"),false).map_err(|_| RECOVERY)? == 40)?;
             require(generation::verify(&workload_source,&output_path.join("generation"),false,false).map_err(|_| RECOVERY)? == (40,39))?;
-            let ingress = if managed_ingress {
+            let (ingress, public_ingress) = if let Some(plan) = &public_plan {
+                let produced = crate::installer_public_ingress::produce(&bao,token,owner,&before,plan).await?;
+                for (name,value) in &produced.files { deliver_copy(&candidate,name,value,0o444,0,0)?; }
+                (None,Some(produced.metadata))
+            } else if managed_ingress {
                 let renewed = crate::installer_ingress_provision::renew(&bao,token,owner,&before,&ingress_identity).await?;
                 for (name, value) in &renewed.files { deliver_copy(&candidate,name,value,0o444,0,0)?; }
-                Some(renewed.metadata)
-            } else { None };
+                (Some(renewed.metadata),None)
+            } else { (None,None) };
             let mut next = BTreeMap::new();
             require(fs::names(&candidate)? == inventory)?;
             for name in &inventory {
                 next.insert(name.clone(),fs::entry(&candidate,name,&[0],&[0o444],false)?);
             }
-            fs::validate_current(&next)?;
+            fs::validate_source_current(&next,public_plan.is_some())?;
             require(!next.values().any(|value|value.windows(token.len()).any(|part|part == token.as_bytes())))?;
             let checks = json!({"token":token,"old":"/input/current","new":output_path.join("generation"),
                 "minimum_ttl":3600,"require_orphan_new":true,"require_orphan_old":false,"replacement":null,"retiring":false});
-            activation_preflight::tokens(&bao,&checks).await.map_err(|_| RECOVERY)?;
-            activation_preflight::certificates(&bao,&checks).await.map_err(|_| RECOVERY)?;
+            if let Some(plan) = &public_plan {
+                let mut policies: Vec<String> = serde_json::from_slice(&credentials["renewal-leaf-policies.json"]).map_err(|_| RECOVERY)?;
+                let ingress_name = crate::installer_ingress_provision::resource_name(owner)?;
+                require(policies.len() == 22 && policies.iter().collect::<BTreeSet<_>>().len() == 22
+                    && policies.iter().filter(|name| *name == &ingress_name).count() == 1)?;
+                policies.retain(|name| name != &ingress_name);
+                activation_preflight::enrolled_replacement(&bao,token,Path::new("/input/current"),
+                    &output_path.join("generation"), &policies, plan.initial_inputs_observed_at()).await.map_err(|_| RECOVERY)?;
+            } else if let Some(plan) = &managed_plan {
+                activation_preflight::enrolled_replacement(&bao,token,Path::new("/input/current"),
+                    &output_path.join("generation"), &plan.workload_policies(), plan.input_observed_at()).await.map_err(|_| RECOVERY)?;
+            } else {
+                activation_preflight::tokens(&bao,&checks).await.map_err(|_| RECOVERY)?;
+                activation_preflight::certificates(&bao,&checks).await.map_err(|_| RECOVERY)?;
+            }
             tls.sync_all().and_then(|_|keycloak.sync_all()).and_then(|_|candidate.sync_all()).map_err(|_| RECOVERY)?;
             let mut validated = json!({"schema":if managed_ingress {"elevenid.installer-generation-validation/v2"} else {"elevenid.installer-generation-validation/v1"},"installation_id":owner,
                 "output_sha256":hashes(&next),"orphan_tokens":token_count,"remote_key_version":1,"ca_changed":false});
             if let Some(ingress) = ingress { validated["ingress"] = serde_json::to_value(ingress).map_err(|_| RECOVERY)?; }
+            if let Some(ingress) = public_ingress {
+                validated["schema"] = json!("elevenid.installer-generation-validation/v3");
+                validated["public_ingress"] = serde_json::to_value(ingress).map_err(|_| RECOVERY)?;
+                validated["public_ingress_plan_sha256"] = json!(public_digest);
+            } else if let Some(digest) = &managed_digest {
+                validated["schema"] = json!("elevenid.installer-generation-validation/v4");
+                validated["managed_renewal_plan_sha256"] = json!(digest);
+            }
             fs::receipt(&output,"validated.json",&validated)?;
             Ok(())
         }.await;
@@ -441,15 +551,25 @@ async fn provision_at(owner: &str, output_path: &Path) -> Result<usize> {
         binding(Path::new("/input/current"),&current,false,true)?;
         binding(Path::new("/input/identity"),&identity,false,true)?;
         binding(output_path,&output,true,false)?;
-        require(fs::current(&current)? == before && identity_snapshot(&identity)? == credentials
+        require(fs::current_for_source(&current, public_plan.is_some())? == before && identity_snapshot(&identity)? == credentials
             && fs::input(Path::new("/input/ca.crt"),65536,&[0,100],&[0o444,0o644])? == ca
             && fs::input(Path::new("/input/keycloak-receipt.json"),8192,&[0,input_owner],&[0o600])? == receipt)?;
+        let (retained_public, retained_managed) = source_plans(owner,input_owner)?;
+        require(retained_public == public_plan && retained_managed == managed_plan)?;
         let mut retained: BTreeSet<String> = ["pending.json","authority.token","tls","keycloak","generation","validated.json"].map(String::from).into();
         if managed_ingress { retained.insert("workload-current".into()); }
         require(fs::names(&output)? == retained)?;
-        fs::receipt(&output,"completed.json",&json!({"schema":if managed_ingress {"elevenid.installer-generation-result/v2"} else {"elevenid.installer-generation-result/v1"},"installation_id":owner,
+        let mut completed = json!({"schema":if managed_ingress {"elevenid.installer-generation-result/v2"} else {"elevenid.installer-generation-result/v1"},"installation_id":owner,
             "files":file_count,"changed_files":changed_count,"orphan_tokens":token_count,"transient_revoked":true,
-            "activated":false,"root_retired":false,"ingress_renewal":managed_ingress,"installation_ready":false}))?;
+            "activated":false,"root_retired":false,"ingress_renewal":managed_ingress,"installation_ready":false});
+        if let Some(digest) = &public_digest {
+            completed["schema"] = json!("elevenid.installer-generation-result/v3");
+            completed["public_ingress_plan_sha256"] = json!(digest);
+        } else if let Some(digest) = &managed_digest {
+            completed["schema"] = json!("elevenid.installer-generation-result/v4");
+            completed["managed_renewal_plan_sha256"] = json!(digest);
+        }
+        fs::receipt(&output,"completed.json",&completed)?;
         Ok(file_count)
     }.await;
     outcome.map_err(|_| RECOVERY.into())
@@ -466,6 +586,10 @@ struct GenerationPending {
     keycloak_receipt_sha256: String,
     root_retired: bool,
     activated: bool,
+    #[serde(default)]
+    public_ingress_plan_sha256: Option<String>,
+    #[serde(default)]
+    managed_renewal_plan_sha256: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -478,6 +602,12 @@ struct GenerationValidated {
     ca_changed: bool,
     #[serde(default)]
     ingress: Option<crate::installer_ingress_outputs::IngressMetadata>,
+    #[serde(default)]
+    public_ingress: Option<crate::installer_public_ingress::PublicIngressMetadata>,
+    #[serde(default)]
+    public_ingress_plan_sha256: Option<String>,
+    #[serde(default)]
+    managed_renewal_plan_sha256: Option<String>,
 }
 
 pub(crate) fn recorded_ingress(
@@ -487,6 +617,15 @@ pub(crate) fn recorded_ingress(
         serde_json::from_slice(records.get("validated.json").ok_or(REFUSED)?)
             .map_err(|_| REFUSED)?;
     Ok(validated.ingress)
+}
+
+pub(crate) fn recorded_public_ingress(
+    records: &BTreeMap<String, Vec<u8>>,
+) -> Result<Option<crate::installer_public_ingress::PublicIngressMetadata>> {
+    let validated: GenerationValidated =
+        serde_json::from_slice(records.get("validated.json").ok_or(REFUSED)?)
+            .map_err(|_| REFUSED)?;
+    Ok(validated.public_ingress)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -501,27 +640,89 @@ struct GenerationCompleted {
     root_retired: bool,
     ingress_renewal: bool,
     installation_ready: bool,
+    #[serde(default)]
+    public_ingress_plan_sha256: Option<String>,
+    #[serde(default)]
+    managed_renewal_plan_sha256: Option<String>,
 }
 pub(crate) struct GenerationProof<'a> {
     pub owner: &'a str,
     pub current: &'a BTreeMap<String, Vec<u8>>,
     pub identity: &'a BTreeMap<String, Vec<u8>>,
     pub keycloak_receipt: &'a [u8],
+    pub public_ingress_plan: Option<&'a crate::installer_public_ingress::PublicIngressPlan>,
+}
+
+pub(crate) fn output_inventory(
+    current: &BTreeMap<String, Vec<u8>>,
+    public_ingress_plan: Option<&crate::installer_public_ingress::PublicIngressPlan>,
+) -> Result<BTreeSet<String>> {
+    fs::source_inventory(
+        &current.keys().cloned().collect(),
+        public_ingress_plan.is_some(),
+    )
 }
 pub(crate) fn validate_records(
     records: &BTreeMap<String, Vec<u8>>,
     outputs: &BTreeMap<String, Vec<u8>>,
     proof: &GenerationProof<'_>,
 ) -> Result<BTreeMap<String, String>> {
+    validate_source_records(records, outputs, proof, None)
+}
+
+/// Recurring private receipts require their own authenticated source plan.
+/// Existing initial-private/public callers cannot acquire this authority from
+/// an optional JSON field or a receipt version alone.
+pub(crate) fn validate_managed_records(
+    records: &BTreeMap<String, Vec<u8>>,
+    outputs: &BTreeMap<String, Vec<u8>>,
+    proof: &GenerationProof<'_>,
+    plan: &installer_managed_renewal::ManagedRenewalPlan,
+) -> Result<BTreeMap<String, String>> {
+    validate_source_records(records, outputs, proof, Some(plan))
+}
+
+fn validate_source_records(
+    records: &BTreeMap<String, Vec<u8>>,
+    outputs: &BTreeMap<String, Vec<u8>>,
+    proof: &GenerationProof<'_>,
+    managed_plan: Option<&installer_managed_renewal::ManagedRenewalPlan>,
+) -> Result<BTreeMap<String, String>> {
     require(
         records.keys().map(String::as_str).collect::<BTreeSet<_>>()
             == ["pending.json", "validated.json", "completed.json"].into(),
     )?;
-    fs::validate_current(proof.current)?;
-    fs::validate_current(outputs)?;
-    let managed_ingress = fs::has_managed_ingress(proof.current)?;
-    require(fs::has_managed_ingress(outputs)? == managed_ingress)?;
-    let version = if managed_ingress { 2 } else { 1 };
+    let public = proof.public_ingress_plan.is_some();
+    require(!(public && managed_plan.is_some()))?;
+    if let Some(plan) = managed_plan {
+        plan.require_snapshot(
+            proof.owner,
+            proof.current,
+            proof.identity,
+            proof.keycloak_receipt,
+        )?;
+    }
+    let managed_digest = managed_plan.map(|plan| plan.sha256()).transpose()?;
+    let public_digest = proof
+        .public_ingress_plan
+        .map(|plan| plan.sha256())
+        .transpose()?;
+    fs::validate_source_current(proof.current, public)?;
+    fs::validate_source_current(outputs, public)?;
+    let managed_ingress = public || fs::has_managed_ingress(proof.current)?;
+    require(
+        outputs.keys().cloned().collect::<BTreeSet<_>>()
+            == output_inventory(proof.current, proof.public_ingress_plan)?,
+    )?;
+    let version = if managed_plan.is_some() {
+        4
+    } else if public {
+        3
+    } else if managed_ingress {
+        2
+    } else {
+        1
+    };
     let pending: GenerationPending =
         serde_json::from_slice(&records["pending.json"]).map_err(|_| REFUSED)?;
     let validated: GenerationValidated =
@@ -544,7 +745,9 @@ pub(crate) fn validate_records(
             && pending.keycloak_receipt_sha256
                 == format!("{:x}", Sha256::digest(proof.keycloak_receipt))
             && !pending.root_retired
-            && !pending.activated,
+            && !pending.activated
+            && pending.public_ingress_plan_sha256 == public_digest
+            && pending.managed_renewal_plan_sha256 == managed_digest,
     )?;
     require(
         validated.schema == format!("elevenid.installer-generation-validation/v{version}")
@@ -552,32 +755,82 @@ pub(crate) fn validate_records(
             && validated.output_sha256 == digests
             && validated.orphan_tokens == if managed_ingress { 22 } else { 21 }
             && validated.remote_key_version == 1
-            && !validated.ca_changed,
+            && !validated.ca_changed
+            && validated.public_ingress_plan_sha256 == public_digest
+            && validated.managed_renewal_plan_sha256 == managed_digest,
     )?;
     require(
         completed.schema == format!("elevenid.installer-generation-result/v{version}")
             && completed.installation_id == proof.owner
-            && completed.files == if managed_ingress { 43 } else { 40 }
-            && completed.changed_files == if managed_ingress { 41 } else { 39 }
+            && completed.files
+                == if public {
+                    42
+                } else if managed_ingress {
+                    43
+                } else {
+                    40
+                }
+            && completed.changed_files
+                == if public {
+                    if validated
+                        .public_ingress
+                        .as_ref()
+                        .is_some_and(|metadata| metadata.certificate_reused)
+                    {
+                        40
+                    } else {
+                        41
+                    }
+                } else if managed_ingress {
+                    41
+                } else {
+                    39
+                }
             && completed.orphan_tokens == if managed_ingress { 22 } else { 21 }
             && completed.transient_revoked
             && !completed.activated
             && !completed.root_retired
             && completed.ingress_renewal == managed_ingress
-            && !completed.installation_ready,
+            && !completed.installation_ready
+            && completed.public_ingress_plan_sha256 == public_digest
+            && completed.managed_renewal_plan_sha256 == managed_digest,
     )?;
     for (name, value) in outputs {
         require(
-            (value == &proof.current[name])
-                == (name == "workload_identity_ca_cert" || name == "installer_ingress_ca_cert"),
+            (Some(value) == proof.current.get(name))
+                == (name == "workload_identity_ca_cert"
+                    || (!public && name == "installer_ingress_ca_cert")
+                    || (public
+                        && name == "installer_ingress_tls_cert"
+                        && validated
+                            .public_ingress
+                            .as_ref()
+                            .is_some_and(|metadata| metadata.certificate_reused))),
         )?;
     }
-    require(validated.ingress.is_some() == managed_ingress)?;
-    if let Some(metadata) = validated.ingress {
-        let identity = crate::installer_ingress_provision::IngressIdentity::from_metadata(
-            &metadata.dns_names,
-            &metadata.ip_addresses,
+    require(
+        validated.ingress.is_some() == (managed_ingress && !public)
+            && validated.public_ingress.is_some() == public,
+    )?;
+    if let Some(metadata) = &validated.public_ingress {
+        crate::installer_public_ingress::validate_recorded_replacement(
+            proof.owner,
+            proof.current,
+            outputs,
+            metadata,
+            proof.public_ingress_plan.ok_or(REFUSED)?,
         )?;
+    }
+    if let Some(metadata) = validated.ingress {
+        let identity = if let Some(plan) = managed_plan {
+            require(metadata.token_observed_at >= plan.input_observed_at())?;
+            plan.ingress_identity()?
+        } else {
+            crate::installer_ingress_provision::IngressIdentity::from_metadata(
+                &metadata.dns_names,
+                &metadata.ip_addresses,
+            )?
+        };
         crate::installer_ingress_provision::validate_recorded_replacement(
             proof.owner,
             proof.current,
@@ -610,6 +863,9 @@ fn deliver_copy(dir: &File, name: &str, bytes: &[u8], mode: u32, uid: u32, gid: 
 pub async fn provision_transfer(owner: &str) -> Result<usize> {
     require(unsafe { libc::geteuid() } == 0)?;
     fs::validate_id(owner)?;
+    let source = fs::directory(Path::new("/input/current"), false, true)?;
+    let source_owner = source.metadata().map_err(|_| REFUSED)?.uid();
+    let selected_plans = source_plans(owner, source_owner)?;
     let parent = fs::directory(Path::new("/transfer"), false, false)?;
     let recipient = parent.metadata().map_err(|_| REFUSED)?;
     require(fs::names(&parent)?.is_empty())?;
@@ -635,16 +891,22 @@ pub async fn provision_transfer(owner: &str) -> Result<usize> {
         ]
         .map(String::from)
         .into();
-        if count == 43 {
+        if count == 43 || count == 42 {
             retained.insert("workload-current".into());
         }
         require(fs::names(&output)? == retained)?;
         let current = fs::directory(Path::new("/input/current"), false, true)?;
         let identity = fs::directory(Path::new("/input/identity"), false, true)?;
-        let before = fs::current(&current)?;
-        let inventory = fs::inventory(fs::has_managed_ingress(&before)?);
-        let credentials = identity_snapshot(&identity)?;
         let input_owner = current.metadata().map_err(|_| RECOVERY)?.uid();
+        let (public_plan, managed_plan) = source_plans(owner, input_owner)?;
+        require(
+            input_owner == source_owner
+                && public_plan == selected_plans.0
+                && managed_plan == selected_plans.1,
+        )?;
+        let before = fs::current_for_source(&current, public_plan.is_some())?;
+        let inventory = output_inventory(&before, public_plan.as_ref())?;
+        let credentials = identity_snapshot(&identity)?;
         let receipt = fs::input(
             Path::new("/input/keycloak-receipt.json"),
             8192,
@@ -667,16 +929,18 @@ pub async fn provision_transfer(owner: &str) -> Result<usize> {
                 fs::entry(&output, name, &[0], &[0o600], false)?,
             );
         }
-        validate_records(
-            &records,
-            &values,
-            &GenerationProof {
-                owner,
-                current: &before,
-                identity: &credentials,
-                keycloak_receipt: &receipt,
-            },
-        )?;
+        let proof = GenerationProof {
+            owner,
+            current: &before,
+            identity: &credentials,
+            keycloak_receipt: &receipt,
+            public_ingress_plan: public_plan.as_ref(),
+        };
+        if let Some(plan) = &managed_plan {
+            validate_managed_records(&records, &values, &proof, plan)?;
+        } else {
+            validate_records(&records, &values, &proof)?;
+        }
         let delivered = fs::child(&parent, "delivered")?;
         for (name, value) in &values {
             deliver_copy(
@@ -699,6 +963,8 @@ pub async fn provision_transfer(owner: &str) -> Result<usize> {
             )?;
         }
         binding(Path::new("/transfer"), &parent, false, false)?;
+        binding(Path::new("/input/current"), &source, false, true)?;
+        require(source_plans(owner, source_owner)? == selected_plans)?;
         fs::deliver_directory(&delivered, &parent, recipient.uid(), recipient.gid())?;
         binding(Path::new("/transfer"), &parent, false, false)?;
         Ok(values.len())
@@ -776,6 +1042,23 @@ mod tests {
             .keys()
             .any(|k| k.contains("ROOT") || k.contains("PROXY")));
         assert!(env.values().all(|v| !v.contains("secret-token")));
+    }
+    #[test]
+    fn fixed_source_selection_refuses_partial_and_competing_plan_inputs() {
+        // Six presence bits admit exactly three source modes. In particular,
+        // a stray fixed file, an orphan digest or a public authority without
+        // its public leaf plan cannot silently select legacy private logic.
+        let mut accepted = 0;
+        for mask in 0..64 {
+            let public = [mask & 1 != 0, mask & 2 != 0];
+            let managed = [mask & 4 != 0, mask & 8 != 0];
+            let authority = [mask & 16 != 0, mask & 32 != 0];
+            let expected = matches!(mask, 0 | 12 | 51);
+            let result = require_source_selection(public, managed, authority).is_ok();
+            assert_eq!(result, expected, "accepted unexpected presence bits {mask}");
+            accepted += usize::from(result);
+        }
+        assert_eq!(accepted, 3);
     }
     fn script(root: &Path, body: &str) -> std::path::PathBuf {
         let path = root.join(format!("child-{}", uuid::Uuid::new_v4()));
@@ -894,6 +1177,7 @@ mod tests {
             current: &current,
             identity: &identity,
             keycloak_receipt: &receipt,
+            public_ingress_plan: None,
         };
         let records: BTreeMap<String, Vec<u8>> = [
             ("pending.json", json!({"schema":"elevenid.installer-generation-intent/v1","installation_id":OWNER,"nonce":"0123456789ab","input_sha256":hashes(&current),"identity_sha256":hashes(&identity),"keycloak_receipt_sha256":format!("{:x}",Sha256::digest(&receipt)),"root_retired":false,"activated":false})),

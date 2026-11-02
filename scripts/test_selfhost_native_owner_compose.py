@@ -280,7 +280,10 @@ def apply_foundation_reference_representation(model):
     return optional_inputs
 
 
-def assert_models(approved, actual, *, interpolated=False, issuer_did=""):
+def assert_models(
+    approved, actual, *, interpolated=False, issuer_did="",
+    ui_enabled_sections="public,console",
+):
     """Check the complete current KMS-only model against its reviewed snapshot."""
     expected = deepcopy(approved)
     # Keep the approved snapshot and its hash frozen. Admit only the exact
@@ -334,6 +337,20 @@ def assert_models(approved, actual, *, interpolated=False, issuer_did=""):
     gateway_environment["GATEWAY_OBSERVE_CLIENT_IP"] = (
         "true" if interpolated else "${GATEWAY_OBSERVE_CLIENT_IP:-true}"
     )
+    # Customer startup selects the public and console sections. Health remains
+    # observable when either or both documents are intentionally excluded.
+    # Admit these exact changes without changing the frozen reference or any
+    # other UI environment, healthcheck command, timing or service field.
+    ui = expected["services"]["ui"]
+    assert "UI_ENABLED_SECTIONS" not in ui["environment"]
+    ui["environment"]["UI_ENABLED_SECTIONS"] = (
+        ui_enabled_sections if interpolated
+        else "${UI_ENABLED_SECTIONS-public,console}"
+    )
+    assert ui["healthcheck"]["test"] == [
+        "CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/",
+    ]
+    ui["healthcheck"]["test"][-1] = "http://127.0.0.1:80/healthz"
     if not interpolated:
         apply_foundation_reference_representation(expected)
     # The installer supplies one normalized DNS did:web identity (including an
@@ -576,6 +593,12 @@ def interpolated_models():
             ("installer-dns-port", {
                 "MARTY_ISSUER_DID": "did:web:identity.example%3A8443:orgs:marty",
             }),
+            ("web-public", {"UI_ENABLED_SECTIONS": "public"}),
+            ("web-console", {"UI_ENABLED_SECTIONS": "console"}),
+            ("web-none", {"UI_ENABLED_SECTIONS": "none"}),
+            # An explicitly empty value must reach startup validation unchanged;
+            # replacing '-' with ':-' would silently re-enable both sections.
+            ("web-empty", {"UI_ENABLED_SECTIONS": ""}),
             (
                 "custom",
                 dict.fromkeys(
@@ -603,6 +626,7 @@ def interpolated_models():
             assert_models(
                 render(APPROVED, values), after, interpolated=True,
                 issuer_did=values.get("MARTY_ISSUER_DID") or "",
+                ui_enabled_sections=values.get("UI_ENABLED_SECTIONS", "public,console"),
             )
             print(f"PASS: self-host {mode} interpolated whole model")
         for file, source_required in (

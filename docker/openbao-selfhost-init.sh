@@ -30,6 +30,29 @@ BAO_HAIP_TOKEN_FILE="${BAO_HAIP_TOKEN_FILE:-/bao/runtime/haip-kms.token}"
 BAO_HAIP_POLICY_FILE="${BAO_HAIP_POLICY_FILE:-/scripts/openbao-haip-workload-policy.hcl}"
 BAO_GRANT_TOKEN_DIR="${BAO_GRANT_TOKEN_DIR:-/bao/runtime}"
 
+# Only the fresh installer enables static auto-unseal. Its fixed Unix helper
+# receives neither the seal-key mount nor caller-selected initialization paths.
+# Other self-host deployments retain their existing Shamir bootstrap below.
+case "${MARTY_OPENBAO_STATIC_SEAL:-}" in
+    "") ;;
+    1)
+        if [ "${MARTY_OPENBAO_LOCAL_CONTROL:-}" != "1" ] || \
+           [ "${BAO_ADDR}" != "https://openbao:8200" ] || \
+           [ "${BAO_CACERT}" != "/bao/data/tls/ca.crt" ] || \
+           [ "${BAO_INIT_FILE}" != "/bao/data/selfhost-init.json" ] || \
+           [ "${BAO_ROOT_TOKEN_FILE}" != "/bao/data/root.token" ] || \
+           [ "${BAO_UNSEAL_KEY_FILE}" != "/bao/data/unseal.key" ] || \
+           [ -z "${MARTY_INSTALLATION_ID:-}" ] || [ -z "${MARTY_OPENBAO_STATIC_INIT_ATTEMPT_ID:-}" ]; then
+            echo "OpenBao installer static-seal configuration refused." >&2
+            exit 1
+        fi
+        ;;
+    *)
+        echo "OpenBao static-seal selection is invalid." >&2
+        exit 1
+        ;;
+esac
+
 mkdir -p "$(dirname "${BAO_INIT_FILE}")" "$(dirname "${BAO_ROOT_TOKEN_FILE}")" "$(dirname "${BAO_UNSEAL_KEY_FILE}")" "$(dirname "${BAO_SERVICE_TOKEN_FILE}")" "$(dirname "${BAO_BOOTSTRAP_TOKEN_FILE}")" "$(dirname "${BAO_SIGNING_KEYS_TOKEN_FILE}")" "$(dirname "${BAO_DIDCOMM_ISSUANCE_TOKEN_FILE}")" "$(dirname "${BAO_NOTIFICATION_TOKEN_FILE}")" "$(dirname "${BAO_HAIP_TOKEN_FILE}")" "$(dirname "${BAO_PUBLIC_CA_FILE}")" "${BAO_GRANT_TOKEN_DIR}"
 if [ -n "${BAO_PASSPORT_CALLBACK_TOKEN_FILE}" ]; then
     mkdir -p "$(dirname "${BAO_PASSPORT_CALLBACK_TOKEN_FILE}")"
@@ -111,27 +134,34 @@ if [ -e "${BAO_INIT_FILE}" ] || [ -e "${BAO_ROOT_TOKEN_FILE}" ] || [ -e "${BAO_U
     exit 1
 fi
 echo "Initializing OpenBao..."
-bao operator init -address="${BAO_ADDR}" -key-shares=1 -key-threshold=1 -format=json > "${BAO_INIT_FILE}"
-init_json="$(tr -d '\r' < "${BAO_INIT_FILE}")"
-unseal_key="$(json_first_array_entry "${init_json}" unseal_keys_b64)"
-root_token="$(json_field "${init_json}" root_token)"
+if [ "${MARTY_OPENBAO_STATIC_SEAL:-}" = "1" ]; then
+    /usr/local/bin/selfhost-static-init \
+        --installation-id "${MARTY_INSTALLATION_ID}" \
+        --attempt-id "${MARTY_OPENBAO_STATIC_INIT_ATTEMPT_ID}"
+    root_token="$(tr -d '\r' < "${BAO_ROOT_TOKEN_FILE}")"
+else
+    bao operator init -address="${BAO_ADDR}" -key-shares=1 -key-threshold=1 -format=json > "${BAO_INIT_FILE}"
+    init_json="$(tr -d '\r' < "${BAO_INIT_FILE}")"
+    unseal_key="$(json_first_array_entry "${init_json}" unseal_keys_b64)"
+    root_token="$(json_field "${init_json}" root_token)"
 
-if [ -z "${unseal_key}" ] || [ -z "${root_token}" ]; then
-    echo "Failed to parse OpenBao initialization material."
-    exit 1
-fi
+    if [ -z "${unseal_key}" ] || [ -z "${root_token}" ]; then
+        echo "Failed to parse OpenBao initialization material."
+        exit 1
+    fi
 
-write_secret_file "${BAO_UNSEAL_KEY_FILE}" "${unseal_key}" 0400
-write_secret_file "${BAO_ROOT_TOKEN_FILE}" "${root_token}" 0400
-sync
-rm -f "${BAO_INIT_FILE}"
-unset init_json
+    write_secret_file "${BAO_UNSEAL_KEY_FILE}" "${unseal_key}" 0400
+    write_secret_file "${BAO_ROOT_TOKEN_FILE}" "${root_token}" 0400
+    sync
+    rm -f "${BAO_INIT_FILE}"
+    unset init_json
 
-current_status="$(status_json)"
-sealed="$(json_bool "${current_status}" sealed)"
-if [ "${sealed}" = "true" ]; then
-    echo "Unsealing OpenBao..."
-    bao operator unseal -address="${BAO_ADDR}" "${unseal_key}" >/dev/null
+    current_status="$(status_json)"
+    sealed="$(json_bool "${current_status}" sealed)"
+    if [ "${sealed}" = "true" ]; then
+        echo "Unsealing OpenBao..."
+        bao operator unseal -address="${BAO_ADDR}" "${unseal_key}" >/dev/null
+    fi
 fi
 
 export BAO_TOKEN="${root_token}"

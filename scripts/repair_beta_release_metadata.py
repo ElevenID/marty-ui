@@ -534,8 +534,21 @@ class Operation:
     def cached_image_matches(self, reference, row):
         return reference in row.get("RepoDigests", [])
 
+    def preimage_running(self, role, prefix):
+        return True
+
+    def should_start_created(self, role, prefix):
+        return True
+
     def stop_generation(self, role, cid, model, prefix):
-        row = self.guarded(role, cid, model, True)
+        running = self.preimage_running(role, prefix)
+        row = self.guarded(role, cid, model, running)
+        if not running:
+            require(not row["State"]["Running"] and row["State"]["Pid"] == 0
+                    and not row["State"].get("Restarting")
+                    and not row["State"]["OOMKilled"], "PREIMAGE_NOT_STOPPED")
+            self.save(prefix + "-already-stopped-" + role + ".json", row)
+            return
         signal = "SIGQUIT" if role == "ui-prod" else "SIGTERM"
         self.save(prefix + "-stop-preimage-" + role + ".json", row)
         self.effect(
@@ -597,6 +610,8 @@ class Operation:
         self.state["newCids"][role] = cid
         self.save(prefix + "-created-" + role + ".json", row)
         self.persist()
+        if not self.should_start_created(role, prefix):
+            return row
         self.effect(
             prefix + "-start-" + role,
             lambda: self.g.command(
@@ -612,7 +627,7 @@ class Operation:
         )
         for role in ROLES:
             previous = load(preflight["before"][role])
-            current = self.g.old_guard(previous, running=True)
+            current = self.g.old_guard(previous, running=self.preimage_running(role, "apply"))
             require(
                 current["NetworkSettings"] == previous["NetworkSettings"],
                 "PREVIEW_ROLE_NETWORK_CHANGED",
@@ -1067,7 +1082,7 @@ class Operation:
                 )
             else:
                 row = self.g.inspect(self.c["oldCids"][role])
-                if not row["State"]["Running"]:
+                if not row["State"]["Running"] and self.should_start_created(role, "rollback"):
                     self.effect(
                         "rollback-start-original-" + role,
                         lambda: self.g.command(

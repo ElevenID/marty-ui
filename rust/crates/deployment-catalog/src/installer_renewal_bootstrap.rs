@@ -65,6 +65,26 @@ pub fn managed_inputs() -> BTreeSet<String> {
     names
 }
 
+/// Public certificates have an independently admitted fullchain. The local
+/// ingress CA is not an input to their runtime generation or health checks.
+pub fn public_inputs() -> BTreeSet<String> {
+    let mut names = current_inputs();
+    names.extend(crate::installer_public_ingress::PUBLIC_OUTPUTS.map(String::from));
+    names
+}
+
+pub(crate) fn source_inventory(
+    names: &BTreeSet<String>,
+    public_ingress: bool,
+) -> Result<BTreeSet<String>> {
+    if public_ingress {
+        require(*names == managed_inputs() || *names == public_inputs())?;
+        Ok(public_inputs())
+    } else {
+        Ok(inventory(managed_inventory(names)?))
+    }
+}
+
 pub(crate) fn inventory(managed_ingress: bool) -> BTreeSet<String> {
     if managed_ingress {
         managed_inputs()
@@ -91,6 +111,19 @@ pub(crate) fn completed_receipt(owner: &str, managed_ingress: bool) -> Value {
     json!({"schema":if managed_ingress {"elevenid.installer-renewal-bootstrap-result/v2"} else {"elevenid.installer-renewal-bootstrap-result/v1"},
         "installation_id":owner,"identity_files":IDENTITY_FILES,"policy_count":if managed_ingress {22} else {21},
         "scoped_login_verified":true,"verification_token_revoked":true,"root_retired":false,"ingress_renewal":managed_ingress})
+}
+
+pub(crate) fn completed_source_receipt(
+    owner: &str,
+    managed_ingress: bool,
+    public_plan_sha256: Option<&str>,
+) -> Value {
+    let mut receipt = completed_receipt(owner, managed_ingress);
+    if let Some(digest) = public_plan_sha256 {
+        receipt["schema"] = json!("elevenid.installer-renewal-bootstrap-result/v3");
+        receipt["public_renewal_authority_plan_sha256"] = json!(digest);
+    }
+    receipt
 }
 
 fn readonly(file: &File) -> Result<()> {
@@ -199,7 +232,14 @@ pub(crate) fn entry(
 }
 
 pub(crate) fn validate_current(values: &BTreeMap<String, Vec<u8>>) -> Result<()> {
-    has_managed_ingress(values)?;
+    validate_source_current(values, false)
+}
+
+pub(crate) fn validate_source_current(
+    values: &BTreeMap<String, Vec<u8>>,
+    public_ingress: bool,
+) -> Result<()> {
+    source_inventory(&values.keys().cloned().collect(), public_ingress)?;
     let mut tokens = BTreeSet::new();
     for (name, value) in values {
         let value = std::str::from_utf8(value).map_err(|_| REFUSED)?;
@@ -219,9 +259,12 @@ pub(crate) fn validate_current(values: &BTreeMap<String, Vec<u8>>) -> Result<()>
     Ok(())
 }
 
-pub(crate) fn current(dir: &File) -> Result<BTreeMap<String, Vec<u8>>> {
+pub(crate) fn current_for_source(
+    dir: &File,
+    public_ingress: bool,
+) -> Result<BTreeMap<String, Vec<u8>>> {
     let inventory = names(dir)?;
-    managed_inventory(&inventory)?;
+    source_inventory(&inventory, public_ingress)?;
     let owner = dir.metadata().map_err(|_| REFUSED)?.uid();
     let values = inventory
         .into_iter()
@@ -230,7 +273,7 @@ pub(crate) fn current(dir: &File) -> Result<BTreeMap<String, Vec<u8>>> {
             Ok((name, value))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
-    validate_current(&values)?;
+    validate_source_current(&values, public_ingress)?;
     Ok(values)
 }
 
@@ -288,8 +331,12 @@ async fn bootstrap_at(installation_id: &str, output_path: &Path) -> Result<usize
         &[0o444, 0o644],
     )?;
     let inputs = directory(Path::new("/input/current"), false, true)?;
-    let before = current(&inputs)?;
-    let managed_ingress = has_managed_ingress(&before)?;
+    let input_owner = inputs.metadata().map_err(|_| REFUSED)?.uid();
+    let public_plan =
+        crate::installer_public_ingress::helper_authority_plan(installation_id, input_owner)?;
+    let public_digest = public_plan.as_ref().map(|plan| plan.sha256()).transpose()?;
+    let before = current_for_source(&inputs, public_plan.is_some())?;
+    let managed_ingress = public_plan.is_some() || has_managed_ingress(&before)?;
     let ingress_identity = crate::installer_ingress_provision::IngressIdentity::from_environment()?;
     require(
         before
@@ -320,7 +367,12 @@ async fn bootstrap_at(installation_id: &str, output_path: &Path) -> Result<usize
     )
     .await
     .map_err(|_| REFUSED)?;
-    if managed_ingress {
+    if let Some(plan) = &public_plan {
+        policies.push(
+            plan.initial_inventory(&bao, root, installation_id, &before)
+                .await?,
+        );
+    } else if managed_ingress {
         policies.push(
             crate::installer_ingress_provision::renewal_inventory(
                 &bao,
@@ -333,7 +385,7 @@ async fn bootstrap_at(installation_id: &str, output_path: &Path) -> Result<usize
         );
     }
     require(
-        current(&inputs)? == before
+        current_for_source(&inputs, public_plan.is_some())? == before
             && input(Path::new("/input/root.token"), 4096, ROOT_OWNERS, &[0o400])? == root_bytes
             && input(
                 Path::new("/input/ca.crt"),
@@ -342,12 +394,13 @@ async fn bootstrap_at(installation_id: &str, output_path: &Path) -> Result<usize
                 &[0o444, 0o644],
             )? == ca,
     )?;
-    receipt(
-        &output,
-        "pending.json",
-        &json!({"schema":if managed_ingress {"elevenid.installer-renewal-bootstrap-intent/v2"} else {"elevenid.installer-renewal-bootstrap-intent/v1"},
-        "installation_id":installation_id,"root_retired":false,"ingress_renewal":managed_ingress}),
-    )?;
+    let mut pending = json!({"schema":if managed_ingress {"elevenid.installer-renewal-bootstrap-intent/v2"} else {"elevenid.installer-renewal-bootstrap-intent/v1"},
+        "installation_id":installation_id,"root_retired":false,"ingress_renewal":managed_ingress});
+    if let Some(digest) = &public_digest {
+        pending["schema"] = json!("elevenid.installer-renewal-bootstrap-intent/v3");
+        pending["public_renewal_authority_plan_sha256"] = json!(digest);
+    }
+    receipt(&output, "pending.json", &pending)?;
     let outcome: Result<usize> = async {
         let identity_name = CString::new("identity").unwrap();
         if unsafe { libc::mkdirat(output.as_raw_fd(), identity_name.as_ptr(), 0o700) } != 0 {
@@ -356,21 +409,22 @@ async fn bootstrap_at(installation_id: &str, output_path: &Path) -> Result<usize
         output.sync_all().map_err(|_| RECOVERY)?;
         let identity_path = output_path.join("identity");
         let identity = directory(&identity_path, true, false)?;
-        approle::bootstrap(
-            &bao,
-            approle::Role::Renewal,
-            &identity_path,
-            &json!({"root_token":root,"names":policies}),
-        )
-        .await
-        .map_err(|_| RECOVERY)?;
+        let mut context = json!({"root_token":root,"names":policies});
+        let mut login_context = json!({});
+        if public_plan.is_some() {
+            context["ingress_certificate_source"] = json!("acme");
+            login_context["ingress_certificate_source"] = json!("acme");
+        }
+        approle::bootstrap(&bao, approle::Role::Renewal, &identity_path, &context)
+            .await
+            .map_err(|_| RECOVERY)?;
         identity.sync_all().map_err(|_| RECOVERY)?;
         require(names(&identity)? == IDENTITY_FILES.map(String::from).into())?;
         for name in IDENTITY_FILES {
             let value = entry(&identity, name, &[0], &[0o600], false)?;
             require(!value.windows(root.len()).any(|v| v == root.as_bytes()))?;
         }
-        let login = approle::login(&bao, approle::Role::Renewal, &identity_path, &json!({}))
+        let login = approle::login(&bao, approle::Role::Renewal, &identity_path, &login_context)
             .await
             .map_err(|_| RECOVERY)?;
         let transient = login["token"].as_str().ok_or(RECOVERY)?;
@@ -406,11 +460,17 @@ async fn bootstrap_at(installation_id: &str, output_path: &Path) -> Result<usize
             return Err(RECOVERY.into());
         }
         authority.map_err(|_| RECOVERY)?;
-        require(current(&inputs)? == before)?;
+        require(
+            current_for_source(&inputs, public_plan.is_some())? == before
+                && crate::installer_public_ingress::helper_authority_plan(
+                    installation_id,
+                    input_owner,
+                )? == public_plan,
+        )?;
         receipt(
             &output,
             "completed.json",
-            &completed_receipt(installation_id, managed_ingress),
+            &completed_source_receipt(installation_id, managed_ingress, public_digest.as_deref()),
         )?;
         Ok(IDENTITY_FILES.len())
     }
@@ -524,11 +584,18 @@ pub async fn bootstrap_transfer(installation_id: &str) -> Result<usize> {
         let completed: Value =
             serde_json::from_slice(&values["completed.json"]).map_err(|_| RECOVERY)?;
         let current_dir = directory(Path::new("/input/current"), false, true)?;
+        let public_plan = crate::installer_public_ingress::helper_authority_plan(
+            installation_id,
+            current_dir.metadata().map_err(|_| RECOVERY)?.uid(),
+        )?;
+        let public_digest = public_plan.as_ref().map(|plan| plan.sha256()).transpose()?;
+        let before = current_for_source(&current_dir, public_plan.is_some())?;
         require(
             completed
-                == completed_receipt(
+                == completed_source_receipt(
                     installation_id,
-                    has_managed_ingress(&current(&current_dir)?)?,
+                    public_plan.is_some() || has_managed_ingress(&before)?,
+                    public_digest.as_deref(),
                 ),
         )?;
         let delivered = child(&parent, "delivered")?;

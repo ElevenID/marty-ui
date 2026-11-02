@@ -1,0 +1,27 @@
+# The existing generation owner selects this layer only for recurring private-CA
+# replacement. Its retained plan pins the selected generation and original scoped
+# renewal enrollment. No public-CA plan or additional authority is mounted.
+services:
+  installer-generation:
+    environment:
+      MARTY_INSTALLER_MANAGED_RENEWAL_PLAN_SHA256: ${MARTY_INSTALLER_MANAGED_RENEWAL_PLAN_SHA256:?bound managed renewal plan digest required}
+    volumes:
+      - type: bind
+        source: ${MARTY_GENERATION_WORK_DIR:?bound generation work directory required}/transfer
+        target: /transfer
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_GENERATION_WORK_DIR:?}/current
+        target: /input/current
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_GENERATION_WORK_DIR:?}/identity
+        target: /input/identity
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_GENERATION_MANAGED_RENEWAL_PLAN:?bound managed renewal plan required}
+        target: /input/managed-renewal-plan.json
+        read_only: true
+        bind: {create_host_path: false}

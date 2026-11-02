@@ -3,94 +3,32 @@ export const SELFHOST_PUBLIC_PROFILE = import.meta.env.VITE_SELFHOST_PUBLIC_PROF
 if (!['full', 'tester'].includes(SELFHOST_PUBLIC_PROFILE)) {
   throw new Error('Unsupported self-host public profile');
 }
-export const SHOW_PUBLIC_DEMOS = SELFHOST_PUBLIC_PROFILE !== 'tester';
+
+// Both historical customer profile names exclude production marketing. The
+// full profile additionally advertises the deployment's API documentation.
+export const SHOW_PUBLIC_DEMOS = false;
 export const SHOW_PUBLIC_DOCUMENTATION_NAV = SELFHOST_PUBLIC_PROFILE !== 'tester';
 
-export const SELFHOST_PRODUCTION_PUBLIC_HOSTS = ['elevenidllc.com', 'www.elevenidllc.com'];
-
-function normalizeHostname(hostname = '') {
-  return hostname.trim().toLowerCase();
-}
-
-function getCurrentHostname() {
-  if (typeof window === 'undefined' || !window.location) {
-    return '';
-  }
-
-  return window.location.hostname;
-}
-
-export function isSelfhostProductionPublicHost(hostname = getCurrentHostname()) {
-  return SELFHOST_PRODUCTION_PUBLIC_HOSTS.includes(normalizeHostname(hostname));
-}
-
-export function getSelfhostPublicUiFlags(hostname = getCurrentHostname(), profile = SELFHOST_PUBLIC_PROFILE) {
-  const disableProductionMarketingCtas = isSelfhostProductionPublicHost(hostname);
-  const tester = profile === 'tester';
-
+export function getSelfhostPublicUiFlags(_hostname = '') {
   return {
     showPublicLoginButton: true,
     disablePublicLoginButton: false,
-    showPublicGetStartedButtons: !tester,
-    disablePublicGetStartedButtons: disableProductionMarketingCtas,
-    showPublicPricingButtons: !tester,
-    disablePublicPricingButtons: disableProductionMarketingCtas,
+    showPublicGetStartedButtons: false,
+    disablePublicGetStartedButtons: true,
+    showPublicPricingButtons: false,
+    disablePublicPricingButtons: true,
     enableLegacyAdminImpersonationBanner: false,
   };
 }
 
-export function getSelfhostPublicTabs(hostname = getCurrentHostname(), profile = SELFHOST_PUBLIC_PROFILE) {
-  const { showPublicPricingButtons, disablePublicPricingButtons } = getSelfhostPublicUiFlags(hostname, profile);
-  const tester = profile === 'tester';
-
+export function getSelfhostPublicTabs(_hostname = '', profile = SELFHOST_PUBLIC_PROFILE) {
   return [
     { labelKey: 'navigation.home', defaultLabel: 'Home', path: '/', exact: true },
-    {
-      labelKey: 'navigation.product',
-      defaultLabel: 'Product',
-      path: '/product',
-      prefixes: [
-        '/product',
-        '/verifiable-credential-api',
-        '/eudi-wallet-verification',
-        '/iso-18013-5-mdoc-verification',
-        '/sd-jwt-verification',
-        '/open-badges-verification',
-        '/open-badges-issuance',
-        '/trust-registry-infrastructure',
-        '/ai',
-      ],
-    },
-    { labelKey: 'navigation.solutions', defaultLabel: 'Solutions', path: '/solutions' },
-    ...(!tester ? [{ labelKey: 'navigation.developers', defaultLabel: 'Developers', path: '/developers', prefixes: ['/developers'] }] : []),
-    { labelKey: 'navigation.standards', defaultLabel: 'Standards', path: '/standards' },
-    ...(!tester ? [{ labelKey: 'navigation.demos', defaultLabel: 'Demos', path: '/demos', prefixes: ['/demos'] }] : []),
-    {
-      labelKey: 'navigation.resources',
-      defaultLabel: 'Resources',
-      path: '/resources',
-      prefixes: [
-        '/resources',
-        '/docs',
-        '/blog',
-        '/authors',
-        '/identity',
-        '/why-verifiable-identity',
-        '/from-idv-to-verifiable-identity',
-        '/architecture',
-        '/security',
-        '/protocol',
-        '/what-is-credential-verification',
-        '/what-is-open-badge',
-        '/what-is-digital-credential',
-        '/what-is-marty-protocol',
-        '/privacy-policy',
-        '/privacy',
-        '/terms-of-service',
-        '/terms',
-      ],
-    },
-    ...(showPublicPricingButtons ? [{ labelKey: 'navigation.pricing', defaultLabel: 'Pricing', path: '/pricing', disabled: disablePublicPricingButtons }] : []),
+    { labelKey: 'navigation.console', defaultLabel: 'Console', path: '/console', prefixes: ['/console'] },
+    { labelKey: 'navigation.applications', defaultLabel: 'Applications', path: '/apply' },
+    ...(profile !== 'tester'
+      ? [{ labelKey: 'navigation.apiDocumentation', defaultLabel: 'API documentation', path: '/docs' }]
+      : []),
   ];
 }
 
@@ -106,8 +44,6 @@ export const ENABLE_LEGACY_ADMIN_IMPERSONATION_BANNER = selfhostPublicUiFlags.en
 export const ENABLE_ORGANIZATION_CREATION = false;
 export const WALLET_SELECTION_ALLOWED_WALLET_IDS = ['wr-spruce-001', 'wr-marty-001'];
 
-export const I18N_NAMESPACES = ['common', 'console', 'onboarding', 'forms', 'errors', 'applicant', 'vendor', 'marketing'];
-
+export const I18N_NAMESPACES = ['common', 'console', 'onboarding', 'forms', 'errors', 'applicant', 'vendor'];
 export const PUBLIC_TABS = getSelfhostPublicTabs();
-
-export const SHOW_PUBLIC_CTA = SELFHOST_PUBLIC_PROFILE !== 'tester';
+export const SHOW_PUBLIC_CTA = false;

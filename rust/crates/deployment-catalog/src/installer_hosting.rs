@@ -4,6 +4,7 @@
 #![cfg(target_os = "linux")]
 
 use crate::{
+    installer_acme_configuration::AcmeParameters,
     installer_compose::{BoundFile, ComposeInputs},
     installer_host_fs as fs,
     installer_state::{InstallerState, LockedInspection, Phase},
@@ -51,6 +52,7 @@ impl Listener {
 pub enum CertificateSource {
     ManagedCa,
     FoundationImport,
+    Acme,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +66,10 @@ enum Termination {
 struct Tls {
     termination: Termination,
     certificate_source: CertificateSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    acme: Option<AcmeParameters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    http01_host_port: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +83,44 @@ pub enum ConnectorKind {
 pub struct Connector {
     pub kind: ConnectorKind,
     pub token_file: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum WebSection {
+    Public,
+    Console,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Web {
+    enabled_sections: Vec<WebSection>,
+}
+
+impl Web {
+    fn validate(&self) -> Result<()> {
+        require(
+            self.enabled_sections.len() <= 2
+                && self
+                    .enabled_sections
+                    .iter()
+                    .enumerate()
+                    .all(|(i, section)| !self.enabled_sections[..i].contains(section)),
+        )
+    }
+
+    fn environment_value(&self) -> &'static str {
+        match (
+            self.enabled_sections.contains(&WebSection::Public),
+            self.enabled_sections.contains(&WebSection::Console),
+        ) {
+            (true, true) => "public,console",
+            (true, false) => "public",
+            (false, true) => "console",
+            (false, false) => "none",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +138,8 @@ struct Configuration {
     tls: Tls,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     connector: Option<Connector>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    web: Option<Web>,
 }
 
 /// Private input bytes stay here until the authenticated installer records the
@@ -208,14 +254,20 @@ impl Configuration {
                 } else {
                     CertificateSource::ManagedCa
                 },
+                acme: None,
+                http01_host_port: None,
             },
             public_origin: foundation_origin,
             public_entry_origin: None,
             connector: None,
+            web: None,
         })
     }
 
     fn validate(&self) -> Result<()> {
+        if let Some(web) = &self.web {
+            web.validate()?;
+        }
         // The transport/SAN parser supports IPv6, but the application's current
         // did:web authority contract does not. Refuse that public identity here
         // before provisioning rather than accepting an origin the gateway will
@@ -269,9 +321,28 @@ impl Configuration {
         if let Some(connector) = &self.connector {
             require(self.mode == Mode::ExternalProxy && path_is_safe(&connector.token_file))?;
         }
+        match self.tls.certificate_source {
+            CertificateSource::Acme => {
+                let parameters = self.tls.acme.as_ref().ok_or(REFUSED)?;
+                parameters.validate()?;
+                let http01 = self.tls.http01_host_port.ok_or(REFUSED)?;
+                require(
+                    self.mode == Mode::Direct
+                        && self.connector.is_none()
+                        && self.public_origin.as_ref().is_some_and(|origin| {
+                            origin.dns_name().is_some() && !origin.is_loopback()
+                        })
+                        && http01 >= 1024
+                        && http01 != self.listener.port,
+                )?;
+            }
+            CertificateSource::ManagedCa | CertificateSource::FoundationImport => {
+                require(self.tls.acme.is_none() && self.tls.http01_host_port.is_none())?;
+            }
+        }
         if let Some(alias) = &self.public_entry_origin {
-            if self.tls.certificate_source != CertificateSource::ManagedCa {
-                return Err("public_entry_origin requires managed-ca certificate issuance with DNS and IP SAN coverage; foundation-import does not support an IP entry alias".into());
+            if self.tls.certificate_source == CertificateSource::FoundationImport {
+                return Err("public_entry_origin requires managed-ca or acme certificate issuance with exact DNS and IP SAN coverage; foundation-import does not support an IP entry alias".into());
             }
             require(
                 self.mode == Mode::Direct
@@ -300,17 +371,67 @@ impl Configuration {
 
     fn require_foundation(&self, foundation_origin: Option<&PublicOrigin>) -> Result<()> {
         match (self.tls.certificate_source, foundation_origin) {
-            (CertificateSource::ManagedCa, None) => Ok(()),
+            (CertificateSource::ManagedCa | CertificateSource::Acme, None) => Ok(()),
             (CertificateSource::FoundationImport, Some(origin)) => {
                 require(self.public_origin.as_ref() == Some(origin))
             }
-            _ => Err("hosting certificate source must match the selected managed OpenBao or imported foundation".into()),
+            _ => Err("hosting certificate source must match the selected managed OpenBao or imported foundation; ACME requires the managed OpenBao setup".into()),
         }
     }
 }
 
 /// Validate user files before confirmation or runtime side effects. Foundation
 /// origin is read by its existing owner; hosting never creates KMS resources.
+pub(crate) fn candidate_binding(
+    raw: &[u8],
+    staging_roots: Option<&[u8]>,
+) -> Result<crate::installer_release::CandidateHosting> {
+    require(!raw.is_empty() && raw.len() <= crate::installer_release::MAX_CANDIDATE_HOSTING)?;
+    let configuration: Configuration = decode(raw)?;
+    configuration.validate_installation()?;
+    configuration.require_foundation(None)?;
+    require(configuration.mode == Mode::Direct && configuration.connector.is_none())?;
+    let binding = crate::installer_release::CandidateHosting {
+        input_sha256: digest(raw),
+        input_size_bytes: raw.len() as u64,
+        public_origin: configuration
+            .public_origin
+            .as_ref()
+            .ok_or(REFUSED)?
+            .as_str()
+            .into(),
+        public_entry_origin: configuration
+            .public_entry_origin
+            .as_ref()
+            .map(|origin| origin.as_str().into()),
+        certificate_source: match configuration.tls.certificate_source {
+            CertificateSource::ManagedCa => "managed-ca",
+            CertificateSource::Acme => "acme",
+            CertificateSource::FoundationImport => return Err(REFUSED.into()),
+        }
+        .into(),
+        acme_environment: configuration
+            .tls
+            .acme
+            .as_ref()
+            .map(|p| p.environment().as_str().into()),
+        acme_terms_url: configuration
+            .tls
+            .acme
+            .as_ref()
+            .map(|p| p.terms_url().into()),
+        staging_trust: staging_roots.map(|bytes| crate::installer_release::CandidateStagingTrust {
+            sha256: digest(bytes),
+            size_bytes: bytes.len() as u64,
+        }),
+    };
+    binding.validate()?;
+    if let Some(bytes) = staging_roots {
+        crate::installer_acme_certificates::validate_staging_roots(bytes)?;
+    }
+    Ok(binding)
+}
+
 pub(crate) fn prepare(
     path: Option<&Path>,
     foundation_origin: Option<PublicOrigin>,
@@ -339,6 +460,12 @@ pub(crate) fn prepare(
 }
 
 impl Prepared {
+    pub(crate) fn input_sha256(&self) -> String {
+        digest(&self.raw)
+    }
+    pub(crate) fn acme_parameters(&self) -> Option<&AcmeParameters> {
+        self.configuration.tls.acme.as_ref()
+    }
     pub(crate) fn host_impact(&self) -> String {
         let origin = self
             .configuration
@@ -347,7 +474,7 @@ impl Prepared {
             .map(PublicOrigin::as_str)
             .unwrap_or("https://localhost:<selected-port>");
         format!(
-            "public origin {origin}; public entry origin {}; ingress listener {}; public TLS owner {}; connector {}",
+            "public origin {origin}; public entry origin {}; ingress listener {}; public TLS owner {}; connector {}; webpage sections {}",
             self.configuration
                 .public_entry_origin
                 .as_ref()
@@ -363,7 +490,8 @@ impl Prepared {
                 "Cloudflare Tunnel (explicit selection)"
             } else {
                 "none"
-            }
+            },
+            self.configuration.web.as_ref().map_or("public,console", Web::environment_value)
         )
     }
 }
@@ -510,6 +638,9 @@ pub(crate) fn resolve(state: &LockedInspection) -> Result<Selection> {
 }
 
 impl Selection {
+    pub(crate) fn source_sha256(&self) -> &str {
+        &self.source_sha256
+    }
     pub(crate) fn is_recorded(&self) -> bool {
         self.recorded
     }
@@ -522,11 +653,28 @@ impl Selection {
     pub fn public_entry_origin(&self) -> Option<&PublicOrigin> {
         self.configuration.public_entry_origin.as_ref()
     }
+    pub(crate) fn enabled_web_sections(&self) -> &'static str {
+        self.configuration
+            .web
+            .as_ref()
+            .map_or("public,console", Web::environment_value)
+    }
+    pub(crate) fn has_web_selection(&self) -> bool {
+        self.configuration.web.is_some()
+    }
     pub fn listener(&self) -> Listener {
         self.configuration.listener
     }
     pub fn certificate_source(&self) -> CertificateSource {
         self.configuration.tls.certificate_source
+    }
+    pub fn acme_parameters(&self) -> Option<&AcmeParameters> {
+        self.configuration.tls.acme.as_ref()
+    }
+    /// The challenge responder binds only to 127.0.0.1. The customer routes
+    /// public HTTP port 80 to this explicit, unprivileged local port.
+    pub fn http01_host_port(&self) -> Option<u16> {
+        self.configuration.tls.http01_host_port
     }
     pub fn connector(&self) -> Option<&Connector> {
         self.configuration.connector.as_ref()

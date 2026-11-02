@@ -1,4 +1,4 @@
-name: Installer candidate grant preparation
+name: Installer candidate grants and startup observations
 
 run-name: Prepare ${{ inputs.phase }} installer grant for build ${{ inputs.build_run_id }} attempt ${{ inputs.build_run_attempt }}
 
@@ -13,10 +13,18 @@ on:
           - staged
           - published
       execute:
-        description: Wait for a real controller execution checkpoint (currently always incomplete; cannot produce acceptance)
+        description: Wait for a real controller execution result; startup observations do not grant release readiness
         required: true
         type: boolean
         default: false
+      execution_result:
+        description: Exact controller result to receive; startup requires production public IP browser evidence
+        required: true
+        type: choice
+        default: incomplete-checkpoint
+        options:
+          - incomplete-checkpoint
+          - startup-observation
       build_run_id:
         description: Successful Nightly installation release run ID
         required: true
@@ -33,6 +41,16 @@ on:
         description: Exact installation nightly tag recorded in its inventory
         required: true
         type: string
+      hosting_input:
+        description: Exact public hosting JSON for a v2 grant; explicit ACME terms agreement required
+        required: false
+        type: string
+        default: ''
+      acme_staging_roots:
+        description: Explicit PEM trust anchors only for CA staging; artifact phase is independent
+        required: false
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -44,7 +62,8 @@ jobs:
   prepare-candidate-grant:
     if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.repository == 'ElevenID/marty-ui'
     # This job signs grants and an authenticated controller consumption record.
-    # It performs no guest execution and issues no acceptance, admission or channel.
+    # The external controller performs guest execution. A separately selected
+    # startup observation grants no functional qualification, admission or channel.
     # A new dispatch is a new authorization; it does not resume a consumed dispatch.
     runs-on: ubuntu-24.04
     environment: stack-release
@@ -71,6 +90,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           PHASE: ${{ inputs.phase }}
           CONTROLLER_USER_ID: ${{ vars.INSTALLER_CONTROLLER_USER_ID }}
+          EXECUTE: ${{ inputs.execute }}
+          EXECUTION_RESULT: ${{ inputs.execution_result }}
         shell: bash
         run: |
           set -euo pipefail
@@ -87,6 +108,8 @@ jobs:
           require(os.environ['GITHUB_REPOSITORY'] == 'ElevenID/marty-ui')
           require(os.environ['GITHUB_REF'] == 'refs/heads/main')
           require(os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch')
+          require(os.environ['EXECUTION_RESULT'] in ('incomplete-checkpoint', 'startup-observation'))
+          require(os.environ['EXECUTION_RESULT'] != 'startup-observation' or os.environ['EXECUTE'] == 'true')
           build = os.environ['BUILD_RUN_ID']
           attempt = os.environ['BUILD_RUN_ATTEMPT']
           require(re.fullmatch(r'[1-9][0-9]{0,15}', build) is not None)
@@ -267,13 +290,48 @@ jobs:
           BUILD_SOURCE_SHA: ${{ inputs.source_sha }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           PHASE: ${{ inputs.phase }}
+          HOSTING_INPUT: ${{ inputs.hosting_input }}
+          ACME_STAGING_ROOTS: ${{ inputs.acme_staging_roots }}
+          EXECUTION_RESULT: ${{ inputs.execution_result }}
         shell: bash
         run: |
           set -euo pipefail
           umask 077
           base="$RUNNER_TEMP/installer-staged-grant"
           chmod 700 "$base/inputs"
-          python scripts/installer_candidate_authorize.py \
+          python - <<'PY'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          import installer_candidate_hosting as hosting
+          from installer_candidate_authorize import write_exclusive
+          raw = os.environ.get('HOSTING_INPUT', '').encode('utf-8')
+          roots = os.environ.get('ACME_STAGING_ROOTS', '').encode('utf-8') or None
+          output = Path(os.environ['RUNNER_TEMP']) / 'installer-staged-grant/grant'
+          if raw:
+              selected = hosting.from_bytes(raw, staging_roots=roots)
+              if os.environ['EXECUTION_RESULT'] == 'startup-observation':
+                  hosting.require(selected['certificate_source'] == 'acme'
+                      and selected['acme_environment'] == 'production'
+                      and selected['public_entry_origin'] is not None
+                      and selected['staging_trust'] is None,
+                      'startup observation requires production public IP hosting')
+              write_exclusive(output / hosting.NAME, raw)
+              if roots is not None:
+                  write_exclusive(output / hosting.ROOTS_NAME, roots)
+          else:
+              hosting.require(roots is None, 'staging trust requires explicit hosting input')
+              hosting.require(os.environ['EXECUTION_RESULT'] != 'startup-observation',
+                  'startup observation requires explicit signed hosting input')
+          PY
+          hosting_flags=()
+          if test -f "$base/grant/hosting-input.json"; then
+            hosting_flags+=(--hosting-input "$base/grant/hosting-input.json")
+          fi
+          if test -f "$base/grant/acme-staging-roots.pem"; then
+            hosting_flags+=(--acme-staging-roots "$base/grant/acme-staging-roots.pem")
+          fi
+          python scripts/installer_candidate_authorize.py "${hosting_flags[@]}" \
             --assets "$base/inputs" --acceptance-run "$base/context/acceptance-run.json" \
             --gh "$base/tools/gh_2.103.2_linux_amd64/bin/gh" --cosign "$base/tools/cosign" \
             --source-sha "$BUILD_SOURCE_SHA" --release-tag "$RELEASE_TAG" \
@@ -346,6 +404,8 @@ jobs:
             ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json.sigstore.json
             ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json.provenance.jsonl
             ${{ runner.temp }}/installer-staged-grant/grant/controller-transport.json
+            ${{ runner.temp }}/installer-staged-grant/grant/hosting-input.json
+            ${{ runner.temp }}/installer-staged-grant/grant/acme-staging-roots.pem
           if-no-files-found: error
           retention-days: 1
       - name: Receive the approved controller's durable consumption receipt
@@ -421,10 +481,12 @@ jobs:
             ${{ runner.temp }}/installer-staged-grant/grant/controller-consumption.json.provenance.jsonl
             ${{ runner.temp }}/installer-staged-grant/grant/controller-consumption.json.transport.json
             ${{ runner.temp }}/installer-staged-grant/grant/controller-transport.json
+            ${{ runner.temp }}/installer-staged-grant/grant/hosting-input.json
+            ${{ runner.temp }}/installer-staged-grant/grant/acme-staging-roots.pem
           if-no-files-found: error
           retention-days: 1
       - name: Receive same-invocation installed probe checkpoint
-        if: inputs.execute
+        if: inputs.execute && inputs.execution_result == 'incomplete-checkpoint'
         env:
           GH_TOKEN: ${{ github.token }}
           CONTROLLER_USER_ID: ${{ steps.context.outputs.controller_user_id }}
@@ -440,7 +502,7 @@ jobs:
             --harness-source-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --controller-user-id "$CONTROLLER_USER_ID" --output "$base/checkpoint/installer-acceptance-checkpoint.json"
       - name: Sign distinct incomplete checkpoint only
-        if: inputs.execute
+        if: inputs.execute && inputs.execution_result == 'incomplete-checkpoint'
         shell: bash
         run: |
           set -euo pipefail
@@ -449,12 +511,12 @@ jobs:
             --bundle "$base/checkpoint/installer-acceptance-checkpoint.json.sigstore.json" \
             "$base/checkpoint/installer-acceptance-checkpoint.json" >/dev/null
       - id: checkpoint_provenance
-        if: inputs.execute
+        if: inputs.execute && inputs.execution_result == 'incomplete-checkpoint'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: ${{ runner.temp }}/installer-staged-grant/checkpoint/installer-acceptance-checkpoint.json
       - name: Verify checkpoint signature and exact invocation proof
-        if: inputs.execute
+        if: inputs.execute && inputs.execution_result == 'incomplete-checkpoint'
         env:
           PROVENANCE_BUNDLE: ${{ steps.checkpoint_provenance.outputs.bundle-path }}
         shell: bash
@@ -480,7 +542,7 @@ jobs:
               source_sha=os.environ['GITHUB_SHA'],run_id=int(os.environ['GITHUB_RUN_ID']),run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']))
           PY
       - name: Archive incomplete checkpoint and authenticated transport evidence
-        if: always() && inputs.execute
+        if: always() && inputs.execute && inputs.execution_result == 'incomplete-checkpoint'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: installer-incomplete-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}
@@ -488,11 +550,81 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
       - name: Refuse incomplete execution as installed acceptance
-        if: inputs.execute
+        if: inputs.execute && inputs.execution_result == 'incomplete-checkpoint'
         shell: bash
         run: |
           printf '%s\n' 'Real controller probe checkpoint is retained. Installed browser/business/recovery cases remain incomplete; no staged/published acceptance report, admission or channel promotion is issued.' >> "$GITHUB_STEP_SUMMARY"
           exit 1
+      - name: Receive actual signed-scope startup payload during this invocation
+        if: inputs.execute && inputs.execution_result == 'startup-observation'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROLLER_USER_ID: ${{ steps.context.outputs.controller_user_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          base="$RUNNER_TEMP/installer-staged-grant"
+          mkdir -m 700 "$base/startup"
+          python scripts/installer_acceptance_return.py receive-startup-payload \
+            --authorization "$base/grant/candidate-authorization.json" --inventory "$base/inputs/installer-inventory.json" \
+            --receipt "$base/grant/controller-consumption.json" --descriptor "$base/grant/controller-transport.json" \
+            --harness-source-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --controller-user-id "$CONTROLLER_USER_ID" --output "$base/startup/installer-startup-observation.json" \
+            --assets "$base/inputs" --gh "$base/tools/gh_2.103.2_linux_amd64/bin/gh" --cosign "$base/tools/cosign"
+      - name: Sign distinct startup observation only
+        if: inputs.execute && inputs.execution_result == 'startup-observation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/installer-staged-grant"
+          "$base/tools/cosign" sign-blob --yes \
+            --bundle "$base/startup/installer-startup-observation.json.sigstore.json" \
+            "$base/startup/installer-startup-observation.json" >/dev/null
+      - id: startup_provenance
+        if: inputs.execute && inputs.execution_result == 'startup-observation'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: ${{ runner.temp }}/installer-staged-grant/startup/installer-startup-observation.json
+      - name: Verify startup signature and exact invocation proof
+        if: inputs.execute && inputs.execution_result == 'startup-observation'
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.startup_provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python - <<'PY'
+          import os,sys
+          from pathlib import Path
+          sys.path.insert(0,'scripts')
+          import installer_release as r
+          import verify_installer_provenance as p
+          from installer_candidate_authorize import write_exclusive
+          base=Path(os.environ['RUNNER_TEMP'])/'installer-staged-grant'
+          subject=base/'startup/installer-startup-observation.json'
+          source=Path(os.environ['PROVENANCE_BUNDLE'])
+          p.local_file(source,maximum=1048576)
+          with source.open('rb') as stream: raw=stream.read(1048577)
+          r.require(0<len(raw)<=1048576,'startup provenance exceeds bound')
+          proof=Path(str(subject)+'.provenance.jsonl');write_exclusive(proof,raw)
+          p.verify_subject(subject,proof,gh=base/'tools/gh_2.103.2_linux_amd64/bin/gh',cosign=base/'tools/cosign',
+              signature_bundle=Path(str(subject)+'.sigstore.json'),workflow=r.acceptance.WORKFLOW,
+              source_sha=os.environ['GITHUB_SHA'],run_id=int(os.environ['GITHUB_RUN_ID']),run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']))
+          PY
+      - name: Archive startup observation and authenticated transport evidence
+        if: always() && inputs.execute && inputs.execution_result == 'startup-observation'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-startup-observation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installer-staged-grant/startup/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Record startup observation boundary
+        if: inputs.execute && inputs.execution_result == 'startup-observation'
+        shell: bash
+        run: |
+          printf '%s\n' 'The five installed startup observations passed for the exact signed candidate and configured public IP endpoint. The installation remains Provisioning and Ready=false. Functional/recovery qualification, root retirement, load characterization, admission and channel promotion remain closed. Final consumers must independently verify this exact invocation completed successfully and authenticate the returned signature and provenance.' >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve partial grant and transport evidence
         if: failure() || cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -502,6 +634,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
       - name: Record the boundary of this workflow
+        if: '!inputs.execute'
         shell: bash
         run: |
           printf '%s\n' 'Candidate execution grants only. Authorization expires within one hour. Controller guest/disk/engine identity is an authenticated controller assertion, not a hosted-runner observation. No guest execution, installed-journey acceptance, admission or channel promotion was performed. The owned draft receipt transport is retained until the local controller archives its evidence; this workflow never deletes it.' >> "$GITHUB_STEP_SUMMARY"

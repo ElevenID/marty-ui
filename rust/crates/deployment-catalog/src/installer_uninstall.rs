@@ -7,6 +7,7 @@ use crate::{
     installer_doctor::{self, SavedSession},
     installer_state::{LockedInspection, LockedMaintenance},
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -104,6 +105,164 @@ fn unchanged(state: &LockedInspection, installation: &Path, saved: &SavedSession
     state.require_unchanged()
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Reconciliation {
+    schema: String,
+    installation_id: uuid::Uuid,
+    project: String,
+    engine_id: String,
+    operation: String,
+    configuration_sha256: String,
+    intent_sha256: String,
+    result_sha256: Option<String>,
+    selected_services: Vec<String>,
+    resources: ProjectResources,
+    previous_command_result_known: bool,
+    action_replayed: bool,
+    installation_ready: bool,
+}
+
+fn verify_reconciliation(
+    state: &LockedInspection,
+    action: &str,
+    operation: &str,
+    intent_bytes: &[u8],
+    result_bytes: Option<&[u8]>,
+    bytes: &[u8],
+) -> Result<()> {
+    require(["start", "stop"].contains(&action))?;
+    let intent = crate::installer_json::decode(intent_bytes).map_err(|_| REFUSED)?;
+    let observed: Reconciliation =
+        serde_json::from_value(crate::installer_json::decode(bytes).map_err(|_| REFUSED)?)
+            .map_err(|_| REFUSED)?;
+    let resources: ProjectResources =
+        serde_json::from_value(intent["prior_resources"].clone()).map_err(|_| REFUSED)?;
+    let selected: Vec<String> =
+        serde_json::from_value(intent["selected_services"].clone()).map_err(|_| REFUSED)?;
+    require(
+        !resources.containers.is_empty()
+            && resources.containers.values().all(|container| {
+                !container.setup
+                    || container
+                        .setup_execution
+                        .as_ref()
+                        .is_some_and(|execution| execution.completed_without_restart)
+            })
+            && ((action == "stop" && selected.is_empty())
+                || (action == "start"
+                    && !selected.is_empty()
+                    && selected.iter().collect::<BTreeSet<_>>().len() == selected.len()
+                    && selected.iter().all(|role| {
+                        resources
+                            .containers
+                            .get(role)
+                            .is_some_and(|container| !container.setup)
+                    }))),
+    )?;
+    require(
+        observed.schema == "elevenid.installer-compose-idempotent-reconciliation/v1"
+            && observed.installation_id == state.journal().installation_id()
+            && observed.project == state.journal().compose_project()
+            && observed.engine_id == state.journal().runtime().ok_or(REFUSED)?.engine_id
+            && observed.operation == operation
+            && intent["configuration_sha256"] == observed.configuration_sha256
+            && observed.intent_sha256 == crate::installer_release::sha256(intent_bytes)
+            && observed.result_sha256 == result_bytes.map(crate::installer_release::sha256)
+            && observed.resources == resources
+            && observed.selected_services == selected
+            && !observed.previous_command_result_known
+            && !observed.action_replayed
+            && !observed.installation_ready,
+    )
+}
+
+/// A lost start/stop response does not make those idempotent operations unsafe
+/// forever. Reconstruct the exact original selection, reobserve every retained
+/// identity and completed setup job, and retire only that uncertain attempt.
+/// Removal and setup jobs never enter this continuation path.
+fn reconcile_pending(
+    installation: &Path,
+    docker: &Path,
+    state: &mut LockedMaintenance,
+    saved: &SavedSession,
+) -> Result<()> {
+    let history = status(state.inspection())?;
+    require(history["operations"]["down"] == "not_started")?;
+    for action in ["start", "stop"] {
+        let Some(operation) = history["pending_operations"][action].as_str() else {
+            continue;
+        };
+        require(saved.schema != installer_doctor::FAILED_RUNTIME_SESSION_SCHEMA)?;
+        let intent_bytes = state
+            .read_evidence(&format!("uninstall-compose-{operation}-intent.json"))?
+            .ok_or(REFUSED)?;
+        let result_bytes =
+            state.read_evidence(&format!("uninstall-compose-{operation}-result.json"))?;
+        let intent = crate::installer_json::decode(&intent_bytes).map_err(|_| REFUSED)?;
+        let selected: Vec<String> =
+            serde_json::from_value(intent["selected_services"].clone()).map_err(|_| REFUSED)?;
+        require(
+            (action == "start" && !selected.is_empty())
+                || (action == "stop" && selected.is_empty()),
+        )?;
+        let mut inputs = saved.inputs.clone();
+        if action == "start" {
+            inputs.profiles.clear();
+        }
+        inputs.services = selected.clone();
+        let session =
+            ComposeSession::new(docker, state.journal().runtime().ok_or(REFUSED)?, inputs)?;
+        if action == "start" {
+            session.require_runtime_selection()?;
+        }
+        require(
+            intent["configuration_sha256"] == session.configuration_sha256()
+                && intent["input_files"]
+                    == serde_json::to_value(session.input_files()).map_err(|_| REFUSED)?,
+        )?;
+        let resources = session.observe_resources()?;
+        let prior: ProjectResources =
+            serde_json::from_value(intent["prior_resources"].clone()).map_err(|_| REFUSED)?;
+        require(resources == prior)?;
+        union_scope(saved, &resources)?;
+        no_active_setup(&resources, &session.status()?)?;
+        require(session.observe_resources()? == resources)?;
+        unchanged(state.inspection(), installation, saved)?;
+        let observation = Reconciliation {
+            schema: "elevenid.installer-compose-idempotent-reconciliation/v1".into(),
+            installation_id: state.journal().installation_id(),
+            project: state.journal().compose_project(),
+            engine_id: state.journal().runtime().ok_or(REFUSED)?.engine_id.clone(),
+            operation: operation.into(),
+            configuration_sha256: session.configuration_sha256().into(),
+            intent_sha256: crate::installer_release::sha256(&intent_bytes),
+            result_sha256: result_bytes
+                .as_deref()
+                .map(crate::installer_release::sha256),
+            selected_services: selected,
+            resources,
+            previous_command_result_known: false,
+            action_replayed: false,
+            installation_ready: false,
+        };
+        let bytes = serde_json::to_vec(&observation).map_err(|_| REFUSED)?;
+        verify_reconciliation(
+            state.inspection(),
+            action,
+            operation,
+            &intent_bytes,
+            result_bytes.as_deref(),
+            &bytes,
+        )?;
+        state.write_evidence_exclusive(
+            &format!("uninstall-compose-{operation}-reconciled.json"),
+            &bytes,
+        )?;
+    }
+    Ok(())
+}
+
 fn next_operation(state: &LockedInspection, action: &str) -> Result<String> {
     let history = status(state)?;
     require(
@@ -173,6 +332,15 @@ fn execute(args: &[String], action: &str) -> Result<String> {
         &args.docker,
         action,
     )?;
+    if action == "start" {
+        if let Some(report) = crate::installer_lifecycle::start_if_configured(
+            &mut state,
+            &args.installation,
+            &args.docker,
+        )? {
+            return Ok(report);
+        }
+    }
     execute_locked(&args.installation, &args.docker, action, &mut state)
 }
 
@@ -184,14 +352,95 @@ pub(crate) fn execute_locked(
     action: &str,
     state: &mut LockedMaintenance,
 ) -> Result<String> {
+    if action == "stop" {
+        if let Some(report) = crate::installer_generation_maintenance::stop_pending_locked(
+            installation,
+            docker,
+            state,
+        )? {
+            return serde_json::to_string(&report).map_err(|_| REFUSED.into());
+        }
+    }
+    execute_selection_locked(installation, docker, action, None, state)
+}
+
+/// The cold recovery owner starts its infrastructure group before application
+/// credential reconciliation. This cannot create containers or select setup.
+pub(crate) fn start_selected_locked(
+    installation: &Path,
+    docker: &Path,
+    selected: &[String],
+    state: &mut LockedMaintenance,
+) -> Result<String> {
+    require(!selected.is_empty())?;
+    execute_selection_locked(installation, docker, "start", Some(selected), state)
+}
+
+fn runtime_satisfied(
+    resources: &ProjectResources,
+    rows: &[Value],
+    action: &str,
+    selected: Option<&[String]>,
+) -> bool {
+    if !["start", "stop"].contains(&action) || no_active_setup(resources, rows).is_err() {
+        return false;
+    }
+    let runtime: BTreeSet<&str> = resources
+        .containers
+        .iter()
+        .filter(|(_, container)| !container.setup)
+        .filter(|(role, _)| selected.is_none_or(|roles| roles.contains(role)))
+        .map(|(role, _)| role.as_str())
+        .collect();
+    !runtime.is_empty()
+        && selected.is_none_or(|roles| roles.len() == runtime.len())
+        && rows
+            .iter()
+            .filter(|row| {
+                row["Service"]
+                    .as_str()
+                    .is_some_and(|role| runtime.contains(role))
+            })
+            .all(|row| {
+                if action == "start" {
+                    let role = row["Service"].as_str().unwrap();
+                    row["State"] == "running"
+                        && (!resources.containers[role].health_required
+                            || row["Health"] == "healthy")
+                } else {
+                    row["State"] == "exited" || row["State"] == "created"
+                }
+            })
+}
+
+fn execute_selection_locked(
+    installation: &Path,
+    docker: &Path,
+    action: &str,
+    selected: Option<&[String]>,
+    state: &mut LockedMaintenance,
+) -> Result<String> {
     require(["start", "stop", "down"].contains(&action))?;
+    require(selected.is_none() || action == "start")?;
     let (saved, session) =
         installer_doctor::open_session(state.inspection(), installation, docker)?;
+    if action != "down" {
+        reconcile_pending(installation, docker, state, &saved)?;
+    }
     let operation = next_operation(state.inspection(), action)?;
     let resources = session.observe_resources()?;
     union_scope(&saved, &resources)?;
-    no_active_setup(&resources, &session.status()?)?;
+    let statuses = session.status()?;
+    no_active_setup(&resources, &statuses)?;
     unchanged(state.inspection(), installation, &saved)?;
+    if action != "down" && runtime_satisfied(&resources, &statuses, action, selected) {
+        require(session.observe_resources()? == resources)?;
+        return serde_json::to_string(&json!({"schema":"elevenid.installer-compose-maintenance/v1",
+            "installation_id":saved.installation_id,"project":saved.inputs.project,"operation":action,
+            "evidence_operation":null,"outcome":"already_observed","command_succeeded":true,"observation_validated":true,
+            "command_invoked":false,"retained":retained(&resources),"automatic_retry":false,
+            "host_files_deleted":false,"images_deleted":false,"named_volumes_deleted":false,"installation_ready":false})).map_err(|_| REFUSED.into());
+    }
     let result = match action {
         "down" => session.down(state, &operation, STOP_GRACE)?,
         "stop" => session.stop(state, &operation, STOP_GRACE)?,
@@ -199,12 +448,14 @@ pub(crate) fn execute_locked(
             require(saved.schema != installer_doctor::FAILED_RUNTIME_SESSION_SCHEMA)?;
             let mut inputs = saved.inputs.clone();
             inputs.profiles.clear();
-            inputs.services = resources
-                .containers
-                .values()
-                .filter(|c| !c.setup)
-                .map(|c| c.service.clone())
-                .collect();
+            inputs.services = selected.map(<[String]>::to_vec).unwrap_or_else(|| {
+                resources
+                    .containers
+                    .values()
+                    .filter(|c| !c.setup)
+                    .map(|c| c.service.clone())
+                    .collect()
+            });
             require(!inputs.services.is_empty())?;
             let binding = state.journal().runtime().ok_or(REFUSED)?.clone();
             let runtime = ComposeSession::new(docker, &binding, inputs)?;
@@ -215,17 +466,19 @@ pub(crate) fn execute_locked(
     unchanged(state.inspection(), installation, &saved)?;
     serde_json::to_string(&json!({"schema":"elevenid.installer-compose-maintenance/v1",
         "installation_id":saved.installation_id,"project":result.project,
-        "operation":action,"evidence_operation":operation,"command_succeeded":result.command_succeeded,
+        "operation":action,"evidence_operation":operation,"command_succeeded":result.command_succeeded,"command_invoked":true,
         "observation_validated":result.observation_validated,"retained":retained(&resources),
         "automatic_retry":false,"host_files_deleted":false,"images_deleted":false,
         "named_volumes_deleted":false,"installation_ready":false})).map_err(|_| REFUSED.into())
 }
 
-/// Historical command evidence only. It does not authorize a retry or substitute
-/// for current resource observations; in-progress and failed operations stay uncertain.
+/// Historical command evidence only. An uncertain start/stop can be retired by
+/// its separately validated ownership reconciliation; this never claims that
+/// its missing client response was successful. Down remains non-replayable.
 pub fn status(state: &LockedInspection) -> Result<Value> {
     let mut operations = BTreeMap::new();
     let mut next = BTreeMap::new();
+    let mut pending = BTreeMap::new();
     for action in ["start", "stop", "down"] {
         let mut observed = "not_started";
         for ordinal in 1..=10000 {
@@ -234,13 +487,17 @@ pub fn status(state: &LockedInspection) -> Result<Value> {
                 .diagnostic_record(&format!("uninstall-compose-{operation}-intent.json"), true)?;
             let result = state
                 .diagnostic_record(&format!("uninstall-compose-{operation}-result.json"), true)?;
-            require(intent.is_some() || result.is_none())?;
+            let reconciliation = state.diagnostic_record(
+                &format!("uninstall-compose-{operation}-reconciled.json"),
+                true,
+            )?;
+            require(intent.is_some() || (result.is_none() && reconciliation.is_none()))?;
             if intent.is_none() {
                 next.insert(action, operation);
                 break;
             }
-            let intent =
-                crate::installer_json::decode(&intent.ok_or(REFUSED)?).map_err(|_| REFUSED)?;
+            let intent_bytes = intent.ok_or(REFUSED)?;
+            let intent = crate::installer_json::decode(&intent_bytes).map_err(|_| REFUSED)?;
             let command = if action == "start" {
                 json!([
                     "start",
@@ -259,9 +516,9 @@ pub fn status(state: &LockedInspection) -> Result<Value> {
                     && intent["installation_ready"] == false
                     && intent["command"] == command,
             )?;
-            observed = if let Some(bytes) = result {
+            observed = if let Some(bytes) = &result {
                 let receipt: ComposeReceipt = serde_json::from_value(
-                    crate::installer_json::decode(&bytes).map_err(|_| REFUSED)?,
+                    crate::installer_json::decode(bytes).map_err(|_| REFUSED)?,
                 )
                 .map_err(|_| REFUSED)?;
                 require(
@@ -289,7 +546,20 @@ pub fn status(state: &LockedInspection) -> Result<Value> {
             } else {
                 "uncertain"
             };
+            if let Some(bytes) = reconciliation {
+                require(observed == "uncertain")?;
+                verify_reconciliation(
+                    state,
+                    action,
+                    &operation,
+                    &intent_bytes,
+                    result.as_deref(),
+                    &bytes,
+                )?;
+                observed = "reconciled";
+            }
             if observed == "uncertain" {
+                pending.insert(action, operation);
                 break;
             }
         }
@@ -297,7 +567,7 @@ pub fn status(state: &LockedInspection) -> Result<Value> {
     }
     state.require_unchanged()?;
     Ok(
-        json!({"operations":operations,"next_operations":next,"historical_evidence_only":true,"automatic_retry":false,
+        json!({"operations":operations,"next_operations":next,"pending_operations":pending,"historical_evidence_only":true,"automatic_retry":false,
         "host_data_credentials_images_and_named_volumes_retained":true}),
     )
 }
@@ -453,6 +723,126 @@ mod tests {
         assert!(state
             .read_evidence("uninstall-compose-stop-0001-result.json")
             .is_ok());
+    }
+
+    #[test]
+    fn reconciled_start_keeps_unknown_response_honest_and_binds_every_retained_identity() {
+        let (_parent, path, mut state) = history_fixture();
+        let mut retained = resources();
+        let mut app = retained.containers["job"].clone();
+        app.id = "d".repeat(64);
+        app.service = "app".into();
+        app.setup = false;
+        app.setup_execution = None;
+        retained.containers.insert("app".into(), app);
+        let intent = serde_json::to_vec(&json!({"schema":"elevenid.installer-compose-intent/v1",
+            "project":state.journal().compose_project(),"engine_id":"fixture-engine",
+            "automatic_retry":false,"installation_ready":false,"command":["start","--wait","--wait-timeout","720"],
+            "configuration_sha256":"c".repeat(64),"input_files":{},"selected_services":["app"],"prior_resources":retained})).unwrap();
+        state
+            .write_evidence("uninstall-compose-start-0001-intent.json", &intent)
+            .unwrap();
+        let record = Reconciliation {
+            schema: "elevenid.installer-compose-idempotent-reconciliation/v1".into(),
+            installation_id: state.journal().installation_id(),
+            project: state.journal().compose_project(),
+            engine_id: "fixture-engine".into(),
+            operation: "start-0001".into(),
+            configuration_sha256: "c".repeat(64),
+            intent_sha256: crate::installer_release::sha256(&intent),
+            result_sha256: None,
+            selected_services: vec!["app".into()],
+            resources: retained,
+            previous_command_result_known: false,
+            action_replayed: false,
+            installation_ready: false,
+        };
+        let bytes = serde_json::to_vec(&record).unwrap();
+        state
+            .with_inspection(|view| {
+                verify_reconciliation(view, "start", "start-0001", &intent, None, &bytes)?;
+                assert!(
+                    verify_reconciliation(view, "down", "start-0001", &intent, None, &bytes)
+                        .is_err()
+                );
+                let mut changed = serde_json::to_value(&record).unwrap();
+                changed["resources"]["containers"]["app"]["id"] = json!("e".repeat(64));
+                assert!(verify_reconciliation(
+                    view,
+                    "start",
+                    "start-0001",
+                    &intent,
+                    None,
+                    &serde_json::to_vec(&changed).unwrap()
+                )
+                .is_err());
+                let mut claimed = serde_json::to_value(&record).unwrap();
+                claimed["previous_command_result_known"] = json!(true);
+                assert!(verify_reconciliation(
+                    view,
+                    "start",
+                    "start-0001",
+                    &intent,
+                    None,
+                    &serde_json::to_vec(&claimed).unwrap()
+                )
+                .is_err());
+                assert!(verify_reconciliation(
+                    view,
+                    "start",
+                    "start-0001",
+                    &intent,
+                    Some(b"late or changed result"),
+                    &bytes
+                )
+                .is_err());
+                Ok(())
+            })
+            .unwrap();
+        state
+            .write_evidence("uninstall-compose-start-0001-reconciled.json", &bytes)
+            .unwrap();
+        drop(state);
+        let inspection = LockedInspection::open(&path).unwrap();
+        assert_eq!(
+            status(&inspection).unwrap()["operations"]["start"],
+            "reconciled"
+        );
+        assert_eq!(next_operation(&inspection, "start").unwrap(), "start-0002");
+        assert!(inspection
+            .diagnostic_record("uninstall-compose-start-0001-result.json", true)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn an_already_running_group_requires_complete_identified_health_observation() {
+        let mut retained = resources();
+        let mut app = retained.containers["job"].clone();
+        app.id = "d".repeat(64);
+        app.service = "app".into();
+        app.setup = false;
+        app.setup_execution = None;
+        app.health_required = true;
+        retained.containers.insert("app".into(), app);
+        let mut rows = vec![
+            json!({"Service":"job","ID":"a".repeat(64),"State":"exited"}),
+            json!({"Service":"app","ID":"d".repeat(64),"State":"running","Health":"healthy"}),
+        ];
+        assert!(runtime_satisfied(&retained, &rows, "start", None));
+        assert!(!runtime_satisfied(&retained, &rows[..1], "start", None));
+        assert!(!runtime_satisfied(
+            &retained,
+            &rows,
+            "start",
+            Some(&["job".into()])
+        ));
+        rows[1]["Health"] = json!("unhealthy");
+        assert!(!runtime_satisfied(&retained, &rows, "start", None));
+        rows[1]["State"] = json!("exited");
+        assert!(runtime_satisfied(&retained, &rows, "stop", None));
+        rows[1]["ID"] = json!("foreign");
+        assert!(!runtime_satisfied(&retained, &rows, "stop", None));
     }
 
     #[test]

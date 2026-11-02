@@ -1,0 +1,102 @@
+--- a/src/account.rs
++++ b/src/account.rs
+@@ -423,0 +424,71 @@
++/// A fetched directory and pinned external signer, before account mutation.
++///
++/// Preparing this value makes a directory GET only. It does not register an
++/// account or call the signer. The installation owner can inspect the fetched
++/// terms/profile, durably record intent, and then explicitly register or look up
++/// the account with the same directory and key.
++pub struct PreparedExternalAccount {
++    client: Client,
++    key: Key,
++}
++
++impl PreparedExternalAccount {
++    /// Terms URL in the exact fetched directory, if advertised.
++    pub fn terms_of_service_url(&self) -> Option<&str> {
++        self.client.directory.meta.terms_of_service.as_deref()
++    }
++
++    /// Profiles advertised by this exact fetched directory.
++    pub fn profiles(&self) -> impl Iterator<Item = ProfileMeta<'_>> {
++        self.client
++            .directory
++            .meta
++            .profiles
++            .iter()
++            .map(|(name, description)| ProfileMeta { name, description })
++    }
++
++    /// Verify the owner's immutable accepted terms and selected profile.
++    pub fn require_terms_and_profile(&self, terms_url: &str, profile: &str) -> Result<(), Error> {
++        if self.terms_of_service_url() != Some(terms_url)
++            || !self.profiles().any(|offered| offered.name == profile)
++        {
++            return Err(Error::Str("ACME directory terms or profile differs from recorded selection"));
++        }
++        Ok(())
++    }
++
++    /// Register or look up the pinned account after the owner persists intent.
++    ///
++    /// The expected terms/profile are checked again against this value's fetched
++    /// directory. This applies to `onlyReturnExisting` lookups as well; resuming
++    /// an old intent cannot silently accept a newly advertised agreement.
++    pub async fn register(
++        self,
++        account: &NewAccount<'_>,
++        external_account: Option<&ExternalAccountKey>,
++        terms_url: &str,
++        profile: &str,
++    ) -> Result<Account, Error> {
++        self.require_terms_and_profile(terms_url, profile)?;
++        if !account.terms_of_service_agreed {
++            return Err(Error::Str("ACME terms were not explicitly agreed"));
++        }
++        AccountBuilder::register(account, self.key, external_account, self.client).await
++    }
++
++    /// Attach an already persisted account URL without a registration request.
++    ///
++    /// The owner must bind this URL, selected directory and key reference to the
++    /// same installation and verify terms/profile before any subsequent mutation.
++    pub fn restore(self, id: String) -> Account {
++        Account {
++            inner: Arc::new(AccountInner {
++                id,
++                key: self.key,
++                client: Arc::new(self.client),
++            }),
++        }
++    }
++}
++
+@@ -424,0 +496,15 @@
++    /// Fetch and inspect an external account's directory before registration.
++    ///
++    /// This performs a directory GET only and never creates an account implicitly.
++    pub async fn prepare_with_signer(
++        self,
++        signer: Arc<dyn ExternalAccountSigner>,
++        directory_url: String,
++    ) -> Result<PreparedExternalAccount, Error> {
++        let key = Key::from_signer(signer)?;
++        Ok(PreparedExternalAccount {
++            client: Client::new(directory_url, self.http).await?,
++            key,
++        })
++    }
++
+--- a/src/types.rs
++++ b/src/types.rs
+@@ -608,0 +609,2 @@
++    #[serde(rename = "termsOfService", default, skip_serializing_if = "Option::is_none")]
++    pub(crate) terms_of_service: Option<String>,
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -38 +38,3 @@
+-pub use account::{Account, AccountBuilder, ExternalAccountKey, ExternalAccountSigner};
++pub use account::{
++    Account, AccountBuilder, ExternalAccountKey, ExternalAccountSigner, PreparedExternalAccount,
++};

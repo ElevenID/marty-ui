@@ -5,6 +5,7 @@ This does not sign, consume a dispatch, observe a guest, or report acceptance.
 """
 from __future__ import annotations
 import argparse
+from contextlib import ExitStack
 import os
 from pathlib import Path
 import stat
@@ -56,7 +57,27 @@ def write_exclusive(path: Path, raw: bytes) -> None:
 def authorize(*, assets: Path, acceptance_run: Path, gh: Path, cosign: Path,
               source_sha: str, release_tag: str, build_run_id: int, build_run_attempt: int,
               harness_source_sha: str, run_id: int, run_attempt: int, output: Path,
-              phase="staged", clock=time.time, runner=provenance.command) -> dict:
+              phase="staged", hosting_input: Path | None = None,
+              acme_staging_roots: Path | None = None,
+              clock=time.time, runner=provenance.command) -> dict:
+    with ExitStack() as stack:
+        held = (stack.enter_context(release.candidate_hosting.HeldInput(hosting_input))
+                if hosting_input is not None else None)
+        roots = (stack.enter_context(release.candidate_hosting.HeldInput(acme_staging_roots,
+                 release.candidate_hosting.MAX_ROOTS_BYTES)) if acme_staging_roots is not None else None)
+        release.require(held is not None or roots is None, "staging trust requires explicit hosting input")
+        if held is None:
+            release.candidate_hosting.check_file({}, output.parent)
+        return _authorize(assets=assets, acceptance_run=acceptance_run, gh=gh, cosign=cosign,
+                          source_sha=source_sha, release_tag=release_tag, build_run_id=build_run_id,
+                          build_run_attempt=build_run_attempt, harness_source_sha=harness_source_sha,
+                          run_id=run_id, run_attempt=run_attempt, output=output, phase=phase,
+                          held_hosting=held, held_roots=roots, clock=clock, runner=runner)
+
+
+def _authorize(*, assets, acceptance_run, gh, cosign, source_sha, release_tag,
+               build_run_id, build_run_attempt, harness_source_sha, run_id, run_attempt,
+               output, phase, held_hosting, held_roots, clock, runner) -> dict:
     """Caller-supplied API snapshot is authoritative, never taken from an artifact.
 
     Verifier binaries must be pinned by the workflow before invocation. Private
@@ -76,7 +97,9 @@ def authorize(*, assets: Path, acceptance_run: Path, gh: Path, cosign: Path,
     inventory = read_record(inventory_path)
     # Prevalidate run and inventory before spending time in verifier subprocesses.
     release.candidate_authorization(inventory, **expected, acceptance_run=run,
-                                    phase=phase, now=int(clock()))
+                                    phase=phase, now=int(clock()),
+                                    hosting_input=None if held_hosting is None else held_hosting.check(),
+                                    staging_roots=None if held_roots is None else held_roots.check())
     tier, _ = release.classify_release_tag(release_tag)
     workflow = ".github/workflows/nightly-release.yml" if tier == "nightly" else ".github/workflows/cd.yml"
     record = release.verify_inventory_assets(assets, **expected)
@@ -91,8 +114,24 @@ def authorize(*, assets: Path, acceptance_run: Path, gh: Path, cosign: Path,
                     "verified inputs changed")
     release.require(release.verify_inventory_assets(assets, **expected) == record, "candidate assets changed")
     result = release.candidate_authorization(inventory, **expected, acceptance_run=run,
-                                           phase=phase, now=int(clock()))
+                                           phase=phase, now=int(clock()),
+                                           hosting_input=None if held_hosting is None else held_hosting.check(),
+                                           staging_roots=None if held_roots is None else held_roots.check())
+    if held_hosting is not None:
+        for name, held in [(release.candidate_hosting.NAME, held_hosting),
+                           (release.candidate_hosting.ROOTS_NAME, held_roots)]:
+            if held is not None:
+                destination = output.parent / name
+                if destination != held.path:
+                    write_exclusive(destination, held.check())
+        release.candidate_hosting.check_file(result, output.parent)
+        held_hosting.check()
+        if held_roots is not None:
+            held_roots.check()
     write_exclusive(output, release.encode(result))
+    if held_hosting is not None:
+        held_hosting.check()
+        release.candidate_hosting.check_file(result, output.parent)
     return result
 
 
@@ -105,6 +144,8 @@ def main(argv=None) -> int:
     for flag in ("build-run-id", "build-run-attempt", "run-id", "run-attempt"):
         parser.add_argument("--" + flag, required=True, type=int)
     parser.add_argument("--phase", choices=("staged", "published"), default="staged")
+    parser.add_argument("--hosting-input", type=Path)
+    parser.add_argument("--acme-staging-roots", type=Path)
     args = vars(parser.parse_args(argv))
     try:
         authorize(**args)

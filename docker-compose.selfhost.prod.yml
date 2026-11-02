@@ -1472,6 +1472,7 @@ services:
     environment:
       GOOGLE_ANALYTICS_MEASUREMENT_ID_FILE: /run/secrets/google_analytics_measurement_id
       GOOGLE_SITE_VERIFICATION_FILE: /run/secrets/google_site_verification
+      UI_ENABLED_SECTIONS: ${UI_ENABLED_SECTIONS-public,console}
     secrets:
       - google_analytics_measurement_id
       - google_site_verification
@@ -1481,7 +1482,7 @@ services:
       - ./scripts/load-secrets-env.sh:/scripts/load-secrets-env.sh:ro
       - ./scripts/ui-selfhost-start.sh:/docker-entrypoint.d/40-ui-selfhost.sh:ro
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/healthz"]
       interval: 10s
       timeout: 5s
       retries: 3

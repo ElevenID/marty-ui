@@ -4,7 +4,7 @@
 #![cfg(target_os = "linux")]
 use crate::{
     operator::{public_spki, version_one_custody},
-    operator_certificates::{check_chain_at, check_lifetime, check_lifetime_at},
+    operator_certificates::{check_chain_at, check_lifetime_at},
     operator_http::{builder, denial, request},
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -46,7 +46,10 @@ pub const OUTPUTS: [&str; 4] = [
 ];
 #[path = "installer_ingress_renew.rs"]
 mod renewal;
-pub(crate) use renewal::{renew, renewal_inventory, validate_recorded_replacement};
+pub(crate) use renewal::{
+    mint_tls_signer, prove_retained_tls_signer, renew, renewal_inventory,
+    validate_recorded_replacement, validate_retained_private_identity_at,
+};
 
 /// Validated certificate identity, independent of the host listener and port.
 /// A DNS host never gains an implicit IP SAN. The journal-bound public entry

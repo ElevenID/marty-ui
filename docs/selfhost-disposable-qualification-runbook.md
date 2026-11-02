@@ -1,5 +1,15 @@
 # Disposable self-host clean-install rehearsal
 
+For the current signed rootless path on an existing nominal 8 GiB AWS host, see
+[signed rootless acceptance](installer-signed-rootless-acceptance.md). It binds
+explicit DNS/IP hosting and separates startup from the full 37-case functional
+and recovery contract; installed writers still hold that qualification gate.
+The 32 GiB/empty-host policy and rootful 4 GiB engineering VM described below
+remain historical v1 procedures. They are not prerequisites for the new direct
+SSH path and must not be relabeled as v2 evidence. The optional
+[rootless QEMU producer](selfhost-disposable-rootless-vm.md) has separate versioned
+records and does not require nesting a VM inside the existing AWS host.
+
 This procedure runs the exact prepared ZIP on an isolated Linux amd64 host. It
 does not qualify or publish the bundle: the runner writes an **unqualified**
 component report. Stack release now builds mandatory installer inputs and requires
@@ -48,7 +58,7 @@ rebuild refuses the retry and preserves the original release; reproducibility
 is not assumed, and signatures or inventory are not overwritten. Never put a
 cross-repository access token into an Actions secret for this handoff.
 
-The current qualification target is 32 GiB RAM and 20 GiB free disk for all
+The historical v1 qualification target is 32 GiB RAM and 20 GiB free disk for all
 locked images and fresh database state. The component rehearsal also requires
 Docker Compose, Python 3.12 with the pinned integration test dependencies,
 Rust 1.95.0 with locked Cargo dependencies, OpenSSL, and anonymous registry
@@ -57,7 +67,7 @@ no existing qualification project. Canvas qualification may use the same host
 sequentially, after its Docker project and state have been removed. The local
 Windows Docker/WSL configuration is not a suitable 32 GiB qualifier.
 
-Acceptance requires 32 GiB of guest-visible RAM and 20 GiB free on Docker's data
+Historical v1 acceptance requires 32 GiB of guest-visible RAM and 20 GiB free on Docker's data
 filesystem before image pulls. The report validator enforces these byte thresholds;
 the harness must establish measurement location and timing. Provision extra VM memory
 for kernel reservations; nominal VM allocation is not the guest measurement.
@@ -920,7 +930,7 @@ not a claim that either channel is ready today; the bootstrap refuses missing or
 unqualified GitHub metadata. It checks a terminal marker so a truncated piped
 download cannot start an installation.
 
-An installer version is not promoted by a successful build or candidate-grant workflow. The required sequence is the exact version's real staged installed acceptance and anonymous published replay (all 23 cases and the 32 GiB host policy), signed admission through `installer-promote.yml` operation `admission`, publication of its separate immutable admission release, then `installer-promote.yml` operation `channel`, followed by `installer-publish-channel.yml`. The channel operation only consumes authenticated published admission and cannot create one. Existing version payload releases are never modified.
+An installer version is not promoted by a successful build or candidate-grant workflow. The required sequence is the exact version's real staged installed acceptance and anonymous published replay (all 23 cases and the historical v1 32 GiB host policy), signed admission through `installer-promote.yml` operation `admission`, publication of its separate immutable admission release, then `installer-promote.yml` operation `channel`, followed by `installer-publish-channel.yml`. The channel operation only consumes authenticated published admission and cannot create one. Existing version payload releases are never modified.
 
 The channel signing archive contains the channel triplet and a separately signed publication-context triplet. The context fixes the observed `installer-channel` branch commit and prior pointer hash. The publisher revalidates admission, predecessor signatures and invocation identities, publishes only the three channel files to immutable `installer-channel-<channel>-<generation>`, and creates a single-parent Git commit preserving the other channel pointer. Reference publication uses non-force update (or exclusive initial creation); a changed head, failed update or uncertain response retains immutable metadata and recovery evidence. Do not force, automatically retry, adopt a draft, or regenerate an older expected-head context. Same-version freshness renewal is deliberately not wired: it requires a separately reviewed fresh public replay.
 
@@ -933,7 +943,7 @@ These are implemented publication gates, not evidence that a real version has pa
 
 `installer-acceptance.yml` keeps grant-only behavior by default. With `execute: true`, the same invocation archives its signed execution grants, waits for the approved numeric controller principal to return `installer-acceptance-checkpoint.json` on the existing owned draft transport, verifies its exact run/attempt/nonce/guest/Engine/inventory/consumption binding, and signs a distinct checkpoint triplet. The artifact is named `installer-incomplete-checkpoint-<run>-<attempt>`, never either accepted staged/published report name. The job then fails explicitly because installed acceptance is incomplete. No checkpoint is accepted by the admission gate.
 
-The controller runs `scripts/installer_acceptance_runner.py` with the same explicit private inputs and pinned SSH options as `installer_candidate_dispatch.py`, plus a fresh private `--output` directory. It performs the real signature/provenance checks, sends the reviewed standalone read-only host probe to guest Python without a source checkout or controller credentials, requires the exact Engine and initial empty Docker state with at least 32 GiB guest-visible/daemon RAM and 20 GiB Docker-filesystem space, then invokes the existing native candidate dispatch. Host observations are preserved before dispatch. They do not establish exhaustive source/credential absence. A 4 GiB VM is refused before installation and produces an incomplete checkpoint.
+For historical v1 observations, the controller explicitly selects `--resource-profile qualification-32gib` when running `scripts/installer_acceptance_runner.py` with the same explicit private inputs and pinned SSH options as `installer_candidate_dispatch.py`, plus a fresh private `--output` directory. It performs the real signature/provenance checks, sends the reviewed standalone read-only host probe to guest Python without a source checkout or controller credentials, requires the exact Engine and initial empty Docker state with at least 32 GiB guest-visible/daemon RAM and 20 GiB Docker-filesystem space, then invokes the existing native candidate dispatch. Host observations are preserved before dispatch. They do not establish exhaustive source/credential absence. A 4 GiB VM is refused before installation and produces an incomplete checkpoint.
 
 The runner always exits nonzero after preserving its checkpoint; a native zero exit still cannot imply that the unimplemented browser/business/restart/cleanup probes passed. All 23 case entries are fixed by code, with only actual cryptographic artifact verification implemented as passed. Do not replace blocked entries manually. Upload only the nonsecret checkpoint to the descriptor's exact draft using the already approved controller identity; preserve local host observations and all guest recovery data. The transport records the approved uploader and exact bytes before signing, does not create a new authorization, does not retry dispatch, and does not delete remote or guest resources.
 
@@ -1016,8 +1026,9 @@ or dispatch. Changed VM/process/disk/Engine/SSH identity stops the transaction;
 replacement requires a new reconciled authorization and guest. Preserve the
 guest, ledger, creation receipt and incomplete checkpoint for recovery. A 4 GiB
 guest may test this machinery only as an engineering trial; release acceptance
-still enforces the existing 32 GiB RAM and 20 GiB free-space predicate until a
-complete measured installed journey and policy change justify another profile.
+under the historical v1 profile still enforces 32 GiB RAM and 20 GiB free space.
+The new rootless profiles have a separate 7 GiB measured admission floor and
+require their own installed proof owners; they do not reuse engineering evidence.
 
 The controller APIs now support an explicit `purpose="engineering-trial"` on
 `preflight`, `consume_preflight`, `verify_consumed_intent`, `exchange` and
