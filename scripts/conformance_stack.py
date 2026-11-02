@@ -16,7 +16,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse
 
-from local_native_functional_binding import ROLES as LOCAL_FUNCTIONAL_ROLES, load_binding
+LOCAL_BINDING = runpy.run_path(str(Path(__file__).with_name("local_native_functional_binding.py")))
+LOCAL_FUNCTIONAL_ROLES = LOCAL_BINDING["ROLES"]
+load_binding = LOCAL_BINDING["load_binding"]
 
 
 ROOT = Path(__file__).resolve().parents[1]
