@@ -30,6 +30,17 @@ def readonly_files():
 
 
 class DesktopTransportTests(unittest.TestCase):
+    def test_exact_readonly_host_source_accepts_daemon_and_proxy_spelling(self):
+        source = "C:/Users/maree/.codex/private/owned/worker.py"
+        transport.exact_readonly_host_source(source, source)
+        transport.exact_readonly_host_source(
+            source, "/run/desktop/mnt/host/c/Users/maree/.codex/private/owned/worker.py")
+        for actual in ("C:/Users/maree/.codex/private/foreign/worker.py",
+                       "/run/desktop/mnt/host/c/Users/maree/.codex/private/foreign/worker.py",
+                       "D:/Users/maree/.codex/private/owned/worker.py"):
+            with self.subTest(actual=actual), self.assertRaisesRegex(ValueError, "DESKTOP_JOURNAL_HELPER_HOST_SOURCE"):
+                transport.exact_readonly_host_source(source, actual)
+
     def test_configuration_receipt_names_refuse_before_desktop_helper(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
