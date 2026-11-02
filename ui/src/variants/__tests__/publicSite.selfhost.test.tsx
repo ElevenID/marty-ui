@@ -6,7 +6,23 @@ import * as publicConfig from '../publicConfig.public';
 import * as customerConfig from '../publicConfig.selfhost';
 import { getPublicLoginFallback, renderMarketingRoutes, renderPublicRoot } from '../publicSite.selfhost';
 
+import { redirectBrowser } from '../../application/routing/appHandoff';
+
+vi.mock('../../application/routing/appHandoff', () => ({ redirectBrowser: vi.fn() }));
+
 const originalUrl = window.location.href;
+
+function renderCustomerRoot(isAuthenticated = false) {
+  return render(
+    <MemoryRouter>
+      <Routes>
+        <Route path="/" element={renderPublicRoot({ isAuthenticated })} />
+        <Route path="/login" element={<div>Customer login</div>} />
+        <Route path="/organizations" element={<div>Customer organizations</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
 
 // Importing the production route module is itself a customer build regression.
 vi.mock('../publicSite.public', () => {
@@ -14,6 +30,7 @@ vi.mock('../publicSite.public', () => {
 });
 
 afterEach(() => {
+  vi.clearAllMocks();
   delete (window as any).__MARTY_RUNTIME_CONFIG__;
   (globalThis as any).jsdom.reconfigure({ url: originalUrl });
 });
@@ -45,24 +62,28 @@ describe('customer UI variant', () => {
     });
   });
 
-  it('renders an application entry with links to the enabled customer experiences', () => {
-    render(renderPublicRoot());
-    expect(screen.getByRole('heading', { name: 'Application portal' })).toBeVisible();
-    expect(screen.getByRole('link', { name: 'Open console' })).toHaveAttribute('href', '/console');
-    expect(screen.getByRole('link', { name: 'View applications' })).toHaveAttribute('href', '/apply');
+  it('opens login for a signed-out customer instead of a homepage', () => {
+    renderCustomerRoot();
+    expect(screen.getByText('Customer login')).toBeVisible();
+    expect(redirectBrowser).not.toHaveBeenCalled();
     expect(getPublicLoginFallback()).toBe('/console');
   });
 
-  it('does not advertise a console excluded at startup', () => {
-    (window as any).__MARTY_RUNTIME_CONFIG__ = { web: { enabled_sections: ['public'] } };
-    render(renderPublicRoot());
-    expect(screen.queryByRole('link', { name: 'Open console' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'View applications' })).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'View organizations' })).toHaveAttribute('href', '/organizations');
-    expect(getPublicLoginFallback()).toBe('/');
+  it('loads the console entrypoint for a signed-in customer', () => {
+    renderCustomerRoot(true);
+    expect(redirectBrowser).toHaveBeenCalledWith('/console', { replace: true });
+    expect(screen.queryByText('Customer login')).not.toBeInTheDocument();
   });
 
-  it('hands customer application actions from the IP entry to the configured DNS origin', () => {
+  it.each([false, true])('respects a disabled console (authenticated=%s)', (authenticated) => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { web: { enabled_sections: ['public'] } };
+    renderCustomerRoot(authenticated);
+    expect(screen.getByText(authenticated ? 'Customer organizations' : 'Customer login')).toBeVisible();
+    expect(redirectBrowser).not.toHaveBeenCalled();
+    expect(getPublicLoginFallback()).toBe('/organizations');
+  });
+
+  it('hands authentication from the IP entry to the configured DNS origin', () => {
     const alias = 'https://203.0.113.10:8443';
     const canonical = 'https://customer.example:8443';
     (globalThis as any).jsdom.reconfigure({ url: `${alias}/` });
@@ -70,9 +91,8 @@ describe('customer UI variant', () => {
       web: { enabled_sections: ['public', 'console'] },
       hosting: { canonicalOrigin: canonical, publicEntryOrigins: [alias] },
     };
-    render(renderPublicRoot());
-    expect(screen.getByRole('link', { name: 'Open console' })).toHaveAttribute('href', `${canonical}/console`);
-    expect(screen.getByRole('link', { name: 'View applications' })).toHaveAttribute('href', `${canonical}/apply`);
+    renderCustomerRoot();
+    expect(redirectBrowser).toHaveBeenCalledWith(`${canonical}/login`, { replace: true });
   });
 
   it.each(['/product', '/pricing', '/blog', '/authors', '/demos', '/privacy-policy'])('does not register production route %s', (pathname) => {
