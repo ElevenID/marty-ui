@@ -28,13 +28,21 @@ def _file_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _private_reference(value: Any, label: str) -> tuple[Path, str]:
+def _private_reference(value: Any, label: str, relocations: dict[str, Any] | None = None) -> tuple[Path, str]:
     if not isinstance(value, dict) or set(value) != {"path", "sha256"}:
         raise ValueError(f"{label} must have only path and sha256")
     raw_path, expected = value["path"], value["sha256"]
     if not isinstance(raw_path, str) or not raw_path or any(ord(ch) < 32 for ch in raw_path):
         raise ValueError(f"{label} path is invalid")
-    path = Path(raw_path)
+    relocated = (relocations or {}).get(raw_path)
+    if relocated is not None:
+        if not isinstance(relocated, dict) or set(relocated) != {"path", "sha256"} or relocated["sha256"] != expected:
+            raise ValueError(f"{label} relocation does not preserve the original sha256")
+        if not isinstance(relocated["path"], str):
+            raise ValueError(f"{label} relocation path is invalid")
+        path = Path(relocated["path"])
+    else:
+        path = Path(raw_path)
     if not path.is_absolute() or not path.is_file() or path.is_symlink():
         raise ValueError(f"{label} must be an existing absolute regular file")
     if not isinstance(expected, str) or not HEX64.fullmatch(expected):
@@ -45,7 +53,8 @@ def _private_reference(value: Any, label: str) -> tuple[Path, str]:
 
 
 def _source_proof_matches(role: str, binary: str, source_revision: str,
-                          binary_path: Path, binary_sha: str, proof_path: Path) -> None:
+                          binary_ref: dict[str, str], binary_sha: str, proof_path: Path,
+                          relocations: dict[str, Any] | None) -> None:
     proof = json.loads(proof_path.read_text(encoding="utf-8"))
     if not isinstance(proof, dict):
         raise ValueError(f"{role} source proof is invalid")
@@ -61,7 +70,7 @@ def _source_proof_matches(role: str, binary: str, source_revision: str,
             and isinstance(actual_binary, dict)
             and actual_binary.get("sha256") == binary_sha
             and actual_binary.get("target") == "/usr/local/bin/marty-auth"
-            and Path(str(actual_binary.get("path", ""))).resolve() == binary_path.resolve()
+            and actual_binary.get("path") == binary_ref["path"]
         )
     else:
         actual_binary = proof.get("binaries", {}).get(binary) if isinstance(proof.get("binaries"), dict) else None
@@ -75,7 +84,7 @@ def _source_proof_matches(role: str, binary: str, source_revision: str,
             and proof["roleBinaries"].get(role) == binary
             and isinstance(actual_binary, dict)
             and actual_binary.get("sha256") == binary_sha
-            and Path(str(actual_binary.get("path", ""))).resolve() == binary_path.resolve()
+            and actual_binary.get("path") == binary_ref["path"]
         )
         if valid and role == "signing-keys":
             test = proof.get("focusedRustTest")
@@ -90,7 +99,7 @@ def _source_proof_matches(role: str, binary: str, source_revision: str,
                 else:
                     output_path, _ = _private_reference(
                         {"path": stdout["path"], "sha256": stdout["sha256"]},
-                        "signing-keys focused Rust test stdout",
+                        "signing-keys focused Rust test stdout", relocations,
                     )
                     output = output_path.read_text(encoding="utf-8")
                     valid = (output_path.stat().st_size == stdout["bytes"]
@@ -104,8 +113,13 @@ def load_binding(path: Path, *, services_image_id: str | None = None) -> tuple[d
     if not path.is_absolute() or not path.is_file() or path.is_symlink():
         raise ValueError("binding must be an existing absolute regular file")
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or set(data) != {"schema", "state", "roles"}:
+    if not isinstance(data, dict) or set(data) not in ({"schema", "state", "roles"},
+                                                       {"schema", "state", "roles", "relocations"}):
         raise ValueError("binding fields are not closed")
+    relocations = data.get("relocations")
+    if relocations is not None and (not isinstance(relocations, dict)
+                                    or any(not isinstance(key, str) or not key for key in relocations)):
+        raise ValueError("binding relocations are invalid")
     if data["schema"] != "elevenid.local-native-functional-binding/v1" or data["state"] != "FUNCTIONAL_ONLY":
         raise ValueError("binding scope is not local functional only")
     roles = data["roles"]
@@ -120,10 +134,10 @@ def load_binding(path: Path, *, services_image_id: str | None = None) -> tuple[d
         source_revision = row["sourceRevision"]
         if not isinstance(source_revision, str) or not HEX40.fullmatch(source_revision):
             raise ValueError(f"{role} source revision is invalid")
-        source_proof, _ = _private_reference(row["sourceProof"], f"{role} source proof")
-        binary_path, binary_sha = _private_reference(row["binary"], f"{role} binary")
-        _source_proof_matches(role, binary, source_revision, binary_path, binary_sha, source_proof)
-        abi_path, _ = _private_reference(row["abiResult"], f"{role} ABI result")
+        source_proof, _ = _private_reference(row["sourceProof"], f"{role} source proof", relocations)
+        binary_path, binary_sha = _private_reference(row["binary"], f"{role} binary", relocations)
+        _source_proof_matches(role, binary, source_revision, row["binary"], binary_sha, source_proof, relocations)
+        abi_path, _ = _private_reference(row["abiResult"], f"{role} ABI result", relocations)
         abi = json.loads(abi_path.read_text(encoding="utf-8"))
         if abi.get("schema") != 1 or abi.get("state") != "ELF_LOADER_UID_COMPATIBILITY_PASS":
             raise ValueError(f"{role} ABI result did not pass")

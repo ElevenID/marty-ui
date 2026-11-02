@@ -111,6 +111,57 @@ def test_signing_source_requires_four_real_focused_tests(tmp_path: Path) -> None
     with pytest.raises(ValueError, match="source proof does not bind"):
         load_binding(path)
 
+
+def test_relocated_receipts_keep_original_paths_and_require_identical_copies(tmp_path: Path) -> None:
+    path = _binding(tmp_path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    relocations = {}
+    for role, binary in ROLES.items():
+        row = data["roles"][role]
+        proof_path = Path(row["sourceProof"]["path"])
+        proof = json.loads(proof_path.read_text(encoding="utf-8"))
+        original_binary = f"C:/original/{binary}"
+        if role == "auth":
+            proof["binary"]["path"] = original_binary
+        else:
+            proof["binaries"][binary]["path"] = original_binary
+        if role == "signing-keys":
+            output = proof["focusedRustTest"]["stdout"]
+            original_output = "C:/original/focused-rust.stdout"
+            relocations[original_output] = {"path": output["path"], "sha256": output["sha256"]}
+            output["path"] = original_output
+        proof_path.write_text(json.dumps(proof), encoding="utf-8")
+        relocated_proof = row["sourceProof"].copy()
+        relocated_proof["sha256"] = _ref(proof_path)["sha256"]
+        original_proof = f"C:/original/{binary}-source.json"
+        relocations[original_proof] = relocated_proof
+        row["sourceProof"] = {"path": original_proof, "sha256": relocated_proof["sha256"]}
+        for field, original in (("binary", original_binary), ("abiResult", f"C:/original/{binary}-abi.json")):
+            old = row[field].copy()
+            relocations[original] = old
+            row[field] = {"path": original, "sha256": old["sha256"]}
+    data["relocations"] = relocations
+    path.write_text(json.dumps(data), encoding="utf-8")
+    binaries, image_id = load_binding(path, services_image_id=IMAGE_ID)
+    assert image_id == IMAGE_ID and set(binaries) == set(ROLES)
+
+    data["roles"]["gateway"]["binary"]["path"] = "C:/other/marty-gateway"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError, match="existing absolute regular file"):
+        load_binding(path)
+    data["roles"]["gateway"]["binary"]["path"] = "C:/original/marty-gateway"
+    copied_gateway = Path(relocations["C:/original/marty-gateway"]["path"])
+    copied_gateway.write_bytes(b"tampered")
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError, match="sha256 mismatch"):
+        load_binding(path)
+
+    copied_gateway.write_bytes(b"marty-gateway-candidate")
+    copied_stdout = Path(relocations["C:/original/focused-rust.stdout"]["path"])
+    copied_stdout.write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="sha256 mismatch"):
+        load_binding(path)
+
     path = _binding(tmp_path)
     data = json.loads(path.read_text(encoding="utf-8"))
     signing = data["roles"]["signing-keys"]
