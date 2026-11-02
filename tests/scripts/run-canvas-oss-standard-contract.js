@@ -1014,12 +1014,27 @@ async function selectProductionBadgeTemplates(marty, organizationId, selectors =
     const type = String(credential.credential_type || '').replace(/[^a-z]/gi, '').toLowerCase();
     const claims = new Set((credential.claims || []).map(claim => claim.name));
     return ['openbadge', 'openbadgecredential'].includes(type)
+      && credential.credential_payload_format === 'SD_JWT_VC'
       && ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context']
-        .every(name => claims.has(name));
+        .every(name => claims.has(name))
+      && Boolean(credential.compliance_profile_id);
   });
   requireCondition(candidates.length === 1, 'badge_template_selection_ambiguous', 'Exactly one active Open Badge application/template pair must be selected for the portability lane.');
   const application = candidates[0];
   const credential = credentialById.get(String(application.credential_template_id));
+  const complianceId = String(credential.compliance_profile_id);
+  const compliance = await marty.get(`/v1/compliance-profiles/${encodeURIComponent(complianceId)}`);
+  requireCondition(
+    String(compliance?.id) === complianceId
+      && (String(compliance?.organization_id || '') === organizationId
+        || (compliance?.is_system === true && compliance?.organization_id == null))
+      && String(compliance?.status || '').toUpperCase() === 'ACTIVE'
+      && compliance?.discoverable === true
+      && compliance?.credential_format === 'SD_JWT_VC'
+      && compliance?.issuance_protocol === 'OID4VCI_PRE_AUTH',
+    'badge_compliance_profile_invalid',
+    'Selected Open Badge compliance profile must be active and compatible with governed SD-JWT issuance.',
+  );
   return { application, credential };
 }
 

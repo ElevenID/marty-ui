@@ -184,6 +184,54 @@ class Scenario:
 
 class Controls(unittest.TestCase):
     def scenario(self, root, **kwargs): return Scenario(Path(root), **kwargs)
+    def recovered_successor(self, root):
+        scenario = self.scenario(root, startup=True)
+        dispatcher = Path(root) / "dispatcher.py"
+        dispatcher.write_text("# source-only dispatcher control")
+        scenario.config["sourceSha256"] = scenario.core.ref(dispatcher)["sha256"]
+        scenario.operation.state["sourceSha256"] = scenario.config["sourceSha256"]
+        result = scenario.recover()
+        previous = copy.deepcopy(scenario.config)
+        previous["executeAuthorized"] = False
+        input_ref = scenario.save("prior-recovery-input.json", previous)
+        invocation = scenario.save("prior-invocation.json", dict(mode="rollback", input=input_ref,
+            sourceSha256=previous["sourceSha256"]))
+        row = scenario.core.load(result["recovered"])[m.ROLE]
+        config = copy.deepcopy(previous)
+        config.update(originalContainer=scenario.save("recovered-original.json", row),
+            oldCids={m.ROLE:row["Id"]}, globalCohortPreimage=scenario.save("allids.json", result["allIds"]),
+            recoveredOffAuthority=dict(input=input_ref, invocation=invocation,
+                result=scenario.save("recovery-result.json", result), dispatcher=scenario.core.ref(dispatcher)))
+        return scenario, config, row
+
+    def test_completed_recovery_authorizes_exact_never_started_successor_and_preflight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s, config, row = self.recovered_successor(tmp)
+            self.assertEqual(m.stopped_authority(config, s.core, reps), row)
+            self.assertEqual(row["State"]["Status"], "created")
+            s.config = config
+            operation = s.new_operation("next-preflight")
+            preflight = operation.preflight()
+            self.assertEqual(preflight["state"], "D11_REBIND_PREFLIGHT_PASSED")
+            self.assertEqual(preflight["oldExternal"]["state"], "ORIGINAL_CONFIGURATION_OFF")
+            self.assertEqual(preflight["oldExternal"]["actualExitCode"], 0)
+            self.assertEqual(len([call for call in s.calls if call[0] == "start"]), 1)
+
+    def test_recovery_authority_rejects_unrelated_created_stale_result_and_prior_source(self):
+        for kind in ("cid", "created", "result", "source", "cohort", "model"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                s, config, row = self.recovered_successor(tmp)
+                if kind == "cid":config["oldCids"][m.ROLE] = "a" * 64
+                elif kind == "created":config["originalContainer"] = s.save("foreign-created.json", dict(row, Id="a"*64))
+                elif kind == "result":
+                    result = s.core.load(config["recoveredOffAuthority"]["result"])
+                    result["served"]["cid"] = "a"*64
+                    config["recoveredOffAuthority"]["result"] = s.save("stale.json", result)
+                elif kind == "source":config["recoveredOffAuthority"]["dispatcher"]["sha256"] = "0"*64
+                elif kind == "cohort":config["globalCohortPreimage"] = s.save("wrong-allids.json", [])
+                else:config["oldModels"][m.ROLE] = s.save("wrong-model.json", {})
+                with self.assertRaises(ValueError):m.stopped_authority(config, s.core, reps)
+
     def test_default_hooks_preserve_metadata_behavior(self):
         core = module("defaults", HERE / "repair_beta_release_metadata.py")
         self.assertTrue(core.Operation.preimage_running(None, "gateway", "apply"))
