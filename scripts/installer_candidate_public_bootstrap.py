@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
+from urllib.parse import urlsplit, urlunsplit
 
 REPO = "ElevenID/marty-ui"
 REPOSITORY_ID = "1140864197"
@@ -330,6 +332,199 @@ def verify(path, tools, workflow, source, run, attempt, home):
     return before[0][0]
 
 
+
+# This standalone bootstrap has no repository imports on the guest. Keep this
+# closed parser equivalent to installer_candidate_hosting; shared fixtures cover
+# byte/context parity. The signed native operator independently validates again.
+HOSTING_MAX = 8192
+HOSTING_ROOTS_MAX = 65536
+HOSTING_FIELDS = {"input_sha256", "input_size_bytes", "public_origin", "public_entry_origin",
+                  "certificate_source", "acme_environment", "acme_terms_url", "staging_trust"}
+HOSTING_DIRECTORIES = {
+    "staging": "https://acme-staging-v02.api.letsencrypt.org/directory",
+    "production": "https://acme-v02.api.letsencrypt.org/directory",
+}
+
+def _hosting_exact(value, required, optional=frozenset()):
+    require(type(value) is dict and required <= set(value) <= required | optional)
+    return value
+
+
+def _hosting_decode(raw: bytes) -> dict:
+    require(type(raw) is bytes and 0 < len(raw) <= HOSTING_MAX)
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            require(key not in result, "duplicate candidate hosting field")
+            result[key] = value
+        return result
+    def invalid_number(_):
+        raise ValueError("invalid candidate hosting number")
+    value = json.loads(raw, object_pairs_hook=pairs, parse_constant=invalid_number)
+    require(type(value) is dict)
+    return value
+
+
+def _hosting_origin(value: str, *, address: bool) -> str:
+    require(type(value) is str and value.isascii() and len(value) <= 320
+            and value.startswith("https://") and not re.search(r"[\s/?#@%\\'\"]", value[8:]))
+    authority = value[8:]
+    if authority.startswith("["):
+        match = re.fullmatch(r"\[([^]]+)\](?::([0-9]+))?", authority)
+        require(match is not None)
+        host, port = match.groups()
+        ip = ipaddress.IPv6Address(host)
+        require(str(ip) == host and ip.ipv4_mapped is None)
+    else:
+        match = re.fullmatch(r"([^:]+)(?::([0-9]+))?", authority)
+        require(match is not None)
+        host, port = match.groups()
+        try:
+            ip = ipaddress.IPv4Address(host)
+        except ValueError:
+            ip = None
+    if port is not None:
+        number = int(port)
+        require(0 < number <= 65535 and number != 443 and str(number) == port)
+    if address:
+        require(ip is not None and not ip.is_loopback and not ip.is_unspecified
+                and not ip.is_multicast and str(ip) != "255.255.255.255")
+    else:
+        require(ip is None and host == host.lower() and len(host) <= 253 and "." in host
+                and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                        for label in host.split(".")))
+        last = host.rsplit(".", 1)[-1]
+        require(not last.isdecimal() and re.fullmatch(r"0x[0-9a-f]+", last) is None)
+        # Reject malformed A-labels rather than treating their ASCII shape as
+        # proof that downstream URL clients will preserve the same authority.
+        for label in host.split("."):
+            if label.startswith("xn--"):
+                require(label.encode("ascii")._hosting_decode("idna").encode("idna")._hosting_decode("ascii") == label)
+    return value
+
+
+def _hosting_terms(value: str) -> str:
+    require(type(value) is str and value.isascii() and 0 < len(value) <= 2048
+            and not re.search(r"[\s\\]", value))
+    parsed = urlsplit(value)
+    require(parsed.scheme == "https" and parsed.netloc == "letsencrypt.org"
+            and not parsed.query and not parsed.fragment
+            and parsed.path.startswith("/documents/") and parsed.path.endswith(".pdf")
+            and urlunsplit(parsed) == value
+            and not any(part.lower() in (".", "..", "%2e", "%2e%2e", ".%2e", "%2e.")
+                        for part in parsed.path.split("/")))
+    return value
+
+
+def _hosting_validate(binding: dict) -> None:
+    _hosting_exact(binding, HOSTING_FIELDS)
+    require(type(binding["input_sha256"]) is str
+            and re.fullmatch(r"[0-9a-f]{64}", binding["input_sha256"]) is not None
+            and type(binding["input_size_bytes"]) is int
+            and 0 < binding["input_size_bytes"] <= HOSTING_MAX)
+    _hosting_origin(binding["public_origin"], address=False)
+    if binding["public_entry_origin"] is not None:
+        _hosting_origin(binding["public_entry_origin"], address=True)
+    require(binding["certificate_source"] in ("managed-ca", "acme"))
+    if binding["certificate_source"] == "acme":
+        require(type(binding["acme_environment"]) is str and binding["acme_environment"] in HOSTING_DIRECTORIES)
+        _hosting_terms(binding["acme_terms_url"])
+    else:
+        require(binding["acme_environment"] is None and binding["acme_terms_url"] is None)
+    staging = binding["certificate_source"] == "acme" and binding["acme_environment"] == "staging"
+    require(staging == (binding["staging_trust"] is not None))
+    if staging:
+        trust = _hosting_exact(binding["staging_trust"], {"sha256", "size_bytes"})
+        require(type(trust["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", trust["sha256"]) is not None
+                and type(trust["size_bytes"]) is int and 0 < trust["size_bytes"] <= HOSTING_ROOTS_MAX)
+
+
+def _hosting_from_bytes(raw: bytes, *, staging_roots: bytes | None = None) -> dict:
+    value = _hosting_exact(_hosting_decode(raw), {"schema", "mode", "public_origin", "listener", "tls"},
+                  {"public_entry_origin", "connector", "web"})
+    require(value["schema"] == "elevenid.installation-hosting/v1" and value["mode"] == "direct"
+            and value.get("connector") is None)
+    if value.get("web") is not None:
+        web = _hosting_exact(value["web"], {"enabled_sections"})
+        sections = web["enabled_sections"]
+        require(type(sections) is list and len(sections) <= 2
+                and all(type(section) is str and section in ("public", "console") for section in sections)
+                and len(set(sections)) == len(sections))
+    canonical = _hosting_origin(value["public_origin"], address=False)
+    alias = value.get("public_entry_origin")
+    if alias is not None:
+        _hosting_origin(alias, address=True)
+    listener = _hosting_exact(value["listener"], {"bind_address", "port"})
+    require(type(listener["bind_address"]) is str and type(listener["port"]) is int
+            and 1024 <= listener["port"] <= 65535)
+    address = ipaddress.ip_address(listener["bind_address"])
+    require(not address.is_loopback and not address.is_multicast
+            and str(address) != "255.255.255.255"
+            and not (isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None))
+    tls = _hosting_exact(value["tls"], {"termination", "certificate_source"}, {"acme", "http01_host_port"})
+    require(tls["termination"] == "marty-keyless" and tls["certificate_source"] in ("managed-ca", "acme"))
+    environment = agreed_terms = None
+    if tls["certificate_source"] == "acme":
+        acme = _hosting_exact(tls.get("acme"), {"environment", "directory_url", "profile", "terms_url", "terms_agreed"}, {"contact"})
+        environment = acme["environment"]
+        require(type(environment) is str and environment in HOSTING_DIRECTORIES
+                and acme["directory_url"] == HOSTING_DIRECTORIES[environment]
+                and acme["profile"] == "shortlived" and acme["terms_agreed"] is True)
+        agreed_terms = _hosting_terms(acme["terms_url"])
+        contact = acme.get("contact")
+        if contact is not None:
+            require(type(contact) is str and contact.isascii() and len(contact) <= 261
+                    and contact.startswith("mailto:") and "@" in contact[7:])
+            local, domain = contact[7:].rsplit("@", 1)
+            require(0 < len(local) <= 64 and not local.startswith(".") and not local.endswith(".")
+                    and ".." not in local and re.fullmatch(r"[A-Za-z0-9._+-]+", local) is not None)
+            _hosting_origin("https://" + domain, address=False)
+            require(":" not in domain)
+        port = tls.get("http01_host_port")
+        require(type(port) is int and 1024 <= port <= 65535 and port != listener["port"])
+    else:
+        require(tls.get("acme") is None and tls.get("http01_host_port") is None)
+    binding = dict(input_sha256=hashlib.sha256(raw).hexdigest(), input_size_bytes=len(raw),
+                   public_origin=canonical, public_entry_origin=alias,
+                   certificate_source=tls["certificate_source"], acme_environment=environment,
+                   acme_terms_url=agreed_terms, staging_trust=None)
+    if staging_roots is not None:
+        require(type(staging_roots) is bytes and 0 < len(staging_roots) <= HOSTING_ROOTS_MAX)
+        binding["staging_trust"] = dict(sha256=hashlib.sha256(staging_roots).hexdigest(), size_bytes=len(staging_roots))
+    _hosting_validate(binding)
+    return binding
+
+
+def _hosting_require_bytes(binding: dict, raw: bytes, *, staging_roots: bytes | None = None) -> None:
+    _hosting_validate(binding)
+    require(_hosting_from_bytes(raw, staging_roots=staging_roots) == binding, "authenticated candidate hosting bytes changed")
+
+
+
+def candidate_hosting(auth, receipt, directory):
+    old = auth.get("schema") == "elevenid.installer-candidate-authorization/v1"
+    require(receipt.get("schema") == "elevenid.installer-controller-consumption/" + ("v1" if old else "v2"))
+    if old:
+        require("hosting" not in auth and "hosting" not in receipt)
+        expected = set()
+    else:
+        require(auth.get("schema") == "elevenid.installer-candidate-authorization/v2")
+        _hosting_validate(auth.get("hosting"))
+        require(receipt.get("hosting") == auth["hosting"])
+        expected = {"hosting-input.json"}
+        if auth["hosting"]["staging_trust"] is not None:
+            expected.add("acme-staging-roots.pem")
+    for name in {"hosting-input.json", "acme-staging-roots.pem"} - expected:
+        require(not os.path.lexists(directory / name), "unbound hosting or staging trust input")
+    if not expected:
+        return None
+    raw = private_file(directory / "hosting-input.json", HOSTING_MAX)
+    roots = private_file(directory / "acme-staging-roots.pem", HOSTING_ROOTS_MAX) if "acme-staging-roots.pem" in expected else None
+    binding = _hosting_from_bytes(raw, staging_roots=roots)
+    require(binding == auth["hosting"], "authenticated hosting input changed")
+    return binding
+
+
 def bootstrap(args):
     require(os.name == "posix" and os.uname().sysname == "Linux" and os.uname().machine == "x86_64"
             and os.geteuid() != 0)
@@ -362,14 +557,15 @@ def bootstrap(args):
                            operator_sha256=args.operator_sha256, phase="published", nonce=args.nonce,
                            harness_source_sha=args.harness_source_sha, run_id=args.run_id,
                            run_attempt=args.run_attempt)
+            hosting = candidate_hosting(auth, receipt, args.grants)
+            if hosting is not None:
+                context["hosting"] = hosting
             for key, value in context.items():
                 require(auth.get(key) == value and receipt.get(key) == value)
-            require(auth.get("schema") == "elevenid.installer-candidate-authorization/v1"
-                    and auth.get("scope") == "acceptance-only" and auth.get("repository") == REPO
+            require(auth.get("scope") == "acceptance-only" and auth.get("repository") == REPO
                     and auth.get("source_ref") == REF and auth.get("workflow") == ACCEPTANCE
                     and auth.get("platform") == "linux/amd64")
-            require(receipt.get("schema") == "elevenid.installer-controller-consumption/v1"
-                    and receipt.get("scope") == "controller-dispatch-consumed"
+            require(receipt.get("scope") == "controller-dispatch-consumed"
                     and receipt.get("repository") == REPO and receipt.get("source_ref") == REF
                     and receipt.get("workflow") == ACCEPTANCE)
             require(receipt.get("authorization_sha256") == digest(auth_raw)
@@ -440,6 +636,7 @@ def bootstrap(args):
                         and private_file(inventory_path, 65536) == inventory_raw
                         and private_digest(operator_path, 536870912)[0] == args.operator_sha256
                         and int(time.time()) < auth["expires_at"])
+                require(candidate_hosting(auth, receipt, args.grants) == hosting)
                 exclusive(output_fd, output, "verified.json", json.dumps({
                     "schema": "elevenid.installer-public-bootstrap-verified/v1",
                     "context_sha256": receipt["context_sha256"],
@@ -475,6 +672,7 @@ def authenticated_operator_fd(args, base_fd, operator):
         receipt_raw = private_file(args.grants / "controller-consumption.json", 65536)
         inventory_raw = private_file(output / "installer-inventory.json", 65536)
         auth, receipt = record(auth_raw), record(receipt_raw)
+        candidate_hosting(auth, receipt, args.grants)
         require(digest(auth_raw) == verified["authorization_sha256"]
                 and digest(receipt_raw) == verified["receipt_sha256"]
                 and digest(inventory_raw) == verified["inventory_sha256"]

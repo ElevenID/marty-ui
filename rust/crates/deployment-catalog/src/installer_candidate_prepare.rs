@@ -116,6 +116,7 @@ fn bind_public_authorization(
         || authorization.harness_source_sha != expected.harness_source_sha
         || authorization.run_id != expected.run_id
         || authorization.run_attempt != expected.run_attempt
+        || authorization.hosting != expected.hosting
     {
         return Err("published candidate authorization context differs".into());
     }
@@ -422,6 +423,7 @@ mod tests {
             harness_source_sha: parsed.harness_source_sha,
             run_id: parsed.run_id,
             run_attempt: parsed.run_attempt,
+            hosting: parsed.hosting,
         };
         (auth, inventory, expected)
     }

@@ -152,6 +152,45 @@ fn config(
     .expect("native config JSON")
 }
 
+fn config_hashes(
+    executable: &OsString,
+    root: &Path,
+    files: &[PathBuf],
+    env: &Path,
+) -> BTreeMap<String, String> {
+    let mut args = vec![
+        "--project-name".into(),
+        format!("marty-install-{}", "a".repeat(32)),
+        "--project-directory".into(),
+        root.to_str().unwrap().into(),
+        "--env-file".into(),
+        env.to_str().unwrap().into(),
+    ];
+    for file in files {
+        args.extend(["-f".into(), file.to_str().unwrap().into()]);
+    }
+    // Pass the wildcard directly to Compose; no shell expands it.
+    args.extend(["config".into(), "--hash".into(), "*".into()]);
+    let output = invoke(
+        executable,
+        root,
+        env.parent().expect("private environment parent"),
+        &args,
+    );
+    let mut hashes = BTreeMap::new();
+    for line in output.lines() {
+        let mut fields = line.split_whitespace();
+        let role = fields.next().expect("native service hash role");
+        let hash = fields.next().expect("native service hash value");
+        assert!(fields.next().is_none());
+        assert_eq!(hash.len(), 64);
+        assert!(hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(hashes.insert(role.into(), hash.into()).is_none());
+    }
+    assert!(!hashes.is_empty());
+    hashes
+}
+
 #[test]
 #[ignore = "requires pinned standalone Compose 5.6.1; config only, no daemon or containers"]
 fn native_filtering_merge_and_restart_layer_semantics() {
@@ -417,6 +456,14 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
         ("MARTY_OPENBAO_DIDCOMM_IMAGE", openbao),
         ("MARTY_KEYCLOAK_NONCE", "config-only-synthetic-nonce".into()),
         (
+            "MARTY_OPENBAO_CONTROL_ATTEMPT_ID",
+            "6b0176e0-a046-4310-917c-57f1ddda1ac0".into(),
+        ),
+        (
+            "MARTY_OPENBAO_STATIC_INIT_ATTEMPT_ID",
+            "96c79b92-d813-414f-bba9-310e9f03d831".into(),
+        ),
+        (
             "MARTY_SELFHOST_PROJECT",
             "marty-selfhost-disposable-config-fixture".into(),
         ),
@@ -450,7 +497,7 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
     private_write(&supplied_env, environment.as_bytes());
     // Use the packaged installer layers, including their real resource closure.
     assert_actual_installer_layers(&executable, &bundle, &bundle, &supplied_env);
-    for (case, public_origin, bind_address, public_entry) in [
+    for (case_index, (case, public_origin, bind_address, public_entry)) in [
         ("direct-dns", "https://marty.example.com", "0.0.0.0", None),
         // Legacy Compose inputs remain readable; fresh hosting selection
         // separately rejects an IP as the canonical identity.
@@ -479,13 +526,21 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
             None,
         ),
         ("proxy", "https://marty.example.com", "127.0.0.1", None),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let origin = marty_selfhost_identity::origin::PublicOrigin::parse(public_origin).unwrap();
         let host = match origin.ip_address() {
             Some(std::net::IpAddr::V6(ip)) => format!("[{ip}]"),
             _ => origin.host().to_owned(),
         };
         let mut selected = values.clone();
+        let web_sections = ["public,console", "public", "console", "none"][case_index % 4];
+        selected.insert(
+            "MARTY_INSTALLER_UI_ENABLED_SECTIONS".into(),
+            web_sections.into(),
+        );
         selected.insert("PUBLIC_API_URL".into(), public_origin.into());
         selected.insert("PUBLIC_DOMAIN".into(), origin.authority().into());
         selected.remove("MARTY_ISSUER_DID");
@@ -551,6 +606,10 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
             services["ui"]["environment"]["UI_CANONICAL_ORIGIN"],
             public_origin
         );
+        assert_eq!(
+            services["ui"]["environment"]["UI_ENABLED_SECTIONS"],
+            web_sections
+        );
         let aliases: Vec<String> = serde_json::from_str(
             services["ui"]["environment"]["UI_PUBLIC_ENTRY_ORIGINS"]
                 .as_str()
@@ -582,6 +641,171 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
             assert!(services[role]
                 .get("ports")
                 .is_none_or(|ports| ports.as_array().is_some_and(Vec::is_empty)));
+        }
+        if case == "direct-dns-with-ip-entry" {
+            // Recurrence begins from the admitted application generation. The
+            // bootstrap job retains its separate historical /secrets mount.
+            selected.insert(
+                "SELFHOST_SECRET_DIR".into(),
+                root.join("application-generation").to_str().unwrap().into(),
+            );
+            assert_native_managed_generation_models(&executable, &bundle, root, &selected);
+            selected.insert("MARTY_ACME_CANONICAL_ORIGIN".into(), public_origin.into());
+            selected.insert(
+                "MARTY_ACME_PUBLIC_ENTRY_ORIGIN".into(),
+                public_entry.unwrap().into(),
+            );
+            selected.insert("MARTY_ACME_HTTP01_HOST_PORT".into(), "18080".into());
+            selected.insert("MARTY_ACME_CUSTODY_PLAN_SHA256".into(), "1".repeat(64));
+            selected.insert("MARTY_ACME_CREDENTIAL_PLAN_SHA256".into(), "2".repeat(64));
+            selected.insert(
+                "MARTY_INSTALLER_PUBLIC_INGRESS_PLAN_SHA256".into(),
+                "3".repeat(64),
+            );
+            selected.insert(
+                "MARTY_INSTALLER_PUBLIC_RENEWAL_AUTHORITY_PLAN_SHA256".into(),
+                "4".repeat(64),
+            );
+            let acme_env = root.join("public-acme.env");
+            private_write(
+                &acme_env,
+                selected
+                    .iter()
+                    .map(|(key, value)| format!("{key}='{value}'\n"))
+                    .collect::<String>()
+                    .as_bytes(),
+            );
+            let layers = bundle.join("deploy-config/compose/selfhost-installer");
+            let files = vec![
+                bundle.join("docker-compose.yml"),
+                bundle.join("docker-compose.selfhost.openbao.yml"),
+                layers.join("compose.bootstrap.yml"),
+                layers.join("compose.installer.yml"),
+                layers.join("compose.runtime.yml"),
+                layers.join("compose.acme.yml"),
+                layers.join("compose.acme-runtime.yml"),
+            ];
+            let public = config(
+                &executable,
+                &bundle,
+                &files,
+                &acme_env,
+                &["setup", "installer-init"],
+                &[],
+            );
+            let roles = public["services"].as_object().unwrap();
+            let bootstrap_runtime = roles["openbao-bootstrap"]["volumes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|mount| mount["target"] == "/bao/runtime")
+                .unwrap();
+            assert_eq!(
+                bootstrap_runtime["source"],
+                root.join("secrets").to_str().unwrap(),
+                "bootstrap retains its historical output directory"
+            );
+            let entry = &roles["installer-ingress"];
+            let mounts = entry["volumes"].as_array().unwrap();
+            assert_eq!(mounts.len(), 3);
+            assert!(mounts.iter().any(|mount| {
+                mount["source"]
+                    == root
+                        .join("application-generation/installer_ingress_tls_cert")
+                        .to_str()
+                        .unwrap()
+            }));
+            assert!(!mounts
+                .iter()
+                .any(|mount| mount["target"] == "/run/installer/ca.crt"));
+            assert!(mounts
+                .iter()
+                .any(|mount| mount["target"] == "/run/installer/openbao-ca.crt"
+                    && mount["read_only"] == true));
+            let health = entry["healthcheck"]["test"].as_array().unwrap();
+            assert!(health.contains(&Value::String("/etc/ssl/certs/ca-certificates.crt".into())));
+            assert!(!health.contains(&Value::String("/run/installer/ca.crt".into())));
+            for role in ["installer-renewal", "installer-generation"] {
+                assert_eq!(
+                    roles[role]["environment"]
+                        ["MARTY_INSTALLER_PUBLIC_RENEWAL_AUTHORITY_PLAN_SHA256"],
+                    "4".repeat(64)
+                );
+                let plan = roles[role]["volumes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|mount| mount["target"] == "/input/public-renewal-authority-plan.json")
+                    .unwrap();
+                assert_eq!(
+                    plan["source"],
+                    root.join("evidence/renewal-public-authority-plan.json")
+                        .to_str()
+                        .unwrap()
+                );
+                assert_eq!(plan["read_only"], true);
+                assert_eq!(plan["bind"]["create_host_path"], false);
+            }
+            assert!(roles["installer-renewal"]["volumes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|mount| mount["target"] != "/input/public-ingress-plan.json"));
+            assert_eq!(
+                roles["installer-generation"]["environment"]
+                    ["MARTY_INSTALLER_PUBLIC_INGRESS_PLAN_SHA256"],
+                "3".repeat(64)
+            );
+            let public_plan = roles["installer-generation"]["volumes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|mount| mount["target"] == "/input/public-ingress-plan.json")
+                .unwrap();
+            assert_eq!(
+                public_plan["source"],
+                root.join("evidence/generation-public-ingress-plan.json")
+                    .to_str()
+                    .unwrap()
+            );
+            assert_eq!(public_plan["read_only"], true);
+            assert_eq!(public_plan["bind"]["create_host_path"], false);
+            let http = &roles["installer-acme-http01"];
+            assert_eq!(http["restart"], "unless-stopped");
+            assert_eq!(http["stop_grace_period"], "1m0s");
+            assert_eq!(http["logging"]["options"]["max-size"], "10m");
+            assert_eq!(http["logging"]["options"]["max-file"], "3");
+            assert_eq!(http["user"], "10001:10001");
+            assert_eq!(http["ports"][0]["host_ip"], "127.0.0.1");
+            assert_eq!(http["ports"][0]["published"], "18080");
+            assert!(http
+                .get("depends_on")
+                .is_none_or(|value| value.as_object().is_some_and(serde_json::Map::is_empty)));
+            assert_eq!(http["volumes"].as_array().unwrap().len(), 1);
+            assert_eq!(http["volumes"][0]["target"], "/run/acme-http01");
+            let runtime = config(&executable, &bundle, &files, &acme_env, &[], &[]);
+            assert!(runtime["services"]["installer-acme-http01"].is_object());
+            for role in [
+                "installer-acme-custody",
+                "installer-acme-credentials",
+                "installer-renewal",
+                "installer-generation",
+                "openbao-bootstrap",
+            ] {
+                assert!(
+                    runtime["services"].get(role).is_none(),
+                    "setup role {role} must not join restart"
+                );
+            }
+            assert_native_generation_models(
+                &executable,
+                &bundle,
+                root,
+                &files,
+                &selected,
+                &public,
+                &runtime,
+            );
         }
         if case == "proxy" {
             let connector_image = format!(
@@ -637,6 +861,408 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
     }
 }
 
+fn assert_native_managed_generation_models(
+    executable: &OsString,
+    bundle: &Path,
+    root: &Path,
+    values: &BTreeMap<String, String>,
+) {
+    let layers = bundle.join("deploy-config/compose/selfhost-installer");
+    let files = vec![
+        bundle.join("docker-compose.yml"),
+        bundle.join("docker-compose.selfhost.openbao.yml"),
+        layers.join("compose.bootstrap.yml"),
+        layers.join("compose.installer.yml"),
+        layers.join("compose.runtime.yml"),
+    ];
+    let env = root.join("managed-original.env");
+    private_write(
+        &env,
+        values
+            .iter()
+            .map(|(key, value)| format!("{key}='{value}'\n"))
+            .collect::<String>()
+            .as_bytes(),
+    );
+    let full = config(
+        executable,
+        bundle,
+        &files,
+        &env,
+        &["setup", "installer-init"],
+        &[],
+    );
+    let runtime = config(executable, bundle, &files, &env, &[], &[]);
+    assert!(full["services"].get("installer-acme-http01").is_none());
+    assert_native_generation_models(executable, bundle, root, &files, values, &full, &runtime);
+}
+
+/// Exercise each source's shipped recurrence layer through the real Compose
+/// parser. Selected-service config is not a full maintenance/runtime model.
+fn assert_native_generation_models(
+    executable: &OsString,
+    bundle: &Path,
+    root: &Path,
+    original_files: &[PathBuf],
+    original_values: &BTreeMap<String, String>,
+    previous_full: &Value,
+    previous_runtime: &Value,
+) {
+    let public = previous_full["services"]["installer-generation"]["environment"]
+        .get("MARTY_INSTALLER_PUBLIC_INGRESS_PLAN_SHA256")
+        .is_some();
+    let (layer, plan_variable, plan_digest, plan_kind, plan_target, prefix) = if public {
+        (
+            "compose.generation.yml",
+            "MARTY_GENERATION_PUBLIC_INGRESS_PLAN",
+            "MARTY_INSTALLER_PUBLIC_INGRESS_PLAN_SHA256",
+            "public-ingress-plan",
+            "/input/public-ingress-plan.json",
+            "public-generation",
+        )
+    } else {
+        (
+            "compose.generation-managed.yml",
+            "MARTY_GENERATION_MANAGED_RENEWAL_PLAN",
+            "MARTY_INSTALLER_MANAGED_RENEWAL_PLAN_SHA256",
+            "managed-renewal-plan",
+            "/input/managed-renewal-plan.json",
+            "managed-generation",
+        )
+    };
+    let mut files = original_files.to_vec();
+    files.push(
+        bundle
+            .join("deploy-config/compose/selfhost-installer")
+            .join(layer),
+    );
+    assert_eq!(
+        files.len(),
+        if public { 8 } else { 6 },
+        "the admitted native layer bound includes generation"
+    );
+    let work = root.join("generation-work/00000000000000000001");
+    let plan = root.join(format!(
+        "evidence/generation-00000000000000000001-{plan_kind}.json"
+    ));
+    let generation = root.join(format!(
+        "application-generations/00000000000000000001-{}",
+        "6".repeat(64)
+    ));
+    let mut helper_values = original_values.clone();
+    helper_values.insert(
+        "MARTY_GENERATION_WORK_DIR".into(),
+        work.to_str().unwrap().into(),
+    );
+    helper_values.insert(plan_variable.into(), plan.to_str().unwrap().into());
+    helper_values.insert(plan_digest.into(), "5".repeat(64));
+    let helper_env = root.join(format!("{prefix}-helper.env"));
+    private_write(
+        &helper_env,
+        helper_values
+            .iter()
+            .map(|(key, value)| format!("{key}='{value}'\n"))
+            .collect::<String>()
+            .as_bytes(),
+    );
+    let helper = config(
+        executable,
+        bundle,
+        &files,
+        &helper_env,
+        &["setup"],
+        &["installer-generation"],
+    );
+    assert_eq!(
+        helper["services"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["installer-generation"],
+        "a credential producer's native config cannot be reused as an infrastructure-start model"
+    );
+    let helper_full = config(executable, bundle, &files, &helper_env, &["setup"], &[]);
+    assert_eq!(
+        helper_full["services"]["installer-generation"], helper["services"]["installer-generation"],
+        "unfiltered configuration retains the exact producer selected for its create/start command"
+    );
+    for role in ["openbao", "openbao-unseal", "installer-acme-http01"] {
+        if !public && role == "installer-acme-http01" {
+            assert!(helper_full["services"].get(role).is_none());
+            continue;
+        }
+        assert!(helper_full["services"][role].is_object());
+        assert_eq!(
+            helper_full["services"][role],
+            previous_full["services"][role]
+        );
+    }
+    assert_eq!(helper_full["services"]["auth"], previous_full["services"]["auth"], "the producer's full admission view retains unselected application services for stop without changing their configuration");
+    let job = &helper["services"]["installer-generation"];
+    let mut expected_helper = previous_full["services"]["installer-generation"].clone();
+    expected_helper["environment"][plan_digest] = Value::String("5".repeat(64));
+    if !public {
+        for key in [
+            "MARTY_INSTALLER_PUBLIC_INGRESS_PLAN_SHA256",
+            "MARTY_INSTALLER_PUBLIC_RENEWAL_AUTHORITY_PLAN_SHA256",
+        ] {
+            assert!(job["environment"].get(key).is_none());
+        }
+        for target in [
+            "/input/public-ingress-plan.json",
+            "/input/public-renewal-authority-plan.json",
+        ] {
+            assert!(job["volumes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|mount| mount["target"] != target));
+        }
+        expected_helper["volumes"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "type":"bind", "source":plan.to_str().unwrap().replace('$', "$$"),
+                "target":plan_target, "read_only":true, "bind":{"create_host_path":false}
+            }));
+    } else {
+        assert!(job["environment"]
+            .get("MARTY_INSTALLER_MANAGED_RENEWAL_PLAN_SHA256")
+            .is_none());
+        assert!(job["volumes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|mount| mount["target"] != "/input/managed-renewal-plan.json"));
+    }
+    let changed_mounts: BTreeMap<_, _> = [
+        ("/transfer", (work.join("transfer"), false)),
+        ("/input/current", (work.join("current"), true)),
+        ("/input/identity", (work.join("identity"), true)),
+        (plan_target, (plan, true)),
+    ]
+    .into_iter()
+    .collect();
+    let mut observed_targets = BTreeSet::new();
+    for mount in expected_helper["volumes"].as_array_mut().unwrap() {
+        if let Some((path, readonly)) = changed_mounts.get(mount["target"].as_str().unwrap()) {
+            observed_targets.insert(mount["target"].as_str().unwrap().to_owned());
+            mount["source"] = Value::String(path.to_str().unwrap().replace('$', "$$"));
+            assert_eq!(mount["read_only"] == true, *readonly);
+            assert_eq!(mount["bind"]["create_host_path"], false);
+        }
+    }
+    assert_eq!(observed_targets.len(), changed_mounts.len());
+    assert_eq!(
+        *job, expected_helper,
+        "the recurring producer changes only its three input roots, source-specific plan mount and bound digest"
+    );
+
+    let mut application_values = helper_values;
+    application_values.insert(
+        "SELFHOST_SECRET_DIR".into(),
+        generation.to_str().unwrap().into(),
+    );
+    let application_env = root.join(format!("{prefix}-application.env"));
+    private_write(
+        &application_env,
+        application_values
+            .iter()
+            .map(|(key, value)| format!("{key}='{value}'\n"))
+            .collect::<String>()
+            .as_bytes(),
+    );
+    let current_runtime = config(executable, bundle, &files, &application_env, &[], &[]);
+    let current_full = config(
+        executable,
+        bundle,
+        &files,
+        &application_env,
+        &["setup", "installer-init"],
+        &[],
+    );
+    let mut expected_runtime = previous_runtime.clone();
+    let mut expected_full = previous_full.clone();
+    let previous_root = Path::new(&original_values["SELFHOST_SECRET_DIR"]);
+    replace_native_generation_files(&mut expected_runtime, previous_root, &generation);
+    replace_native_generation_files(&mut expected_full, previous_root, &generation);
+    expected_full["services"]["installer-generation"] = job.clone();
+    assert_native_model_eq(
+        root,
+        "generation-runtime",
+        &current_runtime,
+        &expected_runtime,
+    );
+    assert_native_model_eq(root, "generation-full", &current_full, &expected_full);
+    let previous_hashes = config_hashes(executable, bundle, &files, &helper_env);
+    let current_hashes = config_hashes(executable, bundle, &files, &application_env);
+    for (hashes, model) in [
+        (&previous_hashes, previous_runtime),
+        (&current_hashes, &current_runtime),
+    ] {
+        assert_eq!(
+            hashes.keys().collect::<BTreeSet<_>>(),
+            model["services"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<BTreeSet<_>>()
+        );
+    }
+    // Native service hashes omit top-level secret file declarations. Equal
+    // hashes cannot decide whether a credential consumer needs replacement.
+    for (role, credential) in [
+        ("auth", "auth_tls_kms_token"),
+        ("gateway", "gateway_tls_kms_token"),
+        ("postgres", "postgres_password"),
+        ("keycloak", "keycloak_signing_kms_token"),
+    ] {
+        assert_eq!(previous_hashes[role], current_hashes[role]);
+        assert_eq!(
+            previous_runtime["services"][role], current_runtime["services"][role],
+            "{role} keeps its service definition while its mounted secret source changes"
+        );
+        assert!(previous_runtime["services"][role]["secrets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reference| reference["source"] == credential));
+        assert_eq!(
+            previous_runtime["secrets"][credential]["file"],
+            previous_root
+                .join(credential)
+                .to_str()
+                .unwrap()
+                .replace('$', "$$")
+        );
+        assert_eq!(
+            current_runtime["secrets"][credential]["file"],
+            generation
+                .join(credential)
+                .to_str()
+                .unwrap()
+                .replace('$', "$$")
+        );
+        assert_ne!(
+            previous_runtime["secrets"][credential],
+            current_runtime["secrets"][credential]
+        );
+    }
+    assert_ne!(
+        previous_hashes["installer-ingress"], current_hashes["installer-ingress"],
+        "explicit bind source changes are represented in the native service hash"
+    );
+    for role in ["openbao", "openbao-unseal", "installer-acme-http01"] {
+        assert_eq!(
+            current_runtime["services"][role], previous_runtime["services"][role],
+            "{role} must retain its native config during application generation replacement"
+        );
+    }
+    let selected = config(
+        executable,
+        bundle,
+        &files,
+        &application_env,
+        &[],
+        &["installer-ingress"],
+    );
+    if public {
+        assert!(current_runtime["services"]["installer-acme-http01"].is_object());
+        assert!(selected["services"].get("installer-acme-http01").is_none(), "selected runtime config omits an unrelated retained responder, so it cannot equal the unfiltered activation model");
+    } else {
+        assert!(current_runtime["services"]
+            .get("installer-acme-http01")
+            .is_none());
+    }
+    assert_eq!(
+        selected["services"]["installer-ingress"], current_runtime["services"]["installer-ingress"],
+        "full configuration admission does not change the specifically selected runtime service"
+    );
+}
+
+fn replace_native_generation_files(model: &mut Value, old: &Path, new: &Path) {
+    let replace = |value: &mut Value| {
+        let decoded = value.as_str().unwrap().replace("$$", "$");
+        let path = Path::new(&decoded);
+        if let Ok(relative) = path.strip_prefix(old) {
+            assert_eq!(relative.components().count(), 1);
+            *value = Value::String(new.join(relative).to_str().unwrap().replace('$', "$$"));
+        }
+    };
+    for declaration in model
+        .get_mut("secrets")
+        .and_then(Value::as_object_mut)
+        .into_iter()
+        .flat_map(|map| map.values_mut())
+    {
+        if let Some(file) = declaration.get_mut("file") {
+            replace(file);
+        }
+    }
+    for service in model["services"].as_object_mut().unwrap().values_mut() {
+        for mount in service
+            .get_mut("volumes")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            if mount["type"] == "bind" {
+                replace(&mut mount["source"]);
+            }
+        }
+    }
+}
+
+fn assert_native_model_eq(root: &Path, label: &str, actual: &Value, expected: &Value) {
+    if actual == expected {
+        return;
+    }
+    // Preserve complete private evidence while keeping CI output bounded and
+    // useful: native configurations contain many large environment sections.
+    private_write(
+        &root.join(format!("{label}-actual.json")),
+        &serde_json::to_vec_pretty(actual).unwrap(),
+    );
+    private_write(
+        &root.join(format!("{label}-expected.json")),
+        &serde_json::to_vec_pretty(expected).unwrap(),
+    );
+    fn differences(actual: &Value, expected: &Value, path: &str, paths: &mut Vec<String>) {
+        if actual == expected || paths.len() >= 32 {
+            return;
+        }
+        match (actual, expected) {
+            (Value::Object(actual), Value::Object(expected)) => {
+                for key in actual
+                    .keys()
+                    .chain(expected.keys())
+                    .collect::<BTreeSet<_>>()
+                {
+                    let next = format!("{path}/{}", key.replace('~', "~0").replace('/', "~1"));
+                    match (actual.get(key), expected.get(key)) {
+                        (Some(actual), Some(expected)) => {
+                            differences(actual, expected, &next, paths)
+                        }
+                        _ if paths.len() < 32 => paths.push(next),
+                        _ => {}
+                    }
+                }
+            }
+            (Value::Array(actual), Value::Array(expected)) if actual.len() == expected.len() => {
+                for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+                    differences(actual, expected, &format!("{path}/{index}"), paths);
+                }
+            }
+            _ => paths.push(path.to_owned()),
+        }
+    }
+    let mut paths = Vec::new();
+    differences(actual, expected, "", &mut paths);
+    panic!("native {label} model differs at {paths:?}; full actual/expected snapshots retained in the private fixture");
+}
+
 fn assert_actual_installer_layers(
     executable: &OsString,
     bundle: &Path,
@@ -645,6 +1271,15 @@ fn assert_actual_installer_layers(
 ) {
     let temp = PrivateFixture::new();
     baseline(executable, temp.path());
+    let installation = fs::read_to_string(supplied_env)
+        .unwrap()
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("MARTY_INSTALLATION_DIR='")
+                .and_then(|v| v.strip_suffix('\''))
+        })
+        .map(PathBuf::from)
+        .expect("bound installation path in source fixture");
     let env = temp.path().join("private.env");
     fs::copy(supplied_env, &env).unwrap();
     fs::set_permissions(&env, fs::Permissions::from_mode(0o600)).unwrap();
@@ -838,14 +1473,113 @@ fn assert_actual_installer_layers(
     );
     assert!(restarted.contains_key("issuance-native"));
     assert!(restarted.contains_key("openbao") && restarted.contains_key("openbao-unseal"));
+    for (role, service) in restarted {
+        assert_eq!(service["restart"], "unless-stopped", "{role} crash policy");
+        assert_eq!(
+            service["stop_grace_period"], "1m0s",
+            "{role} shutdown grace"
+        );
+        assert_eq!(
+            service["logging"]["driver"], "json-file",
+            "{role} log driver"
+        );
+        assert_eq!(
+            service["logging"]["options"]["max-size"], "10m",
+            "{role} log bound"
+        );
+        assert_eq!(
+            service["logging"]["options"]["max-file"], "3",
+            "{role} log rotation"
+        );
+    }
     assert_eq!(
         restarted["openbao-unseal"]["healthcheck"]["test"],
         serde_json::json!([
-            "CMD-SHELL",
-            "bao status -address=https://openbao:8200 -ca-cert=/bao/data/tls/ca.crt >/dev/null 2>&1"
+            "CMD",
+            "/usr/local/bin/selfhost-openbao-ready",
+            "--check-ready"
         ]),
         "the runtime KMS prerequisite must require successful unsealed status"
     );
+    assert_eq!(
+        restarted["openbao"]["healthcheck"]["test"],
+        serde_json::json!([
+            "CMD",
+            "/usr/local/bin/selfhost-openbao-ready",
+            "--check-listener"
+        ]),
+        "sealed or expired-TCP startup must not block the local recovery channel"
+    );
+    assert!(setup_roles.contains("installer-control-enroll"));
+    for target in ["/openbao/file:", "/openbao/logs:"] {
+        assert!(
+            maintenance["installer-control-enroll"]["tmpfs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str().is_some_and(|v| v.starts_with(target))),
+            "the enrollment job must cover inherited image volumes without anonymous storage"
+        );
+    }
+    for role in ["openbao", "openbao-unseal"] {
+        assert_eq!(
+            restarted[role]["environment"]["MARTY_OPENBAO_LOCAL_CONTROL"],
+            "1"
+        );
+        let volumes = restarted[role]["volumes"].as_array().unwrap();
+        let control = volumes
+            .iter()
+            .find(|v| v["target"] == "/bao/control")
+            .unwrap();
+        assert_eq!(
+            control["source"],
+            installation
+                .join("openbao-control/socket")
+                .to_str()
+                .unwrap()
+        );
+        assert_eq!(control["bind"]["create_host_path"], false);
+        if role == "openbao-unseal" {
+            assert_eq!(control["read_only"], true);
+            assert_eq!(
+                volumes.len(),
+                1,
+                "readiness has only the Unix socket; no key, state or machine identity"
+            );
+            assert_eq!(
+                restarted[role]["entrypoint"],
+                serde_json::json!(["/usr/local/bin/selfhost-openbao-ready"])
+            );
+            assert_eq!(restarted[role]["command"], serde_json::json!(["--watch"]));
+        } else {
+            let identity = volumes
+                .iter()
+                .find(|v| v["target"] == "/bao/control-identity")
+                .unwrap();
+            assert_eq!(identity["read_only"], true);
+            let seal = volumes.iter().find(|v| v["target"] == "/bao/seal").unwrap();
+            assert_eq!(seal["read_only"], true);
+            assert_eq!(
+                seal["source"],
+                installation.join("openbao-seal/key").to_str().unwrap()
+            );
+        }
+    }
+    for (role, service) in maintenance {
+        for volume in service["volumes"].as_array().into_iter().flatten() {
+            if volume["source"] == installation.join("openbao-seal/key").to_str().unwrap() {
+                assert_eq!(
+                    role, "openbao",
+                    "static seal must be mounted only into OpenBao"
+                );
+            }
+            assert_ne!(
+                volume["source"],
+                installation.join("openbao-seal").to_str().unwrap(),
+                "the private seal parent is never mounted"
+            );
+        }
+    }
     for (role, service) in restarted {
         let mut expected: BTreeMap<_, _> = maintenance[role]["depends_on"]
             .as_object()

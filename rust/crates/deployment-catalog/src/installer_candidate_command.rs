@@ -7,7 +7,9 @@ use crate::{
     installer_candidate_nonce::{self, Consumption},
     installer_release::{self as release, CandidateContext, CandidatePhase},
     installer_runtime::DockerRunner,
-    installer_state::{AcceptanceScope, Identity, InstallerState, Phase, RuntimeBinding},
+    installer_state::{
+        AcceptanceScope, Identity, InstallerState, Phase, RuntimeBinding, RuntimeProfile,
+    },
     installer_verify::{self, VerificationTools},
 };
 use std::{
@@ -23,6 +25,12 @@ use std::{
 };
 type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "Acceptance-only candidate execution refused or incomplete; preserve controller consumption, guest registry and installation evidence. Consumer admission and installation readiness are not granted.";
+
+#[path = "installer_candidate_scope.rs"]
+mod scope;
+pub(crate) use scope::require_retained as require_retained_scope;
+#[path = "installer_candidate_files.rs"]
+mod files;
 
 struct Options {
     authorization: PathBuf,
@@ -161,24 +169,6 @@ fn account_home() -> Result<PathBuf> {
     require(std::env::var_os("HOME").is_some_and(|value| value == home.as_os_str()))?;
     Ok(home)
 }
-fn persist_signed(
-    state: &mut InstallerState,
-    source: &Path,
-    name: &str,
-    bytes: &[u8],
-) -> Result<()> {
-    state.write_evidence(name, bytes)?;
-    for suffix in [".sigstore.json", ".provenance.jsonl"] {
-        let mut file = source.as_os_str().to_owned();
-        file.push(suffix);
-        state.write_evidence(
-            &format!("{name}{suffix}"),
-            &installer_verify::read_private_bytes(Path::new(&file), 1048576)?,
-        )?;
-    }
-    Ok(())
-}
-
 fn held_private_directory(path: &Path) -> Result<File> {
     crate::installer_runtime::private_parent(path)?;
     let directory = OpenOptions::new()
@@ -241,6 +231,17 @@ fn fetch_published_inner(args: &[String], build_identity: &str) -> Result<()> {
     let held_base = held_private_directory(base)?;
     require(o.authorization.starts_with(base) && o.controller.starts_with(base))?;
     let tools = VerificationTools::new(&o.tools, &o.gh)?;
+    let authorization_files =
+        files::SignedSubject::open(&o.authorization, "installer-candidate-authorization.json")?;
+    let controller_files =
+        files::SignedSubject::open(&o.controller, "installer-controller-consumption.json")?;
+    let auth = authorization_files.bytes();
+    let controller = controller_files.bytes();
+    let parsed = release::parse_candidate_authorization(auth, now()?)?;
+    let hosting = files::HostingInput::open(
+        o.authorization.parent().ok_or(REFUSED)?,
+        parsed.hosting.as_ref(),
+    )?;
     let expected = CandidateContext {
         operator_sha: installer_verify::current_operator_digest()?,
         source_sha: source.into(),
@@ -250,20 +251,18 @@ fn fetch_published_inner(args: &[String], build_identity: &str) -> Result<()> {
         harness_source_sha: o.harness,
         run_id: o.run,
         run_attempt: o.attempt,
+        hosting: hosting.binding(),
     };
-    let auth = installer_verify::read_private_record(&o.authorization)?;
-    let controller = installer_verify::read_private_record(&o.controller)?;
-    for (file, bytes) in [(&o.authorization, &auth), (&o.controller, &controller)] {
-        require(
-            tools.verify(
-                file,
-                release::ACCEPTANCE_WORKFLOW,
-                &expected.harness_source_sha,
-                expected.run_id,
-                expected.run_attempt,
-            )? == release::sha256(bytes),
+    for subject in [&authorization_files, &controller_files] {
+        subject.verify(
+            &tools,
+            release::ACCEPTANCE_WORKFLOW,
+            &expected.harness_source_sha,
+            expected.run_id,
+            expected.run_attempt,
         )?;
     }
+    hosting.check()?;
     let context_hash = release::candidate_context_sha256(&expected)?;
     durable_new(
         &held_base,
@@ -272,8 +271,8 @@ fn fetch_published_inner(args: &[String], build_identity: &str) -> Result<()> {
         &serde_json::to_vec(&serde_json::json!({
             "schema": "elevenid.installer-public-acquisition-intent/v1",
             "context_sha256": context_hash,
-            "authorization_sha256": release::sha256(&auth),
-            "controller_consumption_sha256": release::sha256(&controller),
+            "authorization_sha256": release::sha256(auth),
+            "controller_consumption_sha256": release::sha256(controller),
             "started_at": now()?,
             "installation_ready": false
         }))
@@ -292,17 +291,16 @@ fn fetch_published_inner(args: &[String], build_identity: &str) -> Result<()> {
     let inventory =
         installer_verify::read_private_record(&o.inputs.join("installer-inventory.json"))?;
     release::bind_controller_consumption(
-        &controller,
-        &auth,
+        controller,
+        auth,
         &inventory,
         &expected,
         &o.engine,
         now()?,
     )?;
-    require(
-        installer_verify::read_private_record(&o.authorization)? == auth
-            && installer_verify::read_private_record(&o.controller)? == controller,
-    )?;
+    authorization_files.check()?;
+    controller_files.check()?;
+    hosting.check()?;
     durable_new(
         &held_base,
         base,
@@ -310,8 +308,8 @@ fn fetch_published_inner(args: &[String], build_identity: &str) -> Result<()> {
         &serde_json::to_vec(&serde_json::json!({
             "schema": "elevenid.installer-public-acquisition-result/v1",
             "context_sha256": context_hash,
-            "authorization_sha256": release::sha256(&auth),
-            "controller_consumption_sha256": release::sha256(&controller),
+            "authorization_sha256": release::sha256(auth),
+            "controller_consumption_sha256": release::sha256(controller),
             "inventory_sha256": release::sha256(&inventory),
             "receipts": receipts,
             "installation_ready": false
@@ -323,17 +321,11 @@ fn fetch_published_inner(args: &[String], build_identity: &str) -> Result<()> {
 /// The controller chooses expected run/phase/nonce independently of the signed
 /// records. This entry does not prove guest origin or public acquisition itself.
 pub fn install(args: &[String], build_identity: &str) -> Result<()> {
-    // Acceptance-only execution still records a rootful Docker binding. Keep
-    // the read-only acquisition command available, but refuse this new-install
-    // entry before inspecting Docker, consuming a nonce, or creating state.
-    require_rootless_candidate_qualification()?;
     install_inner(args, build_identity).map_err(|_| REFUSED.into())
-}
-fn require_rootless_candidate_qualification() -> Result<()> {
-    Err("Acceptance-only candidate installation requires qualified rootless storage mapping".into())
 }
 fn install_inner(args: &[String], build_identity: &str) -> Result<()> {
     let o = options(args)?;
+    crate::installer_command::require_rootless_process()?;
     require(unsafe { libc::geteuid() } != 0 && cfg!(target_arch = "x86_64"))?;
     let (source, version) = build_identity.split_once(':').ok_or(REFUSED)?;
     require(hex(source, 40))?;
@@ -357,6 +349,23 @@ fn install_inner(args: &[String], build_identity: &str) -> Result<()> {
     }
     let tools = VerificationTools::new(&o.tools, &o.gh)?;
     let operator_sha = installer_verify::current_operator_digest()?;
+    let authorization_files =
+        files::SignedSubject::open(&o.authorization, "installer-candidate-authorization.json")?;
+    let controller_files =
+        files::SignedSubject::open(&o.controller, "installer-controller-consumption.json")?;
+    let inventory_path = o.inputs.join("installer-inventory.json");
+    let inventory_files = files::SignedSubject::open(&inventory_path, "installer-inventory.json")?;
+    let auth = authorization_files.bytes();
+    let controller = controller_files.bytes();
+    let inventory = inventory_files.bytes();
+    let parsed = release::parse_candidate_authorization(auth, now()?)?;
+    let hosting = files::HostingInput::open(
+        o.authorization.parent().ok_or(REFUSED)?,
+        parsed.hosting.as_ref(),
+    )?;
+    // Refuse unsupported configuration/trust before consuming either nonce or
+    // installation identity. This check does not select or create anything.
+    hosting.prepare()?;
     let expected = CandidateContext {
         operator_sha: operator_sha.clone(),
         source_sha: source.into(),
@@ -366,46 +375,69 @@ fn install_inner(args: &[String], build_identity: &str) -> Result<()> {
         harness_source_sha: o.harness,
         run_id: o.run,
         run_attempt: o.attempt,
+        hosting: hosting.binding(),
     };
-    let auth = installer_verify::read_private_record(&o.authorization)?;
-    let controller = installer_verify::read_private_record(&o.controller)?;
-    let inventory_path = o.inputs.join("installer-inventory.json");
-    let inventory = installer_verify::read_private_record(&inventory_path)?;
     // Authenticate both grants before trusting the controller-selected UUID or
     // creating either local consumption or installation state.
-    for (file, bytes) in [(&o.authorization, &auth), (&o.controller, &controller)] {
-        require(
-            tools.verify(
-                file,
-                release::ACCEPTANCE_WORKFLOW,
-                &expected.harness_source_sha,
-                expected.run_id,
-                expected.run_attempt,
-            )? == release::sha256(bytes),
+    for subject in [&authorization_files, &controller_files] {
+        subject.verify(
+            &tools,
+            release::ACCEPTANCE_WORKFLOW,
+            &expected.harness_source_sha,
+            expected.run_id,
+            expected.run_attempt,
         )?;
     }
     let receipt = release::bind_controller_consumption(
-        &controller,
-        &auth,
-        &inventory,
+        controller,
+        auth,
+        inventory,
         &expected,
         &o.engine,
         now()?,
     )?;
+    let parsed_inventory = release::parse_inventory(inventory)?;
+    inventory_files.verify(
+        &tools,
+        release::build_workflow(version)?,
+        source,
+        parsed_inventory.build_run_id,
+        parsed_inventory.build_run_attempt,
+    )?;
+    let mut authenticated_evidence = BTreeMap::new();
+    for subject in [&authorization_files, &controller_files, &inventory_files] {
+        authenticated_evidence.extend(subject.digests()?);
+    }
+    hosting.check()?;
     let installation_id = uuid::Uuid::parse_str(&receipt.installation_id).map_err(|_| REFUSED)?;
     let port = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|_| REFUSED)?;
     let runtime = RuntimeBinding {
-        docker_host: "unix:///var/run/docker.sock".into(),
+        docker_host: format!("unix:///run/user/{}/docker.sock", unsafe {
+            libc::geteuid()
+        }),
         engine_id: o.engine.clone(),
         openbao_port: port.local_addr().map_err(|_| REFUSED)?.port(),
-        profile: crate::installer_state::RuntimeProfile::Rootful,
+        profile: RuntimeProfile::Rootless,
     };
     let observed = DockerRunner::from_binding(&o.docker, &runtime, &o.tools)?.preflight()?;
+    crate::installer_compose::require_version(&observed.compose_version)?;
+    release::bind_controller_consumption(
+        controller,
+        auth,
+        inventory,
+        &expected,
+        &o.engine,
+        now()?,
+    )?;
+    for subject in [&authorization_files, &controller_files, &inventory_files] {
+        subject.check()?;
+    }
+    hosting.check()?;
     let consumed = installer_candidate_nonce::consume(
         &registry,
         &Consumption {
             nonce: expected.nonce.clone(),
-            authorization_sha256: release::sha256(&auth),
+            authorization_sha256: release::sha256(auth),
             context_sha256: receipt.context_sha256.clone(),
             installation_id,
             engine_id: o.engine.clone(),
@@ -416,30 +448,21 @@ fn install_inner(args: &[String], build_identity: &str) -> Result<()> {
         Identity {
             source_sha: source.into(),
             release_tag: version.into(),
-            inventory_sha256: format!("sha256:{}", release::sha256(&inventory)),
+            inventory_sha256: format!("sha256:{}", release::sha256(inventory)),
         },
         runtime,
         AcceptanceScope {
-            authorization_sha256: release::sha256(&auth),
+            authorization_sha256: release::sha256(auth),
             context_sha256: receipt.context_sha256.clone(),
             consumption_id: consumed.consumption_id.clone(),
+            authenticated_evidence_sha256: Some(authenticated_evidence),
         },
         installation_id,
     )?;
     state.create_private_directory("evidence")?;
     state.create_private_directory("downloads")?;
-    persist_signed(
-        &mut state,
-        &o.authorization,
-        "installer-candidate-authorization.json",
-        &auth,
-    )?;
-    persist_signed(
-        &mut state,
-        &o.controller,
-        "installer-controller-consumption.json",
-        &controller,
-    )?;
+    authorization_files.persist(&mut state)?;
+    controller_files.persist(&mut state)?;
     state.persist_operator(
         &std::env::current_exe().map_err(|_| REFUSED)?,
         &operator_sha,
@@ -458,12 +481,10 @@ fn install_inner(args: &[String], build_identity: &str) -> Result<()> {
         version,
     )?;
     require(prepared.authorization_bytes == auth && prepared.inventory_bytes == inventory)?;
-    persist_signed(
-        &mut state,
-        &inventory_path,
-        "installer-inventory.json",
-        &inventory,
-    )?;
+    for subject in [&authorization_files, &controller_files, &inventory_files] {
+        subject.check()?;
+    }
+    inventory_files.persist(&mut state)?;
     let bundle = crate::installer_bundle::validate_bundle(
         &prepared.bundle,
         &prepared.inventory,
@@ -475,14 +496,36 @@ fn install_inner(args: &[String], build_identity: &str) -> Result<()> {
     )?;
     // Expired grants never enter runtime, even after slow verification/extraction.
     release::bind_controller_consumption(
-        &controller,
-        &auth,
-        &inventory,
+        controller,
+        auth,
+        inventory,
         &expected,
         &o.engine,
         now()?,
     )?;
     state.advance(Phase::Verified)?;
+    hosting.select(&mut state)?;
+    crate::installer_rootless_storage_canary::qualify_installation(
+        &o.docker,
+        &o.installation,
+        &mut state,
+        &prepared.inventory,
+        &operator_sha,
+    )?;
+    // Pulling and qualifying the exact image can be slow. An expired grant
+    // cannot advance into application provisioning after that boundary.
+    release::bind_controller_consumption(
+        controller,
+        auth,
+        inventory,
+        &expected,
+        &o.engine,
+        now()?,
+    )?;
+    for subject in [&authorization_files, &controller_files, &inventory_files] {
+        subject.check()?;
+    }
+    hosting.check()?;
     let result = crate::installer_command::provision_runtime(
         &o.docker,
         &o.installation,
@@ -491,7 +534,16 @@ fn install_inner(args: &[String], build_identity: &str) -> Result<()> {
         &mut state,
         crate::installer_command::RuntimeInvocation {
             operator_sha: &operator_sha,
-            completion: crate::installer_command::RuntimeCompletion::HoldIncomplete,
+            completion: if parsed.hosting.as_ref().is_some_and(|hosting| {
+                hosting.certificate_source == "acme"
+                    && hosting.acme_environment.as_deref() == Some("production")
+                    && hosting.public_entry_origin.is_some()
+                    && hosting.staging_trust.is_none()
+            }) {
+                crate::installer_command::RuntimeCompletion::SignedStartupObserved
+            } else {
+                crate::installer_command::RuntimeCompletion::HoldIncomplete
+            },
         },
         port,
     );
@@ -551,7 +603,7 @@ mod tests {
         assert!(options(&duplicate).is_err());
     }
     #[test]
-    fn candidate_entry_preserves_rootless_hold_and_refuses_bypass_options() {
+    fn candidate_entry_refuses_incomplete_context_and_bypass_options_before_mutation() {
         for args in [
             vec![],
             vec!["--skip-verification", "true"],
@@ -561,15 +613,12 @@ mod tests {
             let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
             assert!(options(&args).is_err());
             let error = install(&args, "not-a-build").unwrap_err();
-            assert_eq!(
-                error,
-                "Acceptance-only candidate installation requires qualified rootless storage mapping"
-            );
+            assert_eq!(error, REFUSED);
             assert!(!error.contains("sensitive-input"));
         }
         assert_eq!(
             install(&valid_options(), "not-a-build").unwrap_err(),
-            "Acceptance-only candidate installation requires qualified rootless storage mapping"
+            REFUSED
         );
     }
 

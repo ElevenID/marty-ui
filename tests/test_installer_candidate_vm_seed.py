@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import installer_candidate_vm_create as creation
 import installer_candidate_vm_runtime as runtime
 import installer_candidate_vm_seed as seed
+from installer_candidate_vm_policy import ROOTLESS_PROFILES, ROOTLESS_PACKAGES, rootless_seed_fields
 from test_installer_candidate_vm_create import root_trial as root_trial
 from test_installer_candidate_vm_runtime import runtime_parent as runtime_parent
 from test_installer_candidate_vm_runtime import VM_ID, UID, GID
@@ -63,6 +64,28 @@ def test_seed_is_root_controlled_and_read_only_to_vm(root_trial, runtime_parent,
     with pytest.raises(FileExistsError):
         seed.prepare(source, registry, parent, runtime_parent,
                      vm_id=VM_ID, ssh_port=22022)
+
+
+@pytest.mark.parametrize("resource_profile", sorted(ROOTLESS_PROFILES))
+def test_explicit_rootless_seed_is_schema_checked_hash_bound_and_read_only(
+    root_trial, runtime_parent, monkeypatch, resource_profile
+):
+    # Existing root CI supplies qemu-img, cloud-init and cloud-localds. This
+    # creates only temporary media; no VM process or guest setup is executed.
+    source, registry, parent = _transferred(root_trial, runtime_parent, monkeypatch)
+    receipt = seed.prepare(source, registry, parent, runtime_parent,
+                           vm_id=VM_ID, ssh_port=22022, resource_profile=resource_profile)
+    assert receipt["schema"] == seed.ROOTLESS_SCHEMA
+    assert receipt["packages"] == ROOTLESS_PACKAGES
+    assert all(receipt[key] == value for key, value in rootless_seed_fields(resource_profile).items())
+    assert receipt["qualified"] is receipt["launch_authorized"] is False
+    assert seed.verify_seed(source, registry, parent, runtime_parent, vm_id=VM_ID) == receipt
+    media = runtime_parent / VM_ID / "seed.iso"
+    assert (media.stat().st_uid, media.stat().st_gid) == (0, GID)
+    assert stat.S_IMODE(media.stat().st_mode) == 0o440
+    control = registry / f"{VM_ID}.control"
+    assert len((control / "user-data").read_bytes()) < 65536
+    assert b"PRIVATE KEY" not in (registry / f"{VM_ID}.seed-receipt.json").read_bytes()
 
 
 def test_seed_failure_retains_intent_and_no_receipt(root_trial, runtime_parent, monkeypatch):

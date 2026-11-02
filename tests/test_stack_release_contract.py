@@ -707,14 +707,19 @@ def test_beta_lifecycle_installs_each_playwright_browser_revision() -> None:
     assert "python -m playwright install chromium" in workflow
 
 
-def test_stack_release_ui_smoke_checks_real_homepage_content() -> None:
-    workflow = _text(".github/workflows/cd.yml")
-
-    assert "Smoke-test UI image" in workflow
-    assert "UI image contains the default Nginx homepage" in workflow
-    assert "UI image homepage is missing ElevenID content" in workflow
-    assert "grep --quiet 'Welcome to nginx'" in workflow
-    assert "grep --quiet 'ElevenID'" in workflow
+def test_stack_release_ui_smoke_checks_customer_audience_and_disabled_web() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    image = next(step["with"] for step in jobs["build-ui"]["steps"] if step.get("id") == "build")
+    assert image["target"] == "selfhost"
+    assert "UI_VARIANT=selfhost" in image["build-args"]
+    assert "NGINX_CONFIG=nginx.spa.conf" in image["build-args"]
+    smoke = next(step for step in jobs["public-stack-smoke"]["steps"]
+                 if step.get("name") == "Smoke-test UI image")
+    assert smoke["working-directory"] == "marty-ui"
+    assert "check-image --audience customer" in smoke["run"]
+    assert "UI_ENABLED_SECTIONS=none" in smoke["run"]
+    assert "http://127.0.0.1:18080/healthz" in smoke["run"]
+    assert smoke["run"].count("= 404") == 2
 
 
 def test_public_ui_build_requires_a_prerendered_root_page() -> None:
@@ -748,6 +753,8 @@ def test_selfhost_ui_image_carries_its_runtime_assets() -> None:
     assert "--target selfhost" in selfhost_build
     assert "--build-arg UI_VARIANT=selfhost" in selfhost_build
     assert "--build-arg NGINX_CONFIG=nginx.spa.conf" in selfhost_build
+    assert "http://127.0.0.1:80/healthz" in selfhost_stage
+    assert 'io.elevenid.ui.audience="customer"' in selfhost_stage
     assert dockerfile.rstrip().endswith(
         "COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html"
     )

@@ -114,7 +114,7 @@ pub fn render(
     p: &ApplicationParameters,
     images: &BTreeMap<String, String>,
 ) -> Result<ApplicationEnvironment> {
-    render_selected(example, compose, tls_fragment, p, images, None)
+    render_selected(example, compose, tls_fragment, p, images, None, None)
 }
 
 pub(crate) fn render_selected(
@@ -124,6 +124,7 @@ pub(crate) fn render_selected(
     p: &ApplicationParameters,
     images: &BTreeMap<String, String>,
     foundation: Option<&crate::installer_foundation::Selection>,
+    hosting: Option<&crate::installer_hosting::Selection>,
 ) -> Result<ApplicationEnvironment> {
     let baseline = parse(EXAMPLE)?;
     let mut values = parse(example)?;
@@ -249,6 +250,18 @@ pub(crate) fn render_selected(
         ("OIDC_POST_LOGOUT_REDIRECT_URI", "/"),
     ] {
         values.insert(key.into(), format!("{}{suffix}", p.origin));
+    }
+    if let Some(hosting) = hosting {
+        values.insert(
+            "UI_ENABLED_SECTIONS".into(),
+            hosting.enabled_web_sections().into(),
+        );
+        if hosting.enabled_web_sections() == "console" {
+            values.insert(
+                "OIDC_POST_LOGOUT_REDIRECT_URI".into(),
+                format!("{}/console/login", p.origin),
+            );
+        }
     }
     for key in [
         "KEYCLOAK_USER_REGISTRATION_ENABLED",
@@ -450,6 +463,62 @@ mod tests {
         assert!(!text.contains("_PASSWORD="));
         assert!(!result.operator_account_created);
         assert_eq!(result.optional_empty_secrets.len(), 6);
+    }
+    #[test]
+    fn console_only_hosting_keeps_login_and_logout_on_the_enabled_section() {
+        use crate::{
+            installer_hosting,
+            installer_state::{Identity, InstallerState, Phase},
+        };
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join("hosting.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema": "elevenid.installation-hosting/v1", "mode": "local",
+                "public_origin": "https://localhost:18443",
+                "listener": {"bind_address": "127.0.0.1", "port": 18443},
+                "tls": {"termination": "marty-keyless", "certificate_source": "managed-ca"},
+                "web": {"enabled_sections": ["console"]}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut state = InstallerState::create(
+            &root.path().join("installation"),
+            Identity {
+                source_sha: "a".repeat(40),
+                release_tag: "v1.2.3".into(),
+                inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+            },
+        )
+        .unwrap();
+        state.create_private_directory("evidence").unwrap();
+        state.advance(Phase::Verified).unwrap();
+        let selection = installer_hosting::select(
+            installer_hosting::prepare(Some(&path), None).unwrap(),
+            &mut state,
+        )
+        .unwrap();
+        let result = render_selected(
+            EXAMPLE,
+            COMPOSE,
+            &tls(),
+            &parameters(),
+            &images(),
+            None,
+            Some(&selection),
+        )
+        .unwrap();
+        let text = String::from_utf8(result.env_bytes).unwrap();
+        assert!(text.contains("UI_ENABLED_SECTIONS='console'\n"));
+        assert!(text
+            .contains("OIDC_POST_LOGOUT_REDIRECT_URI='https://localhost:18443/console/login'\n"));
+        assert!(text.contains("OIDC_REDIRECT_URI='https://localhost:18443/v1/auth/callback'\n"));
     }
     #[test]
     fn public_origin_propagates_to_urls_oidc_and_cors_without_reusing_443_as_listener() {

@@ -5,6 +5,13 @@
 # source and access policy when disabling automatic bind-source creation.
 x-installer-runtime: &installer-runtime
   init: true
+  restart: unless-stopped
+  stop_grace_period: 60s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
   security_opt: [no-new-privileges:true]
   labels:
     com.elevenid.installer.id: ${MARTY_INSTALLER_ID:?set the installation identifier}
@@ -231,6 +238,7 @@ services:
     environment:
       UI_CANONICAL_ORIGIN: ${PUBLIC_API_URL:?set the installation origin}
       UI_PUBLIC_ENTRY_ORIGINS: ${MARTY_INSTALLER_PUBLIC_ENTRY_ORIGINS:-[]}
+      UI_ENABLED_SECTIONS: ${MARTY_INSTALLER_UI_ENABLED_SECTIONS-public,console}
   edge:
     <<: *installer-runtime
     ports: !reset []

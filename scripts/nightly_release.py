@@ -18,6 +18,7 @@ from build_stack_manifest import build_manifest
 from nightly_claim import validate_intake
 from release_transaction import IMAGE_URIS, file_digest
 from stack_tag_gate import classify_release_tag
+from ui_release import build_profile
 
 SCHEMA = "elevenid.nightly-installation-candidate/v1"
 WORKFLOW = ".github/workflows/nightly-release.yml"
@@ -72,15 +73,14 @@ def build_plan(claim: dict, lock: dict) -> list[dict]:
         args.update({prefix + "_VERSION": component["version"],
                      prefix + "_URI": artifacts[0]["uri"],
                      prefix + "_DIGEST": artifacts[0]["digest"]})
+    customer_target, customer_args = build_profile("customer", "tester")
     recipes = {
-        "ui": ("docker/ui.Dockerfile", "", {}),
+        "ui": ("docker/ui.Dockerfile", customer_target, customer_args),
         "services": ("services/Dockerfile", "", {"SERVICE_NAME": "gateway"}),
         "migrations": ("services/Dockerfile.migrations", "", {}),
         "openbao_didcomm": ("openbao/didcomm-authcrypt/Dockerfile", "", {}),
         "keycloak": ("keycloak/openbao-provider/Dockerfile", "", {}),
-        "ui_selfhost": ("docker/ui.Dockerfile", "selfhost", {
-            "UI_VARIANT": "selfhost", "SELFHOST_PUBLIC_PROFILE": "tester",
-            "NGINX_CONFIG": "nginx.spa.conf"}),
+        "ui_selfhost": ("docker/ui.Dockerfile", customer_target, customer_args),
     }
     result = []
     for role, (dockerfile, target, overrides) in recipes.items():

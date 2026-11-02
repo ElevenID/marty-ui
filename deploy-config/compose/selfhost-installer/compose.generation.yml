@@ -1,0 +1,25 @@
+# Authenticated recurring-generation inputs. The generation owner supplies one
+# derived private work directory and admits every exact bind before creation.
+# This file is selected only for the fixed installer-generation setup helper.
+services:
+  installer-generation:
+    volumes:
+      - type: bind
+        source: ${MARTY_GENERATION_WORK_DIR:?bound generation work directory required}/transfer
+        target: /transfer
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_GENERATION_WORK_DIR:?}/current
+        target: /input/current
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_GENERATION_WORK_DIR:?}/identity
+        target: /input/identity
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_GENERATION_PUBLIC_INGRESS_PLAN:?bound generation certificate plan required}
+        target: /input/public-ingress-plan.json
+        read_only: true
+        bind: {create_host_path: false}

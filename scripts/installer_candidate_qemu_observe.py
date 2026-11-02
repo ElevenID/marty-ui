@@ -26,6 +26,13 @@ from typing import Callable
 import installer_release as release
 from installer_candidate_controller import _directory
 from installer_host_probe import command
+from installer_candidate_vm_guest_readiness import (
+    ROOTLESS_FACT_FIELDS, inspect_guest, validate_rootless_facts,
+)
+from installer_candidate_vm_policy import (
+    GUEST_USER, ROOTLESS_UID, ROOTLESS_PACKAGES, ROOTLESS_PROFILES,
+    memory_mib, require_rootless_profile,
+)
 
 
 def private_file_at(parent: int, name: str, owner: int, maximum: int) -> bytes:
@@ -196,8 +203,18 @@ def validate_initial(initial: dict, installation_id: str) -> None:
                 "vm_start_ticks", "vm_disk_device", "vm_disk_inode", "vm_disk_fd",
                 "vm_memory_mib", "vm_cpus", "initial_docker_clean",
                 "capacity_qualified", "clean_host_qualified", "dispatch_authorized"}
+    rootless = type(initial) is dict and initial.get("schema") == "elevenid.installer-qemu-trial-observation/v3"
+    if rootless:
+        required |= ROOTLESS_FACT_FIELDS
+        validate_rootless_facts(initial, initial.get("resource_profile"))
+        release.require(initial.get("guest_uid") == ROOTLESS_UID
+                        and initial.get("guest_user") == GUEST_USER
+                        and type(initial.get("vm_memory_mib")) is int
+                        and initial["vm_memory_mib"] == memory_mib(initial["resource_profile"]),
+                        "initial rootless diagnostic selection differs")
     release.require(type(initial) is dict and set(initial) == required
-                    and initial["schema"] == "elevenid.installer-qemu-trial-observation/v2"
+                    and initial["schema"] == ("elevenid.installer-qemu-trial-observation/v3" if rootless
+                                               else "elevenid.installer-qemu-trial-observation/v2")
                     and initial["observation_phase"] == "initial-empty"
                     and type(initial["target"]) is dict
                     and set(initial["target"]) == {"guest_id", "disk_id", "engine_id",
@@ -231,6 +248,7 @@ def validate_initial(initial: dict, installation_id: str) -> None:
 
 
 def require_same_vm(initial: dict, current: dict) -> None:
+    release.require(current["schema"] == initial["schema"], "VM observation version changed")
     for field in ("target", "guest_user", "guest_uid", "vm_boot_id",
                   "vm_dir_path", "vm_dir_device", "vm_dir_inode",
                   "vm_uid", "vm_gid", "vm_disk_path", "ssh_port",
@@ -241,6 +259,13 @@ def require_same_vm(initial: dict, current: dict) -> None:
         release.require(type(initial.get(field)) is type(current[field])
                         and initial.get(field) == current[field],
                         "VM changed after initial observation")
+    if initial["schema"] == "elevenid.installer-qemu-trial-observation/v3":
+        validate_rootless_facts(current, initial["resource_profile"])
+        release.require(all(current[key] == initial[key] for key in
+                            ROOTLESS_FACT_FIELDS - {"docker_data_filesystem"})
+                        and current["docker_data_filesystem"]["device"]
+                        == initial["docker_data_filesystem"]["device"],
+                        "VM rootless runtime changed after initial observation")
 
 
 def require_clean_docker(phase: str, guest: Callable[[str], str], docker: str) -> None:
@@ -272,7 +297,7 @@ def write_observation(parent: int, name: str, raw: bytes) -> None:
 
 def _observe(vm_dir: Path, vm_parent: int, output_dir: Path, output_parent: int, *, guest_user: str,
              ssh_host: str, installation_id: str, phase: str, expected_vm_uid: int,
-             ssh_bin: Path) -> dict:
+             ssh_bin: Path, resource_profile: str | None = None) -> dict:
     release.require(os.geteuid() == 0 and vm_dir.is_absolute() and output_dir.is_absolute()
                     and vm_dir.resolve() == vm_dir and output_dir.resolve() == output_dir,
                     "trusted absolute controller paths required")
@@ -283,6 +308,9 @@ def _observe(vm_dir: Path, vm_parent: int, output_dir: Path, output_parent: int,
                     and str(uuid.UUID(installation_id)) == installation_id
                     and uuid.UUID(installation_id).version == 4,
                     "observation phase or installation identity differs")
+    if resource_profile is not None:
+        require_rootless_profile(resource_profile)
+        release.require(guest_user == GUEST_USER, "rootless diagnostic guest differs")
     initial_name = installation_id + ".initial-observation.json"
     initial_bytes = None
     initial = None
@@ -290,6 +318,8 @@ def _observe(vm_dir: Path, vm_parent: int, output_dir: Path, output_parent: int,
         initial_bytes = private_file_at(output_parent, initial_name, 0, 65536)
         initial = release.decode(initial_bytes)
         validate_initial(initial, installation_id)
+        release.require(initial.get("resource_profile") == resource_profile,
+                        "VM diagnostic resource profile changed")
     directory = os.fstat(vm_parent)
     release.require(stat.S_ISDIR(directory.st_mode) and stat.S_IMODE(directory.st_mode) == 0o700,
                     "VM control directory is not private")
@@ -310,6 +340,15 @@ def _observe(vm_dir: Path, vm_parent: int, output_dir: Path, output_parent: int,
                     and all(type(arg) is str for arg in vm["args"]),
                     "VM launch record invalid")
     args = vm["args"]
+    release.require(vm.get("resource_profile") == resource_profile,
+                    "VM diagnostic profile differs from retained configuration")
+    if resource_profile is not None:
+        release.require(type(vm.get("memory_mib")) is int
+                        and vm["memory_mib"] == memory_mib(resource_profile)
+                        and args.count("-m") == 1
+                        and args.index("-m") + 1 < len(args)
+                        and args[args.index("-m") + 1] == str(memory_mib(resource_profile)),
+                        "VM diagnostic memory allocation differs")
     disk = vm_dir / "disk.qcow2"
     release.require(args[0] == "/usr/bin/qemu-system-x86_64"
                     and "file=" + str(disk) + ",if=virtio,format=qcow2" in args
@@ -363,22 +402,31 @@ def _observe(vm_dir: Path, vm_parent: int, output_dir: Path, output_parent: int,
                           env={"HOME": "/", "PATH": "/usr/bin:/bin", "LANG": "C"})
             return raw.decode("ascii").strip()
 
-        account = guest("id -u; id -un; stat -c '%u:%a:%F' /home/" + guest_user).splitlines()
-        release.require(len(account) == 3 and account[0].isdecimal() and int(account[0]) > 0
-                        and account[1] == guest_user
-                        and account[2] == account[0] + ":700:directory",
-                        "guest account is not private")
-        docker = ("env -i HOME=/nonexistent PATH=/usr/bin:/bin "
-                  "/usr/bin/docker --host unix:///var/run/docker.sock")
-        engine_query = docker + " info --format '{{json .ID}}'"
-        engine = json.loads(guest(engine_query))
-        release.require(type(engine) is str and engine, "guest Docker Engine unavailable")
-        release.require(guest("uname -m") == "x86_64" and
-                        json.loads(guest(docker + " info --format '{{json .OSType}}'")) == "linux" and
-                        json.loads(guest(docker + " info --format '{{json .Architecture}}'")) in ("x86_64", "amd64"),
-                        "guest Docker platform differs")
-        require_clean_docker(phase, guest, docker)
-        release.require(json.loads(guest(engine_query)) == engine, "guest Docker Engine changed")
+        rootless_guest = None
+        if resource_profile is not None:
+            rootless_guest = inspect_guest(guest, user=guest_user, packages=ROOTLESS_PACKAGES,
+                                           resource_profile=resource_profile,
+                                           require_empty=phase != "post-install")
+            guest_uid = rootless_guest["guest_uid"]
+            engine = rootless_guest["docker_engine_id"]
+        else:
+            account = guest("id -u; id -un; stat -c '%u:%a:%F' /home/" + guest_user).splitlines()
+            release.require(len(account) == 3 and account[0].isdecimal() and int(account[0]) > 0
+                            and account[1] == guest_user
+                            and account[2] == account[0] + ":700:directory",
+                            "guest account is not private")
+            guest_uid = int(account[0])
+            docker = ("env -i HOME=/nonexistent PATH=/usr/bin:/bin "
+                      "/usr/bin/docker --host unix:///var/run/docker.sock")
+            engine_query = docker + " info --format '{{json .ID}}'"
+            engine = json.loads(guest(engine_query))
+            release.require(type(engine) is str and engine, "guest Docker Engine unavailable")
+            release.require(guest("uname -m") == "x86_64" and
+                            json.loads(guest(docker + " info --format '{{json .OSType}}'")) == "linux" and
+                            json.loads(guest(docker + " info --format '{{json .Architecture}}'")) in ("x86_64", "amd64"),
+                            "guest Docker platform differs")
+            require_clean_docker(phase, guest, docker)
+            release.require(json.loads(guest(engine_query)) == engine, "guest Docker Engine changed")
         again = disk.lstat()
         release.require((again.st_dev, again.st_ino) == (disk_info.st_dev, disk_info.st_ino)
                         and (process / "cmdline").read_bytes().rstrip(b"\0").decode().split("\0") == args
@@ -406,12 +454,13 @@ def _observe(vm_dir: Path, vm_parent: int, output_dir: Path, output_parent: int,
                             device=disk_info.st_dev, inode=disk_info.st_ino)))
         target = dict(guest_id=vm["id"], disk_id=disk_identity, engine_id=engine,
                       installation_id=installation_id)
-        evidence = dict(schema="elevenid.installer-qemu-trial-observation/v2", target=target,
+        evidence = dict(schema=("elevenid.installer-qemu-trial-observation/v3" if resource_profile
+                                else "elevenid.installer-qemu-trial-observation/v2"), target=target,
                         observation_phase=phase, vm_boot_id=boot_id,
                         vm_dir_path=str(vm_dir), vm_dir_device=directory.st_dev,
                         vm_dir_inode=directory.st_ino, vm_uid=owner, vm_gid=directory.st_gid,
                         vm_disk_path=str(disk), ssh_port=port,
-                        guest_user=guest_user, guest_uid=int(account[0]),
+                        guest_user=guest_user, guest_uid=guest_uid,
                         vm_config_sha256=release.digest(vm_bytes),
                         vm_executable_sha256=exe_sha,
                         controller_key_sha256=release.digest(key_bytes),
@@ -422,6 +471,8 @@ def _observe(vm_dir: Path, vm_parent: int, output_dir: Path, output_parent: int,
                         vm_memory_mib=vm.get("memory_mib"), vm_cpus=vm.get("cpus"),
                         capacity_qualified=False,
                         clean_host_qualified=False, dispatch_authorized=False)
+        if rootless_guest is not None:
+            evidence.update({key: rootless_guest[key] for key in ROOTLESS_FACT_FIELDS})
         if phase == "initial-empty":
             evidence["initial_docker_clean"] = True
         else:
@@ -460,7 +511,7 @@ def _observe(vm_dir: Path, vm_parent: int, output_dir: Path, output_parent: int,
 
 def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
             installation_id: str, phase: str, expected_vm_uid: int,
-            ssh_bin: Path = Path("/usr/bin/ssh")) -> dict:
+            ssh_bin: Path = Path("/usr/bin/ssh"), resource_profile: str | None = None) -> dict:
     vm_parent = open_vm_dir(vm_dir, expected_vm_uid)
     try:
         parent = _directory(output_dir)
@@ -469,7 +520,7 @@ def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
                             guest_user=guest_user, ssh_host=ssh_host,
                             installation_id=installation_id, phase=phase,
                             expected_vm_uid=expected_vm_uid,
-                            ssh_bin=ssh_bin)
+                            ssh_bin=ssh_bin, resource_profile=resource_profile)
         finally:
             os.close(parent)
     finally:
@@ -486,11 +537,13 @@ def main() -> int:
     parser.add_argument("--phase", choices=("initial-empty", "pre-dispatch", "post-install"), required=True)
     parser.add_argument("--expected-vm-uid", type=int, required=True,
                         help="Diagnostic selection only; future dispatch needs independent approval")
+    parser.add_argument("--resource-profile", choices=sorted(ROOTLESS_PROFILES))
     args = parser.parse_args()
     try:
         observe(args.vm_dir, args.output_dir, guest_user=args.guest_user,
                 ssh_host=args.ssh_host, installation_id=args.installation_id,
-                phase=args.phase, expected_vm_uid=args.expected_vm_uid)
+                phase=args.phase, expected_vm_uid=args.expected_vm_uid,
+                resource_profile=args.resource_profile)
     except (OSError, ValueError, KeyError, TypeError, UnicodeError, IndexError):
         parser.exit(1, "Owned VM observation refused; preserve all control records.\n")
     return 0

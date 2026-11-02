@@ -1,0 +1,25 @@
+# This loopback port must equal tls.http01_host_port in the hosting selection.
+[Unit]
+Description=Marty public HTTP-01 socket forwarding
+Requires=marty-acme-http01.socket
+After=marty-acme-http01.socket
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=notify
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd --connections-max=64 127.0.0.1:18080
+DynamicUser=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=32M
+TasksMax=8
+TimeoutStartSec=15
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=2

@@ -24,6 +24,8 @@ use std::{
 
 type Result<T> = std::result::Result<T, String>;
 pub const COMPOSE_VERSION: &str = "5.6.1";
+#[path = "installer_compose_generation.rs"]
+mod generation;
 const MAX_FILE: u64 = 2 * 1024 * 1024;
 const MAX_WAIT: u64 = 720;
 const REFUSED: &str = "Compose installation policy refused the operation";
@@ -132,6 +134,140 @@ mod tests {
         assert!(runtime_selection(&m, &prior, &selected).is_err());
         m["services"]["app"]["depends_on"] = json!({});
         assert!(runtime_selection(&m, &prior, &selected).is_err());
+    }
+
+    #[test]
+    fn retained_recovery_keeps_full_model_but_requires_an_explicit_runtime_dependency_closure() {
+        let root = tempfile::tempdir().unwrap();
+        let p = inputs(root.path());
+        let mut full = model(&p);
+        let image = p.approved_images.first().unwrap();
+        let mut prior = ProjectResources::default();
+        for role in ["app", "openbao", "openbao-unseal", "installer-acme-http01"] {
+            full["services"][role] = full["services"]["app"].clone();
+            prior
+                .containers
+                .insert(role.into(), identity(role, false, image));
+        }
+        full["services"]["setup"] = json!({"labels":{SETUP_LABEL:"setup"}});
+        prior
+            .containers
+            .insert("setup".into(), identity("setup", true, image));
+        full["services"]["openbao-unseal"]["depends_on"] =
+            json!({"openbao":{"condition":"service_healthy"}});
+        let selected: Vec<String> = ["openbao", "openbao-unseal", "installer-acme-http01"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let original = full.clone();
+        let roles = retained_runtime_selection(&full, &prior, &selected).unwrap();
+        assert_eq!(roles, selected.iter().cloned().collect());
+        assert_eq!(
+            full, original,
+            "admission must retain the complete native model"
+        );
+        assert!(
+            runtime_selection(&full, &prior, &selected).is_err(),
+            "ordinary runtime admission retains its existing no-setup-model policy"
+        );
+        for mutation in [
+            "empty",
+            "duplicate",
+            "unknown",
+            "missing-model",
+            "missing-retained",
+            "setup-selected",
+            "setup-dependency",
+            "unselected-dependency",
+            "incomplete-closure",
+            "retained-setup",
+            "malformed-dependencies",
+            "setup-condition",
+        ] {
+            let mut model = full.clone();
+            let mut retained = prior.clone();
+            let mut selection = selected.clone();
+            match mutation {
+                "empty" => selection.clear(),
+                "duplicate" => selection.push("openbao".into()),
+                "unknown" => selection.push("foreign".into()),
+                "missing-model" => {
+                    model["services"].as_object_mut().unwrap().remove("openbao");
+                }
+                "missing-retained" => {
+                    retained.containers.remove("openbao");
+                }
+                "setup-selected" => selection.push("setup".into()),
+                "setup-dependency" => {
+                    model["services"]["openbao"]["depends_on"] =
+                        json!({"setup":{"condition":"service_completed_successfully"}})
+                }
+                "unselected-dependency" => {
+                    model["services"]["openbao"]["depends_on"] =
+                        json!({"app":{"condition":"service_started"}})
+                }
+                "incomplete-closure" => selection.retain(|role| role != "openbao"),
+                "retained-setup" => retained.containers.get_mut("openbao").unwrap().setup = true,
+                "malformed-dependencies" => {
+                    model["services"]["openbao-unseal"]["depends_on"] = json!(["openbao"])
+                }
+                "setup-condition" => {
+                    model["services"]["openbao-unseal"]["depends_on"]["openbao"]["condition"] =
+                        json!("service_completed_successfully")
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                retained_runtime_selection(&model, &retained, &selection).is_err(),
+                "accepted {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn infrastructure_start_checks_selected_health_and_all_retained_identities() {
+        let mut resources = ProjectResources::default();
+        for (role, setup, id) in [
+            ("openbao", false, "a"),
+            ("app", false, "b"),
+            ("setup", true, "c"),
+        ] {
+            let mut container = identity(role, setup, "fixture");
+            container.id = id.repeat(64);
+            container.health_required = !setup;
+            resources.containers.insert(role.into(), container);
+        }
+        let rows = vec![
+            json!({"Service":"openbao","ID":"a".repeat(64),"State":"running","Health":"healthy"}),
+            json!({"Service":"app","ID":"b".repeat(64),"State":"exited","Health":"unhealthy"}),
+            json!({"Service":"setup","ID":"c".repeat(64),"State":"exited","ExitCode":0}),
+        ];
+        let selected = BTreeSet::from(["openbao".into()]);
+        assert!(completed_selected(&resources, &rows, Some(&selected)));
+        assert!(!completed(&resources, &rows));
+        assert!(!completed_selected(
+            &resources,
+            &rows,
+            Some(&BTreeSet::from(["app".into()]))
+        ));
+        assert!(!completed_selected(
+            &resources,
+            &rows,
+            Some(&BTreeSet::from(["setup".into()]))
+        ));
+        for (row, field, value) in [
+            (0, "Health", json!("unhealthy")),
+            (1, "ID", json!("foreign")),
+            (2, "ExitCode", json!(1)),
+        ] {
+            let mut invalid = rows.clone();
+            invalid[row][field] = value;
+            assert!(!completed_selected(&resources, &invalid, Some(&selected)));
+        }
+        assert!(!completed_selected(&resources, &rows[..2], Some(&selected)));
+        let mut duplicate = rows.clone();
+        duplicate[1] = rows[0].clone();
+        assert!(!completed_selected(&resources, &duplicate, Some(&selected)));
     }
 
     #[test]
@@ -762,6 +898,56 @@ mod tests {
     }
 
     #[test]
+    fn health_restart_requires_one_exact_running_unhealthy_runtime_and_completed_setup() {
+        let image = format!("example.invalid/runtime@sha256:{}", "c".repeat(64));
+        let mut app = identity("app", false, &image);
+        app.health_required = true;
+        let mut setup = identity("setup", true, &image);
+        setup.id = "f".repeat(64);
+        let resources = ProjectResources {
+            containers: BTreeMap::from([("app".into(), app), ("setup".into(), setup)]),
+            ..Default::default()
+        };
+        let rows = vec![
+            json!({"Service":"app","ID":"d".repeat(64),"State":"running","Health":"unhealthy","ExitCode":0}),
+            json!({"Service":"setup","ID":"f".repeat(64),"State":"exited","ExitCode":0}),
+        ];
+        unhealthy_selection(&resources, &rows, &["app".into()]).unwrap();
+        for selected in [
+            vec![],
+            vec!["setup".into()],
+            vec!["app".into(), "app".into()],
+        ] {
+            assert!(unhealthy_selection(&resources, &rows, &selected).is_err());
+        }
+        for mutation in 0..9 {
+            let mut changed = rows.clone();
+            let mut retained = resources.clone();
+            match mutation {
+                0 => changed[0]["Health"] = json!("healthy"),
+                1 => changed[0]["Health"] = json!("starting"),
+                2 => changed[0]["State"] = json!("exited"),
+                3 => changed[0]["ID"] = json!("a".repeat(64)),
+                4 => changed.push(changed[0].clone()),
+                5 => changed[1]["State"] = json!("running"),
+                6 => changed[1]["ExitCode"] = json!(1),
+                7 => retained.containers.get_mut("app").unwrap().health_required = false,
+                _ => {
+                    retained
+                        .containers
+                        .get_mut("setup")
+                        .unwrap()
+                        .setup_execution = None
+                }
+            }
+            assert!(
+                unhealthy_selection(&retained, &changed, &["app".into()]).is_err(),
+                "mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
     fn native_dollar_paths_are_decoded_only_for_host_inspection() {
         let encoded = json!("/private/install $$literal/inputs/file$$$$name");
         assert_eq!(
@@ -920,6 +1106,13 @@ pub struct ComposeSession {
     configuration_sha256: String,
     bindings: BTreeMap<PathBuf, String>,
     cleanup_only: bool,
+    // A generation owner may lend a read-only mixed-ID observation to local
+    // recovery. Ordinary Compose operations cannot use this view to mutate.
+    generation_transition: Option<BTreeSet<String>>,
+    // A retained recovery command admits the complete model but starts only
+    // this explicit runtime dependency closure. Ordinary starts keep their
+    // existing whole-model runtime admission.
+    runtime_recovery_roles: Option<BTreeSet<String>>,
 }
 
 /// Written before application startup. It binds the authenticated maintenance
@@ -1324,6 +1517,12 @@ pub(crate) fn bound_ingress_listener(
             service["environment"]["OIDF_EDGE_PUBLIC_ORIGIN"]
                 == selection.resolve_origin(listener.port)?.as_str(),
         )?;
+        // Startup exposure is part of the exact hosting selection, not an
+        // inherited process environment or an editable Compose override.
+        match model["services"]["ui"]["environment"].get("UI_ENABLED_SECTIONS") {
+            Some(value) => require(value.as_str() == Some(selection.enabled_web_sections()))?,
+            None => require(!selection.has_web_selection())?,
+        }
         let configured_entry = service["environment"]
             .get("OIDF_EDGE_PUBLIC_ENTRY_ORIGIN")
             .map(|entry| entry.as_str().ok_or(REFUSED))
@@ -1569,7 +1768,29 @@ fn resource_names(labelled: &str, named: &str, project: &str) -> Result<BTreeSet
     Ok(result)
 }
 fn completed(resources: &ProjectResources, status: &[Value]) -> bool {
+    completed_selected(resources, status, None)
+}
+
+/// A cold-start infrastructure phase must not require application health before
+/// recovering its credentials. Identity and completed setup custody still cover
+/// every retained container; only the selected runtime's health gates this step.
+fn completed_selected(
+    resources: &ProjectResources,
+    status: &[Value],
+    selected: Option<&BTreeSet<String>>,
+) -> bool {
     if status.len() != resources.containers.len() {
+        return false;
+    }
+    if selected.is_some_and(|roles| {
+        roles.is_empty()
+            || !roles.iter().all(|role| {
+                resources
+                    .containers
+                    .get(role)
+                    .is_some_and(|container| !container.setup)
+            })
+    }) {
         return false;
     }
     let mut seen = BTreeSet::new();
@@ -1589,9 +1810,13 @@ fn completed(resources: &ProjectResources, status: &[Value]) -> bool {
                         .setup_execution
                         .as_ref()
                         .is_some_and(|execution| execution.completed_without_restart)
-            } else {
+            } else if selected.is_none_or(|roles| roles.contains(role)) {
                 row["State"] == "running"
                     && (!container.health_required || row["Health"] == "healthy")
+            } else {
+                row["State"].as_str().is_some_and(|state| {
+                    ["running", "created", "exited", "restarting", "paused"].contains(&state)
+                })
             }
     })
 }
@@ -1644,27 +1869,54 @@ fn command_outcome(result: &Result<String>, complete: bool) -> (Option<i32>, Opt
     }
 }
 
+/// Fixed evidence owners for runtime-only operations. A caller cannot select a
+/// setup command or an arbitrary record namespace through this capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RuntimeOperationOwner {
+    Acme,
+    Generation,
+    Health,
+}
+
+/// Only the immutable-generation owner may replace its fixed producer or the
+/// runtime consumers of a completely admitted generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GenerationOperation {
+    Candidate,
+    Activate,
+}
+impl RuntimeOperationOwner {
+    fn evidence_prefix(self) -> &'static str {
+        match self {
+            Self::Acme => "acme-compose",
+            Self::Generation => "generation-compose",
+            Self::Health => "health-compose",
+        }
+    }
+}
+
 enum Evidence<'a> {
     Install(&'a mut InstallerState),
-    Maintenance(&'a mut LockedMaintenance),
+    Maintenance(&'a mut LockedMaintenance, Option<RuntimeOperationOwner>),
 }
 impl Evidence<'_> {
     fn journal(&self) -> &Journal {
         match self {
             Self::Install(s) => s.journal(),
-            Self::Maintenance(s) => s.journal(),
+            Self::Maintenance(s, _) => s.journal(),
         }
     }
     fn write(&mut self, name: &str, bytes: &[u8]) -> Result<()> {
         match self {
             Self::Install(s) => s.write_evidence(name, bytes),
-            Self::Maintenance(s) => s.write_evidence_exclusive(name, bytes),
+            Self::Maintenance(s, _) => s.write_evidence_exclusive(name, bytes),
         }
     }
     fn prefix(&self) -> &'static str {
         match self {
             Self::Install(_) => "compose",
-            Self::Maintenance(_) => "uninstall-compose",
+            Self::Maintenance(_, None) => "uninstall-compose",
+            Self::Maintenance(_, Some(owner)) => owner.evidence_prefix(),
         }
     }
 }
@@ -1788,7 +2040,34 @@ impl ComposeSession {
         binding: &RuntimeBinding,
         inputs: ComposeInputs,
     ) -> Result<Self> {
-        Self::new_inner(docker_path, binding, inputs, None, false)
+        Self::new_inner(docker_path, binding, inputs, None, false, true)
+    }
+    /// A generation may inspect the complete native model while its mutation
+    /// commands still select only the fixed producer or changed runtime roles.
+    /// No generated/merged model is passed back to Compose for execution.
+    pub(crate) fn new_generation(
+        docker_path: &Path,
+        binding: &RuntimeBinding,
+        inputs: ComposeInputs,
+    ) -> Result<Self> {
+        Self::new_inner(docker_path, binding, inputs, None, false, false)
+    }
+    /// Keep listener, mounts and the retained ownership census visible while
+    /// selecting only an explicit closed set of existing runtime containers.
+    /// This constructor grants no creation or setup execution authority.
+    pub(crate) fn new_runtime_recovery(
+        docker_path: &Path,
+        binding: &RuntimeBinding,
+        inputs: ComposeInputs,
+    ) -> Result<Self> {
+        require(inputs.prior.is_some())?;
+        let mut session = Self::new_inner(docker_path, binding, inputs, None, false, false)?;
+        session.runtime_recovery_roles = Some(retained_runtime_selection(
+            &session.model,
+            &session.prior(),
+            &session.inputs.services,
+        )?);
+        Ok(session)
     }
     pub(crate) fn new_with_deadline(
         docker_path: &Path,
@@ -1796,7 +2075,7 @@ impl ComposeSession {
         inputs: ComposeInputs,
         deadline: Instant,
     ) -> Result<Self> {
-        Self::new_inner(docker_path, binding, inputs, Some(deadline), false)
+        Self::new_inner(docker_path, binding, inputs, Some(deadline), false, true)
     }
     pub(crate) fn for_failed_runtime_cleanup(
         docker_path: &Path,
@@ -1804,7 +2083,7 @@ impl ComposeSession {
         inputs: ComposeInputs,
         deadline: Option<Instant>,
     ) -> Result<Self> {
-        Self::new_inner(docker_path, binding, inputs, deadline, true)
+        Self::new_inner(docker_path, binding, inputs, deadline, true, true)
     }
     fn new_inner(
         docker_path: &Path,
@@ -1812,6 +2091,7 @@ impl ComposeSession {
         inputs: ComposeInputs,
         deadline: Option<Instant>,
         cleanup_only: bool,
+        model_selection: bool,
     ) -> Result<Self> {
         binding.validate()?;
         require(
@@ -1915,10 +2195,12 @@ impl ComposeSession {
             configuration_sha256: String::new(),
             bindings,
             cleanup_only,
+            generation_transition: None,
+            runtime_recovery_roles: None,
         };
         let output = session.compose(
             &["config", "--format", "json"],
-            true,
+            model_selection,
             Duration::from_secs(60),
         )?;
         let model: Value = serde_json::from_str(&output).map_err(|_| REFUSED)?;
@@ -1931,7 +2213,7 @@ impl ComposeSession {
         }
         let hashes = model_hashes(&session.compose(
             &["config", "--hash", "*"],
-            true,
+            model_selection,
             Duration::from_secs(60),
         )?)?;
         require(
@@ -1953,8 +2235,34 @@ impl ComposeSession {
     pub fn configuration_sha256(&self) -> &str {
         &self.configuration_sha256
     }
+    pub(crate) fn runtime_binding(&self) -> &RuntimeBinding {
+        &self.binding
+    }
+    pub(crate) fn input_files(&self) -> &BTreeMap<PathBuf, String> {
+        &self.bindings
+    }
+    pub(crate) fn require_runtime_selection(&self) -> Result<()> {
+        self.runtime_selection_roles().map(|_| ())
+    }
+    pub(crate) fn runtime_selection_roles(&self) -> Result<BTreeSet<String>> {
+        if let Some(expected) = &self.runtime_recovery_roles {
+            require(!self.cleanup_only && self.generation_transition.is_none())?;
+            let roles =
+                retained_runtime_selection(&self.model, &self.prior(), &self.inputs.services)?;
+            require(&roles == expected)?;
+            Ok(roles)
+        } else {
+            runtime_selection(&self.model, &self.prior(), &self.inputs.services)?;
+            Ok(self.model["services"]
+                .as_object()
+                .ok_or(REFUSED)?
+                .keys()
+                .cloned()
+                .collect())
+        }
+    }
     pub fn observe_resources(&self) -> Result<ProjectResources> {
-        self.observe(false)
+        self.observe_transition(false, self.generation_transition.as_ref())
     }
     fn recheck(&self) -> Result<()> {
         verify_input_files(&self.inputs.installation, &self.bindings)?;
@@ -2114,6 +2422,14 @@ impl ComposeSession {
     }
 
     fn observe(&self, allow_new: bool) -> Result<ProjectResources> {
+        self.observe_transition(allow_new, None)
+    }
+
+    fn observe_transition(
+        &self,
+        allow_new: bool,
+        replacing: Option<&BTreeSet<String>>,
+    ) -> Result<ProjectResources> {
         self.recheck()?;
         let project_label = format!("label=com.docker.compose.project={}", self.inputs.project);
         let ids = identifiers(&self.docker.run_checked(&[
@@ -2208,14 +2524,17 @@ impl ComposeSession {
                 }
                 require(c_image(&container)? == images[&identity.image])?;
                 match prior.containers.get(role) {
-                    Some(old) => {
+                    Some(old)
+                        if old.id == identity.id
+                            || replacing.is_none_or(|roles| !roles.contains(role)) =>
+                    {
                         require(old == &identity)?;
                         if old.setup {
                             require(retained_setup_completed(&container))?;
                         }
                     }
-                    None => require(
-                        allow_new
+                    _ => require(
+                        (allow_new || replacing.is_some_and(|roles| roles.contains(role)))
                             && self.model["services"][role]["image"] == identity.image
                             && self.hashes.get(role) == Some(&identity.config_hash)
                             && identity.setup
@@ -2311,17 +2630,28 @@ impl ComposeSession {
             }
         }
         require(
-            prior
-                .containers
+            prior.containers.iter().all(|(role, identity)| {
+                replacing.is_some_and(|roles| roles.contains(role))
+                    || result.containers.get(role) == Some(identity)
+            }) && prior
+                .networks
                 .iter()
-                .all(|(role, identity)| result.containers.get(role) == Some(identity))
-                && prior
-                    .networks
-                    .iter()
-                    .all(|(name, id)| result.networks.get(name) == Some(id))
+                .all(|(name, id)| result.networks.get(name) == Some(id))
                 && prior.volumes.is_subset(&result.volumes),
         )?;
-        if !allow_new {
+        if let Some(replacing) = replacing {
+            require(
+                result.networks == prior.networks
+                    && result.volumes == prior.volumes
+                    && result
+                        .containers
+                        .keys()
+                        .all(|role| prior.containers.contains_key(role))
+                    && prior.containers.keys().all(|role| {
+                        replacing.contains(role) || result.containers.contains_key(role)
+                    }),
+            )?;
+        } else if !allow_new {
             require(result == prior)?;
         }
         Ok(result)
@@ -2402,6 +2732,11 @@ impl ComposeSession {
         )
     }
     fn begin(&self, state: &mut Evidence<'_>, operation: &str, command: &[&str]) -> Result<()> {
+        require(self.generation_transition.is_none())?;
+        if self.runtime_recovery_roles.is_some() {
+            require(command.first() == Some(&"start"))?;
+            self.runtime_selection_roles()?;
+        }
         let observed = self.observe(false)?;
         self.write(
             state,
@@ -2411,6 +2746,7 @@ impl ComposeSession {
                 "schema":"elevenid.installer-compose-intent/v1", "project":self.inputs.project,
                 "engine_id":self.binding.engine_id,"configuration_sha256":self.configuration_sha256,
                 "input_files":self.bindings,"command":command,"prior_resources":observed,
+                "selected_services":self.inputs.services,
                 "automatic_retry":false,"installation_ready":false
             }),
         )
@@ -2566,6 +2902,28 @@ impl ComposeSession {
         operation: &str,
         timeout: Duration,
     ) -> Result<ComposeReceipt> {
+        self.start_existing_for(state, None, operation, timeout)
+    }
+
+    /// Uses the same retained-container admission as manual start, with a fixed
+    /// maintenance owner's records. This never creates or recreates resources.
+    pub(crate) fn start_existing_owned(
+        &self,
+        state: &mut LockedMaintenance,
+        owner: RuntimeOperationOwner,
+        operation: &str,
+        timeout: Duration,
+    ) -> Result<ComposeReceipt> {
+        self.start_existing_for(state, Some(owner), operation, timeout)
+    }
+
+    fn start_existing_for(
+        &self,
+        state: &mut LockedMaintenance,
+        owner: Option<RuntimeOperationOwner>,
+        operation: &str,
+        timeout: Duration,
+    ) -> Result<ComposeReceipt> {
         require(
             !self.cleanup_only
                 && self.inputs.prior.is_some()
@@ -2573,16 +2931,73 @@ impl ComposeSession {
                 && timeout.as_secs() > 0
                 && timeout.as_secs() <= MAX_WAIT,
         )?;
-        runtime_selection(&self.model, &self.prior(), &self.inputs.services)?;
-        let mut state = Evidence::Maintenance(state);
+        let selected = self.runtime_selection_roles()?;
+        let mut state = Evidence::Maintenance(state, owner);
         let seconds = timeout.as_secs().to_string();
         let command = ["start", "--wait", "--wait-timeout", &seconds];
         self.begin(&mut state, operation, &command)?;
         let result = self.compose(&command, true, timeout + Duration::from_secs(60));
         let resources = self.observe(false);
         let status = self.status();
-        let complete = matches!((&resources, &status), (Ok(resources), Ok(status)) if completed(resources, status));
+        let complete = matches!((&resources, &status), (Ok(resources), Ok(status)) if completed_selected(resources, status, Some(&selected)));
         self.receipt(&mut state, operation, &result, complete, resources, status)
+    }
+
+    /// A health owner can restart one already-running unhealthy runtime only.
+    /// Identity, policy, and setup execution remain unchanged. The caller owns
+    /// dependency-health admission and its persisted cooldown/attempt policy.
+    pub(crate) fn restart_owned_unhealthy(
+        &self,
+        state: &mut LockedMaintenance,
+        operation: &str,
+        timeout: Duration,
+    ) -> Result<ComposeReceipt> {
+        require(
+            !self.cleanup_only
+                && self.inputs.prior.is_some()
+                && timeout.as_secs() > 0
+                && timeout.as_secs() <= 120,
+        )?;
+        self.require_runtime_selection()?;
+        let before = self.observe(false)?;
+        unhealthy_selection(&before, &self.status()?, &self.inputs.services)?;
+        let selected: BTreeSet<_> = self.inputs.services.iter().cloned().collect();
+        let mut state = Evidence::Maintenance(state, Some(RuntimeOperationOwner::Health));
+        let seconds = timeout.as_secs().to_string();
+        let command = ["restart", "--no-deps", "--timeout", &seconds];
+        self.begin(&mut state, operation, &command)?;
+        let result = self.compose(&command, true, timeout + Duration::from_secs(60));
+        let until = Instant::now() + timeout;
+        let read_status = || {
+            rows(
+                &self.compose(
+                    &["ps", "--all", "--no-trunc", "--format", "json"],
+                    false,
+                    until
+                        .saturating_duration_since(Instant::now())
+                        .max(Duration::from_millis(1)),
+                )?,
+            )
+        };
+        let mut statuses = read_status();
+        while result.is_ok()
+            && statuses
+                .as_ref()
+                .is_ok_and(|rows| !completed_selected(&before, rows, Some(&selected)))
+            && Instant::now() < until
+        {
+            std::thread::sleep(Duration::from_millis(250));
+            statuses = read_status();
+        }
+        let resources = self.observe(false).and_then(|after| {
+            require(after == before)?;
+            Ok(after)
+        });
+        let complete = matches!((&resources, &statuses), (Ok(resources), Ok(rows))
+            if completed_selected(resources, rows, Some(&selected)));
+        self.receipt(
+            &mut state, operation, &result, complete, resources, statuses,
+        )
     }
 
     pub(crate) fn stop(
@@ -2610,7 +3025,7 @@ impl ComposeSession {
         timeout: Duration,
         down: bool,
     ) -> Result<ComposeReceipt> {
-        let mut state = Evidence::Maintenance(state);
+        let mut state = Evidence::Maintenance(state, None);
         require(
             self.inputs.prior.is_some()
                 && self.inputs.services.is_empty()
@@ -2684,6 +3099,41 @@ impl ComposeSession {
     }
 }
 
+/// The command explicitly names every dependency it may start. Unrelated
+/// runtime/setup roles remain in the complete authenticated model and census,
+/// but they cannot become implicit mutation or health-wait targets.
+fn retained_runtime_selection(
+    model: &Value,
+    prior: &ProjectResources,
+    selected: &[String],
+) -> Result<BTreeSet<String>> {
+    let services = model["services"].as_object().ok_or(REFUSED)?;
+    let roles: BTreeSet<String> = selected.iter().cloned().collect();
+    require(!roles.is_empty() && roles.len() == selected.len())?;
+    for role in &roles {
+        let config = services.get(role).ok_or(REFUSED)?;
+        require(
+            config["labels"][SETUP_LABEL] != "setup"
+                && prior
+                    .containers
+                    .get(role)
+                    .is_some_and(|identity| !identity.setup),
+        )?;
+        if let Some(dependencies) = config.get("depends_on") {
+            for (dependency, condition) in dependencies.as_object().ok_or(REFUSED)? {
+                require(
+                    roles.contains(dependency)
+                        && matches!(
+                            condition["condition"].as_str(),
+                            Some("service_started" | "service_healthy")
+                        ),
+                )?;
+            }
+        }
+    }
+    Ok(roles)
+}
+
 fn runtime_selection(model: &Value, prior: &ProjectResources, selected: &[String]) -> Result<()> {
     let services = model["services"].as_object().ok_or(REFUSED)?;
     require(
@@ -2708,6 +3158,31 @@ fn runtime_selection(model: &Value, prior: &ProjectResources, selected: &[String
                         })
             }),
     )
+}
+
+fn unhealthy_selection(
+    resources: &ProjectResources,
+    rows: &[Value],
+    selected: &[String],
+) -> Result<()> {
+    require(selected.len() == 1)?;
+    let role = &selected[0];
+    let identity = resources.containers.get(role).ok_or(REFUSED)?;
+    require(!identity.setup && identity.health_required)?;
+    let mut normalized = rows.to_vec();
+    let matching: Vec<_> = normalized
+        .iter_mut()
+        .filter(|row| row["Service"] == role.as_str())
+        .collect();
+    require(matching.len() == 1)?;
+    let row = matching.into_iter().next().ok_or(REFUSED)?;
+    require(row["ID"] == identity.id && row["State"] == "running" && row["Health"] == "unhealthy")?;
+    row["Health"] = json!("healthy");
+    require(completed_selected(
+        resources,
+        &normalized,
+        Some(&BTreeSet::from([role.clone()])),
+    ))
 }
 
 fn finite_application_failure(receipt: &ComposeReceipt) -> Result<()> {
