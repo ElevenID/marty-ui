@@ -1333,3 +1333,80 @@ test('engineering unresolved resources still retire independent owned sessions a
   });
   assert.deepEqual(probes,['learner','admin']);assert.equal(privateRetired,false);
 });
+
+
+// Adapter controls only; they cannot qualify a real Canvas run.
+function canvasFenceRetirementFixture({foreign, failDisable, staleReadback, disabled}={}) {
+  const ids={org:'11111111-1111-4111-8111-111111111111',platform:'22222222-2222-4222-8222-222222222222',
+    binding:'33333333-3333-4333-8333-333333333333',application:'44444444-4444-4444-8444-444444444444',
+    template:'55555555-5555-4555-8555-555555555555',transaction:'66666666-6666-4666-8666-666666666666'};
+  const calls=[], target=`/v1/integrations/canvas/program-bindings/${ids.binding}`;
+  const binding={id:ids.binding,organization_id:ids.org,platform_id:ids.platform,
+    display_name:'Portable Canvas badge fence-control',enabled:!disabled,activated_at:disabled?null:NOW,...foreign};
+  const credential={id:'urn:uuid:owned-control',organization_id:ids.org,application_id:ids.application,
+    credential_template_id:ids.template,flow_execution_id:ids.transaction,status:'ACTIVE'};
+  const state={organizationId:ids.org,platformId:ids.platform,binding:{id:ids.binding},
+    applicationId:ids.application,transactionId:ids.transaction,templates:{credential:{id:ids.template}},
+    runSuffix:'fence-control',bindingActivationPossible:true,
+    owned:{martyBindingId:ids.binding,martyPlatformId:ids.platform,resources:{}},
+    marty:{async get(route){calls.push(['GET',route]);
+      if(route===target)return {...binding};
+      if(route.startsWith('/v1/issued-credentials?'))return [{...credential}];
+      if(route.startsWith('/v1/integrations/canvas/evidence-policy-reviews?'))return [];
+      if(route==='/v1/issued-credentials/urn%3Auuid%3Aowned-control')return {...credential};
+      throw new Error('Unexpected read');
+    },async post(route){calls.push(['POST',route]);
+      if(route===target+'/deactivate'){
+        if(failDisable)throw new Error('Controlled deactivation failure');
+        if(!staleReadback){binding.enabled=false;binding.activated_at=null;}return {};
+      }
+      assert.equal(route,'/v1/issued-credentials/urn%3Auuid%3Aowned-control/revoke');
+      credential.status='REVOKED';return {};
+    },async delete(route){calls.push(['DELETE',route]);},
+    async request(method,route,options){calls.push([method,route]);assert.deepEqual(options.expected,[404]);return {};}}};
+  return {state,calls,target};
+}
+
+test('Canvas cleanup fences and confirms the exact binding before credential retirement',async()=>{
+  const {retireCanvasEngineeringSetup}=require('./run-canvas-oss-standard-contract');
+  const {state,calls,target}=canvasFenceRetirementFixture();
+  const result=await retireCanvasEngineeringSetup(state);
+  assert.equal(result.complete,true);assert.equal(result.issuanceRetirement.complete,true);
+  assert.deepEqual(calls.slice(0,3),[['GET',target],['POST',target+'/deactivate'],['GET',target]]);
+  assert(calls.findIndex(([method,route])=>method==='POST'&&route.endsWith('/revoke'))>2);
+});
+
+test('Canvas cleanup refuses changed binding ownership before any retirement mutation',async()=>{
+  const {retireCanvasEngineeringSetup}=require('./run-canvas-oss-standard-contract');
+  for(const foreign of [{organization_id:'foreign'},{platform_id:'foreign'},{id:'foreign'},{display_name:'foreign'}]){
+    const {state,calls}=canvasFenceRetirementFixture({foreign});
+    await assert.rejects(retireCanvasEngineeringSetup(state),error=>{
+      assert.equal(error.canvasCleanupEvidence.complete,false);return true;
+    });
+    assert(calls.every(([method])=>method==='GET'));assert.equal(calls.length,1);
+  }
+});
+
+test('Canvas cleanup never revokes when binding deactivation fails or its readback remains active',async()=>{
+  const {retireCanvasEngineeringSetup}=require('./run-canvas-oss-standard-contract');
+  for(const options of [{failDisable:true},{staleReadback:true}]){
+    const {state,calls,target}=canvasFenceRetirementFixture(options);
+    await assert.rejects(retireCanvasEngineeringSetup(state),error=>error.canvasCleanupEvidence.complete===false);
+    assert(calls.every(([,route])=>route.startsWith(target)));
+    assert.equal(calls.filter(([method])=>method==='POST').length,1);
+  }
+});
+
+test('Canvas cleanup confirms an already disabled binding without another deactivation',async()=>{
+  const {retireCanvasEngineeringSetup}=require('./run-canvas-oss-standard-contract');
+  const {state,calls,target}=canvasFenceRetirementFixture({disabled:true});
+  assert.equal((await retireCanvasEngineeringSetup(state)).complete,true);
+  assert.deepEqual(calls.slice(0,2),[['GET',target],['GET',target]]);
+  assert(!calls.some(([,route])=>route===target+'/deactivate'));
+});
+
+test('Canvas cleanup with no created binding retains the empty prelaunch path',async()=>{
+  const {retireCanvasEngineeringSetup}=require('./run-canvas-oss-standard-contract');
+  const result=await retireCanvasEngineeringSetup({owned:{resources:{}}});
+  assert.equal(result.complete,true);assert.deepEqual(result.resources,[]);
+});

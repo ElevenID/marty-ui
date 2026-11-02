@@ -38,6 +38,27 @@ def public_key(value):
     return {key: value[key] for key in ("kty", "crv", "x", "y", "n", "e") if key in value}
 
 
+# Only exact, fixed public contract details become diagnostic categories.
+# Unknown/oversize/provider-supplied messages are never persisted verbatim.
+PUBLIC_FAILURE_CODES = {
+    (409, "Resolved signing service is incompatible with the issuer identity tuple."):
+        "ISSUER_TUPLE_SERVICE_INCOMPATIBLE",
+    (409, "Configured signing identity is not authorized for the requested purpose."):
+        "ISSUER_PURPOSE_BINDING_DENIED",
+    (409, "Issuer DID resolution is ambiguous for the requested identity tuple."):
+        "ISSUER_TUPLE_AMBIGUOUS",
+    (422, "Issuer purpose, credential format and algorithm are incompatible."):
+        "ISSUER_TUPLE_INVALID",
+}
+
+
+def safe_public_failure_code(status, response):
+    detail = response.get("detail")
+    if not isinstance(detail, str) or len(detail) > 512:
+        return "UNKNOWN_PUBLIC_API_FAILURE"
+    return PUBLIC_FAILURE_CODES.get((status, detail), "UNKNOWN_PUBLIC_API_FAILURE")
+
+
 COLLECTIONS = {
     "application_template_id": "/v1/application-templates",
     "credential_template_id": "/v1/credential-templates",
@@ -78,6 +99,8 @@ class OwnedPassportResources:
         require(type(status) is int and 100 <= status <= 599 and isinstance(response, dict),
                 "Owned passport response is malformed")
         item.update(response_received=True, http_status=status)
+        if status >= 400:
+            item["failure_code"] = safe_public_failure_code(status, response)
         self.save()
         return status, response
 
