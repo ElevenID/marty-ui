@@ -21,18 +21,31 @@ async function main() {
   const root = path.resolve(__dirname, '../..');
   const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
   const runtimeReceipt = boundFile(process.env.DEMO_D12_RUNTIME_RECEIPT);
-  const runtime = JSON.parse(fs.readFileSync(runtimeReceipt.path, 'utf8'));
-  const deployment = JSON.parse(fs.readFileSync(runtime.deploymentManifest, 'utf8'));
-  const productWorkspace = process.env.DEMO_D12_PRODUCT_WORKSPACE;
+  let inputs;
+  if (process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT) {
+    if (runtimeReceipt.path !== process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT
+        || runtimeReceipt.sha256 !== process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256)
+      throw Error('D12 current runtime must match the recorder-selected observation');
+    inputs = { runtimeMode: 'FUNCTIONAL_RUNTIME_V2', runtimeReceipt,
+      stackManifest: boundFile(process.env.DEMO_D12_STACK_MANIFEST),
+      privateFixture: boundFile(process.env.DEMO_D12_PRIVATE_FIXTURE),
+      productionExpectedOff: boundFile(process.env.DEMO_D12_PRODUCTION_EXPECTED_OFF) };
+  } else {
+    const runtime = JSON.parse(fs.readFileSync(runtimeReceipt.path, 'utf8'));
+    const deployment = JSON.parse(fs.readFileSync(runtime.deploymentManifest, 'utf8'));
+    const productWorkspace = process.env.DEMO_D12_PRODUCT_WORKSPACE;
+    const python = process.env.DEMO_PYTHON_EXECUTABLE;
+    if (!productWorkspace || !path.isAbsolute(productWorkspace) || !fs.statSync(productWorkspace).isDirectory()
+        || !python || !path.isAbsolute(python)) throw Error('D12 requires explicit fixed product workspace and Python');
+    // Only paths/hashes enter the public acknowledged fixture. The child loads
+    // private custody bytes after HELLO, source verification and runtime binding.
+    inputs = { runtimeReceipt, deploymentManifest: boundFile(runtime.deploymentManifest),
+      sourceManifest: boundFile(runtime.sourceManifest),
+      stackManifest: boundFile(path.resolve(path.dirname(runtime.deploymentManifest), deployment.deployed_demo_manifest)),
+      privateFixture: boundFile(process.env.DEMO_D12_PRIVATE_FIXTURE), productWorkspace };
+  }
   const python = process.env.DEMO_PYTHON_EXECUTABLE;
-  if (!productWorkspace || !path.isAbsolute(productWorkspace) || !fs.statSync(productWorkspace).isDirectory()
-      || !python || !path.isAbsolute(python)) throw Error('D12 requires explicit fixed product workspace and Python');
-  // Only paths/hashes enter the public acknowledged fixture. The child loads
-  // private custody bytes after HELLO, source verification and runtime binding.
-  const inputs = { runtimeReceipt, deploymentManifest: boundFile(runtime.deploymentManifest),
-    sourceManifest: boundFile(runtime.sourceManifest),
-    stackManifest: boundFile(path.resolve(path.dirname(runtime.deploymentManifest), deployment.deployed_demo_manifest)),
-    privateFixture: boundFile(process.env.DEMO_D12_PRIVATE_FIXTURE), productWorkspace };
+  if (!python || !path.isAbsolute(python)) throw Error('D12 requires explicit fixed Python');
   let client;
   try {
     client = await createDemoLiveEvidence();
