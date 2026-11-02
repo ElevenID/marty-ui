@@ -1488,6 +1488,19 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
   const documents = [];
   const reads = [];
   let presentation;
+  const linkNavigation = { exactNameCount: 0, firstHrefCategory: 'NOT_OBSERVED', afterClickPageCategory: 'NOT_OBSERVED' };
+  const expectedAssignmentPath = `/courses/${fixtures.course.id}/assignments/${externalAssignment.id}`;
+  const classifyCanvasAssignmentLocation = raw => {
+    try {
+      const url = new URL(raw, canvas.origin);
+      if (url.origin !== canvas.origin) return 'OTHER_ORIGIN';
+      if (url.pathname === expectedAssignmentPath) return 'TARGET_ASSIGNMENT';
+      if (url.pathname === '/login' || url.pathname.startsWith('/login/')) return 'CANVAS_LOGIN';
+      if (url.pathname.startsWith(`/courses/${fixtures.course.id}/assignments/`)) return 'OTHER_COURSE_ASSIGNMENT';
+      if (url.pathname === `/courses/${fixtures.course.id}/assignments`) return 'ASSIGNMENT_INDEX';
+      return 'OTHER_CANVAS_PATH';
+    } catch { return 'INVALID_URL'; }
+  };
   const observeDocument = response => {
     const request = response.request();
     if ((!request.isNavigationRequest() && response.status() < 400) || documents.length >= 40) return;
@@ -1496,7 +1509,10 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
       : url.origin === canvas.origin ? 'canvas' : 'other',
     kind: url.pathname.startsWith('/v1/auth/canvas-lti/') ? 'canvas_auth_api'
       : url.pathname.startsWith('/v1/integrations/canvas/lti/') ? 'lti_api'
-      : url.pathname.startsWith('/canvas/lti/') ? 'lti_ui' : 'other',
+      : url.pathname.startsWith('/canvas/lti/') ? 'lti_ui'
+      : url.origin === canvas.origin && url.pathname === expectedAssignmentPath ? 'canvas_assignment_target'
+      : url.origin === canvas.origin && url.pathname.startsWith(`/courses/${fixtures.course.id}/assignments/`) ? 'canvas_assignment_other'
+      : 'other',
     json: (response.headers()['content-type'] || '').includes('application/json') };
     documents.push(item);
     if (item.json && item.origin === 'marty' && item.status >= 400) reads.push(response.json().then(value => {
@@ -1510,9 +1526,22 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
   });
   const assignmentName = String(externalAssignment?.name || externalAssignment?.title || '').trim();
   requireCondition(assignmentName, 'canvas_assignment_name_missing', 'The Deep Linked Canvas assignment requires a visible name.');
-  await page.getByRole('link', { name: assignmentName, exact: true }).first().click();
+  const assignmentLinks = page.getByRole('link', { name: assignmentName, exact: true });
+  linkNavigation.exactNameCount = Math.min(10, await assignmentLinks.count());
+  if (linkNavigation.exactNameCount > 0) {
+    linkNavigation.firstHrefCategory = await assignmentLinks.first().evaluate((node, expected) => {
+      try {
+        const url = new URL(node.getAttribute('href') || '', location.origin);
+        if (url.origin !== expected.origin) return 'OTHER_ORIGIN';
+        return url.pathname === expected.path ? 'TARGET_ASSIGNMENT'
+          : url.pathname.startsWith(expected.coursePrefix) ? 'OTHER_COURSE_ASSIGNMENT' : 'OTHER_CANVAS_PATH';
+      } catch { return 'INVALID_URL'; }
+    }, { origin: canvas.origin, path: expectedAssignmentPath,
+      coursePrefix: `/courses/${fixtures.course.id}/assignments/` });
+  }
+  await assignmentLinks.first().click();
   await page.waitForURL(url => url.origin === canvas.origin
-    && url.pathname === `/courses/${fixtures.course.id}/assignments/${externalAssignment.id}`,
+    && url.pathname === expectedAssignmentPath,
   { timeout: DEFAULT_TIMEOUT_MS });
   const launchControl = page.getByRole('link', { name: /load .* in a new window|open .* in a new window|launch external tool/i })
     .or(page.getByRole('button', { name: /load .* in a new window|open .* in a new window|launch external tool/i })).first();
@@ -1561,7 +1590,8 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
       document.alerts = canvasLaunchErrorSummary({ details: document.alerts.map(message => ({ message })) });
       delete document.errorBody;
     }
-    error.canvasResourceDiagnostic = { documents, document };
+    linkNavigation.afterClickPageCategory = classifyCanvasAssignmentLocation(page.url());
+    error.canvasResourceDiagnostic = { documents, document, linkNavigation };
     throw error;
   } finally {
     page.off('response', observeDocument);
@@ -2651,7 +2681,7 @@ async function createOriginalCookieSessionContext(requestFactory,cookies) {
   const send=(method,url,options={})=>isolated[method](url,{...options,
     headers:{...options.headers,Cookie:original}});
   return {isolated,session:{cookies:async()=>cookies.map(cookie=>({...cookie})),addCookies:async()=>{},
-    request:{get:(url,options)=>send('get',url,options),delete:(url,options)=>send('delete',url,options)}}};
+    request:{get:(url,options)=>send('get',url,options),post:(url,options)=>send('post',url,options),delete:(url,options)=>send('delete',url,options)}}};
 }
 
 async function retireCanvasCaptureSessions(state, observe = () => {}) {
