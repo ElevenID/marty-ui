@@ -356,14 +356,7 @@ impl ComposeSession {
                 }),
         )?;
         self.observe(false)?;
-        self.bindings = self
-            .inputs
-            .files
-            .iter()
-            .chain(std::iter::once(&self.inputs.environment))
-            .chain(&self.inputs.bound_inputs)
-            .map(|file| (file.path.clone(), file.sha256.clone()))
-            .collect();
+        self.bindings = self.generation_checkpoint_bindings()?;
         self.recheck()?;
         let mut writer = Evidence::Maintenance(state, Some(RuntimeOperationOwner::Generation));
         self.begin(
@@ -606,6 +599,40 @@ impl ComposeSession {
         )
     }
 
+    /// Keep the authenticated OpenBao custody anchor across generation pruning.
+    /// It can be inherited only through the prior receipt, rather than explicit
+    /// Compose inputs, and is still needed to admit its private helper mounts.
+    fn generation_checkpoint_bindings(&self) -> Result<BTreeMap<PathBuf, String>> {
+        let mut bindings: BTreeMap<_, _> = self
+            .inputs
+            .files
+            .iter()
+            .chain(std::iter::once(&self.inputs.environment))
+            .chain(&self.inputs.bound_inputs)
+            .map(|file| (file.path.clone(), file.sha256.clone()))
+            .collect();
+        let custody = self
+            .inputs
+            .installation
+            .join("evidence")
+            .join(OPENBAO_CUSTODY);
+        if let Some(hash) = self
+            .inputs
+            .prior
+            .as_ref()
+            .ok_or(REFUSED)?
+            .input_files
+            .get(&custody)
+        {
+            require(
+                self.bindings.get(&custody) == Some(hash)
+                    && bindings.get(&custody).is_none_or(|current| current == hash),
+            )?;
+            bindings.insert(custody, hash.clone());
+        }
+        Ok(bindings)
+    }
+
     /// A fresh native checkpoint prevents prior dotenv paths from accumulating
     /// forever in each successor receipt. The generation owner separately binds
     /// the previous receipt in its immutable lineage before calling this method.
@@ -618,14 +645,7 @@ impl ComposeSession {
             !self.cleanup_only && self.inputs.prior.is_some() && self.inputs.services.is_empty(),
         )?;
         self.observe(false)?;
-        self.bindings = self
-            .inputs
-            .files
-            .iter()
-            .chain(std::iter::once(&self.inputs.environment))
-            .chain(&self.inputs.bound_inputs)
-            .map(|file| (file.path.clone(), file.sha256.clone()))
-            .collect();
+        self.bindings = self.generation_checkpoint_bindings()?;
         self.recheck()?;
         let mut writer = Evidence::Maintenance(state, Some(RuntimeOperationOwner::Generation));
         self.begin(

@@ -81,11 +81,17 @@ impl Fixture {
     }
 
     fn new(kind: GenerationOperation) -> Self {
+        Self::for_project(
+            kind,
+            format!("marty-install-{}", INSTALLATION.replace('-', "")),
+        )
+    }
+
+    fn for_project(kind: GenerationOperation, project: String) -> Self {
         let root = tempfile::tempdir().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let image = format!("example.invalid/runtime@sha256:{}", "c".repeat(64));
         let other_image = format!("example.invalid/other@sha256:{}", "d".repeat(64));
-        let project = format!("marty-install-{}", INSTALLATION.replace('-', ""));
         let network = format!("{project}_default");
         let volume = format!("{project}_data");
         let mut prior = ProjectResources {
@@ -184,6 +190,12 @@ case "$1" in
       *) cat "${0%/*}/ids.txt" ;;
     esac ;;
   inspect) cat "${0%/*}/containers.json" ;;
+  compose)
+    while test "$#" -gt 0; do
+      if test "$1" = ps; then cat "${0%/*}/status.json"; exit 0; fi
+      shift
+    done
+    exit 95 ;;
   image) test "$2" = inspect; cat "${0%/*}/image.json" ;;
   network|volume)
     case "$2" in
@@ -282,6 +294,20 @@ esac
             serde_json::to_vec(&self.inspected).unwrap(),
         )
         .unwrap();
+        let status: Vec<_> = self
+            .inspected
+            .iter()
+            .map(|row| {
+                json!({"ID":row["Id"],
+                    "Service":row["Config"]["Labels"]["com.docker.compose.service"],
+                    "State":row["State"]["Status"],"ExitCode":row["State"]["ExitCode"],"Health":""})
+            })
+            .collect();
+        fs::write(
+            self.root.path().join("status.json"),
+            serde_json::to_vec(&status).unwrap(),
+        )
+        .unwrap();
         for (kind, resources) in [("network", &self.networks), ("volume", &self.volumes)] {
             let mut names = String::new();
             for resource in resources {
@@ -300,6 +326,284 @@ esac
     fn observe(&self, kind: GenerationOperation) -> Result<ProjectResources> {
         self.flush();
         self.session.observe_generation_transition(kind)
+    }
+}
+
+fn checkpoint_fixture() -> (
+    tempfile::TempDir,
+    Fixture,
+    LockedMaintenance,
+    OpenBaoCustody,
+) {
+    let parent = tempfile::tempdir().unwrap();
+    let installation = parent.path().join("installation");
+    let binding = RuntimeBinding {
+        docker_host: "unix:///var/run/docker.sock".into(),
+        engine_id: "test-engine".into(),
+        openbao_port: 18443,
+        profile: RuntimeProfile::Rootful,
+    };
+    let mut initial = InstallerState::create_with_runtime(
+        &installation,
+        crate::installer_state::Identity {
+            source_sha: "a".repeat(40),
+            release_tag: "v1.2.3".into(),
+            inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+        },
+        binding,
+    )
+    .unwrap();
+    initial.create_private_directory("evidence").unwrap();
+    let mut fixture = Fixture::for_project(
+        GenerationOperation::Activate,
+        initial.journal().compose_project(),
+    );
+    fixture.session.inputs.installation = installation.clone();
+    fixture.session.inputs.services.clear();
+    let image = fixture
+        .session
+        .inputs
+        .approved_images
+        .first()
+        .unwrap()
+        .clone();
+    for (role, digit) in [("openbao-tls-init", '6'), ("openbao-bootstrap", '9')] {
+        let identity = identity(role, digit, true, &image);
+        fixture
+            .inspected
+            .push(inspection(&identity, &fixture.session.inputs.project));
+        fixture
+            .session
+            .inputs
+            .prior
+            .as_mut()
+            .unwrap()
+            .resources
+            .as_mut()
+            .unwrap()
+            .containers
+            .insert(role.into(), identity);
+    }
+    let state_root = installation.join("openbao-state");
+    fs::create_dir(&state_root).unwrap();
+    fs::set_permissions(&state_root, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut directory = private_directory(&state_root).unwrap();
+    // Exercise the existing opaque-custody predicates without requiring chown
+    // to a second mapped uid in the test runner's user namespace.
+    directory.uid = unsafe { libc::geteuid() }.saturating_add(1);
+    let custody = OpenBaoCustody {
+        schema: "elevenid.installer-openbao-private-inputs/v1".into(),
+        project: fixture.session.inputs.project.clone(),
+        engine_id: fixture.session.binding.engine_id.clone(),
+        tls_container_id: "6".repeat(64),
+        tls_image: image,
+        directory,
+    };
+    let custody_bytes = serde_json::to_vec(&custody).unwrap();
+    initial
+        .write_evidence(OPENBAO_CUSTODY, &custody_bytes)
+        .unwrap();
+    let bound = |name: &str, bytes: &[u8]| {
+        let path = installation.join(name);
+        fs::write(&path, bytes).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        BoundFile {
+            path,
+            sha256: sha256(bytes),
+        }
+    };
+    fixture.session.inputs.files = vec![bound("compose.yaml", b"services: {}\n")];
+    fixture.session.inputs.environment = bound("current.env", b"CURRENT=fixture\n");
+    let obsolete = bound("obsolete.env", b"OBSOLETE=fixture\n");
+    let prior = fixture.session.inputs.prior.as_mut().unwrap();
+    prior.input_files.insert(obsolete.path, obsolete.sha256);
+    prior.input_files.insert(
+        installation.join("evidence").join(OPENBAO_CUSTODY),
+        sha256(&custody_bytes),
+    );
+    fixture.session.bindings = prior.input_files.clone();
+    for file in fixture
+        .session
+        .inputs
+        .files
+        .iter()
+        .chain(std::iter::once(&fixture.session.inputs.environment))
+    {
+        fixture
+            .session
+            .bindings
+            .insert(file.path.clone(), file.sha256.clone());
+    }
+    fixture.session.configuration_sha256 = model_sha256(&fixture.session.model).unwrap();
+    fixture.flush();
+    drop(initial);
+    let state = LockedMaintenance::open(&installation).unwrap();
+    (parent, fixture, state, custody)
+}
+
+fn generation_checkpoint(
+    fixture: Fixture,
+    state: &mut LockedMaintenance,
+    baseline: bool,
+) -> Result<crate::installer_doctor::SavedSession> {
+    let mut inputs = fixture.session.inputs.clone();
+    let model = fixture.session.model.clone();
+    let configuration_sha256 = fixture.session.configuration_sha256.clone();
+    let receipt = if baseline {
+        fixture.session.checkpoint_generation_baseline(
+            state,
+            "custody-checkpoint",
+            &BTreeSet::from(["api".into()]),
+        )?
+    } else {
+        fixture
+            .session
+            .checkpoint_generation(state, "custody-checkpoint")?
+    };
+    inputs.prior = Some(receipt.clone());
+    let saved = crate::installer_doctor::SavedSession {
+        schema: "elevenid.installer-compose-session/v1".into(),
+        installation_id: state.journal().installation_id().to_string(),
+        inputs,
+        model,
+        configuration_sha256,
+        receipt,
+    };
+    let encoded = serde_json::to_vec(&saved).unwrap();
+    Ok(serde_json::from_value(crate::installer_json::decode(&encoded).unwrap()).unwrap())
+}
+
+fn stop_checkpoint_runtime(fixture: &mut Fixture, baseline: bool) {
+    if baseline {
+        let api = fixture.container("api");
+        api["State"]["Status"] = json!("exited");
+        api["State"]["Running"] = json!(false);
+        fixture.flush();
+    }
+}
+
+#[test]
+fn generation_checkpoints_preserve_inherited_custody_for_saved_successors() {
+    for baseline in [false, true] {
+        let (_parent, mut fixture, mut state, custody) = checkpoint_fixture();
+        let installation = fixture.session.inputs.installation.clone();
+        let path = installation.join("evidence").join(OPENBAO_CUSTODY);
+        let expected = fixture.session.bindings[&path].clone();
+        assert!(fixture.session.inputs.bound_inputs.is_empty());
+        stop_checkpoint_runtime(&mut fixture, baseline);
+        let saved = generation_checkpoint(fixture, &mut state, baseline).unwrap();
+        assert!(saved.receipt.command_succeeded && saved.receipt.observation_validated);
+        assert_eq!(saved.receipt.input_files.len(), 3);
+        assert_eq!(saved.receipt.input_files.get(&path), Some(&expected));
+        assert!(!saved
+            .receipt
+            .input_files
+            .contains_key(&installation.join("obsolete.env")));
+        let prior = saved.inputs.prior.as_ref().unwrap();
+        assert_eq!(
+            serde_json::to_value(prior).unwrap(),
+            serde_json::to_value(&saved.receipt).unwrap()
+        );
+        verify_input_files(&installation, &prior.input_files).unwrap();
+        let bytes = crate::installer_verify::read_private_record(&path).unwrap();
+        assert_eq!(sha256(&bytes), prior.input_files[&path]);
+        let retained: OpenBaoCustody = serde_json::from_slice(&bytes).unwrap();
+        validate_openbao_custody(&retained, &saved.inputs, &custody.directory).unwrap();
+        // The record's foreign-owner claim still cannot admit an actually
+        // operator-owned directory. No test-only custody bypass is introduced.
+        assert!(private_openbao_input(
+            &installation.join("openbao-state/root.token"),
+            true,
+            &saved.inputs
+        )
+        .is_err());
+        for suffix in ["intent", "result"] {
+            let bytes = state
+                .read_evidence(&format!(
+                    "generation-compose-custody-checkpoint-{suffix}.json"
+                ))
+                .unwrap()
+                .unwrap();
+            let record: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                record["input_files"],
+                serde_json::to_value(&prior.input_files).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn generation_checkpoints_do_not_adopt_unpinned_custody_files() {
+    for baseline in [false, true] {
+        let (_parent, mut fixture, mut state, _) = checkpoint_fixture();
+        let installation = fixture.session.inputs.installation.clone();
+        let path = installation.join("evidence").join(OPENBAO_CUSTODY);
+        fixture
+            .session
+            .inputs
+            .prior
+            .as_mut()
+            .unwrap()
+            .input_files
+            .remove(&path);
+        fixture.session.bindings.remove(&path);
+        assert!(path.is_file());
+        stop_checkpoint_runtime(&mut fixture, baseline);
+        let saved = generation_checkpoint(fixture, &mut state, baseline).unwrap();
+        assert_eq!(saved.receipt.input_files.len(), 2);
+        assert!(!saved.receipt.input_files.contains_key(&path));
+        assert!(private_openbao_input(
+            &installation.join("openbao-state/root.token"),
+            true,
+            &saved.inputs
+        )
+        .is_err());
+    }
+}
+
+#[test]
+fn generation_checkpoints_refuse_conflicting_missing_or_changed_custody_pins() {
+    for baseline in [false, true] {
+        for case in 0..4 {
+            let (_parent, mut fixture, mut state, _) = checkpoint_fixture();
+            let path = fixture
+                .session
+                .inputs
+                .installation
+                .join("evidence")
+                .join(OPENBAO_CUSTODY);
+            match case {
+                0 => {
+                    fixture
+                        .session
+                        .inputs
+                        .prior
+                        .as_mut()
+                        .unwrap()
+                        .input_files
+                        .insert(path.clone(), "a".repeat(64));
+                }
+                1 => fixture.session.inputs.bound_inputs.push(BoundFile {
+                    path: path.clone(),
+                    sha256: "a".repeat(64),
+                }),
+                2 => {
+                    fixture.session.bindings.remove(&path);
+                }
+                3 => fs::write(&path, b"changed-custody\n").unwrap(),
+                _ => unreachable!(),
+            }
+            stop_checkpoint_runtime(&mut fixture, baseline);
+            assert!(
+                generation_checkpoint(fixture, &mut state, baseline).is_err(),
+                "baseline={baseline}, case={case}"
+            );
+            assert!(state
+                .read_evidence("generation-compose-custody-checkpoint-intent.json")
+                .unwrap()
+                .is_none());
+        }
     }
 }
 
