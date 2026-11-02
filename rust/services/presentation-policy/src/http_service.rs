@@ -524,7 +524,7 @@ pub(crate) async fn evaluate_policy(
     if policy.status != PolicyStatus::Active {
         return Err(bad_request(&format!(
             "Policy is not active (status: {})",
-            status_name(policy.status)
+            policy.status.as_str()
         )));
     }
     validate_evaluation_request(request)?;
@@ -884,7 +884,7 @@ pub(crate) fn policy_response(policy: &PresentationPolicy) -> Value {
         "id": policy.id,
         "organization_id": policy.organization_id,
         "name": policy.name,
-        "status": status_name(policy.status),
+        "status": policy.status.as_str(),
         "description": policy.description,
         "purpose": policy.purpose.as_ref().or(policy.display_metadata.purpose_description.as_ref()),
         "required_claims": policy.required_claims.iter().map(protocol_claim_response).collect::<Vec<_>>(),
@@ -1401,15 +1401,6 @@ fn verification_error(error: PresentationVerificationError) -> PresentationPolic
             service_unavailable("PRESENTATION_POLICY.NATIVE_BACKEND_UNAVAILABLE")
         }
         PresentationVerificationError::Failed(detail) => unprocessable(&detail),
-    }
-}
-
-fn status_name(status: PolicyStatus) -> &'static str {
-    match status {
-        PolicyStatus::Draft => "draft",
-        PolicyStatus::Active => "active",
-        PolicyStatus::Suspended => "suspended",
-        PolicyStatus::Archived => "archived",
     }
 }
 

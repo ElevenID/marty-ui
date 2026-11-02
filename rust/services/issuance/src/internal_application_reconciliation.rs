@@ -736,7 +736,7 @@ fn reconciliation_plan(
     let transaction = transaction.map(|transaction| {
         json!({
             "id": transaction.id,
-            "status": credential_transaction_status(transaction.status),
+            "status": transaction.status.as_str(),
             "is_expired": now > transaction.expires_at,
         })
     });
@@ -845,18 +845,6 @@ fn stale_receipt(
     match &result {
         Ok(receipt) if receipt.reasons.is_empty() => None,
         _ => Some(result),
-    }
-}
-
-fn credential_transaction_status(status: CredentialTransactionStatus) -> &'static str {
-    match status {
-        CredentialTransactionStatus::Pending => "pending",
-        CredentialTransactionStatus::Authorized => "authorized",
-        CredentialTransactionStatus::Signing => "signing",
-        CredentialTransactionStatus::Issued => "issued",
-        CredentialTransactionStatus::Failed => "failed",
-        CredentialTransactionStatus::Expired => "expired",
-        CredentialTransactionStatus::Revoked => "revoked",
     }
 }
 

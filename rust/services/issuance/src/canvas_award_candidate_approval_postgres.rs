@@ -15,8 +15,8 @@ use crate::{
     },
     canvas_award_candidate_service::CanvasAwardCandidateApprovalError,
     canvas_issuance_guard::{
-        canvas_approval_policy_set_id, evidence_fact_snapshots_match, LIST_CURRENT_FACTS,
-        LOAD_CANVAS_POLICY_SET,
+        canvas_approval_policy_set_id, evidence_fact_snapshots_match, trimmed_json_text,
+        LIST_CURRENT_FACTS, LOAD_CANVAS_POLICY_SET,
     },
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::CanvasLtiExperienceSessionContext,
@@ -170,7 +170,7 @@ impl CanvasAwardApprovalRepository for PostgresCanvasAwardApprovalRepository {
             let Some(subject) = plan.lti_subject.as_deref() else {
                 return Ok(None);
             };
-            let launch_deployment = text(context.verified_launch.get("deployment_id"));
+            let launch_deployment = trimmed_json_text(context.verified_launch.get("deployment_id"));
             let deployment_id = if launch_deployment.is_empty() {
                 deployment.flatten().unwrap_or_default()
             } else {
@@ -245,9 +245,9 @@ impl CanvasApplicationApprovalRepository for PostgresCanvasAwardApprovalReposito
         else {
             return Ok(None);
         };
-        let platform_id = text(canvas.get("canvas_platform_id"));
-        let binding_id = text(canvas.get("canvas_program_binding_id"));
-        let template_id = text(application.get("application_template_id"));
+        let platform_id = trimmed_json_text(canvas.get("canvas_platform_id"));
+        let binding_id = trimmed_json_text(canvas.get("canvas_program_binding_id"));
+        let template_id = trimmed_json_text(application.get("application_template_id"));
         if platform_id.is_empty() || binding_id.is_empty() {
             return Ok(Some(CanvasApplicationApprovalSnapshot {
                 policy_set: None,
@@ -288,9 +288,10 @@ impl CanvasApplicationApprovalRepository for PostgresCanvasAwardApprovalReposito
             || binding
                 .get("archived_at")
                 .is_some_and(|value| !value.is_null())
-            || text(application_template.get("id")) != template_id
-            || text(application_template.get("id")) != text(binding.get("application_template_id"))
-            || text(application_template.get("credential_template_id")).is_empty()
+            || trimmed_json_text(application_template.get("id")) != template_id
+            || trimmed_json_text(application_template.get("id"))
+                != trimmed_json_text(binding.get("application_template_id"))
+            || trimmed_json_text(application_template.get("credential_template_id")).is_empty()
         {
             return Ok(None);
         }
@@ -393,7 +394,10 @@ pub(crate) async fn reserve_management_canvas_issuance_in_transaction(
         .and_then(|value| value.as_object().cloned())
         .ok_or(CanvasApplicationApprovalError::NotReady)?;
     if !application_approval_snapshot_is_current(&current, &snapshot.application)
-        || !matches!(text(current.get("status")).as_str(), "pending" | "approved")
+        || !matches!(
+            trimmed_json_text(current.get("status")).as_str(),
+            "pending" | "approved"
+        )
         || current
             .get("credential_id")
             .is_some_and(|value| !value.is_null())
@@ -490,14 +494,14 @@ async fn lock_manual_approval_dependencies(
         .and_then(|integration| integration.get("canvas"))
         .and_then(Value::as_object);
     let platform_id = canvas
-        .map(|canvas| text(canvas.get("canvas_platform_id")))
+        .map(|canvas| trimmed_json_text(canvas.get("canvas_platform_id")))
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| text(snapshot.platform.get("id")));
+        .unwrap_or_else(|| trimmed_json_text(snapshot.platform.get("id")));
     let binding_id = canvas
-        .map(|canvas| text(canvas.get("canvas_program_binding_id")))
+        .map(|canvas| trimmed_json_text(canvas.get("canvas_program_binding_id")))
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| text(snapshot.binding.get("id")));
-    let template_id = text(snapshot.application.get("application_template_id"));
+        .unwrap_or_else(|| trimmed_json_text(snapshot.binding.get("id")));
+    let template_id = trimmed_json_text(snapshot.application.get("application_template_id"));
     let platform = sqlx::query_scalar::<_, Value>(LOCK_APPROVAL_PLATFORM)
         .bind(&platform_id)
         .bind(&prepared.organization_id)
@@ -579,8 +583,8 @@ async fn load_current_pending_transaction(
     let Some(transaction_id) = optional_text(application.get("issuance_transaction_id")) else {
         return Ok(None);
     };
-    let application_id = text(application.get("id"));
-    let organization_id = text(application.get("organization_id"));
+    let application_id = trimmed_json_text(application.get("id"));
+    let organization_id = trimmed_json_text(application.get("organization_id"));
     sqlx::query(
         "SELECT * FROM issuance_service.issuance_transactions
          WHERE id = $1 AND organization_id = $2 AND application_id = $3
@@ -943,7 +947,7 @@ async fn lock_current_approval_dependencies(
             .lti_subject
             .as_deref()
             .ok_or(CanvasAwardCandidateApprovalError::ReadinessDrift)?;
-        let mut deployment_id = text(context.verified_launch.get("deployment_id"));
+        let mut deployment_id = trimmed_json_text(context.verified_launch.get("deployment_id"));
         if deployment_id.is_empty() {
             deployment_id = sqlx::query_scalar::<_, Option<String>>(
                 "SELECT lti_deployment_id FROM issuance_service.canvas_platforms
@@ -1055,16 +1059,8 @@ fn has_canvas_marker(integration: &Value) -> bool {
 }
 
 fn optional_text(value: Option<&Value>) -> Option<String> {
-    let value = text(value);
+    let value = trimmed_json_text(value);
     (!value.is_empty()).then_some(value)
-}
-
-fn text(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(value)) => value.trim().to_owned(),
-        Some(Value::Null) | None => String::new(),
-        Some(value) => value.to_string().trim_matches('"').trim().to_owned(),
-    }
 }
 
 fn approval_repository_error(cause: sqlx::Error) -> CanvasAwardCandidateApprovalError {

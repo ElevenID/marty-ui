@@ -232,7 +232,7 @@ where
         .bind(&transaction.subject_did)
         .bind(&transaction.idempotency_key_hash)
         .bind(&transaction.idempotency_request_hash)
-        .bind(transaction_status(transaction.status))
+        .bind(transaction.status.as_str())
         .bind(&transaction.pre_authorized_code)
         .bind(&transaction.nonce)
         .bind(Value::Object(transaction.claims.clone()))
@@ -1098,7 +1098,7 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
             .bind(&transaction.issuer_algorithm)
             .bind(&transaction.signing_service_id)
             .bind(&transaction.organization_id)
-            .bind(transaction_status(transaction.status))
+            .bind(transaction.status.as_str())
             .fetch_optional(&self.pool)
             .await
             .map_err(repository_error)?
@@ -1120,7 +1120,7 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
              WHERE id = $2 AND organization_id = $3 AND status = 'signing'
                AND reserved_credential_id = $4",
         )
-        .bind(transaction_status(claim.previous_status))
+        .bind(claim.previous_status.as_str())
         .bind(&claim.transaction.id)
         .bind(&claim.transaction.organization_id)
         .bind(&claim.transaction.reserved_credential_id)
@@ -1239,18 +1239,6 @@ fn missing_issuer_identity(credential_type: &str) -> CredentialIssuanceError {
     CredentialIssuanceError::IssuerUnavailable(format!(
         "The selected credential configuration '{credential_type}' has no active DID-mediated issuer identity."
     ))
-}
-
-const fn transaction_status(status: CredentialTransactionStatus) -> &'static str {
-    match status {
-        CredentialTransactionStatus::Pending => "pending",
-        CredentialTransactionStatus::Authorized => "authorized",
-        CredentialTransactionStatus::Signing => "signing",
-        CredentialTransactionStatus::Issued => "issued",
-        CredentialTransactionStatus::Failed => "failed",
-        CredentialTransactionStatus::Expired => "expired",
-        CredentialTransactionStatus::Revoked => "revoked",
-    }
 }
 
 fn validate_idempotent_recovery(

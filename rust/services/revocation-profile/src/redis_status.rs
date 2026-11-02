@@ -82,7 +82,7 @@ impl RedisStatusRepository {
         format!(
             "{}:{{{scope}}}:status_list:{}",
             self.key_prefix,
-            format_name(format)
+            format.as_str()
         )
     }
 
@@ -250,7 +250,7 @@ fn serialize_record(record: &StatusListRecord) -> Result<Vec<u8>, StatusError> {
     serde_json::to_vec(&StoredStatusList {
         id: record.id.clone(),
         tenant_id: record.scope.clone(),
-        format: format_name(record.format).into(),
+        format: record.format.as_str().into(),
         size: record.size,
         bits_per_status: record.bits_per_status,
         data: STANDARD.encode(&record.data),
@@ -310,13 +310,6 @@ fn deserialize_record(
     // persisted state. This is a compatibility check, not a second kernel.
     record.get(0)?;
     Ok(record)
-}
-
-fn format_name(format: StatusListFormat) -> &'static str {
-    match format {
-        StatusListFormat::Bitstring => "bitstring",
-        StatusListFormat::TokenStatusList => "token_status_list",
-    }
 }
 
 fn parse_format(value: &str) -> Result<StatusListFormat, StatusError> {
