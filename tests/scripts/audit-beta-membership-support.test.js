@@ -6,10 +6,10 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const {
-  GRANT, assertions, awaitNaturalExpiry, expiryWindow, loginInstanceBinding, nativeLoginResult,
+  GRANT, assertions, awaitNaturalExpiry, expiryWindow, loginInstanceBinding, loginInstanceOwnership, nativeLoginResult,
   validateFixture, validateIssuerSetup, validateLoginSetup,
 } = require('./beta-membership-support-contract');
-const { createSupportController, guards, main, prepareFixture,startLogin } = require('./audit-beta-membership-support');
+const { createSupportController, guards, main, prepareFixture,startLogin,rebindLoginInstance } = require('./audit-beta-membership-support');
 
 const uuid = (n) => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const ORIGIN = 'https://service.example.test';
@@ -207,6 +207,10 @@ test('fixture preflight consumes actual public identity tuples and ignores unrel
 test('login preflight rejects dynamic or already-trusted foreign issuer configuration without changing it', () => {
   const f = fixture(); const observed = loginSetup(f);
   assert.equal(validateLoginSetup(f, observed, 'untrusted-issuer').policyId, f.login.presentationPolicyId);
+  const noProfile=structuredClone(observed);noProfile.policy.trust_profile_id=null;
+  assert.throws(()=>validateLoginSetup(f,noProfile,'untrusted-issuer'));
+  const noCredentials=structuredClone(observed);noCredentials.policy.credential_requirements=[];
+  assert.throws(()=>validateLoginSetup(f,noCredentials,'untrusted-issuer'));
   observed.trust.trust_sources = [{ registry_url: 'https://registry.example.test' }];
   assert.throws(() => validateLoginSetup(f, observed, 'untrusted-issuer'), /explicit local trust profile/);
   observed.trust.trust_sources = []; observed.trust.allowed_issuers.push(f.foreign.issuerDid);
@@ -524,16 +528,41 @@ test('untrusted evidence requires the exact native instance and authenticated fo
 });
 
 test('actual login page Flow binding rejects changed org, policy, trust and request origin', () => {
-  const f = fixture(); const details = { nonce: 'fixture-login-nonce', href: 'openid4vp://?request_uri=fixture',
+  const f = fixture(),proof=validateLoginSetup(f,loginSetup(f),'untrusted-issuer'); const details = { nonce: 'fixture-login-nonce', href: 'openid4vp://?request_uri=fixture',
     dcApiRequestUrl: `/v1/flows/instances/${uuid(30)}/request?transport=dc_api` };
   const instance = { id: uuid(30), organization_id: f.login.organizationId, context_data: {
-    presentation_policy_id: f.login.presentationPolicyId, trust_profile_id: f.login.trustProfileId, oid4vp_issuer_did: f.login.verifierDid } };
-  assert.equal(loginInstanceBinding(details, instance, f, ORIGIN).instanceId, uuid(30));
-  assert.throws(() => loginInstanceBinding({ ...details, dcApiRequestUrl: `https://foreign.example.test${details.dcApiRequestUrl}` }, instance, f, ORIGIN));
+    presentation_policy_id: f.login.presentationPolicyId, trust_profile_id: f.login.trustProfileId,
+    callback_url:'http://auth.internal/internal/v1/auth/credential-verified?nonce=fixture-login-nonce',
+    oid4vp_issuer_did: f.login.verifierDid } };
+  assert.equal(loginInstanceBinding(details, instance, f, ORIGIN,proof).instanceId, uuid(30));
+  const policyOwned=structuredClone(instance);policyOwned.context_data.trust_profile_id=null;
+  assert.equal(loginInstanceBinding(details,policyOwned,f,ORIGIN,proof).contextTrustProfileId,null);
+  const missingOverride=structuredClone(policyOwned);delete missingOverride.context_data.trust_profile_id;
+  assert.throws(()=>loginInstanceBinding(details,missingOverride,f,ORIGIN,proof));
+  const ownedMissing=JSON.parse(JSON.stringify(loginInstanceOwnership(details,missingOverride,f,ORIGIN)));
+  assert.equal(ownedMissing.contextTrustProfilePresent,false);
+  assert.equal(ownedMissing.contextTrustProfileId,null);
+  assert.throws(()=>loginInstanceBinding(details,policyOwned,f,ORIGIN,{...proof,trustProfileId:uuid(99)}));
+  assert.throws(() => loginInstanceBinding({ ...details, dcApiRequestUrl: `https://foreign.example.test${details.dcApiRequestUrl}` }, instance, f, ORIGIN,proof));
   for (const field of ['presentation_policy_id', 'trust_profile_id', 'oid4vp_issuer_did']) {
     const copy = structuredClone(instance); copy.context_data[field] = 'foreign';
-    assert.throws(() => loginInstanceBinding(details, copy, f, ORIGIN));
+    assert.throws(() => loginInstanceBinding(details, copy, f, ORIGIN,proof));
   }
+  const start=Date.now();instance.created_at=new Date(start).toISOString();
+  assert.equal(loginInstanceOwnership(details,instance,f,ORIGIN,{afterMs:start-1000,beforeMs:start+1000}).instanceId,instance.id);
+  for(const callbackUrl of ['http://auth.internal/internal/v1/auth/credential-verified?nonce=foreign',
+    'http://auth.internal/internal/v1/auth/credential-verified',
+    'http://auth.internal/internal/v1/auth/credential-verified?nonce=fixture-login-nonce&nonce=fixture-login-nonce',
+    'http://auth.internal/internal/v1/auth/wrong?nonce=fixture-login-nonce']){
+    const changed=structuredClone(instance);changed.context_data.callback_url=callbackUrl;
+    assert.throws(()=>loginInstanceOwnership(details,changed,f,ORIGIN,{afterMs:start-1000,beforeMs:start+1000}),error=>{
+      assert.equal(error.message.includes('fixture-login-nonce'),false);
+      assert.equal(error.message.includes('nonce=foreign'),false);
+      return true;
+    });
+  }
+  instance.created_at=new Date(start-60000).toISOString();
+  assert.throws(()=>loginInstanceOwnership(details,instance,f,ORIGIN,{afterMs:start-1000,beforeMs:start+1000}));
 });
 
 test('aggregates require actual recovery, native trust result and cleanup in both no-video lanes', () => {
@@ -600,15 +629,50 @@ test('a preflight-blocked functional run writes both JSON receipts without crede
 
 test('shared login hook journals before navigation and acknowledges only exact server binding',async()=>{
  const f=fixture(),events=[],instance={id:uuid(30),organization_id:f.login.organizationId,context_data:{
-  presentation_policy_id:f.login.presentationPolicyId,trust_profile_id:f.login.trustProfileId,oid4vp_issuer_did:f.login.verifierDid}};
+   presentation_policy_id:f.login.presentationPolicyId,trust_profile_id:null,oid4vp_issuer_did:f.login.verifierDid,
+   callback_url:'http://auth.internal/internal/v1/auth/credential-verified?nonce=PRIVATE_NONCE'},created_at:new Date().toISOString()};
  const authPage={goto:async()=>events.push('navigation'),evaluate:async()=>({nonce:'PRIVATE_NONCE',href:'PRIVATE_WALLET_LINK',
   dcApiRequestUrl:ORIGIN+'/v1/flows/instances/'+instance.id+'/request'})};
- const operator={evaluate:async()=>({ok:true,status:200,body:instance})};
+  const service=fakeService(f);const operator={evaluate:async(callback,request)=>request.requestPath===`/v1/flows/instances/${instance.id}`
+    ?{ok:true,status:200,body:instance}:service.page.evaluate(callback,request)};
  const flowHooks={beforeStart:async()=>events.push('intent'),acknowledge:async({binding})=>{assert.equal(binding.instanceId,instance.id);events.push('ack');}};
  await startLogin({authPage,operator,fixture:f,origin:ORIGIN,flowHooks});assert.deepEqual(events,['intent','navigation','ack']);
- events.length=0;instance.context_data.presentation_policy_id=uuid(999);
+  events.length=0;instance.context_data.trust_profile_id=uuid(999);
  await assert.rejects(startLogin({authPage,operator,fixture:f,origin:ORIGIN,flowHooks}));
- assert.deepEqual(events,['intent','navigation']);
+  assert.deepEqual(events,['intent','navigation','ack']);
+  events.length=0;instance.context_data.trust_profile_id=null;instance.context_data.presentation_policy_id=uuid(999);
+  await assert.rejects(startLogin({authPage,operator,fixture:f,origin:ORIGIN,flowHooks}));
+  assert.deepEqual(events,['intent','navigation','ack']);
+  events.length=0;instance.organization_id=uuid(999);
+  await assert.rejects(startLogin({authPage,operator,fixture:f,origin:ORIGIN,flowHooks}));
+  assert.deepEqual(events,['intent','navigation']);
+  instance.organization_id=f.login.organizationId;
+  instance.context_data.presentation_policy_id=f.login.presentationPolicyId;
+  for(const callbackUrl of ['http://auth.internal/internal/v1/auth/credential-verified?nonce=foreign',
+    'http://auth.internal/internal/v1/auth/credential-verified',
+    'http://auth.internal/internal/v1/auth/credential-verified?nonce=PRIVATE_NONCE&nonce=PRIVATE_NONCE']){
+    events.length=0;instance.context_data.callback_url=callbackUrl;
+    await assert.rejects(startLogin({authPage,operator,fixture:f,origin:ORIGIN,flowHooks}));
+    assert.deepEqual(events,['intent','navigation']);
+  }
+});
+
+test('post-presentation Flow binding retains fresh effective policy trust and rejects changed authority',async()=>{
+  const f=fixture(),service=fakeService(f),instance={id:uuid(30),organization_id:f.login.organizationId,
+    context_data:{presentation_policy_id:f.login.presentationPolicyId,trust_profile_id:null,oid4vp_issuer_did:f.login.verifierDid,
+      callback_url:'http://auth.internal/internal/v1/auth/credential-verified?nonce=PRIVATE_NONCE'}};
+  const route=`/v1/flows/instances/${instance.id}`;
+  const operator={evaluate:async(callback,request)=>request.requestPath===route
+    ?{ok:true,status:200,body:instance}:service.page.evaluate(callback,request)};
+  const details={nonce:'PRIVATE_NONCE',href:'PRIVATE_WALLET_LINK',dcApiRequestUrl:ORIGIN+route+'/request'};
+  const loginAuthority=structuredClone(service.login);
+  loginAuthority.issuers=service.setups.flatMap(setup=>setup.issuers);
+  const args={details,instancePath:route,operator,fixture:f,origin:ORIGIN,loginAuthority,lane:'expired-offer'};
+  assert.equal((await rebindLoginInstance(args)).contextTrustProfileId,null);
+  instance.context_data.trust_profile_id=uuid(999);
+  await assert.rejects(rebindLoginInstance(args));
+  instance.context_data.trust_profile_id=null;service.login.policy.trust_profile_id=null;
+  await assert.rejects(rebindLoginInstance(args));
 });
 
 test('dedicated owned expiry offer uses optional server TTL; recovery preserves configured defaults', async () => {

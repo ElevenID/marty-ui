@@ -66,8 +66,16 @@ async function cancelOwnedLogin({binding,readInstance,cancel,finalize,readAuth,b
 async function readBoundLoginFlow(binding,readInstance){
  const before=await readInstance();
  assert.equal(before.id,binding.instanceId);assert.equal(before.organization_id,binding.organizationId);
- assert.equal(before.context_data?.presentation_policy_id,binding.presentationPolicyId);
- assert.equal(before.context_data?.trust_profile_id,binding.trustProfileId);
+ if(Object.hasOwn(binding,'contextPolicyPresent'))
+  assert.equal(Object.hasOwn(before.context_data||{},'presentation_policy_id'),binding.contextPolicyPresent);
+ assert.equal(before.context_data?.presentation_policy_id,
+  Object.hasOwn(binding,'contextPolicyId')
+    ?binding.contextPolicyPresent===false?undefined:binding.contextPolicyId:binding.presentationPolicyId);
+ if(Object.hasOwn(binding,'contextTrustProfilePresent'))
+  assert.equal(Object.hasOwn(before.context_data||{},'trust_profile_id'),binding.contextTrustProfilePresent);
+ assert.equal(before.context_data?.trust_profile_id,
+  Object.hasOwn(binding,'contextTrustProfileId')
+    ?binding.contextTrustProfilePresent===false?undefined:binding.contextTrustProfileId:binding.trustProfileId);
  return before;
 }
 async function retireLoginFlow({binding,readInstance,cancel,beforeCancel}){

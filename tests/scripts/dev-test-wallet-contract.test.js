@@ -58,6 +58,18 @@ test('cleanup reconciles only the bound login Flow and records intent before can
  const done=cancelFixture();done.readInstance=async()=>({id:'flow-owned',organization_id:'org',
   context_data:{presentation_policy_id:'policy',trust_profile_id:'trust'},status:'COMPLETED'});
  assert.deepEqual(await retireLoginFlow(done),{status:'COMPLETED'});assert.deepEqual(done.calls,[]);
+ const policyOwned=cancelFixture();policyOwned.binding.contextTrustProfileId=null;
+ const originalRead=policyOwned.readInstance;policyOwned.readInstance=async()=>{
+  const row=await originalRead();row.context_data.trust_profile_id=null;return row;};
+ assert.deepEqual(await retireLoginFlow(policyOwned),{status:'CANCELLED'});
+ assert.deepEqual(policyOwned.calls,['intent','cancel']);
+ const missing=cancelFixture();missing.binding=JSON.parse(JSON.stringify({...missing.binding,
+  contextPolicyPresent:false,contextPolicyId:null,contextTrustProfilePresent:false,contextTrustProfileId:null}));
+ const missingRead=missing.readInstance;missing.readInstance=async()=>{
+  const row=await missingRead();delete row.context_data.presentation_policy_id;
+  delete row.context_data.trust_profile_id;return row;};
+ assert.deepEqual(await retireLoginFlow(missing),{status:'CANCELLED'});
+ assert.deepEqual(missing.calls,['intent','cancel']);
 });
 function expiryFixture(edit={}){
  let now=Date.parse('2026-10-28T00:00:30Z');const start=now,calls=[];

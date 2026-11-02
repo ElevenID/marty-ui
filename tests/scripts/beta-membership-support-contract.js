@@ -231,7 +231,7 @@ async function awaitNaturalExpiry({ readOffer, window, now = Date.now, delay = (
   throw new Error('Server did not report natural offer expiration within the explicit maximum wait');
 }
 
-function loginInstanceBinding(details, instance, fixture, origin) {
+function loginInstanceOwnership(details, instance, fixture, origin, window) {
   requiredText(details?.nonce, 'Credential login nonce');
   requiredText(details?.href, 'Credential login wallet link');
   const request = new URL(details?.dcApiRequestUrl, origin);
@@ -240,11 +240,35 @@ function loginInstanceBinding(details, instance, fixture, origin) {
   assert.ok(match && UUID.test(match[1]), 'Login page must expose its native Flow request instance');
   assert.equal(instance?.id, match[1]);
   assert.equal(instance.organization_id, fixture.login.organizationId);
-  assert.equal(instance.context_data?.presentation_policy_id, fixture.login.presentationPolicyId);
-  assert.equal(instance.context_data?.trust_profile_id, fixture.login.trustProfileId);
-  assert.equal(instance.context_data?.oid4vp_issuer_did, fixture.login.verifierDid);
+  const callback=new URL(instance.context_data?.callback_url);
+  assert.equal(callback.pathname,'/internal/v1/auth/credential-verified',
+    'Login Flow must use the native credential verification callback');
+  const callbackNonces=callback.searchParams.getAll('nonce');
+  assert.equal(callbackNonces.length,1,'Login Flow callback must contain one Auth nonce');
+  assert.ok(callbackNonces[0]===details.nonce,'Login Flow callback nonce must belong to the current page');
+  if(window){const created=Date.parse(instance.created_at);
+    assert(Number.isFinite(created)&&created>=window.afterMs&&created<=window.beforeMs,
+      'Login Flow must belong to the current owned start window');}
   return { instanceId: instance.id, organizationId: instance.organization_id, presentationPolicyId: fixture.login.presentationPolicyId,
-    trustProfileId: fixture.login.trustProfileId, nonceSha256: hash(details.nonce) };
+    contextPolicyPresent:Object.hasOwn(instance.context_data||{},'presentation_policy_id'),
+    contextPolicyId: instance.context_data?.presentation_policy_id ?? null,
+    trustProfileId: fixture.login.trustProfileId,
+    contextTrustProfilePresent:Object.hasOwn(instance.context_data||{},'trust_profile_id'),
+    contextTrustProfileId: instance.context_data?.trust_profile_id ?? null,
+    nonceSha256: hash(details.nonce) };
+}
+
+function loginInstanceBinding(details, instance, fixture, origin, policyProof) {
+  const binding=loginInstanceOwnership(details, instance, fixture, origin);
+  assert.equal(binding.contextPolicyId,fixture.login.presentationPolicyId);
+  assert.equal(policyProof?.policyId, fixture.login.presentationPolicyId);
+  assert.equal(policyProof.trustProfileId, fixture.login.trustProfileId);
+  assert(Object.hasOwn(instance.context_data||{},'trust_profile_id'),
+    'Login Flow must expose its trust override state');
+  assert.equal(binding.contextTrustProfileId===null || binding.contextTrustProfileId===fixture.login.trustProfileId,true,
+    'Login Flow cannot override the governed policy trust profile');
+  assert.equal(instance.context_data?.oid4vp_issuer_did, fixture.login.verifierDid);
+  return binding;
 }
 
 function nativeLoginResult(result, binding, fixture, issuerDid, allowed) {
@@ -280,5 +304,5 @@ function assertions(lane, checks) {
 }
 
 module.exports = { GRANT, MAX_EXPIRY_WAIT_SECONDS, MAX_OFFER_TTL_SECONDS, assertions, awaitNaturalExpiry,
-  credentialContract, expiryWindow, hash, loginInstanceBinding, nativeLoginResult, validateFixture,
+  credentialContract, expiryWindow, hash, loginInstanceBinding, loginInstanceOwnership, nativeLoginResult, validateFixture,
   validateIssuerSetup, validateLoginSetup };

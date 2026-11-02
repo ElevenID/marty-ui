@@ -48,7 +48,9 @@ async function main(env=process.env){
    flows.push(entry);report.flows.push({createAttempted:true,instanceId:null,retirementConfirmed:false});save();},
   async acknowledge({binding,instance}){assert(entry&&!entry.owned,'Duplicate Flow acknowledgement');
    entry.owned={id:binding.instanceId,organizationId:binding.organizationId};
-   entry.binding=binding;const row=report.flows[flows.indexOf(entry)];row.instanceId=binding.instanceId;row.nonceSha256=binding.nonceSha256;save();
+   entry.binding=binding;const row=report.flows[flows.indexOf(entry)];row.instanceId=binding.instanceId;row.nonceSha256=binding.nonceSha256;
+   row.contextPolicyPresent=binding.contextPolicyPresent;row.contextPolicyId=binding.contextPolicyId;
+   row.contextTrustProfilePresent=binding.contextTrustProfilePresent;row.contextTrustProfileId=binding.contextTrustProfileId;save();
   }};}
  async function start(){const c=await context('beta'),p=await page(c),h=hooks();
   const login=await support.startLogin({authPage:p,operator,fixture,origin:settings.origin,flowHooks:h});
