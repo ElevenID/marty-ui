@@ -1305,52 +1305,105 @@ async function runDeepLinkingViaAssignmentUi(page, fixtures, toolId, adminCanvas
   const ltiFrame = await waitFor(() => page.frames().find((frame) => {
     try { return new URL(frame.url()).origin === martyOrigin; } catch { return false; }
   }), DEFAULT_TIMEOUT_MS, 500, 'deep_link_iframe_missing');
-  await ltiFrame.getByRole('button', { name: /add marty activity to canvas/i }).click();
-  try {
-    await page.getByRole('dialog', { name: /^link resource from external tool$/i })
-      .waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
-  } catch {
-    const responseUrl = ltiFrame.url();
-    let returnPage = 'other';
+  const deepLinkResponsePath = '/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response';
+  const isDeepLinkRequest = (request) => {
     try {
-      const parsed = new URL(responseUrl);
-      if (parsed.origin === new URL(adminCanvas.origin).origin
-        && parsed.pathname.includes('/deep_linking_response')) returnPage = 'canvas_deep_link_response';
-      else if (parsed.origin === martyOrigin) returnPage = 'marty_frame';
-    } catch { /* An opaque frame URL is diagnostic only. */ }
-    const rejectedContent = await ltiFrame.getByRole('button', { name: /i understand, continue/i })
-      .isVisible().catch(() => false);
-    // Stock Canvas's rejection table has Field in its third column. Never
-    // retain its title, message, or unchecked field text from an LTI response.
-    const rejectedFields = rejectedContent
-      ? await ltiFrame.getByRole('table', { name: /content items with errors/i })
-        .locator('tbody tr').evaluateAll((rows) => [...new Set(rows.slice(0, 10)
-          .map((row) => {
-            const field = row.cells[2]?.textContent?.trim() || '';
-            if (field.startsWith('lineItem.')) return 'lineItem';
-            if (['url', 'custom', 'title', 'type'].includes(field)) return field;
-            return 'other';
-          }))]).catch(() => [])
-      : [];
-    const diagnostic = {
-      returnPage,
-      rejectedContent,
-      rejectedFields,
-      resourceDialogVisible: await page.getByRole('dialog', { name: /^link resource from external tool$/i })
-        .isVisible().catch(() => false),
-      chooserHasMartyUrl: await chooser.locator('#external_tool_create_url').inputValue()
-        .then((value) => {
-          try { return new URL(value).origin === martyOrigin; } catch { return false; }
-        }).catch(() => false),
-    };
-    const failure = new ContractFailure(
-      rejectedContent ? 'canvas_deep_link_content_rejected' : 'canvas_deep_link_return_unhandled',
-      rejectedContent
-        ? 'Stock Canvas rejected the returned Deep Linking content item.'
-        : 'Stock Canvas did not close the Deep Linking return dialog.',
-    );
-    failure.canvasResourceDiagnostic = diagnostic;
-    throw failure;
+      const url = new URL(request.url());
+      return request.method() === 'POST' && url.origin === martyOrigin && url.pathname === deepLinkResponsePath;
+    }
+    catch { return false; }
+  };
+  const apiStatuses = [];
+  let apiRequestFailed = false;
+  let canvasReturnNavigated = false;
+  const onResponse = (response) => {
+    if (isDeepLinkRequest(response.request()) && apiStatuses.length < 3) apiStatuses.push(response.status());
+  };
+  const onRequestFailed = (request) => { if (isDeepLinkRequest(request)) apiRequestFailed = true; };
+  const onFrameNavigated = (frame) => {
+    if (frame !== ltiFrame) return;
+    try { if (new URL(frame.url()).origin === new URL(adminCanvas.origin).origin) canvasReturnNavigated = true; }
+    catch { /* Opaque frame navigation is not a Canvas return. */ }
+  };
+  page.on('response', onResponse);
+  page.on('requestfailed', onRequestFailed);
+  page.on('framenavigated', onFrameNavigated);
+  try {
+    await ltiFrame.evaluate(() => {
+      window.__martyCanvasDeepLinkProbe = { cspDirective: null };
+      window.addEventListener('securitypolicyviolation', (event) => {
+        if (['form-action', 'navigate-to', 'connect-src'].includes(event.effectiveDirective)) {
+          window.__martyCanvasDeepLinkProbe.cspDirective = event.effectiveDirective;
+        }
+      });
+    }).catch(() => { /* Diagnostic listener cannot alter the functional path. */ });
+    await ltiFrame.getByRole('button', { name: /add marty activity to canvas/i }).click();
+    try {
+      await page.getByRole('dialog', { name: /^link resource from external tool$/i })
+        .waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
+    } catch {
+      const responseUrl = ltiFrame.url();
+      let returnPage = 'other';
+      try {
+        const parsed = new URL(responseUrl);
+        if (parsed.origin === new URL(adminCanvas.origin).origin
+          && parsed.pathname.includes('/deep_linking_response')) returnPage = 'canvas_deep_link_response';
+        else if (parsed.origin === martyOrigin) returnPage = 'marty_frame';
+      } catch { /* An opaque frame URL is diagnostic only. */ }
+      const rejectedContent = await ltiFrame.getByRole('button', { name: /i understand, continue/i })
+        .isVisible().catch(() => false);
+      // Stock Canvas's rejection table has Field in its third column. Never
+      // retain its title, message, or unchecked field text from an LTI response.
+      const rejectedFields = rejectedContent
+        ? await ltiFrame.getByRole('table', { name: /content items with errors/i })
+          .locator('tbody tr').evaluateAll((rows) => [...new Set(rows.slice(0, 10)
+            .map((row) => {
+              const field = row.cells[2]?.textContent?.trim() || '';
+              if (field.startsWith('lineItem.')) return 'lineItem';
+              if (['url', 'custom', 'title', 'type'].includes(field)) return field;
+              return 'other';
+            }))]).catch(() => [])
+        : [];
+      const diagnostic = {
+        returnPage,
+        rejectedContent,
+        rejectedFields,
+        deepLinkApiStatuses: apiStatuses,
+        deepLinkApiRequestFailed: apiRequestFailed,
+        canvasReturnNavigated,
+        martyErrorAlertVisible: await ltiFrame.locator('[role="alert"].MuiAlert-colorError, [role="alert"].MuiAlert-standardError')
+          .first().isVisible().catch(() => false),
+        returningButtonVisible: await ltiFrame.getByRole('button', { name: /returning to canvas/i })
+          .isVisible().catch(() => false),
+        returnForm: await ltiFrame.evaluate((canvasOrigin) => {
+          const form = document.querySelector('form[method="post"][target="_self"]');
+          let actionCanvasOrigin = false;
+          try { actionCanvasOrigin = Boolean(form) && new URL(form.action).origin === canvasOrigin; } catch { /* No action URL. */ }
+          return { present: Boolean(form), actionCanvasOrigin,
+            jwtFieldPresent: Boolean(form?.querySelector('input[name="JWT"]')?.value) };
+        }, new URL(adminCanvas.origin).origin).catch(() => ({ present: false, actionCanvasOrigin: false, jwtFieldPresent: false })),
+        cspDirective: await ltiFrame.evaluate(() => window.__martyCanvasDeepLinkProbe?.cspDirective || null)
+          .catch(() => null),
+        resourceDialogVisible: await page.getByRole('dialog', { name: /^link resource from external tool$/i })
+          .isVisible().catch(() => false),
+        chooserHasMartyUrl: await chooser.locator('#external_tool_create_url').inputValue()
+          .then((value) => {
+            try { return new URL(value).origin === martyOrigin; } catch { return false; }
+          }).catch(() => false),
+      };
+      const failure = new ContractFailure(
+        rejectedContent ? 'canvas_deep_link_content_rejected' : 'canvas_deep_link_return_unhandled',
+        rejectedContent
+          ? 'Stock Canvas rejected the returned Deep Linking content item.'
+          : 'Stock Canvas did not close the Deep Linking return dialog.',
+      );
+      failure.canvasResourceDiagnostic = diagnostic;
+      throw failure;
+    }
+  } finally {
+    page.off('response', onResponse);
+    page.off('requestfailed', onRequestFailed);
+    page.off('framenavigated', onFrameNavigated);
   }
   await waitFor(async () => {
     const value = await chooser.locator('#external_tool_create_url').inputValue();
