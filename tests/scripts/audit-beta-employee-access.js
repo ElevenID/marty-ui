@@ -244,7 +244,7 @@ function requireConfigurationBinding(configuration) {
   );
   if (configuration.credential.credential_type !== 'EmployeeAccessCredential'
       || configuration.credential.vct !== `${BETA_ORIGIN}/credentials/employee-access`
-      || configuration.credential.credential_payload_format !== 'w3c_vcdm_v2_sd_jwt'
+      || configuration.credential.credential_payload_format !== 'SD_JWT_VC'
       || !exactArray(configuration.credential.claims?.map(({ name }) => name), expectedClaims)) {
     throw new Error('D-04 Credential Template has drifted from the employee credential contract');
   }
