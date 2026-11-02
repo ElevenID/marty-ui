@@ -6,6 +6,7 @@ impl ComposeSession {
     fn generation_roles(&self, operation: GenerationOperation) -> Result<BTreeSet<String>> {
         require(
             !self.cleanup_only
+                && self.runtime_recovery_roles.is_none()
                 && self.generation_transition.is_none()
                 && self.inputs.prior.is_some(),
         )?;
