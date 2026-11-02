@@ -85,9 +85,21 @@ jobs:
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           docker pull "$IMAGE@$DIGEST"
           test "$(docker inspect --format '{{ index .Config.Labels "io.elevenid.ui.audience" }}' "$IMAGE@$DIGEST")" = production
-          docker run --rm -d --name production-web-smoke -p 127.0.0.1:18080:80 "$IMAGE@$DIGEST"
-          trap 'docker rm -f production-web-smoke >/dev/null 2>&1 || true' EXIT
-          curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 \
+          cleanup() {
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              docker inspect --format '{{json .State}}' production-web-smoke || true
+              docker logs production-web-smoke || true
+            fi
+            docker rm -f production-web-smoke >/dev/null 2>&1 || true
+            exit "$status"
+          }
+          trap cleanup EXIT
+          docker run -d --name production-web-smoke -p 127.0.0.1:18080:80 "$IMAGE@$DIGEST"
+          # Docker may accept and reset a connection before Nginx is ready.
+          # Bound both individual requests and the complete startup retry window.
+          curl --fail --silent --show-error --retry 30 --retry-all-errors --retry-delay 1 \
+            --retry-max-time 30 --connect-timeout 2 --max-time 5 \
             http://127.0.0.1:18080/ --output "$RUNNER_TEMP/production-homepage.html"
           grep --quiet 'ElevenID' "$RUNNER_TEMP/production-homepage.html"
           ! grep --quiet 'Welcome to nginx' "$RUNNER_TEMP/production-homepage.html"
