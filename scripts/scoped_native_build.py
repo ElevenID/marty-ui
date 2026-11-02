@@ -327,6 +327,8 @@ def current_issuer_limits(profile):
     require(profile in CURRENT_ISSUER_READY_PROFILES, "CURRENT_ISSUER_PROFILE_REQUIRED")
     if profile == CURRENT_ISSUER_POLICY_COMPACT_PROFILE:
         return "1536m", 1536 * 1024 ** 2, 1536 * 1024 + math.ceil(1.1 * 1024 * 1024)
+    if profile == ISSUANCE_OFFER_PROFILE:
+        return "3g", 3 * 1024 ** 3, int(4.1 * 1024 * 1024)
     return "2g", 2 * 1024 ** 3, int(3.1 * 1024 * 1024)
 
 
