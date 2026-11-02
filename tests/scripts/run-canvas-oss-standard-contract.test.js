@@ -106,10 +106,11 @@ test('prelaunch cleanup accepts only terminal owned roster with no application o
     target_type:'background_roster',application_id:null,status:'succeeded'}];
   const candidates=[{id:'candidate-1',organization_id:org,binding_id:binding,
     application_id:null,status:'identity_link_required'}];
-  let deactivated=false;
+  let deactivated=false,inventory;
   const state={bindingActivationPossible:true,binding:{id:binding},organizationId:org,
     platformId:platform,runSuffix:'owned-run-1',owned:{martyBindingId:binding},marty:{
       async get(path){
+        if(path.endsWith('/applications'))return inventory;
         if(path.includes('/program-bindings/'))return {id:binding,organization_id:org,
           platform_id:platform,display_name:'Portable Canvas badge owned-run-1',
           enabled:!deactivated,activated_at:deactivated?null:NOW};
@@ -130,6 +131,20 @@ test('prelaunch cleanup accepts only terminal owned roster with no application o
   ]) {
     state.prelaunchAbsenceConfirmed=false;
     change();
+    await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+      error=>error.code==='canvas_background_application_uncertain');
+  }
+  inventory={organization_id:org,binding_id:binding,platform_id:platform,
+    binding_disabled:true,complete:true,applications:[]};
+  await reconcileCanvasPrelaunchApplicationAbsence(state);
+  assert.equal(state.prelaunchAbsenceConfirmed,true);
+  for(const bad of [
+    {...inventory,organization_id:'foreign'},
+    {...inventory,binding_disabled:false},
+    {...inventory,complete:false},
+    {...inventory,applications:[{id:'orphan-app',status:'approved'}]},
+  ]) {
+    inventory=bad;state.prelaunchAbsenceConfirmed=false;
     await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
       error=>error.code==='canvas_background_application_uncertain');
   }

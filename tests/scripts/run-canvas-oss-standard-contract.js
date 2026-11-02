@@ -2631,8 +2631,17 @@ async function reconcileCanvasPrelaunchApplicationAbsence(state) {
   'canvas_background_application_uncertain','Owned Canvas jobs are pending or reference an application.');
   requireCondition(candidates.every(candidate=>candidate.organization_id===organizationId
     && candidate.binding_id===bindingId&&candidate.application_id==null
-    && candidate.status==='identity_link_required'),
+    && ['identity_link_required','pending_claim'].includes(candidate.status)),
   'canvas_background_application_uncertain','Owned Canvas candidates reference an application or claim.');
+  if(candidates.some(candidate=>candidate.status==='pending_claim')) {
+    const inventory=await state.marty.get(`${bindingPath}/applications`);
+    requireCondition(inventory?.organization_id===organizationId
+      && inventory.binding_id===bindingId && inventory.platform_id===state.platformId
+      && inventory.binding_disabled===true && inventory.complete===true
+      && Array.isArray(inventory.applications) && inventory.applications.length===0,
+    'canvas_background_application_uncertain',
+    'A pending roster claim requires complete, fenced application absence.');
+  }
   state.prelaunchAbsenceConfirmed=true;
 }
 
@@ -2848,6 +2857,16 @@ async function main(options = {}) {
   const preparationState = {};
   const markActive = (id) => { activeCase = id; };
   const pass = (id, evidence) => { ledger.pass(id, evidence); };
+  const markRecordedStage = (stage) => {
+    const file = path.join(path.dirname(args.observations), `recorded-prelaunch-${stage.toLowerCase()}.json`);
+    const fd = fs.openSync(file, 'wx', 0o600);
+    try {
+      fs.writeFileSync(fd, JSON.stringify({state: stage, at: new Date().toISOString()}) + '\n');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  };
 
   try {
     const setup = await prepareCanvasCaptureFixtures({
@@ -2878,14 +2897,24 @@ async function main(options = {}) {
       if(preparationState.custody)preparationState.custody.retain('betaAdminSession',
         JSON.stringify(await betaAdminContext.cookies(martyOrigin)));
     }
+    markRecordedStage('CONTEXT_CREATE_BEGIN');
     recordedContext = await browser.newContext({
       viewport: { width: 1440, height: 900 },
       ...(!args.functionalRerun ? {recordVideo:{dir:path.dirname(args.video),size:{width:1440,height:900}}} : {}),
     });
+    markRecordedStage('CONTEXT_CREATE_COMPLETE');
+    markRecordedStage('COOKIE_COPY_BEGIN');
     await copyCookies(learnerContext, recordedContext);
+    markRecordedStage('COOKIE_COPY_COMPLETE');
+    markRecordedStage('PAGE_CREATE_BEGIN');
     recordedPage = await recordedContext.newPage();
+    markRecordedStage('PAGE_CREATE_COMPLETE');
+    markRecordedStage('GRADES_NAVIGATION_BEGIN');
     await recordedPage.goto(`${canvasOrigin}/courses/${fixtures.course.id}/grades`, { waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS });
+    markRecordedStage('GRADES_NAVIGATION_COMPLETE');
+    markRecordedStage('OVERLAY_BEGIN');
     await showVideoStep(recordedPage, 'Canvas evidence is complete', 'The learner completed a native assignment, a Classic Quiz, and the module in stock Canvas.');
+    markRecordedStage('OVERLAY_COMPLETE');
 
     markActive('learner_resource_launch');
     preparationState.owned.martyLearnerLaunchIntent=true;preparationState.persistOwned();

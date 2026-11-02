@@ -1162,6 +1162,47 @@ mod tests {
     }
 
     #[test]
+    fn disabled_canvas_binding_application_inventory_requires_owned_integration_read() {
+        let path = "/v1/integrations/canvas/program-bindings/binding-1/applications";
+        let required = resolve_action("GET", path).expect("binding inventory read route");
+        assert_eq!(required.permission, "integration-connector:view");
+        assert_eq!(required.resource, "integration-connector");
+        let lookup = resolve_resource_lookup(path).expect("exact binding owner lookup");
+        assert_eq!(lookup.service, "issuance");
+        assert_eq!(
+            lookup.path,
+            "/v1/integrations/canvas/program-bindings/binding-1"
+        );
+        assert_eq!(
+            authorize_api_key(
+                required.permission,
+                "org-2",
+                Some("org-1"),
+                &["integrations:read".into()]
+            ),
+            Err(TenantAuthorizationFailure::ApiKeyOrganizationMismatch),
+        );
+        assert_eq!(
+            authorize_api_key(
+                required.permission,
+                "org-1",
+                Some("org-1"),
+                &["applications:read".into()]
+            ),
+            Err(TenantAuthorizationFailure::ApiKeyPermissionMissing),
+        );
+        assert_eq!(
+            authorize_api_key(
+                required.permission,
+                "org-1",
+                Some("org-1"),
+                &["integrations:read".into()]
+            ),
+            Ok(()),
+        );
+    }
+
+    #[test]
     fn presentation_policy_owner_lookup_uses_internal_projection_and_preserves_scopes() {
         let lookup = resolve_resource_lookup(
             "/v1/presentation-policies/11111111-1111-1111-1111-111111111111",

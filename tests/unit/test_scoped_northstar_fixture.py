@@ -440,4 +440,46 @@ class CreatedRepresentationControls(unittest.TestCase):
             altered=copy.deepcopy(actual);change(altered)
             with self.assertRaises(ValueError):check(altered)
 
+
+
+
+class OwnedNetworkTransitionTests(unittest.TestCase):
+    @staticmethod
+    def snapshots():
+        baseline = dict(Name="elevenid-beta-network", Id="1" * 64, Driver="bridge",
+            Options={"reviewed": "true"}, Labels={"owner": "beta"},
+            Containers={"a" * 64: dict(Name="retained", IPv4Address="10.44.0.2/24", IPv6Address="")},
+            Status={"IPAM": {"Subnets": {"10.44.0.0/24": {"IPsInUse": 3, "DynamicIPsAvailable": 253}}}})
+        running = copy.deepcopy(baseline)
+        running["Containers"]["b" * 64] = dict(Name="elevenid-beta-northstar-admissions-1",
+            IPv4Address="10.44.0.3/24", IPv6Address="")
+        running["Status"]["IPAM"]["Subnets"]["10.44.0.0/24"] = {"IPsInUse": 4, "DynamicIPsAvailable": 252}
+        return baseline, running
+
+    def test_known_start_and_stop_keep_exact_both_ipam_counters(self):
+        before, after = self.snapshots()
+        options = dict(known_cids={"b" * 64}, container_name="elevenid-beta-northstar-admissions-1")
+        m.owned_network_transition(before, after, **options)
+        m.owned_network_transition(after, before, **options)
+        m.owned_network_transition(before, copy.deepcopy(before), known_cids=set(), container_name=options["container_name"])
+
+    def test_foreign_endpoint_and_static_or_counter_changes_are_refused(self):
+        for change in ("foreign-cid", "foreign-name", "retained-endpoint", "one-counter", "no-counter",
+                       "driver", "options", "label", "no-membership-counter", "wrong-subnet"):
+            with self.subTest(change=change):
+                before, after = self.snapshots()
+                if change == "foreign-cid": after["Containers"]["c" * 64] = after["Containers"].pop("b" * 64)
+                if change == "foreign-name": after["Containers"]["b" * 64]["Name"] = "unrelated"
+                if change == "retained-endpoint": after["Containers"]["a" * 64]["IPv4Address"] = "10.44.0.9/24"
+                if change == "one-counter": after["Status"]["IPAM"]["Subnets"]["10.44.0.0/24"]["DynamicIPsAvailable"] += 1
+                if change == "no-counter": after["Status"] = copy.deepcopy(before["Status"])
+                if change == "driver": after["Driver"] = "foreign"
+                if change == "options": after["Options"]["foreign"] = "true"
+                if change == "label": after["Labels"]["owner"] = "foreign"
+                if change == "no-membership-counter": after["Containers"].pop("b" * 64)
+                if change == "wrong-subnet": after["Containers"]["b" * 64]["IPv4Address"] = "10.45.0.3/24"
+                with self.assertRaises(ValueError):
+                    m.owned_network_transition(before, after, known_cids={"b" * 64},
+                        container_name="elevenid-beta-northstar-admissions-1")
+
 if __name__ == "__main__": unittest.main()

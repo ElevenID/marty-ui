@@ -8,6 +8,7 @@ created-container verifier and existing external-component/public verifier.
 """
 from copy import deepcopy
 from pathlib import Path
+import ipaddress
 import re
 
 ROLE = "northstar-admissions"
@@ -155,6 +156,42 @@ def require(value, code):
         raise ValueError(code)
 
 
+def owned_network_transition(before, after, *, known_cids, container_name):
+    """One durable-owned endpoint may start/stop; every other network fact is exact."""
+    require(isinstance(known_cids, set) and all(re.fullmatch(r"[a-f0-9]{64}", cid)
+            for cid in known_cids), "KNOWN_NETWORK_ENDPOINT_AUTHORITY_REQUIRED")
+    old, current = deepcopy(before), deepcopy(after)
+    previous_endpoints, endpoints = old.pop("Containers"), current.pop("Containers")
+    require(isinstance(previous_endpoints, dict) and isinstance(endpoints, dict), "NETWORK_ENDPOINT_SHAPE_CHANGED")
+    removed, added = set(previous_endpoints) - set(endpoints), set(endpoints) - set(previous_endpoints)
+    require(len(removed) + len(added) <= 1 and removed | added <= known_cids,
+            "UNRELATED_NETWORK_ENDPOINT_CHANGED")
+    require(all(previous_endpoints[cid] == endpoints[cid] for cid in set(previous_endpoints) & set(endpoints)),
+            "RETAINED_NETWORK_ENDPOINT_CHANGED")
+    subnets = old.get("Status", {}).get("IPAM", {}).get("Subnets")
+    require(isinstance(subnets, dict), "BOUND_NETWORK_IPAM_STATUS_REQUIRED")
+    for delta, rows in ((-1, {cid: previous_endpoints[cid] for cid in removed}),
+                        (1, {cid: endpoints[cid] for cid in added})):
+        for row in rows.values():
+            require(row.get("Name") == container_name, "OWNED_NETWORK_ENDPOINT_NAME_CHANGED")
+            prefixes = []
+            for field in ("IPv4Address", "IPv6Address"):
+                address = row.get(field)
+                if address:
+                    prefixes.append(str(ipaddress.ip_interface(address).network))
+            require(prefixes and len(prefixes) == len(set(prefixes)) and all(prefix in subnets for prefix in prefixes),
+                    "OWNED_NETWORK_ENDPOINT_SUBNET_CHANGED")
+            for prefix in prefixes:
+                counters = subnets[prefix]
+                require(type(counters.get("IPsInUse")) is int and type(counters.get("DynamicIPsAvailable")) is int,
+                        "BOUND_NETWORK_IPAM_COUNTERS_REQUIRED")
+                counters["IPsInUse"] += delta
+                counters["DynamicIPsAvailable"] -= delta
+                require(counters["IPsInUse"] >= 0 and counters["DynamicIPsAvailable"] >= 0,
+                        "BOUND_NETWORK_IPAM_COUNTER_RANGE")
+    require(current == old, "BOUND_NETWORK_CONFIGURATION_CHANGED")
+
+
 def model_delta(before, after, fixture, server):
     require(before.get("name") == after.get("name") == "elevenid-beta", "PROJECT_CHANGED")
     require(set(before.get("services", {})) == {ROLE}, "ONE_ROLE_REQUIRED")
@@ -205,6 +242,28 @@ def execution_type(core):
             require(set(config["retainedContainers"]) == set(identities), "EXACT_RETAINED22_SNAPSHOTS_REQUIRED")
             model_delta(self.models[ROLE], self.changed[ROLE], core.read_ref(config["newFixture"]), self.server)
             self.identities = identities
+            # A never-started recovered OFF row has no assigned NetworkID. Bind
+            # assignment to the same model network observed on retained22;
+            # retained_twenty separately verifies their exact live generations.
+            self.networks, self.network_ids = {}, None
+            if config.get("functionalStartupAuthorized") is True and any(
+                    not row["NetworkID"] for row in self.original["NetworkSettings"]["Networks"].values()):
+                declared = self.models[ROLE]["networks"]
+                service_networks = self.models[ROLE]["services"][ROLE]["networks"]
+                names = {declared[key]["name"] for key in service_networks}
+                require(names == set(self.original["NetworkSettings"]["Networks"]), "MODEL_NETWORK_SET_CHANGED")
+                require(set(config["networkAuthority"]) == names, "EXACT_NETWORK_AUTHORITY_REQUIRED")
+                self.networks = {name: core.load(ref) for name, ref in config["networkAuthority"].items()}
+                self.network_ids = {}
+                retained = [core.load(ref) for ref in config["retainedContainers"].values()]
+                for name in names:
+                    network = self.networks[name]
+                    require(network["Name"] == name and re.fullmatch(r"[a-f0-9]{64}", network["Id"]),
+                            "BOUND_NETWORK_IDENTITY_CHANGED")
+                    ids = {row["NetworkSettings"]["Networks"][name]["NetworkID"]
+                           for row in retained if name in row["NetworkSettings"]["Networks"]}
+                    require(ids == {network["Id"]}, "RETAINED_NETWORK_ID_AMBIGUOUS")
+                    self.network_ids[name] = network["Id"]
             self.marker = None
             self.observe_external = observe_external
             self.recovery_started_cids = set()
@@ -225,7 +284,8 @@ def execution_type(core):
                             row["Id"] == self.state["newCids"].get(ROLE)
                             and ("apply-start-" + ROLE in self.state["operations"]
                                  or self.state.get("pending") == "apply-start-" + ROLE)))),
-                    host_mounts=representations.host_mounts, daemon_source=representations.daemon_source)
+                    host_mounts=representations.host_mounts, daemon_source=representations.daemon_source,
+                    network_ids=self.network_ids)
             self.verify_container = verify
             self.g.candidate_guard = lambda role, row, model, *, running: (require(role == ROLE, "ONE_ROLE_REQUIRED"), self.verify_container(row, model, running=running))
             require(config["publicManifest"] == config["newFixture"]
@@ -244,6 +304,14 @@ def execution_type(core):
             return prefix == "apply" and self.c.get("functionalStartupAuthorized") is True
 
         def retained_twenty(self):
+            # Preserve static daemon config, retained endpoints and exact IPAM
+            # counters; only the one journal-owned endpoint may start or stop.
+            for name, expected in self.networks.items():
+                rows = self.g.observe(["network", "inspect", expected["Id"]], "northstar-network")
+                require(len(rows) == 1, "BOUND_NETWORK_AMBIGUOUS")
+                known = set(self.recovery_started_cids) | set(self.state["newCids"].values())
+                owned_network_transition(expected, rows[0], known_cids=known,
+                                         container_name=self.original["Name"].lstrip("/"))
             require(len(self.identities) == 22, "EXACT_RUNTIME22_REQUIRED")
             for role, identity in self.identities.items():
                 expected = core.load(self.c["retainedContainers"][role])
@@ -357,7 +425,7 @@ def execution_type(core):
     return NorthstarFixture
 
 
-def candidate_guard(original, actual, *, fixture, provenance, running, host_mounts, daemon_source, server=None, replaced_cid=None, allow_known_exited=False, allow_known_running=False):
+def candidate_guard(original, actual, *, fixture, provenance, running, host_mounts, daemon_source, server=None, replaced_cid=None, allow_known_exited=False, allow_known_running=False, network_ids=None):
     """Exact one-RO-secret successor using shared host-mount representation readers."""
     require(actual["Image"] == original["Image"] == IMAGE and actual["Name"] == original["Name"], "ROLE_OR_IMAGE_CHANGED")
     require(actual["State"]["Running"] is running and not actual["State"]["OOMKilled"], "RUNNING_OR_OOM_CHANGED")
@@ -454,7 +522,17 @@ def candidate_guard(original, actual, *, fixture, provenance, running, host_moun
                 "GlobalIPv6Address", "GlobalIPv6PrefixLen", "MacAddress", "DNSNames"}
     for name, previous in old_networks.items():
         current = networks[name]
-        require(current["NetworkID"] in ((previous["NetworkID"],) if running else ("", previous["NetworkID"])), "NETWORK_ID_CHANGED")
+        expected_id = previous["NetworkID"]
+        if expected_id == "" and (running or current["NetworkID"] != ""):
+            require(running or allow_known_exited, "RETAINED_NETWORK_EXIT_INTENT_REQUIRED")
+            state = original["State"]
+            require(state["Status"] == "created" and state["Running"] is False and state["Pid"] == 0
+                    and state["StartedAt"].startswith("0001-") and not state["OOMKilled"]
+                    and not state["Restarting"], "ORIGINAL_NETWORK_NOT_NEVER_STARTED")
+            require(network_ids is not None and set(network_ids) == set(old_networks)
+                    and re.fullmatch(r"[a-f0-9]{64}", network_ids[name]), "RETAINED_NETWORK_ID_REQUIRED")
+            expected_id = network_ids[name]
+        require(current["NetworkID"] in ((expected_id,) if running else ("", expected_id)), "NETWORK_ID_CHANGED")
         require({k:v for k,v in previous.items() if k not in assigned} ==
                 {k:v for k,v in current.items() if k not in assigned}, "NETWORK_STATIC_OPTIONS_CHANGED")
     if server is None:
