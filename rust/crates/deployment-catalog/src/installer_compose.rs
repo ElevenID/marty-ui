@@ -26,6 +26,9 @@ type Result<T> = std::result::Result<T, String>;
 pub const COMPOSE_VERSION: &str = "5.6.1";
 #[path = "installer_compose_generation.rs"]
 mod generation;
+#[cfg(test)]
+#[path = "installer_compose_recovery_tests.rs"]
+mod recovery_tests;
 const MAX_FILE: u64 = 2 * 1024 * 1024;
 const MAX_WAIT: u64 = 720;
 const REFUSED: &str = "Compose installation policy refused the operation";
@@ -1115,6 +1118,43 @@ pub struct ComposeSession {
     runtime_recovery_roles: Option<BTreeSet<String>>,
 }
 
+#[derive(Clone, Copy)]
+enum ModelAdmission {
+    Selected,
+    Complete,
+    RetainedRuntime,
+}
+
+impl ModelAdmission {
+    fn selects_services(self) -> bool {
+        matches!(self, Self::Selected)
+    }
+
+    fn admit(self, model: &Value, inputs: &ComposeInputs) -> Result<Option<BTreeSet<String>>> {
+        if matches!(self, Self::RetainedRuntime) {
+            let prior = inputs
+                .prior
+                .as_ref()
+                .and_then(|receipt| receipt.resources.as_ref())
+                .ok_or(REFUSED)?;
+            let selected = retained_runtime_selection(model, prior, &inputs.services)?;
+            let services = model["services"].as_object().ok_or(REFUSED)?;
+            require(
+                prior
+                    .containers
+                    .keys()
+                    .all(|role| services.contains_key(role)),
+            )?;
+            let required_sources = prior.containers.keys().chain(&selected).cloned().collect();
+            admit_model_sources(model, inputs, Some(&required_sources))?;
+            Ok(Some(selected))
+        } else {
+            admit_model(model, inputs)?;
+            Ok(None)
+        }
+    }
+}
+
 /// Written before application startup. It binds the authenticated maintenance
 /// union without claiming that any future application resource exists.
 #[derive(Clone, Serialize, Deserialize)]
@@ -1924,6 +1964,18 @@ impl Evidence<'_> {
 /// Validate only deployment policy. Compose validates syntax and dependencies.
 /// There is deliberately no service-name, secret-name, dependency or mount table.
 fn admit_model(model: &Value, p: &ComposeInputs) -> Result<()> {
+    admit_model_sources(model, p, None)
+}
+
+/// Existing-runtime recovery cannot create future setup or application roles.
+/// Keep their static policy in the complete model, but require source custody
+/// only for the validated runtime closure and every retained container role.
+/// Ordinary and generation admission require every model source to exist.
+fn admit_model_sources(
+    model: &Value,
+    p: &ComposeInputs,
+    required_sources: Option<&BTreeSet<String>>,
+) -> Result<()> {
     require(model["name"] == p.project)?;
     require(model.as_object().ok_or(REFUSED)?.keys().all(|k| {
         k.starts_with("x-")
@@ -1939,6 +1991,7 @@ fn admit_model(model: &Value, p: &ComposeInputs) -> Result<()> {
         bound_ingress_listener(model, p)?;
     }
     for (role, service) in services {
+        let check_file = required_sources.is_none_or(|roles| roles.contains(role));
         require(name(role) && p.permits_image(role, text(&service["image"])?))?;
         for field in [
             "build",
@@ -1996,7 +2049,7 @@ fn admit_model(model: &Value, p: &ComposeInputs) -> Result<()> {
                         path.to_str().ok_or(REFUSED)?,
                         volume["read_only"] == true,
                         p,
-                        true,
+                        check_file,
                     )?;
                 }
                 "volume" => {
@@ -2017,7 +2070,7 @@ fn admit_model(model: &Value, p: &ComposeInputs) -> Result<()> {
                         && empty(declaration.get("content")),
                 )?;
                 let path = config_path(&declaration["file"])?;
-                mount_policy(path.to_str().ok_or(REFUSED)?, true, p, true)?;
+                mount_policy(path.to_str().ok_or(REFUSED)?, true, p, check_file)?;
             }
         }
     }
@@ -2040,7 +2093,14 @@ impl ComposeSession {
         binding: &RuntimeBinding,
         inputs: ComposeInputs,
     ) -> Result<Self> {
-        Self::new_inner(docker_path, binding, inputs, None, false, true)
+        Self::new_inner(
+            docker_path,
+            binding,
+            inputs,
+            None,
+            false,
+            ModelAdmission::Selected,
+        )
     }
     /// A generation may inspect the complete native model while its mutation
     /// commands still select only the fixed producer or changed runtime roles.
@@ -2050,7 +2110,14 @@ impl ComposeSession {
         binding: &RuntimeBinding,
         inputs: ComposeInputs,
     ) -> Result<Self> {
-        Self::new_inner(docker_path, binding, inputs, None, false, false)
+        Self::new_inner(
+            docker_path,
+            binding,
+            inputs,
+            None,
+            false,
+            ModelAdmission::Complete,
+        )
     }
     /// Keep listener, mounts and the retained ownership census visible while
     /// selecting only an explicit closed set of existing runtime containers.
@@ -2061,13 +2128,14 @@ impl ComposeSession {
         inputs: ComposeInputs,
     ) -> Result<Self> {
         require(inputs.prior.is_some())?;
-        let mut session = Self::new_inner(docker_path, binding, inputs, None, false, false)?;
-        session.runtime_recovery_roles = Some(retained_runtime_selection(
-            &session.model,
-            &session.prior(),
-            &session.inputs.services,
-        )?);
-        Ok(session)
+        Self::new_inner(
+            docker_path,
+            binding,
+            inputs,
+            None,
+            false,
+            ModelAdmission::RetainedRuntime,
+        )
     }
     pub(crate) fn new_with_deadline(
         docker_path: &Path,
@@ -2075,7 +2143,14 @@ impl ComposeSession {
         inputs: ComposeInputs,
         deadline: Instant,
     ) -> Result<Self> {
-        Self::new_inner(docker_path, binding, inputs, Some(deadline), false, true)
+        Self::new_inner(
+            docker_path,
+            binding,
+            inputs,
+            Some(deadline),
+            false,
+            ModelAdmission::Selected,
+        )
     }
     pub(crate) fn for_failed_runtime_cleanup(
         docker_path: &Path,
@@ -2083,7 +2158,14 @@ impl ComposeSession {
         inputs: ComposeInputs,
         deadline: Option<Instant>,
     ) -> Result<Self> {
-        Self::new_inner(docker_path, binding, inputs, deadline, true, true)
+        Self::new_inner(
+            docker_path,
+            binding,
+            inputs,
+            deadline,
+            true,
+            ModelAdmission::Selected,
+        )
     }
     fn new_inner(
         docker_path: &Path,
@@ -2091,7 +2173,7 @@ impl ComposeSession {
         inputs: ComposeInputs,
         deadline: Option<Instant>,
         cleanup_only: bool,
-        model_selection: bool,
+        admission: ModelAdmission,
     ) -> Result<Self> {
         binding.validate()?;
         require(
@@ -2200,11 +2282,11 @@ impl ComposeSession {
         };
         let output = session.compose(
             &["config", "--format", "json"],
-            model_selection,
+            admission.selects_services(),
             Duration::from_secs(60),
         )?;
         let model: Value = serde_json::from_str(&output).map_err(|_| REFUSED)?;
-        admit_model(&model, &session.inputs)?;
+        session.runtime_recovery_roles = admission.admit(&model, &session.inputs)?;
         if let Some(foundation) = foundation {
             foundation.validate_model(&model)?;
         }
@@ -2213,7 +2295,7 @@ impl ComposeSession {
         }
         let hashes = model_hashes(&session.compose(
             &["config", "--hash", "*"],
-            model_selection,
+            admission.selects_services(),
             Duration::from_secs(60),
         )?)?;
         require(
@@ -2367,7 +2449,7 @@ impl ComposeSession {
 
     /// Pull only verified immutable references selected by the native model.
     pub fn pull(&self) -> Result<()> {
-        require(!self.cleanup_only)?;
+        require(!self.cleanup_only && self.runtime_recovery_roles.is_none())?;
         #[cfg(feature = "installer-development")]
         if let Some(image) = &self.inputs.development_image {
             image.inspect(&self.docker)?;
@@ -2848,7 +2930,7 @@ impl ComposeSession {
         state: &mut InstallerState,
         service: &str,
     ) -> Result<ComposeReceipt> {
-        require(!self.cleanup_only)?;
+        require(!self.cleanup_only && self.runtime_recovery_roles.is_none())?;
         let mut state = Evidence::Install(state);
         let config = &self.model["services"][service];
         require(
