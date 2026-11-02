@@ -53,6 +53,7 @@ const ASSETS: &[&str] = &[
     "scripts/kms_core_release.py",
     "scripts/test_conformance_native_compose.py",
     "scripts/conformance_stack.py",
+    "scripts/local_native_functional_binding.py",
     "scripts/test_canvas_worker_compose_render.py",
     "scripts/didcomm_wallet_fixture.py",
     "scripts/test_canvas_lti_https.py",

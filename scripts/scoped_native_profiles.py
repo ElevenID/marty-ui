@@ -71,6 +71,15 @@ CANVAS_SCOPED_JOBS = BuildProfile(
 )
 
 
+ISSUANCE_OFFER_FORMAT = BuildProfile(
+    "d05-issuance-offer-format-only",
+    "e836a700579a1dc0be4894c6bf416c26529d2564",
+    (("issuance-native", "marty-issuance-service"),),
+    ("marty-issuance-service",),
+    "marty-d05-issuance-offer-format-",
+    "current-issuer-ready-native",
+)
+
 OFFICIAL_ALL_SERVICES = BuildProfile(
     "oid4vc-all-services",
     "d2debf0fde2a0c826f8925aca648c9d3dabfbc9f",
@@ -109,7 +118,7 @@ LATEST_ALL_SERVICES = BuildProfile(
 
 
 def reviewed_profile(name):
-    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, CANVAS_SCOPED_JOBS, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
+    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, CANVAS_SCOPED_JOBS, ISSUANCE_OFFER_FORMAT, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
         if name == profile.name:
             return profile
     raise ValueError("UNKNOWN_REVIEWED_BUILD_PROFILE")

@@ -235,6 +235,13 @@ def test_workflow_preserves_full_merge_group_and_required_gate() -> None:
     )
     jobs = workflow["jobs"]
     rust_steps = jobs["test-rust-services"]["steps"]
+    checkout = next(
+        step
+        for step in rust_steps
+        if str(step.get("uses", "")).startswith("actions/checkout@")
+    )
+    assert checkout["with"]["ref"] == "${{ github.sha }}"
+    assert checkout["with"]["persist-credentials"] is False
     record = next(
         s
         for s in rust_steps
