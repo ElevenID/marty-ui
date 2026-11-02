@@ -16,7 +16,6 @@
         "status": "pending",
         "pre_auth_code": "pre-auth-a",
         "credential_type": "EmployeeBadge",
-        "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
         "created_at": "2026-08-20T12:34:56.123000+00:00",
         "expires_at": "2099-08-20T12:49:56+00:00"
       },
@@ -27,7 +26,6 @@
         "status": "revoked",
         "pre_auth_code": "pre-auth-b",
         "credential_type": "MemberCredential",
-        "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
         "created_at": "2026-08-19T10:00:00+00:00",
         "expires_at": "2099-08-19T10:15:00+00:00",
         "issued_at": "2026-08-19T10:03:00+00:00",
@@ -41,7 +39,6 @@
         "status": "authorized",
         "pre_auth_code": "pre-auth-foreign",
         "credential_type": "ForeignCredential",
-        "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
         "created_at": "2026-08-18T08:00:00+00:00",
         "expires_at": "2099-08-18T08:15:00+00:00"
       },
@@ -52,7 +49,6 @@
         "status": "pending",
         "pre_auth_code": "pre-auth-expired",
         "credential_type": "ExpiredCredential",
-        "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
         "created_at": "2000-01-01T00:00:00+00:00",
         "expires_at": "2000-01-01T00:15:00+00:00"
       }
