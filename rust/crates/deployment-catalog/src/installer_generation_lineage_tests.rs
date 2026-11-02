@@ -46,13 +46,19 @@ fn helper(sequence: u64, completed: bool, image: &str) -> ContainerIdentity {
         memory_limit: 64 * 1024 * 1024,
     }
 }
-fn native_receipt(sequence: u64, operation: &str, completed: bool, image: &str) -> ComposeReceipt {
+fn native_receipt(
+    sequence: u64,
+    operation: &str,
+    completed: bool,
+    image: &str,
+    engine: &str,
+) -> ComposeReceipt {
     let project = format!("marty-install-{}", public_fixture::OWNER.replace('-', ""));
     let helper = helper(sequence, completed, image);
     ComposeReceipt {
         schema: "elevenid.installer-compose-operation/v1".into(),
         project: project.clone(),
-        engine_id: "engine".into(),
+        engine_id: engine.into(),
         operation: operation.into(),
         configuration_sha256: "6".repeat(64),
         input_files: BTreeMap::new(),
@@ -84,6 +90,9 @@ pub(super) struct Fixture {
 }
 impl Fixture {
     pub(super) fn new(last: u64) -> Self {
+        Self::with_engine(last, "engine")
+    }
+    pub(super) fn with_engine(last: u64, engine: &str) -> Self {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         for name in [
@@ -112,7 +121,7 @@ impl Fixture {
             "keycloak-observation.json",
             &json!({
                 "schema":"elevenid.installer-keycloak/v2","installation_id":public_fixture::OWNER,
-                "engine_id":"engine","container_id":"a".repeat(64),
+                "engine_id":engine,"container_id":"a".repeat(64),
                 "container_name":format!("marty-install-{}-installer-keycloak-1",public_fixture::OWNER.replace('-',"")),
                 "network_id":"b".repeat(64),
                 "image":format!("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:{}","c".repeat(64)),
@@ -221,7 +230,7 @@ impl Fixture {
             } else {
                 format!("g{sequence:020}-wait-000000")
             };
-            let native = native_receipt(sequence, &operation, true, &image);
+            let native = native_receipt(sequence, &operation, true, &image, engine);
             let native_bytes = record(
                 root.path(),
                 &if sequence == 0 {
@@ -234,8 +243,8 @@ impl Fixture {
             if sequence > 0 {
                 let parent = generations.last().unwrap();
                 let create = format!("g{sequence:020}-create-000000");
-                let created = native_receipt(sequence, &create, false, &image);
-                let previous = native_receipt(sequence - 1, "previous", true, &image);
+                let created = native_receipt(sequence, &create, false, &image, engine);
+                let previous = native_receipt(sequence - 1, "previous", true, &image, engine);
                 let created_bytes = record(
                     root.path(),
                     &format!("generation-compose-{create}-result.json"),
@@ -289,7 +298,7 @@ impl Fixture {
                 );
             }
             let host = json!({"schema":"elevenid.installer-generation-host/v4",
-                "installation_id":public_fixture::OWNER,"engine_id":"engine",
+                "installation_id":public_fixture::OWNER,"engine_id":engine,
                 "container_id":helper(sequence,true,&image).id,
                 "container_name":format!("marty-install-{}-installer-generation-1",public_fixture::OWNER.replace('-',"")),
                 "network_id":"b".repeat(64),"image":image,"root_retired":false,
@@ -318,7 +327,7 @@ impl Fixture {
             let binding = GenerationBinding {
                 schema: "elevenid.installer-application-generation/v4".into(),
                 installation_id: public_fixture::OWNER.into(),
-                engine_id: "engine".into(),
+                engine_id: engine.into(),
                 network_id: Some("b".repeat(64)),
                 generation_receipt_sha256: digest(&host_bytes),
                 files: after

@@ -1476,6 +1476,14 @@ pub(crate) fn test_lineage_fixture(last: u64) -> (tempfile::TempDir, Vec<Generat
     (fixture.root, fixture.generations)
 }
 #[cfg(test)]
+pub(crate) fn test_lineage_fixture_with_engine(
+    last: u64,
+    engine: &str,
+) -> (tempfile::TempDir, Vec<GenerationBinding>) {
+    let fixture = lineage_tests::Fixture::with_engine(last, engine);
+    (fixture.root, fixture.generations)
+}
+#[cfg(test)]
 pub(crate) fn test_lineage_visits<T>(operation: impl FnOnce() -> T) -> (T, Vec<u64>) {
     candidate_visits::measure(operation)
 }
