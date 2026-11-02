@@ -1306,8 +1306,52 @@ async function runDeepLinkingViaAssignmentUi(page, fixtures, toolId, adminCanvas
     try { return new URL(frame.url()).origin === martyOrigin; } catch { return false; }
   }), DEFAULT_TIMEOUT_MS, 500, 'deep_link_iframe_missing');
   await ltiFrame.getByRole('button', { name: /add marty activity to canvas/i }).click();
-  await page.getByRole('dialog', { name: /^link resource from external tool$/i })
-    .waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
+  try {
+    await page.getByRole('dialog', { name: /^link resource from external tool$/i })
+      .waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
+  } catch {
+    const responseUrl = ltiFrame.url();
+    let returnPage = 'other';
+    try {
+      const parsed = new URL(responseUrl);
+      if (parsed.origin === new URL(adminCanvas.origin).origin
+        && parsed.pathname.includes('/deep_linking_response')) returnPage = 'canvas_deep_link_response';
+      else if (parsed.origin === martyOrigin) returnPage = 'marty_frame';
+    } catch { /* An opaque frame URL is diagnostic only. */ }
+    const rejectedContent = await ltiFrame.getByRole('button', { name: /i understand, continue/i })
+      .isVisible().catch(() => false);
+    // Stock Canvas's rejection table has Field in its third column. Never
+    // retain its title, message, or unchecked field text from an LTI response.
+    const rejectedFields = rejectedContent
+      ? await ltiFrame.getByRole('table', { name: /content items with errors/i })
+        .locator('tbody tr').evaluateAll((rows) => [...new Set(rows.slice(0, 10)
+          .map((row) => {
+            const field = row.cells[2]?.textContent?.trim() || '';
+            if (field.startsWith('lineItem.')) return 'lineItem';
+            if (['url', 'custom', 'title', 'type'].includes(field)) return field;
+            return 'other';
+          }))]).catch(() => [])
+      : [];
+    const diagnostic = {
+      returnPage,
+      rejectedContent,
+      rejectedFields,
+      resourceDialogVisible: await page.getByRole('dialog', { name: /^link resource from external tool$/i })
+        .isVisible().catch(() => false),
+      chooserHasMartyUrl: await chooser.locator('#external_tool_create_url').inputValue()
+        .then((value) => {
+          try { return new URL(value).origin === martyOrigin; } catch { return false; }
+        }).catch(() => false),
+    };
+    const failure = new ContractFailure(
+      rejectedContent ? 'canvas_deep_link_content_rejected' : 'canvas_deep_link_return_unhandled',
+      rejectedContent
+        ? 'Stock Canvas rejected the returned Deep Linking content item.'
+        : 'Stock Canvas did not close the Deep Linking return dialog.',
+    );
+    failure.canvasResourceDiagnostic = diagnostic;
+    throw failure;
+  }
   await waitFor(async () => {
     const value = await chooser.locator('#external_tool_create_url').inputValue();
     try { return new URL(value).origin === martyOrigin; } catch { return false; }
