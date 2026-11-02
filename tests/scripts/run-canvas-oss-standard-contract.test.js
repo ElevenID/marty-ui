@@ -343,10 +343,28 @@ test('pipeline prerequisites read the explicit mounted artifact directory and re
   }));
   const original = global.fetch;
   t.after(() => { global.fetch = original; });
-  global.fetch = async () => new Response(JSON.stringify({ marty_ui_sha: 'c'.repeat(40) }), { status: 200 });
+  const publicKey = { kty: 'RSA', alg: 'RS256', kid: 'did:web:beta.elevenidllc.com:orgs:marty#lti', n: 'AQ', e: 'AQAB' };
+  let toolJwks = { status: 200, keys: [publicKey] };
+  global.fetch = async (url) => {
+    const route = new URL(url).pathname;
+    if (route === '/.well-known/marty-release') return new Response(JSON.stringify({ marty_ui_sha: 'c'.repeat(40) }), { status: 200 });
+    if (route === '/v1/integrations/canvas/lti/jwks') return new Response(JSON.stringify({ keys: toolJwks.keys }), { status: toolJwks.status });
+    return new Response('', { status: 200 });
+  };
   const ledger = new ObservationLedger(NOW);
   await observePipelinePrerequisites(ledger, 'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory);
   assert.equal(ledger.entries.get('stock_lifecycle_bootstrap_only').status, 'passed');
+  assert.equal(ledger.entries.get('standard_lti_13_install').status, 'not_run');
+  assert.equal(ledger.toJSON().cases.length, CASE_IDS.length);
+  toolJwks = { status: 200, keys: [publicKey, { ...publicKey, kid: publicKey.kid + '-foreign', d: 'private' }] };
+  await assert.rejects(observePipelinePrerequisites(new ObservationLedger(NOW),
+    'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory),
+  error => error.code === 'canvas_lti_tool_jwks_invalid');
+  toolJwks = { status: 503, keys: [] };
+  await assert.rejects(observePipelinePrerequisites(new ObservationLedger(NOW),
+    'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory),
+  error => error.code === 'canvas_lti_tool_signer_unavailable');
+  toolJwks = { status: 200, keys: [publicKey] };
   const invalid = [
     value => { delete value.forbidden_operation_counts; },
     value => { value.forbidden_operation_counts = {}; },

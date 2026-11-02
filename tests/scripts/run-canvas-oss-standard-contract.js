@@ -1066,18 +1066,17 @@ async function observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, m
   requireCondition(release.marty_ui_sha === runtime.source_id, 'beta_release_drift', 'Beta release marker drifted from the captured runtime context.');
   ledger.pass('beta_release_bound_and_healthy', 'The healthy beta release marker matches the reviewed runtime source snapshot.');
 
-  markActive('canvas_lti_tool_signer_ready');
+  markActive('standard_lti_13_install');
   const toolJwksResponse = await fetchWithTimeout(`${martyOrigin}/v1/integrations/canvas/lti/jwks`, { headers: { Accept: 'application/json' } });
   requireCondition(toolJwksResponse.status === 200, 'canvas_lti_tool_signer_unavailable', 'The Canvas LTI tool signing identity is not ready.');
   const toolJwks = await responseJson(toolJwksResponse, 'canvas_lti_tool_jwks_invalid', 'The Canvas LTI public JWKS is unavailable');
-  requireCondition(Array.isArray(toolJwks?.keys) && toolJwks.keys.some((key) => key
-    && key.kty === 'RSA' && key.alg === 'RS256' && key.retired_at == null
-    && typeof key.kid === 'string' && /^did:web:[^#]+#[^#]+$/.test(key.kid)
-    && typeof key.n === 'string' && key.n.length > 0
-    && typeof key.e === 'string' && key.e.length > 0
-    && !['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'].some((field) => Object.hasOwn(key, field))),
+  requireCondition(Array.isArray(toolJwks?.keys)
+    && toolJwks.keys.every((key) => key && !['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'].some((field) => Object.hasOwn(key, field)))
+    && toolJwks.keys.some((key) => key.kty === 'RSA' && key.alg === 'RS256' && key.retired_at == null
+      && typeof key.kid === 'string' && /^did:web:[^#]+#[^#]+$/.test(key.kid)
+      && typeof key.n === 'string' && key.n.length > 0
+      && typeof key.e === 'string' && key.e.length > 0),
   'canvas_lti_tool_jwks_invalid', 'The Canvas LTI public JWKS has no active public RSA signing key.');
-  ledger.pass('canvas_lti_tool_signer_ready', 'The governed Canvas LTI tool identity publishes an active public RSA/RS256 verification key.');
 
   markActive('canvas_public_https_reachable');
   const canvasResponse = await fetchWithTimeout(`${canvasOrigin}/login/canvas`, { headers: { Accept: 'text/html' } });
