@@ -232,6 +232,39 @@ class Controls(unittest.TestCase):
                 else:config["oldModels"][m.ROLE] = s.save("wrong-model.json", {})
                 with self.assertRaises(ValueError):m.stopped_authority(config, s.core, reps)
 
+
+    def test_retained_successor_requires_exact_validated_single_role_and_cohort(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            core = module("successor_core", HERE / "repair_beta_release_metadata.py")
+            def save(name, value):
+                file = root / name; file.write_text(json.dumps(value)); return core.ref(file)
+            roles = ["issuance-native"] + ["retained-" + str(i) for i in range(21)]
+            before = {role: save("before-"+role+".json", {"Id":f"{i+100:064x}"}) for i, role in enumerate(roles)}
+            after = copy.deepcopy(before); old = core.load(before["issuance-native"])["Id"]; new = "f" * 64
+            after["issuance-native"] = save("after-issuance.json", {"Id":new})
+            baseline = ["a"*64] + [core.load(ref)["Id"] for ref in before.values()]
+            expected = sorted((set(baseline)-{old})|{new})
+            previous = {"retainedContainers":before,"runtimeAuthority":{"source":"old-profile"}}
+            config = {"retainedContainers":after,"runtimeAuthority":{"source":"new-profile"},
+                "globalCohortPreimage":save("current-cohort.json",expected)}
+            def validated(prior, current):
+                self.assertEqual(prior,previous["runtimeAuthority"]);self.assertEqual(current,config["runtimeAuthority"])
+                return {"role":"issuance-native","oldCid":old,"newCid":new}
+            self.assertEqual(m.retained_role_successor_cohort(config,previous,baseline,core,validated),expected)
+            with self.assertRaisesRegex(ValueError,"SUCCESSOR_REQUIRED"):
+                m.retained_role_successor_cohort(config,previous,baseline,core,None)
+            for kind in ("foreign-cid","removed-unrelated","other-role","wrong-target","same-cid","duplicate"):
+                changed=copy.deepcopy(config);callback=validated
+                if kind=="foreign-cid":changed["globalCohortPreimage"]=save(kind+".json",expected[:-1]+["b"*64])
+                elif kind=="removed-unrelated":changed["globalCohortPreimage"]=save(kind+".json",expected[1:])
+                elif kind=="other-role":changed["retainedContainers"]["retained-1"]=save(kind+".json",{"Id":"b"*64})
+                elif kind=="wrong-target":callback=lambda *_:{"role":"gateway","oldCid":old,"newCid":new}
+                elif kind=="same-cid":callback=lambda *_:{"role":"issuance-native","oldCid":old,"newCid":old}
+                else:changed["globalCohortPreimage"]=save(kind+".json",expected+[expected[0]])
+                with self.subTest(kind=kind),self.assertRaises(ValueError):
+                    m.retained_role_successor_cohort(changed,previous,baseline,core,callback)
+
     def test_default_hooks_preserve_metadata_behavior(self):
         core = module("defaults", HERE / "repair_beta_release_metadata.py")
         self.assertTrue(core.Operation.preimage_running(None, "gateway", "apply"))

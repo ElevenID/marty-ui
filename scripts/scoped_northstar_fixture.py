@@ -57,7 +57,31 @@ def asset_contract(config, core):
     return server
 
 
-def recovered_off_authority(config, core, representations, depth):
+def retained_role_successor_cohort(config, previous, baseline, core, runtime_successor):
+    """A reviewed caller delegates profile validation to the shared native validator."""
+    require(callable(runtime_successor), "RECOVERED_OFF_COHORT_SUCCESSOR_REQUIRED")
+    transition = runtime_successor(previous["runtimeAuthority"], config["runtimeAuthority"])
+    require(set(transition) == {"role", "oldCid", "newCid"}
+            and transition["role"] == "issuance-native", "RECOVERED_OFF_SUCCESSOR_SCOPE_CHANGED")
+    old, new = transition["oldCid"], transition["newCid"]
+    before = {role: core.load(ref)["Id"] for role, ref in previous["retainedContainers"].items()}
+    after = {role: core.load(ref)["Id"] for role, ref in config["retainedContainers"].items()}
+    require(len(before) == len(after) == 22 and set(before) == set(after) and ROLE not in before
+            and before.get("issuance-native") == old and after.get("issuance-native") == new
+            and all(before[role] == after[role] for role in before if role != "issuance-native")
+            and len(set(before.values())) == len(set(after.values())) == 22
+            and all(re.fullmatch(r"[a-f0-9]{64}", cid) for cid in (*before.values(), *after.values())),
+            "RECOVERED_OFF_RETAINED_ROLE_CHANGED")
+    require(old in baseline and new not in baseline and set(before.values()).issubset(baseline),
+            "RECOVERED_OFF_SUCCESSOR_NOT_FRESH")
+    expected = (set(baseline) - {old}) | {new}
+    actual = core.load(config["globalCohortPreimage"])
+    require(len(actual) == len(baseline) == len(set(actual))
+            and set(actual) == expected, "RECOVERED_OFF_COHORT_CHANGED")
+    return actual
+
+
+def recovered_off_authority(config, core, representations, depth, runtime_successor=None):
     proof = config["recoveredOffAuthority"]
     require(set(proof) == {"input", "invocation", "result", "dispatcher"}
             and representations is not None and depth < 8, "RECOVERED_OFF_REFS_CHANGED")
@@ -69,7 +93,7 @@ def recovered_off_authority(config, core, representations, depth):
             and previous["rollbackAuthorized"] is True and previous["executeAuthorized"] is False,
             "RECOVERED_OFF_INVOCATION_CHANGED")
     core.read_ref(proof["dispatcher"])
-    original = stopped_authority(previous, core, representations, depth + 1)
+    original = stopped_authority(previous, core, representations, depth + 1, runtime_successor)
     failed = core.load(previous["recoveryState"])
     require(result["state"] == "D11_NORTHSTAR_ORIGINAL_CONFIGURATION_RESTORED_OFF"
             and core.load(result["originalFailure"]) == failed
@@ -97,15 +121,16 @@ def recovered_off_authority(config, core, representations, depth):
             and state["ExitCode"] == 0 and state["StartedAt"].startswith("0001-")
             and result["served"] == {"state": "ORIGINAL_CONFIGURATION_OFF", "cid": row["Id"],
                 "pid": 0, "actualExitCode": 0}, "RECOVERED_OFF_NOT_NEVER_STARTED")
-    require(core.load(config["globalCohortPreimage"]) == result["allIds"]
-            and len(result["allIds"]) == len(set(result["allIds"]))
+    require(len(result["allIds"]) == len(set(result["allIds"]))
             and row["Id"] in result["allIds"], "RECOVERED_OFF_COHORT_CHANGED")
+    if core.load(config["globalCohortPreimage"]) != result["allIds"]:
+        retained_role_successor_cohort(config, previous, result["allIds"], core, runtime_successor)
     return row
 
 
-def stopped_authority(config, core, representations=None, depth=0):
+def stopped_authority(config, core, representations=None, depth=0, runtime_successor=None):
     if "recoveredOffAuthority" in config:
-        return recovered_off_authority(config, core, representations, depth)
+        return recovered_off_authority(config, core, representations, depth, runtime_successor)
     proof = config["shutdown"]
     require(set(proof) == {"result", "after"}, "SHUTDOWN_REFS_CHANGED")
     result, after = core.load(proof["result"]), core.load(proof["after"])
@@ -162,7 +187,7 @@ def execution_type(core):
 
     class NorthstarFixture(core.Operation):
         def __init__(self, config, output, *, transport, identities,
-                     representations, observe_external):
+                     representations, observe_external, runtime_successor=None):
             require(config["scope"] == "FUNCTIONAL_ONLY" and config["sourceRevision"] == SOURCE
                     and config["imageSource"] == SOURCE,
                     "SOURCE_OR_FUNCTIONAL_SCOPE_CHANGED")
@@ -174,7 +199,7 @@ def execution_type(core):
             self.models = {ROLE: core.load(config["oldModels"][ROLE])}
             self.changed = {ROLE: core.load(config["newModels"][ROLE])}
             self.server = asset_contract(config, core)
-            self.original = stopped_authority(config, core, representations)
+            self.original = stopped_authority(config, core, representations, runtime_successor=runtime_successor)
             require(type(config.get("functionalStartupAuthorized", False)) is bool,
                     "EXPLICIT_STARTUP_FLAG_REQUIRED")
             require(set(config["retainedContainers"]) == set(identities), "EXACT_RETAINED22_SNAPSHOTS_REQUIRED")
