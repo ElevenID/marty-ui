@@ -2021,7 +2021,12 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         names.index("Compile reusable Rust test executables")
         < names.index("Fail fast on image-free Canvas renewal configuration")
         < names.index("Compile Bookworm-compatible base runtime acceptance")
-        < names.index("Build public selfhost image")
+    )
+    # The selfhost-only image phase is independent of Canvas preflights.
+    assert (
+        names.index("Build public selfhost image")
+        < names.index("Retire completed selfhost builder cache")
+        < names.index("Compile reusable Rust test executables")
     )
     assert (
         names.index("Compile reusable Rust test executables")

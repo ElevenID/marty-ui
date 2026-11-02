@@ -20,7 +20,7 @@ const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet, walletOri
 const { VIDEO_SIZE, createArtifactDir, finalizeVideo, maskProtocolField, showStep } = require('./demo-recording');
 const {
   GRANT, assertions, awaitNaturalExpiry, credentialContract, expiryWindow, hash,
-  loginInstanceBinding, nativeLoginResult, validateFixture, validateIssuerSetup, validateLoginSetup,
+  loginInstanceBinding, loginInstanceOwnership, nativeLoginResult, validateFixture, validateIssuerSetup, validateLoginSetup,
 } = require('./beta-membership-support-contract');
 const {isCredentialLoginDestinationUrl, requireCompletedLoginNonce} = require('./beta-credential-contract');
 const {observeCredentialLoginBrowser} = require('./credential-login-browser-observation');
@@ -71,6 +71,8 @@ async function prepareFixture(artifactDir, env, lane, evidence) {
   // Validate before copying; private/provider credentials are not fixture data.
   const proposed = validateFixture(JSON.parse(bytes.toString('utf8')), lane);
   assert.equal(proposed.applicant.email, env.TEST_APPLICANT_EMAIL, 'Fixture must name the existing synthetic applicant account');
+  if (env.TEST_SECONDARY_APPLICANT_EMAIL) assert.equal(proposed.secondaryApplicant?.email,
+    env.TEST_SECONDARY_APPLICANT_EMAIL, 'Fixture must name the second owned synthetic applicant account');
   fs.writeFileSync(path.join(artifactDir, FIXTURE_FILE), bytes, { flag: 'wx', mode: 0o600 });
   const actualBytes = await evidence.readFixture(FIXTURE_FILE);
   assert.equal(sha256(actualBytes), sha256(bytes), 'Recorder fixture bytes changed before sealing');
@@ -122,16 +124,7 @@ function createSupportController({ operator, applicantPage, fixture, lane, origi
     const foreign = lane === 'untrusted-issuer' ? await issuerSetup(fixture.foreign) : null;
     if (foreign) assert.deepEqual(credentialContract(foreign.credential), credentialContract(trusted.credential),
       'Foreign fixture must preserve the exact membership claim/format contract');
-    const login = {
-      policy: await requireJson(operator, `/v1/presentation-policies/${encodeURIComponent(fixture.login.presentationPolicyId)}`),
-      trust: await requireJson(operator, `/v1/trust-profiles/${encodeURIComponent(fixture.login.trustProfileId)}`),
-      relationships: await requireJson(operator, `/v1/trust-profiles/${encodeURIComponent(fixture.login.trustProfileId)}/issuers`),
-      issuers: await listResources(operator, '/v1/issuer-entities', fixture.login.organizationId),
-    };
-    const loginProof = validateLoginSetup(fixture, login, lane);
-    const referenced = new Set(login.relationships.map((item) => item.issuer_id));
-    login.issuers = login.issuers.filter((item) => referenced.has(item.id)
-      || [fixture.trusted.issuerDid, fixture.foreign?.issuerDid].includes(item.issuer_id));
+    const {login,proof:loginProof}=await currentLoginAuthority(operator,fixture,lane);
     const organizationIds = [...new Set([fixture.trusted.organizationId,
       ...(lane === 'untrusted-issuer' ? [fixture.foreign.organizationId] : [])])];
     const organizationState = [];
@@ -343,7 +336,21 @@ async function authMe(context, origin) {
   return response.json();
 }
 
-async function startLogin({authPage,operator,fixture,origin,flowHooks}) {
+async function currentLoginAuthority(operator,fixture,lane){
+  const login={policy:await requireJson(operator,`/v1/presentation-policies/${encodeURIComponent(fixture.login.presentationPolicyId)}`),
+    trust:await requireJson(operator,`/v1/trust-profiles/${encodeURIComponent(fixture.login.trustProfileId)}`),
+    relationships:await requireJson(operator,`/v1/trust-profiles/${encodeURIComponent(fixture.login.trustProfileId)}/issuers`),
+    issuers:await listResources(operator,'/v1/issuer-entities',fixture.login.organizationId)};
+  const proof=validateLoginSetup(fixture,login,lane);
+  const referenced=new Set(login.relationships.map(item=>item.issuer_id));
+  login.issuers=login.issuers.filter(item=>referenced.has(item.id)
+    || [fixture.trusted.issuerDid,fixture.foreign?.issuerDid].includes(item.issuer_id));
+  return {login,proof};
+}
+
+async function startLogin({authPage,operator,fixture,origin,flowHooks,lane='expired-offer'}) {
+  const before=await currentLoginAuthority(operator,fixture,lane);
+  const startedAt=Date.now();
   await flowHooks?.beforeStart();
   await authPage.goto(`${origin}/v1/auth/credential-login`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   const details = await authPage.evaluate(() => ({ nonce: document.body.dataset.nonce,
@@ -353,13 +360,23 @@ async function startLogin({authPage,operator,fixture,origin,flowHooks}) {
   assert.ok(requestUrl.origin === origin && match, 'Native login Flow request binding is required');
   const instancePath = `/v1/flows/instances/${match[1]}`;
   const instance=await requireJson(operator, instancePath);
-  const binding = loginInstanceBinding(details, instance, fixture, origin);
-  await flowHooks?.acknowledge({binding,instance});
-  return {details,instancePath,binding};
+  const owned=loginInstanceOwnership(details,instance,fixture,origin,{afterMs:startedAt-15_000,beforeMs:Date.now()+15_000});
+  await flowHooks?.acknowledge({binding:owned,instance});
+  const after=await currentLoginAuthority(operator,fixture,lane);
+  assert.deepEqual(after.login,before.login,'Login policy and trust changed during Flow creation');
+  const binding = loginInstanceBinding(details, instance, fixture, origin,after.proof);
+  return {details,instancePath,binding,loginAuthority:after.login};
+}
+
+async function rebindLoginInstance({details,instancePath,operator,fixture,origin,loginAuthority,lane}){
+  const after=await currentLoginAuthority(operator,fixture,lane);
+  assert.deepEqual(after.login,loginAuthority,'Login policy and trust changed after presentation');
+  return loginInstanceBinding(details,await requireJson(operator,instancePath),fixture,origin,after.proof);
 }
 
 async function present({ authPage, walletPage, authContext, operator, fixture, origin, wallet, record, waitFor, issuerDid, allowed, step,flowHooks }) {
-  const {details,instancePath,binding}=await startLogin({authPage,operator,fixture,origin,flowHooks});
+  const lane=fixture.foreign?'untrusted-issuer':'expired-offer';
+  const {details,instancePath,binding,loginAuthority}=await startLogin({authPage,operator,fixture,origin,flowHooks,lane});
   const browserObservation = allowed ? observeCredentialLoginBrowser(authPage, origin, details.nonce) : null;
   await step(authPage, allowed ? '4. Sign in with the trusted badge' : '2. Try the foreign issuer badge',
     'The real credential sign-in page has created a signed request. The separate wallet is the first-party Rust test client.');
@@ -378,7 +395,7 @@ async function present({ authPage, walletPage, authContext, operator, fixture, o
   }, 60_000, 500);
   // Re-bind after the response. A terminal result from an unrelated instance
   // or changed policy cannot qualify either the positive or negative lane.
-  loginInstanceBinding(details, await requireJson(operator, instancePath), fixture, origin);
+  await rebindLoginInstance({details,instancePath,operator,fixture,origin,loginAuthority,lane});
   const result = nativeLoginResult(await requireJson(operator, `${instancePath}/result`), binding, fixture, issuerDid, allowed);
   if (allowed) {
     assert.ok(response.ok(), 'Wallet must complete the actual trusted presentation');
@@ -636,4 +653,4 @@ if (require.main === module) main().catch((error) => {
   console.error(JSON.stringify({ failed: true, type: error.name })); process.exitCode = 1;
 });
 module.exports = { EVIDENCE_FILE, FIXTURE_FILE, createSupportController, guards, main,
-  prepareFixture, present, receive, stableConfiguration, walletInventory,authMe,startLogin };
+  prepareFixture, present, receive, stableConfiguration, walletInventory,authMe,startLogin,rebindLoginInstance };

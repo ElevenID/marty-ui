@@ -80,6 +80,7 @@ async fn transaction_contract(claims_type: &str) {
             status TEXT NOT NULL,
             pre_auth_code TEXT NOT NULL UNIQUE,
             credential_type TEXT,
+            credential_payload_format character varying(30) NOT NULL,
             created_at TIMESTAMPTZ NOT NULL,
             expires_at TIMESTAMPTZ NOT NULL,
             issued_at TIMESTAMPTZ,
@@ -132,9 +133,9 @@ async fn transaction_contract(claims_type: &str) {
         sqlx::query(
             "INSERT INTO issuance_service.issuance_transactions (
                 id, organization_id, credential_template_id, applicant_id, application_id,
-                subject_did, status, pre_auth_code, credential_type, created_at, expires_at,
-                issued_at, revoked_at, revocation_reason
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+                subject_did, status, pre_auth_code, credential_type, credential_payload_format,
+                created_at, expires_at, issued_at, revoked_at, revocation_reason
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
         )
         .bind(id)
         .bind(organization_id)
@@ -145,6 +146,8 @@ async fn transaction_contract(claims_type: &str) {
         .bind(status)
         .bind(format!("pre-auth-{id}"))
         .bind(Some(format!("Credential{id}")))
+        // Seed the legacy JWT fixture explicitly, not the production SD-JWT default.
+        .bind("w3c_vcdm_v2_jwt_vc")
         .bind(created_at)
         .bind(expires_at)
         .bind(None::<DateTime<Utc>>)
@@ -163,6 +166,7 @@ async fn transaction_contract(claims_type: &str) {
         .expect("transaction must exist");
     assert_eq!(transaction.organization_id, "org-a");
     assert_eq!(transaction.status, TransactionStatus::Revoked);
+    assert_eq!(transaction.credential_payload_format, "w3c_vcdm_v2_jwt_vc");
     assert_eq!(transaction.created_at, created_at);
     assert_eq!(
         transaction.revoked_at,

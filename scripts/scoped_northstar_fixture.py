@@ -57,7 +57,55 @@ def asset_contract(config, core):
     return server
 
 
-def stopped_authority(config, core):
+def recovered_off_authority(config, core, representations, depth):
+    proof = config["recoveredOffAuthority"]
+    require(set(proof) == {"input", "invocation", "result", "dispatcher"}
+            and representations is not None and depth < 8, "RECOVERED_OFF_REFS_CHANGED")
+    previous, invocation, result = (core.load(proof[k]) for k in ("input", "invocation", "result"))
+    require(invocation["mode"] == "rollback"
+            and core.load(invocation["input"]) == previous
+            and invocation["input"]["sha256"] == proof["input"]["sha256"]
+            and invocation["sourceSha256"] == previous["sourceSha256"] == proof["dispatcher"]["sha256"]
+            and previous["rollbackAuthorized"] is True and previous["executeAuthorized"] is False,
+            "RECOVERED_OFF_INVOCATION_CHANGED")
+    core.read_ref(proof["dispatcher"])
+    original = stopped_authority(previous, core, representations, depth + 1)
+    failed = core.load(previous["recoveryState"])
+    require(result["state"] == "D11_NORTHSTAR_ORIGINAL_CONFIGURATION_RESTORED_OFF"
+            and core.load(result["originalFailure"]) == failed
+            and failed["sourceSha256"] == previous["sourceSha256"]
+            and failed["runId"] == previous["runId"] and failed["oldCids"] == previous["oldCids"]
+            and set(failed["newCids"]) == {ROLE}, "RECOVERED_OFF_RESULT_CHANGED")
+    recovered = core.load(result["recovered"])
+    require(set(recovered) == {ROLE}, "RECOVERED_OFF_ROLE_CHANGED")
+    row = core.load(config["originalContainer"])
+    require(row == recovered[ROLE] and config["oldCids"] == {ROLE: row["Id"]}
+            and row["Id"] not in (original["Id"], failed["newCids"][ROLE])
+            and config["shutdown"] == previous["shutdown"]
+            and core.load(config["oldModels"][ROLE]) == core.load(previous["oldModels"][ROLE])
+            and config["oldFixture"] == previous["oldFixture"], "RECOVERED_OFF_PREIMAGE_CHANGED")
+    fixture = Path(core.load(previous["oldModels"][ROLE])["secrets"]["northstar_run"]["file"])
+    require(fixture.read_bytes() == core.read_ref(previous["oldFixture"]).read_bytes(),
+            "RECOVERED_OFF_FIXTURE_BYTES_CHANGED")
+    candidate_guard(original, row, fixture=fixture,
+        provenance=previous["provenance"]["rollback"], running=False,
+        host_mounts=representations.host_mounts, daemon_source=representations.daemon_source,
+        replaced_cid=failed["newCids"][ROLE])
+    state = row["State"]
+    require(state["Status"] == "created" and state["Running"] is False and state["Pid"] == 0
+            and state["Restarting"] is False and state["OOMKilled"] is False
+            and state["ExitCode"] == 0 and state["StartedAt"].startswith("0001-")
+            and result["served"] == {"state": "ORIGINAL_CONFIGURATION_OFF", "cid": row["Id"],
+                "pid": 0, "actualExitCode": 0}, "RECOVERED_OFF_NOT_NEVER_STARTED")
+    require(core.load(config["globalCohortPreimage"]) == result["allIds"]
+            and len(result["allIds"]) == len(set(result["allIds"]))
+            and row["Id"] in result["allIds"], "RECOVERED_OFF_COHORT_CHANGED")
+    return row
+
+
+def stopped_authority(config, core, representations=None, depth=0):
+    if "recoveredOffAuthority" in config:
+        return recovered_off_authority(config, core, representations, depth)
     proof = config["shutdown"]
     require(set(proof) == {"result", "after"}, "SHUTDOWN_REFS_CHANGED")
     result, after = core.load(proof["result"]), core.load(proof["after"])
@@ -126,7 +174,7 @@ def execution_type(core):
             self.models = {ROLE: core.load(config["oldModels"][ROLE])}
             self.changed = {ROLE: core.load(config["newModels"][ROLE])}
             self.server = asset_contract(config, core)
-            self.original = stopped_authority(config, core)
+            self.original = stopped_authority(config, core, representations)
             require(type(config.get("functionalStartupAuthorized", False)) is bool,
                     "EXPLICIT_STARTUP_FLAG_REQUIRED")
             require(set(config["retainedContainers"]) == set(identities), "EXACT_RETAINED22_SNAPSHOTS_REQUIRED")
@@ -242,7 +290,9 @@ def execution_type(core):
         def preflight(self):
             require(self.c.get("preflightAuthorized") is True, "PREFLIGHT_NOT_ARMED")
             ids, before = self.baseline()
-            proof = {"state": "ORIGINAL_CONFIGURATION_OFF137", "cid": before[ROLE]["Id"]}
+            exit_code = before[ROLE]["State"]["ExitCode"]
+            proof = {"state": "ORIGINAL_CONFIGURATION_OFF137" if exit_code == 137 else "ORIGINAL_CONFIGURATION_OFF",
+                     "cid": before[ROLE]["Id"], "actualExitCode": exit_code}
             return dict(state="D11_REBIND_PREFLIGHT_PASSED",allIds=sorted(ids),
                         before={ROLE:self.save("northstar-before.json", before[ROLE])},oldExternal=proof)
 
@@ -306,11 +356,27 @@ def candidate_guard(original, actual, *, fixture, provenance, running, host_moun
                 b["Labels"].pop(key, None)
     if not same and ("com.docker.compose.replace" in a["Labels"]
                      or "com.docker.compose.replace" in b["Labels"]):
-        require(replaced_cid is not None and b["Labels"].get("com.docker.compose.replace") == replaced_cid,
-                "COMPOSE_REPLACED_CID_CHANGED")
+        number = a["Labels"].get("com.docker.compose.container-number", "")
+        retained_name = (isinstance(number, str) and re.fullmatch(r"[1-9][0-9]*", number)
+            and a["Labels"].get("com.docker.compose.replace") == ROLE + "-" + number
+            and b["Labels"].get("com.docker.compose.replace") == ROLE + "-" + number
+            and original["Name"] == "/elevenid-beta-" + ROLE + "-" + number)
+        require(replaced_cid is not None and (
+            b["Labels"].get("com.docker.compose.replace") == replaced_cid or retained_name),
+            "COMPOSE_REPLACED_CID_CHANGED")
         if "com.docker.compose.replace" in a["Labels"]:
             b["Labels"]["com.docker.compose.replace"] = a["Labels"]["com.docker.compose.replace"]
         else:b["Labels"].pop("com.docker.compose.replace", None)
+    if not same:
+        def environment(values):
+            require(isinstance(values, list) and all(isinstance(v, str) and "=" in v for v in values),
+                    "ENVIRONMENT_SHAPE_CHANGED")
+            pairs = [v.split("=", 1) for v in values]
+            result = dict(pairs)
+            require(len(result) == len(pairs), "DUPLICATE_ENVIRONMENT_KEY")
+            return result
+        require(environment(a["Env"]) == environment(b["Env"]), "ENVIRONMENT_VALUES_CHANGED")
+        b["Env"] = a["Env"]
     require(a == b, "CONFIG_CHANGED")
     ah, bh = deepcopy(original["HostConfig"]), deepcopy(actual["HostConfig"])
     for field in ("Binds", "Mounts"):
@@ -319,6 +385,16 @@ def candidate_guard(original, actual, *, fixture, provenance, running, host_moun
         require(bh.get("Init") is True, "REPAIRED_INIT_REQUIRED")
         if "Init" in ah:bh["Init"] = ah["Init"]
         else:bh.pop("Init", None)
+    if not same:
+        for key in ("Dns", "DnsOptions", "DnsSearch"):
+            if key in ah and key in bh:
+                empty = lambda v: v is None or isinstance(v, list) and not v
+                if empty(ah[key]) and empty(bh[key]):
+                    bh[key] = ah[key]
+        if "OomKillDisable" in ah and "OomKillDisable" in bh:
+            enabled = lambda v: v is None or v is False
+            if enabled(ah["OomKillDisable"]) and enabled(bh["OomKillDisable"]):
+                bh["OomKillDisable"] = ah["OomKillDisable"]
     require(ah == bh, "HOST_CONFIG_CHANGED")
     require(len(original["Mounts"]) == 1 and original["Mounts"][0]["Destination"] == TARGET
             and original["Mounts"][0]["Type"] == "bind" and original["Mounts"][0]["RW"] is False,
@@ -334,7 +410,9 @@ def candidate_guard(original, actual, *, fixture, provenance, running, host_moun
     old_binds, old_api = host_mounts(original)
     new_binds, new_api = host_mounts(actual)
     if server is not None:
-        require(mounts[SERVER_TARGET] == {"Type": "bind", "Source": daemon_source(str(server)),
+        server_mount = deepcopy(mounts[SERVER_TARGET])
+        server_mount["Source"] = daemon_source(server_mount["Source"])
+        require(server_mount == {"Type": "bind", "Source": daemon_source(str(server)),
             "Destination": SERVER_TARGET, "Mode": "", "RW": False, "Propagation": "rprivate"},
             "SERVER_TOP_MOUNT_CHANGED")
         require(SERVER_TARGET not in new_binds and new_api.pop(SERVER_TARGET, None) == {

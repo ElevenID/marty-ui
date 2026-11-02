@@ -7,7 +7,10 @@ use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{management_security::ManagementSecurity, python_datetime::isoformat};
+use crate::{
+    credential::credential_configuration_id_for_format, management_security::ManagementSecurity,
+    python_datetime::isoformat,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,6 +52,7 @@ pub struct IssuanceTransactionRecord {
     pub status: TransactionStatus,
     pub pre_auth_code: String,
     pub credential_type: Option<String>,
+    pub credential_payload_format: String,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub issued_at: Option<DateTime<Utc>>,
@@ -166,15 +170,18 @@ impl TransactionReadService {
             .credential_type
             .as_deref()
             .filter(|value| !value.is_empty())
-            .unwrap_or("default")
-            .to_owned();
+            .unwrap_or("default");
+        let configuration_id = credential_configuration_id_for_format(
+            credential_type,
+            &transaction.credential_payload_format,
+        );
         let issuer_url = format!(
             "{}/org/{}",
             self.issuer_base_url, transaction.organization_id
         );
         let offer = create_credential_offer(
             &issuer_url,
-            &[credential_type],
+            &[configuration_id],
             Some(&transaction.pre_auth_code),
             false,
         )
@@ -309,7 +316,73 @@ impl IssuanceTransactionResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{TransactionReadError, TransactionStatus};
+    use super::{
+        IssuanceTransactionRecord, TransactionReadError, TransactionReadRepository,
+        TransactionReadService, TransactionStatus,
+    };
+    use async_trait::async_trait;
+    use chrono::{TimeDelta, Utc};
+    use std::sync::Arc;
+
+    struct OneTransaction(IssuanceTransactionRecord);
+
+    #[async_trait]
+    impl TransactionReadRepository for OneTransaction {
+        async fn get(
+            &self,
+            transaction_id: &str,
+        ) -> Result<Option<IssuanceTransactionRecord>, TransactionReadError> {
+            Ok((transaction_id == self.0.id).then(|| self.0.clone()))
+        }
+
+        async fn list(
+            &self,
+            _organization_id: &str,
+        ) -> Result<Vec<IssuanceTransactionRecord>, TransactionReadError> {
+            Ok(vec![self.0.clone()])
+        }
+    }
+
+    #[tokio::test]
+    async fn public_offer_uses_the_same_format_specific_configuration_id_as_application_offers() {
+        for (format, expected) in [
+            ("w3c_vcdm_v2_sd_jwt", "OpenBadgeCredential#sd-jwt"),
+            ("w3c_vcdm_v2_jwt_vc", "OpenBadgeCredential"),
+            ("mso_mdoc", "OpenBadgeCredential#mdoc"),
+        ] {
+            let now = Utc::now();
+            let transaction = IssuanceTransactionRecord {
+                id: "owned-tx".to_owned(),
+                organization_id: "owned-org".to_owned(),
+                credential_template_id: "owned-template".to_owned(),
+                applicant_id: None,
+                application_id: Some("owned-application".to_owned()),
+                subject_did: None,
+                status: TransactionStatus::Pending,
+                pre_auth_code: "owned-code".to_owned(),
+                credential_type: Some("OpenBadgeCredential".to_owned()),
+                credential_payload_format: format.to_owned(),
+                created_at: now,
+                expires_at: now + TimeDelta::minutes(5),
+                issued_at: None,
+                revoked_at: None,
+                revocation_reason: None,
+            };
+            let service = TransactionReadService::new(
+                Arc::new(OneTransaction(transaction)),
+                None,
+                "https://issuer.example",
+            );
+            let offer = service
+                .offer("owned-tx")
+                .await
+                .expect("current public offer");
+            assert_eq!(
+                offer["credential_configuration_ids"],
+                serde_json::json!([expected])
+            );
+        }
+    }
 
     #[test]
     fn statuses_fail_closed() {

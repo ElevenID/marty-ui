@@ -2080,7 +2080,7 @@ def test_full_mode_still_fails_on_missing_mandatory_registration(shell_case, mis
     assert all(call[3:] == ["--list"] for call in calls if call[0] == "child")
 
 
-def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate():
+def test_workflow_keeps_canvas_preflights_and_selfhost_image_phases_before_full_gate():
     workflow = yaml.safe_load(
         (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     )
@@ -2095,7 +2095,12 @@ def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate
     databases = names.index("Create isolated Rust contract databases")
     full = names.index("Run isolated database contract suites concurrently")
     assert names.count("Preflight published worker parity in two isolated groups") == 1
-    assert rendered + 1 == preflight < image < loader < passport < full
+    assert rendered + 1 == preflight < full
+    # These are separate matrix lanes; only the selfhost phase needs image cache.
+    cache = names.index("Retire completed selfhost builder cache")
+    compile_host = names.index("Compile reusable Rust test executables")
+    assert image < cache < compile_host < loader < passport < full
+    assert steps[cache]["if"] == "matrix.lane == 'selfhost'"
     assert prepare < databases < full
     assert steps[preflight]["working-directory"] == "rust"
     assert steps[preflight]["shell"] == "bash"

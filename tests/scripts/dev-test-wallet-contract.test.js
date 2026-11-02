@@ -1,6 +1,13 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {sessionIsolation,cancelOwnedLogin,expiredOffer,freshLoginRecovery,assertions,SUPPORTED,retireLoginFlow}=require('./dev-test-wallet-contract');
+const {sessionIsolation,cancelOwnedLogin,expiredOffer,freshLoginRecovery,assertions,SUPPORTED,retireLoginFlow,safeAssertionSite}=require('./dev-test-wallet-contract');
+test('assertion site emits only an allowed source location',()=>{
+ const error={name:'AssertionError',stack:'AssertionError: secret offer URI\n    at completeIssue (C:\\private\\tests\\scripts\\audit-beta-membership-support.js:216:12)\n    at another (C:\\private\\else.js:1:2)'};
+ assert.equal(safeAssertionSite(error),'audit-beta-membership-support.js:216');
+ assert.equal(safeAssertionSite({name:'AssertionError',stack:'AssertionError: secret\n    at x (C:\\private\\secret.js:1:2)'}),null);
+ assert.equal(safeAssertionSite({name:'AssertionError',stack:'AssertionError: secret\n    at x (C:\\private\\tests\\scripts\\dev-test-wallet-contract.js:10001:2)'}),null);
+ assert.equal(safeAssertionSite({name:'Error',stack:error.stack}),null);
+});
 function holders({leak=false,resetOther=false,allowWrong=false,allowEmpty=false}={}){
  const data={a:['credential-a'],b:['credential-b']};
  function holder(id){const row={session:{origin:'http://127.0.0.1:8790',evidence:{runId:id,sessionId:id,instanceId:'same-owned-instance'},assertOwned:async()=>{}}};
@@ -27,20 +34,35 @@ test('leaked inventory, wrong-run acceptance, cross-reset, empty-holder presenta
 function cancelFixture(edit={}){
  const calls=[],binding={instanceId:'flow-owned',organizationId:'org',presentationPolicyId:'policy',trustProfileId:'trust',nonceSha256:'a'.repeat(64)};
  let cancelled=false;
- return {calls,binding,readInstance:async()=>({id:edit.foreign?'foreign':binding.instanceId,organization_id:'org',
+ return {calls,binding,origin:'https://beta.example.test',readInstance:async()=>({id:edit.foreign?'foreign':binding.instanceId,organization_id:'org',
   context_data:{presentation_policy_id:'policy',trust_profile_id:'trust'},status:cancelled?'CANCELLED':'AWAITING_WALLET'}),
   beforeCancel:async()=>calls.push('intent'),cancel:async()=>{calls.push('cancel');cancelled=true;return {ok:!edit.noAck};},
-  finalize:async()=>({status:edit.redirect?302:400,setCookie:!!edit.cookie}),readAuth:async()=>({authenticated:!!edit.login})};
+  finalize:async()=>({status:edit.status??(edit.redirect||edit.failureRedirect?302:400),setCookie:!!edit.cookie,
+   location:edit.failureRedirect?'https://beta.example.test/?auth_error=Login+session+expired':edit.redirectLocation||null}),
+  readAuth:async()=>({authenticated:!!edit.login})};
 }
 test('harness cancellation is exact-owned/intent-first and never claims a holder UI button',async()=>{
  const f=cancelFixture(),r=await cancelOwnedLogin(f);assert.deepEqual(f.calls,['intent','cancel']);
  assert.equal(r.kind,'HARNESS_CANCELS_OWNED_FLOW');assert.equal(r.holderClickCancel,'N/A');
+ const failureRedirect=cancelFixture({failureRedirect:true});
+ assert.equal((await cancelOwnedLogin(failureRedirect)).harness_cancel_no_login,true);
  assert.equal(freshLoginRecovery(r,{binding:{instanceId:'new-flow',nonceSha256:'b'.repeat(64)},authenticated:true,browserFinalizeVerified:true}),true);
  for(const binding of [{instanceId:r.flowInstanceId,nonceSha256:'b'.repeat(64)},
   {instanceId:'new-flow',nonceSha256:r.nonceSha256}])assert.throws(()=>freshLoginRecovery(r,{binding,authenticated:true,browserFinalizeVerified:true}));
 });
 test('foreign ownership, unknown cancel ACK, cookie, redirect or unexpected login fail closed',async()=>{
- for(const edit of [{foreign:true},{noAck:true},{cookie:true},{redirect:true},{login:true}]){
+ for(const edit of [{foreign:true},{noAck:true},{cookie:true},{redirect:true},{login:true},
+  {redirect:true,redirectLocation:'https://foreign.example.test/?auth_error=failed'},
+  {redirect:true,redirectLocation:'https://beta.example.test/console/applicant/catalog?auth_method=credential'},
+  {redirect:true,redirectLocation:'https://beta.example.test/'},
+  {redirect:true,redirectLocation:'https://beta.example.test/?auth_error=one&auth_error=two'},
+  {redirect:true,redirectLocation:'https://beta.example.test/?auth_error=failed&auth_error_code=one&auth_error_code=two'},
+  {redirect:true,redirectLocation:'https://user:secret@beta.example.test/?auth_error=failed'},
+  {redirect:true,redirectLocation:'https://beta.example.test/?auth_error=++'},
+  {redirect:true,redirectLocation:'https://beta.example.test/?auth_error=failed#fragment'},
+  {redirect:true,redirectLocation:'https://beta.example.test/?auth_error=failed&auth_method=credential'},
+  {status:301,redirectLocation:'https://beta.example.test/?auth_error=failed'},
+  {status:500}]){
   const f=cancelFixture(edit);await assert.rejects(cancelOwnedLogin(f));if(edit.foreign||edit.login)assert.deepEqual(f.calls,[]);
  }
 });
@@ -51,6 +73,18 @@ test('cleanup reconciles only the bound login Flow and records intent before can
  const done=cancelFixture();done.readInstance=async()=>({id:'flow-owned',organization_id:'org',
   context_data:{presentation_policy_id:'policy',trust_profile_id:'trust'},status:'COMPLETED'});
  assert.deepEqual(await retireLoginFlow(done),{status:'COMPLETED'});assert.deepEqual(done.calls,[]);
+ const policyOwned=cancelFixture();policyOwned.binding.contextTrustProfileId=null;
+ const originalRead=policyOwned.readInstance;policyOwned.readInstance=async()=>{
+  const row=await originalRead();row.context_data.trust_profile_id=null;return row;};
+ assert.deepEqual(await retireLoginFlow(policyOwned),{status:'CANCELLED'});
+ assert.deepEqual(policyOwned.calls,['intent','cancel']);
+ const missing=cancelFixture();missing.binding=JSON.parse(JSON.stringify({...missing.binding,
+  contextPolicyPresent:false,contextPolicyId:null,contextTrustProfilePresent:false,contextTrustProfileId:null}));
+ const missingRead=missing.readInstance;missing.readInstance=async()=>{
+  const row=await missingRead();delete row.context_data.presentation_policy_id;
+  delete row.context_data.trust_profile_id;return row;};
+ assert.deepEqual(await retireLoginFlow(missing),{status:'CANCELLED'});
+ assert.deepEqual(missing.calls,['intent','cancel']);
 });
 function expiryFixture(edit={}){
  let now=Date.parse('2026-10-28T00:00:30Z');const start=now,calls=[];

@@ -42,14 +42,45 @@ def positive_integer(value: object, field: str) -> int:
     return int(value)
 
 
-def git(repo: Path, *args: str) -> str:
+def git(repo: Path, *args: str, timeout: float = 30) -> str:
     return subprocess.run(
         ["git", "-C", str(repo), *args],
         check=True,
         capture_output=True,
         text=True,
         encoding="utf-8",
+        timeout=timeout,
     ).stdout.strip()
+
+
+def require_base_ancestry(
+    repo: Path, event_base_sha: str, checkout_base_sha: str, checkout_sha: str
+) -> None:
+    # The event base snapshot can precede GitHub's immutable merge object.
+    # Never consult a moving branch/ref or the current PR API to reconcile it.
+    if event_base_sha == checkout_base_sha:
+        return
+    try:
+        shallow = git(repo, "rev-parse", "--is-shallow-repository") == "true"
+        if shallow:
+            git(
+                repo, "fetch", "--no-tags", "--no-recurse-submodules",
+                "--unshallow", "origin", checkout_sha, event_base_sha, timeout=120,
+            )
+        else:
+            try:
+                git(repo, "cat-file", "-e", f"{event_base_sha}^{{commit}}")
+            except subprocess.CalledProcessError:
+                git(
+                    repo, "fetch", "--no-tags", "--no-recurse-submodules",
+                    "origin", checkout_sha, event_base_sha, timeout=120,
+                )
+        require(
+            git(repo, "merge-base", event_base_sha, checkout_base_sha) == event_base_sha,
+            "PR event base is not an ancestor of checkout base",
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise ValueError("PR base ancestry unavailable") from error
 
 
 def build_attestation(
@@ -111,7 +142,11 @@ def build_attestation(
         for line in header.splitlines()
         if line.startswith("parent ")
     ]
-    require(parents == [base_sha, head_sha], "PR merge parents mismatch")
+    require(len(parents) == 2, "PR merge must have exactly two parents")
+    checkout_base_sha = sha(parents[0], "checkout base parent SHA")
+    require(parents[1] == head_sha, "PR merge head parent mismatch")
+    require_base_ancestry(repo, base_sha, checkout_base_sha, checkout_sha)
+    require(git(repo, "rev-parse", "HEAD") == checkout_sha, "checkout HEAD changed during ancestry read")
     require(
         git(repo, "status", "--porcelain", "--untracked-files=no") == "",
         "tracked checkout changed during Rust tests",
@@ -141,6 +176,7 @@ def build_attestation(
         "event": "pull_request",
         "pull_request_number": number,
         "pull_request_base_sha": base_sha,
+        "checkout_base_parent_sha": checkout_base_sha,
         "pull_request_head_sha": head_sha,
         "checkout_ref": checkout_ref,
         "checkout_sha": checkout_sha,
@@ -162,7 +198,7 @@ def main() -> int:
             json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
             encoding="utf-8",
         )
-    except (KeyError, OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (KeyError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"PR Rust checkout attestation unavailable: {error}", file=sys.stderr)
         return 1
     return 0

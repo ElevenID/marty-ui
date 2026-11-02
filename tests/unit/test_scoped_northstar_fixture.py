@@ -184,6 +184,54 @@ class Scenario:
 
 class Controls(unittest.TestCase):
     def scenario(self, root, **kwargs): return Scenario(Path(root), **kwargs)
+    def recovered_successor(self, root):
+        scenario = self.scenario(root, startup=True)
+        dispatcher = Path(root) / "dispatcher.py"
+        dispatcher.write_text("# source-only dispatcher control")
+        scenario.config["sourceSha256"] = scenario.core.ref(dispatcher)["sha256"]
+        scenario.operation.state["sourceSha256"] = scenario.config["sourceSha256"]
+        result = scenario.recover()
+        previous = copy.deepcopy(scenario.config)
+        previous["executeAuthorized"] = False
+        input_ref = scenario.save("prior-recovery-input.json", previous)
+        invocation = scenario.save("prior-invocation.json", dict(mode="rollback", input=input_ref,
+            sourceSha256=previous["sourceSha256"]))
+        row = scenario.core.load(result["recovered"])[m.ROLE]
+        config = copy.deepcopy(previous)
+        config.update(originalContainer=scenario.save("recovered-original.json", row),
+            oldCids={m.ROLE:row["Id"]}, globalCohortPreimage=scenario.save("allids.json", result["allIds"]),
+            recoveredOffAuthority=dict(input=input_ref, invocation=invocation,
+                result=scenario.save("recovery-result.json", result), dispatcher=scenario.core.ref(dispatcher)))
+        return scenario, config, row
+
+    def test_completed_recovery_authorizes_exact_never_started_successor_and_preflight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s, config, row = self.recovered_successor(tmp)
+            self.assertEqual(m.stopped_authority(config, s.core, reps), row)
+            self.assertEqual(row["State"]["Status"], "created")
+            s.config = config
+            operation = s.new_operation("next-preflight")
+            preflight = operation.preflight()
+            self.assertEqual(preflight["state"], "D11_REBIND_PREFLIGHT_PASSED")
+            self.assertEqual(preflight["oldExternal"]["state"], "ORIGINAL_CONFIGURATION_OFF")
+            self.assertEqual(preflight["oldExternal"]["actualExitCode"], 0)
+            self.assertEqual(len([call for call in s.calls if call[0] == "start"]), 1)
+
+    def test_recovery_authority_rejects_unrelated_created_stale_result_and_prior_source(self):
+        for kind in ("cid", "created", "result", "source", "cohort", "model"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                s, config, row = self.recovered_successor(tmp)
+                if kind == "cid":config["oldCids"][m.ROLE] = "a" * 64
+                elif kind == "created":config["originalContainer"] = s.save("foreign-created.json", dict(row, Id="a"*64))
+                elif kind == "result":
+                    result = s.core.load(config["recoveredOffAuthority"]["result"])
+                    result["served"]["cid"] = "a"*64
+                    config["recoveredOffAuthority"]["result"] = s.save("stale.json", result)
+                elif kind == "source":config["recoveredOffAuthority"]["dispatcher"]["sha256"] = "0"*64
+                elif kind == "cohort":config["globalCohortPreimage"] = s.save("wrong-allids.json", [])
+                else:config["oldModels"][m.ROLE] = s.save("wrong-model.json", {})
+                with self.assertRaises(ValueError):m.stopped_authority(config, s.core, reps)
+
     def test_default_hooks_preserve_metadata_behavior(self):
         core = module("defaults", HERE / "repair_beta_release_metadata.py")
         self.assertTrue(core.Operation.preimage_running(None, "gateway", "apply"))
@@ -304,5 +352,59 @@ class Controls(unittest.TestCase):
             s.rows[cid]["State"]["StartedAt"]="2026-11-02T00:00:00Z"
             with self.assertRaises(ValueError):s.operation.preflight()
             self.assertFalse(s.calls)
+
+
+class CreatedRepresentationControls(unittest.TestCase):
+    def candidate(self, directory):
+        scenario = Scenario(Path(directory))
+        scenario.execute()
+        cid = scenario.operation.state["newCids"][m.ROLE]
+        return scenario, copy.deepcopy(scenario.rows[cid])
+
+    def verify(self, scenario, row):
+        scenario.operation.verify_container(row, scenario.operation.changed[m.ROLE], running=False)
+
+    def test_exact_compose_retained_name_env_order_and_disabled_default_representations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s, row = self.candidate(directory)
+            s.operation.original["Config"]["Labels"].update({"com.docker.compose.container-number":"1", "com.docker.compose.replace":m.ROLE+"-1"})
+            # The verifier loads its immutable original from its exact bound snapshot.
+            original = copy.deepcopy(s.old)
+            original["Config"]["Labels"].update(s.operation.original["Config"]["Labels"])
+            original["Config"]["Env"] = ["PORT=4175", "SECOND=value=with=equals"]
+            original["HostConfig"].update(Dns=[], DnsOptions=[], DnsSearch=[], OomKillDisable=None)
+            s.config["originalContainer"] = s.save("representation-original.json", original)
+            row["Config"]["Labels"].update({"com.docker.compose.container-number":"1", "com.docker.compose.replace":m.ROLE+"-1"})
+            row["Config"]["Env"] = list(reversed(original["Config"]["Env"]))
+            row["HostConfig"].update(Dns=None, DnsOptions=None, DnsSearch=None, OomKillDisable=False)
+            baseline = copy.deepcopy(row); self.verify(s, row); self.assertEqual(row, baseline)
+            for change in (
+                lambda v:v["Config"]["Labels"].update({"com.docker.compose.replace":"foreign-1"}),
+                lambda v:v["Config"]["Labels"].update({"com.docker.compose.container-number":"2"}),
+                lambda v:v["Config"].update(Env=["PORT=4175", "PORT=4175", "SECOND=value=with=equals"]),
+                lambda v:v["Config"].update(Env=["PORT=4176", "SECOND=value=with=equals"]),
+                lambda v:v["HostConfig"].update(Dns=["192.0.2.1"]),
+                lambda v:v["HostConfig"].update(DnsOptions=["ndots:1"]),
+                lambda v:v["HostConfig"].update(DnsSearch=["example.test"]),
+                lambda v:v["HostConfig"].update(OomKillDisable=True)):
+                altered = copy.deepcopy(baseline);change(altered)
+                with self.assertRaises(ValueError):self.verify(s, altered)
+
+    def test_windows_server_source_uses_existing_daemon_reader_without_other_mount_changes(self):
+        before=original();actual=copy.deepcopy(before);actual["Id"]="c"*64
+        actual["Config"]["Hostname"]="c"*12
+        actual["Config"]["Labels"]["com.docker.compose.replace"]=before["Id"]
+        actual["HostConfig"]["Init"]=True
+        actual["State"].update(Status="created",ExitCode=0,StartedAt="0001-01-01T00:00:00Z",FinishedAt="0001-01-01T00:00:00Z")
+        fixture=Path("C:/owned/fixture.json");before["Mounts"][0]["Source"]=reps.daemon_source(str(fixture));before["HostConfig"]["Mounts"][0]["Source"]=reps.daemon_source(str(fixture));actual["Mounts"][0]["Source"]=reps.daemon_source(str(fixture));actual["HostConfig"]["Mounts"][0]["Source"]=reps.daemon_source(str(fixture))
+        server=Path("C:/owned/server.mjs");source=str(server)
+        actual["Mounts"].append(dict(Type="bind",Source=source,Destination=m.SERVER_TARGET,RW=False,Mode="",Propagation="rprivate"))
+        actual["HostConfig"]["Mounts"].append(dict(Type="bind",Source=source,Target=m.SERVER_TARGET,ReadOnly=True,BindOptions={}))
+        provenance={k:v for k,v in before["Config"]["Labels"].items() if k.startswith("com.docker.compose.") and k not in ("com.docker.compose.project","com.docker.compose.service","com.docker.compose.replace")}
+        def check(value):m.candidate_guard(before,value,fixture=fixture,provenance=provenance,running=False,host_mounts=reps.host_mounts,daemon_source=reps.daemon_source,server=server,replaced_cid=before["Id"])
+        check(actual)
+        for change in (lambda v:v["Mounts"][-1].update(RW=True),lambda v:v["Mounts"][-1].update(Source="C:/owned/foreign.mjs")):
+            altered=copy.deepcopy(actual);change(altered)
+            with self.assertRaises(ValueError):check(altered)
 
 if __name__ == "__main__": unittest.main()

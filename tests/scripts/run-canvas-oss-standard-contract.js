@@ -1014,12 +1014,27 @@ async function selectProductionBadgeTemplates(marty, organizationId, selectors =
     const type = String(credential.credential_type || '').replace(/[^a-z]/gi, '').toLowerCase();
     const claims = new Set((credential.claims || []).map(claim => claim.name));
     return ['openbadge', 'openbadgecredential'].includes(type)
+      && credential.credential_payload_format === 'SD_JWT_VC'
       && ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context']
-        .every(name => claims.has(name));
+        .every(name => claims.has(name))
+      && Boolean(credential.compliance_profile_id);
   });
   requireCondition(candidates.length === 1, 'badge_template_selection_ambiguous', 'Exactly one active Open Badge application/template pair must be selected for the portability lane.');
   const application = candidates[0];
   const credential = credentialById.get(String(application.credential_template_id));
+  const complianceId = String(credential.compliance_profile_id);
+  const compliance = await marty.get(`/v1/compliance-profiles/${encodeURIComponent(complianceId)}`);
+  requireCondition(
+    String(compliance?.id) === complianceId
+      && (String(compliance?.organization_id || '') === organizationId
+        || (compliance?.is_system === true && compliance?.organization_id == null))
+      && String(compliance?.status || '').toUpperCase() === 'ACTIVE'
+      && compliance?.discoverable === true
+      && compliance?.credential_format === 'SD_JWT_VC'
+      && compliance?.issuance_protocol === 'OID4VCI_PRE_AUTH',
+    'badge_compliance_profile_invalid',
+    'Selected Open Badge compliance profile must be active and compatible with governed SD-JWT issuance.',
+  );
   return { application, credential };
 }
 
@@ -1065,6 +1080,18 @@ async function observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, m
   const release = await responseJson(releaseResponse, 'beta_health_failed', 'Beta release marker request failed');
   requireCondition(release.marty_ui_sha === runtime.source_id, 'beta_release_drift', 'Beta release marker drifted from the captured runtime context.');
   ledger.pass('beta_release_bound_and_healthy', 'The healthy beta release marker matches the reviewed runtime source snapshot.');
+
+  markActive('standard_lti_13_install');
+  const toolJwksResponse = await fetchWithTimeout(`${martyOrigin}/v1/integrations/canvas/lti/jwks`, { headers: { Accept: 'application/json' } });
+  requireCondition(toolJwksResponse.status === 200, 'canvas_lti_tool_signer_unavailable', 'The Canvas LTI tool signing identity is not ready.');
+  const toolJwks = await responseJson(toolJwksResponse, 'canvas_lti_tool_jwks_invalid', 'The Canvas LTI public JWKS is unavailable');
+  requireCondition(Array.isArray(toolJwks?.keys)
+    && toolJwks.keys.every((key) => key && !['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'].some((field) => Object.hasOwn(key, field)))
+    && toolJwks.keys.some((key) => key.kty === 'RSA' && key.alg === 'RS256' && key.retired_at == null
+      && typeof key.kid === 'string' && /^did:web:[^#]+#[^#]+$/.test(key.kid)
+      && typeof key.n === 'string' && key.n.length > 0
+      && typeof key.e === 'string' && key.e.length > 0),
+  'canvas_lti_tool_jwks_invalid', 'The Canvas LTI public JWKS has no active public RSA signing key.');
 
   markActive('canvas_public_https_reachable');
   const canvasResponse = await fetchWithTimeout(`${canvasOrigin}/login/canvas`, { headers: { Accept: 'text/html' } });
@@ -1305,9 +1332,106 @@ async function runDeepLinkingViaAssignmentUi(page, fixtures, toolId, adminCanvas
   const ltiFrame = await waitFor(() => page.frames().find((frame) => {
     try { return new URL(frame.url()).origin === martyOrigin; } catch { return false; }
   }), DEFAULT_TIMEOUT_MS, 500, 'deep_link_iframe_missing');
-  await ltiFrame.getByRole('button', { name: /add marty activity to canvas/i }).click();
-  await page.getByRole('dialog', { name: /^link resource from external tool$/i })
-    .waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
+  const deepLinkResponsePath = '/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response';
+  const isDeepLinkRequest = (request) => {
+    try {
+      const url = new URL(request.url());
+      return request.method() === 'POST' && url.origin === martyOrigin && url.pathname === deepLinkResponsePath;
+    }
+    catch { return false; }
+  };
+  const apiStatuses = [];
+  let apiRequestFailed = false;
+  let canvasReturnNavigated = false;
+  const onResponse = (response) => {
+    if (isDeepLinkRequest(response.request()) && apiStatuses.length < 3) apiStatuses.push(response.status());
+  };
+  const onRequestFailed = (request) => { if (isDeepLinkRequest(request)) apiRequestFailed = true; };
+  const onFrameNavigated = (frame) => {
+    if (frame !== ltiFrame) return;
+    try { if (new URL(frame.url()).origin === new URL(adminCanvas.origin).origin) canvasReturnNavigated = true; }
+    catch { /* Opaque frame navigation is not a Canvas return. */ }
+  };
+  page.on('response', onResponse);
+  page.on('requestfailed', onRequestFailed);
+  page.on('framenavigated', onFrameNavigated);
+  try {
+    await ltiFrame.evaluate(() => {
+      window.__martyCanvasDeepLinkProbe = { cspDirective: null };
+      window.addEventListener('securitypolicyviolation', (event) => {
+        if (['form-action', 'navigate-to', 'connect-src'].includes(event.effectiveDirective)) {
+          window.__martyCanvasDeepLinkProbe.cspDirective = event.effectiveDirective;
+        }
+      });
+    }).catch(() => { /* Diagnostic listener cannot alter the functional path. */ });
+    await ltiFrame.getByRole('button', { name: /add marty activity to canvas/i }).click();
+    try {
+      await page.getByRole('dialog', { name: /^link resource from external tool$/i })
+        .waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
+    } catch {
+      const responseUrl = ltiFrame.url();
+      let returnPage = 'other';
+      try {
+        const parsed = new URL(responseUrl);
+        if (parsed.origin === new URL(adminCanvas.origin).origin
+          && parsed.pathname.includes('/deep_linking_response')) returnPage = 'canvas_deep_link_response';
+        else if (parsed.origin === martyOrigin) returnPage = 'marty_frame';
+      } catch { /* An opaque frame URL is diagnostic only. */ }
+      const rejectedContent = await ltiFrame.getByRole('button', { name: /i understand, continue/i })
+        .isVisible().catch(() => false);
+      // Stock Canvas's rejection table has Field in its third column. Never
+      // retain its title, message, or unchecked field text from an LTI response.
+      const rejectedFields = rejectedContent
+        ? await ltiFrame.getByRole('table', { name: /content items with errors/i })
+          .locator('tbody tr').evaluateAll((rows) => [...new Set(rows.slice(0, 10)
+            .map((row) => {
+              const field = row.cells[2]?.textContent?.trim() || '';
+              if (field.startsWith('lineItem.')) return 'lineItem';
+              if (['url', 'custom', 'title', 'type'].includes(field)) return field;
+              return 'other';
+            }))]).catch(() => [])
+        : [];
+      const diagnostic = {
+        returnPage,
+        rejectedContent,
+        rejectedFields,
+        deepLinkApiStatuses: apiStatuses,
+        deepLinkApiRequestFailed: apiRequestFailed,
+        canvasReturnNavigated,
+        martyErrorAlertVisible: await ltiFrame.locator('[role="alert"].MuiAlert-colorError, [role="alert"].MuiAlert-standardError')
+          .first().isVisible().catch(() => false),
+        returningButtonVisible: await ltiFrame.getByRole('button', { name: /returning to canvas/i })
+          .isVisible().catch(() => false),
+        returnForm: await ltiFrame.evaluate((canvasOrigin) => {
+          const form = document.querySelector('form[method="post"][target="_self"]');
+          let actionCanvasOrigin = false;
+          try { actionCanvasOrigin = Boolean(form) && new URL(form.action).origin === canvasOrigin; } catch { /* No action URL. */ }
+          return { present: Boolean(form), actionCanvasOrigin,
+            jwtFieldPresent: Boolean(form?.querySelector('input[name="JWT"]')?.value) };
+        }, new URL(adminCanvas.origin).origin).catch(() => ({ present: false, actionCanvasOrigin: false, jwtFieldPresent: false })),
+        cspDirective: await ltiFrame.evaluate(() => window.__martyCanvasDeepLinkProbe?.cspDirective || null)
+          .catch(() => null),
+        resourceDialogVisible: await page.getByRole('dialog', { name: /^link resource from external tool$/i })
+          .isVisible().catch(() => false),
+        chooserHasMartyUrl: await chooser.locator('#external_tool_create_url').inputValue()
+          .then((value) => {
+            try { return new URL(value).origin === martyOrigin; } catch { return false; }
+          }).catch(() => false),
+      };
+      const failure = new ContractFailure(
+        rejectedContent ? 'canvas_deep_link_content_rejected' : 'canvas_deep_link_return_unhandled',
+        rejectedContent
+          ? 'Stock Canvas rejected the returned Deep Linking content item.'
+          : 'Stock Canvas did not close the Deep Linking return dialog.',
+      );
+      failure.canvasResourceDiagnostic = diagnostic;
+      throw failure;
+    }
+  } finally {
+    page.off('response', onResponse);
+    page.off('requestfailed', onRequestFailed);
+    page.off('framenavigated', onFrameNavigated);
+  }
   await waitFor(async () => {
     const value = await chooser.locator('#external_tool_create_url').inputValue();
     try { return new URL(value).origin === martyOrigin; } catch { return false; }
@@ -1509,7 +1633,7 @@ function validateAuthoritativeEvidenceHeads(facts, requirements) {
   return heads;
 }
 
-async function validateAndActivateBinding(marty, bindingId) {
+async function validateAndActivateBinding(marty, bindingId, beforeActivation = () => {}) {
   const deadline = Date.now() + READINESS_TIMEOUT_MS;
   let validation = null;
   while (Date.now() < deadline) {
@@ -1526,6 +1650,7 @@ async function validateAndActivateBinding(marty, bindingId) {
     fail('binding_readiness_blocked', `Canvas binding readiness is blocked by: ${codes || 'unknown'}.`);
   }
   validateReadinessSnapshot(validation);
+  await beforeActivation();
   const activation = await marty.post(`/v1/integrations/canvas/program-bindings/${encodeURIComponent(bindingId)}/activate`, {}, [200]);
   validateReadinessSnapshot(activation, { requireActive: true });
   requireCondition(activation.config_version === validation.config_version, 'binding_readiness_version_changed', 'Canvas binding configuration changed between validation and activation.');
@@ -2268,7 +2393,8 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
 
     const binding = await createProgramBinding(marty, platformId, templates, fixtures, runSuffix);
     requireCondition(binding?.id, 'canvas_binding_create_failed', 'Marty did not create the typed Canvas program binding.');
-    state.binding=binding;owned.martyBindingId=String(binding.id);persistOwned();
+    state.binding=binding;owned.martyBindingId=String(binding.id);
+    owned.martyBindingActivationAttempted=false;persistOwned();
 
     markActive('instructor_deep_linking');
     const externalAssignment = await performInstructorDeepLinking(adminPage, adminCanvas, fixtures, String(tool.id), martyOrigin);
@@ -2287,7 +2413,9 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     markActive('standard_lti_13_install');
     const activationJobBaseline = await rosterJobBaseline(marty, organizationId, binding.id);
     state.bindingActivationPossible=true;owned.martyBindingActivationPossible=true;persistOwned();
-    const {activation}=await validateAndActivateBinding(marty, binding.id);
+    const {activation}=await validateAndActivateBinding(marty, binding.id,()=>{
+      owned.martyBindingActivationAttempted=true;persistOwned();
+    });
     const activationAt=await activatedRosterJobTimestamp(marty, organizationId, platformId,
       binding.id, activation.config_version);
     pass('standard_lti_13_install', `Stock Canvas installed LTI 1.3 and all ${BLOCKING_READINESS_CHECK_CODES.length} production blocking readiness checks passed.`);
@@ -2468,7 +2596,11 @@ async function reconcileCanvasPrelaunchApplicationAbsence(state) {
   const prefix=`?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`;
   const jobs=await completeBindingJobInventory(state.marty,organizationId,bindingId);
   const candidates=await state.marty.get(`/v1/integrations/canvas/canvas-award-candidates${prefix}`);
-  requireCondition(jobs.length>0 && Array.isArray(candidates) && candidates.length<100,
+  const noActivationAndNoJobs=state.owned?.martyBindingActivationAttempted===false
+    && Object.hasOwn(ownedBinding,'activated_at') && ownedBinding.activated_at===null
+    && jobs.length===0 && Array.isArray(candidates) && candidates.length===0;
+  requireCondition((jobs.length>0||noActivationAndNoJobs)
+    && Array.isArray(candidates) && candidates.length<100,
     'canvas_background_application_uncertain','Owned Canvas background inventory is incomplete.');
   requireCondition(jobs.every(job=>job.organization_id===organizationId&&job.binding_id===bindingId
     && job.platform_id===state.platformId&&job.target_type==='background_roster'

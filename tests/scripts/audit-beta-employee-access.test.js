@@ -75,6 +75,7 @@ test('D-04 configuration uses one exact employee credential across application, 
     'target-trust-1',
   );
   assert.equal(credentialPayload.credential_type, 'EmployeeAccessCredential');
+  assert.equal(credentialPayload.credential_payload_format, 'w3c_vcdm_v2_sd_jwt');
   assert.deepEqual(
     credentialPayload.claims.map(({ name }) => name),
     ['employee_id', 'given_name', 'family_name', 'department', 'access_level', 'employment_status'],
@@ -92,6 +93,7 @@ test('D-04 configuration uses one exact employee credential across application, 
     id: 'credential-1',
     status: 'ACTIVE',
     ...credentialPayload,
+    credential_payload_format: 'SD_JWT_VC',
     trust_profile_id: 'trust-1',
     compliance_profile_id: 'compliance-1',
   };
@@ -124,7 +126,7 @@ test('D-04 configuration uses one exact employee credential across application, 
 test('D-04 configuration rejects drift between active release resources', () => {
   const credentialPayload = employeeCredentialPayload(source);
   assert.throws(() => requireConfigurationBinding({
-    credential: { id: 'credential-1', ...credentialPayload },
+    credential: { id: 'credential-1', ...credentialPayload, credential_payload_format: 'SD_JWT_VC' },
     application: {
       id: 'application-template-1',
       credential_template_id: 'credential-2',
@@ -141,7 +143,7 @@ test('D-04 configuration rejects drift between active release resources', () => 
   }), /wrong Credential Template/);
 
   assert.throws(() => requireConfigurationBinding({
-    credential: { id: 'credential-1', ...credentialPayload },
+    credential: { id: 'credential-1', ...credentialPayload, credential_payload_format: 'SD_JWT_VC' },
     application: {
       id: 'application-template-1',
       ...employeeApplicationTemplatePayload('credential-1'),
@@ -160,7 +162,7 @@ test('D-04 configuration rejects drift between active release resources', () => 
 
 test('D-04 configuration rejects semantic and approval-trigger drift', () => {
   const credentialPayload = employeeCredentialPayload(source);
-  const credential = { id: 'credential-1', status: 'ACTIVE', ...credentialPayload };
+  const credential = { id: 'credential-1', status: 'ACTIVE', ...credentialPayload, credential_payload_format: 'SD_JWT_VC' };
   const application = {
     id: 'application-template-1',
     status: 'ACTIVE',
@@ -175,6 +177,12 @@ test('D-04 configuration rejects semantic and approval-trigger drift', () => {
 
   assert.throws(() => requireConfigurationBinding({
     credential: { ...credential, credential_type: 'GenericCredential' },
+    application,
+    policy,
+    flow,
+  }), /credential contract/);
+  assert.throws(() => requireConfigurationBinding({
+    credential: { ...credential, credential_payload_format: 'w3c_vcdm_v2_sd_jwt' },
     application,
     policy,
     flow,

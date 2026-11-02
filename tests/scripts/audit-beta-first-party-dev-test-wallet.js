@@ -29,7 +29,7 @@ async function main(env=process.env){
   recordingQualified:false,mediaGenerated:false,fullLegacyContractQualified:false,errors:[]};
  const save=()=>{const p=path.join(directory,'report.json'),fd=fs.openSync(p+'.next','wx',0o600);
   try{fs.writeFileSync(fd,JSON.stringify(report,null,2)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}fs.renameSync(p+'.next',p);};
- let evidence,browser,controller,fixture,operator,stage='PREPARATION';
+ let evidence,browser,controller,secondaryController,fixture,operator,stage='PREPARATION';
  const contexts=[],holders=[],flows=[];
  async function context(kind){const c=await browser.newContext();const row={context:c,kind,retired:false};
   contexts.push(row);if(kind==='beta'){
@@ -48,7 +48,9 @@ async function main(env=process.env){
    flows.push(entry);report.flows.push({createAttempted:true,instanceId:null,retirementConfirmed:false});save();},
   async acknowledge({binding,instance}){assert(entry&&!entry.owned,'Duplicate Flow acknowledgement');
    entry.owned={id:binding.instanceId,organizationId:binding.organizationId};
-   entry.binding=binding;const row=report.flows[flows.indexOf(entry)];row.instanceId=binding.instanceId;row.nonceSha256=binding.nonceSha256;save();
+   entry.binding=binding;const row=report.flows[flows.indexOf(entry)];row.instanceId=binding.instanceId;row.nonceSha256=binding.nonceSha256;
+   row.contextPolicyPresent=binding.contextPolicyPresent;row.contextPolicyId=binding.contextPolicyId;
+   row.contextTrustProfilePresent=binding.contextTrustProfilePresent;row.contextTrustProfileId=binding.contextTrustProfileId;save();
   }};}
  async function start(){const c=await context('beta'),p=await page(c),h=hooks();
   const login=await support.startLogin({authPage:p,operator,fixture,origin:settings.origin,flowHooks:h});
@@ -67,14 +69,27 @@ async function main(env=process.env){
   assert.equal(createHash('sha256').update(fs.readFileSync(env.DEMO_D05_FIXTURE_FILE)).digest('hex'),env.DEMO_D05_FIXTURE_SHA256,
    'Dev/test fixture changed after controller preflight');
   fixture=(await support.prepareFixture(directory,env,'expired-offer',evidence)).fixture;
+  assert(fixture.secondaryApplicant&&env.TEST_SECONDARY_APPLICANT_EMAIL&&env.TEST_SECONDARY_APPLICANT_PASSWORD,
+    'A second owned synthetic applicant is required for two credential holders');
   assert.equal(fixture.expiry.mode,'PER_OWNED_OFFER','Dedicated per-owned-offer lifetime required');
   browser=await require('@playwright/test').chromium.launch({headless:true});
-  const admin=await context('beta'),applicant=await context('beta');operator=await page(admin);const applicantPage=await page(applicant);
+  const admin=await context('beta'),applicant=await context('beta'),secondary=await context('beta');
+  operator=await page(admin);const applicantPage=await page(applicant),secondaryPage=await page(secondary);
   const {login,waitFor}=require('./audit-beta-credential-lifecycle');
   await login(operator,env.TEST_ADMIN_EMAIL,env.TEST_ADMIN_PASSWORD);await login(applicantPage,env.TEST_APPLICANT_EMAIL,env.TEST_APPLICANT_PASSWORD);
+  await login(secondaryPage,env.TEST_SECONDARY_APPLICANT_EMAIL,env.TEST_SECONDARY_APPLICANT_PASSWORD);
+  const updateOwned=()=>{report.ownedApplications=[...(controller?.ownedApplications||[]),
+    ...(secondaryController?.ownedApplications||[])].map(owned=>JSON.parse(JSON.stringify(owned)));save();};
   controller=support.createSupportController({operator,applicantPage,fixture,lane:'expired-offer',origin:settings.origin,
-   runId:report.runId,waitFor,onOwned:owned=>{report.ownedApplications=JSON.parse(JSON.stringify(owned));save();}});
-  stage='SOURCE_AUTHORITY';report.fixtureBindingsSha256=digest(await controller.preflight());
+    runId:report.runId,waitFor,onOwned:updateOwned});
+  const {secondaryApplicant,...primaryFixture}=fixture;
+  const secondaryFixture=require('./beta-membership-support-contract').validateFixture(
+    {...primaryFixture,applicant:secondaryApplicant},'expired-offer');
+  secondaryController=support.createSupportController({operator,applicantPage:secondaryPage,
+    fixture:secondaryFixture,lane:'expired-offer',origin:settings.origin,
+    runId:report.runId+'.holder-b',waitFor,onOwned:updateOwned});
+  stage='SOURCE_AUTHORITY';report.fixtureBindingsSha256=digest([await controller.preflight(),
+    await secondaryController.preflight()]);
   report.cryptographicScope={credentialFormat:fixture.trusted.credentialFormat,
    evidence:'OBSERVED_CONFIGURED_NATIVE_POLICY_SIGNATURE_AND_TRUST_RESULT',
    freshPresentationHolderProofClaimed:false,independentHolderKeysClaimed:false};
@@ -98,9 +113,10 @@ async function main(env=process.env){
   assert.notEqual(fresh.owned.transactionId,expiring.owned.transactionId);
   stage='RECEIPT';
   for(const [index,holder] of holders.entries()){
-   const issued=index===0?fresh:await controller.issue(fixture.trusted,'dev-test-holder-'+index);
+   const owner=index===0?controller:secondaryController;
+   const issued=index===0?fresh:await owner.issue(fixture.trusted,'dev-test-holder-'+index);
    const receipt=await support.receive(holder.page,settings.wallet,issued.offerUri,false);assert(receipt.ok);
-   const credential=await controller.issuedCredential(issued,fixture.trusted);
+   const credential=await owner.issuedCredential(issued,fixture.trusted);
    report.receipts.push({httpStatus:receipt.httpStatus,ok:receipt.ok,
     applicationId:issued.owned.applicationId,transactionId:issued.owned.transactionId,credentialId:credential.id});
    await holder.page.locator('#credentials li:not(.empty)').first().waitFor();
@@ -117,12 +133,18 @@ async function main(env=process.env){
    readInstance:()=>requireJson(operator,denial.instancePath),
    beforeCancel:async()=>{report.cancelIntent={kind:'HARNESS_CANCELS_OWNED_FLOW',instanceId:denial.binding.instanceId};save();},
    cancel:()=>requireJson(operator,denial.instancePath+'/cancel',{method:'POST'}).then(()=>({ok:true})),
-   finalize:async()=>{const r=await denial.context.context.request.get(settings.origin+'/v1/auth/credential-login/finalize?nonce='+encodeURIComponent(denial.details.nonce),{timeout:15000,maxRedirects:0});return {status:r.status(),setCookie:Boolean(r.headers()['set-cookie'])};},
+   finalize:async()=>{const r=await denial.context.context.request.get(settings.origin+'/v1/auth/credential-login/finalize?nonce='+encodeURIComponent(denial.details.nonce),{timeout:15000,maxRedirects:0});
+    const result={status:r.status(),setCookie:Boolean(r.headers()['set-cookie']),location:r.headers().location||null};
+    let destination='NONE';try{const u=new URL(result.location);destination=u.origin===settings.origin&&u.pathname==='/'?'PRIMARY_ROOT':'OTHER';}catch{if(result.location)destination='INVALID';}
+    report.cancellationFinalizeObservation={status:result.status,setCookie:result.setCookie,destination};save();return result;},
+   origin:settings.origin,
    readAuth:()=>support.authMe(denial.context.context,settings.origin)});
   report.checks.harness_cancel_no_login=true;
   stage='FRESH_LOGIN_RECOVERY';report.recoveryLogin=await positive(a);
   report.checks.fresh_nonce_login_recovery=contract.freshLoginRecovery(report.cancellation,report.recoveryLogin);
- }catch(error){report.errors.push({stage,code:/^[A-Z][A-Z0-9_]{2,79}$/.test(error.message)?error.message:'DEV_TEST_CONTRACT_FAILED',type:error.name});}
+ }catch(error){const assertionSite=contract.safeAssertionSite(error);
+  report.errors.push({stage,code:/^[A-Z][A-Z0-9_]{2,79}$/.test(error.message)?error.message:'DEV_TEST_CONTRACT_FAILED',type:error.name,
+   ...(assertionSite?{assertionSite}:{})});}
  finally{
   for(const entry of flows){try{assert(entry.owned,'Unresolved Flow creation');const route='/v1/flows/instances/'+entry.owned.id;
    const result=await contract.retireLoginFlow({binding:entry.binding,readInstance:()=>requireJson(operator,route),
@@ -130,8 +152,16 @@ async function main(env=process.env){
     cancel:()=>requireJson(operator,route+'/cancel',{method:'POST'}).then(()=>({ok:true}))});
    const row=report.flows[flows.indexOf(entry)];row.retirementConfirmed=true;row.terminalStatus=result.status;
   }catch{report.errors.push({stage:'FLOW_CLEANUP',code:'OWNED_FLOW_RETIREMENT_UNCONFIRMED'});}}
-  if(controller){try{report.resourceCleanup=await controller.cleanup();report.configurationReadback=await controller.invariantReadback();}
-   catch{report.errors.push({stage:'RESOURCE_CLEANUP',code:'OWNED_RESOURCE_CLEANUP_UNCONFIRMED'});}}
+  if(controller){const owners=[controller,...(secondaryController?[secondaryController]:[])];
+    const cleanups=await Promise.allSettled(owners.map(owner=>owner.cleanup()));
+    report.resourceCleanup={ok:cleanups.every(item=>item.status==='fulfilled'&&item.value.ok===true),
+     applications:cleanups.flatMap(item=>item.status==='fulfilled'?item.value.applications:[])};
+    const readbacks=await Promise.allSettled(owners.map(owner=>owner.invariantReadback()));
+    report.configurationReadback={ok:readbacks.every(item=>item.status==='fulfilled'&&item.value.ok===true),
+     beforeSha256:readbacks[0]?.status==='fulfilled'?readbacks[0].value.beforeSha256:null,
+     afterSha256:readbacks[0]?.status==='fulfilled'?readbacks[0].value.afterSha256:null};
+    if(!report.resourceCleanup.ok||!report.configurationReadback.ok)
+     report.errors.push({stage:'RESOURCE_CLEANUP',code:'OWNED_RESOURCE_CLEANUP_UNCONFIRMED'});}
   for(const holder of holders){try{assert(holder.session,'Session creation outcome unknown');
    report.closedWalletSessions.push(await closeControlSession(holder.session,holder.context));}
    catch{report.errors.push({stage:'WALLET_CLEANUP',code:'OWNED_WALLET_CLEANUP_UNCONFIRMED'});}}

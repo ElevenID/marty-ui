@@ -44,6 +44,7 @@ const {
   requireJson,
   requireActiveComplianceProfile,
   requireNoConflictingApplications,
+  requireCurrentIssuerServiceReady,
   requireOwnedApplication,
   resolveActiveIssuerDid,
   submitOwnedApplication,
@@ -243,6 +244,7 @@ function requireConfigurationBinding(configuration) {
   );
   if (configuration.credential.credential_type !== 'EmployeeAccessCredential'
       || configuration.credential.vct !== `${BETA_ORIGIN}/credentials/employee-access`
+      || configuration.credential.credential_payload_format !== 'SD_JWT_VC'
       || !exactArray(configuration.credential.claims?.map(({ name }) => name), expectedClaims)) {
     throw new Error('D-04 Credential Template has drifted from the employee credential contract');
   }
@@ -409,6 +411,10 @@ async function approveAndIssue(page, ownedResources, { recording } = {}) {
     ownedResources.uncertainMutations = ownedResources.uncertainMutations
       .filter(({ operation }) => operation !== 'reviewer_lock');
   }
+  await requireCurrentIssuerServiceReady(page, {
+    organizationId: ORG_ID, credentialTemplateId: ownedResources.credentialTemplateId,
+    issuerDid: ownedResources.issuerDid,
+  });
   const { issued, transaction } = await issueOwnedApplication(page, ownedResources, 'Issue employee credential', {
     requestIssue: recording ? (endpoint) => issueThroughConsole(page, recording, endpoint) : undefined,
   });
@@ -456,6 +462,7 @@ async function runEmployeeDemo(evidence) {
     applicationId: null,
     transactionId: null,
     credentialId: null,
+    issuerDid: null,
     uncertainMutations: [],
   };
   const report = {
@@ -531,9 +538,11 @@ async function runEmployeeDemo(evidence) {
     report.orgSelection = await selectOrg(page);
     if (!report.orgSelection.ok) throw new Error(`Cannot select organization ${ORG_ID}`);
     const configuration = await ensureConfiguration(page, stamp, ownedResources);
+    ownedResources.issuerDid = configuration.credential.issuer_did;
     ownedResources.applicationTemplateId = configuration.application.id;
     ownedResources.credentialTemplateId = configuration.credential.id;
     report.configuration = {
+      sourceTemplateId: SOURCE_TEMPLATE_ID,
       credentialTemplateId: configuration.credential.id,
       applicationTemplateId: configuration.application.id,
       presentationPolicyId: configuration.policy.id,
