@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[path = "installer_health_diagnostics.rs"]
@@ -29,6 +29,8 @@ const SUSTAINED: u64 = 600;
 const COOLDOWN: u64 = 1800;
 const WINDOW: u64 = 86400;
 const INFRASTRUCTURE: [&str; 3] = ["openbao", "openbao-unseal", "installer-acme-http01"];
+const OBSERVATION_ATTEMPTS: usize = 3;
+const OBSERVATION_BUDGET: Duration = Duration::from_secs(60);
 
 fn require(ok: bool, reason: Reason) -> Result<()> {
     if ok {
@@ -427,63 +429,59 @@ fn same_runtime_states(
         })
 }
 
-pub(crate) fn reconcile_locked(
-    installation: &Path,
-    docker: &Path,
-    state: &mut LockedMaintenance,
-) -> std::result::Result<Value, String> {
-    reconcile(installation, docker, state, false)
-}
-pub(crate) fn reconcile_infrastructure_locked(
-    installation: &Path,
-    docker: &Path,
-    state: &mut LockedMaintenance,
-) -> std::result::Result<Value, String> {
-    reconcile(installation, docker, state, true)
-}
-fn reconcile(
-    installation: &Path,
-    docker: &Path,
-    state: &mut LockedMaintenance,
-    infrastructure_only: bool,
-) -> std::result::Result<Value, String> {
-    let mut trace = Trace::new(state, infrastructure_only);
-    reconcile_observed(installation, docker, state, infrastructure_only, &mut trace)
-        .map_err(|error| trace.failure(state, error))
+/// Only an uncommitted native-state observation may be repeated. Publication of
+/// a new repair decision and repair execution are outside this closure. All
+/// operation and other guard errors return immediately; every attempt shares the
+/// same Docker observation deadline.
+fn reobserve_native_states<T>(
+    deadline: Instant,
+    mut now: impl FnMut() -> Instant,
+    mut observe: impl FnMut(usize) -> Result<T>,
+) -> Result<T> {
+    let mut attempt = 0;
+    loop {
+        if now() >= deadline {
+            return Err("Docker inspection deadline exceeded".to_owned().into());
+        }
+        attempt += 1;
+        match observe(attempt) {
+            Err(Failure::Guard(Reason::NativeStateChanged))
+                if attempt < OBSERVATION_ATTEMPTS && now() < deadline => {}
+            Ok(_) if now() >= deadline => {
+                return Err("Docker inspection deadline exceeded".to_owned().into());
+            }
+            result => return result,
+        }
+    }
 }
 
-fn reconcile_observed(
-    installation: &Path,
-    docker: &Path,
-    state: &mut LockedMaintenance,
+fn retain_observation_resources(
+    admitted: &mut Option<ProjectResources>,
+    observed: &ProjectResources,
+) -> Result<()> {
+    match admitted {
+        Some(original) => require(original == observed, Reason::ResourceSetChanged),
+        None => {
+            *admitted = Some(observed.clone());
+            Ok(())
+        }
+    }
+}
+
+struct RepairDecision {
+    unhealthy: Vec<Value>,
+    selected: Option<String>,
+    operation: Option<String>,
+}
+
+fn plan_repair(
+    checkpoint: &mut Checkpoint,
+    resources: &ProjectResources,
+    rows: &BTreeMap<String, &Value>,
+    model: &Value,
+    now: u64,
     infrastructure_only: bool,
-    trace: &mut Trace,
-) -> Result<Value> {
-    state.inspection().require_path_binding(installation)?;
-    trace.stage = "open_session";
-    let (saved, session) =
-        installer_doctor::open_session(state.inspection(), installation, docker)?;
-    trace.stage = "observe_resources_before";
-    let resources = session.observe_resources()?;
-    trace.resources(&resources, false);
-    trace.stage = "observe_native_before";
-    let values = session.status()?;
-    trace.native(&resources, &values, false);
-    trace.stage = "validate_native_before";
-    let rows = native_rows(&resources, &values)?;
-    trace.stage = "load_checkpoint";
-    let (mut checkpoint, mut prior) = load(state, Some(&mut *trace))?;
-    trace.checkpoint_sequence = Some(checkpoint.sequence);
-    trace.checkpoint_observed_at = Some(checkpoint.observed_at);
-    trace.stage = "observation_clock";
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| Reason::ObservationClock)?
-        .as_secs();
-    trace.observation_unix_seconds = Some(now);
-    require(now >= checkpoint.observed_at, Reason::ObservationClock)?;
-    checkpoint.observed_at = now;
-    trace.stage = "repair_eligibility";
+) -> Result<RepairDecision> {
     let mut unhealthy = Vec::new();
     let mut selected = None;
     let mut present = BTreeSet::new();
@@ -505,7 +503,7 @@ fn reconcile_observed(
             continue;
         }
         role.unhealthy_since.get_or_insert(now);
-        let dependencies = blocked_dependencies(&saved.model, name, &rows)?;
+        let dependencies = blocked_dependencies(model, name, rows)?;
         let decision = eligibility(role, now, &dependencies);
         let in_scope = !infrastructure_only || INFRASTRUCTURE.contains(&name.as_str());
         if in_scope && decision == "eligible" && selected.is_none() {
@@ -531,6 +529,95 @@ fn reconcile_observed(
                 outcome: Outcome::IntentRecorded,
             });
     }
+    Ok(RepairDecision {
+        unhealthy,
+        selected,
+        operation,
+    })
+}
+
+struct HealthObservation {
+    saved: installer_doctor::SavedSession,
+    checkpoint: Checkpoint,
+    prior: Option<Vec<u8>>,
+    now: u64,
+    decision: RepairDecision,
+}
+
+pub(crate) fn reconcile_locked(
+    installation: &Path,
+    docker: &Path,
+    state: &mut LockedMaintenance,
+) -> std::result::Result<Value, String> {
+    reconcile(installation, docker, state, false)
+}
+pub(crate) fn reconcile_infrastructure_locked(
+    installation: &Path,
+    docker: &Path,
+    state: &mut LockedMaintenance,
+) -> std::result::Result<Value, String> {
+    reconcile(installation, docker, state, true)
+}
+fn reconcile(
+    installation: &Path,
+    docker: &Path,
+    state: &mut LockedMaintenance,
+    infrastructure_only: bool,
+) -> std::result::Result<Value, String> {
+    let mut trace = Trace::new(state, infrastructure_only);
+    reconcile_observed(installation, docker, state, infrastructure_only, &mut trace)
+        .map_err(|error| trace.failure(state, error))
+}
+
+fn prepare_observation(
+    installation: &Path,
+    docker: &Path,
+    state: &mut LockedMaintenance,
+    infrastructure_only: bool,
+    trace: &mut Trace,
+    admitted: &mut Option<ProjectResources>,
+    deadline: Instant,
+) -> Result<HealthObservation> {
+    state.inspection().require_path_binding(installation)?;
+    trace.stage = "open_session";
+    let (saved, session) = installer_doctor::open_session_with_deadline(
+        state.inspection(),
+        installation,
+        docker,
+        Some(deadline),
+    )?;
+    trace.stage = "observe_resources_before";
+    let resources = session.observe_resources()?;
+    trace.resources(&resources, false);
+    retain_observation_resources(admitted, &resources)?;
+    trace.stage = "observe_native_before";
+    let values = session.status()?;
+    trace.native(&resources, &values, false);
+    trace.stage = "validate_native_before";
+    let rows = native_rows(&resources, &values)?;
+    trace.stage = "load_checkpoint";
+    // Reload retained policy, including exact pending-publication recovery. No
+    // speculative decision from a discarded observation is carried forward.
+    let (mut checkpoint, prior) = load(state, Some(&mut *trace))?;
+    trace.checkpoint_sequence = Some(checkpoint.sequence);
+    trace.checkpoint_observed_at = Some(checkpoint.observed_at);
+    trace.stage = "observation_clock";
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| Reason::ObservationClock)?
+        .as_secs();
+    trace.observation_unix_seconds = Some(now);
+    require(now >= checkpoint.observed_at, Reason::ObservationClock)?;
+    checkpoint.observed_at = now;
+    trace.stage = "repair_eligibility";
+    let decision = plan_repair(
+        &mut checkpoint,
+        &resources,
+        &rows,
+        &saved.model,
+        now,
+        infrastructure_only,
+    )?;
     trace.stage = "observe_resources_after";
     let after_resources = session.observe_resources()?;
     trace.resources(&after_resources, true);
@@ -546,6 +633,50 @@ fn reconcile_observed(
         same_runtime_states(&rows, &after_rows),
         Reason::NativeStateChanged,
     )?;
+    Ok(HealthObservation {
+        saved,
+        checkpoint,
+        prior,
+        now,
+        decision,
+    })
+}
+
+fn reconcile_observed(
+    installation: &Path,
+    docker: &Path,
+    state: &mut LockedMaintenance,
+    infrastructure_only: bool,
+    trace: &mut Trace,
+) -> Result<Value> {
+    let deadline = Instant::now() + OBSERVATION_BUDGET;
+    let mut admitted = None;
+    let HealthObservation {
+        saved,
+        mut checkpoint,
+        mut prior,
+        now,
+        decision,
+    } = reobserve_native_states(deadline, Instant::now, |attempt| {
+        if attempt > 1 {
+            // A final refusal describes one complete attempt, not mixed snapshots.
+            *trace = Trace::new(state, infrastructure_only);
+        }
+        prepare_observation(
+            installation,
+            docker,
+            state,
+            infrastructure_only,
+            trace,
+            &mut admitted,
+            deadline,
+        )
+    })?;
+    let RepairDecision {
+        unhealthy,
+        selected,
+        operation,
+    } = decision;
     trace.stage = "publish_checkpoint";
     state.inspection().require_path_binding(installation)?;
     save(state, &mut checkpoint, &mut prior)?;
