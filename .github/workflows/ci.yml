@@ -996,6 +996,9 @@ jobs:
           # The PR merge ref may move after this event; checkout the immutable event SHA.
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Prefer cached Docker Hub images without restarting the runner daemon
+        if: matrix.lane != 'renewal-unit'
+        run: bash scripts/ci/configure-dockerhub-mirror.sh
       - name: Reclaim unused hosted SDK disk for contracts
         if: matrix.lane == 'contracts' && runner.environment == 'github-hosted' && runner.os == 'Linux'
         env:
@@ -1016,9 +1019,6 @@ jobs:
             fi
           done
           df -Pk /
-      - name: Prefer cached Docker Hub images without restarting the runner daemon
-        if: matrix.lane != 'renewal-unit'
-        run: bash scripts/ci/configure-dockerhub-mirror.sh
       - name: Select the exact BuildKit image with registry fallback
         if: matrix.lane != 'renewal-unit'
         shell: bash
