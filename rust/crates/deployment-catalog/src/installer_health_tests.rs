@@ -2,7 +2,7 @@ use super::*;
 use crate::installer_state::{Identity, InstallerState, RuntimeBinding, RuntimeProfile};
 use std::{os::unix::fs::symlink, path::PathBuf};
 
-fn fixture() -> (tempfile::TempDir, PathBuf, LockedMaintenance, Checkpoint) {
+pub(super) fn fixture() -> (tempfile::TempDir, PathBuf, LockedMaintenance, Checkpoint) {
     let parent = tempfile::tempdir().unwrap();
     let path = parent.path().join("installation");
     let mut original = InstallerState::create_with_runtime(
@@ -23,7 +23,7 @@ fn fixture() -> (tempfile::TempDir, PathBuf, LockedMaintenance, Checkpoint) {
     original.create_private_directory("evidence").unwrap();
     drop(original);
     let mut state = LockedMaintenance::open(&path).unwrap();
-    let (mut checkpoint, bytes) = load(&mut state).unwrap();
+    let (mut checkpoint, bytes) = load(&mut state, None).unwrap();
     assert!(bytes.is_none());
     checkpoint.observed_at = 10000;
     checkpoint.roles.insert(
@@ -148,12 +148,15 @@ fn thousands_of_observations_use_a_bounded_durable_checkpoint() {
     );
     drop(state);
     let mut state = LockedMaintenance::open(&path).unwrap();
-    let (loaded, bytes) = load(&mut state).unwrap();
+    let (loaded, bytes) = load(&mut state, None).unwrap();
     assert_eq!(loaded, checkpoint);
     assert_eq!(bytes, prior);
     // Removing the selected checkpoint cannot silently reset repair limits.
     std::fs::remove_file(path.join("evidence").join(CHECKPOINT)).unwrap();
-    assert!(load(&mut state).is_err());
+    assert!(matches!(
+        load(&mut state, None),
+        Err(Failure::Guard(Reason::CheckpointMissing))
+    ));
 }
 
 #[test]
@@ -165,7 +168,7 @@ fn pending_checkpoint_reconciles_exact_predecessor_after_process_loss() {
     // Crash before the initialization marker and rename is recoverable.
     drop(state);
     let mut state = LockedMaintenance::open(&path).unwrap();
-    let (loaded, bytes) = load(&mut state).unwrap();
+    let (loaded, bytes) = load(&mut state, None).unwrap();
     assert_eq!(loaded, checkpoint);
     assert_eq!(bytes.as_deref(), Some(first.as_slice()));
     assert!(state.read_evidence(PENDING).unwrap().is_none());
@@ -176,7 +179,7 @@ fn pending_checkpoint_reconciles_exact_predecessor_after_process_loss() {
     state.write_evidence_exclusive(PENDING, &next).unwrap();
     drop(state);
     let mut state = LockedMaintenance::open(&path).unwrap();
-    assert_eq!(load(&mut state).unwrap().0, checkpoint);
+    assert_eq!(load(&mut state, None).unwrap().0, checkpoint);
 }
 
 #[test]
@@ -212,10 +215,157 @@ fn changed_pending_checkpoint_or_symlink_never_replaces_current() {
                 .write_evidence_exclusive(PENDING, &encode(&next).unwrap())
                 .unwrap();
         }
-        assert!(load(&mut state).is_err(), "{corruption}");
+        let result = load(&mut state, None);
+        let expected = match corruption {
+            "predecessor" => Some(Reason::CheckpointPredecessor),
+            "sequence" => Some(Reason::CheckpointSequence),
+            "clock" => Some(Reason::CheckpointClock),
+            "foreign" => Some(Reason::CheckpointInstallation),
+            "unknown" => Some(Reason::RecordJsonInvalid),
+            "symlink" => None,
+            _ => unreachable!(),
+        };
+        if let Some(expected) = expected {
+            assert!(
+                matches!(result, Err(Failure::Guard(actual)) if actual == expected),
+                "{corruption}"
+            );
+        } else {
+            assert!(matches!(result, Err(Failure::Operation(_))), "{corruption}");
+        }
         assert_eq!(
             std::fs::read(path.join("evidence").join(CHECKPOINT)).unwrap(),
             before
+        );
+    }
+}
+
+pub(super) fn native_fixture() -> (ProjectResources, Vec<Value>) {
+    use crate::installer_compose::{ContainerIdentity, SetupExecution};
+    let mut resources = ProjectResources::default();
+    let mut rows = Vec::new();
+    for (name, setup, id) in [("gateway", false, "d"), ("migration", true, "e")] {
+        resources.containers.insert(
+            name.into(),
+            ContainerIdentity {
+                id: id.repeat(64),
+                service: name.into(),
+                image: "reviewed-image".into(),
+                config_hash: "f".repeat(64),
+                setup,
+                setup_execution: setup.then(|| SetupExecution {
+                    started_at: "2026-11-03T00:00:00Z".into(),
+                    finished_at: "2026-11-03T00:00:01Z".into(),
+                    completed_without_restart: true,
+                }),
+                health_required: !setup,
+                cap_add: BTreeSet::new(),
+                cap_drop: BTreeSet::new(),
+                read_only: true,
+                memory_limit: 1024,
+            },
+        );
+        rows.push(json!({"Service":name,"ID":id.repeat(64),
+            "State":if setup { "exited" } else { "running" },
+            "Health":if setup { "" } else { "healthy" },"ExitCode":0}));
+    }
+    (resources, rows)
+}
+
+#[test]
+fn native_guard_reasons_distinguish_identity_setup_and_inventory_refusals() {
+    let (resources, rows) = native_fixture();
+    assert!(native_rows(&resources, &rows).is_ok());
+    for (mutation, expected) in [
+        ("role-type", Reason::NativeRoleInvalid),
+        ("foreign-role", Reason::NativeRoleUnknown),
+        ("identity", Reason::NativeContainerIdentity),
+        ("duplicate", Reason::NativeRoleDuplicate),
+        ("setup-running", Reason::NativeSetupState),
+        ("setup-exit", Reason::NativeSetupExit),
+        ("setup-history", Reason::NativeSetupHistory),
+        ("setup-restarted", Reason::NativeSetupHistory),
+        ("incomplete", Reason::NativeInventoryIncomplete),
+    ] {
+        let mut resources = resources.clone();
+        let mut rows = rows.clone();
+        match mutation {
+            "role-type" => rows[0]["Service"] = json!(false),
+            "foreign-role" => rows[0]["Service"] = json!("neighbor"),
+            "identity" => rows[0]["ID"] = json!("a".repeat(64)),
+            "duplicate" => rows.push(rows[0].clone()),
+            "setup-running" => rows[1]["State"] = json!("running"),
+            "setup-exit" => rows[1]["ExitCode"] = json!(1),
+            "setup-history" => {
+                resources
+                    .containers
+                    .get_mut("migration")
+                    .unwrap()
+                    .setup_execution = None
+            }
+            "setup-restarted" => {
+                resources
+                    .containers
+                    .get_mut("migration")
+                    .unwrap()
+                    .setup_execution
+                    .as_mut()
+                    .unwrap()
+                    .completed_without_restart = false
+            }
+            "incomplete" => {
+                rows.pop();
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(native_rows(&resources, &rows), Err(Failure::Guard(actual)) if actual == expected),
+            "{mutation}"
+        );
+    }
+}
+
+#[test]
+fn checkpoint_guard_reasons_keep_binding_clock_and_limit_checks_fail_closed() {
+    let (_parent, _path, state, mut valid) = fixture();
+    valid.sequence = 1;
+    validate(&valid, state.inspection()).unwrap();
+    for (mutation, expected) in [
+        ("schema", Reason::CheckpointSchema),
+        ("engine", Reason::CheckpointEngine),
+        ("project", Reason::CheckpointProject),
+        ("sequence", Reason::CheckpointSequence),
+        ("container", Reason::CheckpointContainerId),
+        ("clock", Reason::CheckpointClock),
+        ("attempts", Reason::CheckpointAttemptLimit),
+    ] {
+        let mut checkpoint = valid.clone();
+        match mutation {
+            "schema" => checkpoint.schema = "foreign".into(),
+            "engine" => checkpoint.engine_id = "foreign".into(),
+            "project" => checkpoint.project = "neighbor".into(),
+            "sequence" => checkpoint.sequence = 0,
+            "container" => {
+                checkpoint.roles.get_mut("gateway").unwrap().container_id = "short".into()
+            }
+            "clock" => {
+                checkpoint.roles.get_mut("gateway").unwrap().unhealthy_since =
+                    Some(checkpoint.observed_at + 1)
+            }
+            "attempts" => {
+                checkpoint.roles.get_mut("gateway").unwrap().attempts = (0..3)
+                    .map(|_| Attempt {
+                        operation: format!("repair-{}", uuid::Uuid::new_v4()),
+                        started_at: 9000,
+                        outcome: Outcome::IntentRecorded,
+                    })
+                    .collect()
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(validate(&checkpoint, state.inspection()), Err(Failure::Guard(actual)) if actual == expected),
+            "{mutation}"
         );
     }
 }

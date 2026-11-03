@@ -1,6 +1,7 @@
 """Synthetic Linux rootless bootstrap boundary; no Docker daemon or network."""
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -47,6 +48,8 @@ done < /proc/self/status
 @pytest.mark.skipif(os.name != "posix" or not Path("/proc/self/status").exists(),
                     reason="Linux process-status boundary")
 def test_rootless_bootstrap_requires_nnp_before_external_commands(tmp_path):
+    if os.getuid() == 0:
+        pytest.skip("requires a non-root Linux test process; UID refusal precedes the NNP check")
     status = Path("/proc/self/status").read_text()
     if "NoNewPrivs:\t1" in status:
         pytest.skip("test process already has no-new-privileges")
@@ -65,7 +68,28 @@ def test_rootless_bootstrap_requires_nnp_before_external_commands(tmp_path):
 
 @pytest.mark.skipif(os.name != "posix" or not Path("/proc/self/status").exists(),
                     reason="Linux process-status boundary")
-def test_rootless_bootstrap_pins_user_socket_and_isolates_docker_config(tmp_path):
+def test_host_check_does_not_bypass_root_refusal(tmp_path):
+    if os.getuid() != 0:
+        pytest.skip("requires a root process to exercise the root refusal")
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    for name in ("uname", "docker", "curl", "mktemp"):
+        executable = tools / name
+        executable.write_text("#!/bin/sh\necho UNEXPECTED_TOOL_EXECUTION >&2\nexit 91\n")
+        executable.chmod(0o700)
+    result = subprocess.run(["/bin/sh", str(SCRIPT), "--check-host"],
+                            env={"PATH": str(tools)}, capture_output=True, text=True, timeout=15)
+    assert result.returncode != 0
+    assert "regular non-root login without sudo" in result.stderr
+    assert "UNEXPECTED_TOOL_EXECUTION" not in result.stderr
+
+
+@pytest.mark.skipif(os.name != "posix" or not Path("/proc/self/status").exists(),
+                    reason="Linux process-status boundary")
+@pytest.mark.parametrize("check_host", [False, True])
+def test_rootless_bootstrap_pins_user_socket_and_isolates_docker_config(tmp_path, check_host):
+    if os.getuid() == 0:
+        pytest.skip("requires a non-root Linux process to exercise the real rootless preflight")
     setpriv = shutil.which("setpriv")
     if setpriv is None:
         pytest.skip("setpriv unavailable")
@@ -95,14 +119,26 @@ esac
            "MARTY_UNTRUSTED": "canary", "DOCKER_CONFIG": "/tmp/untrusted-config"}
     env.pop("DOCKER_CONTEXT", None)
     env.pop("DOCKER_HOST", None)
-    result = subprocess.run([setpriv, "--no-new-privs", "--inh-caps=-all",
-                             "--ambient-caps=-all", "--", "/bin/sh", str(SCRIPT),
-                             "--candidate-test", TAG], env=env, capture_output=True,
+    command = [setpriv, "--no-new-privs", "--inh-caps=-all",
+               "--ambient-caps=-all", "--", "/bin/sh", str(SCRIPT),
+               "--candidate-test", TAG]
+    if check_host:
+        command += ["--check-host"]
+    result = subprocess.run(command, env=env, capture_output=True,
                             text=True, timeout=15)
-    assert result.returncode != 0
-    assert "SYNTHETIC_DOWNLOAD_REFUSED" in result.stderr
+    if check_host:
+        assert result.returncode == 0, result.stderr
+        assert "bootstrap host checks passed" in result.stdout
+        assert "Compose, resources, images, release availability, and installation readiness were not checked" in result.stdout
+        assert "SYNTHETIC_DOWNLOAD_REFUSED" not in result.stderr
+    else:
+        assert result.returncode != 0
+        assert "SYNTHETIC_DOWNLOAD_REFUSED" in result.stderr
     assert "EARLY_COMPOSE_PROBE" not in result.stderr
     assert f"OBS_HOST=unix:///run/user/{os.getuid()}/docker.sock" in result.stderr
     assert "OBS_CONFIG=/tmp/marty-installer." in result.stderr
     assert "OBS_UNTRUSTED=absent" in result.stderr
     assert "/tmp/untrusted-config" not in result.stderr
+    staged_configs = re.findall(r"OBS_CONFIG=(\S+)", result.stderr)
+    assert staged_configs
+    assert all(not Path(path).exists() for path in staged_configs)

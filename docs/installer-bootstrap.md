@@ -6,6 +6,13 @@ nonroot Linux amd64 process with no-new-privileges and an already-running,
 user-owned rootless Docker daemon. macOS, Windows and other architectures are
 not supported.
 
+For a first installation on your own Linux machine, start with the
+[Linux installer tester quickstart](linux-installer-tester.md). It covers host
+preparation, `--check-host`, exact signed candidate selection, pending ACME
+orders, HTTPS trust, and feedback. The current external test entry is
+`--candidate-test EXACT_NIGHTLY_TAG`; normal channel/version admission remains
+held. This page describes the bootstrap and deployment boundaries in detail.
+
 Unsigned Compose development qualification passed on an 8 GiB rootless host:
 fresh installation, migrations, two ordinary restarts, the credential
 issue/present/revoke/deny journey, final audit, and normal shutdown with data and
@@ -29,16 +36,29 @@ HTML returned in place of JavaScript do not pass. These bounded HTTP checks do
 not execute JavaScript, establish public network reachability, or replace the
 required fresh-browser test. The report states both limitations explicitly.
 
-The bootstrap invocation puts the entire download-and-script pipeline under
+## Select an exact signed candidate
+
+Run the bootstrap as the regular installation owner under no-new-privileges.
+Both tag placeholders below must name the same published nightly containing
+this implementation; historical nightlies can contain the older rootful path.
+The invocation puts the entire download-and-script pipeline under
 no-new-privileges and propagates download errors:
 
 ```sh
-/usr/bin/setpriv --no-new-privs -- bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/ElevenID/marty-ui/main/install.sh | sh -s -- --channel nightly'
+/usr/bin/setpriv --no-new-privs -- bash -o pipefail -c 'curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/vX.Y.Z-nightly.YYYYMMDD.RUN_ID/install.sh | sh -s -- --candidate-test vX.Y.Z-nightly.YYYYMMDD.RUN_ID'
 ```
 
-Use `--channel stable` for stable releases, or `--version TAG` for an exact
-version. These selectors are mutually exclusive. `--install-dir ABSOLUTE_PATH`
-and `--yes` are forwarded to the verified operator. `--hosting-file ABSOLUTE_PATH`
+The quickstart downloads that same release's bootstrap first, so you can inspect
+it and run `--check-host` before provisioning. That check performs the bootstrap's
+Linux, process-privilege, tool, and rootless Docker checks, then exits before
+verification-tool or release downloads and operator dispatch. It does not
+validate Compose, resource capacity, signed payloads, or an installation.
+
+`--candidate-test`, `--channel nightly|stable`, and `--version TAG` are mutually
+exclusive release selectors. The latter two require separate signed admission;
+a published nightly alone does not make them available. `--install-dir
+ABSOLUTE_PATH` and `--yes` are forwarded to the verified operator. Review the
+host-impact confirmation before using `--yes`. `--hosting-file ABSOLUTE_PATH`
 selects a versioned local, direct, or external-proxy hosting configuration;
 without it the default remains private localhost. Hosting does not require
 `--foundation-file`, and managed OpenBao remains the default. See
@@ -48,16 +68,7 @@ For an explicitly selected ACME staging environment, pass the public staging
 CA file with `--acme-staging-roots ABSOLUTE_PATH`. The verified operator validates
 and retains that trust input; production ACME refuses this override. See
 [ACME hosting setup](installer-acme-host.md) for the complete staging contract.
-`--help` works without
-Docker or platform detection.
-
-The exact-tag candidate command has the same boundary. Both tag placeholders
-must name a newly published nightly containing this implementation; historical
-nightlies can contain the older rootful path:
-
-```sh
-/usr/bin/setpriv --no-new-privs -- bash -o pipefail -c 'curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/vX.Y.Z-nightly.YYYYMMDD.RUN_ID/install.sh | sh -s -- --candidate-test vX.Y.Z-nightly.YYYYMMDD.RUN_ID'
-```
+`--help` works without Docker, platform detection, or downloads.
 
 The initial script is fetched over HTTPS and executes before its own bytes can
 be independently verified. It authenticates the signed inventory and operator
@@ -80,6 +91,15 @@ Docker/Compose versions and redacted error text to the person who invited you,
 or [issue #1350](https://github.com/ElevenID/marty-ui/issues/1350). Do not share
 secret values or raw credential diagnostics.
 
+An ACME-pending invocation can exit zero with `application_started: false`.
+Inspect the reported outcome and retained polling deadlines; use the retained
+operator's `acme status` and, when permitted, `acme continue` under
+no-new-privileges. Preserve the existing installation instead of running a new
+bootstrap to resume an order. After actual startup, use `status`, `doctor`,
+`trust-info`, and `validate`, then check the browser separately. The
+[tester guide](linux-installer-tester.md#4-inspect-the-result-and-finish-pending-acme)
+connects these steps to the canonical hosting and lifecycle operations.
+
 ## Requirements and release availability
 
 Run as a regular Linux amd64 user with trusted preinstalled `setpriv`, Bash,
@@ -90,6 +110,12 @@ refused. The installer does not use sudo, install OS packages, start a daemon,
 configure subordinate IDs or change host CA trust. Any earlier runtime or host
 policy setup is a separate prerequisite. It does not remove the user's unrelated
 group memberships or claim to sandbox all their existing authority.
+
+Follow the [host preparation steps](linux-installer-tester.md#1-prepare-the-linux-host)
+before entering the no-new-privileges installer process. The rootless runtime
+requires cgroup v2, the systemd cgroup driver, and Docker memory-limit support.
+Use the 8 GiB test target and at least 20 GiB free on Docker's data filesystem;
+these are test resources, not a production capacity claim.
 
 The bootstrap uses private temporary verification-tool and Docker-config files,
 then downloads pinned verification tools. It requires no repository checkout or

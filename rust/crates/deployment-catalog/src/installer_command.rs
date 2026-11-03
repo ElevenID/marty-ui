@@ -801,6 +801,24 @@ pub(crate) fn provision_runtime(
     validate_and_complete(docker, installation, bundle, state, inventory, invocation)
 }
 
+fn acme_continuation_command(installation: &Path, docker: &Path) -> Vec<PathBuf> {
+    // A command copied from the initial installer is a new process. It does
+    // not inherit that installer's no-new-privileges setting from the tester's
+    // interactive shell, so keep the boundary in the returned literal argv.
+    vec![
+        PathBuf::from("/usr/bin/setpriv"),
+        PathBuf::from("--no-new-privs"),
+        PathBuf::from("--"),
+        installation.join("marty-deploy"),
+        PathBuf::from("acme"),
+        PathBuf::from("continue"),
+        PathBuf::from("--install-dir"),
+        installation.to_path_buf(),
+        PathBuf::from("--docker-bin"),
+        docker.to_path_buf(),
+    ]
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "The authenticated runtime and separate admitted candidate remain explicit at the first activation boundary."
@@ -831,14 +849,13 @@ fn finish_acme_installation(
             "installation_id":state.journal().installation_id(),
             "outcome":disposition, "enrollment":outcome.enrolment.report,
             "application_started":false, "installation_ready":false,
-            "continuation":[installation.join("marty-deploy"), std::path::PathBuf::from("acme"),
-                std::path::PathBuf::from("continue"), std::path::PathBuf::from("--install-dir"),
-                installation.to_path_buf(), std::path::PathBuf::from("--docker-bin"), docker.to_path_buf()]
+            "continuation":acme_continuation_command(installation, docker)
         });
         println!(
             "{}",
             serde_json::to_string(&report).map_err(|_| "cannot encode ACME continuation")?
         );
+        eprintln!("ACME enrollment has not started the application. Preserve this installation and inspect the reported outcome and polling deadline before using its continuation command; do not run a new installation to resume an order.");
         return Ok(());
     };
     if candidate.environment() == crate::installer_acme_configuration::AcmeEnvironment::Staging {
@@ -1107,6 +1124,39 @@ fn completion_after_validation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn acme_continuation_preserves_no_new_privileges_and_literal_paths() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let installation = root.path().join("trial with $' literal characters");
+        std::fs::create_dir(&installation).unwrap();
+        let operator = installation.join("marty-deploy");
+        // This harmless stand-in observes the process boundary and received
+        // arguments; it cannot touch Docker, credentials or an installation.
+        std::fs::write(
+            &operator,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\"\nwhile read -r key value; do\n  if [ \"$key\" = 'NoNewPrivs:' ]; then printf 'NoNewPrivs=%s\\n' \"$value\"; fi\ndone < /proc/self/status\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&operator, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let docker = root.path().join("docker path with $' literal characters");
+        let command = acme_continuation_command(&installation, &docker);
+        let output = std::process::Command::new(&command[0])
+            .args(&command[1..])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output.stderr);
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!(
+                "acme\ncontinue\n--install-dir\n{}\n--docker-bin\n{}\nNoNewPrivs=1\n",
+                installation.display(),
+                docker.display(),
+            )
+        );
+    }
+
     #[test]
     fn candidate_completion_keeps_provisioning_and_cannot_claim_ready() {
         use std::os::unix::fs::PermissionsExt;

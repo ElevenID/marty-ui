@@ -7,31 +7,39 @@ main() (
     umask 077
     fail() { printf 'Marty installer: %s\n' "$*" >&2; exit 1; }
     usage() {
-        printf '%s\n' 'Usage: install.sh [--channel nightly|stable | --version TAG | --candidate-test NIGHTLY_TAG] [--install-dir PATH] [--foundation-file PATH] [--hosting-file PATH] [--acme-staging-roots PATH] [--yes]'
+        printf '%s\n' \
+            'Usage: install.sh [--check-host] [--channel nightly|stable | --version TAG | --candidate-test NIGHTLY_TAG] [--install-dir PATH] [--foundation-file PATH] [--hosting-file PATH] [--acme-staging-roots PATH] [--yes]' \
+            'Supported host: Linux amd64, a regular non-root user, no-new-privileges, and an already-running rootless Docker daemon.' \
+            'Run a downloaded copy with: /usr/bin/setpriv --no-new-privs -- sh /absolute/install.sh [options]' \
+            '--check-host checks bootstrap tools, platform, process privileges, and rootless Docker connectivity, then exits without downloads or installation.' \
+            'It creates and removes a private temporary Docker configuration. It does not check Compose, resources, images, release availability, or installation readiness.' \
+            '--candidate-test requires an exact published nightly tag and grants no Ready status; --channel and --version require signed installer admission.' \
+            'Managed OpenBao is the default; --foundation-file is optional. Host setup is separate: the installer does not use sudo or install OS packages.'
     }
     # Candidate rootless entry must not execute even platform probes with
     # inherited root identity, capabilities, or privilege-gaining exec rights.
     # This uses shell builtins before any external command in that path.
     require_rootless_process() {
+        [ -r /proc/self/status ] || fail 'Linux /proc/self/status is required; only Linux amd64 is supported'
         seen_uid= seen_gid= seen_nnp= seen_eff= seen_prm= seen_amb=
         while read -r key first second third fourth extra; do
             case "$key" in
                 Uid:)
                     [ -z "$seen_uid" ] && [ -z "$extra" ] && [ -n "$first" ] &&
                         [ "$first" = "$second" ] && [ "$first" = "$third" ] &&
-                        [ "$first" = "$fourth" ] && [ "$first" != 0 ] || fail 'Rootless process UID differs'
+                        [ "$first" = "$fourth" ] && [ "$first" != 0 ] || fail 'Rootless process UID differs or is root; use a regular non-root login without sudo'
                     seen_uid=$first ;;
                 Gid:)
                     [ -z "$seen_gid" ] && [ -z "$extra" ] && [ -n "$first" ] &&
                         [ "$first" = "$second" ] && [ "$first" = "$third" ] &&
-                        [ "$first" = "$fourth" ] && [ "$first" != 0 ] || fail 'Rootless process GID differs'
+                        [ "$first" = "$fourth" ] && [ "$first" != 0 ] || fail 'Rootless process GID differs or is root; use a regular non-root login without sudo'
                     seen_gid=$first ;;
                 NoNewPrivs:)
                     [ -z "$seen_nnp" ] && [ "$first" = 1 ] && [ -z "$second" ] ||
-                        fail 'Rootless trial requires no-new-privileges'
+                        fail 'Rootless trial requires no-new-privileges; run the whole command under /usr/bin/setpriv --no-new-privs -- without sudo (see --help)'
                     seen_nnp=1 ;;
                 CapEff:|CapPrm:|CapAmb:)
-                    case "$first" in 0000000000000000) ;; *) fail 'Rootless process has capabilities' ;; esac
+                    case "$first" in 0000000000000000) ;; *) fail 'Rootless process has capabilities; use a regular login with no effective, permitted, or ambient capabilities' ;; esac
                     [ -z "$second" ] || fail 'Rootless capability record differs'
                     case "$key" in
                         CapEff:) [ -z "$seen_eff" ] || fail 'Repeated capability record'; seen_eff=1 ;;
@@ -45,21 +53,23 @@ main() (
             fail 'Rootless process privilege state incomplete'
     }
     # Host-specific behavior stays behind the selected platform adapter.
-    linux_rootless_preflight() {
-        for tool in curl sha256sum mktemp tar chmod rm wc cut grep docker mkdir env id; do
-            command -v "$tool" >/dev/null 2>&1 || fail "Required tool is missing: $tool"
+    linux_required_tools() {
+        for tool in curl sha256sum mktemp tar gzip chmod rm wc cut grep docker mkdir env id; do
+            command -v "$tool" >/dev/null 2>&1 || fail "Required tool is missing: $tool; install trusted host prerequisites before retrying"
         done
+    }
+    linux_rootless_preflight() {
         select_docker_binary
         uid=$(id -u) || fail 'Installer UID unavailable'
         case "$uid" in ''|0|*[!0-9]*) fail 'Rootless installer UID invalid' ;; esac
         [ "$uid" = "$seen_uid" ] || fail 'Installer UID changed'
-        [ -z "${DOCKER_CONTEXT:-}" ] || fail 'Docker context override is refused for rootless trial'
+        [ -z "${DOCKER_CONTEXT:-}" ] || fail 'Docker context override is refused for rootless trial; unset DOCKER_CONTEXT and use the same-user rootless socket'
         docker_endpoint="unix:///run/user/$uid/docker.sock"
         [ -z "${DOCKER_HOST:-}" ] || [ "$DOCKER_HOST" = "$docker_endpoint" ] ||
             fail 'Docker endpoint differs from user-owned rootless socket'
         unset DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION
         export DOCKER_HOST="$docker_endpoint"
-        isolated_docker info >/dev/null 2>&1 || fail 'User-owned rootless Docker Engine unavailable'
+        isolated_docker info >/dev/null 2>&1 || fail "User-owned rootless Docker Engine unavailable at $docker_endpoint; start the existing rootless daemon for this user before retrying"
         security_options=$(isolated_docker info --format '{{range .SecurityOptions}}{{println .}}{{end}}') ||
             fail 'Rootless Docker mode unavailable'
         [ "$(printf '%s\n' "$security_options" | grep -cx 'name=rootless' || :)" = 1 ] ||
@@ -84,12 +94,13 @@ main() (
         host_arch=$(uname -m) || fail 'Cannot detect host architecture'
         # Each supported adapter owns the complete, reviewed trust-anchor tuple.
         # Never construct verifier URLs or hashes from untrusted host strings.
-        unset platform operator_asset preflight digest_adapter jq_url jq_sha jq_size
+        unset platform operator_asset requirements preflight digest_adapter jq_url jq_sha jq_size
         unset cosign_url cosign_sha cosign_size gh_url gh_sha gh_size gh_member
         case "$host_os:$host_arch" in
             Linux:x86_64|Linux:amd64)
                 platform=linux/amd64
                 operator_asset=marty-deploy-linux-amd64
+                requirements=linux_required_tools
                 preflight=linux_rootless_preflight
                 digest_adapter=linux_digest
                 jq_url=https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64
@@ -114,6 +125,7 @@ main() (
     hosting_file=
     acme_staging_roots=
     yes=false
+    check_host=false
     complete=false
     candidate_test=false
     while [ "$#" -gt 0 ]; do
@@ -121,6 +133,7 @@ main() (
             --bootstrap-complete) [ "$#" -eq 1 ] || fail 'Invalid bootstrap terminator'; complete=true; shift ;;
             --help|-h) usage; exit 0 ;;
             --yes) yes=true; shift ;;
+            --check-host) check_host=true; shift ;;
             --channel|--version|--candidate-test|--install-dir|--foundation-file|--hosting-file|--acme-staging-roots)
                 [ "$#" -ge 2 ] && [ -n "$2" ] || fail "Missing value for $1"
                 case "$2" in --*) fail "Missing value for $1" ;; esac
@@ -147,9 +160,11 @@ main() (
     if [ "$candidate_test" = true ]; then
         case "$version" in *-nightly.*) ;; *) fail 'Candidate testing requires an exact nightly tag' ;; esac
     fi
+    # Check dependencies before creating staging or installing its cleanup trap.
+    "$requirements"
     stage=
     create_stage() {
-        stage=$(mktemp -d /tmp/marty-installer.XXXXXXXX) || fail 'Cannot create private download directory'
+        stage=$(mktemp -d /tmp/marty-installer.XXXXXXXX) || fail 'Cannot create private download directory; /tmp must be writable with enough free space'
         trap 'rm -rf -- "$stage"' EXIT
         trap 'exit 130' INT
         trap 'exit 143' TERM
@@ -160,15 +175,38 @@ main() (
     # configuration. The operator uses its own isolated configuration too.
     export DOCKER_CONFIG="$stage/config"
     "$preflight"
+    if [ "$check_host" = true ]; then
+        printf '%s\n' \
+            "Marty bootstrap host checks passed: Linux amd64, non-root UID $uid, no-new-privileges, zero effective/permitted/ambient capabilities, and rootless Docker connectivity." \
+            'Only bootstrap tools and host checks ran; Compose, resources, images, release availability, and installation readiness were not checked.' \
+            'The private temporary Docker configuration will be removed on exit. No downloads, Docker mutations, or installation were performed.'
+        return
+    fi
     # Never consume or send a caller's GitHub credentials during public bootstrap.
     unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN GH_DEBUG
     export GH_CONFIG_DIR="$stage/config" GH_HOST=github.com GH_PROMPT_DISABLED=1
     export XDG_CACHE_HOME="$stage/cache" COSIGN_YES=true
     fetch() {
         # curlrc is disabled; restrict both the initial and redirected protocols.
-        curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+        if download_status=$(curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
             --connect-timeout 20 --max-time 600 --retry 2 --max-filesize "$3" \
-            --output "$2" "$1" || fail 'Download failed; check connectivity and public GitHub rate limits'
+            --write-out '%{http_code}' --output "$2" "$1"); then
+            :
+        else
+            case "$download_status" in
+                404)
+                    case "$1" in
+                        https://raw.githubusercontent.com/ElevenID/marty-ui/installer-channel/*)
+                            fail 'No public installer channel is available for this selection. An explicitly published nightly may be tested with --candidate-test TAG; normal installation still requires signed admission' ;;
+                        https://github.com/ElevenID/marty-ui/releases/download/installer-admission-*/*)
+                            fail 'No public signed installer admission is available for this version. --version requires accepted admission; --candidate-test NIGHTLY_TAG is a separate unqualified test path' ;;
+                        *) fail 'Required public release asset is unavailable (HTTP 404); check the exact published release tag and its required assets' ;;
+                    esac ;;
+                401|403|429)
+                    fail 'Public download access was denied or rate-limited; check public release access and GitHub anonymous rate limits. This bootstrap does not use GitHub credentials' ;;
+                *) fail 'Download failed; check HTTPS connectivity, host CA trust, available temporary space, and public GitHub access' ;;
+            esac
+        fi
         [ "$(wc -c < "$2")" -le "$3" ] || fail 'Downloaded asset exceeds its size limit'
     }
     digest() { "$digest_adapter" "$1"; }
@@ -177,28 +215,37 @@ main() (
         [ "$(digest "$2")" = "$3" ] || fail 'Verification tool digest mismatch'
     }
     pinned "$jq_url" "$stage/jq" "$jq_sha" "$jq_size"
-    pinned "$cosign_url" "$stage/cosign" "$cosign_sha" "$cosign_size"
-    pinned "$gh_url" "$stage/gh.tar.gz" "$gh_sha" "$gh_size"
-    tar -xzf "$stage/gh.tar.gz" -C "$stage" "$gh_member"
-    gh="$stage/$gh_member"
-    chmod 700 "$stage/jq" "$stage/cosign" "$gh"
+    chmod 700 "$stage/jq"
     jq="$stage/jq"
+    "$jq" --version >/dev/null 2>&1 || fail 'Pinned jq cannot execute; Linux amd64 and executable temporary storage under /tmp are required'
+    verifiers_ready=false
+    prepare_verifiers() {
+        [ "$verifiers_ready" = false ] || return 0
+        # Missing release metadata must not trigger the large verifier downloads.
+        pinned "$cosign_url" "$stage/cosign" "$cosign_sha" "$cosign_size"
+        pinned "$gh_url" "$stage/gh.tar.gz" "$gh_sha" "$gh_size"
+        tar -xzf "$stage/gh.tar.gz" -C "$stage" "$gh_member" || fail 'Cannot unpack the pinned GitHub verifier; check tar, gzip, and available temporary space'
+        gh="$stage/$gh_member"
+        chmod 700 "$stage/cosign" "$gh"
+        verifiers_ready=true
+    }
     repo=ElevenID/marty-ui
     base="https://github.com/$repo/releases/download"
     run_field() {
         "$jq" -er --arg key "$2" '.[$key] | select(type == "number" and . > 0 and . < 9007199254740992 and floor == .)' "$1"
     }
     verify() {
+        prepare_verifiers
         env -i PATH=/usr/bin:/bin HOME="$stage/home" XDG_CACHE_HOME="$stage/cache" \
             "$stage/cosign" verify-blob "$1" --bundle "$1.sigstore.json" \
             --certificate-identity "https://github.com/$repo/.github/workflows/$2@refs/heads/main" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null || fail 'Blob signature verification failed; no deployment operator was executed'
         env -i PATH=/usr/bin:/bin HOME="$stage/home" XDG_CACHE_HOME="$stage/cache" \
             GH_CONFIG_DIR="$stage/config" GH_HOST=github.com GH_PROMPT_DISABLED=1 \
             "$gh" attestation verify "$1" --bundle "$1.provenance.jsonl" --repo "$repo" \
             --signer-workflow "$repo/.github/workflows/$2" --source-ref refs/heads/main \
             --source-digest "$3" --deny-self-hosted-runners \
-            --predicate-type https://slsa.dev/provenance/v1 --format json > "$1.verified.json"
+            --predicate-type https://slsa.dev/provenance/v1 --format json > "$1.verified.json" || fail 'Provenance verification failed; no deployment operator was executed'
         "$jq" -e --arg source "$3" \
             --arg signer "https://github.com/$repo/.github/workflows/$2@refs/heads/main" \
             --arg invocation "https://github.com/$repo/actions/runs/$4/attempts/$5" '
@@ -211,7 +258,7 @@ main() (
                 and .sourceRepositoryDigest == $source
                 and .sourceRepositoryRef == "refs/heads/main"
                 and .buildSignerURI == $signer
-                and .runInvocationURI == $invocation)' "$1.verified.json" >/dev/null
+                and .runInvocationURI == $invocation)' "$1.verified.json" >/dev/null || fail 'Verified provenance identity differs from the exact source, workflow, or invocation'
     }
     signed_download() {
         fetch "$1" "$2" "$3"
