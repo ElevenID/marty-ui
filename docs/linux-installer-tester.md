@@ -110,6 +110,16 @@ correct DNS/routing, public HTTP-01 reachability, and explicit agreement to the
 chosen CA terms; follow [ACME hosting](installer-acme-host.md). Local/private-CA
 hosting does not need public DNS or an ACME account.
 
+For application choices, prepare a private `--settings-file ABSOLUTE_PATH`
+before the first invocation using the
+[application settings guide](installer-application-settings.md). Managed
+Keycloak registration is enabled by default. Organization creation, Google
+login, email verification and password reset are explicit choices; mail and
+social login require their real provider configuration and any required
+credential files.
+Omitting the settings file keeps the documented defaults. This interface is
+for a fresh installation and does not change a retained installation's policy.
+
 `--channel nightly`, `--channel stable`, and `--version TAG` require separate
 signed admission and remain held. Do not substitute them for candidate testing.
 A missing asset or failed signature/provenance check is a stop: preserve the
@@ -187,6 +197,13 @@ arguments, recordings, shared terminals, feedback, and logs. Use this Marty
 account rather than the separate Keycloak service-administration credentials.
 An imported foundation using external authentication has no local operator
 password; use the identity-provider account arranged for that foundation.
+
+For default managed authentication, confirm that the login page offers new-user
+registration. Record a registration and subsequent sign-in with a separate test
+account, including any displayed error. If the selected settings explicitly
+disable registration or use an external identity provider, compare the page
+with that policy instead. Email verification and password-reset flows are only
+expected when their SMTP-dependent settings were supplied and enabled.
 
 Record validation's individual required checks and verify the actual page in a
 fresh browser session, including a separate sign-in attempt if testing login.
