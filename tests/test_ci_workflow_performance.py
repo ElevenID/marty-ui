@@ -27,6 +27,11 @@ RELEASE_TEST_COMMAND = (
     "grep \"^oom_kill \" /proc/vmstat 2>/dev/null || true; exit \"$status\"' EXIT\n"
     "python -X faulthandler -m pytest tests -n 2 -v --tb=short --durations=20\n"
 )
+ROOT_OPTIONAL_SECRET_CASES = (
+    "test_creates_exact_nine_empty_private_files",
+    "test_enabled_integration_cannot_receive_empty_secret",
+    "test_late_mode_failure_rolls_back_owned_outputs",
+)
 
 
 def test_disposable_tls_root_contracts_have_executed_release_owner() -> None:
@@ -83,6 +88,87 @@ def test_fresh_vm_creation_has_required_root_release_owner() -> None:
     for required in ('len(cases) != 158', '("tests", 158)', '("skipped", 0)',
                      '("failures", 0)', '("errors", 0)'):
         assert required in command
+
+
+def test_optional_secret_staging_has_required_root_release_owner() -> None:
+    _, workflow = _workflow(CI_PATH)
+    steps = workflow["jobs"]["test-release-contracts"]["steps"]
+    named = {step.get("name"): step for step in steps}
+    general = named["Run repository release checks"]
+    vm = named["Exercise root-owned fresh VM creation contracts"]
+    root = named["Exercise root-owned optional secret staging contracts"]
+    assert root["if"] == general["if"]
+    assert steps.index(root) == steps.index(vm) + 1
+    assert root["shell"] == "bash"
+    assert root.get("continue-on-error", False) is False
+    command = root["run"]
+    assert command.startswith("set -euo pipefail\n")
+    assert 'python_bin="$(command -v python)"' in command
+    assert 'sudo env PYTHONPATH=packages PYTHONDONTWRITEBYTECODE=1 "$python_bin"' in command
+    assert re.findall(r"\btests/[^\s\\]+", command) == [
+        f"tests/test_stage_selfhost_disabled_optional_secrets.py::{name}"
+        for name in ROOT_OPTIONAL_SECRET_CASES
+    ]
+    assert "-p no:cacheprovider --junitxml=" in command
+    for required in ('len(cases) != 3', '("tests", 3)', '("skipped", 0)',
+                     '("failures", 0)', '("errors", 0)'):
+        assert required in command
+
+
+@pytest.mark.parametrize(
+    "attributes,case_tag,case_count,name_override,passes",
+    [
+        ({}, "", 3, None, True),
+        ({"skipped": "1"}, "skipped", 3, None, False),
+        ({}, "skipped", 3, None, False),
+        ({"failures": "1"}, "failure", 3, None, False),
+        ({}, "failure", 3, None, False),
+        ({"errors": "1"}, "error", 3, None, False),
+        ({}, "error", 3, None, False),
+        ({"tests": "2"}, "", 2, None, False),
+        ({}, "", 2, None, False),
+        ({}, "", 3, ROOT_OPTIONAL_SECRET_CASES[1], False),
+        ({}, "", 3, "test_unrelated", False),
+    ],
+)
+def test_optional_secret_root_report_requires_executed_passing_cases(
+    tmp_path: Path,
+    attributes: dict[str, str],
+    case_tag: str,
+    case_count: int,
+    name_override: str | None,
+    passes: bool,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    command = next(
+        step["run"] for step in workflow["jobs"]["test-release-contracts"]["steps"]
+        if step.get("name") == "Exercise root-owned optional secret staging contracts"
+    )
+    validator = command.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    counters = {"tests": "3", "skipped": "0", "failures": "0", "errors": "0"}
+    counters.update(attributes)
+    names = list(ROOT_OPTIONAL_SECRET_CASES[:case_count])
+    if name_override is not None:
+        names[0] = name_override
+    cases = "".join(
+        f'<testcase name="{name}">'
+        + (f"<{case_tag}/>" if case_tag and index == 0 else "")
+        + "</testcase>"
+        for index, name in enumerate(names)
+    )
+    report = tmp_path / "root-optional-secrets.xml"
+    summary = " ".join(f'{name}="{value}"' for name, value in counters.items())
+    report.write_text(
+        f"<testsuites><testsuite {summary}>{cases}</testsuite></testsuites>",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, "-", str(report)], input=validator,
+        text=True, capture_output=True, check=False,
+    )
+    assert (result.returncode == 0) is passes, result.stderr
+
+
 CANVAS_COMPOSITION_COMMAND = (
     'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
     'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '

@@ -100,6 +100,17 @@ bootstrap to resume an order. After actual startup, use `status`, `doctor`,
 [tester guide](linux-installer-tester.md#4-inspect-the-result-and-finish-pending-acme)
 connects these steps to the canonical hosting and lifecycle operations.
 
+## Application policy and optional credentials
+
+`--settings-file ABSOLUTE_PATH` selects a private, typed JSON policy for a fresh
+installation. Registration defaults to enabled for managed Keycloak. Email
+verification, password reset, social login and integrations require their
+documented dependencies; optional credentials are imported from private files
+and remain bound through ACME continuation and credential generations.
+See the [complete settings, defaults and credential matrix](installer-application-settings.md),
+including the distinction between Keycloak SMTP and unavailable application
+notification email, external-provider ownership and unsupported combinations.
+
 ## Requirements and release availability
 
 Run as a regular Linux amd64 user with trusted preinstalled `setpriv`, Bash,

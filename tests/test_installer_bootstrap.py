@@ -48,6 +48,7 @@ def test_help_does_not_require_docker_or_downloads(monkeypatch):
     assert "--channel nightly|stable" in result.stdout
     assert "--foundation-file PATH" in result.stdout
     assert "--hosting-file PATH" in result.stdout
+    assert "--settings-file PATH" in result.stdout
     assert "--acme-staging-roots PATH" in result.stdout
     assert "--check-host" in result.stdout
 
@@ -67,6 +68,9 @@ def test_help_does_not_require_docker_or_downloads(monkeypatch):
     (["--hosting-file"], "Missing value"),
     (["--hosting-file", "--yes"], "Missing value"),
     (["--hosting-file", "/one", "--hosting-file", "/two"], "Repeated hosting"),
+    (["--settings-file"], "Missing value"),
+    (["--settings-file", "--yes"], "Missing value"),
+    (["--settings-file", "/one", "--settings-file", "/two"], "Repeated application settings"),
     (["--acme-staging-roots"], "Missing value"),
     (["--acme-staging-roots", ""], "Missing value"),
     (["--acme-staging-roots", "--yes"], "Missing value"),
@@ -337,7 +341,7 @@ def test_native_handoff_preserves_hosting_path_as_one_opaque_argument(tmp_path, 
     hosting = "/private/hosting file $(literal).json"
     setup = dict(version="v1.2.3-nightly.20261027.42", stage=str(tmp_path), gh="/private/gh",
                  docker_endpoint="unix:///run/user/1000/docker.sock", docker_engine_id="engine-1234",
-                 docker_bin="/usr/bin/docker", destination="", foundation_file="", hosting_file=hosting,
+                 docker_bin="/usr/bin/docker", destination="", foundation_file="", hosting_file=hosting, settings_file="",
                  acme_staging_roots="", yes="false", channel="nightly")
     script = "\n".join(f"{key}={shlex.quote(value)}" for key, value in setup.items())
     result = run(source=script + "\n" + handoff + "\nprintf '%s\\0' \"$@\"\n")
@@ -346,6 +350,35 @@ def test_native_handoff_preserves_hosting_path_as_one_opaque_argument(tmp_path, 
     assert arguments[0] == verb
     assert arguments.count("--hosting-file") == 1
     assert arguments[arguments.index("--hosting-file") + 1] == hosting
+
+
+@pytest.mark.parametrize("verb", ["install", "candidate-test"])
+@pytest.mark.parametrize("settings", [None, "/private/settings $(literal); &.json"])
+def test_settings_parse_and_handoff_is_one_explicit_argument(tmp_path, monkeypatch, verb, settings):
+    source = SCRIPT.read_text()
+    parser_start = source.index("    channel=nightly\n")
+    parser_end = source.index("    require_rootless_process\n", parser_start)
+    handoff_start = source.index(f"set -- {verb} --version")
+    handoff_end = source.index('"$stage/marty-deploy" "$@"', handoff_start)
+    setup = dict(stage=str(tmp_path), gh="/private/gh", docker_endpoint="unix:///run/user/1000/docker.sock",
+                 docker_engine_id="engine-1234", docker_bin="/usr/bin/docker")
+    script = "fail() { printf '%s\\n' \"$*\" >&2; exit 1; }\n"
+    script += "\n".join(f"{key}={shlex.quote(value)}" for key, value in setup.items()) + "\n"
+    script += source[parser_start:parser_end] + source[handoff_start:handoff_end]
+    script += "\nprintf '%s\\0' \"$@\"\n"
+    args = ["--candidate-test" if verb == "candidate-test" else "--version", "v1.2.3-nightly.20261027.42"]
+    if settings is not None:
+        args += ["--settings-file", settings]
+    monkeypatch.setenv("settings_file", "/untrusted/inherited-settings.json")
+    result = run(args + ["--bootstrap-complete"], source=script)
+    assert result.returncode == 0, result.stderr
+    arguments = result.stdout.rstrip("\0").split("\0")
+    assert "/untrusted/inherited-settings.json" not in arguments
+    if settings is None:
+        assert "--settings-file" not in arguments
+    else:
+        assert arguments.count("--settings-file") == 1
+        assert arguments[arguments.index("--settings-file") + 1] == settings
 
 
 @pytest.mark.parametrize("verb", ["install", "candidate-test"])

@@ -39,6 +39,9 @@ Use the optional `--hosting-file ABSOLUTE_PATH` for direct VM hosting or an
 external proxy, including an explicitly selected Cloudflare Tunnel connector.
 Managed OpenBao and private localhost access remain the defaults. See
 [hosting configuration and browser trust](docs/installer-hosting.md).
+Use `--settings-file ABSOLUTE_PATH` for typed application choices such as
+registration, Keycloak email, organization creation and optional integrations;
+see the [application settings and credential matrix](docs/installer-application-settings.md).
 
 ### Local Development (Recommended)
 

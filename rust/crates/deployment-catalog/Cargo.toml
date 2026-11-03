@@ -29,6 +29,7 @@ spki = { workspace = true, features = ["pem"] }
 x509-cert.workspace = true
 marty-crypto.workspace = true
 marty-openbao-http = { path = "../openbao-http" }
+marty-passport-auth = { path = "../passport-auth" }
 reqwest.workspace = true
 tokio.workspace = true
 chrono.workspace = true

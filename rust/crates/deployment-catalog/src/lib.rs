@@ -92,6 +92,7 @@ pub mod installer_rootless_canary_helper;
 #[cfg(target_os = "linux")]
 pub mod installer_rootless_storage_canary;
 pub mod installer_runtime;
+pub(crate) mod installer_settings;
 #[cfg(target_os = "linux")]
 pub mod installer_startup_observation;
 pub mod installer_state;

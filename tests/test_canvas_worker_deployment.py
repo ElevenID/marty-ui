@@ -725,13 +725,17 @@ def test_default_run_retains_only_original_bundle_issuance_and_rust_owners(
     ]
 
 
-@pytest.mark.parametrize("regression", [None, "secret", "didcomm", "legacy", "unrelated"])
+@pytest.mark.parametrize("regression", [
+    None, "secret", "api-token-secret", "shared-file", "api-token-file",
+    "didcomm", "legacy", "portable", "mirror", "unrelated", "passport", "bureau",
+])
 def test_no_canvas_issuance_profile_preserves_runtime_except_disabled_canvas(
     compose_worker_gate, regression
 ):
     original_service = {
         "environment": [
             "CANVAS_CREDENTIALS_SHARED_SECRET_FILE=/run/secrets/canvas_credentials_shared_secret",
+            "CANVAS_CREDENTIALS_API_TOKEN_FILE=/run/secrets/canvas_credentials_api_token",
             "CANVAS_PORTABLE_INTEGRATION_ENABLED=true",
             "CANVAS_LEGACY_EVENT_INGEST_ENABLED=true",
             "CANVAS_MIRROR_WORKER_ENABLED=true",
@@ -740,36 +744,69 @@ def test_no_canvas_issuance_profile_preserves_runtime_except_disabled_canvas(
         "secrets": [
             {"source": "marty_db_password"},
             {"source": "canvas_credentials_shared_secret"},
+            {"source": "canvas_credentials_api_token"},
         ],
         "restart": "unless-stopped",
     }
     base = {
         "services": {name: deepcopy(original_service) for name in ("issuance", "issuance-native")}
     }
+    for secret in ("passport_tenant_api_keys", "personalization_bureau_api_key"):
+        base["services"]["issuance-native"]["secrets"].append({"source": secret})
+        base["services"]["issuance-native"]["environment"].append(
+            f"{secret.upper()}_FILE=/run/secrets/{secret}"
+        )
     preview = deepcopy(base)
     for service in preview["services"].values():
         service["environment"] = {
+            **compose_worker_gate["environment_mapping"](service["environment"]),
             "CANVAS_CREDENTIALS_SHARED_SECRET_FILE": "",
+            "CANVAS_CREDENTIALS_API_TOKEN_FILE": "",
             "CANVAS_PORTABLE_INTEGRATION_ENABLED": "false",
             "CANVAS_LEGACY_EVENT_INGEST_ENABLED": "false",
             "CANVAS_MIRROR_WORKER_ENABLED": "false",
             "ISSUER_BASE_URL": "https://issuer.example.invalid",
         }
-        service["secrets"] = [{"source": "marty_db_password"}]
+        service["secrets"] = [
+            secret for secret in service["secrets"]
+            if secret["source"] not in {"canvas_credentials_shared_secret", "canvas_credentials_api_token"}
+        ]
     if regression == "secret":
         preview["services"]["issuance"]["secrets"].append(
             {"source": "canvas_credentials_shared_secret"}
         )
+    elif regression == "api-token-secret":
+        preview["services"]["issuance-native"]["secrets"].append(
+            {"source": "canvas_credentials_api_token"}
+        )
+    elif regression in {"shared-file", "api-token-file"}:
+        key = (
+            "CANVAS_CREDENTIALS_SHARED_SECRET_FILE" if regression == "shared-file"
+            else "CANVAS_CREDENTIALS_API_TOKEN_FILE"
+        )
+        preview["services"]["issuance"]["environment"][key] = "/run/secrets/reselected-canvas-credential"
     elif regression == "didcomm":
         preview["services"]["issuance-native"]["secrets"].append(
             {"source": "didcomm_issuance_openbao_token"}
         )
-    elif regression == "legacy":
-        preview["services"]["issuance-native"]["environment"][
-            "CANVAS_LEGACY_EVENT_INGEST_ENABLED"
-        ] = "true"
+    elif regression in {"legacy", "portable", "mirror"}:
+        key = {
+            "legacy": "CANVAS_LEGACY_EVENT_INGEST_ENABLED",
+            "portable": "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+            "mirror": "CANVAS_MIRROR_WORKER_ENABLED",
+        }[regression]
+        preview["services"]["issuance-native"]["environment"][key] = "true"
     elif regression == "unrelated":
         preview["services"]["issuance"]["restart"] = "no"
+    elif regression in {"passport", "bureau"}:
+        secret_name = (
+            "passport_tenant_api_keys" if regression == "passport"
+            else "personalization_bureau_api_key"
+        )
+        preview["services"]["issuance-native"]["secrets"] = [
+            secret for secret in preview["services"]["issuance-native"]["secrets"]
+            if secret["source"] != secret_name
+        ]
     compare = compose_worker_gate["assert_no_canvas_issuance_secret"]
     if regression:
         with pytest.raises(AssertionError, match="No-Canvas issuance"):

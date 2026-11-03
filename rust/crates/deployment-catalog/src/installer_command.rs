@@ -28,6 +28,7 @@ struct Options {
     directory: Option<PathBuf>,
     foundation_file: Option<PathBuf>,
     hosting_file: Option<PathBuf>,
+    settings_file: Option<PathBuf>,
     acme_staging_roots: Option<PathBuf>,
     channel: Option<(String, PathBuf)>,
     profile: RuntimeProfile,
@@ -85,9 +86,16 @@ fn retained_staging_roots(
     Ok(bytes)
 }
 fn report_host_impact(hosting: &crate::installer_hosting::Prepared) {
-    eprintln!("Marty host impact: this experimental installation uses a pre-existing user-owned rootless Docker daemon. It may pull images; create private probe containers, workload containers, a network and a Redis volume; bind the selected ingress listener and private loopback service ports; and write private credentials and retained state under the selected installation path. It does not invoke sudo, package installation, daemon setup, or a rootful Docker socket. Ordinary uninstall retains data, credentials, images and the Redis volume; purge is unsupported. Use a disposable VM snapshot.");
-    eprintln!("Marty hosting selection: {}. DNS, frontend certificates and firewall configuration remain with their selected owners.", hosting.host_impact());
-    eprintln!("Marty trial feedback: retain the printed installation path and first failing stage; reply to your inviter with redacted facts or comment at https://github.com/ElevenID/marty-ui/issues/1350. No failed state is automatically purged.");
+    eprintln!(
+        "Marty host impact: this experimental installation uses a pre-existing user-owned rootless Docker daemon. It may pull images; create private probe containers, workload containers, a network and a Redis volume; bind the selected ingress listener and private loopback service ports; and write private credentials and retained state under the selected installation path. It does not invoke sudo, package installation, daemon setup, or a rootful Docker socket. Ordinary uninstall retains data, credentials, images and the Redis volume; purge is unsupported. Use a disposable VM snapshot."
+    );
+    eprintln!(
+        "Marty hosting selection: {}. DNS, frontend certificates and firewall configuration remain with their selected owners.",
+        hosting.host_impact()
+    );
+    eprintln!(
+        "Marty trial feedback: retain the printed installation path and first failing stage; reply to your inviter with redacted facts or comment at https://github.com/ElevenID/marty-ui/issues/1350. No failed state is automatically purged."
+    );
 }
 fn options(args: &[String]) -> Result<Options> {
     let mut values = BTreeMap::new();
@@ -117,6 +125,7 @@ fn options(args: &[String]) -> Result<Options> {
             "--runtime-profile",
             "--foundation-file",
             "--hosting-file",
+            "--settings-file",
             "--acme-staging-roots",
         ]
         .contains(&key)
@@ -152,6 +161,7 @@ fn options(args: &[String]) -> Result<Options> {
     let directory = values.remove("--install-dir").map(PathBuf::from);
     let foundation_file = values.remove("--foundation-file").map(PathBuf::from);
     let hosting_file = values.remove("--hosting-file").map(PathBuf::from);
+    let settings_file = values.remove("--settings-file").map(PathBuf::from);
     let acme_staging_roots = values.remove("--acme-staging-roots").map(PathBuf::from);
     let channel = match (
         values.remove("--channel"),
@@ -169,6 +179,7 @@ fn options(args: &[String]) -> Result<Options> {
         || directory.as_ref().is_some_and(|p| !p.is_absolute())
         || foundation_file.as_ref().is_some_and(|p| !p.is_absolute())
         || hosting_file.as_ref().is_some_and(|p| !p.is_absolute())
+        || settings_file.as_ref().is_some_and(|p| !p.is_absolute())
         || acme_staging_roots
             .as_ref()
             .is_some_and(|p| !p.is_absolute())
@@ -194,6 +205,7 @@ fn options(args: &[String]) -> Result<Options> {
         directory,
         foundation_file,
         hosting_file,
+        settings_file,
         acme_staging_roots,
         channel,
         profile,
@@ -336,6 +348,10 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         .map(crate::installer_foundation::preflight_origin)
         .transpose()?;
     let hosting = crate::installer_hosting::prepare(o.hosting_file.as_deref(), foundation_origin)?;
+    let settings = crate::installer_settings::prepare(
+        o.settings_file.as_deref(),
+        o.foundation_file.is_none(),
+    )?;
     let staging_roots = initial_staging_roots(&hosting, o.acme_staging_roots.as_deref())?;
     let tools = VerificationTools::new(&o.tools, &o.gh)?;
     let operator_sha = installer_verify::current_operator_digest()?;
@@ -520,6 +536,7 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         crate::installer_foundation::select(path, &directory, &mut state)?;
     }
     crate::installer_hosting::select(hosting, &mut state)?;
+    crate::installer_settings::select(settings, &mut state)?;
     if let Some(roots) = &staging_roots {
         state.write_evidence(STAGING_ROOTS, roots)?;
     }
@@ -572,6 +589,21 @@ pub(crate) fn provision_runtime(
 ) -> Result<()> {
     state.require_live_phase(Phase::Verified)?;
     let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
+    // Other independently authenticated fresh entry points share these same
+    // defaults. Bind them before provisioning instead of leaving an implicit
+    // unrecorded application policy in candidate qualification runs.
+    if state
+        .with_inspection(crate::installer_settings::load)?
+        .is_none()
+    {
+        let managed = state
+            .with_inspection(crate::installer_foundation::load)?
+            .is_none();
+        crate::installer_settings::select(
+            crate::installer_settings::prepare(None, managed)?,
+            state,
+        )?;
+    }
     if let Some(foundation) = state.with_inspection(crate::installer_foundation::load)? {
         state.advance(Phase::Provisioning)?;
         eprintln!("Marty runtime stage: local credentials and preprovisioned AWS inputs");
@@ -855,7 +887,9 @@ fn finish_acme_installation(
             "{}",
             serde_json::to_string(&report).map_err(|_| "cannot encode ACME continuation")?
         );
-        eprintln!("ACME enrollment has not started the application. Preserve this installation and inspect the reported outcome and polling deadline before using its continuation command; do not run a new installation to resume an order.");
+        eprintln!(
+            "ACME enrollment has not started the application. Preserve this installation and inspect the reported outcome and polling deadline before using its continuation command; do not run a new installation to resume an order."
+        );
         return Ok(());
     };
     if candidate.environment() == crate::installer_acme_configuration::AcmeEnvironment::Staging {
@@ -1088,7 +1122,9 @@ fn validate_and_complete(
             std::str::from_utf8(&startup.bytes()?)
                 .map_err(|_| "cannot encode signed startup observation")?
         );
-        eprintln!("SIGNED STARTUP OBSERVED: journal remains Provisioning; Ready, functional/recovery qualification and load characterization are false.");
+        eprintln!(
+            "SIGNED STARTUP OBSERVED: journal remains Provisioning; Ready, functional/recovery qualification and load characterization are false."
+        );
         return Ok(());
     }
     println!(
@@ -1112,9 +1148,13 @@ fn completion_after_validation(
         ) {
             return Err("candidate trial completion requires candidate-test scope".into());
         }
-        eprintln!("CANDIDATE TRIAL OBSERVED: application startup and required read-only validation passed. This experimental rootless stack is not production ready; the journal remains Provisioning, installation_ready is false, and installed-journey qualification was not performed.");
+        eprintln!(
+            "CANDIDATE TRIAL OBSERVED: application startup and required read-only validation passed. This experimental rootless stack is not production ready; the journal remains Provisioning, installation_ready is false, and installed-journey qualification was not performed."
+        );
         eprintln!("Retained Marty trial state: {:?}", installation);
-        eprintln!("Report feedback and the first failing stage to https://github.com/ElevenID/marty-ui/issues/1350");
+        eprintln!(
+            "Report feedback and the first failing stage to https://github.com/ElevenID/marty-ui/issues/1350"
+        );
         Ok(())
     } else {
         Err("Owned application startup observations recorded. Explicit local CA trust onboarding and installed journey qualification remain incomplete; preserve the reported state for recovery. Installation is not ready.".into())
@@ -1312,6 +1352,19 @@ mod tests {
         *hosting_args.last_mut().unwrap() = "/private/hosting.json".into();
         hosting_args.extend(["--hosting-file".into(), "/private/second.json".into()]);
         assert!(candidate_test_options(&hosting_args).is_err());
+        let mut settings_args = args.clone();
+        settings_args.extend(["--settings-file".into(), "/private/application.json".into()]);
+        assert_eq!(
+            candidate_test_options(&settings_args)
+                .unwrap()
+                .settings_file,
+            Some(PathBuf::from("/private/application.json"))
+        );
+        *settings_args.last_mut().unwrap() = "relative.json".into();
+        assert!(candidate_test_options(&settings_args).is_err());
+        *settings_args.last_mut().unwrap() = "/private/application.json".into();
+        settings_args.extend(["--settings-file".into(), "/private/other.json".into()]);
+        assert!(candidate_test_options(&settings_args).is_err());
         args.truncate(args.len() - 2);
         assert!(candidate_test_options(&args).is_err());
         args.extend(["--runtime-profile".into(), "rootful".into()]);

@@ -207,7 +207,8 @@ def assert_no_canvas_overlay_activation(compose_command=None):
 
 
 def assert_no_canvas_issuance_secret(base, preview):
-    """The preview must omit the Canvas secret without changing other runtime inputs."""
+    """Omit both Canvas credentials and preserve every other runtime input."""
+    canvas_secrets = {"canvas_credentials_shared_secret", "canvas_credentials_api_token"}
     for name in ("issuance", "issuance-native"):
         original = deepcopy(base["services"][name])
         expected = deepcopy(original)
@@ -216,21 +217,20 @@ def assert_no_canvas_issuance_secret(base, preview):
         assert original_env["CANVAS_CREDENTIALS_SHARED_SECRET_FILE"] == (
             "/run/secrets/canvas_credentials_shared_secret"
         )
+        assert "CANVAS_CREDENTIALS_API_TOKEN_FILE" in original_env
         expected_env.update(
             CANVAS_PORTABLE_INTEGRATION_ENABLED="false",
             CANVAS_LEGACY_EVENT_INGEST_ENABLED="false",
             CANVAS_MIRROR_WORKER_ENABLED="false",
             CANVAS_CREDENTIALS_SHARED_SECRET_FILE="",
+            CANVAS_CREDENTIALS_API_TOKEN_FILE="",
         )
         expected["environment"] = expected_env
-        assert any(
-            secret["source"] == "canvas_credentials_shared_secret"
-            for secret in expected["secrets"]
-        )
+        assert canvas_secrets <= {secret["source"] for secret in expected["secrets"]}
         expected["secrets"] = [
             secret
             for secret in expected["secrets"]
-            if secret["source"] != "canvas_credentials_shared_secret"
+            if secret["source"] not in canvas_secrets
         ]
         actual = deepcopy(preview["services"][name])
         actual["environment"] = environment_mapping(actual["environment"])

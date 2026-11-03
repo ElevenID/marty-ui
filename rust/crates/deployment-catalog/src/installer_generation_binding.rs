@@ -248,7 +248,8 @@ fn read(dir: &File, name: &str, record: bool) -> Result<(Vec<u8>, u32)> {
     require(
         !bytes.is_empty()
             || (!record
-                && (crate::installer_application_env::OPTIONAL_EMPTY_SECRETS.contains(&name)
+                && (crate::installer_application_env::OPTIONAL_INTEGRATION_SECRETS
+                    .contains(&name)
                     || name == "external_oidc_client_secret")),
     )?;
     Ok((bytes, mode))
@@ -501,7 +502,7 @@ impl GenerationBinding {
                 hash(&file.sha256)
                     && file.size <= 65536
                     && (file.size > 0
-                        || crate::installer_application_env::OPTIONAL_EMPTY_SECRETS
+                        || crate::installer_application_env::OPTIONAL_INTEGRATION_SECRETS
                             .contains(&name.as_str())
                         || (self.imported_foundation() && name == "external_oidc_client_secret"))
                     && file.mode == 0o444
@@ -966,6 +967,7 @@ pub fn stage(
         successor: None,
     };
     result.validate()?;
+    crate::installer_settings::verify_generation(installation, &result.files)?;
     let encoded = serde_json::to_vec(&result).map_err(|_| REFUSED)?;
     state.write_evidence(PENDING, &encoded)?;
     state.create_private_directory(ROOT)?;
@@ -1128,6 +1130,7 @@ fn verify_one_attempt(
     parent: Option<&VerifiedGeneration>,
 ) -> Result<VerifiedGeneration> {
     b.validate()?;
+    crate::installer_settings::verify_generation(installation, &b.files)?;
     if let Some(successor) = &b.successor {
         let parent = parent.ok_or(REFUSED)?;
         let (bytes, candidates, plan) = candidate_with_parent(

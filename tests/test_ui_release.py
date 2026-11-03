@@ -201,13 +201,45 @@ def test_website_workflow_separates_source_build_signature_and_deployment():
     assert "cosign sign --yes" in shell and "cosign sign-blob --yes" in shell
     attestations = [step["with"] for step in steps if step.get("uses", "").startswith("actions/attest-build-provenance@")]
     assert len(attestations) == 2
-    assert any(item.get("subject-path") == "production-web/production-web-release.json" for item in attestations)
+    assert any("production-web/production-web-release.json" in item.get("subject-path", "").splitlines() for item in attestations)
+    assert any("production-web/deployment/production-openbao.zip" in item.get("subject-path", "").splitlines() for item in attestations)
+    assert shell.index("stable_installer_assets.py --phase verify-published") < shell.index("package_production_deployment.py")
+    assert "gh_2.103.2_linux_amd64.tar.gz" in shell
+    assert "62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8" in shell
+    assert '"$verifier/gh_2.103.2_linux_amd64/bin/gh"' in shell
+    assert '--gh "$(command -v gh)"' not in shell
     assert not any(command in shell for command in ("kubectl", "helm upgrade", "gh release create", "ssh "))
     for step in steps:
         if "uses" in step:
             assert re.fullmatch(r"[^\s]+@[0-9a-f]{40}", step["uses"])
         if "run" in step:
             subprocess.run(["bash", "-n"], input=step["run"], text=True, check=True, capture_output=True)
+
+
+def test_full_production_binds_both_sources_and_the_private_producer(source):
+    private_sha = "c" * 40
+    options = dict(production_pages="full", commerce_source_sha=private_sha)
+    plan = release.production_plan(source, SOURCE, **options)
+    assert plan["image"] == release.COMMERCE_IMAGE
+    assert plan["workflow"] == release.COMMERCE_WORKFLOW
+    assert plan["build_args"]["MARTY_PRODUCTION_PAGES"] == "full"
+    full_metadata = {**metadata(plan), "production_pages": "full",
+                     "commerce_extension": {"repository": release.COMMERCE_REPOSITORY, "source_sha": private_sha}}
+    value = record(source, plan, metadata=full_metadata, **options)
+    assert value["producer"]["source_sha"] == private_sha
+    assert value["source_sha"] == SOURCE
+    assert release.validate_production_release(source, value, SOURCE) == value
+    wrong = copy.deepcopy(value)
+    wrong["producer"]["source_sha"] = SOURCE
+    with pytest.raises(ValueError, match="producer identity"):
+        release.validate_production_release(source, wrong, SOURCE)
+    with pytest.raises(ValueError, match="audience, source or version"):
+        record(source, plan, metadata=metadata(plan), **options)
+
+
+def test_full_production_refuses_missing_private_source(source):
+    with pytest.raises(ValueError, match="exact private commerce source"):
+        release.production_plan(source, SOURCE, production_pages="full")
 
 
 def test_all_customer_producers_check_the_image_audience():

@@ -49,6 +49,14 @@ export function getHostingRuntimeConfig() {
   return getWindowRuntimeConfig().hosting;
 }
 
+export function isOrganizationCreationEnabled(legacyDefault = false) {
+  const runtimeConfig = getWindowRuntimeConfig();
+  if (Object.prototype.hasOwnProperty.call(runtimeConfig, 'organizationCreationEnabled')) {
+    return runtimeConfig.organizationCreationEnabled === true;
+  }
+  return legacyDefault === true;
+}
+
 export function getEnabledWebSections() {
   const runtimeConfig = getWindowRuntimeConfig();
   if (!Object.prototype.hasOwnProperty.call(runtimeConfig, 'web')) {
@@ -84,9 +92,10 @@ export function isWebPathEnabled(pathname = '/') {
 }
 
 export function getGoogleAnalyticsMeasurementId() {
-  const runtimeValue = getWindowRuntimeConfig().googleAnalyticsMeasurementId;
-  if (typeof runtimeValue === 'string' && runtimeValue.trim()) {
-    return runtimeValue.trim();
+  const runtimeConfig = getWindowRuntimeConfig();
+  if (Object.prototype.hasOwnProperty.call(runtimeConfig, 'googleAnalyticsMeasurementId')) {
+    const runtimeValue = runtimeConfig.googleAnalyticsMeasurementId;
+    return typeof runtimeValue === 'string' ? runtimeValue.trim() : '';
   }
 
   const buildValue = import.meta.env.VITE_GA_MEASUREMENT_ID;

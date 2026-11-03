@@ -354,6 +354,9 @@ pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
             "sign_grant_mint_issuance_passport_token",
             "token_hmac_key",
             "canvas_credentials_shared_secret",
+            "canvas_credentials_api_token",
+            "passport_tenant_api_keys",
+            "personalization_bureau_api_key",
             "grpc_service_token",
             "workload_identity_ca_cert",
             "issuance_workload_server_cert",
@@ -374,6 +377,7 @@ pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
             "gateway_workload_client_cert",
             "gateway_tls_kms_token",
             "openbao_tls_ca_cert",
+            "passport_tenant_api_keys",
         ]
         .into_iter()
         .collect(),
@@ -391,6 +395,7 @@ pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
             "issuance_api_key",
             "signing_keys_issuer_sign_key",
             "sign_grant_mint_flow_wallet_token",
+            "passport_tenant_api_keys",
         ]
         .into_iter()
         .collect(),
@@ -505,12 +510,23 @@ impl ClosedSelfhostModel {
                 "issuance-native" => "PASSPORT_NATIVE_HTTP_ENABLED",
                 _ => unreachable!(),
             };
-            // This released selfhost fixture is deliberately default-off. The
-            // optional empty file selector is not a mounted secret; selecting
-            // passport later requires a separate qualified secret overlay.
+            // This released selfhost fixture is deliberately default-off.
+            // Optional placeholder mounts remain present while their selectors
+            // stay empty; enabling Passport requires separate qualification.
             require(environment.get(passport_selector) == Some(&json!("false")))?;
             require(environment.get("PASSPORT_TENANT_API_KEYS") == Some(&json!("")))?;
             require(environment.get("PASSPORT_TENANT_API_KEYS_FILE") == Some(&json!("")))?;
+            let optional_file_selectors: &[&str] = if *owner == "issuance-native" {
+                &[
+                    "CANVAS_CREDENTIALS_API_TOKEN_FILE",
+                    "PERSONALIZATION_BUREAU_API_KEY_FILE",
+                ]
+            } else {
+                &[]
+            };
+            for key in optional_file_selectors {
+                require(environment.get(*key) == Some(&json!("")))?;
+            }
             for raw in [
                 "ISSUANCE_API_KEY",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
@@ -550,7 +566,9 @@ impl ClosedSelfhostModel {
             }
             require(mounts == expected_secrets(owner))?;
             for (key, value) in environment {
-                if key == "PASSPORT_TENANT_API_KEYS_FILE" {
+                if key == "PASSPORT_TENANT_API_KEYS_FILE"
+                    || optional_file_selectors.contains(&key.as_str())
+                {
                     continue;
                 }
                 if key == "BAO_CACERT"
@@ -1164,6 +1182,74 @@ fn negative_controls(
         changed["x-database-url-template"] = single;
         assert!(ClosedSelfhostModel::from_rendered(&changed, changed.clone(), directory).is_err());
     }
+    for (owner, selector, secret) in [
+        (
+            "issuance-native",
+            "CANVAS_CREDENTIALS_API_TOKEN_FILE",
+            "canvas_credentials_api_token",
+        ),
+        (
+            "issuance-native",
+            "PERSONALIZATION_BUREAU_API_KEY_FILE",
+            "personalization_bureau_api_key",
+        ),
+        (
+            "issuance-native",
+            "PASSPORT_TENANT_API_KEYS_FILE",
+            "passport_tenant_api_keys",
+        ),
+        (
+            "gateway",
+            "PASSPORT_TENANT_API_KEYS_FILE",
+            "passport_tenant_api_keys",
+        ),
+        (
+            "flow",
+            "PASSPORT_TENANT_API_KEYS_FILE",
+            "passport_tenant_api_keys",
+        ),
+    ] {
+        let mut changed = model.full_model.clone();
+        let mounts = changed["services"][owner]["secrets"]
+            .as_array_mut()
+            .unwrap();
+        let previous_count = mounts.len();
+        mounts.retain(|mount| mount["source"] != secret);
+        assert_eq!(mounts.len() + 1, previous_count);
+        assert!(ClosedSelfhostModel::from_rendered(&changed, changed.clone(), directory).is_err());
+        for value in [None, Some(json!(format!("/run/secrets/{secret}")))] {
+            let mut changed = model.full_model.clone();
+            let environment = changed["services"][owner]["environment"]
+                .as_object_mut()
+                .unwrap();
+            if let Some(value) = value {
+                environment.insert(selector.into(), value);
+            } else {
+                environment.remove(selector);
+            }
+            assert!(
+                ClosedSelfhostModel::from_rendered(&changed, changed.clone(), directory).is_err()
+            );
+        }
+    }
+    for owner in ["gateway", "flow"] {
+        for secret in [
+            "canvas_credentials_api_token",
+            "personalization_bureau_api_key",
+        ] {
+            let mut changed = model.full_model.clone();
+            changed["services"][owner]["secrets"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"source": secret, "target": format!("/run/secrets/{secret}")}));
+            assert!(
+                ClosedSelfhostModel::from_rendered(&changed, changed.clone(), directory).is_err()
+            );
+        }
+    }
+    let mut changed = model.full_model.clone();
+    changed["services"]["issuance-native"]["environment"]["UNQUALIFIED_SECRET_FILE"] = json!("");
+    assert!(ClosedSelfhostModel::from_rendered(&changed, changed.clone(), directory).is_err());
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStringExt;

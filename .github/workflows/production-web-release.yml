@@ -4,6 +4,11 @@ run-name: Build production website from ${{ github.sha }}
 
 on:
   workflow_dispatch:
+    inputs:
+      stack_release_tag:
+        description: Exact stable OpenBao backend release from this source (vX.Y.Z)
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -136,9 +141,50 @@ jobs:
             --output production-web/production-web-release.json
           cosign sign-blob --yes --bundle production-web/production-web-release.json.sigstore.json \
             production-web/production-web-release.json
+      - name: Bind the production website to the exact stable OpenBao stack
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKEND_TAG: ${{ inputs.stack_release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$BACKEND_TAG" = "v$(jq -er .version production-web/build-plan.json)"
+          python -m pip install --requirement scripts/selfhost-preview-tools.requirements.txt
+          verifier="$RUNNER_TEMP/production-installer-gh"
+          mkdir "$verifier"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+            --connect-timeout 20 --max-time 120 --max-filesize 15031001 \
+            https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz \
+            --output "$verifier/gh.tar.gz"
+          test "$(stat -c %s "$verifier/gh.tar.gz")" = 15031001
+          printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 \
+            "$verifier/gh.tar.gz" | sha256sum --check --strict
+          tar -xzf "$verifier/gh.tar.gz" --no-same-owner --no-same-permissions \
+            -C "$verifier" gh_2.103.2_linux_amd64/bin/gh
+          chmod 700 "$verifier/gh_2.103.2_linux_amd64/bin/gh"
+          assets="$RUNNER_TEMP/production-backend"
+          mkdir "$assets"
+          for name in install.sh marty-deploy-linux-amd64 prepared-selfhost-bundle.zip prepared-selfhost-images.json installer-inventory.json; do
+            gh release download "$BACKEND_TAG" --repo "$GITHUB_REPOSITORY" --dir "$assets" \
+              --pattern "$name" --pattern "$name.provenance.jsonl"
+          done
+          python scripts/stable_installer_assets.py --phase verify-published \
+            --assets "$assets" --source-sha "$GITHUB_SHA" --tag "$BACKEND_TAG" \
+            --gh "$verifier/gh_2.103.2_linux_amd64/bin/gh"
+          python scripts/package_production_deployment.py \
+            --ui-release production-web/production-web-release.json --backend-assets "$assets" \
+            --source-sha "$GITHUB_SHA" --tag "$BACKEND_TAG" --output-dir production-web/deployment
+          for name in production-deployment.json production-openbao.zip; do
+            cosign sign-blob --yes --bundle "production-web/deployment/$name.sigstore.json" \
+              "production-web/deployment/$name"
+          done
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
-          subject-path: production-web/production-web-release.json
+          subject-path: |
+            production-web/production-web-release.json
+            production-web/deployment/production-deployment.json
+            production-web/deployment/production-openbao.zip
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: production-web-${{ steps.plan.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}

@@ -597,6 +597,9 @@ fn write_synthetic_secrets(
             "canvas_credentials_shared_secret",
             "synthetic-selfhost-canvas-shared-secret",
         ),
+        ("canvas_credentials_api_token", ""),
+        ("passport_tenant_api_keys", ""),
+        ("personalization_bureau_api_key", ""),
         ("grpc_service_token", SERVICE_TOKEN),
         ("workload_identity_ca_cert", kms_ca_pem),
         ("issuance_workload_server_cert", kms_ca_pem),
@@ -631,7 +634,8 @@ fn write_synthetic_secrets(
             std::fs::create_dir(&path).map_err(|_| ERROR)?;
             continue;
         }
-        let contents = if case == SecretCase::CrLf {
+        // Unselected optional placeholders stay empty in every fault case.
+        let contents = if case == SecretCase::CrLf && !value.is_empty() {
             format!("{value}\r\n")
         } else {
             value.to_string()
@@ -857,6 +861,28 @@ mod tests {
             dedicated_key,
             super::super::selfhost_runtime_sidecar::MANAGEMENT_KEY
         );
+        for case in [
+            SecretCase::Correct,
+            SecretCase::CrLf,
+            SecretCase::WrongPassword,
+            SecretCase::MissingMount,
+            SecretCase::Directory,
+            SecretCase::Unreadable,
+            SecretCase::Empty,
+            SecretCase::Placeholder,
+            SecretCase::RawAndFile,
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let log_values = write_synthetic_secrets(directory.path(), case, KMS_CA_CERT).unwrap();
+            for name in [
+                "canvas_credentials_api_token",
+                "passport_tenant_api_keys",
+                "personalization_bureau_api_key",
+            ] {
+                assert_eq!(std::fs::read(directory.path().join(name)).unwrap(), b"");
+            }
+            assert!(log_values.iter().all(|value| !value.is_empty()));
+        }
     }
 
     #[test]

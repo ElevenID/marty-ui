@@ -96,6 +96,9 @@ export function renderMarketingRoutes({ login, showDemos = true }) {
         login,
         useAuth,
         disableSandboxSignup: DISABLE_PUBLIC_GET_STARTED_BUTTONS,
+        checkoutBasePath: '/pricing/checkout',
+        setupPath: '/console/org/setup',
+        billingPath: '/console/org/billing',
       })}
     </>
   );

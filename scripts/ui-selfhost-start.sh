@@ -21,15 +21,26 @@ escape_sed_replacement() {
     printf '%s' "$1" | sed -e 's/[\\/&|]/\\&/g'
 }
 
-escape_js_single_quoted() {
-    printf '%s' "$1" | sed -e "s/'/'\"'\"'/g"
-}
-
 ga_measurement_id="${GOOGLE_ANALYTICS_MEASUREMENT_ID:-}"
 site_verification="${GOOGLE_SITE_VERIFICATION:-}"
 canonical_origin="${UI_CANONICAL_ORIGIN:-}"
 public_entry_origins="${UI_PUBLIC_ENTRY_ORIGINS:-[]}"
 enabled_sections="${UI_ENABLED_SECTIONS-public,console}"
+organization_creation_enabled="${ORGANIZATION_CREATION_ENABLED-false}"
+
+case "$ga_measurement_id" in
+    *'
+'*) echo 'GOOGLE_ANALYTICS_MEASUREMENT_ID must be a GA4 measurement identifier' >&2; exit 1 ;;
+esac
+if [ -n "$ga_measurement_id" ] && ! printf '%s' "$ga_measurement_id" | LC_ALL=C grep -Eq '^G-[A-Z0-9]+$'; then
+    echo 'GOOGLE_ANALYTICS_MEASUREMENT_ID must be a GA4 measurement identifier' >&2
+    exit 1
+fi
+
+case "${organization_creation_enabled}" in
+    true|false) ;;
+    *) echo 'ORGANIZATION_CREATION_ENABLED must be true or false' >&2; exit 1 ;;
+esac
 
 # One validated startup choice controls both the server and the client. Empty,
 # duplicate and unknown values are errors, never an implicit enable-all mode.
@@ -70,7 +81,8 @@ cp -R "${SOURCE_DIR}/." "${TARGET_DIR}/"
 
 cat > "${RUNTIME_CONFIG_FILE}" <<EOF
 window.__MARTY_RUNTIME_CONFIG__ = Object.assign({}, window.__MARTY_RUNTIME_CONFIG__, {
-  googleAnalyticsMeasurementId: '$(escape_js_single_quoted "${ga_measurement_id}")',
+  googleAnalyticsMeasurementId: '${ga_measurement_id}',
+  organizationCreationEnabled: ${organization_creation_enabled},
   web: { enabled_sections: ${sections_json} },
   hosting: {
     canonicalOrigin: '${canonical_origin}',

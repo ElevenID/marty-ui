@@ -38,6 +38,7 @@ import {
   getConsoleEligibleOrganizations,
 } from '../../../application/session/authSession';
 import { ENABLE_ORGANIZATION_CREATION } from '@ui-public-config';
+import { isOrganizationCreationEnabled } from '../../../utils/runtimeConfig';
 
 function logOrgSetupError(message, error) {
   if (import.meta.env?.DEV && import.meta.env?.MODE !== 'test') {
@@ -49,6 +50,7 @@ function logOrgSetupError(message, error) {
  * Organization Setup Page Component
  */
 export function OrgSetupPage() {
+  const organizationCreationEnabled = isOrganizationCreationEnabled(ENABLE_ORGANIZATION_CREATION);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const {
@@ -81,7 +83,7 @@ export function OrgSetupPage() {
     return <OrgConsoleUnavailable error={membershipLoadError} onRetry={reloadConsoleState} />;
   }
 
-  if (createOnlyMode && ENABLE_ORGANIZATION_CREATION) {
+  if (createOnlyMode && organizationCreationEnabled) {
     return <Navigate to={createOrganizationPath} replace />;
   }
 
@@ -189,12 +191,12 @@ export function OrgSetupPage() {
               No Organizations Yet
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-              {ENABLE_ORGANIZATION_CREATION
+              {organizationCreationEnabled
                 ? 'Create an organization, discover a public organization, or join with a code to get started.'
                 : 'Discover a public organization or join with a code to get started.'}
             </Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center">
-              {ENABLE_ORGANIZATION_CREATION && (
+              {organizationCreationEnabled && (
                 <Button
                   variant="contained"
                   startIcon={<AddIcon />}
@@ -332,7 +334,7 @@ export function OrgSetupPage() {
               Manage Organizations
             </Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center" sx={{ mt: 2 }}>
-              {ENABLE_ORGANIZATION_CREATION && (
+              {organizationCreationEnabled && (
                 <Button
                   variant="outlined"
                   startIcon={<AddIcon />}

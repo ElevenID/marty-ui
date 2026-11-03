@@ -67,6 +67,7 @@ x-issuance-application-env: &issuance-application-env
   ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE: /run/secrets/sign_grant_mint_issuance_readiness_token
   ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE: /run/secrets/sign_grant_mint_issuance_passport_token
   CANVAS_CREDENTIALS_SHARED_SECRET_FILE: /run/secrets/canvas_credentials_shared_secret
+  CANVAS_CREDENTIALS_API_TOKEN_FILE: ${CANVAS_CREDENTIALS_API_TOKEN_FILE:-}
   CANVAS_CREDENTIALS_PROVIDER: ${CANVAS_CREDENTIALS_PROVIDER:-bridge}
   CANVAS_CREDENTIALS_PUBLISH_URL: ${CANVAS_CREDENTIALS_PUBLISH_URL:-}
   CANVAS_CREDENTIALS_STATUS_SYNC_URL: ${CANVAS_CREDENTIALS_STATUS_SYNC_URL:-}
@@ -218,6 +219,7 @@ services:
     image: ${MARTY_KEYCLOAK_KMS_IMAGE:-}
     entrypoint: ["/bin/bash", "/scripts/setup-keycloak-selfhost-production.sh"]
     environment:
+      KEYCLOAK_SETUP_STRICT: "true"
       KC_URL: http://keycloak:8080
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
       KEYCLOAK_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_admin_password
@@ -456,6 +458,7 @@ services:
       - gateway_workload_client_cert
       - gateway_tls_kms_token
       - openbao_tls_ca_cert
+      - passport_tenant_api_keys
     ports:
       - "127.0.0.1:${SELFHOST_GATEWAY_HOST_PORT:-18000}:8000"
     depends_on:
@@ -757,6 +760,7 @@ services:
       - sign_grant_mint_issuance_readiness_token
       - sign_grant_mint_issuance_passport_token
       - workload_identity_ca_cert
+      - canvas_credentials_api_token
     volumes:
       - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
     depends_on:
@@ -820,6 +824,7 @@ services:
       PASSPORT_TENANT_API_KEYS_FILE: ${PASSPORT_TENANT_API_KEYS_FILE:-}
       PERSONALIZATION_BUREAU_URL: ${PERSONALIZATION_BUREAU_URL:-}
       PERSONALIZATION_BUREAU_API_KEY: ${PERSONALIZATION_BUREAU_API_KEY:-}
+      PERSONALIZATION_BUREAU_API_KEY_FILE: ${PERSONALIZATION_BUREAU_API_KEY_FILE:-}
       PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:-}
     secrets:
       - marty_db_password
@@ -837,6 +842,9 @@ services:
       - issuance_workload_server_cert
       - openbao_tls_ca_cert
       - issuance_tls_kms_token
+      - passport_tenant_api_keys
+      - personalization_bureau_api_key
+      - canvas_credentials_api_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1273,6 +1281,7 @@ services:
       - issuance_api_key
       - signing_keys_issuer_sign_key
       - sign_grant_mint_flow_wallet_token
+      - passport_tenant_api_keys
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1473,6 +1482,7 @@ services:
       GOOGLE_ANALYTICS_MEASUREMENT_ID_FILE: /run/secrets/google_analytics_measurement_id
       GOOGLE_SITE_VERIFICATION_FILE: /run/secrets/google_site_verification
       UI_ENABLED_SECTIONS: ${UI_ENABLED_SECTIONS-public,console}
+      ORGANIZATION_CREATION_ENABLED: ${ORGANIZATION_CREATION_ENABLED:-false}
     secrets:
       - google_analytics_measurement_id
       - google_site_verification
@@ -1680,3 +1690,9 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/google_site_verification
   smtp_password:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/smtp_password
+  passport_tenant_api_keys:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/passport_tenant_api_keys
+  personalization_bureau_api_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/personalization_bureau_api_key
+  canvas_credentials_api_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/canvas_credentials_api_token
