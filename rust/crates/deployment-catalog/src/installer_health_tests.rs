@@ -369,3 +369,264 @@ fn checkpoint_guard_reasons_keep_binding_clock_and_limit_checks_fail_closed() {
         );
     }
 }
+
+fn require_native_pair(
+    resources: &ProjectResources,
+    before: &[Value],
+    after: &[Value],
+) -> Result<()> {
+    let before = native_rows(resources, before)?;
+    let after = native_rows(resources, after)?;
+    require(
+        same_runtime_states(&before, &after),
+        Reason::NativeStateChanged,
+    )
+}
+
+#[test]
+fn native_reobservation_accepts_a_transient_transition_then_a_stable_pair() {
+    let (resources, stable) = native_fixture();
+    let mut starting = stable.clone();
+    starting[0]["Health"] = json!("starting");
+    let mut admitted = None;
+    let mut attempts = Vec::new();
+    let result = reobserve_native_states(
+        Instant::now() + OBSERVATION_BUDGET,
+        Instant::now,
+        |attempt| {
+            attempts.push(attempt);
+            retain_observation_resources(&mut admitted, &resources)?;
+            require_native_pair(
+                &resources,
+                if attempt == 1 { &starting } else { &stable },
+                &stable,
+            )?;
+            Ok(attempt)
+        },
+    );
+    assert_eq!(result.unwrap(), 2);
+    assert_eq!(attempts, [1, 2]);
+    assert_eq!(admitted, Some(resources));
+}
+
+#[test]
+fn native_reobservation_reloads_the_checkpoint_and_cancels_a_stale_repair() {
+    let (_parent, _path, mut state, mut checkpoint) = fixture();
+    let (resources, healthy) = native_fixture();
+    let role = checkpoint.roles.get_mut("gateway").unwrap();
+    role.container_id = resources.containers["gateway"].id.clone();
+    role.unhealthy_since = Some(9000);
+    let mut prior = None;
+    save(&mut state, &mut checkpoint, &mut prior).unwrap();
+    let retained = prior.clone();
+    let mut unhealthy = healthy.clone();
+    unhealthy[0]["Health"] = json!("unhealthy");
+    let mut admitted = None;
+    let mut attempts = 0;
+    let (mut accepted, decision, mut original) = reobserve_native_states(
+        Instant::now() + OBSERVATION_BUDGET,
+        Instant::now,
+        |attempt| {
+            attempts += 1;
+            retain_observation_resources(&mut admitted, &resources)?;
+            let (mut candidate, original) = load(&mut state, None)?;
+            assert_eq!(original, retained);
+            assert!(candidate.roles["gateway"].attempts.is_empty());
+            let before = if attempt == 1 { &unhealthy } else { &healthy };
+            let rows = native_rows(&resources, before)?;
+            candidate.observed_at = 11000;
+            let decision = plan_repair(
+                &mut candidate,
+                &resources,
+                &rows,
+                &json!({"services":{"gateway":{}}}),
+                11000,
+                false,
+            )?;
+            if attempt == 1 {
+                assert_eq!(decision.selected.as_deref(), Some("gateway"));
+                assert_eq!(candidate.roles["gateway"].attempts.len(), 1);
+            }
+            require_native_pair(&resources, before, &healthy)?;
+            Ok((candidate, decision, original))
+        },
+    )
+    .unwrap();
+    assert_eq!(attempts, 2);
+    assert!(decision.selected.is_none() && decision.operation.is_none());
+    assert!(accepted.roles["gateway"].attempts.is_empty());
+    assert!(accepted.roles["gateway"].unhealthy_since.is_none());
+    assert_eq!(state.read_evidence(CHECKPOINT).unwrap(), retained);
+    // Only the accepted plan can be published; the discarded attempt consumed no repair.
+    save(&mut state, &mut accepted, &mut original).unwrap();
+    assert_eq!(accepted.sequence, checkpoint.sequence + 1);
+    assert!(load(&mut state, None).unwrap().0.roles["gateway"]
+        .attempts
+        .is_empty());
+}
+
+#[test]
+fn native_reobservation_refuses_persistent_drift_and_retains_the_diagnostic() {
+    let (_parent, _path, mut state, mut checkpoint) = fixture();
+    let mut prior = None;
+    save(&mut state, &mut checkpoint, &mut prior).unwrap();
+    let (resources, before) = native_fixture();
+    let mut after = before.clone();
+    after[0]["State"] = json!("restarting");
+    let mut admitted = None;
+    let mut attempts = 0;
+    let mut trace = Trace::new(&state, true);
+    let result = reobserve_native_states(Instant::now() + OBSERVATION_BUDGET, Instant::now, |_| {
+        attempts += 1;
+        retain_observation_resources(&mut admitted, &resources)?;
+        trace.stage = "validate_native_after";
+        trace.resources(&resources, false);
+        trace.resources(&resources, true);
+        trace.native(&resources, &before, false);
+        trace.native(&resources, &after, true);
+        require_native_pair(&resources, &before, &after)
+    });
+    assert_eq!(attempts, OBSERVATION_ATTEMPTS);
+    assert!(matches!(
+        result,
+        Err(Failure::Guard(Reason::NativeStateChanged))
+    ));
+    assert_eq!(state.read_evidence(CHECKPOINT).unwrap(), prior);
+    let message = trace.failure(&mut state, result.unwrap_err());
+    assert!(message.contains("reason=native_state_changed"));
+    let bytes = state
+        .read_evidence("health-refusal-0001.json")
+        .unwrap()
+        .unwrap();
+    let diagnostic: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(diagnostic["reason"], "native_state_changed");
+    assert_eq!(diagnostic["stage"], "validate_native_after");
+    assert_eq!(state.read_evidence(CHECKPOINT).unwrap(), prior);
+}
+
+#[test]
+fn native_reobservation_cannot_adopt_a_replacement_between_attempts() {
+    let (resources, rows) = native_fixture();
+    let mut replacement = resources.clone();
+    replacement.containers.get_mut("gateway").unwrap().id = "f".repeat(64);
+    let mut replacement_rows = rows.clone();
+    replacement_rows[0]["ID"] = json!("f".repeat(64));
+    assert!(native_rows(&replacement, &replacement_rows).is_ok());
+    let mut admitted = None;
+    let mut attempts = 0;
+    let result: Result<()> = reobserve_native_states(
+        Instant::now() + OBSERVATION_BUDGET,
+        Instant::now,
+        |attempt| {
+            attempts += 1;
+            retain_observation_resources(
+                &mut admitted,
+                if attempt == 1 {
+                    &resources
+                } else {
+                    &replacement
+                },
+            )?;
+            Err(Reason::NativeStateChanged.into())
+        },
+    );
+    assert_eq!(attempts, 2);
+    assert!(matches!(
+        result,
+        Err(Failure::Guard(Reason::ResourceSetChanged))
+    ));
+    assert_eq!(admitted, Some(resources));
+}
+
+#[test]
+fn native_reobservation_does_not_retry_identity_or_setup_refusals() {
+    let (resources, rows) = native_fixture();
+    for (field, index, value, reason) in [
+        (
+            "ID",
+            0,
+            json!("f".repeat(64)),
+            Reason::NativeContainerIdentity,
+        ),
+        ("State", 1, json!("running"), Reason::NativeSetupState),
+        ("ExitCode", 1, json!(1), Reason::NativeSetupExit),
+    ] {
+        let mut invalid = rows.clone();
+        invalid[index][field] = value;
+        let mut attempts = 0;
+        let result =
+            reobserve_native_states(Instant::now() + OBSERVATION_BUDGET, Instant::now, |_| {
+                attempts += 1;
+                require_native_pair(&resources, &invalid, &rows)
+            });
+        assert_eq!(attempts, 1);
+        assert!(matches!(result, Err(Failure::Guard(actual)) if actual == reason));
+    }
+}
+
+#[test]
+fn native_reobservation_does_not_retry_an_uncertain_operation_error() {
+    let mut attempts = 0;
+    let result: Result<()> =
+        reobserve_native_states(Instant::now() + OBSERVATION_BUDGET, Instant::now, |_| {
+            attempts += 1;
+            // Matching words never convert an operation failure into the typed guard.
+            Err(Failure::Operation(
+                "native_state_changed; command result uncertain".into(),
+            ))
+        });
+    assert_eq!(attempts, 1);
+    assert!(matches!(result, Err(Failure::Operation(_))));
+}
+
+#[test]
+fn native_reobservation_shares_one_deadline_without_extending_it() {
+    let began = Instant::now();
+    let clock = std::cell::Cell::new(began);
+    let deadline = began + OBSERVATION_BUDGET;
+    let mut attempts = 0;
+    let result: Result<()> = reobserve_native_states(
+        deadline,
+        || clock.get(),
+        |_| {
+            attempts += 1;
+            clock.set(clock.get() + Duration::from_secs(31));
+            Err(Reason::NativeStateChanged.into())
+        },
+    );
+    assert_eq!(attempts, 2);
+    assert!(matches!(
+        result,
+        Err(Failure::Guard(Reason::NativeStateChanged))
+    ));
+    assert!(clock.get() >= deadline);
+    let result: Result<()> = reobserve_native_states(
+        deadline,
+        || clock.get(),
+        |_| {
+            attempts += 1;
+            Ok(())
+        },
+    );
+    assert_eq!(
+        attempts, 2,
+        "an expired budget cannot start another observation"
+    );
+    assert!(matches!(result, Err(Failure::Operation(_))));
+}
+
+#[test]
+fn native_reobservation_does_not_accept_a_plan_completed_after_its_deadline() {
+    let began = Instant::now();
+    let clock = std::cell::Cell::new(began);
+    let deadline = began + OBSERVATION_BUDGET;
+    let result: Result<()> = reobserve_native_states(
+        deadline,
+        || clock.get(),
+        |_| {
+            clock.set(deadline);
+            Ok(())
+        },
+    );
+    assert!(matches!(result, Err(Failure::Operation(_))));
+}

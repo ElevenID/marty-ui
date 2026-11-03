@@ -327,7 +327,7 @@ pub(crate) fn open_session(
 ) -> Result<(SavedSession, ComposeSession)> {
     open_session_with_deadline(state, installation, docker, None)
 }
-fn open_session_with_deadline(
+pub(crate) fn open_session_with_deadline(
     state: &LockedInspection,
     installation: &Path,
     docker: &Path,
