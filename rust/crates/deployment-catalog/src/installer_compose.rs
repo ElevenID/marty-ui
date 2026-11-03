@@ -788,6 +788,168 @@ mod tests {
         }
     }
 
+    fn receipt_fixture() -> (tempfile::TempDir, InstallerState, ComposeSession) {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let executable = root.path().join("docker-fixture");
+        fs::write(
+            &executable,
+            "#!/bin/sh\n: > \"${0%/*}/docker-invoked\"\nexit 97\n",
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        // Receipt-only fixture: no socket is opened and this executable must
+        // never run. The synthetic binding works for root and non-root tests.
+        let binding = RuntimeBinding {
+            docker_host: "unix:///var/run/docker.sock".into(),
+            engine_id: "test-engine".into(),
+            openbao_port: 18443,
+            profile: RuntimeProfile::Rootful,
+        };
+        let installation = root.path().join("installation");
+        let mut state = InstallerState::create_with_runtime(
+            &installation,
+            crate::installer_state::Identity {
+                source_sha: "0".repeat(40),
+                release_tag: "v0.0.0".into(),
+                inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+            },
+            binding.clone(),
+        )
+        .unwrap();
+        state.create_private_directory("evidence").unwrap();
+        let mut inputs = inputs(&installation);
+        inputs.project = state.journal().compose_project();
+        let session = ComposeSession {
+            docker: DockerRunner::new(
+                &executable,
+                &binding.docker_host,
+                &binding.engine_id,
+                root.path(),
+            )
+            .unwrap(),
+            binding,
+            model: model(&inputs),
+            inputs,
+            hashes: BTreeMap::new(),
+            configuration_sha256: "a".repeat(64),
+            bindings: BTreeMap::from([(installation.join("PRIVATE-input.env"), "b".repeat(64))]),
+            cleanup_only: false,
+            generation_transition: None,
+            runtime_recovery_roles: None,
+        };
+        (root, state, session)
+    }
+
+    #[test]
+    fn failed_compose_receipt_reports_retained_outcome_without_private_output() {
+        for (command, exit, class) in [
+            (
+                Err("Compose setup failed (exit=Some(1)); inspect private project evidence; no retry was performed".into()),
+                Some(1),
+                "client_exit_nonzero",
+            ),
+            (Err("token=PRIVATE".into()), None, "runtime_boundary_outcome_uncertain"),
+            (Ok("password=PRIVATE".into()), Some(0), "postcondition_not_established"),
+        ] {
+            let (root, mut state, session) = receipt_fixture();
+            let error = session.receipt(
+                &mut Evidence::Install(&mut state),
+                "setup-openbao-bootstrap",
+                &command,
+                false,
+                Ok(ProjectResources::default()),
+                Ok(vec![json!({"Command":"secret=PRIVATE"})]),
+            ).unwrap_err();
+            assert!(error.starts_with(UNCERTAIN));
+            assert!(error.contains("operation=setup-openbao-bootstrap"));
+            assert!(error.contains(&format!("failure_class={class}")));
+            assert!(error.contains(&format!("client_exit_code={}", exit.map_or_else(|| "unknown".into(), |code| code.to_string()))));
+            assert!(error.contains("observation_validated=true"));
+            assert!(error.ends_with("diagnostic=evidence/compose-setup-openbao-bootstrap-result.json"));
+            assert!(!error.contains("PRIVATE"));
+            let retained: Value = serde_json::from_slice(&fs::read(
+                session.inputs.installation.join("evidence/compose-setup-openbao-bootstrap-result.json"),
+            ).unwrap()).unwrap();
+            assert_eq!(retained["client_exit_code"], json!(exit));
+            assert_eq!(retained["failure_class"], class);
+            assert_eq!(retained["command_succeeded"], false);
+            assert_eq!(retained["observation_validated"], true);
+            assert_eq!(retained["installation_ready"], false);
+            assert!(!root.path().join("docker-invoked").exists());
+        }
+    }
+
+    #[test]
+    fn compose_receipt_distinguishes_missing_observation_from_success() {
+        let (root, mut state, session) = receipt_fixture();
+        let error = session
+            .receipt(
+                &mut Evidence::Install(&mut state),
+                "openbao-api",
+                &Ok(String::new()),
+                true,
+                Err("PRIVATE observation error".into()),
+                Err("PRIVATE status error".into()),
+            )
+            .unwrap_err();
+        assert!(
+            error.contains("failure_class=none; client_exit_code=0; observation_validated=false")
+        );
+        assert!(!error.contains("PRIVATE"));
+        let success = session
+            .receipt(
+                &mut Evidence::Install(&mut state),
+                "openbao-ready",
+                &Ok(String::new()),
+                true,
+                Ok(ProjectResources::default()),
+                Ok(Vec::new()),
+            )
+            .unwrap();
+        assert!(success.command_succeeded && success.observation_validated);
+        assert_eq!(success.failure_class, None);
+        assert!(!success.installation_ready);
+        assert!(!root.path().join("docker-invoked").exists());
+    }
+
+    #[test]
+    fn compose_failure_diagnostic_requires_valid_operation_and_exclusive_receipt() {
+        let (root, mut state, session) = receipt_fixture();
+        let error = session
+            .receipt(
+                &mut Evidence::Install(&mut state),
+                "setup-openbao-bootstrap\nPRIVATE",
+                &Err("PRIVATE".into()),
+                false,
+                Ok(ProjectResources::default()),
+                Ok(Vec::new()),
+            )
+            .unwrap_err();
+        assert_eq!(error, REFUSED);
+        let name = "compose-setup-openbao-bootstrap-result.json";
+        state
+            .write_evidence(name, b"existing private receipt")
+            .unwrap();
+        let error = session
+            .receipt(
+                &mut Evidence::Install(&mut state),
+                "setup-openbao-bootstrap",
+                &Err("PRIVATE".into()),
+                false,
+                Ok(ProjectResources::default()),
+                Ok(Vec::new()),
+            )
+            .unwrap_err();
+        assert!(!error.contains("diagnostic="));
+        assert!(!error.contains("PRIVATE"));
+        assert_eq!(
+            fs::read(session.inputs.installation.join("evidence").join(name)).unwrap(),
+            b"existing private receipt"
+        );
+        assert!(!root.path().join("docker-invoked").exists());
+    }
+
     #[test]
     fn failed_runtime_cleanup_requires_every_setup_completed_and_exact_observed_rows() {
         let root = tempfile::tempdir().unwrap();
@@ -2874,7 +3036,17 @@ impl ComposeSession {
         if command_succeeded && observation_validated {
             Ok(receipt)
         } else {
-            Err(UNCERTAIN.into())
+            // The operation was validated and its exclusive receipt persisted
+            // above. Report only fixed classification and numeric status, never
+            // command output, native status rows, input paths, or error bodies.
+            Err(format!(
+                "{UNCERTAIN}; operation={operation}; failure_class={}; client_exit_code={}; observation_validated={observation_validated}; diagnostic=evidence/{}-{operation}-result.json",
+                receipt.failure_class.as_deref().unwrap_or("none"),
+                receipt
+                    .client_exit_code
+                    .map_or_else(|| "unknown".into(), |code| code.to_string()),
+                state.prefix(),
+            ))
         }
     }
 

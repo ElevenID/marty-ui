@@ -64,6 +64,27 @@ static-seal node, the absence of prior root/unseal/recovery/init material, and a
 empty private output directory. It persists `static-init-pending.json` before
 making its single `POST /v1/sys/init` request.
 
+The initialization operation has a fixed 120-second context budget, including
+the fresh-state checks, request and readiness observation. A shorter caller
+deadline or cancellation is preserved. Only the single initialization POST uses
+a dedicated private Unix client whose header and response wait are bounded by
+that operation context. Ordinary status and other control requests retain their
+10-second response-header and 15-second request limits; the 5-second Unix dial,
+socket/peer custody, proxy and redirect refusals, and bounded response validation
+are unchanged. A response taking longer than an ordinary status request does
+not by itself justify abandoning an initialization that remains within budget.
+
+Cancellation, deadline expiry, and invalid or missing initialization responses
+still leave the pending intent and any private outputs in place. There is no
+retry or replay. The helper may append a fixed public failure class to its
+existing refusal message; it never prints transport error text, response bodies,
+tokens or private paths. These helper-local stderr classes do not change the
+host installer's separate boundary for retained Compose diagnostics. They
+describe the local failure boundary, not
+whether the server applied initialization. A pending record without a result is
+an uncertain outcome, and a public result alone does not prove that the helper's
+final checks or the remainder of the bootstrap job completed successfully.
+
 The request specifies `recovery_shares=1` and `recovery_threshold=1` and supplies
 no Shamir share parameters. OpenBao 2.5.5 rejects `secret_shares` and
 `secret_threshold` when the configured seal uses recovery keys; see the
@@ -139,6 +160,11 @@ transaction owns that boundary. See the
 Focused Go tests verify fresh-only initialization, pre-mutation intent, private
 output custody, refusal after lost initialization responses, no adoption of
 existing root/recovery/unseal material, and readiness without mutation.
+They also exercise a real Unix response delayed beyond the ordinary header and
+request limits, bounded cancellation without another initialization request,
+and unchanged limits on the ordinary control client. These regressions establish
+the request-budget behavior; they do not establish the cause of a particular
+customer failure or qualify a fresh AWS installation.
 
 The opt-in test
 `TestOfficialOpenBao255StaticSealRestartsWithoutUnsealReplay` uses the verified

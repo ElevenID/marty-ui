@@ -180,9 +180,19 @@ func TestOfficialOpenBao255StaticSealRestartsWithoutUnsealReplay(t *testing.T) {
 		t.Fatal("fresh static-seal node was already initialized")
 	}
 	recorder := &recordingTransport{base: client.Transport}
-	initializer := *client
-	initializer.Transport = recorder
-	receipt, err := initializeStaticAt(ctx, testInstallation, testAttempt, paths, currentOwner(), &initializer)
+	observer := *client
+	observer.Transport = recorder
+	initializationClient, err := newStaticInitClientAt(socket, currentOwner())
+	if err != nil {
+		t.Fatal("official static initialization client refused")
+	}
+	defer closeClient(initializationClient)
+	initializer := *initializationClient
+	initializer.Transport = staticInitRoundTripper(func(request *http.Request) (*http.Response, error) {
+		recorder.operations = append(recorder.operations, request.Method+" "+request.URL.Path)
+		return initializationClient.Transport.RoundTrip(request)
+	})
+	receipt, err := initializeStaticAt(ctx, testInstallation, testAttempt, paths, currentOwner(), &observer, &initializer)
 	if err != nil {
 		t.Fatalf("actual static initialization core refused official responses after %v", recorder.operations)
 	}
@@ -190,7 +200,7 @@ func TestOfficialOpenBao255StaticSealRestartsWithoutUnsealReplay(t *testing.T) {
 		t.Fatal("static initialization did not become ready without unseal")
 	}
 	before := len(recorder.operations)
-	if _, err := initializeStaticAt(ctx, testInstallation, testAttempt, paths, currentOwner(), &initializer); err == nil || len(recorder.operations) != before {
+	if _, err := initializeStaticAt(ctx, testInstallation, testAttempt, paths, currentOwner(), &observer, &initializer); err == nil || len(recorder.operations) != before {
 		t.Fatal("static initialization was replayed")
 	}
 	initCalls := 0

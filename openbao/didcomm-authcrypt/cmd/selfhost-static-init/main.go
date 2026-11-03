@@ -18,17 +18,23 @@ func main() {
 	attempt := flag.String("attempt-id", "", "recorded fresh initialization attempt UUID")
 	flag.Parse()
 	if flag.NArg() != 0 {
-		fail()
+		fail(nil)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	receipt, err := openbaocontrol.InitializeStatic(ctx, *installation, *attempt)
-	if err != nil || json.NewEncoder(os.Stdout).Encode(receipt) != nil {
-		fail()
+	if err != nil {
+		fail(err)
+	}
+	if json.NewEncoder(os.Stdout).Encode(receipt) != nil {
+		fail(nil)
 	}
 }
 
-func fail() {
+func fail(err error) {
 	fmt.Fprintln(os.Stderr, "OpenBao static-seal initialization refused; preserve the pending setup and private outputs")
+	if class := openbaocontrol.StaticInitFailureClass(err); class != "" {
+		fmt.Fprintf(os.Stderr, "OpenBao static-seal failure_class=%s; initialization outcome remains uncertain\n", class)
+	}
 	os.Exit(1)
 }
