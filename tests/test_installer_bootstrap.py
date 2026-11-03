@@ -40,13 +40,16 @@ def simulated_process(source):
     return source.replace(target, '    isolated_docker() { docker "$@"; }')
 
 
-def test_help_does_not_require_docker_or_downloads():
+def test_help_does_not_require_docker_or_downloads(monkeypatch):
+    if os.name != "nt":
+        monkeypatch.setenv("PATH", "")
     result = run(["--help"])
     assert result.returncode == 0
     assert "--channel nightly|stable" in result.stdout
     assert "--foundation-file PATH" in result.stdout
     assert "--hosting-file PATH" in result.stdout
     assert "--acme-staging-roots PATH" in result.stdout
+    assert "--check-host" in result.stdout
 
 
 @pytest.mark.parametrize("args,reason", [
@@ -151,6 +154,128 @@ def test_help_does_not_probe_platform():
     result = run(["--help"], source=setup + SCRIPT.read_text())
     assert result.returncode == 0
     assert "UNEXPECTED" not in result.stdout + result.stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="controlled POSIX tool search")
+@pytest.mark.parametrize("missing", ["mktemp", "mkdir", "rm", "gzip"])
+def test_missing_staging_dependency_is_reported_before_any_staging(tmp_path, monkeypatch, missing):
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    for tool in ("curl", "sha256sum", "mktemp", "tar", "gzip", "chmod", "rm", "wc", "cut",
+                 "grep", "docker", "mkdir", "env", "id"):
+        if tool != missing:
+            executable = tools / tool
+            executable.write_text("#!/bin/sh\necho UNEXPECTED_TOOL_EXECUTION >&2\nexit 91\n")
+            executable.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tools))
+    host = 'uname() { case "$1" in -s) printf "Linux\\n";; -m) printf "x86_64\\n";; esac; }\n'
+    result = run(["--check-host"], source=simulated_process(host + SCRIPT.read_text()))
+    assert result.returncode != 0
+    assert f"Required tool is missing: {missing}" in result.stderr
+    assert "UNEXPECTED_TOOL_EXECUTION" not in result.stderr
+
+
+@pytest.mark.parametrize("args", [
+    ["--check-host"],
+    ["--candidate-test", "v1.2.3-nightly.20261103.42", "--check-host"],
+])
+def test_host_check_finishes_without_release_downloads_or_operator_dispatch(args):
+    setup = '''unset DOCKER_HOST DOCKER_CONTEXT
+uname() { case "$1" in -s) printf 'Linux\\n';; -m) printf 'x86_64\\n';; esac; }
+id() { printf '1000\\n'; }
+docker() {
+    case "$1:${2:-}" in
+        info:--format)
+            printf 'STAGING:%s\\n' "$DOCKER_CONFIG" >&2
+            case "$3" in
+                *SecurityOptions*) printf 'name=rootless\\n';;
+                *ID*) printf 'synthetic-engine\\n';;
+                *) return 91;;
+            esac;;
+        info:) return 0;;
+        *) printf 'UNEXPECTED_DOCKER_OPERATION\\n' >&2; return 91;;
+    esac
+}
+curl() { printf 'UNEXPECTED_DOWNLOAD\\n' >&2; return 91; }
+'''
+    result = run(args, source=simulated_process(setup + SCRIPT.read_text()))
+    assert result.returncode == 0, result.stderr
+    assert "bootstrap host checks passed" in result.stdout
+    assert "release availability, and installation readiness were not checked" in result.stdout
+    assert "UNEXPECTED" not in result.stdout + result.stderr
+    staging = [line.removeprefix("STAGING:") for line in result.stderr.splitlines()
+               if line.startswith("STAGING:")]
+    assert staging and all(not Path(path).exists() for path in staging)
+
+
+@pytest.mark.parametrize("url,status,reason", [
+    ("https://raw.githubusercontent.com/ElevenID/marty-ui/installer-channel/nightly.json",
+     "404", "No public installer channel is available"),
+    ("https://github.com/ElevenID/marty-ui/releases/download/installer-admission-v1.2.3/installer-admission.json",
+     "404", "No public signed installer admission is available"),
+    ("https://github.com/ElevenID/marty-ui/releases/download/v1.2.3-nightly.20261103.42/installer-inventory.json",
+     "404", "Required public release asset is unavailable"),
+    ("https://github.com/example/public-asset", "401", "access was denied or rate-limited"),
+    ("https://github.com/example/public-asset", "403", "access was denied or rate-limited"),
+    ("https://github.com/example/public-asset", "429", "access was denied or rate-limited"),
+    ("https://github.com/example/public-asset", "000", "Download failed; check HTTPS connectivity"),
+    ("https://github.com/example/public-asset", "UNTRUSTED_REMOTE_TEXT", "Download failed; check HTTPS connectivity"),
+])
+def test_public_download_failure_is_actionable_without_echoing_response(url, status, reason):
+    source = SCRIPT.read_text()
+    fetch = source[source.index("    fetch() {"):source.index("    digest() {")]
+    setup = f'''fail() {{ printf '%s\\n' "$*" >&2; exit 1; }}
+curl() {{ printf '%s' {shlex.quote(status)}; return 22; }}
+'''
+    result = run(source=setup + fetch + f'\nfetch {shlex.quote(url)} /unused 65536\n')
+    assert result.returncode != 0
+    assert reason in result.stderr
+    assert "UNTRUSTED_REMOTE_TEXT" not in result.stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="local shell download-routing fixture")
+@pytest.mark.parametrize("args,reason", [
+    ([], "No public installer channel is available"),
+    (["--version", "v1.2.3"], "No public signed installer admission is available"),
+    (["--candidate-test", "v1.2.3-nightly.20261103.42"], "Required public release asset is unavailable"),
+])
+def test_missing_metadata_does_not_download_large_verifiers_or_dispatch(args, reason):
+    # Synthetic transport/digest observations exercise actual shell routing;
+    # this is not a cryptographic verification or installation proof.
+    setup = '''unset DOCKER_HOST DOCKER_CONTEXT
+uname() { case "$1" in -s) printf 'Linux\\n';; -m) printf 'x86_64\\n';; esac; }
+id() { printf '1000\\n'; }
+docker() {
+    case "${3:-}" in
+        *SecurityOptions*) printf 'name=rootless\\n';;
+        *ID*) printf 'synthetic-engine\\n';;
+        *) return 0;;
+    esac
+}
+sha256sum() { printf '020468de7539ce70ef1bceaf7cde2e8c4f2ca6c3afb84642aabc5c97d9fc2a0d  -\\n'; }
+curl() {
+    for value do url=$value; done
+    while [ "$#" -gt 0 ]; do
+        case "$1" in --output) output=$2; shift 2;; *) shift;; esac
+    done
+    printf 'FETCH:%s\\n' "$url" >&2
+    case "$url" in
+        https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64)
+            printf '#!/bin/sh\\n[ "$1" = --version ]\\n' > "$output"
+            printf 200;;
+        https://raw.githubusercontent.com/ElevenID/marty-ui/installer-channel/*|https://github.com/ElevenID/marty-ui/releases/download/*)
+            printf 404; return 22;;
+        *) printf 'UNEXPECTED_VERIFIER_DOWNLOAD\\n' >&2; return 91;;
+    esac
+}
+'''
+    result = run(args, source=simulated_process(setup + SCRIPT.read_text()))
+    assert result.returncode != 0
+    assert reason in result.stderr
+    assert len([line for line in result.stderr.splitlines() if line.startswith("FETCH:")]) == 2
+    assert "UNEXPECTED_VERIFIER_DOWNLOAD" not in result.stderr
+    assert "/sigstore/cosign/" not in result.stderr
+    assert "/cli/cli/" not in result.stderr
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="actual bootstrap admission JSON policy")

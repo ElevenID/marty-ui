@@ -43,6 +43,14 @@ def test_nightly_guide_has_one_unedited_rootless_boundary_command():
     assert "recovery-only command" in guide
     assert "restore-rootless-canary" in guide
     assert "production Ready status" in guide
+    assert f"/blob/{SOURCE}/docs/linux-installer-tester.md" in guide
+    assert "/blob/main/" not in guide
+    assert "8 GiB RAM" in guide
+    assert "20 GiB free on Docker's data filesystem" in guide
+    assert "application_started=false" in guide
+    assert "even when the command exits zero" in guide
+    assert "paused lifecycle units" in guide
+    assert "before this command is advertised" not in guide
     assert "--install-dir" not in guide
     assert "stage_selfhost_disposable_preview" not in guide
     assert "sudo KMS" not in guide

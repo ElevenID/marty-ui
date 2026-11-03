@@ -15,7 +15,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-type Result<T> = std::result::Result<T, String>;
+#[path = "installer_health_diagnostics.rs"]
+mod diagnostics;
+use diagnostics::{Failure, Reason, Trace};
+
+type Result<T> = std::result::Result<T, Failure>;
 const REFUSED: &str =
     "Bounded health recovery refused; preserve the health checkpoint and native operation evidence";
 const CHECKPOINT: &str = "health-checkpoint.json";
@@ -26,11 +30,11 @@ const COOLDOWN: u64 = 1800;
 const WINDOW: u64 = 86400;
 const INFRASTRUCTURE: [&str; 3] = ["openbao", "openbao-unseal", "installer-acme-http01"];
 
-fn require(ok: bool) -> Result<()> {
+fn require(ok: bool, reason: Reason) -> Result<()> {
     if ok {
         Ok(())
     } else {
-        Err(REFUSED.into())
+        Err(reason.into())
     }
 }
 fn digest(value: &str) -> bool {
@@ -47,12 +51,12 @@ fn role_name(value: &str) -> bool {
             .all(|v| v.is_ascii_lowercase() || v.is_ascii_digit() || v == b'-' || v == b'_')
 }
 fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
-    serde_json::to_vec(value).map_err(|_| REFUSED.into())
+    serde_json::to_vec(value).map_err(|_| Reason::RecordEncoding.into())
 }
 fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
-    require(bytes.len() <= 262144)?;
-    serde_json::from_value(installer_json::decode(bytes).map_err(|_| REFUSED)?)
-        .map_err(|_| REFUSED.into())
+    require(bytes.len() <= 262144, Reason::RecordTooLarge)?;
+    serde_json::from_value(installer_json::decode(bytes).map_err(|_| Reason::RecordJsonInvalid)?)
+        .map_err(|_| Reason::RecordJsonInvalid.into())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -99,34 +103,62 @@ struct Initial {
 
 fn validate(checkpoint: &Checkpoint, state: &LockedInspection) -> Result<()> {
     require(
-        checkpoint.schema == "elevenid.installer-health-checkpoint/v1"
-            && checkpoint.installation_id == state.journal().installation_id()
-            && checkpoint.engine_id == state.journal().runtime().ok_or(REFUSED)?.engine_id
-            && checkpoint.project == state.journal().compose_project()
-            && checkpoint.sequence > 0
-            && (checkpoint.sequence == 1) == checkpoint.previous_sha256.is_none()
-            && checkpoint
-                .previous_sha256
-                .as_ref()
-                .is_none_or(|value| digest(value))
-            && checkpoint.roles.len() <= 128,
+        checkpoint.schema == "elevenid.installer-health-checkpoint/v1",
+        Reason::CheckpointSchema,
     )?;
+    require(
+        checkpoint.installation_id == state.journal().installation_id(),
+        Reason::CheckpointInstallation,
+    )?;
+    require(
+        checkpoint.engine_id
+            == state
+                .journal()
+                .runtime()
+                .ok_or(Reason::RuntimeBindingMissing)?
+                .engine_id,
+        Reason::CheckpointEngine,
+    )?;
+    require(
+        checkpoint.project == state.journal().compose_project(),
+        Reason::CheckpointProject,
+    )?;
+    require(
+        checkpoint.sequence > 0
+            && (checkpoint.sequence == 1) == checkpoint.previous_sha256.is_none(),
+        Reason::CheckpointSequence,
+    )?;
+    require(
+        checkpoint
+            .previous_sha256
+            .as_ref()
+            .is_none_or(|value| digest(value)),
+        Reason::CheckpointPredecessor,
+    )?;
+    require(checkpoint.roles.len() <= 128, Reason::CheckpointRoleLimit)?;
     for (name, role) in &checkpoint.roles {
+        require(role_name(name), Reason::CheckpointRoleName)?;
+        require(digest(&role.container_id), Reason::CheckpointContainerId)?;
         require(
-            role_name(name)
-                && digest(&role.container_id)
-                && role
-                    .unhealthy_since
-                    .is_none_or(|at| at <= checkpoint.observed_at)
-                && role.attempts.len() <= 2,
+            role.unhealthy_since
+                .is_none_or(|at| at <= checkpoint.observed_at),
+            Reason::CheckpointClock,
         )?;
+        require(role.attempts.len() <= 2, Reason::CheckpointAttemptLimit)?;
         let mut previous = None;
         for attempt in &role.attempts {
-            let id = attempt.operation.strip_prefix("repair-").ok_or(REFUSED)?;
+            let id = attempt
+                .operation
+                .strip_prefix("repair-")
+                .ok_or(Reason::CheckpointAttemptId)?;
             require(
-                uuid::Uuid::parse_str(id).is_ok_and(|id| id.to_string() == attempt.operation[7..])
-                    && attempt.started_at <= checkpoint.observed_at
+                uuid::Uuid::parse_str(id).is_ok_and(|id| id.to_string() == attempt.operation[7..]),
+                Reason::CheckpointAttemptId,
+            )?;
+            require(
+                attempt.started_at <= checkpoint.observed_at
                     && previous.is_none_or(|prior| prior <= attempt.started_at),
+                Reason::CheckpointAttemptClock,
             )?;
             previous = Some(attempt.started_at);
         }
@@ -139,8 +171,14 @@ fn validate_initial(bytes: &[u8], state: &LockedInspection) -> Result<Initial> {
     require(
         initial.schema == "elevenid.installer-health-initialized/v1"
             && initial.installation_id == state.journal().installation_id()
-            && initial.engine_id == state.journal().runtime().ok_or(REFUSED)?.engine_id
+            && initial.engine_id
+                == state
+                    .journal()
+                    .runtime()
+                    .ok_or(Reason::RuntimeBindingMissing)?
+                    .engine_id
             && digest(&initial.first_checkpoint_sha256),
+        Reason::InitialBinding,
     )?;
     Ok(initial)
 }
@@ -149,27 +187,47 @@ fn initialize(state: &mut LockedMaintenance, first: &[u8]) -> Result<()> {
     let expected = Initial {
         schema: "elevenid.installer-health-initialized/v1".into(),
         installation_id: state.journal().installation_id(),
-        engine_id: state.journal().runtime().ok_or(REFUSED)?.engine_id.clone(),
+        engine_id: state
+            .journal()
+            .runtime()
+            .ok_or(Reason::RuntimeBindingMissing)?
+            .engine_id
+            .clone(),
         first_checkpoint_sha256: installer_release::sha256(first),
     };
     let bytes = encode(&expected)?;
     if let Some(existing) = state.read_evidence(INITIALIZED)? {
-        require(existing == bytes)
+        require(existing == bytes, Reason::InitialConflict)
     } else {
-        state.write_evidence_exclusive(INITIALIZED, &bytes)
+        Ok(state.write_evidence_exclusive(INITIALIZED, &bytes)?)
     }
 }
 
 /// Only an exact pending successor can complete a lost atomic publication.
 /// The checkpoint is bounded; successful no-op timer runs create no history
 /// files. Rare native restart attempts retain their own immutable receipts.
-fn load(state: &mut LockedMaintenance) -> Result<(Checkpoint, Option<Vec<u8>>)> {
+fn load(
+    state: &mut LockedMaintenance,
+    mut trace: Option<&mut Trace>,
+) -> Result<(Checkpoint, Option<Vec<u8>>)> {
     let mut current = state.read_evidence(CHECKPOINT)?;
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.checkpoint(CHECKPOINT, current.as_deref());
+    }
     let initial = state.read_evidence(INITIALIZED)?;
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.stage = "load_initialized";
+        trace.checkpoint(INITIALIZED, initial.as_deref());
+    }
     if let Some(bytes) = &initial {
         validate_initial(bytes, state.inspection())?;
     }
-    if let Some(pending) = state.read_evidence(PENDING)? {
+    let pending = state.read_evidence(PENDING)?;
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.stage = "load_pending_checkpoint";
+        trace.checkpoint(PENDING, pending.as_deref());
+    }
+    if let Some(pending) = pending {
         let next: Checkpoint = decode(&pending)?;
         validate(&next, state.inspection())?;
         let prior = current
@@ -183,43 +241,61 @@ fn load(state: &mut LockedMaintenance) -> Result<(Checkpoint, Option<Vec<u8>>)> 
             next.previous_sha256
                 == current
                     .as_ref()
-                    .map(|bytes| installer_release::sha256(bytes))
-                && next.sequence
-                    == prior
-                        .as_ref()
-                        .map_or(Some(1), |prior| prior.sequence.checked_add(1))
-                        .ok_or(REFUSED)?
-                && prior
+                    .map(|bytes| installer_release::sha256(bytes)),
+            Reason::CheckpointPredecessor,
+        )?;
+        require(
+            next.sequence
+                == prior
                     .as_ref()
-                    .is_none_or(|prior| next.observed_at >= prior.observed_at),
+                    .map_or(Some(1), |prior| prior.sequence.checked_add(1))
+                    .ok_or(Reason::CheckpointSequence)?,
+            Reason::CheckpointSequence,
+        )?;
+        require(
+            prior
+                .as_ref()
+                .is_none_or(|prior| next.observed_at >= prior.observed_at),
+            Reason::CheckpointClock,
         )?;
         if current.is_none() {
             initialize(state, &pending)?;
         } else {
-            require(initial.is_some())?;
+            require(initial.is_some(), Reason::InitialMissing)?;
         }
         state.publish_health_checkpoint(current.as_deref(), &pending)?;
         current = Some(pending);
+    }
+    if let Some(trace) = trace {
+        trace.stage = "load_checkpoint";
     }
     if let Some(bytes) = &current {
         let checkpoint: Checkpoint = decode(bytes)?;
         validate(&checkpoint, state.inspection())?;
         let initial = validate_initial(
-            &state.read_evidence(INITIALIZED)?.ok_or(REFUSED)?,
+            &state
+                .read_evidence(INITIALIZED)?
+                .ok_or(Reason::InitialMissing)?,
             state.inspection(),
         )?;
         require(
             checkpoint.sequence != 1
                 || initial.first_checkpoint_sha256 == installer_release::sha256(bytes),
+            Reason::InitialCheckpointMismatch,
         )?;
         return Ok((checkpoint, current));
     }
-    require(initial.is_none())?;
+    require(initial.is_none(), Reason::CheckpointMissing)?;
     Ok((
         Checkpoint {
             schema: "elevenid.installer-health-checkpoint/v1".into(),
             installation_id: state.journal().installation_id(),
-            engine_id: state.journal().runtime().ok_or(REFUSED)?.engine_id.clone(),
+            engine_id: state
+                .journal()
+                .runtime()
+                .ok_or(Reason::RuntimeBindingMissing)?
+                .engine_id
+                .clone(),
             project: state.journal().compose_project(),
             sequence: 0,
             previous_sha256: None,
@@ -235,7 +311,10 @@ fn save(
     checkpoint: &mut Checkpoint,
     prior: &mut Option<Vec<u8>>,
 ) -> Result<()> {
-    checkpoint.sequence = checkpoint.sequence.checked_add(1).ok_or(REFUSED)?;
+    checkpoint.sequence = checkpoint
+        .sequence
+        .checked_add(1)
+        .ok_or(Reason::CheckpointSequence)?;
     checkpoint.previous_sha256 = prior.as_ref().map(|bytes| installer_release::sha256(bytes));
     validate(checkpoint, state.inspection())?;
     let bytes = encode(checkpoint)?;
@@ -254,21 +333,32 @@ fn native_rows<'a>(
 ) -> Result<BTreeMap<String, &'a Value>> {
     let mut result = BTreeMap::new();
     for row in values {
-        let name = row["Service"].as_str().ok_or(REFUSED)?;
-        let container = resources.containers.get(name).ok_or(REFUSED)?;
-        require(row["ID"] == container.id && result.insert(name.into(), row).is_none())?;
+        let name = row["Service"].as_str().ok_or(Reason::NativeRoleInvalid)?;
+        let container = resources
+            .containers
+            .get(name)
+            .ok_or(Reason::NativeRoleUnknown)?;
+        require(row["ID"] == container.id, Reason::NativeContainerIdentity)?;
+        require(
+            result.insert(name.into(), row).is_none(),
+            Reason::NativeRoleDuplicate,
+        )?;
         if container.setup {
+            require(row["State"] == "exited", Reason::NativeSetupState)?;
+            require(row["ExitCode"] == 0, Reason::NativeSetupExit)?;
             require(
-                row["State"] == "exited"
-                    && row["ExitCode"] == 0
-                    && container
-                        .setup_execution
-                        .as_ref()
-                        .is_some_and(|execution| execution.completed_without_restart),
+                container
+                    .setup_execution
+                    .as_ref()
+                    .is_some_and(|execution| execution.completed_without_restart),
+                Reason::NativeSetupHistory,
             )?;
         }
     }
-    require(result.len() == resources.containers.len())?;
+    require(
+        result.len() == resources.containers.len(),
+        Reason::NativeInventoryIncomplete,
+    )?;
     Ok(result)
 }
 
@@ -280,10 +370,10 @@ fn blocked_dependencies(
     let Some(dependencies) = model["services"][role].get("depends_on") else {
         return Ok(vec![]);
     };
-    let dependencies = dependencies.as_object().ok_or(REFUSED)?;
+    let dependencies = dependencies.as_object().ok_or(Reason::DependencyModel)?;
     let mut blocked = Vec::new();
     for (dependency, condition) in dependencies {
-        require(role_name(dependency))?;
+        require(role_name(dependency), Reason::DependencyRole)?;
         let observed = rows.get(dependency);
         let ready = observed.is_some_and(|row| match condition["condition"].as_str() {
             Some("service_started") => row["State"] == "running",
@@ -341,14 +431,14 @@ pub(crate) fn reconcile_locked(
     installation: &Path,
     docker: &Path,
     state: &mut LockedMaintenance,
-) -> Result<Value> {
+) -> std::result::Result<Value, String> {
     reconcile(installation, docker, state, false)
 }
 pub(crate) fn reconcile_infrastructure_locked(
     installation: &Path,
     docker: &Path,
     state: &mut LockedMaintenance,
-) -> Result<Value> {
+) -> std::result::Result<Value, String> {
     reconcile(installation, docker, state, true)
 }
 fn reconcile(
@@ -356,20 +446,44 @@ fn reconcile(
     docker: &Path,
     state: &mut LockedMaintenance,
     infrastructure_only: bool,
+) -> std::result::Result<Value, String> {
+    let mut trace = Trace::new(state, infrastructure_only);
+    reconcile_observed(installation, docker, state, infrastructure_only, &mut trace)
+        .map_err(|error| trace.failure(state, error))
+}
+
+fn reconcile_observed(
+    installation: &Path,
+    docker: &Path,
+    state: &mut LockedMaintenance,
+    infrastructure_only: bool,
+    trace: &mut Trace,
 ) -> Result<Value> {
     state.inspection().require_path_binding(installation)?;
+    trace.stage = "open_session";
     let (saved, session) =
         installer_doctor::open_session(state.inspection(), installation, docker)?;
+    trace.stage = "observe_resources_before";
     let resources = session.observe_resources()?;
+    trace.resources(&resources, false);
+    trace.stage = "observe_native_before";
     let values = session.status()?;
+    trace.native(&resources, &values, false);
+    trace.stage = "validate_native_before";
     let rows = native_rows(&resources, &values)?;
-    let (mut checkpoint, mut prior) = load(state)?;
+    trace.stage = "load_checkpoint";
+    let (mut checkpoint, mut prior) = load(state, Some(&mut *trace))?;
+    trace.checkpoint_sequence = Some(checkpoint.sequence);
+    trace.checkpoint_observed_at = Some(checkpoint.observed_at);
+    trace.stage = "observation_clock";
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|_| REFUSED)?
+        .map_err(|_| Reason::ObservationClock)?
         .as_secs();
-    require(now >= checkpoint.observed_at)?;
+    trace.observation_unix_seconds = Some(now);
+    require(now >= checkpoint.observed_at, Reason::ObservationClock)?;
     checkpoint.observed_at = now;
+    trace.stage = "repair_eligibility";
     let mut unhealthy = Vec::new();
     let mut selected = None;
     let mut present = BTreeSet::new();
@@ -378,7 +492,7 @@ fn reconcile(
             continue;
         }
         present.insert(name.clone());
-        let row = rows.get(name).ok_or(REFUSED)?;
+        let row = rows.get(name).ok_or(Reason::NativeInventoryIncomplete)?;
         let role = checkpoint.roles.entry(name.clone()).or_default();
         if role.container_id != container.id {
             role.container_id = container.id.clone();
@@ -409,30 +523,47 @@ fn reconcile(
         checkpoint
             .roles
             .get_mut(role)
-            .ok_or(REFUSED)?
+            .ok_or(Reason::RepairSelection)?
             .attempts
             .push(Attempt {
-                operation: operation.clone().ok_or(REFUSED)?,
+                operation: operation.clone().ok_or(Reason::RepairSelection)?,
                 started_at: now,
                 outcome: Outcome::IntentRecorded,
             });
     }
-    require(session.observe_resources()? == resources)?;
+    trace.stage = "observe_resources_after";
+    let after_resources = session.observe_resources()?;
+    trace.resources(&after_resources, true);
+    require(after_resources == resources, Reason::ResourceSetChanged)?;
     // Compose also emits human-readable age/status strings. Those may change
     // between two observations without any native state transition.
+    trace.stage = "observe_native_after";
     let after_values = session.status()?;
+    trace.native(&resources, &after_values, true);
+    trace.stage = "validate_native_after";
     let after_rows = native_rows(&resources, &after_values)?;
-    require(same_runtime_states(&rows, &after_rows))?;
+    require(
+        same_runtime_states(&rows, &after_rows),
+        Reason::NativeStateChanged,
+    )?;
+    trace.stage = "publish_checkpoint";
     state.inspection().require_path_binding(installation)?;
     save(state, &mut checkpoint, &mut prior)?;
     let mut repair = Value::Null;
     if let Some(role) = selected {
-        let operation = operation.ok_or(REFUSED)?;
+        let operation = operation.ok_or(Reason::RepairSelection)?;
         let mut inputs = saved.inputs.clone();
         inputs.profiles.clear();
         inputs.services = vec![role.clone()];
-        let runtime =
-            ComposeSession::new(docker, state.journal().runtime().ok_or(REFUSED)?, inputs)?;
+        let runtime = ComposeSession::new(
+            docker,
+            state
+                .journal()
+                .runtime()
+                .ok_or(Reason::RuntimeBindingMissing)?,
+            inputs,
+        )?;
+        trace.stage = "repair_owned_unhealthy";
         let outcome = runtime.restart_owned_unhealthy(state, &operation, Duration::from_secs(120));
         let observed = if outcome.is_ok() {
             Outcome::HealthyObserved
@@ -442,12 +573,13 @@ fn reconcile(
         checkpoint
             .roles
             .get_mut(&role)
-            .ok_or(REFUSED)?
+            .ok_or(Reason::RepairSelection)?
             .attempts
             .last_mut()
-            .ok_or(REFUSED)?
+            .ok_or(Reason::RepairSelection)?
             .outcome = observed.clone();
         state.require_unchanged()?;
+        trace.stage = "publish_repair_outcome";
         save(state, &mut checkpoint, &mut prior)?;
         repair = json!({"service":role,"operation":operation,"outcome":observed,
             "evidence_prefix":format!("health-compose-{operation}"),"setup_replayed":false});

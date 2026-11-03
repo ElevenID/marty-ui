@@ -19,20 +19,19 @@ limitation.
 
 ## 🚀 Quick Start
 
-### Nightly installer bootstrap
+### Linux installer testing
 
-```sh
-/usr/bin/setpriv --no-new-privs -- bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/ElevenID/marty-ui/main/install.sh | sh -s -- --channel nightly'
-```
+Start with the [Linux installer tester quickstart](docs/linux-installer-tester.md).
+It covers rootless Docker preparation, the download-free `--check-host` check,
+an exact signed nightly selected with `--candidate-test TAG`, certificate setup,
+browser access, and feedback. No source checkout or organization credentials
+are required. Use a disposable Linux amd64 host with the 8 GiB test target and
+at least 20 GiB free on Docker's data filesystem.
 
-Initially supports a regular Linux amd64 user with a pre-existing user-owned
-rootless Docker Engine and Compose.
-A published, signed admission for the selected release is required; unavailable
-or unqualified releases are refused. Use `--version TAG` instead of `--channel
-nightly` to select an exact admitted version.
-An external tester can select an unqualified, exact nightly with
-`--candidate-test TAG` on a disposable Linux amd64 host; this path preserves
-diagnostics and never grants installer admission or Ready status.
+Candidate testing preserves diagnostics and does not grant installer admission,
+Ready status, or production qualification. Normal `--channel nightly`,
+`--channel stable`, and `--version TAG` installation require separate signed
+admission and remain held; they are not the current external tester entry point.
 
 See [bootstrap usage and platform support](docs/installer-bootstrap.md) for
 requirements and the boundary between the bootstrap and deployment operations.
@@ -139,8 +138,6 @@ The Compose services do not mount sibling source repositories. Release images
 are built from pinned Rust revisions and immutable compatibility artifacts; they
 do not install a Python MMF package.
 
-See [IMPORT_MIGRATION.md](IMPORT_MIGRATION.md) for import path details.
-
 ## Workflow scope and qualification
 
 Choose one useful workflow and verify its exact release, profile, inputs, and
@@ -206,7 +203,11 @@ npm run dev
 - Gateway: <http://localhost:8000>
 - API docs: <http://localhost:8000/docs>
 
-## Prerequisites
+## Local development prerequisites
+
+These prerequisites and commands are for the source-based development stack.
+For the published Linux installer, follow the separate
+[rootless host setup](docs/linux-installer-tester.md#1-prepare-the-linux-host).
 
 - **Docker Desktop** or Docker Engine with Compose support
 - **Node.js** (optional, for native UI development)
@@ -230,7 +231,7 @@ sudo systemctl start docker
 sudo usermod -aG docker $USER
 ```
 
-## Quick Start
+## Start the development stack
 
 1. **Start the backend stack:**
 
