@@ -719,6 +719,7 @@ def test_stack_release_ui_smoke_checks_customer_audience_and_disabled_web() -> N
     assert "check-image --audience customer" in smoke["run"]
     assert "UI_ENABLED_SECTIONS=none" in smoke["run"]
     assert "http://127.0.0.1:18080/healthz" in smoke["run"]
+    assert "--retry-all-errors" in smoke["run"]
     assert smoke["run"].count("= 404") == 2
 
 
