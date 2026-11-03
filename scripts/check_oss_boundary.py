@@ -49,6 +49,7 @@ FORBIDDEN_PATHS = (
 FORBIDDEN_TEXT = (
     "@marty/subscriptions",
     "ElevenID/marty-subscriptions",
+    "COMMERCE_REPOSITORY",
     "MARTY_SUBSCRIPTIONS_REF",
     "SQUARE_ACCESS_TOKEN",
     "SQUARE_WEBHOOK_SIGNATURE_KEY",
@@ -62,6 +63,24 @@ FORBIDDEN_TEXT = (
     "selfhost-commercial",
     "pypi.pkg.github.com",
 )
+# These complete, exact statements only bind public release metadata to its
+# private producer identity. Each is admitted once at its reviewed path. Do not
+# exempt the whole file or the repository marker: new fetches, imports, aliases,
+# dependencies, endpoints and payment credentials must still be rejected.
+METADATA_IDENTITY_LINES = {
+    "docker/ui.Dockerfile": (
+        '      bun -e \'const p="dist-final/marty-ui-release.json"; '
+        'const m=await Bun.file(p).json(); m.production_pages="full"; '
+        'm.commerce_extension={repository:"ElevenID/marty-subscriptions",'
+        'source_sha:process.env.MARTY_COMMERCE_SOURCE_SHA}; '
+        'await Bun.write(p,JSON.stringify(m)+"\\n");\'; \\',
+    ),
+    "scripts/ui_release.py": (
+        'COMMERCE_REPOSITORY = "ElevenID/marty-subscriptions"',
+        '    return {"repository": COMMERCE_REPOSITORY, "source_sha": source_sha}',
+        '        producer.update(repository=COMMERCE_REPOSITORY, source_sha=commerce_source_sha)',
+    ),
+}
 IGNORED_PARTS = {"__pycache__", "node_modules", "dist", "build", "artifacts"}
 COMMERCIAL_CATALOG_KEYS = {
     "addons",
@@ -103,6 +122,18 @@ def _candidate_files(root: Path):
             yield path
 
 
+def _without_metadata_identity(relative: str, content: str) -> str:
+    allowed = list(METADATA_IDENTITY_LINES.get(relative, ()))
+    remaining = []
+    for line in content.splitlines(keepends=True):
+        statement = line.rstrip("\r\n")
+        if statement in allowed:
+            allowed.remove(statement)
+        else:
+            remaining.append(line)
+    return "".join(remaining)
+
+
 def scan_repository(root: Path) -> list[str]:
     root = root.resolve()
     findings: list[str] = []
@@ -125,6 +156,7 @@ def scan_repository(root: Path) -> list[str]:
         except (OSError, UnicodeDecodeError):
             continue
         relative = path.relative_to(root).as_posix()
+        content = _without_metadata_identity(relative, content)
         for marker in FORBIDDEN_TEXT:
             if marker in content:
                 findings.append(f"forbidden marker {marker!r}: {relative}")

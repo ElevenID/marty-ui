@@ -96,8 +96,13 @@ def test_disposable_producers_close_exact_local_secret_roster() -> None:
             "issuance_passport",
         )
     }
-    assert len(local_secrets) == 78
-    assert len(optional) == 6
+    assert len(local_secrets) == 81
+    assert optional == {
+        "google_client_id", "google_client_secret",
+        "google_analytics_measurement_id", "google_site_verification", "smtp_password",
+        "canvas_credentials_shared_secret", "canvas_credentials_api_token",
+        "passport_tenant_api_keys", "personalization_bureau_api_key",
+    }
     assert local_secrets == GENERATED | KEYCLOAK_OUTPUTS | SELFHOST_TLS_FILES | openbao | optional
 
 

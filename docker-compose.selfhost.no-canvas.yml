@@ -10,6 +10,7 @@ services:
       CANVAS_PORTABLE_INTEGRATION_ENABLED: "false"
       CANVAS_LEGACY_EVENT_INGEST_ENABLED: "false"
       CANVAS_CREDENTIALS_SHARED_SECRET_FILE: ""
+      CANVAS_CREDENTIALS_API_TOKEN_FILE: ""
     secrets: !override
       - marty_db_password
       - openbao_service_token
@@ -30,6 +31,7 @@ services:
       CANVAS_LEGACY_EVENT_INGEST_ENABLED: "false"
       CANVAS_MIRROR_WORKER_ENABLED: "false"
       CANVAS_CREDENTIALS_SHARED_SECRET_FILE: ""
+      CANVAS_CREDENTIALS_API_TOKEN_FILE: ""
     secrets: !override
       - marty_db_password
       - issuance_api_key
@@ -45,3 +47,5 @@ services:
       - issuance_workload_server_cert
       - openbao_tls_ca_cert
       - issuance_tls_kms_token
+      - passport_tenant_api_keys
+      - personalization_bureau_api_key

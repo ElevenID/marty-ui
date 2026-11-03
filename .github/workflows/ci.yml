@@ -610,9 +610,9 @@ jobs:
             fi
             sleep 2
           done
-      - name: Verify crawler configuration and artifact validator
+      - name: Verify crawler and production build contracts
         run: |
-          node --test scripts/crawler-config.test.mjs
+          node --test scripts/crawler-config.test.mjs scripts/production-build-contract.test.mjs
           python3 scripts/test_crawler_artifacts.py
       - name: Build and validate the normal public site
         env:

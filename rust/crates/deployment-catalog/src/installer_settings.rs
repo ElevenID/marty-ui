@@ -564,7 +564,7 @@ impl Configuration {
         if smtp {
             require(!text("KEYCLOAK_SMTP_FROM").is_empty()
                 && (on("KEYCLOAK_SMTP_SSL") ^ on("KEYCLOAK_SMTP_STARTTLS"))
-                && (!text("KEYCLOAK_SMTP_USERNAME").is_empty() == supplied("smtp_password")))
+                && (text("KEYCLOAK_SMTP_USERNAME").is_empty() != supplied("smtp_password")))
                 .map_err(|_| "Keycloak SMTP requires a sender, exactly one of SSL/STARTTLS, and matching username/password inputs".to_owned())?;
         } else {
             require(text("KEYCLOAK_SMTP_USERNAME").is_empty() && !supplied("smtp_password"))
