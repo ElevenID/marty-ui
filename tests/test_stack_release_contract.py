@@ -735,6 +735,23 @@ def test_public_ui_build_requires_a_prerendered_root_page() -> None:
     assert "unlinkSync(stagedPath)" in vite_config
 
 
+def _assert_final_public_ui_runtime_stage(dockerfile: str) -> None:
+    stages = list(re.finditer(r"^[ \t]*FROM[ \t]+[^\r\n]+$", dockerfile, re.MULTILINE | re.IGNORECASE))
+    assert stages and stages[-1].group(0).strip() == "FROM runtime-base AS public", (
+        "public UI must remain the default final Docker stage"
+    )
+    public_lines = dockerfile[stages[-1].end():].splitlines()
+    for required in (
+        'RUN test "$UI_VARIANT" = public',
+        'LABEL io.elevenid.ui.audience="production"',
+        "COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html",
+        "COPY scripts/ui-production-start.sh /docker-entrypoint.d/40-ui-production.sh",
+        "COPY scripts/load-secrets-env.sh /scripts/load-secrets-env.sh",
+        "RUN chmod +x /docker-entrypoint.d/40-ui-production.sh /scripts/load-secrets-env.sh",
+    ):
+        assert required in public_lines, f"public UI stage is missing runtime contract: {required}"
+
+
 def test_selfhost_ui_image_carries_its_runtime_assets() -> None:
     dockerfile = _text("docker/ui.Dockerfile")
     registry_builder = _text("scripts/build-push-registry.sh")
@@ -756,9 +773,32 @@ def test_selfhost_ui_image_carries_its_runtime_assets() -> None:
     assert "--build-arg NGINX_CONFIG=nginx.spa.conf" in selfhost_build
     assert "http://127.0.0.1:80/healthz" in selfhost_stage
     assert 'io.elevenid.ui.audience="customer"' in selfhost_stage
-    assert dockerfile.rstrip().endswith(
-        "COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html"
-    )
+    _assert_final_public_ui_runtime_stage(dockerfile)
+
+
+@pytest.mark.parametrize("removed_line", [
+    "COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html",
+    "COPY scripts/ui-production-start.sh /docker-entrypoint.d/40-ui-production.sh",
+    "COPY scripts/load-secrets-env.sh /scripts/load-secrets-env.sh",
+    "RUN chmod +x /docker-entrypoint.d/40-ui-production.sh /scripts/load-secrets-env.sh",
+])
+def test_public_ui_stage_requires_compiled_assets_and_executable_runtime_hooks(
+    removed_line: str,
+) -> None:
+    before, public_stage = _text("docker/ui.Dockerfile").rsplit("FROM runtime-base AS public", 1)
+    assert removed_line in public_stage.splitlines()
+    mutated = before + "FROM runtime-base AS public" + public_stage.replace(removed_line + "\n", "", 1)
+
+    with pytest.raises(AssertionError, match="public UI stage is missing runtime contract"):
+        _assert_final_public_ui_runtime_stage(mutated)
+
+
+@pytest.mark.parametrize("later_stage", ["FROM runtime-base AS later", "from runtime-base as later"])
+def test_public_ui_stage_must_remain_the_default_final_target(later_stage: str) -> None:
+    dockerfile = _text("docker/ui.Dockerfile") + "\n" + later_stage + "\n"
+
+    with pytest.raises(AssertionError, match="default final Docker stage"):
+        _assert_final_public_ui_runtime_stage(dockerfile)
 
 
 def test_stack_release_allows_only_successful_one_shot_exits() -> None:

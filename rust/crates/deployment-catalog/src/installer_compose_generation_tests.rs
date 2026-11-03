@@ -90,6 +90,32 @@ impl Fixture {
     fn for_project(kind: GenerationOperation, project: String) -> Self {
         let root = tempfile::tempdir().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let binding = RuntimeBinding {
+            docker_host: "unix:///var/run/docker.sock".into(),
+            engine_id: "test-engine".into(),
+            openbao_port: 18443,
+            profile: RuntimeProfile::Rootful,
+        };
+        // The fixture constructs the session directly, so retain the same
+        // private journal required by the production constructor and recheck.
+        // This legacy installation has no application-settings selection.
+        let installation_id: uuid::Uuid = project
+            .strip_prefix("marty-install-")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let journal = json!({"schema":"elevenid.installer-state/v1",
+            "installation_id":installation_id,"phase":"provisioned","revision":3,
+            "identity":{"source_sha":"a".repeat(40),"release_tag":"v1.2.3",
+                "inventory_sha256":format!("sha256:{}","b".repeat(64))},
+            "runtime":binding});
+        let journal_path = root.path().join("installation.json");
+        fs::write(&journal_path, serde_json::to_vec(&journal).unwrap()).unwrap();
+        fs::set_permissions(&journal_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let retained = InstallerState::inspect(root.path()).unwrap();
+        assert_eq!(retained.compose_project(), project);
+        assert_eq!(retained.runtime(), Some(&binding));
+        assert!(retained.application_settings_sha256().is_none());
         let image = format!("example.invalid/runtime@sha256:{}", "c".repeat(64));
         let other_image = format!("example.invalid/other@sha256:{}", "d".repeat(64));
         let network = format!("{project}_default");
@@ -228,12 +254,7 @@ esac
                 root.path(),
             )
             .unwrap(),
-            binding: RuntimeBinding {
-                docker_host: "unix:///var/run/docker.sock".into(),
-                engine_id: "test-engine".into(),
-                openbao_port: 18443,
-                profile: RuntimeProfile::Rootful,
-            },
+            binding,
             inputs,
             model,
             hashes,
@@ -603,6 +624,35 @@ fn generation_checkpoints_refuse_conflicting_missing_or_changed_custody_pins() {
                 .read_evidence("generation-compose-custody-checkpoint-intent.json")
                 .unwrap()
                 .is_none());
+        }
+    }
+}
+
+#[test]
+fn native_generation_observation_requires_retained_journal_before_docker() {
+    for kind in [
+        GenerationOperation::Candidate,
+        GenerationOperation::Activate,
+    ] {
+        for missing in [false, true] {
+            let fixture = Fixture::new(kind);
+            let journal = fixture.root().join("installation.json");
+            if missing {
+                fs::remove_file(&journal).unwrap();
+            } else {
+                fs::write(&journal, b"invalid journal").unwrap();
+            }
+            fs::write(
+                fixture.root().join("docker-fixture"),
+                b"#!/bin/sh\nprintf invoked > \"${0%/*}/native-observer-invoked\"\nexit 97\n",
+            )
+            .unwrap();
+            let journal_error = InstallerState::inspect(fixture.root()).unwrap_err();
+            assert_eq!(fixture.observe(kind).unwrap_err(), journal_error);
+            assert!(
+                !fixture.root().join("native-observer-invoked").exists(),
+                "invalid or absent retained journal must be refused before native inspection"
+            );
         }
     }
 }
