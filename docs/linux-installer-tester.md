@@ -227,6 +227,20 @@ whether ACME was pending and whether any restart/recovery was automatic or
 manual. Preserve reported evidence filenames locally. Do not attach the whole
 installation, raw logs, private keys, tokens, passwords, or credential data.
 
+For a native Compose failure, keep the displayed `operation=`, `failure_class=`,
+`client_exit_code=`, `observation_validated=`, and `diagnostic=` fields. The
+diagnostic path is relative to the printed installation directory and names the
+retained operation result, for example
+`evidence/compose-setup-openbao-bootstrap-result.json`. Preserve that receipt
+locally; share the displayed fields instead of attaching the complete Compose
+receipt, which can contain private command and configuration metadata.
+`observation_validated=true` means the resource observations were accepted; it
+does not mean setup succeeded. An unknown client exit code or an unestablished
+postcondition requires investigation. Do not rerun the bootstrap, an initial
+setup job, or a Compose command to retry failed provisioning. The retained
+`start` and lifecycle commands recover an already established runtime; they do
+not resume incomplete initial setup.
+
 For a native health refusal, retain the reported `reason=` and `diagnostic=`
 reference when present. The installation's
 `evidence/health-refusal-0001.json` through `health-refusal-0032.json` are bounded

@@ -18,6 +18,59 @@ import (
 
 var errStaticInit = errors.New("fresh OpenBao static-seal initialization refused; retain the pending setup and private outputs")
 
+const staticInitTimeout = 120 * time.Second
+
+type staticInitRequestFailure string
+
+const (
+	staticInitRequestDeadline staticInitRequestFailure = "initialization_request_context_deadline"
+	staticInitRequestCanceled staticInitRequestFailure = "initialization_request_context_canceled"
+	staticInitRequestRefused  staticInitRequestFailure = "initialization_request_or_response_refused"
+	staticInitMaterialRefused staticInitRequestFailure = "initialization_response_material_refused"
+)
+
+func (failure staticInitRequestFailure) Error() string { return errStaticInit.Error() }
+func (failure staticInitRequestFailure) Unwrap() error { return errStaticInit }
+
+// StaticInitFailureClass exposes only fixed local classifications. It never
+// returns an underlying transport error, response body, token, or private path.
+// Every failed initialization request still has an uncertain server outcome.
+func StaticInitFailureClass(err error) string {
+	var failure staticInitRequestFailure
+	if errors.As(err, &failure) {
+		switch failure {
+		case staticInitRequestDeadline, staticInitRequestCanceled, staticInitRequestRefused, staticInitMaterialRefused:
+			return string(failure)
+		}
+	}
+	return ""
+}
+
+// The one fresh sys/init POST can spend the remaining initialization context
+// receiving its response. Other control requests retain their short timeouts.
+// A new client owns its transport; no shared client or transport is modified.
+func newStaticInitClientAt(path string, expected owner) (*http.Client, error) {
+	client, err := newClientAt(path, expected)
+	if err != nil {
+		return nil, err
+	}
+	defer closeClient(client)
+	return cloneStaticInitClient(client)
+}
+
+func cloneStaticInitClient(client *http.Client) (*http.Client, error) {
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		return nil, errStaticInit
+	}
+	initializationTransport := transport.Clone()
+	initializationTransport.ResponseHeaderTimeout = 0
+	initializationClient := *client
+	initializationClient.Transport = initializationTransport
+	initializationClient.Timeout = 0
+	return &initializationClient, nil
+}
+
 type staticInitPaths struct {
 	state, output string
 	root          owner
@@ -73,9 +126,14 @@ func InitializeStatic(ctx context.Context, installationID, attemptID string) (St
 		return StaticInitReceipt{}, errStaticInit
 	}
 	defer closeClient(client)
+	initializationClient, err := newStaticInitClientAt(SocketPath, expected)
+	if err != nil {
+		return StaticInitReceipt{}, errStaticInit
+	}
+	defer closeClient(initializationClient)
 	return initializeStaticAt(ctx, installationID, attemptID, staticInitPaths{
 		state: "/bao/data", output: "/bao/static-init", root: owner{0, 0},
-	}, expected, client)
+	}, expected, client, initializationClient)
 }
 
 // Root-owned private initialization outputs live inside the image-owned state
@@ -106,7 +164,12 @@ func writeRootExclusive(directory *os.File, name string, data []byte, root owner
 	return retained, nil
 }
 
-func initializeStaticAt(ctx context.Context, installationID, attemptID string, paths staticInitPaths, expected owner, client *http.Client) (StaticInitReceipt, error) {
+func initializeStaticAt(ctx context.Context, installationID, attemptID string, paths staticInitPaths, expected owner, client, initializationClient *http.Client) (StaticInitReceipt, error) {
+	// Bound the entire initialization even for an unbounded caller. A shorter
+	// parent deadline or cancellation remains authoritative; the POST never
+	// starts a new budget after the fresh-state checks and durable intent.
+	ctx, cancel := context.WithTimeout(ctx, staticInitTimeout)
+	defer cancel()
 	var receipt StaticInitReceipt
 	if !uuidPattern.MatchString(installationID) || !uuidPattern.MatchString(attemptID) {
 		return receipt, errStaticInit
@@ -161,19 +224,29 @@ func initializeStaticAt(ctx context.Context, installationID, attemptID string, p
 	}
 	// Auto seals reject Shamir secret_shares/secret_threshold. Recovery shares
 	// authorize administrative recovery; they cannot replace the static key.
-	if apiRequest(ctx, client, http.MethodPost, "sys/init", "", map[string]int{
+	if err := apiRequest(ctx, initializationClient, http.MethodPost, "sys/init", "", map[string]int{
 		"recovery_shares": 1, "recovery_threshold": 1,
-	}, &initialized) != nil || len(initialized.UnsealKeys) != 0 || len(initialized.UnsealKeysB64) != 0 ||
+	}, &initialized); err != nil {
+		switch ctx.Err() {
+		case context.DeadlineExceeded:
+			return receipt, staticInitRequestDeadline
+		case context.Canceled:
+			return receipt, staticInitRequestCanceled
+		default:
+			return receipt, staticInitRequestRefused
+		}
+	}
+	if len(initialized.UnsealKeys) != 0 || len(initialized.UnsealKeysB64) != 0 ||
 		len(initialized.RecoveryKeys) != 1 || len(initialized.RecoveryB64) != 1 ||
 		len(initialized.RootToken) < 20 || len(initialized.RootToken) > 4096 ||
 		strings.IndexFunc(initialized.RootToken, func(r rune) bool { return r < 33 || r > 126 }) >= 0 {
-		return receipt, errStaticInit
+		return receipt, staticInitMaterialRefused
 	}
 	recovery, err := base64.StdEncoding.DecodeString(initialized.RecoveryB64[0])
 	hexRecovery, hexErr := hex.DecodeString(initialized.RecoveryKeys[0])
 	if err != nil || hexErr != nil || len(recovery) < 32 || len(recovery) > 64 ||
 		base64.StdEncoding.EncodeToString(recovery) != initialized.RecoveryB64[0] || !bytes.Equal(recovery, hexRecovery) {
-		return receipt, errStaticInit
+		return receipt, staticInitMaterialRefused
 	}
 	material, err := json.Marshal(staticInitMaterial{
 		Schema: "elevenid.openbao-static-init-private/v1", InstallationID: installationID,

@@ -18,10 +18,10 @@ import (
 )
 
 func TestStaticInitializationKeepsSealKeySeparateAndPublishesScopedEvidence(t *testing.T) {
-	paths, client, requests, initialized := staticInitFixture(t, "")
+	paths, client, initializationClient, requests, initialized := staticInitFixture(t, "", nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	receipt, err := initializeStaticAt(ctx, testInstallation, testAttempt, paths, currentOwner(), client)
+	receipt, err := initializeStaticAt(ctx, testInstallation, testAttempt, paths, currentOwner(), client, initializationClient)
 	if err != nil || initialized.Load() != 1 || !receipt.Initialized || !receipt.UnsealedReady || receipt.SealType != "static" ||
 		receipt.ClusterID != testCluster || !receipt.RecoveryKeyWritten || !receipt.RootTokenWritten ||
 		receipt.RootRetired || receipt.InitializationReplayed || receipt.InstallationReady {
@@ -56,7 +56,7 @@ func TestStaticInitializationKeepsSealKeySeparateAndPublishesScopedEvidence(t *t
 		}
 	}
 	before := requests.Load()
-	if _, err := initializeStaticAt(ctx, testInstallation, testAttempt, paths, currentOwner(), client); err == nil || requests.Load() != before {
+	if _, err := initializeStaticAt(ctx, testInstallation, testAttempt, paths, currentOwner(), client, initializationClient); err == nil || requests.Load() != before {
 		t.Fatal("completed initialization was adopted or replayed")
 	}
 }
@@ -67,10 +67,10 @@ func TestStaticInitializationRefusesExistingAndUncertainState(t *testing.T) {
 		"already-initialized", "shamir", "init-response-lost", "unseal-key-returned", "wrong-recovery", "root-collision",
 	} {
 		t.Run(failure, func(t *testing.T) {
-			paths, client, requests, initialized := staticInitFixture(t, failure)
+			paths, client, initializationClient, requests, initialized := staticInitFixture(t, failure, nil)
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			if _, err := initializeStaticAt(ctx, testInstallation, testAttempt, paths, currentOwner(), client); err == nil {
+			if _, err := initializeStaticAt(ctx, testInstallation, testAttempt, paths, currentOwner(), client, initializationClient); err == nil {
 				t.Fatal("unsafe initialization was accepted")
 			}
 			if initialized.Load() > 0 {
@@ -79,7 +79,7 @@ func TestStaticInitializationRefusesExistingAndUncertainState(t *testing.T) {
 					t.Fatal("uncertain initialization lost its pre-mutation intent")
 				}
 				before := requests.Load()
-				if _, err := initializeStaticAt(ctx, testInstallation, testAttempt, paths, currentOwner(), client); err == nil || requests.Load() != before {
+				if _, err := initializeStaticAt(ctx, testInstallation, testAttempt, paths, currentOwner(), client, initializationClient); err == nil || requests.Load() != before {
 					t.Fatal("uncertain initialization reached the API again")
 				}
 			}
@@ -87,7 +87,14 @@ func TestStaticInitializationRefusesExistingAndUncertainState(t *testing.T) {
 	}
 }
 
-func staticInitFixture(t *testing.T, failure string) (staticInitPaths, *http.Client, *atomic.Int32, *atomic.Int32) {
+func staticInitFixture(t *testing.T, failure string, beforeResponse func(*http.Request)) (staticInitPaths, *http.Client, *http.Client, *atomic.Int32, *atomic.Int32) {
+	t.Helper()
+	return staticInitFixtureWithServer(t, failure, beforeResponse, staticInitUnixClients)
+}
+
+type staticInitTestServer func(*testing.T, http.Handler) (*http.Client, *http.Client)
+
+func staticInitFixtureWithServer(t *testing.T, failure string, beforeResponse func(*http.Request), server staticInitTestServer) (staticInitPaths, *http.Client, *http.Client, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 	paths := staticInitPaths{state: t.TempDir(), output: t.TempDir(), root: currentOwner()}
 	for _, path := range []string{paths.state, paths.output} {
@@ -112,7 +119,7 @@ func staticInitFixture(t *testing.T, failure string) (staticInitPaths, *http.Cli
 		paths.output = paths.state
 	}
 	requests, initialized := &atomic.Int32{}, &atomic.Int32{}
-	path, expected := unixServer(t, http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	client, initializationClient := server(t, http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		requests.Add(1)
 		if request.Header.Get("X-Vault-Token") != "" || request.URL.RawQuery != "" {
 			t.Error("fresh initialization used an unexpected token or query")
@@ -137,6 +144,12 @@ func staticInitFixture(t *testing.T, failure string) (staticInitPaths, *http.Cli
 				t.Error("initialization occurred before durable intent")
 			}
 			initialized.Add(1)
+			if beforeResponse != nil {
+				beforeResponse(request)
+				if request.Context().Err() != nil {
+					return
+				}
+			}
 			if failure == "init-response-lost" {
 				_, _ = w.Write([]byte(`{"root_token":`))
 				return
@@ -161,10 +174,21 @@ func staticInitFixture(t *testing.T, failure string) (staticInitPaths, *http.Cli
 			http.NotFound(w, request)
 		}
 	}))
+	return paths, client, initializationClient, requests, initialized
+}
+
+func staticInitUnixClients(t *testing.T, handler http.Handler) (*http.Client, *http.Client) {
+	t.Helper()
+	path, expected := unixServer(t, handler)
 	client, err := newClientAt(path, expected)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { closeClient(client) })
-	return paths, client, requests, initialized
+	initializationClient, err := newStaticInitClientAt(path, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeClient(initializationClient) })
+	return client, initializationClient
 }

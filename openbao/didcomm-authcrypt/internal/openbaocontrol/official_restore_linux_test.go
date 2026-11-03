@@ -150,7 +150,12 @@ func (node *restoreNode) wait(t *testing.T, ctx context.Context, predicate func(
 }
 func (node *restoreNode) initialize(t *testing.T, ctx context.Context, installation, attempt string) (StaticInitReceipt, string) {
 	t.Helper()
-	receipt, err := initializeStaticAt(ctx, installation, attempt, staticInitPaths{state: node.state, output: filepath.Join(node.directory, "initialization"), root: currentOwner()}, currentOwner(), node.client)
+	initializationClient, err := newStaticInitClientAt(node.socket, currentOwner())
+	if err != nil {
+		t.Fatal("fresh disposable initialization client refused")
+	}
+	defer closeClient(initializationClient)
+	receipt, err := initializeStaticAt(ctx, installation, attempt, staticInitPaths{state: node.state, output: filepath.Join(node.directory, "initialization"), root: currentOwner()}, currentOwner(), node.client, initializationClient)
 	if err != nil {
 		t.Fatal("fresh disposable node initialization failed")
 	}
