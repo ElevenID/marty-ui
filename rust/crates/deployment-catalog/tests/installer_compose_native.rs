@@ -1075,6 +1075,11 @@ fn assert_native_generation_models(
             .as_bytes(),
     );
     let current_runtime = config(executable, bundle, &files, &application_env, &[], &[]);
+    assert_eq!(
+        current_runtime["services"]["auth"]["depends_on"]["keycloak"],
+        serde_json::json!({"condition":"service_healthy","required":true}),
+        "generation activation must wait for the managed realm before starting Auth"
+    );
     let current_full = config(
         executable,
         bundle,
@@ -1341,6 +1346,15 @@ fn assert_actual_installer_layers(
     );
     let services = install["services"].as_object().unwrap();
     assert!(services.len() >= 30);
+    assert_eq!(
+        services["auth"]["depends_on"]["keycloak-configurator"]["condition"],
+        "service_completed_successfully",
+        "initial Auth startup must wait for realm/client configuration"
+    );
+    assert_eq!(
+        services["keycloak-configurator"]["depends_on"]["keycloak"]["condition"],
+        "service_healthy"
+    );
     for (dependent, dependency) in [
         ("compliance-profile", "organization"),
         ("presentation-policy", "organization"),
@@ -1591,6 +1605,14 @@ fn assert_actual_installer_layers(
         if kms_consumers.contains(role.as_str()) {
             expected.insert(
                 "openbao-unseal".into(),
+                serde_json::json!({"condition":"service_healthy","required":true}),
+            );
+        }
+        if role == "auth" {
+            // Auth fetches discovery/JWKS before opening listeners. Removing the
+            // completed configurator must retain live managed OIDC readiness.
+            expected.insert(
+                "keycloak".into(),
                 serde_json::json!({"condition":"service_healthy","required":true}),
             );
         }
