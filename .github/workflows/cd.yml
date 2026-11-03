@@ -814,7 +814,7 @@ jobs:
       contents: read
       packages: read
       attestations: read
-    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@1e646774e43d41868e1e927c48b492d23678dda7
+    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@7c91052734f2570e1988682fd70cf3d604513386
     with:
       lane: all
       collect_only: true
@@ -822,7 +822,7 @@ jobs:
       candidate_artifact: stack-release-official-candidate-${{ github.run_id }}
       candidate_manifest_sha256: ${{ needs.prepare-official-candidate.outputs.manifest_sha256 }}
       candidate_tag: ${{ needs.resolve-transaction.outputs.tag }}
-      harness_revision: 1e646774e43d41868e1e927c48b492d23678dda7
+      harness_revision: 7c91052734f2570e1988682fd70cf3d604513386
 
   official-gate-evidence:
     needs: [resolve-transaction, prepare-official-candidate, official-interoperability]
@@ -832,7 +832,7 @@ jobs:
       actions: read
     env:
       SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
-      HARNESS_SHA: 1e646774e43d41868e1e927c48b492d23678dda7
+      HARNESS_SHA: 7c91052734f2570e1988682fd70cf3d604513386
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -1015,7 +1015,7 @@ jobs:
             --source-sha "$SOURCE_SHA" --version "$VERSION" --image-metadata "$metadata"
           docker run --rm -d --name marty-ui-smoke -e UI_ENABLED_SECTIONS=none \
             -p 127.0.0.1:18080:80 "$IMAGE@$UI_DIGEST"
-          curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 \
+          curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-all-errors --retry-delay 1 \
             http://127.0.0.1:18080/healthz
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18080/)" = 404
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18080/console/)" = 404
