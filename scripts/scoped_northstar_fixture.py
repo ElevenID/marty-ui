@@ -8,6 +8,7 @@ created-container verifier and existing external-component/public verifier.
 """
 from copy import deepcopy
 from pathlib import Path
+import ipaddress
 import re
 
 ROLE = "northstar-admissions"
@@ -57,7 +58,31 @@ def asset_contract(config, core):
     return server
 
 
-def recovered_off_authority(config, core, representations, depth):
+def retained_role_successor_cohort(config, previous, baseline, core, runtime_successor):
+    """A reviewed caller delegates profile validation to the shared native validator."""
+    require(callable(runtime_successor), "RECOVERED_OFF_COHORT_SUCCESSOR_REQUIRED")
+    transition = runtime_successor(previous["runtimeAuthority"], config["runtimeAuthority"])
+    require(set(transition) == {"role", "oldCid", "newCid"}
+            and transition["role"] == "issuance-native", "RECOVERED_OFF_SUCCESSOR_SCOPE_CHANGED")
+    old, new = transition["oldCid"], transition["newCid"]
+    before = {role: core.load(ref)["Id"] for role, ref in previous["retainedContainers"].items()}
+    after = {role: core.load(ref)["Id"] for role, ref in config["retainedContainers"].items()}
+    require(len(before) == len(after) == 22 and set(before) == set(after) and ROLE not in before
+            and before.get("issuance-native") == old and after.get("issuance-native") == new
+            and all(before[role] == after[role] for role in before if role != "issuance-native")
+            and len(set(before.values())) == len(set(after.values())) == 22
+            and all(re.fullmatch(r"[a-f0-9]{64}", cid) for cid in (*before.values(), *after.values())),
+            "RECOVERED_OFF_RETAINED_ROLE_CHANGED")
+    require(old in baseline and new not in baseline and set(before.values()).issubset(baseline),
+            "RECOVERED_OFF_SUCCESSOR_NOT_FRESH")
+    expected = (set(baseline) - {old}) | {new}
+    actual = core.load(config["globalCohortPreimage"])
+    require(len(actual) == len(baseline) == len(set(actual))
+            and set(actual) == expected, "RECOVERED_OFF_COHORT_CHANGED")
+    return actual
+
+
+def recovered_off_authority(config, core, representations, depth, runtime_successor=None):
     proof = config["recoveredOffAuthority"]
     require(set(proof) == {"input", "invocation", "result", "dispatcher"}
             and representations is not None and depth < 8, "RECOVERED_OFF_REFS_CHANGED")
@@ -69,7 +94,7 @@ def recovered_off_authority(config, core, representations, depth):
             and previous["rollbackAuthorized"] is True and previous["executeAuthorized"] is False,
             "RECOVERED_OFF_INVOCATION_CHANGED")
     core.read_ref(proof["dispatcher"])
-    original = stopped_authority(previous, core, representations, depth + 1)
+    original = stopped_authority(previous, core, representations, depth + 1, runtime_successor)
     failed = core.load(previous["recoveryState"])
     require(result["state"] == "D11_NORTHSTAR_ORIGINAL_CONFIGURATION_RESTORED_OFF"
             and core.load(result["originalFailure"]) == failed
@@ -97,15 +122,16 @@ def recovered_off_authority(config, core, representations, depth):
             and state["ExitCode"] == 0 and state["StartedAt"].startswith("0001-")
             and result["served"] == {"state": "ORIGINAL_CONFIGURATION_OFF", "cid": row["Id"],
                 "pid": 0, "actualExitCode": 0}, "RECOVERED_OFF_NOT_NEVER_STARTED")
-    require(core.load(config["globalCohortPreimage"]) == result["allIds"]
-            and len(result["allIds"]) == len(set(result["allIds"]))
+    require(len(result["allIds"]) == len(set(result["allIds"]))
             and row["Id"] in result["allIds"], "RECOVERED_OFF_COHORT_CHANGED")
+    if core.load(config["globalCohortPreimage"]) != result["allIds"]:
+        retained_role_successor_cohort(config, previous, result["allIds"], core, runtime_successor)
     return row
 
 
-def stopped_authority(config, core, representations=None, depth=0):
+def stopped_authority(config, core, representations=None, depth=0, runtime_successor=None):
     if "recoveredOffAuthority" in config:
-        return recovered_off_authority(config, core, representations, depth)
+        return recovered_off_authority(config, core, representations, depth, runtime_successor)
     proof = config["shutdown"]
     require(set(proof) == {"result", "after"}, "SHUTDOWN_REFS_CHANGED")
     result, after = core.load(proof["result"]), core.load(proof["after"])
@@ -128,6 +154,42 @@ def stopped_authority(config, core, representations=None, depth=0):
 def require(value, code):
     if not value:
         raise ValueError(code)
+
+
+def owned_network_transition(before, after, *, known_cids, container_name):
+    """One durable-owned endpoint may start/stop; every other network fact is exact."""
+    require(isinstance(known_cids, set) and all(re.fullmatch(r"[a-f0-9]{64}", cid)
+            for cid in known_cids), "KNOWN_NETWORK_ENDPOINT_AUTHORITY_REQUIRED")
+    old, current = deepcopy(before), deepcopy(after)
+    previous_endpoints, endpoints = old.pop("Containers"), current.pop("Containers")
+    require(isinstance(previous_endpoints, dict) and isinstance(endpoints, dict), "NETWORK_ENDPOINT_SHAPE_CHANGED")
+    removed, added = set(previous_endpoints) - set(endpoints), set(endpoints) - set(previous_endpoints)
+    require(len(removed) + len(added) <= 1 and removed | added <= known_cids,
+            "UNRELATED_NETWORK_ENDPOINT_CHANGED")
+    require(all(previous_endpoints[cid] == endpoints[cid] for cid in set(previous_endpoints) & set(endpoints)),
+            "RETAINED_NETWORK_ENDPOINT_CHANGED")
+    subnets = old.get("Status", {}).get("IPAM", {}).get("Subnets")
+    require(isinstance(subnets, dict), "BOUND_NETWORK_IPAM_STATUS_REQUIRED")
+    for delta, rows in ((-1, {cid: previous_endpoints[cid] for cid in removed}),
+                        (1, {cid: endpoints[cid] for cid in added})):
+        for row in rows.values():
+            require(row.get("Name") == container_name, "OWNED_NETWORK_ENDPOINT_NAME_CHANGED")
+            prefixes = []
+            for field in ("IPv4Address", "IPv6Address"):
+                address = row.get(field)
+                if address:
+                    prefixes.append(str(ipaddress.ip_interface(address).network))
+            require(prefixes and len(prefixes) == len(set(prefixes)) and all(prefix in subnets for prefix in prefixes),
+                    "OWNED_NETWORK_ENDPOINT_SUBNET_CHANGED")
+            for prefix in prefixes:
+                counters = subnets[prefix]
+                require(type(counters.get("IPsInUse")) is int and type(counters.get("DynamicIPsAvailable")) is int,
+                        "BOUND_NETWORK_IPAM_COUNTERS_REQUIRED")
+                counters["IPsInUse"] += delta
+                counters["DynamicIPsAvailable"] -= delta
+                require(counters["IPsInUse"] >= 0 and counters["DynamicIPsAvailable"] >= 0,
+                        "BOUND_NETWORK_IPAM_COUNTER_RANGE")
+    require(current == old, "BOUND_NETWORK_CONFIGURATION_CHANGED")
 
 
 def model_delta(before, after, fixture, server):
@@ -162,7 +224,7 @@ def execution_type(core):
 
     class NorthstarFixture(core.Operation):
         def __init__(self, config, output, *, transport, identities,
-                     representations, observe_external):
+                     representations, observe_external, runtime_successor=None):
             require(config["scope"] == "FUNCTIONAL_ONLY" and config["sourceRevision"] == SOURCE
                     and config["imageSource"] == SOURCE,
                     "SOURCE_OR_FUNCTIONAL_SCOPE_CHANGED")
@@ -174,12 +236,34 @@ def execution_type(core):
             self.models = {ROLE: core.load(config["oldModels"][ROLE])}
             self.changed = {ROLE: core.load(config["newModels"][ROLE])}
             self.server = asset_contract(config, core)
-            self.original = stopped_authority(config, core, representations)
+            self.original = stopped_authority(config, core, representations, runtime_successor=runtime_successor)
             require(type(config.get("functionalStartupAuthorized", False)) is bool,
                     "EXPLICIT_STARTUP_FLAG_REQUIRED")
             require(set(config["retainedContainers"]) == set(identities), "EXACT_RETAINED22_SNAPSHOTS_REQUIRED")
             model_delta(self.models[ROLE], self.changed[ROLE], core.read_ref(config["newFixture"]), self.server)
             self.identities = identities
+            # A never-started recovered OFF row has no assigned NetworkID. Bind
+            # assignment to the same model network observed on retained22;
+            # retained_twenty separately verifies their exact live generations.
+            self.networks, self.network_ids = {}, None
+            if config.get("functionalStartupAuthorized") is True and any(
+                    not row["NetworkID"] for row in self.original["NetworkSettings"]["Networks"].values()):
+                declared = self.models[ROLE]["networks"]
+                service_networks = self.models[ROLE]["services"][ROLE]["networks"]
+                names = {declared[key]["name"] for key in service_networks}
+                require(names == set(self.original["NetworkSettings"]["Networks"]), "MODEL_NETWORK_SET_CHANGED")
+                require(set(config["networkAuthority"]) == names, "EXACT_NETWORK_AUTHORITY_REQUIRED")
+                self.networks = {name: core.load(ref) for name, ref in config["networkAuthority"].items()}
+                self.network_ids = {}
+                retained = [core.load(ref) for ref in config["retainedContainers"].values()]
+                for name in names:
+                    network = self.networks[name]
+                    require(network["Name"] == name and re.fullmatch(r"[a-f0-9]{64}", network["Id"]),
+                            "BOUND_NETWORK_IDENTITY_CHANGED")
+                    ids = {row["NetworkSettings"]["Networks"][name]["NetworkID"]
+                           for row in retained if name in row["NetworkSettings"]["Networks"]}
+                    require(ids == {network["Id"]}, "RETAINED_NETWORK_ID_AMBIGUOUS")
+                    self.network_ids[name] = network["Id"]
             self.marker = None
             self.observe_external = observe_external
             self.recovery_started_cids = set()
@@ -200,7 +284,8 @@ def execution_type(core):
                             row["Id"] == self.state["newCids"].get(ROLE)
                             and ("apply-start-" + ROLE in self.state["operations"]
                                  or self.state.get("pending") == "apply-start-" + ROLE)))),
-                    host_mounts=representations.host_mounts, daemon_source=representations.daemon_source)
+                    host_mounts=representations.host_mounts, daemon_source=representations.daemon_source,
+                    network_ids=self.network_ids)
             self.verify_container = verify
             self.g.candidate_guard = lambda role, row, model, *, running: (require(role == ROLE, "ONE_ROLE_REQUIRED"), self.verify_container(row, model, running=running))
             require(config["publicManifest"] == config["newFixture"]
@@ -219,6 +304,14 @@ def execution_type(core):
             return prefix == "apply" and self.c.get("functionalStartupAuthorized") is True
 
         def retained_twenty(self):
+            # Preserve static daemon config, retained endpoints and exact IPAM
+            # counters; only the one journal-owned endpoint may start or stop.
+            for name, expected in self.networks.items():
+                rows = self.g.observe(["network", "inspect", expected["Id"]], "northstar-network")
+                require(len(rows) == 1, "BOUND_NETWORK_AMBIGUOUS")
+                known = set(self.recovery_started_cids) | set(self.state["newCids"].values())
+                owned_network_transition(expected, rows[0], known_cids=known,
+                                         container_name=self.original["Name"].lstrip("/"))
             require(len(self.identities) == 22, "EXACT_RUNTIME22_REQUIRED")
             for role, identity in self.identities.items():
                 expected = core.load(self.c["retainedContainers"][role])
@@ -332,7 +425,7 @@ def execution_type(core):
     return NorthstarFixture
 
 
-def candidate_guard(original, actual, *, fixture, provenance, running, host_mounts, daemon_source, server=None, replaced_cid=None, allow_known_exited=False, allow_known_running=False):
+def candidate_guard(original, actual, *, fixture, provenance, running, host_mounts, daemon_source, server=None, replaced_cid=None, allow_known_exited=False, allow_known_running=False, network_ids=None):
     """Exact one-RO-secret successor using shared host-mount representation readers."""
     require(actual["Image"] == original["Image"] == IMAGE and actual["Name"] == original["Name"], "ROLE_OR_IMAGE_CHANGED")
     require(actual["State"]["Running"] is running and not actual["State"]["OOMKilled"], "RUNNING_OR_OOM_CHANGED")
@@ -429,7 +522,17 @@ def candidate_guard(original, actual, *, fixture, provenance, running, host_moun
                 "GlobalIPv6Address", "GlobalIPv6PrefixLen", "MacAddress", "DNSNames"}
     for name, previous in old_networks.items():
         current = networks[name]
-        require(current["NetworkID"] in ((previous["NetworkID"],) if running else ("", previous["NetworkID"])), "NETWORK_ID_CHANGED")
+        expected_id = previous["NetworkID"]
+        if expected_id == "" and (running or current["NetworkID"] != ""):
+            require(running or allow_known_exited, "RETAINED_NETWORK_EXIT_INTENT_REQUIRED")
+            state = original["State"]
+            require(state["Status"] == "created" and state["Running"] is False and state["Pid"] == 0
+                    and state["StartedAt"].startswith("0001-") and not state["OOMKilled"]
+                    and not state["Restarting"], "ORIGINAL_NETWORK_NOT_NEVER_STARTED")
+            require(network_ids is not None and set(network_ids) == set(old_networks)
+                    and re.fullmatch(r"[a-f0-9]{64}", network_ids[name]), "RETAINED_NETWORK_ID_REQUIRED")
+            expected_id = network_ids[name]
+        require(current["NetworkID"] in ((expected_id,) if running else ("", expected_id)), "NETWORK_ID_CHANGED")
         require({k:v for k,v in previous.items() if k not in assigned} ==
                 {k:v for k,v in current.items() if k not in assigned}, "NETWORK_STATIC_OPTIONS_CHANGED")
     if server is None:

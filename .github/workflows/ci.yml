@@ -999,6 +999,26 @@ jobs:
       - name: Prefer cached Docker Hub images without restarting the runner daemon
         if: matrix.lane != 'renewal-unit'
         run: bash scripts/ci/configure-dockerhub-mirror.sh
+      - name: Reclaim unused hosted SDK disk for contracts
+        if: matrix.lane == 'contracts' && runner.environment == 'github-hosted' && runner.os == 'Linux'
+        env:
+          CONTRACTS_LANE: ${{ matrix.lane }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_ACTIONS" == true && "$RUNNER_ENVIRONMENT" == github-hosted ]]
+          [[ "$RUNNER_OS" == Linux && "$CONTRACTS_LANE" == contracts ]]
+          # These preinstalled SDKs are not inputs to this Rust-only lane.
+          # Preserve source, fixtures, Docker, compiler caches and test outputs.
+          df -Pk /
+          for sdk in /usr/local/lib/android /usr/share/dotnet; do
+            if [[ -e "$sdk" || -L "$sdk" ]]; then
+              [[ -d "$sdk" && ! -L "$sdk" && "$(realpath -e -- "$sdk")" == "$sdk" ]]
+              sudo du -sk -- "$sdk"
+              sudo rm -rf -- "$sdk"
+            fi
+          done
+          df -Pk /
       - name: Select the exact BuildKit image with registry fallback
         if: matrix.lane != 'renewal-unit'
         shell: bash

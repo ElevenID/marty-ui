@@ -521,3 +521,38 @@ def test_lost_flow_start_never_retries_and_reconciles_only_unique_owned_projecti
     assert journal.value["flow_start"]["state"] == expected
     assert json.loads(journal.path.read_text())["flow_start"]["state"] == expected
     assert "synthetic" not in journal.path.read_text()
+
+
+@pytest.mark.parametrize("status,body,expected", [
+    (409, {"detail": "Resolved signing service is incompatible with the issuer identity tuple."},
+     "ISSUER_TUPLE_SERVICE_INCOMPATIBLE"),
+    (409, {"detail": "Configured signing identity is not authorized for the requested purpose."},
+     "ISSUER_PURPOSE_BINDING_DENIED"),
+    (409, {"detail": "Issuer DID resolution is ambiguous for the requested identity tuple."},
+     "ISSUER_TUPLE_AMBIGUOUS"),
+    (422, {"detail": "Issuer purpose, credential format and algorithm are incompatible."},
+     "ISSUER_TUPLE_INVALID"),
+    (409, {"detail": "provider-token=private-test-value"}, "UNKNOWN_PUBLIC_API_FAILURE"),
+    (409, {"detail": "x" * 513}, "UNKNOWN_PUBLIC_API_FAILURE"),
+    (409, {"detail": {"token": "private-test-value"}}, "UNKNOWN_PUBLIC_API_FAILURE"),
+    (500, {"detail": "Resolved signing service is incompatible with the issuer identity tuple."},
+     "UNKNOWN_PUBLIC_API_FAILURE"),
+])
+def test_owned_api_failure_records_only_fixed_public_code(owned, status, body, expected):
+    journal = owned[0]
+    journal.request = lambda *args: (status, body)
+    observed = journal.call("csca", "POST", journal.scoped("/v1/signing-keys/issuer-identities"), {})
+    assert observed == (status, body)  # Call semantics and caller rejection remain unchanged.
+    operation = journal.value["operations"][-1]
+    assert operation["response_received"] is True
+    assert operation["http_status"] == status
+    assert operation["failure_code"] == expected
+    assert "private-test-value" not in json.dumps(journal.value)
+    assert "detail" not in operation
+
+
+def test_owned_api_success_has_no_failure_code(owned):
+    journal = owned[0]
+    journal.request = lambda *args: (200, {"success": True})
+    assert journal.call("flow", "GET", "/v1/source-control") == (200, {"success": True})
+    assert "failure_code" not in journal.value["operations"][-1]

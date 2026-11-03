@@ -1771,15 +1771,12 @@ jobs:
           test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
-          python scripts/release_transaction.py validate \
+          python scripts/release_transaction.py validate --require-qualified \
             --input transaction/release-transaction.json \
             --repository "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" \
             --stack-lock release/stack-lock.json --claim-run-id "$CLAIM_RUN_ID" \
             --output validated-transaction.json
-          jq -e '
-            (.state == "qualified" or .state == "promoting" or .state == "promoted")
-            and (.gates | length == 5)
-          ' validated-transaction.json >/dev/null
+
           printf '%s' "$EXTERNAL_IMAGES_JSON" | jq -e '
             if type == "object" and length > 0
                and (has("issuance") | not)
@@ -1943,17 +1940,13 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
-          python scripts/release_transaction.py validate \
+          python scripts/release_transaction.py validate --require-qualified \
             --input transaction/release-transaction.json \
             --repository "$GITHUB_REPOSITORY" --source-sha "$GITHUB_SHA" \
             --stack-lock release/stack-lock.json \
             --claim-run-id "$(jq -r .claim_run_id transaction/release-transaction.json)" \
             --output "$RUNNER_TEMP/selfhost-consumer-transaction.json"
-          jq -e '
-            (.state == "qualified" or .state == "promoting" or
-             .state == "promoted") and
-            (.gates | length == 5)
-          ' "$RUNNER_TEMP/selfhost-consumer-transaction.json" >/dev/null
+
           python scripts/check_prepared_selfhost_consumer.py \
             --archive prepared/prepared-selfhost-bundle.zip \
             --image-lock prepared/prepared-selfhost-images.json \
@@ -2172,15 +2165,13 @@ jobs:
           test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
-          python scripts/release_transaction.py validate \
+          python scripts/release_transaction.py validate --require-qualified \
             --input "$RUNNER_TEMP/installer-transaction/release-transaction.json" \
             --repository "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" \
             --stack-lock release/stack-lock.json --claim-run-id "$CLAIM_RUN_ID" \
             --output "$RUNNER_TEMP/installer-validated-transaction.json"
-          jq -e --arg tag "$TAG" '
-            .tag == $tag and (.state == "qualified" or .state == "promoting" or .state == "promoted")
-            and (.gates | length == 5)
-          ' "$RUNNER_TEMP/installer-validated-transaction.json" >/dev/null
+          jq -e --arg tag "$TAG" '.tag == $tag' \
+            "$RUNNER_TEMP/installer-validated-transaction.json" >/dev/null
           for directory in installer-prepared installer-prepared-proof installer-operator installer-operator-proof installer-public-kms; do
             chmod 700 "$RUNNER_TEMP/$directory"
           done

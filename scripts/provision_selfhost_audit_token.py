@@ -36,7 +36,7 @@ def policy_for(org: str, slug: str, did: str) -> tuple[str, tuple[str, ...]]:
             or not re.fullmatch(r"did:web:[A-Za-z0-9.%-]+:orgs:" +
                                 re.escape(slug), did)):
         raise ValueError("synthetic DID does not match organization slug")
-    keys = tuple(managed_reference(org, purpose)
+    keys = tuple(managed_reference(org, purpose, did)
                  for purpose in ("vc_jwt_issuer", "oid4vp_request_signing"))
     paths = tuple(f"transit/keys/{name}" for name in (*keys, SIGNER))
     policy = "".join(f'path "{path}" {{ capabilities = ["read"] }}\n'

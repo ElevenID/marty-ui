@@ -1,5 +1,6 @@
 """One real private-loopback HTTPS boundary for native operator profile tests."""
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import ssl
@@ -18,6 +19,38 @@ def https_json_server(tmp_path, dispatch, errors):
                     "-addext", "subjectAltName=IP:127.0.0.1", "-addext", "basicConstraints=critical,CA:FALSE"],
                             check=False, capture_output=True)
     assert result.returncode == 0, result.stderr.decode(errors="replace")
+
+    # Keep transport fixtures valid across small host clock corrections. The
+    # native client still verifies time, trust, signature and the IP SAN. A
+    # freshly minted, zero-margin notBefore can otherwise prevent a negative
+    # AppRole case from ever reaching its intended API request.
+    request = tmp_path / "listener.csr"
+    result = subprocess.run(["openssl", "req", "-new", "-config", str(config),
+                             "-key", str(key), "-out", str(request),
+                             "-subj", "/CN=localhost"], check=False, capture_output=True)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    (tmp_path / "index.txt").write_text("")
+    (tmp_path / "serial").write_text("01\n")
+    (tmp_path / "certificates").mkdir()
+    issuer = tmp_path / "issuer.cnf"
+    issuer.write_text(
+        "[ca]\ndefault_ca=issuer\n[issuer]\ndatabase=./index.txt\n"
+        "serial=./serial\nnew_certs_dir=./certificates\ncertificate=./ca.crt\n"
+        "private_key=./listener.key\ndefault_md=sha256\npolicy=subject\n"
+        "x509_extensions=listener\n[subject]\ncommonName=supplied\n"
+        "[listener]\nsubjectAltName=IP:127.0.0.1\n"
+        "basicConstraints=critical,CA:FALSE\n"
+    )
+    now = datetime.now(timezone.utc)
+    stable = tmp_path / "stable.crt"
+    result = subprocess.run([
+        "openssl", "ca", "-batch", "-selfsign", "-notext", "-config", str(issuer),
+        "-in", str(request), "-out", str(stable),
+        "-startdate", (now - timedelta(minutes=1)).strftime("%Y%m%d%H%M%SZ"),
+        "-enddate", (now + timedelta(days=1)).strftime("%Y%m%d%H%M%SZ"),
+    ], cwd=tmp_path, check=False, capture_output=True)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    stable.replace(ca)
 
     class Handler(BaseHTTPRequestHandler):
         def handle_request(self):
