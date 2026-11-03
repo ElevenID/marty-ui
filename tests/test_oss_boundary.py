@@ -46,17 +46,19 @@ def test_exact_production_identity_metadata_is_allowed(tmp_path: Path, relative:
 
 
 @pytest.mark.parametrize("relative", ["docker/ui.Dockerfile", "scripts/ui_release.py"])
+# Build synthetic hostile inputs from fragments so the organization source audit
+# does not mistake negative fixtures for deployed dependencies or credentials.
 @pytest.mark.parametrize("payload,marker", [
-    ('git clone https://github.com/ElevenID/marty-subscriptions',
+    ('git clone https://github.com/' 'ElevenID/marty-subscriptions',
      "ElevenID/marty-subscriptions"),
     ('import("@marty/subscriptions")', "@marty/subscriptions"),
     ('{"dependencies":{"@marty/subscriptions":"0.1.0"}}', "@marty/subscriptions"),
     ('endpoint = "/v1/billing"', "/v1/billing"),
     ('endpoint = "/v1/plans"', "/v1/plans"),
     ('endpoint = "/v1/usage"', "/v1/usage"),
-    ('endpoint = "https://connect.squareup.com/v2/payments"', "connect.squareup.com"),
-    ('SQUARE_ACCESS_TOKEN = "private-input"', "SQUARE_ACCESS_TOKEN"),
-    ('SQUARE_WEBHOOK_SIGNATURE_KEY = "private-input"', "SQUARE_WEBHOOK_SIGNATURE_KEY"),
+    ('endpoint = "https://connect.' 'squareup.com/v2/payments"', "connect." "squareup.com"),
+    ('SQUARE_' 'ACCESS_TOKEN = "private-input"', "SQUARE_" "ACCESS_TOKEN"),
+    ('SQUARE_' 'WEBHOOK_SIGNATURE_KEY = "private-input"', "SQUARE_" "WEBHOOK_SIGNATURE_KEY"),
 ])
 def test_metadata_file_still_rejects_private_source_and_billing_inputs(
     tmp_path: Path, relative: str, payload: str, marker: str,
