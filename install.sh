@@ -8,13 +8,14 @@ main() (
     fail() { printf 'Marty installer: %s\n' "$*" >&2; exit 1; }
     usage() {
         printf '%s\n' \
-            'Usage: install.sh [--check-host] [--channel nightly|stable | --version TAG | --candidate-test NIGHTLY_TAG] [--install-dir PATH] [--foundation-file PATH] [--hosting-file PATH] [--acme-staging-roots PATH] [--yes]' \
+            'Usage: install.sh [--check-host] [--channel nightly|stable | --version TAG | --candidate-test NIGHTLY_TAG] [--install-dir PATH] [--foundation-file PATH] [--hosting-file PATH] [--settings-file PATH] [--acme-staging-roots PATH] [--yes]' \
             'Supported host: Linux amd64, a regular non-root user, no-new-privileges, and an already-running rootless Docker daemon.' \
             'Run a downloaded copy with: /usr/bin/setpriv --no-new-privs -- sh /absolute/install.sh [options]' \
             '--check-host checks bootstrap tools, platform, process privileges, and rootless Docker connectivity, then exits without downloads or installation.' \
             'It creates and removes a private temporary Docker configuration. It does not check Compose, resources, images, release availability, or installation readiness.' \
             '--candidate-test requires an exact published nightly tag and grants no Ready status; --channel and --version require signed installer admission.' \
-            'Managed OpenBao is the default; --foundation-file is optional. Host setup is separate: the installer does not use sudo or install OS packages.'
+            'Managed OpenBao is the default; --foundation-file is optional. Host setup is separate: the installer does not use sudo or install OS packages.' \
+            '--settings-file accepts a private typed JSON application policy and private optional credential-file references; see docs/installer-application-settings.md.'
     }
     # Candidate rootless entry must not execute even platform probes with
     # inherited root identity, capabilities, or privilege-gaining exec rights.
@@ -123,6 +124,7 @@ main() (
     destination=
     foundation_file=
     hosting_file=
+    settings_file=
     acme_staging_roots=
     yes=false
     check_host=false
@@ -134,7 +136,7 @@ main() (
             --help|-h) usage; exit 0 ;;
             --yes) yes=true; shift ;;
             --check-host) check_host=true; shift ;;
-            --channel|--version|--candidate-test|--install-dir|--foundation-file|--hosting-file|--acme-staging-roots)
+            --channel|--version|--candidate-test|--install-dir|--foundation-file|--hosting-file|--settings-file|--acme-staging-roots)
                 [ "$#" -ge 2 ] && [ -n "$2" ] || fail "Missing value for $1"
                 case "$2" in --*) fail "Missing value for $1" ;; esac
                 case "$1" in
@@ -144,6 +146,7 @@ main() (
                     --install-dir) [ -z "$destination" ] || fail 'Repeated installation directory'; destination=$2 ;;
                     --foundation-file) [ -z "$foundation_file" ] || fail 'Repeated foundation input'; foundation_file=$2 ;;
                     --hosting-file) [ -z "$hosting_file" ] || fail 'Repeated hosting input'; hosting_file=$2 ;;
+                    --settings-file) [ -z "$settings_file" ] || fail 'Repeated application settings input'; settings_file=$2 ;;
                     --acme-staging-roots) [ -z "$acme_staging_roots" ] || fail 'Repeated ACME staging roots input'; acme_staging_roots=$2 ;;
                 esac
                 shift 2 ;;
@@ -290,6 +293,7 @@ main() (
         [ -z "$destination" ] || set -- "$@" --install-dir "$destination"
         [ -z "$foundation_file" ] || set -- "$@" --foundation-file "$foundation_file"
         [ -z "$hosting_file" ] || set -- "$@" --hosting-file "$hosting_file"
+        [ -z "$settings_file" ] || set -- "$@" --settings-file "$settings_file"
         [ -z "$acme_staging_roots" ] || set -- "$@" --acme-staging-roots "$acme_staging_roots"
         [ "$yes" = false ] || set -- "$@" --yes
         "$stage/marty-deploy" "$@"
@@ -365,6 +369,7 @@ main() (
     [ -z "$destination" ] || set -- "$@" --install-dir "$destination"
     [ -z "$foundation_file" ] || set -- "$@" --foundation-file "$foundation_file"
     [ -z "$hosting_file" ] || set -- "$@" --hosting-file "$hosting_file"
+    [ -z "$settings_file" ] || set -- "$@" --settings-file "$settings_file"
     [ -z "$acme_staging_roots" ] || set -- "$@" --acme-staging-roots "$acme_staging_roots"
     if [ -f "$stage/channel.json" ]; then
         set -- "$@" --channel "$channel" --verified-channel "$stage/channel.json"

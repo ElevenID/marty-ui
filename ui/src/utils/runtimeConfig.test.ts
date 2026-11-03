@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { getEnabledWebSections, isAdminImpersonationEnabled, isWebPathEnabled, isWebSectionEnabled } from './runtimeConfig';
+import { getEnabledWebSections, getGoogleAnalyticsMeasurementId, isAdminImpersonationEnabled, isOrganizationCreationEnabled, isWebPathEnabled, isWebSectionEnabled } from './runtimeConfig';
 
 function setEnv(values: Record<string, unknown>) {
   Object.assign(import.meta.env, values);
@@ -9,6 +9,7 @@ function setEnv(values: Record<string, unknown>) {
 afterEach(() => {
   delete (window as any).__MARTY_RUNTIME_CONFIG__;
   delete (import.meta.env as any).VITE_ENABLE_ADMIN_IMPERSONATION;
+  delete (import.meta.env as any).VITE_GA_MEASUREMENT_ID;
   setEnv({ PROD: false });
 });
 
@@ -39,6 +40,36 @@ describe('isAdminImpersonationEnabled', () => {
     setEnv({ PROD: false });
 
     expect(isAdminImpersonationEnabled()).toBe(true);
+  });
+});
+
+describe('analytics runtime setting', () => {
+  it('respects an explicit empty value over a compiled fallback', () => {
+    setEnv({ VITE_GA_MEASUREMENT_ID: 'G-OLD123' });
+    expect(getGoogleAnalyticsMeasurementId()).toBe('G-OLD123');
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { googleAnalyticsMeasurementId: '' };
+    expect(getGoogleAnalyticsMeasurementId()).toBe('');
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { googleAnalyticsMeasurementId: 'G-NEW123' };
+    expect(getGoogleAnalyticsMeasurementId()).toBe('G-NEW123');
+  });
+});
+
+describe('organization creation setting', () => {
+  it.each([false, true])('uses the deployment value over the legacy audience default %s', (legacyDefault) => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { organizationCreationEnabled: true };
+    expect(isOrganizationCreationEnabled(legacyDefault)).toBe(true);
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { organizationCreationEnabled: false };
+    expect(isOrganizationCreationEnabled(legacyDefault)).toBe(false);
+  });
+
+  it.each([null, 'true', 'false', 1, [], {}])('rejects a malformed explicit value %j', (value) => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { organizationCreationEnabled: value };
+    expect(isOrganizationCreationEnabled(true)).toBe(false);
+  });
+
+  it('preserves legacy audience behavior only when the runtime setting is absent', () => {
+    expect(isOrganizationCreationEnabled(false)).toBe(false);
+    expect(isOrganizationCreationEnabled(true)).toBe(true);
   });
 });
 

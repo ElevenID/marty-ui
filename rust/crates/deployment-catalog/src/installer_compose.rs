@@ -1611,7 +1611,9 @@ pub(crate) fn require_version(version: &str) -> Result<()> {
     if version_supported(version) {
         Ok(())
     } else {
-        Err(format!("This installer requires Docker Compose {COMPOSE_VERSION}; install that supported plugin and retry preflight before creating an installation"))
+        Err(format!(
+            "This installer requires Docker Compose {COMPOSE_VERSION}; install that supported plugin and retry preflight before creating an installation"
+        ))
     }
 }
 fn model_hashes(output: &str) -> Result<BTreeMap<String, String>> {
@@ -1936,7 +1938,7 @@ fn mount_policy(source: &str, readonly: bool, p: &ComposeInputs, check_file: boo
                 if error.kind() == std::io::ErrorKind::PermissionDenied
                     && private_openbao_input(path, readonly, p)? =>
             {
-                return Ok(())
+                return Ok(());
             }
             Err(_) => return Err(REFUSED.into()),
         };
@@ -2058,10 +2060,17 @@ fn command_outcome(result: &Result<String>, complete: bool) -> (Option<i32>, Opt
                 return (Some(code), Some("client_exit_nonzero".into()));
             }
             let class = match error.as_str() {
-                "Compose setup failed (exit=None); inspect private project evidence; no retry was performed" => "client_terminated_outcome_uncertain",
-                "Docker command timed out; owned child process group was cancelled" => "client_timeout_outcome_uncertain",
-                "Compose wait deadline reached; inspect retained project before recovery" => "client_timeout_outcome_uncertain",
-                "Compose setup completed but diagnostic output exceeded the capture bound; inspect retained project before continuing" => {
+                "Compose setup failed (exit=None); inspect private project evidence; no retry was performed" => {
+                    "client_terminated_outcome_uncertain"
+                }
+                "Docker command timed out; owned child process group was cancelled" => {
+                    "client_timeout_outcome_uncertain"
+                }
+                "Compose wait deadline reached; inspect retained project before recovery" => {
+                    "client_timeout_outcome_uncertain"
+                }
+                "Compose setup completed but diagnostic output exceeded the capture bound; inspect retained project before continuing" =>
+                {
                     return (Some(0), Some("output_capture_incomplete".into()));
                 }
                 _ => "runtime_boundary_outcome_uncertain",
@@ -2368,6 +2377,7 @@ impl ComposeSession {
             )?;
         }
         let foundation = crate::installer_foundation::for_inputs(&inputs)?;
+        crate::installer_settings::for_inputs(&inputs)?;
         for root in inputs
             .writable_bind_roots
             .iter()
@@ -2448,6 +2458,9 @@ impl ComposeSession {
             Duration::from_secs(60),
         )?;
         let model: Value = serde_json::from_str(&output).map_err(|_| REFUSED)?;
+        if let Some(settings) = crate::installer_settings::for_inputs(&session.inputs)? {
+            settings.verify_model_secrets(&session.inputs.installation, &model)?;
+        }
         session.runtime_recovery_roles = admission.admit(&model, &session.inputs)?;
         if let Some(foundation) = foundation {
             foundation.validate_model(&model)?;
@@ -2510,6 +2523,9 @@ impl ComposeSession {
     }
     fn recheck(&self) -> Result<()> {
         verify_input_files(&self.inputs.installation, &self.bindings)?;
+        if let Some(settings) = crate::installer_settings::for_inputs(&self.inputs)? {
+            settings.verify_model_secrets(&self.inputs.installation, &self.model)?;
+        }
         if let Some(foundation) = crate::installer_foundation::for_inputs(&self.inputs)? {
             if !self.model.is_null() {
                 foundation.validate_model(&self.model)?;

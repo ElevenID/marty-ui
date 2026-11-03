@@ -40,6 +40,7 @@ vi.mock('../../services/organizationsApi', () => ({
 
 describe('CreateOrganizationPage', () => {
   beforeEach(() => {
+    delete (window as any).__MARTY_RUNTIME_CONFIG__;
     vi.clearAllMocks();
     mockSearchParams.mockReturnValue(new URLSearchParams(''));
     mockCreateOrganization.mockResolvedValue({ id: 'org-new' });
@@ -55,7 +56,16 @@ describe('CreateOrganizationPage', () => {
     });
   });
 
+  it('uses the deployment setting to disable organization creation', () => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { organizationCreationEnabled: false };
+    render(<CreateOrganizationPage />);
+    expect(screen.getByText('Organization creation is disabled')).toBeVisible();
+    expect(screen.queryByLabelText('Organization Slug')).not.toBeInTheDocument();
+    expect(mockCreateOrganization).not.toHaveBeenCalled();
+  });
+
   it('creates an organization with discovery and membership settings', async () => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { organizationCreationEnabled: true };
     const { user } = render(<CreateOrganizationPage />);
 
     await user.type(screen.getByLabelText('Organization Slug'), 'acme-travel');

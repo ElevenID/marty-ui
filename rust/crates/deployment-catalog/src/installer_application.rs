@@ -226,6 +226,9 @@ pub(crate) fn bootstrap_inputs(
         )?);
     }
     hosting.bind_inputs(&mut inputs)?;
+    if let Some(settings) = state.with_inspection(crate::installer_settings::load)? {
+        settings.bind_inputs(&mut inputs)?;
+    }
     Ok(inputs)
 }
 pub(crate) fn job_inputs(
@@ -456,6 +459,9 @@ fn start_inner(
         images,
         foundation.as_ref(),
         Some(&hosting),
+        state
+            .with_inspection(crate::installer_settings::load)?
+            .as_ref(),
     )?;
     if public_acme {
         state.with_inspection(|view| require_acme_preparation(view, installation))?;

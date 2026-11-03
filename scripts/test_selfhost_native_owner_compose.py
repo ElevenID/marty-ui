@@ -48,6 +48,7 @@ NATIVE_ADDITIVE = {
     "PASSPORT_TENANT_API_KEYS_FILE": "${PASSPORT_TENANT_API_KEYS_FILE:-}",
     "PERSONALIZATION_BUREAU_URL": "${PERSONALIZATION_BUREAU_URL:-}",
     "PERSONALIZATION_BUREAU_API_KEY": "${PERSONALIZATION_BUREAU_API_KEY:-}",
+    "PERSONALIZATION_BUREAU_API_KEY_FILE": "${PERSONALIZATION_BUREAU_API_KEY_FILE:-}",
     "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:-}",
 }
 PASSPORT_CONSUMER_ADDITIVE = {
@@ -108,6 +109,7 @@ ALTERNATE_TLS_PROVIDER_INPUTS = {
     "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_ARN",
 }
 SHARED_ADDITIONS = {
+    "CANVAS_CREDENTIALS_API_TOKEN_FILE": "${CANVAS_CREDENTIALS_API_TOKEN_FILE:-}",
     "ALLOWED_REDIRECT_URIS": "${ALLOWED_REDIRECT_URIS:-}",
     "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": PUBLICATION_SETTINGS[
         "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE"
@@ -138,7 +140,7 @@ def rendered_additions(templates, values):
 UNFORWARDED = set(
     """
 APP_ENV CANVAS_ADMIN_API_TOKEN CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK
-CANVAS_CREDENTIALS_API_TOKEN CANVAS_CREDENTIALS_API_TOKEN_FILE
+CANVAS_CREDENTIALS_API_TOKEN
 CANVAS_CREDENTIALS_BASE_URL CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS
 CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS
 CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE
@@ -282,7 +284,7 @@ def apply_foundation_reference_representation(model):
 
 def assert_models(
     approved, actual, *, interpolated=False, issuer_did="",
-    ui_enabled_sections="public,console",
+    ui_enabled_sections="public,console", bureau_api_key_file="", canvas_api_token_file="",
 ):
     """Check the complete current KMS-only model against its reviewed snapshot."""
     expected = deepcopy(approved)
@@ -332,6 +334,9 @@ def assert_models(
     expected["services"]["keycloak"]["environment"]["JAVA_OPTS_KC_HEAP"] = (
         "-XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=65"
     )
+    configurator_environment = expected["services"]["keycloak-configurator"]["environment"]
+    assert "KEYCLOAK_SETUP_STRICT" not in configurator_environment
+    configurator_environment["KEYCLOAK_SETUP_STRICT"] = "true"
     gateway_environment = expected["services"]["gateway"]["environment"]
     assert "GATEWAY_OBSERVE_CLIENT_IP" not in gateway_environment
     gateway_environment["GATEWAY_OBSERVE_CLIENT_IP"] = (
@@ -346,6 +351,10 @@ def assert_models(
     ui["environment"]["UI_ENABLED_SECTIONS"] = (
         ui_enabled_sections if interpolated
         else "${UI_ENABLED_SECTIONS-public,console}"
+    )
+    assert "ORGANIZATION_CREATION_ENABLED" not in ui["environment"]
+    ui["environment"]["ORGANIZATION_CREATION_ENABLED"] = (
+        expected["services"]["gateway"]["environment"]["ORGANIZATION_CREATION_ENABLED"]
     )
     assert ui["healthcheck"]["test"] == [
         "CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/",
@@ -401,6 +410,28 @@ def assert_models(
     token_position = next(index for index, item in enumerate(signing["secrets"])
                           if item["source"] == "signing_keys_openbao_token") + 1
     signing["secrets"].insert(token_position, {"source": didcomm_secret, "target": didcomm_path})
+    # Optional Canvas/Passport credentials are file-backed and reach only their
+    # existing runtime consumers. Empty files remain unused unless selected.
+    secret_root = expected["secrets"]["google_client_id"]["file"].rsplit("/", 1)[0]
+    for secret, owners in (
+        ("passport_tenant_api_keys", ("gateway", "flow", "issuance-native")),
+        ("personalization_bureau_api_key", ("issuance-native",)),
+        ("canvas_credentials_api_token", ("issuance", "issuance-native")),
+    ):
+        assert secret not in expected["secrets"]
+        expected["secrets"][secret] = {"file": f"{secret_root}/{secret}", "name": f"{expected['name']}_{secret}"}
+        for owner in owners:
+            expected["services"][owner]["secrets"].append(
+                {"source": secret, "target": f"/run/secrets/{secret}"})
+    expected["services"]["issuance-native"]["environment"]["PERSONALIZATION_BUREAU_API_KEY_FILE"] = (
+        bureau_api_key_file if interpolated else "${PERSONALIZATION_BUREAU_API_KEY_FILE:-}"
+    )
+    for environment in (expected["x-issuance-application-env"],
+                        expected["services"]["issuance"]["environment"],
+                        expected["services"]["issuance-native"]["environment"]):
+        environment["CANVAS_CREDENTIALS_API_TOKEN_FILE"] = (
+            canvas_api_token_file if interpolated else "${CANVAS_CREDENTIALS_API_TOKEN_FILE:-}"
+        )
     issuance = expected["services"]["issuance"]
     envelope = "signing_keys_integration_secret_key"
     envelope_path = f"/run/secrets/{envelope}"
@@ -627,6 +658,8 @@ def interpolated_models():
                 render(APPROVED, values), after, interpolated=True,
                 issuer_did=values.get("MARTY_ISSUER_DID") or "",
                 ui_enabled_sections=values.get("UI_ENABLED_SECTIONS", "public,console"),
+                bureau_api_key_file=values.get("PERSONALIZATION_BUREAU_API_KEY_FILE") or "",
+                canvas_api_token_file=values.get("CANVAS_CREDENTIALS_API_TOKEN_FILE") or "",
             )
             print(f"PASS: self-host {mode} interpolated whole model")
         for file, source_required in (

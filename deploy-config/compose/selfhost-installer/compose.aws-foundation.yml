@@ -110,6 +110,7 @@ services:
     - workload_identity_ca_cert
     - gateway_workload_client_cert
     - signing_grant_authorities
+    - passport_tenant_api_keys
     volumes:
     - type: bind
       source: ${MARTY_AWS_GATEWAY_IDENTITY_DIR:?preprovisioned AWS foundation input required}
@@ -284,6 +285,7 @@ services:
     - grpc_service_token
     - workload_identity_ca_cert
     - signing_grant_authorities
+    - canvas_credentials_api_token
     volumes: !override
     - type: bind
       source: ${MARTY_AWS_ISSUANCE_IDENTITY_DIR:?preprovisioned AWS foundation input required}
@@ -331,6 +333,9 @@ services:
     - workload_identity_ca_cert
     - issuance_workload_server_cert
     - signing_grant_authorities
+    - passport_tenant_api_keys
+    - personalization_bureau_api_key
+    - canvas_credentials_api_token
     volumes:
     - type: bind
       source: ${MARTY_AWS_ISSUANCE_NATIVE_IDENTITY_DIR:?preprovisioned AWS foundation input required}
@@ -606,6 +611,7 @@ services:
     - issuance_api_key
     - signing_keys_issuer_sign_key
     - signing_grant_authorities
+    - passport_tenant_api_keys
     volumes:
     - type: bind
       source: ${MARTY_AWS_FLOW_IDENTITY_DIR:?preprovisioned AWS foundation input required}

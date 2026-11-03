@@ -9,6 +9,7 @@ import { fileURLToPath, URL } from 'node:url'
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { selfhostBuildContractPlugin } from './scripts/selfhost-build-contract.mjs'
+import { productionBuildContract, productionBuildContractPlugin } from './scripts/production-build-contract.mjs'
 
 const PRERENDERED_ROOT_STAGING_PATH = '__prerendered-root.html'
 const PRERENDER_RUNTIME_ASSET_ORIGIN = /https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=\/assets\/)/gi
@@ -155,9 +156,14 @@ export default defineConfig(async ({ mode }) => {
   const prerenderDebug = process.env.PRERENDER_DEBUG === '1'
   const prerenderConcurrency = Number(process.env.PRERENDER_CONCURRENCY || 1)
   const port = Number(env.VITE_PORT || env.PORT || env.UI_DEV_PORT || 3000)
-  const commerceExtensionPath = process.env.MARTY_COMMERCE_EXTENSION_PATH
-    ? resolve(process.env.MARTY_COMMERCE_EXTENSION_PATH)
-    : fileURLToPath(new URL('./src/extensions/commerce/publicStub.jsx', import.meta.url))
+  const productionCommerceEntry = productionBuildContract({
+    pages: process.env.MARTY_PRODUCTION_PAGES || 'public',
+    selfhost: isSelfhostBuild,
+    extensionPath: process.env.MARTY_COMMERCE_EXTENSION_PATH,
+    sourceSha: process.env.MARTY_COMMERCE_SOURCE_SHA,
+  })
+  const commerceExtensionPath = productionCommerceEntry
+    || fileURLToPath(new URL('./src/extensions/commerce/publicStub.jsx', import.meta.url))
   const bundleAnalysisBaseName = isSelfhostBuild ? 'bundle-analysis-selfhost' : 'bundle-analysis-public'
   let authorRoutes = []
   let blogRoutes = []
@@ -242,6 +248,7 @@ export default defineConfig(async ({ mode }) => {
     '/architecture',
     '/security',
     '/resources',
+    ...(productionCommerceEntry ? ['/pricing'] : []),
     ...demoRoutes,
     '/verifiable-credential-api',
     '/eudi-wallet-verification',
@@ -280,12 +287,14 @@ export default defineConfig(async ({ mode }) => {
         '@ui-public-config': fileURLToPath(new URL(`./src/variants/publicConfig.${isSelfhostBuild ? 'selfhost' : 'public'}.js`, import.meta.url)),
         '@ui-public-routes': fileURLToPath(new URL(`./src/variants/publicSite.${isSelfhostBuild ? 'selfhost' : 'public'}.jsx`, import.meta.url)),
         '@marty/commerce-extension': commerceExtensionPath,
+        'react-router-dom': 'react-router',
       },
       // Force all react-* and router packages to resolve to a single copy from this
       // project root. This prevents duplicate instances when @elevenid/marty-blog
       // local package) carries its own node_modules with react-router – which would
       // create a second RouterContext that has no access to the outer <BrowserRouter>.
-      dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router'],
+      dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router',
+        '@mui/material', '@mui/icons-material', '@emotion/react', '@emotion/styled', 'prop-types'],
     },
     optimizeDeps: {
       include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router'],
@@ -294,6 +303,7 @@ export default defineConfig(async ({ mode }) => {
     plugins: [
       muiIconMjsCompatibilityPlugin(),
       ...(isSelfhostBuild ? [selfhostBuildContractPlugin()] : []),
+      ...(productionCommerceEntry ? [productionBuildContractPlugin(productionCommerceEntry)] : []),
       ...(!disablePrerender ? [prerenderLocaleAssetsPlugin()] : []),
       react(),
       consoleEntryRewritePlugin(),
@@ -519,7 +529,7 @@ export default defineConfig(async ({ mode }) => {
     },
     build: {
       outDir: isSelfhostBuild ? 'dist-selfhost' : 'dist',
-      sourcemap: !isSelfhostBuild,
+      sourcemap: !isSelfhostBuild && !productionCommerceEntry,
       chunkSizeWarningLimit: 1000, // Increase from default 500kB to 1000kB
       rollupOptions: {
         input: {

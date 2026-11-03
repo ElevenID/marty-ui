@@ -1,11 +1,18 @@
 # syntax=docker/dockerfile:1.7
 # Marty UI web application image
+# Private producers may replace this empty stage with a named BuildKit context.
+# The default customer/public build never receives private commerce sources.
+FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS commerce_extension
+RUN mkdir /extension
+
 FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS builder
 
 ARG UI_VARIANT=public
 ARG SELFHOST_PUBLIC_PROFILE=full
 ARG MARTY_RELEASE_VERSION=development
 ARG MARTY_UI_SHA=unknown
+ARG MARTY_PRODUCTION_PAGES=public
+ARG MARTY_COMMERCE_SOURCE_SHA
 ARG MARTY_API_CORE_VERSION
 ARG MARTY_API_CORE_URI
 ARG MARTY_API_CORE_DIGEST
@@ -17,6 +24,8 @@ ARG MARTY_BLOG_DIGEST
 ENV NODE_ENV=production
 ENV VITE_UI_VARIANT=${UI_VARIANT}
 ENV VITE_SELFHOST_PUBLIC_PROFILE=${SELFHOST_PUBLIC_PROFILE}
+ENV MARTY_PRODUCTION_PAGES=${MARTY_PRODUCTION_PAGES}
+ENV MARTY_COMMERCE_SOURCE_SHA=${MARTY_COMMERCE_SOURCE_SHA}
 ENV VITE_ISSUER_API=http://localhost:8080
 ENV VITE_VERIFIER_API=http://localhost:8081
 ENV VITE_WALLET_API=http://localhost:8082
@@ -47,10 +56,12 @@ RUN test -n "$MARTY_API_CORE_VERSION" \
 
 # Copy application code
 COPY ui/ .
+COPY --from=commerce_extension /extension /workspace/commerce-extension
 
 # Build the application
 RUN { [ "$SELFHOST_PUBLIC_PROFILE" = "full" ] || [ "$SELFHOST_PUBLIC_PROFILE" = "tester" ]; } \
     && { [ "$UI_VARIANT" = "public" ] || [ "$UI_VARIANT" = "selfhost" ]; } \
+    && if [ "$MARTY_PRODUCTION_PAGES" = full ]; then export MARTY_COMMERCE_EXTENSION_PATH=/workspace/commerce-extension/src/extension.jsx; fi \
     && if [ "$UI_VARIANT" = "selfhost" ]; then bun run build:selfhost && mv dist-selfhost dist-final; else bun run build && mv dist dist-final; fi \
     && if [ "$UI_VARIANT" = "public" ]; then \
       test -s dist-final/index.html \
@@ -59,7 +70,10 @@ RUN { [ "$SELFHOST_PUBLIC_PROFILE" = "full" ] || [ "$SELFHOST_PUBLIC_PROFILE" = 
     fi \
     && if [ "$UI_VARIANT" = public ]; then audience=production; else audience=customer; fi \
     && printf '{"component":"ui","release_version":"%s","marty_ui_sha":"%s","audience":"%s","ui_variant":"%s"}\n' \
-      "$MARTY_RELEASE_VERSION" "$MARTY_UI_SHA" "$audience" "$UI_VARIANT" > dist-final/marty-ui-release.json
+      "$MARTY_RELEASE_VERSION" "$MARTY_UI_SHA" "$audience" "$UI_VARIANT" > dist-final/marty-ui-release.json \
+    && if [ "$MARTY_PRODUCTION_PAGES" = full ]; then \
+      bun -e 'const p="dist-final/marty-ui-release.json"; const m=await Bun.file(p).json(); m.production_pages="full"; m.commerce_extension={repository:"ElevenID/marty-subscriptions",source_sha:process.env.MARTY_COMMERCE_SOURCE_SHA}; await Bun.write(p,JSON.stringify(m)+"\n");'; \
+    fi
 
 # Use nginx to serve the built application
 FROM nginx:1.29.1-alpine@sha256:42a516af16b852e33b7682d5ef8acbd5d13fe08fecadc7ed98605ba5e3b26ab8 AS runtime-base
@@ -118,3 +132,6 @@ ARG UI_VARIANT=public
 RUN test "$UI_VARIANT" = public
 LABEL io.elevenid.ui.audience="production"
 COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html
+COPY scripts/ui-production-start.sh /docker-entrypoint.d/40-ui-production.sh
+COPY scripts/load-secrets-env.sh /scripts/load-secrets-env.sh
+RUN chmod +x /docker-entrypoint.d/40-ui-production.sh /scripts/load-secrets-env.sh

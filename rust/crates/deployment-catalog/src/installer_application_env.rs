@@ -14,13 +14,16 @@ type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "application environment differs from the reviewed installation contract";
 const EXAMPLE: &str = include_str!("../../../../.env.selfhost.production.example");
 pub const OPERATOR_EMAIL: &str = "operator@localhost";
-pub const OPTIONAL_EMPTY_SECRETS: [&str; 6] = [
+pub const OPTIONAL_INTEGRATION_SECRETS: [&str; 9] = [
     "google_client_id",
     "google_client_secret",
     "google_analytics_measurement_id",
     "google_site_verification",
     "smtp_password",
     "canvas_credentials_shared_secret",
+    "canvas_credentials_api_token",
+    "passport_tenant_api_keys",
+    "personalization_bureau_api_key",
 ];
 
 pub struct ApplicationParameters {
@@ -114,9 +117,13 @@ pub fn render(
     p: &ApplicationParameters,
     images: &BTreeMap<String, String>,
 ) -> Result<ApplicationEnvironment> {
-    render_selected(example, compose, tls_fragment, p, images, None, None)
+    render_selected(example, compose, tls_fragment, p, images, None, None, None)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Application policy and provider/hosting selections have independent retained owners."
+)]
 pub(crate) fn render_selected(
     example: &str,
     compose: &str,
@@ -125,6 +132,7 @@ pub(crate) fn render_selected(
     images: &BTreeMap<String, String>,
     foundation: Option<&crate::installer_foundation::Selection>,
     hosting: Option<&crate::installer_hosting::Selection>,
+    settings: Option<&crate::installer_settings::Selection>,
 ) -> Result<ApplicationEnvironment> {
     let baseline = parse(EXAMPLE)?;
     let mut values = parse(example)?;
@@ -203,7 +211,6 @@ pub(crate) fn render_selected(
         ("GRPC_INSECURE_ALLOWED", "false"),
         ("MARTY_ORG_DOMAIN", origin.host()),
         ("MARTY_ORG_ADMIN_EMAIL", OPERATOR_EMAIL),
-        ("KEYCLOAK_SMTP_FROM", "noreply@localhost"),
         ("MARTY_MIGRATION_PROFILE", "selfhost-production"),
     ] {
         values.insert(key.into(), value.into());
@@ -263,43 +270,43 @@ pub(crate) fn render_selected(
             );
         }
     }
-    for key in [
-        "KEYCLOAK_USER_REGISTRATION_ENABLED",
-        "KEYCLOAK_VERIFY_EMAIL",
-        "KEYCLOAK_RESET_PASSWORD_ENABLED",
-        "KEYCLOAK_SOCIAL_LOGIN_ENABLED",
-        "KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED",
-        "KEYCLOAK_SMTP_SSL",
-        "KEYCLOAK_SMTP_STARTTLS",
-        "ORGANIZATION_CREATION_ENABLED",
-        "CANVAS_PORTABLE_INTEGRATION_ENABLED",
-        "CANVAS_LEGACY_EVENT_INGEST_ENABLED",
-        "CANVAS_MIRROR_WORKER_ENABLED",
-        "CANVAS_ALLOW_PRIVATE_BASE_URLS",
-        "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS",
-        "DID_PUBLIC_FALLBACK_ENABLED",
-        "DIDCOMM_ALLOW_PRIVATE_ENDPOINTS",
-    ] {
-        values.insert(key.into(), "false".into());
+    crate::installer_settings::apply_defaults(&mut values);
+    if let Some(settings) = settings {
+        settings.apply_environment(&mut values)?;
     }
-    for key in [
-        "UI_ADDITIONAL_BASE_URLS",
-        "KEYCLOAK_SMTP_HOST",
-        "KEYCLOAK_SMTP_USERNAME",
-        "SMTP_HOST",
-        "SMTP_USERNAME",
-        "CANVAS_CREDENTIALS_API_BASE_URL",
-        "CANVAS_CREDENTIALS_PUBLISH_URL",
-        "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
-        "CANVAS_CREDENTIALS_ISSUER_ID",
-        "CANVAS_CREDENTIALS_BADGECLASS_ID",
-        "CANVAS_PILOT_ORGANIZATION_IDS",
-        "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
-        "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
-        "UNIVERSAL_RESOLVER_URL",
-        "DID_WEB_ALLOWED_HOSTS",
-    ] {
-        values.insert(key.into(), String::new());
+    if values
+        .get("KEYCLOAK_SMTP_FROM")
+        .is_none_or(String::is_empty)
+    {
+        values.insert(
+            "KEYCLOAK_SMTP_FROM".into(),
+            format!("noreply@{}", origin.host()),
+        );
+    }
+    values
+        .entry("CANVAS_LTI_EXPERIENCE_BASE_URL".into())
+        .or_insert_with(|| p.origin.clone());
+    let experience = values
+        .get("CANVAS_LTI_EXPERIENCE_BASE_URL")
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&p.origin);
+    let completion = format!(
+        "{}/console/org/deploy/canvas",
+        experience.trim_end_matches('/')
+    );
+    values
+        .entry("CANVAS_OAUTH_COMPLETION_REDIRECT_URL".into())
+        .or_insert(completion);
+    // Secondary origins extend browser policy only; the generated canonical
+    // origin, issuer DID and callback identity remain owned by hosting.
+    if let Some(additional) = values
+        .get("UI_ADDITIONAL_BASE_URLS")
+        .filter(|v| !v.is_empty())
+    {
+        values.insert(
+            "CORS_ORIGINS".into(),
+            format!("{},{}", p.origin, additional),
+        );
     }
     if let Some(foundation) = foundation {
         foundation.apply_environment(&mut values)?;
@@ -339,8 +346,15 @@ pub(crate) fn render_selected(
         .into_iter()
         .map(|name| p.installation.join(name))
         .collect(),
-        optional_empty_secrets: OPTIONAL_EMPTY_SECRETS
+        optional_empty_secrets: OPTIONAL_INTEGRATION_SECRETS
             .into_iter()
+            .filter(|name| {
+                settings.is_none_or(|s| {
+                    s.fingerprints()
+                        .get(*name)
+                        .is_some_and(|f| f.size_bytes == 0)
+                })
+            })
             .map(str::to_owned)
             .collect(),
         operator_account_created: false,
@@ -462,7 +476,7 @@ mod tests {
             .all(|line| !line.split_once('=').unwrap().1.contains("REPLACE_")));
         assert!(!text.contains("_PASSWORD="));
         assert!(!result.operator_account_created);
-        assert_eq!(result.optional_empty_secrets.len(), 6);
+        assert_eq!(result.optional_empty_secrets.len(), 9);
     }
     #[test]
     fn console_only_hosting_keeps_login_and_logout_on_the_enabled_section() {
@@ -512,6 +526,7 @@ mod tests {
             &images(),
             None,
             Some(&selection),
+            None,
         )
         .unwrap();
         let text = String::from_utf8(result.env_bytes).unwrap();

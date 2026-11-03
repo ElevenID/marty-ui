@@ -4280,6 +4280,7 @@ dependencies = [
  "marty-crypto",
  "marty-managed-key-reference",
  "marty-openbao-http",
+ "marty-passport-auth",
  "marty-selfhost-bundle",
  "marty-selfhost-identity",
  "marty-signing-grant",

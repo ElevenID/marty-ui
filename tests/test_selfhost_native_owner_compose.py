@@ -98,6 +98,19 @@ def test_selfhost_openbao_requires_transactional_raft_storage():
     assert "bao operator raft list-peers" in bootstrap
 
 
+@pytest.mark.parametrize("changed", [None, "false", "${KEYCLOAK_SETUP_STRICT:-true}"])
+def test_ordinary_keycloak_setup_cannot_suppress_configuration_failure(rendered_models, changed):
+    approved, current = deepcopy(rendered_models)
+    environment = current["services"]["keycloak-configurator"]["environment"]
+    assert environment["KEYCLOAK_SETUP_STRICT"] == "true"
+    if changed is None:
+        del environment["KEYCLOAK_SETUP_STRICT"]
+    else:
+        environment["KEYCLOAK_SETUP_STRICT"] = changed
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
 def test_selfhost_redis_is_socket_only_and_available_to_exact_consumers():
     model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
     services = model["services"]
@@ -201,6 +214,7 @@ def test_web_selection_changes_only_the_reviewed_ui_inputs(rendered_models):
     assert selected["environment"] == {
         **original["environment"],
         "UI_ENABLED_SECTIONS": "${UI_ENABLED_SECTIONS-public,console}",
+        "ORGANIZATION_CREATION_ENABLED": "${ORGANIZATION_CREATION_ENABLED:-false}",
     }
     assert selected["healthcheck"] == {
         **original["healthcheck"],
@@ -208,11 +222,48 @@ def test_web_selection_changes_only_the_reviewed_ui_inputs(rendered_models):
     }
 
 
+@pytest.mark.parametrize("external_foundation", [False, True])
+def test_optional_credentials_have_only_the_existing_consumers(rendered_models, external_foundation):
+    _, current = rendered_models
+    if external_foundation:
+        current = GATE["GATE"]["render"](
+            GATE["GATE"]["BASE"],
+            "deploy-config/compose/selfhost-installer/compose.aws-foundation.yml",
+        )
+    for secret, owners in (
+        ("passport_tenant_api_keys", {"gateway", "flow", "issuance-native"}),
+        ("personalization_bureau_api_key", {"issuance-native"}),
+        ("canvas_credentials_api_token", {"issuance", "issuance-native"}),
+    ):
+        mounted = {name for name, service in current["services"].items()
+                   if any(item["source"] == secret for item in service.get("secrets", []))}
+        assert mounted == owners
+        assert current["secrets"][secret]["file"].endswith("/" + secret)
+        setting = secret.upper() + "_FILE"
+        for owner in owners:
+            service = current["services"][owner]
+            environment = GATE["GATE"]["environment_mapping"](service["environment"])
+            assert environment[setting] == "${" + setting + ":-}"
+            selected = [item for item in service["secrets"] if item["source"] == secret]
+            assert len(selected) == 1
+            assert selected[0]["target"] in {secret, f"/run/secrets/{secret}"}
+
+
+def test_passport_credentials_cannot_gain_an_unrelated_consumer(rendered_models):
+    approved, current = deepcopy(rendered_models)
+    current["services"]["ui"].setdefault("secrets", []).append({
+        "source": "passport_tenant_api_keys", "target": "/run/secrets/passport_tenant_api_keys"})
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
 @pytest.mark.parametrize("path,replacement", [
     (("environment", "UI_ENABLED_SECTIONS"), None),
     (("environment", "UI_ENABLED_SECTIONS"), "${UI_ENABLED_SECTIONS-none}"),
     (("environment", "UI_ENABLED_SECTIONS"), "${UI_ENABLED_SECTIONS:-public,console}"),
     (("environment", "UI_ENABLED_SECTIONS"), "public,console"),
+    (("environment", "ORGANIZATION_CREATION_ENABLED"), None),
+    (("environment", "ORGANIZATION_CREATION_ENABLED"), "true"),
     (("environment", "UI_PRODUCTION_MARKETING"), "true"),
     (("healthcheck", "test", -1), "http://127.0.0.1:80/"),
     (("healthcheck", "test", -1), "http://127.0.0.1:80/console"),

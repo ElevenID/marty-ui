@@ -19,16 +19,22 @@ test('production script policy allows WASM without JavaScript eval or inline per
   }));
   assert.deepEqual(directives.get('script-src'), [
     "'self'", "'wasm-unsafe-eval'", 'https://cdn.redoc.ly', 'https://cdn.jsdelivr.net',
-    'https://static.cloudflareinsights.com',
+    'https://static.cloudflareinsights.com', 'https://www.googletagmanager.com',
   ]);
-  assert.deepEqual(directives.get('connect-src'), ["'self'", 'https://cloudflareinsights.com']);
+  assert.deepEqual(directives.get('connect-src'), [
+    "'self'", 'https://cloudflareinsights.com', 'https://www.googletagmanager.com',
+    'https://www.google-analytics.com', 'https://region1.google-analytics.com',
+    'https://analytics.google.com', 'https://region1.analytics.google.com',
+  ]);
   assert.deepEqual(directives.get('frame-src'), ["'self'", 'https://www.youtube-nocookie.com']);
 });
 
-test('production policy preserves consented demo embeds and configured edge analytics', async () => {
+test('production policy preserves consented demo embeds and configured analytics', async () => {
   const playerUrl = 'https://www.youtube-nocookie.com/embed/test-video?cc_load_policy=1';
   const beaconUrl = 'https://static.cloudflareinsights.com/beacon.min.js/version';
   const rumUrl = 'https://cloudflareinsights.com/cdn-cgi/rum';
+  const gaScriptUrl = 'https://www.googletagmanager.com/gtag/js?id=G-TEST123';
+  const gaCollectUrl = 'https://region1.google-analytics.com/g/collect';
   const server = http.createServer((request, response) => {
     response.setHeader('Content-Security-Policy', productionPolicy);
     if (request.url === '/app.js') {
@@ -64,8 +70,9 @@ test('production policy preserves consented demo embeds and configured edge anal
       return route.fulfill({
         status: 200,
         headers: { 'Access-Control-Allow-Origin': '*' },
-        contentType: url === beaconUrl ? 'application/javascript' : 'text/html',
-        body: url === beaconUrl ? 'window.beaconLoaded = true;' : '<!doctype html><h1>Demo player</h1>',
+        contentType: [beaconUrl, gaScriptUrl].includes(url) ? 'application/javascript' : 'text/html',
+        body: url === beaconUrl ? 'window.beaconLoaded = true;'
+          : url === gaScriptUrl ? 'window.gaLoaded = true;' : '<!doctype html><h1>Demo player</h1>',
       });
     });
     await page.goto(`http://127.0.0.1:${server.address().port}`);
@@ -77,7 +84,11 @@ test('production policy preserves consented demo embeds and configured edge anal
     await page.addScriptTag({ url: beaconUrl });
     assert.equal(await page.evaluate(() => window.beaconLoaded), true);
     assert.equal(await page.evaluate(async url => (await fetch(url)).ok, rumUrl), true);
-    assert.deepEqual(externalRequests.sort(), [playerUrl, beaconUrl, rumUrl].sort());
+    await page.addScriptTag({ url: gaScriptUrl });
+    assert.equal(await page.evaluate(() => window.gaLoaded), true);
+    assert.equal(await page.evaluate(async url => (await fetch(url)).ok, gaCollectUrl), true);
+    const expectedRequests = [playerUrl, beaconUrl, rumUrl, gaScriptUrl, gaCollectUrl].sort();
+    assert.deepEqual(externalRequests.sort(), expectedRequests);
     assert.deepEqual(await page.evaluate(() => window.policyViolations), []);
 
     for (const url of [
@@ -94,11 +105,16 @@ test('production policy preserves consented demo embeds and configured edge anal
       ), new URL(url).origin);
     }
     await assert.rejects(page.addScriptTag({ url: 'https://static.cloudflareinsights.com.example.test/beacon.js' }));
+    await assert.rejects(page.addScriptTag({ url: 'https://www.googletagmanager.com.example.test/gtag/js' }));
     assert.equal(await page.evaluate(async () => {
       try { await fetch('https://cloudflareinsights.com.example.test/cdn-cgi/rum'); return false; }
       catch { return true; }
     }), true);
-    assert.deepEqual(externalRequests.sort(), [playerUrl, beaconUrl, rumUrl].sort());
+    assert.equal(await page.evaluate(async () => {
+      try { await fetch('https://region1.google-analytics.com.example.test/g/collect'); return false; }
+      catch { return true; }
+    }), true);
+    assert.deepEqual(externalRequests.sort(), expectedRequests);
   } finally {
     if (browser) await browser.close();
     await new Promise(resolve => server.close(resolve));

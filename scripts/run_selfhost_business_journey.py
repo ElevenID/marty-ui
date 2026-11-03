@@ -84,6 +84,18 @@ CANVAS_UNUSED_SETTINGS = frozenset({
     "CANVAS_CREDENTIALS_PUBLISH_URL", "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
     "CANVAS_CREDENTIALS_ISSUER_ID", "CANVAS_CREDENTIALS_BADGECLASS_ID",
 })
+PASSPORT_DISABLED_FLAGS = {
+    "gateway": ("PASSPORT_NATIVE_GATEWAY_ENABLED", "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED",
+                "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"),
+    "flow": ("PASSPORT_NATIVE_FLOW_ENABLED", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"),
+    "issuance-native": ("PASSPORT_NATIVE_HTTP_ENABLED", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
+                        "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED", "PASSPORT_KMS_ARTIFACTS_ENABLED",
+                        "PASSPORT_KMS_CALLBACKS_ENABLED"),
+}
+BUREAU_UNUSED_SETTINGS = (
+    "PERSONALIZATION_BUREAU_URL", "PERSONALIZATION_BUREAU_API_KEY",
+    "PERSONALIZATION_BUREAU_API_KEY_FILE", "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
+)
 
 
 def measured(diagnostics: RunDiagnostics | None, name: str):
@@ -335,6 +347,25 @@ def disabled_optional_secrets(model: dict | None) -> frozenset[str]:
     if (canvas_disabled and observed_canvas ==
             CANVAS_DISABLED_FLAGS | CANVAS_UNUSED_SETTINGS):
         allowed.add("canvas_credentials_shared_secret")
+        if all((environment(owner) or {}).get("CANVAS_CREDENTIALS_API_TOKEN_FILE") == ""
+               for owner in ("issuance", "issuance-native")):
+            allowed.add("canvas_credentials_api_token")
+    # Default-empty files are permitted only with complete, explicitly disabled
+    # consumer controls. A selected path, raw credential, missing flag or active
+    # provider must not be turned into an empty credential by this legacy tool.
+    passport_disabled = True
+    for owner, flags in PASSPORT_DISABLED_FLAGS.items():
+        env = environment(owner)
+        if (env is None or any(not isinstance(env.get(flag), str)
+                              or env[flag].lower() not in FALSE_VALUES for flag in flags)
+                or env.get("PASSPORT_TENANT_API_KEYS") != ""
+                or env.get("PASSPORT_TENANT_API_KEYS_FILE") != ""):
+            passport_disabled = False
+    if passport_disabled:
+        allowed.add("passport_tenant_api_keys")
+        if all((environment("issuance-native") or {}).get(setting) == ""
+               for setting in BUREAU_UNUSED_SETTINGS):
+            allowed.add("personalization_bureau_api_key")
     return frozenset(allowed & OPTIONAL_LOCAL_SECRET_NAMES)
 
 

@@ -79,6 +79,8 @@ struct Preparation {
     execution_scope: ExecutionScope,
     provenance: Provenance,
     hosting_selection_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    application_settings_sha256: Option<String>,
     entries: BTreeMap<String, Entry>,
     prior_evidence_sha256: BTreeMap<String, String>,
     storage_created: bool,
@@ -164,7 +166,12 @@ pub(crate) fn require_supported_scope(state: &LockedInspection) -> Result<()> {
     }
 }
 
-fn entries(root: &File) -> Result<BTreeMap<String, Entry>> {
+fn entries(state: &LockedInspection) -> Result<BTreeMap<String, Entry>> {
+    let root = state.installation_directory();
+    let settings = crate::installer_settings::load(state)?;
+    if let Some(settings) = &settings {
+        settings.verify_secrets(root)?;
+    }
     let mut paths = vec![
         ("evidence".to_owned(), true, 0o700, None),
         ("secrets".to_owned(), true, 0o700, None),
@@ -184,9 +191,20 @@ fn entries(root: &File) -> Result<BTreeMap<String, Entry>> {
         ),
     ];
     paths.extend(
-        crate::installer_application_env::OPTIONAL_EMPTY_SECRETS
+        crate::installer_application_env::OPTIONAL_INTEGRATION_SECRETS
             .into_iter()
-            .map(|name| (format!("secrets/{name}"), false, 0o444, Some(0))),
+            .map(|name| {
+                (
+                    format!("secrets/{name}"),
+                    false,
+                    0o444,
+                    Some(
+                        settings
+                            .as_ref()
+                            .map_or(0, |s| s.fingerprints()[name].size_bytes),
+                    ),
+                )
+            }),
     );
     let open = |path: &str| -> Result<File> {
         if let Some((parent, name)) = path.split_once('/') {
@@ -208,6 +226,9 @@ fn entries(root: &File) -> Result<BTreeMap<String, Entry>> {
         require(
             observed.get(path) == Some(&Entry::observe(&open(path)?, *directory, *mode, *length)?),
         )?;
+    }
+    if let Some(settings) = &settings {
+        settings.verify_secrets(root)?;
     }
     Ok(observed)
 }
@@ -275,7 +296,11 @@ fn observe(state: &LockedInspection, installation: &Path) -> Result<Preparation>
             .hosting_selection_sha256()
             .ok_or(REFUSED)?
             .into(),
-        entries: entries(state.installation_directory())?,
+        application_settings_sha256: state
+            .journal()
+            .application_settings_sha256()
+            .map(str::to_owned),
+        entries: entries(state)?,
         prior_evidence_sha256,
         storage_created: true,
         operator_projection_created: true,
@@ -317,6 +342,8 @@ pub(crate) fn verify_retained_provenance(
             && preparation.execution_scope == *state.journal().execution_scope()
             && Some(preparation.hosting_selection_sha256.as_str())
                 == state.journal().hosting_selection_sha256()
+            && preparation.application_settings_sha256.as_deref()
+                == state.journal().application_settings_sha256()
             && preparation.storage_created
             && preparation.operator_projection_created
             && !preparation.application_started
@@ -352,6 +379,9 @@ pub(crate) fn verify_retained_provenance(
     }
     for (name, expected) in preparation.prior_evidence_sha256 {
         require(installer_release::sha256(&state.read_evidence(&name)?) == expected)?;
+    }
+    if let Some(settings) = crate::installer_settings::load(state)? {
+        settings.verify_secrets(state.installation_directory())?;
     }
     state.require_path_binding(installation)
 }
@@ -423,6 +453,81 @@ pub(crate) fn prepared_fixture(
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn historical_six_input_inventory_is_not_adopted_as_current_preparation() {
+        let root = tempfile::tempdir().unwrap();
+        let installation = root.path().join("installation");
+        let mut state = InstallerState::create(
+            &installation,
+            Identity {
+                source_sha: "a".repeat(40),
+                release_tag: "v1.2.3".into(),
+                inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+            },
+        )
+        .unwrap();
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        for name in [
+            "evidence",
+            "secrets",
+            "state",
+            "state/postgres",
+            "state/redis",
+            "state/applicant",
+            "backups",
+            "openbao-exports",
+            "openbao-snapshot-identity",
+        ] {
+            let path = installation.join(name);
+            std::fs::create_dir(&path).unwrap();
+            std::fs::set_permissions(
+                path,
+                std::fs::Permissions::from_mode(if name == "state/applicant" {
+                    0o2770
+                } else {
+                    0o700
+                }),
+            )
+            .unwrap();
+        }
+        for (name, mode) in [
+            ("operator-password", 0o600),
+            ("secrets/operator_bootstrap_password", 0o444),
+        ] {
+            let path = installation.join(name);
+            std::fs::write(&path, [b'x'; 69]).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        for name in [
+            "google_client_id",
+            "google_client_secret",
+            "google_analytics_measurement_id",
+            "google_site_verification",
+            "smtp_password",
+            "canvas_credentials_shared_secret",
+        ] {
+            let path = installation.join("secrets").join(name);
+            std::fs::write(&path, []).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        }
+        assert!(state.with_inspection(entries).is_err());
+        assert!(!installation
+            .join("secrets/passport_tenant_api_keys")
+            .exists());
+        for name in [
+            "passport_tenant_api_keys",
+            "personalization_bureau_api_key",
+            "canvas_credentials_api_token",
+        ] {
+            let path = installation.join("secrets").join(name);
+            std::fs::write(&path, []).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        }
+        let current = state.with_inspection(entries).unwrap();
+        assert_eq!(current.len(), 20);
+    }
 
     #[test]
     fn qualification_provenance_requires_exact_named_records_and_acceptance_pins() {

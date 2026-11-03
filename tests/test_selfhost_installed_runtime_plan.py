@@ -175,9 +175,13 @@ def test_source_compose_has_reviewed_full_dag() -> None:
          "-f", "docker-compose.selfhost.bundle.override.yml", "config", "--format", "json"],
         cwd=ROOT, env=env, check=True, capture_output=True, text=True,
     )
-    result = plan(json.loads(completed.stdout), PREFLIGHT, SECRET_ROOT)
+    rendered = json.loads(completed.stdout)
+    result = plan(rendered, PREFLIGHT, SECRET_ROOT)
     assert result["service_count"] == 29
     assert result["dependency_count"] > 30
+    from run_selfhost_business_journey import disabled_optional_secrets
+    assert {"canvas_credentials_api_token", "passport_tenant_api_keys",
+            "personalization_bureau_api_key"} <= disabled_optional_secrets(rendered)
 
 
 def test_default_selfhost_compose_never_mounts_bootstrap_root() -> None:

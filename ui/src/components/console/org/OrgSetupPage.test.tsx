@@ -40,6 +40,7 @@ vi.mock('../../../services/organizationsApi', () => ({
 
 describe('OrgSetupPage', () => {
   beforeEach(() => {
+    delete (window as any).__MARTY_RUNTIME_CONFIG__;
     vi.clearAllMocks();
 
     mockSearchParams.mockReturnValue(new URLSearchParams(''));

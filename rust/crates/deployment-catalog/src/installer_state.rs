@@ -280,6 +280,8 @@ pub struct Journal {
     hosting_selection_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hosting_addon_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    application_settings_sha256: Option<String>,
 }
 impl Journal {
     pub fn installation_id(&self) -> uuid::Uuid {
@@ -306,11 +308,27 @@ impl Journal {
     pub fn hosting_addon_sha256(&self) -> Option<&str> {
         self.hosting_addon_sha256.as_deref()
     }
+    pub(crate) fn application_settings_sha256(&self) -> Option<&str> {
+        self.application_settings_sha256.as_deref()
+    }
     pub fn compose_project(&self) -> String {
         format!("marty-install-{}", self.installation_id.simple())
     }
     fn validate(&self) -> Result<()> {
         self.identity.validate()?;
+        if self
+            .application_settings_sha256
+            .as_ref()
+            .is_some_and(|value| {
+                self.phase == Phase::Initialized
+                    || value.len() != 64
+                    || !value
+                        .bytes()
+                        .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+            })
+        {
+            return Err("invalid application settings binding".into());
+        }
         if self.hosting_selection_sha256.as_ref().is_some_and(|value| {
             self.phase == Phase::Initialized
                 || value.len() != 64
@@ -853,7 +871,7 @@ impl LockedInspection {
         }
         let bytes = self.read_credential_bytes(
             reopen_regular(&file)?,
-            crate::installer_application_env::OPTIONAL_EMPTY_SECRETS.contains(&entry),
+            crate::installer_application_env::OPTIONAL_INTEGRATION_SECRETS.contains(&entry),
         )?;
         if entry == "openbao_tls_ca_cert" {
             use x509_cert::der::DecodePem;
@@ -1926,11 +1944,22 @@ impl InstallerState {
         Ok(())
     }
 
-    /// Create only the fixed application directories and disabled-integration
-    /// placeholders. Existing state is never adopted; partial writes poison the
+    /// Create only the fixed application directories and selected immutable
+    /// integration inputs. Existing state is never adopted; partial writes poison the
     /// transaction and remain available for explicit recovery.
     pub fn prepare_application_storage(&mut self) -> Result<()> {
         self.require_live_phase(Phase::Provisioning)?;
+        let selected = self.with_inspection(crate::installer_settings::load)?;
+        let optional_inputs = selected
+            .as_ref()
+            .map(|s| s.initial_secrets())
+            .transpose()?
+            .unwrap_or_else(|| {
+                crate::installer_application_env::OPTIONAL_INTEGRATION_SECRETS
+                    .into_iter()
+                    .map(|name| (name.to_owned(), Vec::new()))
+                    .collect()
+            });
         private(&self.directory, true)?;
         let secrets = open_at(
             &self.directory,
@@ -1971,23 +2000,28 @@ impl InstallerState {
         let backups = make(&self.directory, "backups")?;
         let exports = make(&self.directory, "openbao-exports")?;
         let snapshot_identity = make(&self.directory, "openbao-snapshot-identity")?;
-        for entry in crate::installer_application_env::OPTIONAL_EMPTY_SECRETS {
-            let file = open_at(
+        for (entry, bytes) in &optional_inputs {
+            let mut file = open_at(
                 &secrets,
                 &name(entry),
                 libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
                 0o600,
             )?;
             private(&file, false)?;
+            file.write_all(bytes)
+                .map_err(|_| "persist selected integration input")?;
             if unsafe { libc::fchmod(file.as_raw_fd(), 0o444) } != 0 {
-                return Err(error("set disabled integration input mode"));
+                return Err(error("set selected integration input mode"));
             }
             file.sync_all()
-                .map_err(|_| "persist disabled integration input")?;
+                .map_err(|_| "persist selected integration input")?;
         }
         secrets
             .sync_all()
-            .map_err(|_| "persist application placeholders")?;
+            .map_err(|_| "persist application integration inputs")?;
+        if let Some(selected) = selected {
+            selected.verify_secrets(&self.directory)?;
+        }
         if let Some(creation) = &mut self.application_creation {
             creation.capture(&state, &backups, &exports, &snapshot_identity)?;
         }
@@ -2506,6 +2540,7 @@ impl InstallerState {
             scope,
             hosting_selection_sha256: None,
             hosting_addon_sha256: None,
+            application_settings_sha256: None,
         };
         let mut state = Self {
             directory,
@@ -2656,6 +2691,24 @@ impl InstallerState {
         }
         let mut journal = self.journal.clone();
         journal.hosting_selection_sha256 = Some(digest.into());
+        self.persist(&journal)?;
+        self.journal = journal;
+        Ok(())
+    }
+    /// Bind application policy and optional credential fingerprints once,
+    /// before provisioning. Missing remains meaningful for legacy journals.
+    pub(crate) fn bind_application_settings(&mut self, digest: &str) -> Result<()> {
+        self.require_live_phase(Phase::Verified)?;
+        if self.journal.application_settings_sha256.is_some()
+            || digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        {
+            return Err("application settings can be bound only once".into());
+        }
+        let mut journal = self.journal.clone();
+        journal.application_settings_sha256 = Some(digest.into());
         self.persist(&journal)?;
         self.journal = journal;
         Ok(())
@@ -3552,7 +3605,7 @@ mod tests {
         std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o444)).unwrap();
         let inspection = LockedInspection::open(&path).unwrap();
         assert_eq!(inspection.read_secret("token").unwrap(), b"credential");
-        for entry in crate::installer_application_env::OPTIONAL_EMPTY_SECRETS {
+        for entry in crate::installer_application_env::OPTIONAL_INTEGRATION_SECRETS {
             let optional = path.join("secrets").join(entry);
             std::fs::write(&optional, b"").unwrap();
             std::fs::set_permissions(&optional, std::fs::Permissions::from_mode(0o444)).unwrap();
@@ -4061,7 +4114,7 @@ mod tests {
         )
         .unwrap();
         assert!(state.validate_applicant_storage().is_err());
-        for entry in crate::installer_application_env::OPTIONAL_EMPTY_SECRETS {
+        for entry in crate::installer_application_env::OPTIONAL_INTEGRATION_SECRETS {
             let metadata = std::fs::metadata(path.join("secrets").join(entry)).unwrap();
             assert!(metadata.is_file());
             assert_eq!(metadata.len(), 0);

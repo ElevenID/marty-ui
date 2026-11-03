@@ -90,6 +90,8 @@
     "docker/secrets/selfhost.example/openbao_tls_ca_cert",
     "docker/secrets/selfhost.example/org_tls_kms_token",
     "docker/secrets/selfhost.example/org_workload_server_cert",
+    "docker/secrets/selfhost.example/passport_tenant_api_keys",
+    "docker/secrets/selfhost.example/personalization_bureau_api_key",
     "docker/secrets/selfhost.example/postgres_password",
     "docker/secrets/selfhost.example/pp_tls_kms_token",
     "docker/secrets/selfhost.example/pp_workload_server_cert",

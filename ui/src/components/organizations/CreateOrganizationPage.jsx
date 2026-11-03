@@ -7,6 +7,7 @@ import { useConsole } from '../../contexts/ConsoleContext';
 import OrgConsoleUnavailable from '../console/OrgConsoleUnavailable';
 import CreateOrganizationForm from './CreateOrganizationForm';
 import { ENABLE_ORGANIZATION_CREATION } from '@ui-public-config';
+import { isOrganizationCreationEnabled } from '../../utils/runtimeConfig';
 
 const SHOULD_LOG_CREATE_ORG_DIAGNOSTICS = import.meta.env.DEV && import.meta.env.MODE !== 'test';
 
@@ -71,6 +72,7 @@ function includeCreatedOrganization(memberships, createdOrganization) {
 }
 
 function CreateOrganizationPage() {
+  const organizationCreationEnabled = isOrganizationCreationEnabled(ENABLE_ORGANIZATION_CREATION);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const {
@@ -86,7 +88,7 @@ function CreateOrganizationPage() {
   const returnTo = searchParams.get('returnTo');
 
   const handleCreateOrganization = async (payload) => {
-    if (!ENABLE_ORGANIZATION_CREATION) {
+    if (!organizationCreationEnabled) {
       setError('Organization creation is disabled for this deployment.');
       return;
     }
@@ -135,7 +137,7 @@ function CreateOrganizationPage() {
     return <OrgConsoleUnavailable error={membershipLoadError} onRetry={reloadConsoleState} />;
   }
 
-  if (!ENABLE_ORGANIZATION_CREATION) {
+  if (!organizationCreationEnabled) {
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
         <Box sx={{ mb: 3 }}>
