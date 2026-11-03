@@ -23,6 +23,9 @@ services:
       openbao-unseal: *usable-kms
       db-migrate: *completed-job
       keycloak-configurator: *completed-job
+      # Auth checks managed OIDC before opening its listeners.
+      keycloak:
+        condition: service_healthy
   organization:
     depends_on:
       kms-initialize: *completed-job
