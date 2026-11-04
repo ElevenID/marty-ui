@@ -14,6 +14,7 @@ from pathlib import Path
 
 if __package__:
     from .release_transaction import REQUIRED_IMAGE_ROLES
+    from .release_review_main import gate_authority, require_review_only_history, strict_json
     from .check_release_absent import (
         RegistryTagAlreadyExists,
         ReleaseAlreadyExists,
@@ -23,6 +24,7 @@ if __package__:
     )
 else:
     from release_transaction import REQUIRED_IMAGE_ROLES
+    from release_review_main import gate_authority, require_review_only_history, strict_json
     from check_release_absent import (
         RegistryTagAlreadyExists,
         ReleaseAlreadyExists,
@@ -57,6 +59,29 @@ def registry_digest(image: str, version: str) -> str:
     return "sha256:" + hashlib.sha256(result.stdout).hexdigest()
 
 
+def protected_main_commit(repository: str) -> str:
+    """Resolve authorization through the authenticated API, never a local ref."""
+    try:
+        result = subprocess.run(
+            ["gh", "api", "--hostname", "github.com",
+             f"repos/{repository}/branches/main"],
+            check=True, capture_output=True, timeout=30,
+        )
+        if len(result.stdout) > 1024 * 1024:
+            raise ValueError("oversized branch response")
+        branch = strict_json(result.stdout)
+        if not isinstance(branch, dict) or not isinstance(branch.get("commit"), dict):
+            raise ValueError("invalid branch response")
+        commit = branch["commit"].get("sha")
+        if (branch.get("name") != "main" or branch.get("protected") is not True
+                or not isinstance(commit, str)
+                or re.fullmatch(r"[0-9a-f]{40}", commit) is None):
+            raise ValueError("invalid protected main response")
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        raise PrePromotionError("Could not authenticate protected main") from None
+    return commit
+
+
 def check(
     transaction: dict[str, object], *, source_sha: str, claim_run_id: str,
     tag: str, repository: str, git_command: Callable[..., str] = git,
@@ -64,6 +89,9 @@ def check(
     registry_absent: Callable[[str, str, str, str], None] = ensure_registry_tag_absent,
     digest_lookup: Callable[[str, str], str] = registry_digest,
     token: str, actor: str, images: tuple[str, ...],
+    official_gate: bytes, run_id: int, current_attempt: int = 1,
+    main_lookup: Callable[[str], str] = protected_main_commit,
+    history_check: Callable[..., None] = require_review_only_history,
 ) -> dict[str, bool]:
     """Return existing exact image tags, including writes before a checkpoint."""
     roles = REQUIRED_IMAGE_ROLES
@@ -108,10 +136,26 @@ def check(
 
     if git_command("rev-parse", "HEAD^{commit}") != source_sha:
         raise PrePromotionError("Publication checkout differs from claimed source")
+    try:
+        authority = gate_authority(
+            official_gate, transaction, run_id=run_id, current_attempt=current_attempt,
+        )
+    except (ValueError, KeyError, TypeError):
+        raise PrePromotionError("Official gate differs from the qualified transaction") from None
+    expected_main = authority["protected_main_commit"]
+    if main_lookup(repository) != expected_main:
+        raise PrePromotionError("Protected main changed after official qualification")
     git_command("fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main")
     main_sha = git_command("rev-parse", "refs/remotes/origin/main^{commit}")
-    if git_command("merge-base", source_sha, main_sha) != source_sha:
-        raise PrePromotionError("Claimed release source is not an ancestor of protected main")
+    if main_sha != expected_main:
+        raise PrePromotionError("Fetched main differs from authenticated review authority")
+    try:
+        history_check(
+            source_sha, main_sha, run_id, authority["origin_attempt"],
+            authority["review_required"], record_sha256=authority["record_sha256"],
+        )
+    except (ValueError, OSError, subprocess.SubprocessError):
+        raise PrePromotionError("Protected main is not the exact permitted review history") from None
 
     if state != "promoted":
         if git_command("ls-remote", "--tags", "origin", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"):
@@ -134,6 +178,10 @@ def check(
                 existing[role] = True
             else:
                 existing[role] = False
+    # Coordinate reads can take time. A later authorization commit is not an
+    # invitation to refresh an already-qualified candidate's accepted main.
+    if main_lookup(repository) != expected_main:
+        raise PrePromotionError("Protected main changed during the pre-publication check")
     return existing
 
 
@@ -144,6 +192,9 @@ def main() -> None:
     parser.add_argument("--claim-run-id", default=os.environ.get("CLAIM_RUN_ID", ""))
     parser.add_argument("--tag", default=os.environ.get("TAG", ""))
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
+    parser.add_argument("--official-gate", required=True, type=Path)
+    parser.add_argument("--run-id", type=int, default=os.environ.get("GITHUB_RUN_ID", "0"))
+    parser.add_argument("--current-attempt", type=int, default=os.environ.get("GITHUB_RUN_ATTEMPT", "0"))
     parser.add_argument("--image", action="append")
     parser.add_argument("--role", choices=REQUIRED_IMAGE_ROLES)
     args = parser.parse_args()
@@ -157,11 +208,19 @@ def main() -> None:
         transaction = json.loads(args.transaction.read_text(encoding="utf-8"))
         if not isinstance(transaction, dict):
             raise PrePromotionError("Qualified transaction is invalid")
+        if (args.official_gate.is_symlink() or not args.official_gate.is_file()
+                or args.official_gate.stat().st_size > 8 * 1024 * 1024):
+            raise PrePromotionError("Official gate must be a bounded regular file")
+        official_gate = args.official_gate.read_bytes()
+        if len(official_gate) > 8 * 1024 * 1024:
+            raise PrePromotionError("Official gate exceeds its size bound")
         existing = check(
             transaction, source_sha=args.source_sha, claim_run_id=args.claim_run_id,
             tag=args.tag, repository=args.repository,
             token=os.environ.get("GH_TOKEN", ""), actor=os.environ.get("GITHUB_ACTOR", ""),
             images=tuple(images),
+            official_gate=official_gate, run_id=args.run_id,
+            current_attempt=args.current_attempt,
         )
         if args.role:
             print("present" if existing[args.role] else "absent")

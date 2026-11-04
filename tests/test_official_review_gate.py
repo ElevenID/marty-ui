@@ -4,12 +4,14 @@ import argparse
 import importlib.util
 import json
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("official_review_gate", ROOT / "scripts/official_review_gate.py")
+sys.path.insert(0, str(ROOT))
+SPEC = importlib.util.spec_from_file_location("scripts.official_review_gate", ROOT / "scripts/official_review_gate.py")
 assert SPEC and SPEC.loader
 gate = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gate)
@@ -31,7 +33,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     calls = []
     plan = json.dumps({"pending": ["transport-unit-fixture-only"], "release_qualified": False}).encode()
 
-    def validator(arguments):
+    def validator(arguments, **kwargs):
         calls.append(arguments)
         if arguments[1:] == ["--list-lanes"]:
             return json.dumps(LANES).encode()
@@ -71,17 +73,16 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return args, GitHub(), calls, frozen
 
 
-def test_gate_only_retry_reuses_origin_attempt_and_never_downloads_a_partial_new_set(fixture) -> None:
+def test_snapshot_can_read_historical_origin_but_bounded_qualification_rejects_retry(fixture) -> None:
     args, github, calls, _ = fixture
     assert gate.snapshot(args, github) is False
     downloads = [call for call in github.calls if call[0] == "download"]
     assert downloads == [("download", 17, "official-review-input-17")]
     assert calls[-1][-2:] == ["1", str(args.snapshot / "official-summaries")]
-    gate.qualify(args, github)
-    assert args.output.is_file()
-    assert ("api", "contents/release/official-reviews/17-1.json?ref=" + "c" * 40, {"raw": True}) in github.calls
-    assert calls[-1][1:4] == ["--with-main-review", str(args.authorization / "record.json"), "c" * 40]
-    assert calls[-1][-2] == "1"
+    with pytest.raises(ValueError, match="original protected-main dispatch attempt"):
+        gate.qualify(args, github)
+    assert not args.output.exists()
+    assert not any(call[0] == "api" and call[1] == "branches/main" for call in github.calls)
 
 
 def test_first_collection_downloads_the_complete_current_set_before_freezing(fixture) -> None:
@@ -153,9 +154,13 @@ def test_foreign_contexts_fail_before_network_or_filesystem_mutation(fixture, mo
 
 
 @pytest.mark.parametrize("protected", [False, None, "true"])
-def test_only_real_protected_main_can_supply_review_records(fixture, protected) -> None:
+def test_only_real_protected_main_can_supply_review_records(fixture, monkeypatch, protected) -> None:
     args, github, _, _ = fixture
     gate.snapshot(args, github)
+    args.current_attempt = 1
+    for key, value in {"GITHUB_RUN_ATTEMPT": "1", "GITHUB_EVENT_NAME": "workflow_dispatch",
+                       "GITHUB_SHA": args.source, "GITHUB_REPOSITORY_ID": gate.REPOSITORY_ID}.items():
+        monkeypatch.setenv(key, value)
     github.branch["protected"] = protected
     with pytest.raises(ValueError):
         gate.qualify(args, github)
@@ -163,9 +168,13 @@ def test_only_real_protected_main_can_supply_review_records(fixture, protected) 
     assert not any(call[0] == "api" and call[1].startswith("contents/") for call in github.calls)
 
 
-def test_local_forged_record_is_never_used_as_authorization(fixture) -> None:
+def test_local_forged_record_is_never_used_as_authorization(fixture, monkeypatch) -> None:
     args, github, _, _ = fixture
     gate.snapshot(args, github)
+    args.current_attempt = 1
+    for key, value in {"GITHUB_RUN_ATTEMPT": "1", "GITHUB_EVENT_NAME": "workflow_dispatch",
+                       "GITHUB_SHA": args.source, "GITHUB_REPOSITORY_ID": gate.REPOSITORY_ID}.items():
+        monkeypatch.setenv(key, value)
     args.authorization.mkdir()
     record = args.authorization / "record.json"
     record.write_bytes(b'{"verdict":"accepted"}')
