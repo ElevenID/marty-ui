@@ -10,7 +10,7 @@ use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row, Transaction};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::oid4vci_authorization::Oid4vciAuthorizationRepository;
+use crate::oid4vci_authorization::{authorization_transaction_id, Oid4vciAuthorizationRepository};
 use crate::oid4vci_authorization_postgres::PostgresOid4vciAuthorizationRepository;
 use crate::{
     credential::{
@@ -1221,14 +1221,6 @@ struct CanvasProjection {
     renewal_source: Option<String>,
 }
 
-fn authorization_transaction_id(session_id: &str) -> String {
-    Uuid::new_v5(
-        &Uuid::NAMESPACE_URL,
-        format!("marty:oid4vci:authorization-session:{session_id}").as_bytes(),
-    )
-    .to_string()
-}
-
 fn random_capability() -> String {
     let mut bytes = [0_u8; 32];
     rand::rng().fill_bytes(&mut bytes);
@@ -2253,6 +2245,30 @@ mod tests {
             authorization_transaction_id("authorization-session-race"),
             "dca62a6b-abc0-590d-906b-2582303615e5"
         );
+    }
+
+    #[test]
+    fn authorization_transaction_identity_preserves_session_bytes() {
+        // Independent UUID-v5 vectors retain the existing Python contract.
+        for (session, expected) in [
+            ("", "f2748c94-ac3a-55be-bfaa-50ac29c8a56e"),
+            (
+                "authorization-session-other",
+                "8e63872b-80ac-5026-ad0a-146587f73a60",
+            ),
+            (
+                " authorization-session-race",
+                "02d92c0f-5325-5e96-9cc6-7da0e1af66d8",
+            ),
+            (
+                "authorization-session-race ",
+                "902e66f6-d815-5764-beb1-10cfa18cc53d",
+            ),
+            ("café/雪", "93931080-f4b8-54ea-92e7-a6e844ff2bc8"),
+            ("x\0y", "00d4e6d1-f5ab-5990-a94e-ca70f71d713a"),
+        ] {
+            assert_eq!(authorization_transaction_id(session), expected);
+        }
     }
 
     #[test]

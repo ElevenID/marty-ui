@@ -215,6 +215,36 @@ fn application_approval_requires_trusted_evidence() {
             "authenticated_at": now().to_rfc3339()
         }}),
     )]);
+    for field in ["event_id_sha256", "payload_sha256"] {
+        for invalid in [
+            json!(null),
+            json!(false),
+            json!(""),
+            json!("a".repeat(63)),
+            json!("a".repeat(65)),
+            json!("A".repeat(64)),
+            json!("g".repeat(64)),
+            json!(format!(" {}", "a".repeat(63))),
+            json!("é".repeat(32)),
+        ] {
+            let mut malformed = trusted.clone();
+            malformed
+                .get_mut("_marty_precondition_evidence_v1")
+                .unwrap()["application_approved"][field] = invalid;
+            assert!(matches!(
+                start_instance_record_with_trusted_context(
+                    &definition,
+                    start.clone(),
+                    "marty-applicant-service",
+                    now(),
+                    malformed,
+                ),
+                Err(marty_flow::FlowInstanceExecutionError::PreconditionsNotMet(
+                    _
+                ))
+            ));
+        }
+    }
     let instance = start_instance_record_with_trusted_context(
         &definition,
         start,

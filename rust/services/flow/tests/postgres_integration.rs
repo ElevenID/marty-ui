@@ -1073,6 +1073,34 @@ async fn run_crud_contract(
         created_at_ms: u64::try_from(now.timestamp_millis())?,
         updated_at_ms: u64::try_from(now.timestamp_millis())?,
     };
+    for invalid in [
+        String::new(),
+        "a".repeat(63),
+        "a".repeat(65),
+        "A".repeat(64),
+        "g".repeat(64),
+        format!(" {}", "a".repeat(63)),
+        "é".repeat(32),
+    ] {
+        for payload in [false, true] {
+            let mut malformed = receipt.clone();
+            if payload {
+                malformed.payload_sha256.clone_from(&invalid);
+            } else {
+                malformed.event_id_sha256.clone_from(&invalid);
+            }
+            assert!(matches!(
+                repository
+                    .reserve_application_event_plan(malformed, std::slice::from_ref(&planned),)
+                    .await,
+                Err(marty_flow::RepositoryError::InvalidReplayDigest)
+            ));
+        }
+    }
+    assert!(repository
+        .instance(&application_instance.id)
+        .await?
+        .is_none());
     let (reserved, created) = repository
         .reserve_application_event_plan(receipt.clone(), std::slice::from_ref(&planned))
         .await?;

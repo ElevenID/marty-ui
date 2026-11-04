@@ -228,6 +228,46 @@ fn application_offer_plan_is_durable_idempotent_and_conflict_safe() {
 }
 
 #[test]
+fn malformed_application_event_digests_do_not_reserve_a_plan() {
+    for invalid in [
+        String::new(),
+        "a".repeat(63),
+        "a".repeat(65),
+        "A".repeat(64),
+        "g".repeat(64),
+        format!(" {}", "a".repeat(63)),
+        format!("{}\0", "a".repeat(63)),
+        "é".repeat(32),
+        format!("sha256:{}", "a".repeat(64)),
+    ] {
+        for payload in [false, true] {
+            let repository = InMemoryFlowRepository::default();
+            let mut candidate = receipt('a', 'b');
+            if payload {
+                candidate.payload_sha256.clone_from(&invalid);
+            } else {
+                candidate.event_id_sha256.clone_from(&invalid);
+            }
+            assert!(matches!(
+                repository.reserve_application_event_plan(
+                    candidate,
+                    vec![planned_instance("instance-first", &"c".repeat(64))],
+                ),
+                Err(RepositoryError::InvalidReplayDigest)
+            ));
+            assert!(repository.instance("instance-first").unwrap().is_none());
+            let (_, created) = repository
+                .reserve_application_event_plan(
+                    receipt('a', 'b'),
+                    vec![planned_instance("instance-first", &"c".repeat(64))],
+                )
+                .unwrap();
+            assert!(created);
+        }
+    }
+}
+
+#[test]
 fn issuance_artifacts_are_idempotent_by_transaction_and_tenant_safe() {
     let repository = InMemoryFlowRepository::default();
     let first = FlowArtifact {

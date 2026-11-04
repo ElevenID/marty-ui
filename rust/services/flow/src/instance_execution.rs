@@ -5,6 +5,7 @@ use serde_json::{json, Map, Value};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::repository::valid_sha256;
 use crate::{
     AdvanceFlowRequest, DefinitionStatus, FlowApiError, FlowDefinitionRecord, FlowDomainError,
     FlowExtensionRequest, FlowInstanceRecord, FlowRecordError, FlowType, StartFlowRequest,
@@ -366,22 +367,15 @@ fn precondition_met(name: &str, evidence: Option<&Map<String, Value>>) -> bool {
         && approval
             .get("event_id_sha256")
             .and_then(Value::as_str)
-            .is_some_and(lower_hex_digest)
+            .is_some_and(valid_sha256)
         && approval
             .get("payload_sha256")
             .and_then(Value::as_str)
-            .is_some_and(lower_hex_digest)
+            .is_some_and(valid_sha256)
         && approval
             .get("authenticated_at")
             .and_then(Value::as_str)
             .is_some_and(|value| !value.trim().is_empty())
-}
-
-fn lower_hex_digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 pub fn application_approved_trigger(definition: &FlowDefinitionRecord) -> bool {
