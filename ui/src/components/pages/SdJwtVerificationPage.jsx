@@ -1,9 +1,10 @@
+import { useSurfaceNavigate } from '../../application/routing/useSurfaceNavigate';
 import { Box, Typography, Button } from '@mui/material';
-import { useNavigate } from 'react-router';
+
 import { SEOHead, softwareApplicationSchema } from '../seo';
 
 function SdJwtVerificationPage() {
-  const navigate = useNavigate();
+  const navigate = useSurfaceNavigate();
   return (
     <Box>
       <SEOHead

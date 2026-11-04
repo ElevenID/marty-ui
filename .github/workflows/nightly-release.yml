@@ -48,6 +48,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
+      - name: Require valid eligible nightly source before admission
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: python scripts/ci/check_release_preflight.py --source-sha "$SOURCE_SHA" --require-eligible
       - name: Authenticate nightly claim and current main
         id: plan
         env:
@@ -119,21 +123,12 @@ jobs:
             core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
       - name: Build existing production recipe by digest
         id: build
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        uses: ./.github/actions/build-product-image
         with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          target: ${{ matrix.target }}
-          platforms: linux/amd64
-          build-args: ${{ matrix.build_args }}
-          outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
-          provenance: mode=max
-          sbom: true
-          cache-from: type=gha,scope=marty-ui-public-services
-          secret-envs: |
-            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
-            sccache_url=SCCACHE_GHA_CACHE_URL
-            sccache_mode=SCCACHE_GHA_RW_MODE
+          producer: nightly
+          source-sha: ${{ github.sha }}
+          version: ${{ needs.admit.outputs.version }}
+          image-plan: ${{ toJSON(matrix) }}
       - name: Reject production website images from the customer release
         if: matrix.role == 'ui' || matrix.role == 'ui_selfhost'
         env:
@@ -185,21 +180,19 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  prepare-installation:
-    needs: [admit, build-images]
+  prepare-native:
+    needs: admit
     runs-on: ubuntu-24.04
     permissions:
-      actions: read
       contents: read
-      packages: read
-      attestations: read
-      id-token: write
+    outputs:
+      artifact_id: ${{ steps.native_artifact.outputs.artifact-id }}
+      archive_sha256: ${{ steps.native_archive.outputs.sha256 }}
     env:
       CARGO_PROFILE_RELEASE_DEBUG: '0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
@@ -208,6 +201,70 @@ jobs:
         with:
           toolchain: 1.95.0
           targets: x86_64-unknown-linux-musl
+      - name: Build existing Rust packager and Linux operator
+        env:
+          MARTY_DEPLOY_SOURCE_SHA: ${{ github.sha }}
+          MARTY_DEPLOY_RELEASE_TAG: ${{ needs.admit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools cmake
+          cargo build --locked --release --manifest-path rust/Cargo.toml \
+            --target-dir "$RUNNER_TEMP/tools" -p marty-selfhost-bundle --bin package-selfhost-bundle
+          cargo test --locked --manifest-path rust/Cargo.toml \
+            --target-dir "$RUNNER_TEMP/tools" -p marty-deployment-catalog
+          CC_x86_64_unknown_linux_musl=musl-gcc cargo build --locked --release \
+            --target x86_64-unknown-linux-musl --manifest-path rust/Cargo.toml \
+            --target-dir "$RUNNER_TEMP/tools" -p marty-deployment-catalog --bin marty-deploy
+      - name: Require real Compose installer model compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci/qualify-installer-compose-model.sh "$RUNNER_TEMP/tools"
+      - name: Seal qualified native tools for this source and attempt
+        id: native_archive
+        env:
+          TAG: ${{ needs.admit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          operator="$RUNNER_TEMP/tools/x86_64-unknown-linux-musl/release/marty-deploy"
+          test "$("$operator" --build-identity)" = "$GITHUB_SHA:$TAG"
+          if readelf -l "$operator" | grep -q INTERP; then exit 1; fi
+          sha256="$(python scripts/nightly_native_artifact.py pack \
+            --packager "$RUNNER_TEMP/tools/release/package-selfhost-bundle" \
+            --operator "$operator" --source-sha "$GITHUB_SHA" --tag "$TAG" \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/nightly-native.zip")"
+          printf 'sha256=%s\n' "$sha256" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        id: native_artifact
+        with:
+          name: nightly-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nightly-native.zip
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  prepare-installation:
+    needs: [admit, build-images, prepare-native]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      attestations: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -236,27 +293,33 @@ jobs:
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/nightly-release.yml" \
               --deny-self-hosted-runners
           done
-      - name: Build existing Rust packager and Linux operator
+      - name: Download exact same-attempt native artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.prepare-native.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/native-download
+      - name: Verify native artifact producer, bytes and original attempt
         env:
-          MARTY_DEPLOY_SOURCE_SHA: ${{ github.sha }}
-          MARTY_DEPLOY_RELEASE_TAG: ${{ needs.admit.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.admit.outputs.tag }}
+          NATIVE_ARTIFACT_ID: ${{ needs.prepare-native.outputs.artifact_id }}
+          NATIVE_ARCHIVE_SHA256: ${{ needs.prepare-native.outputs.archive_sha256 }}
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends musl-tools cmake
-          cargo build --locked --release --manifest-path rust/Cargo.toml \
-            --target-dir "$RUNNER_TEMP/tools" -p marty-selfhost-bundle --bin package-selfhost-bundle
-          cargo test --locked --manifest-path rust/Cargo.toml \
-            --target-dir "$RUNNER_TEMP/tools" -p marty-deployment-catalog
-          CC_x86_64_unknown_linux_musl=musl-gcc cargo build --locked --release \
-            --target x86_64-unknown-linux-musl --manifest-path rust/Cargo.toml \
-            --target-dir "$RUNNER_TEMP/tools" -p marty-deployment-catalog --bin marty-deploy
-      - name: Require real Compose installer model compatibility
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash scripts/ci/qualify-installer-compose-model.sh "$RUNNER_TEMP/tools"
+          [[ "$NATIVE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          test "$(find "$RUNNER_TEMP/native-download" -mindepth 1 -maxdepth 1 -printf '%f:%y\n')" = nightly-native.zip:f
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$NATIVE_ARTIFACT_ID" \
+            > "$RUNNER_TEMP/native-artifact.json"
+          python scripts/nightly_native_artifact.py restore \
+            --archive "$RUNNER_TEMP/native-download/nightly-native.zip" \
+            --artifact-json "$RUNNER_TEMP/native-artifact.json" \
+            --artifact-id "$NATIVE_ARTIFACT_ID" --archive-sha256 "$NATIVE_ARCHIVE_SHA256" \
+            --source-sha "$GITHUB_SHA" --tag "$TAG" \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/verified-native"
+          test "$("$RUNNER_TEMP/verified-native/marty-deploy-linux-amd64" --build-identity)" = "$GITHUB_SHA:$TAG"
       - name: Package digest-locked installation assets
         env:
           TAG: ${{ needs.admit.outputs.tag }}
@@ -265,12 +328,12 @@ jobs:
           set -euo pipefail
           python scripts/package_nightly_installation.py --source "$GITHUB_WORKSPACE" \
             --candidate "$RUNNER_TEMP/nightly-candidate.json" \
-            --packager "$RUNNER_TEMP/tools/release/package-selfhost-bundle" \
+            --packager "$RUNNER_TEMP/verified-native/package-selfhost-bundle" \
             --output "$RUNNER_TEMP/prepared"
           python scripts/nightly_release.py manifest --candidate "$RUNNER_TEMP/nightly-candidate.json" \
             --timestamp "$(git show -s --format=%cI HEAD)" --output "$RUNNER_TEMP/prepared/stack-manifest.json"
           asset="$RUNNER_TEMP/prepared/marty-deploy-linux-amd64"
-          cp "$RUNNER_TEMP/tools/x86_64-unknown-linux-musl/release/marty-deploy" "$asset"
+          cp "$RUNNER_TEMP/verified-native/marty-deploy-linux-amd64" "$asset"
           chmod 755 "$asset"
           test "$("$asset" --build-identity)" = "$GITHUB_SHA:$TAG"
           if readelf -l "$asset" | grep -q INTERP; then exit 1; fi

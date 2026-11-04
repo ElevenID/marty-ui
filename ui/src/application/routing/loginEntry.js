@@ -1,16 +1,19 @@
 /**
  * Pure helpers for the /login route.
  */
+import { safeNavigationDestination } from './safeNavigation';
 
 export function getLoginEntryRedirect(locationState, fallback = '/', search = '') {
   const statePath = locationState?.from?.pathname;
   const stateSearch = locationState?.from?.search || '';
+  const stateHash = locationState?.from?.hash || '';
   if (statePath) {
-    return `${statePath}${stateSearch}`;
+    const stateDestination = safeNavigationDestination(`${statePath}${stateSearch}${stateHash}`);
+    if (stateDestination) return stateDestination;
   }
 
   const next = new URLSearchParams(search || '').get('next');
-  return next || fallback;
+  return safeNavigationDestination(next) || safeNavigationDestination(fallback) || '/';
 }
 
 export function getLoginEntryDecision({ isAuthenticated, isLoading, redirectTo = '/' }) {

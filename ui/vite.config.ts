@@ -10,9 +10,11 @@ import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from
 import { resolve } from 'node:path'
 import { selfhostBuildContractPlugin } from './scripts/selfhost-build-contract.mjs'
 import { productionBuildContract, productionBuildContractPlugin } from './scripts/production-build-contract.mjs'
+import { websiteBuildRevision, webSurfaceBuildContractPlugin } from './scripts/web-surface-build-contract.mjs'
+import { websiteAssetBase, websiteAssetsPlugin } from './scripts/website-assets.mjs'
 
 const PRERENDERED_ROOT_STAGING_PATH = '__prerendered-root.html'
-const PRERENDER_RUNTIME_ASSET_ORIGIN = /https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=\/assets\/)/gi
+const PRERENDER_RUNTIME_ASSET_ORIGIN = /https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=\/(?:_website\/[^/]+\/)?assets\/)/gi
 
 function sanitizePrerenderedAssetUrls(html: string) {
   return html.replace(PRERENDER_RUNTIME_ASSET_ORIGIN, '')
@@ -152,12 +154,23 @@ export default defineConfig(async ({ mode }) => {
   const isDev = mode === 'development'
   const enableBundleAnalysis = mode === 'analyze' || process.env.ANALYZE_BUNDLE === '1'
   const isSelfhostBuild = mode === 'selfhost' || env.VITE_UI_VARIANT === 'selfhost'
-  const disablePrerender = isDev || isSelfhostBuild || process.env.DISABLE_PRERENDER === '1'
+  const surface = process.env.MARTY_UI_SURFACE || 'combined'
+  if (!['combined', 'website', 'application'].includes(surface)) throw new Error('Unknown UI surface')
+  if (isSelfhostBuild && surface !== 'combined') throw new Error('Customer UI cannot select a production surface')
+  const isWebsiteBuild = surface === 'website'
+  const isApplicationBuild = surface === 'application'
+  const sourceSha = process.env.MARTY_UI_SHA || 'development'
+  const pages = process.env.MARTY_PRODUCTION_PAGES || 'public'
+  const commerceSha = process.env.MARTY_COMMERCE_SOURCE_SHA
+  const websiteRevision = isWebsiteBuild ? websiteBuildRevision({ sourceSha, commerceSha, pages, revision: process.env.MARTY_WEBSITE_REVISION }) : null
+  const assetBase = isWebsiteBuild ? websiteAssetBase(websiteRevision) : '/'
+  const disablePrerender = isDev || isSelfhostBuild || isApplicationBuild || process.env.DISABLE_PRERENDER === '1'
   const prerenderDebug = process.env.PRERENDER_DEBUG === '1'
   const prerenderConcurrency = Number(process.env.PRERENDER_CONCURRENCY || 1)
   const port = Number(env.VITE_PORT || env.PORT || env.UI_DEV_PORT || 3000)
   const productionCommerceEntry = productionBuildContract({
-    pages: process.env.MARTY_PRODUCTION_PAGES || 'public',
+    pages,
+    surface,
     selfhost: isSelfhostBuild,
     extensionPath: process.env.MARTY_COMMERCE_EXTENSION_PATH,
     sourceSha: process.env.MARTY_COMMERCE_SOURCE_SHA,
@@ -169,7 +182,7 @@ export default defineConfig(async ({ mode }) => {
   let blogRoutes = []
   let demoRoutes = []
 
-  if (!isSelfhostBuild) {
+  if (!isSelfhostBuild && !isApplicationBuild) {
     const {
       BLOG_POSTS,
       BLOG_AUTHORS,
@@ -267,7 +280,7 @@ export default defineConfig(async ({ mode }) => {
     '/terms-of-service',
     ...blogRoutes,
     ...authorRoutes,
-    '/docs',
+    ...(!isWebsiteBuild ? ['/docs'] : []),
   ])
   const sitemapOnlyRoutes = requireUniqueRoutes('sitemap-only', [
     '/ai',
@@ -282,10 +295,12 @@ export default defineConfig(async ({ mode }) => {
   ])
   
   return {
+    publicDir: isWebsiteBuild ? false : 'public',
+    define: { 'import.meta.env.VITE_WEBSITE_ASSET_BASE': JSON.stringify(assetBase) },
     resolve: {
       alias: {
-        '@ui-public-config': fileURLToPath(new URL(`./src/variants/publicConfig.${isSelfhostBuild ? 'selfhost' : 'public'}.js`, import.meta.url)),
-        '@ui-public-routes': fileURLToPath(new URL(`./src/variants/publicSite.${isSelfhostBuild ? 'selfhost' : 'public'}.jsx`, import.meta.url)),
+        '@ui-public-config': fileURLToPath(new URL(`./src/variants/publicConfig.${isSelfhostBuild ? 'selfhost' : isWebsiteBuild ? 'website' : 'public'}.js`, import.meta.url)),
+        '@ui-public-routes': fileURLToPath(new URL(`./src/variants/publicSite.${isSelfhostBuild ? 'selfhost' : isApplicationBuild ? 'application' : 'public'}.jsx`, import.meta.url)),
         '@marty/commerce-extension': commerceExtensionPath,
         'react-router-dom': 'react-router',
       },
@@ -298,15 +313,16 @@ export default defineConfig(async ({ mode }) => {
     },
     optimizeDeps: {
       include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router'],
-      exclude: isSelfhostBuild ? [] : ['@elevenid/marty-blog'],
+      exclude: isSelfhostBuild || isApplicationBuild ? [] : ['@elevenid/marty-blog'],
     },
     plugins: [
       muiIconMjsCompatibilityPlugin(),
-      ...(isSelfhostBuild ? [selfhostBuildContractPlugin()] : []),
+      ...(isSelfhostBuild ? [selfhostBuildContractPlugin()] : [webSurfaceBuildContractPlugin({ surface, sourceSha, revision: websiteRevision, pages, commerceSha, commerceEntry: productionCommerceEntry })]),
+      ...(isWebsiteBuild ? [websiteAssetsPlugin(websiteRevision)] : []),
       ...(productionCommerceEntry ? [productionBuildContractPlugin(productionCommerceEntry)] : []),
-      ...(!disablePrerender ? [prerenderLocaleAssetsPlugin()] : []),
+      ...(!disablePrerender && !isWebsiteBuild ? [prerenderLocaleAssetsPlugin()] : []),
       react(),
-      consoleEntryRewritePlugin(),
+      ...(!isWebsiteBuild ? [consoleEntryRewritePlugin()] : []),
       ...(isDev ? [checker({
         // Match the production build's checked sources. The broad root config
         // includes test fixtures that do not currently type-check; Vitest owns
@@ -370,8 +386,9 @@ export default defineConfig(async ({ mode }) => {
 
       // Crawler files do not require a browser. Dockerfile.prod deliberately
       // disables prerendering, but every public build still needs these files.
-      ...(!isDev && !isSelfhostBuild ? [
+      ...(!isDev && !isSelfhostBuild && !isApplicationBuild ? [
         Sitemap({
+          outDir: isWebsiteBuild ? 'dist-website' : 'dist',
           hostname: 'https://elevenidllc.com',
           // The plugin also scans emitted HTML. In prerendered builds, submit
           // only routes without an HTML artifact; in Docker's SPA build, submit
@@ -528,13 +545,14 @@ export default defineConfig(async ({ mode }) => {
       },
     },
     build: {
-      outDir: isSelfhostBuild ? 'dist-selfhost' : 'dist',
+      outDir: isSelfhostBuild ? 'dist-selfhost' : surface === 'combined' ? 'dist' : `dist-${surface}`,
+      assetsDir: isWebsiteBuild ? `${assetBase.slice(1)}assets` : 'assets',
       sourcemap: !isSelfhostBuild && !productionCommerceEntry,
       chunkSizeWarningLimit: 1000, // Increase from default 500kB to 1000kB
       rollupOptions: {
         input: {
           main: fileURLToPath(new URL('./index.html', import.meta.url)),
-          console: fileURLToPath(new URL('./console/index.html', import.meta.url)),
+          ...(!isWebsiteBuild ? { console: fileURLToPath(new URL('./console/index.html', import.meta.url)) } : {}),
         },
         output: {
           manualChunks: createManualChunk,

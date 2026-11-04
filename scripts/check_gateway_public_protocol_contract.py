@@ -513,6 +513,13 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
     changes = job("changes")
     service = job("test-rust-services")
     gate = job("ci-gate")
+    classifier_path = REPO_ROOT / "scripts/ci/affected_components.sh"
+    if not classifier_path.is_file() or classifier_path.is_symlink():
+        raise AssertionError(
+            "the full Rust workspace test owner is not registered in CI: "
+            "the extracted classifier is missing or not a regular file"
+        )
+    classifier = classifier_path.read_text(encoding="utf-8")
     strategy_match = re.search(
         r"(?ms)^    strategy:\n(.*?)(?=^    [a-z][a-z0-9-]*:\n|\Z)", service
     )
@@ -563,10 +570,24 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
         '          \'["canvas","contracts","selfhost"]\' || needs.changes.outputs.rust_matrix) }}'
     )
     required = (
-        'rust_matrix=\'["canvas","contracts","selfhost"]\'' in changes
-        and "rust_matrix='[\"contracts\"]'" in changes
-        and 'if [[ "${{ github.event_name }}" == merge_group ]]' in changes
-        and "needs: changes" in service
+        # Matrix ownership moved into a checked-out helper. Verify its exact
+        # invocation and output wiring, then inspect the authoritative source
+        # rather than requiring stale copies of the old inline classifier.
+        "        id: classify\n" in changes
+        and "        run: |\n          source scripts/ci/affected_components.sh\n" in changes
+        and "      rust_matrix: ${{ steps.classify.outputs.rust_matrix }}\n" in changes
+        and "      plan: ${{ steps.classify.outputs.plan }}\n" in changes
+        and 'rust_matrix=\'["canvas","contracts","selfhost"]\'' in classifier
+        and "rust_matrix='[\"contracts\"]'" in classifier
+        and (
+            'if [[ "$website_only" == true ]]; then\n'
+            '  website=true\n'
+            'elif [[ "$EVENT_NAME" != pull_request ]]; then\n'
+            '  all=true\nelse\n'
+        ) in classifier
+        and 'if [[ "$all" == true ]]; then\n  ui=true\n  python=true\n  rust=true\n' in classifier
+        and "python3 scripts/ci/affected_components.py emit\n" in classifier
+        and re.search(r"(?m)^    needs: \[changes, release-preflight\]$", service)
         and "if: needs.changes.outputs.rust == 'true'" in service
         and matrix_body == diagnostic_matrix
         and "cargo test --locked --workspace --no-run" in service
@@ -583,6 +604,10 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
         and '"$RUST_MATRIX" == \'["canvas","contracts","selfhost"]\' ]]' in gate
         and 'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
         in gate
+        and 'if [[ "${{ github.event_name }}" == merge_group && "$WEBSITE_ONLY" != true ]]; then' in gate
+        and "          CI_PLAN: ${{ needs.changes.outputs.plan }}\n" in gate
+        and "          CI_NEEDS_JSON: ${{ toJSON(needs) }}\n" in gate
+        and "        run: python3 scripts/ci/affected_components.py gate\n" in gate
     )
     if not required:
         raise AssertionError(

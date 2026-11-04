@@ -7,7 +7,7 @@ import { pruneSelfhostDist } from '../../../scripts/prune-selfhost-dist.mjs';
 
 describe('customer build exclusion', () => {
   it('rejects every marketing page imported by the production route module', () => {
-    const productionRoutes = path.resolve('src/variants/publicSite.public.jsx');
+    const productionRoutes = path.resolve('src/variants/marketingRoutes.jsx');
     const imports = [...readFileSync(productionRoutes, 'utf8').matchAll(/import\(['"]([^'"]+)['"]\)/g)];
     expect(imports.length).toBeGreaterThan(20);
     for (const [, imported] of imports) {

@@ -220,11 +220,13 @@ def test_packaging_refuses_source_drift_and_existing_output(packaged, tmp_path):
         addon.package(source, tmp_path / "changed", **args)
 
 
-@pytest.mark.parametrize("filename, needs", [
-    ("nightly-release.yml", ["admit", "publish"]),
-    ("cd.yml", ["resolve-transaction", "publish-manifest"]),
+@pytest.mark.parametrize("filename, needs, condition", [
+    ("nightly-release.yml", ["admit", "publish"],
+     "${{ inputs.publish_cloudflare_addon }}"),
+    ("cd.yml", ["resolve-transaction", "publish-manifest"],
+     "${{ inputs.publish_cloudflare_addon && inputs.publication_contract == 'v1' }}"),
 ])
-def test_optional_producer_runs_only_after_core_publication(filename, needs):
+def test_optional_producer_runs_only_after_core_publication(filename, needs, condition):
     workflow = yaml.safe_load((ROOT / ".github/workflows" / filename).read_text())
     inputs = workflow.get("on", workflow.get(True))["workflow_dispatch"]["inputs"]
     assert inputs["publish_cloudflare_addon"] == {
@@ -234,7 +236,7 @@ def test_optional_producer_runs_only_after_core_publication(filename, needs):
     jobs = workflow["jobs"]
     optional = jobs["publish-cloudflare-addon"]
     assert optional["needs"] == needs
-    assert optional["if"] == "${{ inputs.publish_cloudflare_addon }}"
+    assert optional["if"] == condition
     assert all("publish-cloudflare-addon" not in job.get("needs", []) for name, job in jobs.items()
                if name != "publish-cloudflare-addon")
     build = next(s for s in optional["steps"] if s.get("id") == "image")

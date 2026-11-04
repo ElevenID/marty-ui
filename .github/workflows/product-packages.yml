@@ -81,35 +81,14 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Pass bounded source-derived build arguments
-        id: args
-        env:
-          IMAGE_PLAN: ${{ toJSON(matrix) }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            echo 'value<<PRODUCT_BUILD_ARGS'
-            jq -r '.build_args | to_entries[] | "\(.key)=\(.value)"' <<< "$IMAGE_PLAN"
-            echo PRODUCT_BUILD_ARGS
-          } >> "$GITHUB_OUTPUT"
-      - name: Build only this product's image role
+      - name: Build only this product's verified image role
         id: image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        uses: ./.github/actions/build-product-image
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
-          target: ${{ matrix.target }}
-          platforms: ${{ matrix.platform }}
-          outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
-          build-args: ${{ steps.args.outputs.value }}
-          labels: |
-            io.elevenid.product=${{ needs.plan.outputs.product }}
-            io.elevenid.qualification=unqualified
-          provenance: mode=max
-          sbom: true
-          cache-from: type=gha,scope=product-${{ needs.plan.outputs.product }}-${{ matrix.role }}
-          cache-to: type=gha,mode=max,scope=product-${{ needs.plan.outputs.product }}-${{ matrix.role }}
+          producer: product
+          source-sha: ${{ github.sha }}
+          product: ${{ needs.plan.outputs.product }}
+          image-plan: ${{ toJSON(matrix) }}
       - name: Verify the console is a customer UI image
         if: matrix.role == 'ui'
         env:

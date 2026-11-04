@@ -122,6 +122,24 @@ def test_production_hook_reads_public_files_and_refreshes_every_prerendered_head
                 assert "public-verify" not in text
 
 
+def test_website_hook_writes_only_the_namespaced_runtime_config(tmp_path):
+    target = tmp_path / "website"
+    target.mkdir()
+    (target / "index.html").write_text('<html><head></head><body>Website</body></html>')
+    (target / "runtime-config.js").write_text('retained application config')
+    runtime = target / "_website/runtime-config.js"
+    script = (ROOT / "scripts/ui-production-start.sh").read_text()
+    script = script.replace('TARGET_DIR="/usr/share/nginx/html"', "TARGET_DIR=" + shlex.quote(str(target)))
+    script = script.replace(". /scripts/load-secrets-env.sh", ": # no secrets in this fixture")
+    result = subprocess.run(["sh"], input=script, text=True, capture_output=True,
+                            env={"PATH": os.environ["PATH"], "MARTY_UI_RUNTIME_CONFIG_PATH": str(runtime),
+                                 "ORGANIZATION_CREATION_ENABLED": "false"})
+    assert result.returncode == 0, result.stderr
+    assert "organizationCreationEnabled: false" in runtime.read_text()
+    assert (target / "runtime-config.js").read_text() == 'retained application config'
+    assert 'Website' in (target / "index.html").read_text()
+
+
 @pytest.mark.parametrize("audience", ["customer", "production"])
 @pytest.mark.parametrize("value", ["G-test", "UA-12345-1", "G-ABC'", "G-ABC\\", "G-ABC\nthrow Error('injected')"])
 def test_invalid_ga_identifier_is_rejected_before_any_runtime_or_page_change(tmp_path, audience, value):

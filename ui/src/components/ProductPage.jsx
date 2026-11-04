@@ -1,3 +1,4 @@
+import { useSurfaceNavigate } from '../application/routing/useSurfaceNavigate';
 /**
  * Product Page
  * 
@@ -18,7 +19,7 @@ import SecurityIcon from '@mui/icons-material/Security';
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import GitHubIcon from '@mui/icons-material/GitHub';
-import { useNavigate } from 'react-router';
+
 import { DISABLE_PUBLIC_PRICING_BUTTONS, SHOW_PUBLIC_PRICING_BUTTONS } from '@ui-public-config';
 import FutureFeatureButton from './FutureFeatureButton';
 import { PRODUCTS } from '../data/marketingContent';
@@ -33,7 +34,7 @@ const DEPLOYMENT_ICONS = {
 };
 
 function ProductPage() {
-  const navigate = useNavigate();
+  const navigate = useSurfaceNavigate();
   const branding = useBranding();
 
   return (

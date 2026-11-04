@@ -1,0 +1,54 @@
+name: Build source-bound product image
+description: Revalidate and build one existing product or nightly recipe by digest
+inputs:
+  producer:
+    description: Existing product or nightly producer
+    required: true
+  source-sha:
+    description: Exact admitted checkout
+    required: true
+  image-plan:
+    description: Complete source-derived matrix row
+    required: true
+  product:
+    description: Independent product identity for the product producer
+    default: ''
+  version:
+    description: Admitted nightly version for the nightly producer
+    default: ''
+outputs:
+  digest:
+    description: Built immutable OCI digest
+    value: ${{ steps.image.outputs.digest }}
+runs:
+  using: composite
+  steps:
+    - name: Revalidate exact source recipe and cache authority
+      id: recipe
+      shell: bash
+      env:
+        PRODUCER: ${{ inputs.producer }}
+        SOURCE_SHA: ${{ inputs.source-sha }}
+        IMAGE_PLAN: ${{ inputs.image-plan }}
+        PRODUCT: ${{ inputs.product }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        python scripts/product_image_build.py --producer "$PRODUCER" \
+          --source-sha "$SOURCE_SHA" --product "$PRODUCT" --version "$VERSION"
+    - name: Build the verified image by digest
+      id: image
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+      with:
+        context: ${{ steps.recipe.outputs.context }}
+        file: ${{ steps.recipe.outputs.dockerfile }}
+        target: ${{ steps.recipe.outputs.target }}
+        platforms: ${{ steps.recipe.outputs.platform }}
+        outputs: type=image,name=${{ steps.recipe.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+        build-args: ${{ steps.recipe.outputs.build-args }}
+        labels: ${{ steps.recipe.outputs.labels }}
+        provenance: mode=max
+        sbom: true
+        cache-from: ${{ steps.recipe.outputs.cache-from }}
+        cache-to: ${{ steps.recipe.outputs.cache-to }}
+        secret-envs: ${{ steps.recipe.outputs.secret-envs }}

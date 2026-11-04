@@ -1,7 +1,8 @@
 import { DEMO_INDEX, DEMO_MANIFESTS } from '../generated/demoManifests.generated';
 import WALLET_SCHEMA from '../generated/demoWalletSchema.generated.json';
 
-const MANIFEST_ROOT = '/demos/manifests';
+import { staticAssetHref } from '../utils/staticAssetHref';
+const MANIFEST_ROOT = staticAssetHref('/demos/manifests');
 const STACK_VERSION_PATTERN = /^\d{4}\.\d{2}\.\d+$/;
 const MIP_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 const YOUTUBE_CHANNEL_ID_PATTERN = /^UC[A-Za-z0-9_-]{22}$/;

@@ -26,6 +26,12 @@ test('full production binds the exact private source and requires it in the emit
     const args = { pages: 'full', extensionPath: entry, sourceSha };
     assert.equal(productionBuildContract(args), entry);
     assert.throws(() => productionBuildContract({ ...args, sourceSha: 'b'.repeat(40) }), /identity differs/);
+    for (const surface of ['website', 'application']) {
+      assert.throws(() => productionBuildContract({ ...args, surface }), /adapter is missing/);
+      const adapter = path.join(root, 'src', `${surface}.jsx`);
+      writeFileSync(adapter, 'export const commerceExtensionEnabled = true;\n');
+      assert.equal(productionBuildContract({ ...args, surface }), adapter);
+    }
     const plugin = productionBuildContractPlugin(entry);
     plugin.generateBundle({}, { 'main.js': { type: 'chunk', modules: { [entry]: {} } } });
     assert.throws(() => plugin.generateBundle({}, {

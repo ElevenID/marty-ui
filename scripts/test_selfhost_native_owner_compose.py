@@ -360,6 +360,19 @@ def assert_models(
         "CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/",
     ]
     ui["healthcheck"]["test"][-1] = "http://127.0.0.1:80/healthz"
+    # The existing edge must start independently of product health so retained
+    # marketing remains available. Keep the frozen model/hash and admit only
+    # these exact dependency removals and the local edge health target; ports,
+    # mounts, upstreams, health timing and all other fields remain compared.
+    edge = expected["services"]["edge"]
+    assert edge.pop("depends_on") == {
+        owner: {"condition": "service_healthy", "required": True}
+        for owner in ("ui", "gateway", "flow", "keycloak")
+    }
+    assert edge["healthcheck"]["test"] == [
+        "CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/ready",
+    ]
+    edge["healthcheck"]["test"][-1] = "http://127.0.0.1/edge-healthz"
     if not interpolated:
         apply_foundation_reference_representation(expected)
     # The installer supplies one normalized DNS did:web identity (including an

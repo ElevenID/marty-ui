@@ -97,6 +97,7 @@ def test_plan_is_exact_artifact_bound_and_excludes_optional_connectors() -> None
     assert result["dependency_count"] == sum(map(len, EXPECTED_DEPENDENCIES.values()))
     layers = result["startup_layers"]
     assert sum(map(len, layers)) == 29
+    assert "edge" in layers[0]
     assert not {"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"} & EXPECTED_SERVICES
     assert not {"cloudflare_tunnel_token", "cloudflare_beta_tunnel_token"} & EXPECTED_SECRET_NAMES
     assert next(i for i, layer in enumerate(layers) if "db-migrate" in layer) < next(
@@ -120,6 +121,10 @@ def test_plan_is_exact_artifact_bound_and_excludes_optional_connectors() -> None
     lambda m: m["services"]["db-migrate"].update({"restart": "always"}),
     lambda m: m["services"]["gateway"]["depends_on"].pop("auth"),
     lambda m: m["services"]["auth"]["depends_on"].pop("applicant"),
+    lambda m: m["services"]["auth"]["depends_on"].pop("keycloak-configurator"),
+    lambda m: m["services"]["db-migrate"]["depends_on"].pop("postgres"),
+    lambda m: m["services"]["kms-initialize"]["depends_on"].pop("db-migrate"),
+    lambda m: m["services"]["issuance-native"]["depends_on"].pop("issuance-migrations"),
     lambda m: m["services"]["flow"]["depends_on"].pop("trust-profile"),
     lambda m: m["services"]["flow"]["depends_on"].pop("deployment-profile"),
     lambda m: m["services"]["signing-keys"].update({"secrets": [{"source": "undeclared"}]}),
@@ -144,6 +149,16 @@ def test_plan_rejects_dag_and_declaration_drift(change) -> None:
     changed = model()
     change(changed)
     with pytest.raises(ValueError):
+        plan(changed, PREFLIGHT, SECRET_ROOT)
+
+
+@pytest.mark.parametrize("peer", ["ui", "gateway", "flow", "keycloak"])
+def test_plan_rejects_reintroduced_edge_startup_dependencies(peer: str) -> None:
+    changed = model()
+    changed["services"]["edge"]["depends_on"][peer] = {
+        "condition": "service_healthy", "required": True,
+    }
+    with pytest.raises(ValueError, match="service edge changed dependency edges"):
         plan(changed, PREFLIGHT, SECRET_ROOT)
 
 
@@ -176,9 +191,11 @@ def test_source_compose_has_reviewed_full_dag() -> None:
         cwd=ROOT, env=env, check=True, capture_output=True, text=True,
     )
     rendered = json.loads(completed.stdout)
+    assert "depends_on" not in rendered["services"]["edge"]
     result = plan(rendered, PREFLIGHT, SECRET_ROOT)
     assert result["service_count"] == 29
     assert result["dependency_count"] > 30
+    assert "edge" in result["startup_layers"][0]
     from run_selfhost_business_journey import disabled_optional_secrets
     assert {"canvas_credentials_api_token", "passport_tenant_api_keys",
             "personalization_bureau_api_key"} <= disabled_optional_secrets(rendered)
@@ -225,9 +242,10 @@ def test_api_only_overlay_excludes_only_console_and_preserves_backend_dependenci
     actual = render([*profiles, "-f", "docker-compose.selfhost.api-only.yml"])
     assert "ui" in original
     assert "ui" not in actual
+    assert "depends_on" not in original["edge"]
+    assert "depends_on" not in actual["edge"]
     expected = copy.deepcopy(original)
     expected.pop("ui")
-    expected["edge"]["depends_on"].pop("ui")
     expected["edge"]["environment"]["SELFHOST_CONSOLE_ENABLED"] = "false"
     assert actual == expected
     assert "canvas-sync-worker" in actual

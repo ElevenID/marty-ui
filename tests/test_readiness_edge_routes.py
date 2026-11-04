@@ -75,13 +75,23 @@ def test_beta_keycloak_publishes_the_canonical_https_issuer_without_proxy_header
 
 def test_selfhost_edge_healthchecks_use_readiness() -> None:
     for relative_path, service in (
-        ("docker-compose.selfhost.prod.yml", "edge"),
         ("docker-compose.selfhost.cloudflare-legacy.yml", "tunnel-nginx-proxy"),
     ):
         model = yaml.safe_load(_text(relative_path))
         healthcheck = model["services"][service]["healthcheck"]["test"]
         assert "http://127.0.0.1/ready" in healthcheck, relative_path
         assert "http://127.0.0.1/health" not in healthcheck, relative_path
+
+
+def test_production_edge_can_start_while_product_is_unavailable() -> None:
+    edge = yaml.safe_load(_text("docker-compose.selfhost.prod.yml"))["services"]["edge"]
+    assert "http://127.0.0.1/edge-healthz" in edge["healthcheck"]["test"]
+    assert not edge.get("depends_on")
+    template = _text("docker/nginx-selfhost.prod.conf.template")
+    assert "include /etc/nginx/marty-website/*.conf;" in template
+    assert "location = /edge-healthz" in template
+    # Existing product readiness retains its gateway semantics.
+    _assert_ready_proxied_before_spa_fallback("docker/nginx-selfhost.prod.conf.template")
 
 
 def test_gateway_container_healthchecks_use_dependency_readiness() -> None:

@@ -52,7 +52,8 @@ test-user accounts as part of installed acceptance.
    Stack release but its official issuer run stopped at Compose validation;
    it has no official conformance or installed qualification. The stable
    `v1.1.263` claim is bound to its earlier source and its producer failed; do
-   not reuse that coordinate for new source. Consider `v1.1.265` only
+   not reuse that coordinate for new source. Derive the next candidate from the
+   `release` field in `release/stack-lock.json`; consider it only
    after its exact-main release, terminally successful bundle producer,
    independent fresh installed journey, and restored-stack gates pass. A
    continuously running beta or self-host cutover also needs a production

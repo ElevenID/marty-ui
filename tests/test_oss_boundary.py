@@ -6,6 +6,12 @@ from scripts.check_oss_boundary import scan_repository
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+METADATA_FILES = [
+    "docker/ui.Dockerfile",
+    "scripts/ui_release.py",
+    "scripts/website_release.py",
+    "scripts/website_provenance.py",
+]
 
 
 def test_current_repository_has_no_private_commerce_implementation() -> None:
@@ -36,7 +42,7 @@ def test_boundary_scan_reports_commercial_price_catalog(tmp_path: Path) -> None:
     ]
 
 
-@pytest.mark.parametrize("relative", ["docker/ui.Dockerfile", "scripts/ui_release.py"])
+@pytest.mark.parametrize("relative", METADATA_FILES)
 def test_exact_production_identity_metadata_is_allowed(tmp_path: Path, relative: str) -> None:
     target = tmp_path / relative
     target.parent.mkdir(parents=True)
@@ -45,7 +51,7 @@ def test_exact_production_identity_metadata_is_allowed(tmp_path: Path, relative:
     assert scan_repository(tmp_path) == []
 
 
-@pytest.mark.parametrize("relative", ["docker/ui.Dockerfile", "scripts/ui_release.py"])
+@pytest.mark.parametrize("relative", METADATA_FILES)
 # Build synthetic hostile inputs from fragments so the organization source audit
 # does not mistake negative fixtures for deployed dependencies or credentials.
 @pytest.mark.parametrize("payload,marker", [
@@ -73,37 +79,49 @@ def test_metadata_file_still_rejects_private_source_and_billing_inputs(
     assert f"forbidden marker {marker!r}: {relative}" in scan_repository(tmp_path)
 
 
-@pytest.mark.parametrize("relative", ["docker/ui.Dockerfile", "scripts/ui_release.py"])
+@pytest.mark.parametrize("relative", METADATA_FILES)
 @pytest.mark.parametrize("mutation", ["extend", "repeat", "relocate"])
 def test_identity_exception_requires_exact_statement_once_at_exact_path(
     tmp_path: Path, relative: str, mutation: str,
 ) -> None:
     content = (REPO_ROOT / relative).read_text(encoding="utf-8")
-    statement = next(line for line in content.splitlines()
-                     if "ElevenID/marty-subscriptions" in line)
-    if mutation == "extend":
-        content = content.replace(statement, statement + "; fetch_private_source()", 1)
-    elif mutation == "repeat":
-        content += "\n" + statement + "\n"
-    else:
+    statements = [
+        (line, marker)
+        for line in content.splitlines()
+        for marker in ("ElevenID/marty-subscriptions", "COMMERCE_REPOSITORY")
+        if marker in line
+    ]
+    assert statements, "metadata fixture must exercise a forbidden identity marker"
+    if mutation == "relocate":
         relative = "scripts/unreviewed-release.py"
     target = tmp_path / relative
     target.parent.mkdir(parents=True)
-    target.write_text(content, encoding="utf-8")
+    for statement, marker in statements:
+        modified = content
+        if mutation == "extend":
+            modified = content.replace(statement, statement + "; fetch_private_source()", 1)
+        elif mutation == "repeat":
+            modified += "\n" + statement + "\n"
+        target.write_text(modified, encoding="utf-8")
 
-    assert ("forbidden marker 'ElevenID/marty-subscriptions': "
-            + relative) in scan_repository(tmp_path)
+        assert f"forbidden marker {marker!r}: {relative}" in scan_repository(tmp_path), statement
 
 
-def test_production_identity_constant_cannot_be_reused_to_fetch_private_source(
-    tmp_path: Path,
+@pytest.mark.parametrize("relative", METADATA_FILES[1:])
+@pytest.mark.parametrize("payload", [
+    'subprocess.run(["git", "clone", COMMERCE_REPOSITORY], check=True)',
+    'subprocess.run(["git", "clone", ui.COMMERCE_REPOSITORY], check=True)',
+    'from ui_release import COMMERCE_REPOSITORY as private_source',
+    'private_source = ui.COMMERCE_REPOSITORY',
+])
+def test_production_identity_constant_cannot_be_reused_outside_metadata(
+    tmp_path: Path, relative: str, payload: str,
 ) -> None:
-    relative = "scripts/ui_release.py"
     target = tmp_path / relative
     target.parent.mkdir(parents=True)
     target.write_text(
         (REPO_ROOT / relative).read_text(encoding="utf-8")
-        + '\nsubprocess.run(["git", "clone", COMMERCE_REPOSITORY], check=True)\n',
+        + "\n" + payload + "\n",
         encoding="utf-8",
     )
 

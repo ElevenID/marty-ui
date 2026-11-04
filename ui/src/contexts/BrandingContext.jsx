@@ -1,3 +1,4 @@
+import { staticAssetHref } from '../utils/staticAssetHref';
 import { createContext, useState, useEffect } from 'react';
 import { getPublicEntryCanonicalOrigin } from '../application/routing/publicEntry';
 
@@ -43,7 +44,7 @@ export function BrandingProvider({ children }) {
 
   useEffect(() => {
     // Fetch runtime branding configuration
-    fetch('/config.json', getPublicEntryCanonicalOrigin() ? { credentials: 'omit' } : undefined)
+    fetch(staticAssetHref('/config.json'), getPublicEntryCanonicalOrigin() ? { credentials: 'omit' } : undefined)
       .then(response => {
         if (!response.ok) {
           throw new Error('Config not found, using defaults');

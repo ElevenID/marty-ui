@@ -438,7 +438,13 @@ def test_stable_installer_publication_closes_payload_proofs_and_remote_bytes() -
     assert "200)" in existing and "first-attempt coordinate" in existing
     assert "exit 1" in existing.split("200)", 1)[1].split(";;", 1)[0]
     assert "gh release download" not in existing
-    assert "if" not in steps[publish]
+    assert steps[publish]["if"] == "inputs.publication_contract == 'v1'"
+    candidate = steps[names["Seal the immutable v2 publication candidate"]]
+    assert candidate["if"] == "inputs.publication_contract == 'v2'"
+    assert late_tag < names["Seal the immutable v2 publication candidate"] < publish
+    # The prospective v2 branch still uses all original qualification and
+    # signing gates; only its final release mutation moves to a fresh publisher.
+    assert all("if" not in steps[i] for i in (checks, signing, attest, export, seal, late_tag))
     assert all("continue-on-error" not in steps[i] for i in (checks, signing, attest, export, publish))
 
 
@@ -753,8 +759,8 @@ def _assert_final_public_ui_runtime_stage(dockerfile: str) -> None:
     )
     public_lines = dockerfile[stages[-1].end():].splitlines()
     for required in (
-        'RUN test "$UI_VARIANT" = public',
-        'LABEL io.elevenid.ui.audience="production"',
+        'RUN test "$UI_VARIANT" = public && test "$UI_SURFACE" = combined',
+        'LABEL io.elevenid.ui.audience="production" io.elevenid.ui.surface="combined"',
         "COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html",
         "COPY scripts/ui-production-start.sh /docker-entrypoint.d/40-ui-production.sh",
         "COPY scripts/load-secrets-env.sh /scripts/load-secrets-env.sh",
@@ -859,18 +865,18 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.265"
+    release_tag = "v" + lock["release"].removeprefix("marty-ui@")
     assert lock["release_state"] == "eligible"
-    stack_tag_gate.require_release_eligible(ROOT, "v1.1.265")
+    stack_tag_gate.require_release_eligible(ROOT, release_tag)
     workflow = _text(".github/workflows/cd.yml")
     assert 'manifest_timestamp="$(git show -s --format=%cI "$SOURCE_SHA")"' in workflow
     assert '--generated-at "$manifest_timestamp" --output stack-manifest.json' in workflow
     assert 'mandatory installer inputs' in _text("docs/selfhost-disposable-qualification-runbook.md")
     release_tag = "v" + lock["release"].removeprefix("marty-ui@")
     cutover_guide = _text("docs/keycloak-kms-installed-cutover.md")
-    assert release_tag in cutover_guide
+    assert "release/stack-lock.json" in cutover_guide
     kms_tracker = _text("docs/remote-kms-hardening-plan.md")
-    assert f"source stack lock currently selects `{lock['release']}`" in kms_tracker
+    assert "release/stack-lock.json" in kms_tracker
     with pytest.raises(stack_tag_gate.StackTagGateError, match="release"):
         stack_tag_gate.require_release_eligible(ROOT, "v1.1.244")
     assert "marty-credentials-issuance" not in components

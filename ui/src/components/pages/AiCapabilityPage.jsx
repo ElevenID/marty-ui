@@ -1,3 +1,4 @@
+import { useSurfaceNavigate } from '../../application/routing/useSurfaceNavigate';
 import { Box, Typography, Paper, Grid, Button } from '@mui/material';
 import { SEOHead } from '../seo';
 import { softwareApplicationSchema, breadcrumbListSchema } from '../seo/structuredData';
@@ -7,8 +8,8 @@ import SecurityIcon from '@mui/icons-material/Security';
 import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
 import SchemaIcon from '@mui/icons-material/Schema';
 import PolicyIcon from '@mui/icons-material/Policy';
-import { useNavigate } from 'react-router';
-import ProtocolSupportCatalog from './ProtocolSupportCatalog';
+
+import ProtocolSupportCatalog from './MarketingProtocolSupportCatalog';
 
 const capabilities = [
   {
@@ -41,7 +42,7 @@ const useCases = [
 ];
 
 function AiCapabilityPage() {
-  const navigate = useNavigate();
+  const navigate = useSurfaceNavigate();
 
   return (
     <Box>

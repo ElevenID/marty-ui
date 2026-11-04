@@ -1,3 +1,4 @@
+import { useSurfaceNavigate } from '../application/routing/useSurfaceNavigate';
 /**
  * Protocol Page
  *
@@ -10,7 +11,7 @@ import { Box, Typography, Card, CardContent, CardActionArea, Grid, Paper, Button
 import { SEOHead } from './seo';
 import { protocolSchema } from './seo/structuredData';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router';
+
 import GitHubIcon from '@mui/icons-material/GitHub';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
@@ -35,7 +36,7 @@ const CHAPTER_ICONS = {
 
 function ProtocolPage() {
   const { t } = useTranslation('marketing');
-  const navigate = useNavigate();
+  const navigate = useSurfaceNavigate();
 
   return (
     <Box>

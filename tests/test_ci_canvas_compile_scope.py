@@ -33,7 +33,8 @@ def test_canvas_dev_profile_matches_explicit_host_feedback_settings() -> None:
     owner_branch = compile_run.split(
         'elif [[ "${{ matrix.lane }}" == contracts ]]; then', 1
     )[0]
-    assert "CARGO_PROFILE_DEV_DEBUG" not in owner_branch
+    assert owner_branch.count("--env CARGO_PROFILE_DEV_DEBUG=0") == 1
+    assert owner_branch.count("--env 'RUSTFLAGS=-C link-arg=-fuse-ld=mold'") == 1
     assert "CARGO_PROFILE_DEV_DEBUG" not in owner_and_contracts
     assert canvas.count("--env CARGO_PROFILE_DEV_DEBUG=0") == 1
     assert canvas.index("--env CARGO_PROFILE_TEST_DEBUG=0") < canvas.index(
@@ -246,11 +247,13 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
         changes["outputs"]["rust_matrix"] == "${{ steps.classify.outputs.rust_matrix }}"
     )
     classifier = next(step for step in changes["steps"] if step.get("id") == "classify")
-    assert 'rust_matrix=\'["canvas","contracts","selfhost"]\'' in classifier["run"]
-    assert "rust_matrix='[\"contracts\"]'" in classifier["run"]
-    assert "rust_matrix='[\"worker\"]'" in classifier["run"]
-    assert "rust_matrix='[\"selfhost\"]'" in classifier["run"]
-    assert "--select-acceptance-test-lane" in classifier["run"]
+    assert classifier["run"].strip() == "source scripts/ci/affected_components.sh"
+    classifier_source = (ROOT / "scripts/ci/affected_components.sh").read_text()
+    assert 'rust_matrix=\'["canvas","contracts","selfhost"]\'' in classifier_source
+    assert "rust_matrix='[\"contracts\"]'" in classifier_source
+    assert "rust_matrix='[\"worker\"]'" in classifier_source
+    assert "rust_matrix='[\"selfhost\"]'" in classifier_source
+    assert "--select-acceptance-test-lane" in classifier_source
     steps = {step.get("name"): step for step in job["steps"]}
     assert steps["Start digest-pinned Rust test services after registry setup"]["if"] == (
         "matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit'"

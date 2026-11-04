@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -153,7 +155,7 @@ def test_workflow_contract_has_no_stable_or_recording_dispatch() -> None:
 
 
 @pytest.mark.parametrize("workflow_name", [
-    "prepare-nightly-claim.yml", "nightly-claim-intake.yml",
+    "prepare-nightly-claim.yml", "nightly-claim-intake.yml", "prepare-stack-tag.yml",
 ])
 def test_tag_lookup_failure_cannot_be_accepted_as_absence(workflow_name: str) -> None:
     if sys.platform == "win32":
@@ -162,9 +164,69 @@ def test_tag_lookup_failure_cannot_be_accepted_as_absence(workflow_name: str) ->
     lookup = next(line.strip() for line in source.splitlines()
                   if line.strip().startswith('tag_refs="$(git ls-remote '))
     result = subprocess.run(
-        ["bash", "-c", "set -euo pipefail\ngit() { return 42; }\ntag=test\n"
+        ["bash", "-c", "set -euo pipefail\ngit() { return 42; }\ntag=test\nTAG=test\n"
          + lookup + "\necho accepted"],
         check=False, capture_output=True, text=True,
     )
     assert result.returncode == 42
     assert "accepted" not in result.stdout
+
+
+def test_intake_payload_survives_checkout_cleanup(tmp_path: Path) -> None:
+    """Execute the actual intake shell before checkout's destructive clean."""
+    workflow = yaml.safe_load((ROOT / ".github/workflows/nightly-claim-intake.yml").read_text())
+    steps = workflow["jobs"]["intake"]["steps"]
+    intake = steps[0]
+    assert "actions/checkout@" in steps[1]["uses"]
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    gh = tools / "gh"
+    gh.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[0] == 'api':\n"
+        f"    print(json.dumps({preparation_run()!r}))\n"
+        "elif args[:2] == ['run', 'download']:\n"
+        "    target = pathlib.Path(args[args.index('--dir') + 1])\n"
+        "    target.mkdir(parents=True)\n"
+        f"    (target / 'nightly-claim.json').write_text(json.dumps({claim()!r}))\n"
+        "else:\n"
+        "    raise SystemExit(42)\n"
+    )
+    gh.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tools}:{os.environ['PATH']}",
+           "RUNNER_TEMP": str(runner_temp), "GITHUB_REPOSITORY": "ElevenID/marty-ui",
+           "CLAIM_RUN_ID": "12345"}
+    subprocess.run(["bash", "-c", intake["run"]], cwd=workspace, env=env,
+                   check=True, capture_output=True, text=True)
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    (workspace / "would-have-been-deleted.json").write_text("{}")
+    subprocess.run(["git", "clean", "-ffdx"], cwd=workspace, check=True,
+                   capture_output=True, text=True)
+    assert not (workspace / "would-have-been-deleted.json").exists()
+    intake_dir = runner_temp / "nightly-claim-intake"
+    payload = json.loads((intake_dir / "claim/nightly-claim.json").read_text())
+    producer = json.loads((intake_dir / "preparation-run.json").read_text())
+    assert nightly.validate_intake(payload, producer, current_main_sha=SOURCE, policy=POLICY) == claim()
+    consumer = next(step["run"] for step in steps
+                    if step.get("name") == "Require same current main and no existing tag")
+    assert '--claim "$intake_dir/claim/nightly-claim.json"' in consumer
+    assert '--run-json "$intake_dir/preparation-run.json"' in consumer
+
+
+@pytest.mark.parametrize("workflow_name", [
+    "prepare-nightly-claim.yml", "nightly-claim-intake.yml", "prepare-stack-tag.yml",
+])
+def test_exact_main_claim_reads_do_not_fetch_repository_history(workflow_name: str) -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows" / workflow_name).read_text())
+    steps = next(job["steps"] for job in workflow["jobs"].values() if "steps" in job)
+    checkout = next(step for step in steps if "actions/checkout@" in step.get("uses", ""))
+    assert checkout["with"]["fetch-depth"] == 1
+    assert checkout["with"]["persist-credentials"] is False
+    text = "\n".join(step.get("run", "") for step in steps)
+    assert "git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main" in text

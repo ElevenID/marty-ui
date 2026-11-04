@@ -188,12 +188,17 @@ def test_producer_workflow_consumes_the_selected_plan_and_keeps_qualification_se
     assert "uses" not in workflow["jobs"]["plan"]["steps"][0]
     matrix = workflow["jobs"]["build"]["strategy"]["matrix"]
     assert matrix == "${{ fromJSON(needs.plan.outputs.matrix) }}"
-    image = next(step["with"] for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "image")
-    assert image["file"] == "${{ matrix.dockerfile }}"
+    call = next(step for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "image")
+    assert call["uses"] == "./.github/actions/build-product-image"
+    assert call["with"] == {"producer": "product", "source-sha": "${{ github.sha }}",
+                            "product": "${{ needs.plan.outputs.product }}", "image-plan": "${{ toJSON(matrix) }}"}
+    shared = yaml.safe_load((ROOT / ".github/actions/build-product-image/action.yml").read_bytes())
+    image = next(step["with"] for step in shared["runs"]["steps"] if step.get("id") == "image")
+    assert image["file"] == "${{ steps.recipe.outputs.dockerfile }}"
     assert image["sbom"] is True
     assert image["provenance"] == "mode=max"
     assert "push-by-digest=true" in image["outputs"]
-    assert "unqualified" in image["labels"]
+    assert image["labels"] == "${{ steps.recipe.outputs.labels }}"
     assert workflow["jobs"]["package"]["needs"] == ["plan", "build"]
     steps = workflow["jobs"]["package"]["steps"]
     archive_paths = {"product-package.tar.gz", "product-package.tar.gz.sha256"}
@@ -205,7 +210,7 @@ def test_producer_workflow_consumes_the_selected_plan_and_keeps_qualification_se
 
     for job in workflow["jobs"].values():
         for step in job["steps"]:
-            if "uses" in step:
+            if "uses" in step and step["uses"] != "./.github/actions/build-product-image":
                 assert len(step["uses"].split("@")[-1]) == 40
             assert "installer" not in step.get("run", "")
 

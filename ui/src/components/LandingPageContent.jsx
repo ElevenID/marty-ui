@@ -1,0 +1,1987 @@
+import { getPublicEntryCanonicalOrigin, publicEntryHref } from '../application/routing/publicEntry';
+/**
+ * Landing Page Component
+ *
+ * Public landing page shown to unauthenticated users.
+ * Provides information about the service, pricing tiers, and prompts login.
+ */
+
+import { Suspense, lazy, useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router';
+import {
+  DISABLE_PUBLIC_PRICING_BUTTONS,
+  SHOW_PUBLIC_CTA,
+  SHOW_PUBLIC_PRICING_BUTTONS,
+} from '@ui-public-config';
+import FutureFeatureButton from './FutureFeatureButton';
+import { SEOHead, organizationSchema } from './seo';
+import {
+  Box,
+  Typography,
+  Button,
+  Card,
+  CardContent,
+  CardActionArea,
+  Grid,
+  Alert,
+  Snackbar,
+  CircularProgress,
+  Paper,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
+  Chip,
+  Divider,
+  Collapse,
+  useMediaQuery,
+  useTheme,
+} from '@mui/material';
+import FlightTakeoffIcon from '@mui/icons-material/FlightTakeoff';
+import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
+import SecurityIcon from '@mui/icons-material/Security';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import PolicyIcon from '@mui/icons-material/Policy';
+import BusinessIcon from '@mui/icons-material/Business';
+import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
+import CodeIcon from '@mui/icons-material/Code';
+import SyncAltIcon from '@mui/icons-material/SyncAlt';
+import GppGoodIcon from '@mui/icons-material/GppGood';
+import GavelIcon from '@mui/icons-material/Gavel';
+import TrendingUpIcon from '@mui/icons-material/TrendingUp';
+import ApiIcon from '@mui/icons-material/Api';
+import PhoneIphoneIcon from '@mui/icons-material/PhoneIphone';
+import SettingsInputAntennaIcon from '@mui/icons-material/SettingsInputAntenna';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import { useTranslation } from 'react-i18next';
+import { useSurfaceNavigate } from '../application/routing/useSurfaceNavigate';
+import { useBranding } from '../hooks/useBranding';
+import {
+  clearLandingAuthError,
+  getLandingAuthError,
+} from '../application/routing/landingEntry';
+import { redirectBrowser } from '../application/routing/appHandoff';
+import GitHubIcon from '@mui/icons-material/GitHub';
+import {
+  IDENTITY_CONCEPTS,
+  PRODUCTS,
+  TRUST_SIGNALS,
+  ORGANIZATION_OUTCOMES,
+  AUDIENCE_ROUTING,
+  PROOF_STRIP,
+  VALUE_PROPOSITION,
+  ECOSYSTEM_SIGNALS,
+  HERO_INTERACTIVE_DEMO,
+  END_USER_EXPERIENCES,
+  DEVELOPER_QUICKSTART,
+  INTERACTIVE_PROOF_LAB,
+  DEPLOYMENT_PLAYBOOKS,
+  DEPLOYMENT_MODELS,
+  STANDARDS_INFO,
+  PROTOCOL,
+  BLOG_POSTS,
+} from '../data/marketingContent';
+import {
+  GUIDE_CHAPTERS,
+  GUIDE_ARTICLES_BY_CHAPTER,
+} from '@elevenid/marty-blog';
+import { UnifiedIdentityFlowDiagram, StandardsStackDiagram, InteractiveProtocolMap, DeploymentModelDiagram } from './diagrams';
+import { createVerifierDemoVerificationResult, resolveVerifierDemoRequest } from '../application/verifier/verifierDemoFlow';
+import { trackEvent } from '../utils/analytics';
+import { Section, SectionHeading } from './landing/LandingSection';
+import {
+  PROOF_LAB_RUNTIME,
+  createProofLabPresentationData,
+  createProofLabRequestPreview,
+} from './landing/proofLabRuntime';
+
+// Fade-in animation style helper
+const fadeInSx = (delay = 0) => ({
+  '@keyframes fadeInUp': {
+    from: { opacity: 0, transform: 'translateY(24px)' },
+    to: { opacity: 1, transform: 'translateY(0)' },
+  },
+  animation: `fadeInUp 0.6s ease-out ${delay}s both`,
+});
+
+// Audience path icon mapping
+const AUDIENCE_ICONS = {
+  Business: <BusinessIcon sx={{ fontSize: 40 }} />,
+  AccountBalance: <AccountBalanceIcon sx={{ fontSize: 40 }} />,
+  Code: <CodeIcon sx={{ fontSize: 40 }} />,
+};
+
+const PLAYBOOK_ICONS = {
+  'deploy-age-verification': <VerifiedUserIcon sx={{ fontSize: 32, color: 'success.main' }} />,
+  'deploy-enterprise-access': <BusinessIcon sx={{ fontSize: 32, color: 'primary.main' }} />,
+  'deploy-airline-boarding': <FlightTakeoffIcon sx={{ fontSize: 32, color: 'info.main' }} />,
+  'deploy-membership-credentials': <AccountBalanceIcon sx={{ fontSize: 32, color: 'secondary.main' }} />,
+};
+
+const QUICK_START_PATHS = [
+  {
+    id: 'verify-credentials',
+    role: 'Operations',
+    title: 'Verify Credentials',
+    description: 'Validate credentials from wallets, partner issuers, and digital IDs without repeated document review.',
+    details: ['retail age verification', 'workforce access', 'travel checkpoints'],
+    cta: 'Start Verifying Credentials',
+    path: '/product#verification-api',
+    icon: <VerifiedUserIcon sx={{ fontSize: 36, color: 'primary.main' }} />,
+  },
+  {
+    id: 'issue-credentials',
+    role: 'Issuers',
+    title: 'Issue Credentials',
+    description: 'Create reusable credentials for employees, members, and customers from one governed issuance surface.',
+    details: ['workforce badges', 'Open Badges', 'membership credentials'],
+    cta: 'Issue a Credential',
+    path: '/product#issuance-api',
+    icon: <FlightTakeoffIcon sx={{ fontSize: 36, color: 'secondary.main' }} />,
+  },
+  {
+    id: 'build-with-elevenid',
+    role: 'Developers',
+    title: 'Build With ElevenID',
+    description: 'Integrate verification APIs, wallet presentation flows, and trust registry configuration from the docs path.',
+    details: ['verification API', 'wallet presentation flows', 'trust registry configuration'],
+    cta: 'Read API Docs',
+    path: '/docs',
+    icon: <CodeIcon sx={{ fontSize: 36, color: 'info.main' }} />,
+  },
+];
+
+const ProductCapabilitiesSection = lazy(() => import('./landing/ProductCapabilitiesSection'));
+const DeploymentModelsSection = lazy(() => import('./landing/DeploymentModelsSection'));
+const ProofLabSection = lazy(() => import('./landing/ProofLabSection'));
+const EndUserExperienceSection = lazy(() => import('./landing/EndUserExperienceSection'));
+
+function LazySectionFallback({ bgcolor = 'transparent', minHeight = 260 }) {
+  return (
+    <Section bgcolor={bgcolor}>
+      <Box
+        sx={{
+          minHeight,
+          borderRadius: 3,
+          bgcolor: bgcolor === 'grey.50' ? 'grey.100' : 'grey.50',
+          border: '1px solid',
+          borderColor: 'grey.200',
+        }}
+      />
+    </Section>
+  );
+}
+
+function DeveloperQuickstartSection({ t }) {
+  return (
+    <Section>
+      <Paper
+        elevation={0}
+        sx={{
+          p: { xs: 2.5, md: 4 },
+          borderRadius: 3,
+          background: 'linear-gradient(135deg, #071427 0%, #10233d 100%)',
+          color: 'common.white',
+        }}
+      >
+        <Grid container spacing={4} alignItems="stretch">
+          <Grid item xs={12} md={4}>
+            <Chip
+              label={t('landingPage.developerQuickstart.eyebrow', 'Developer quickstart')}
+              color="info"
+              variant="outlined"
+              sx={{ mb: 2, fontWeight: 700, borderColor: 'rgba(255,255,255,0.22)', color: 'common.white' }}
+            />
+            <Typography variant="h4" fontWeight={800} sx={{ mb: 1.5 }}>
+              {t('landingPage.developerQuickstart.title', DEVELOPER_QUICKSTART.title)}
+            </Typography>
+            <Typography variant="body1" sx={{ mb: 2.5, color: 'rgba(255,255,255,0.8)' }}>
+              {t('landingPage.developerQuickstart.description', DEVELOPER_QUICKSTART.description)}
+            </Typography>
+            <List dense sx={{ mb: 2.5 }}>
+              {DEVELOPER_QUICKSTART.bullets.map((item) => (
+                <ListItem key={item} sx={{ px: 0, py: 0.5 }}>
+                  <ListItemIcon sx={{ minWidth: 32 }}>
+                    <CheckCircleIcon fontSize="small" sx={{ color: 'success.light' }} />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary={item}
+                    slotProps={{
+                      primary: { variant: 'body2', color: 'rgba(255,255,255,0.88)' }
+                    }}
+                  />
+                </ListItem>
+              ))}
+            </List>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5 }}>
+              <Button variant="contained" component="a" href={publicEntryHref('/docs')} endIcon={<ArrowForwardIcon />}>
+                Open API docs
+              </Button>
+              <Button
+                variant="outlined"
+                component="a"
+                href={publicEntryHref('/product')}
+                sx={{ borderColor: 'rgba(255,255,255,0.3)', color: 'common.white' }}
+              >
+                Explore Marty
+              </Button>
+            </Box>
+          </Grid>
+
+          <Grid item xs={12} md={8}>
+            <Grid container spacing={2}>
+              <Grid item xs={12}>
+                <Paper elevation={0} sx={{ p: 2.5, bgcolor: 'rgba(255,255,255,0.06)', borderRadius: 3, border: '1px solid rgba(255,255,255,0.12)' }}>
+                  <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.68)', textTransform: 'uppercase', letterSpacing: 1.1 }}>
+                    bash
+                  </Typography>
+                  <Box
+                    component="pre"
+                    sx={{
+                      m: 0,
+                      mt: 1.25,
+                      overflowX: 'auto',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      fontFamily: 'Consolas, Menlo, Monaco, monospace',
+                      fontSize: '0.85rem',
+                      lineHeight: 1.65,
+                      color: 'common.white',
+                    }}
+                  >
+                    {DEVELOPER_QUICKSTART.snippet}
+                  </Box>
+                </Paper>
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <Paper elevation={0} sx={{ p: 2.5, height: '100%', bgcolor: 'rgba(255,255,255,0.06)', borderRadius: 3, border: '1px solid rgba(255,255,255,0.12)' }}>
+                  <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.68)', textTransform: 'uppercase', letterSpacing: 1.1 }}>
+                    sample response
+                  </Typography>
+                  <Box
+                    component="pre"
+                    sx={{
+                      m: 0,
+                      mt: 1.25,
+                      overflowX: 'auto',
+                      whiteSpace: 'pre-wrap',
+                      fontFamily: 'Consolas, Menlo, Monaco, monospace',
+                      fontSize: '0.85rem',
+                      lineHeight: 1.65,
+                      color: 'common.white',
+                    }}
+                  >
+                    {DEVELOPER_QUICKSTART.response}
+                  </Box>
+                </Paper>
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <Paper elevation={0} sx={{ p: 2.5, height: '100%', bgcolor: 'rgba(255,255,255,0.06)', borderRadius: 3, border: '1px solid rgba(255,255,255,0.12)' }}>
+                  <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.68)', textTransform: 'uppercase', letterSpacing: 1.1 }}>
+                    when to use it
+                  </Typography>
+                  <Typography variant="body2" sx={{ mt: 1.25, mb: 1.5, color: 'rgba(255,255,255,0.84)' }}>
+                    {DEVELOPER_QUICKSTART.note}
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                    <Chip label="POST /v1/vc-api/credentials/verify" size="small" sx={{ bgcolor: 'rgba(255,255,255,0.08)', color: 'common.white' }} />
+                    <Chip label="/flows/verify for wallet journeys" size="small" sx={{ bgcolor: 'rgba(255,255,255,0.08)', color: 'common.white' }} />
+                  </Box>
+                </Paper>
+              </Grid>
+            </Grid>
+          </Grid>
+        </Grid>
+      </Paper>
+    </Section>
+  );
+}
+
+function StandardsArchitectureSection({ t, expandedLayer, onToggleLayer }) {
+  return (
+    <Section bgcolor="grey.50">
+      <SectionHeading divider>
+        {t('landingPage.standards.title', 'Standards-Based Architecture')}
+      </SectionHeading>
+      <Typography
+        variant="h6"
+        textAlign="center"
+        sx={{
+          mb: 4,
+          fontWeight: 700,
+          color: 'primary.main',
+          bgcolor: 'primary.50',
+          py: 1.5,
+          px: 3,
+          borderRadius: 2,
+          maxWidth: 520,
+          mx: 'auto',
+        }}
+      >
+        {t('landingPage.standards.subtitle', 'Standards guide the design. Tests establish compatibility.')}
+      </Typography>
+
+      <Box sx={{ maxWidth: 800, mx: 'auto', mb: 4 }}>
+        {(STANDARDS_INFO?.layers || []).map((layer, idx) => (
+          <Paper
+            key={idx}
+            elevation={expandedLayer === idx ? 3 : 1}
+            sx={{ mb: 1, borderRadius: 2, overflow: 'hidden', transition: 'all 0.2s ease' }}
+          >
+            <Box
+              onClick={() => onToggleLayer(expandedLayer === idx ? null : idx)}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                px: 3,
+                py: 2,
+                cursor: 'pointer',
+                '&:hover': { bgcolor: 'grey.100' },
+              }}
+            >
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                <Chip label={`Layer ${idx + 1}`} size="small" color="primary" sx={{ fontWeight: 700, fontSize: '0.7rem' }} />
+                <Typography variant="subtitle1" fontWeight={700}>{layer.name}</Typography>
+              </Box>
+              {expandedLayer === idx ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+            </Box>
+            <Collapse in={expandedLayer === idx}>
+              <Box sx={{ px: 3, pb: 2 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                  {layer.description}
+                </Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                  {layer.standards?.map((std) => (
+                    <Chip
+                      key={std.name}
+                      label={`${std.name} - ${std.description}`}
+                      variant="outlined"
+                      size="small"
+                    />
+                  ))}
+                </Box>
+              </Box>
+            </Collapse>
+          </Paper>
+        ))}
+      </Box>
+
+      <Paper elevation={3} sx={{ p: { xs: 2, md: 4 }, bgcolor: 'white' }}>
+        <StandardsStackDiagram interactive={false} />
+      </Paper>
+
+      <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ mt: 3, maxWidth: 700, mx: 'auto' }}>
+        {t(
+          'landingPage.standards.description',
+          "These layers let ElevenID LLC interoperate across governments, wallets, and enterprises without custom integrations."
+        )}
+      </Typography>
+      <Box sx={{ textAlign: 'center', mt: 2 }}>
+        <Button
+          variant="outlined"
+          size="large"
+          component="a"
+          href={publicEntryHref('/standards')}
+          endIcon={<ArrowForwardIcon />}
+          sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
+        >
+          {t('landingPage.standards.cta', 'Explore Standards')}
+        </Button>
+      </Box>
+    </Section>
+  );
+}
+
+function LandingPageContent({ isLoading = false }) {
+  const { t } = useTranslation('marketing');
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const brandingContext = useBranding();
+  const branding = brandingContext?.branding || { appName: 'ElevenID LLC' };
+  const navigate = useSurfaceNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [authError, setAuthError] = useState(null);
+  const [expandedLayer, setExpandedLayer] = useState(null);
+  const [activeHeroStepId, setActiveHeroStepId] = useState(HERO_INTERACTIVE_DEMO.steps?.[0]?.id || null);
+  const [activeProofLabScenarioId, setActiveProofLabScenarioId] = useState(INTERACTIVE_PROOF_LAB.scenarios?.[0]?.id || null);
+  const [proofLabStatus, setProofLabStatus] = useState('idle');
+  const [proofLabResult, setProofLabResult] = useState(null);
+  const [activeExperienceId, setActiveExperienceId] = useState(END_USER_EXPERIENCES.journeys?.[0]?.id || null);
+
+  // Check for auth error in URL params
+  useEffect(() => {
+    const error = getLandingAuthError(searchParams);
+    if (error) {
+      setAuthError(error);
+      setSearchParams(clearLandingAuthError(searchParams), { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    setProofLabStatus('idle');
+    setProofLabResult(null);
+  }, [activeProofLabScenarioId]);
+
+  const handleCloseError = () => {
+    setAuthError(null);
+  };
+
+  // Show loading spinner while checking auth instead of blank page
+  if (isLoading) {
+    return (
+      <>
+        <SEOHead
+          title="Verifiable Identity Infrastructure"
+          description="Marty is customer-operated software for portable credentials, applicant and document verification, and Travel Trust. Explore defined workflows and release-specific evidence."
+          canonicalPath="/"
+          structuredData={organizationSchema()}
+          keywords={[
+            'verifiable credentials',
+            'digital wallet',
+            'EUDI Wallet',
+            'Open Badges',
+            'W3C VC',
+            'identity verification',
+            'ISO 18013-5',
+            'mDL',
+            'SD-JWT',
+            'OID4VP',
+          ]}
+        />
+        <Box
+          display="flex"
+          justifyContent="center"
+          alignItems="center"
+          minHeight="50vh"
+          flexDirection="column"
+          gap={2}
+        >
+          <CircularProgress />
+          <Typography color="text.secondary">{t('landingPage.loading', 'Loading...')}</Typography>
+        </Box>
+      </>
+    );
+  }
+
+  const features = [
+    {
+      icon: <FlightTakeoffIcon sx={{ fontSize: 48, color: 'primary.main' }} />,
+      title: t('landingPage.features.issuance.title', 'Issuance'),
+      description: t(
+        'landingPage.features.issuance.description',
+        'Issue standards-based credentials with cryptographic signatures and policy enforcement.'
+      ),
+    },
+    {
+      icon: <VerifiedUserIcon sx={{ fontSize: 48, color: 'success.main' }} />,
+      title: t('landingPage.features.verification.title', 'Verification'),
+      description: t(
+        'landingPage.features.verification.description',
+        'Verify credentials against trust anchors with revocation checking and selective disclosure.'
+      ),
+    },
+    {
+      icon: <SecurityIcon sx={{ fontSize: 48, color: 'warning.main' }} />,
+      title: t('landingPage.features.governance.title', 'Governance'),
+      description: t(
+        'landingPage.features.governance.description',
+        'Manage trust, policy, and deployment centrally—without changing verifier code.'
+      ),
+    },
+  ];
+
+  // Identity problems grouped into 3 themes
+  const identityProblemThemes = [
+    {
+      icon: <SyncAltIcon sx={{ fontSize: 36, color: 'error.main' }} />,
+      theme: t('landingPage.identityProblem.themes.interoperability', 'Interoperability'),
+      problems: [
+        t('landingPage.identityProblem.items.fragmented', "Fragmented systems that don't interoperate across partners or jurisdictions"),
+      ],
+    },
+    {
+      icon: <GppGoodIcon sx={{ fontSize: 36, color: 'warning.main' }} />,
+      theme: t('landingPage.identityProblem.themes.trust', 'Trust'),
+      problems: [
+        t('landingPage.identityProblem.items.unclearTrust', 'Unclear issuer trust and PKI complexity at scale'),
+      ],
+    },
+    {
+      icon: <GavelIcon sx={{ fontSize: 36, color: 'info.main' }} />,
+      theme: t('landingPage.identityProblem.themes.compliance', 'Compliance'),
+      problems: [
+        t('landingPage.identityProblem.items.privacyPressure', 'Privacy pressure—data minimization and selective disclosure requirements'),
+      ],
+    },
+  ];
+
+  const idvTraditionalItems = [
+    t('idvComparison.traditional.oneTimeChecks', "Which claim must be checked?"),
+    t('idvComparison.traditional.vendorControlled', "Who operates the data and keys?"),
+    t('idvComparison.traditional.biometric', "How is the presenter bound to the credential?"),
+    t('idvComparison.traditional.closedAPIs', "Which interfaces and profiles are required?"),
+    t('idvComparison.traditional.manualTrust', "Which issuers and rules are trusted?"),
+    t('idvComparison.traditional.reVerification', "When can a credential be reused?"),
+  ];
+
+  const idvElevenIdItems = [
+    { text: t('idvComparison.elevenid.reusable', "Defined credential and document inputs"), bold: null },
+    { text: t('idvComparison.elevenid.holderControlled', "Customer or selected-partner operations"), bold: null },
+    { text: t('idvComparison.elevenid.cryptographic', "Profile-specific holder-binding tests"), bold: null },
+    { text: t('idvComparison.elevenid.openStandards', "Documented interfaces and tested combinations"), bold: null },
+    { text: t('idvComparison.elevenid.governedTrust', "Explicit issuer trust and policy configuration"), bold: null },
+    { text: t('idvComparison.elevenid.reuseAcross', "Reuse evaluated within an agreed workflow"), bold: null },
+  ];
+
+  const proofClaims = [
+    {
+      category: t('proofStrip.interoperability', 'Scope'),
+      label: t('landingPage.proofStrip.claims.w3c', PROOF_STRIP.claims?.[0]?.label || 'One Marty product, three use cases'),
+    },
+    {
+      category: t('proofStrip.offlineVerification', 'Evaluation'),
+      label: t('landingPage.proofStrip.claims.offlineCache', PROOF_STRIP.claims?.[1]?.label || 'Synthetic evaluation first'),
+    },
+    {
+      category: t('proofStrip.deployment', 'Operations'),
+      label: t('landingPage.proofStrip.claims.deployment', PROOF_STRIP.claims?.[2]?.label || 'Customer or partner operated'),
+    },
+    {
+      category: t('proofStrip.keySecurity', 'Key Security'),
+      label: t('landingPage.proofStrip.claims.keySecurity', PROOF_STRIP.claims?.[3]?.label || 'Explicit trust and key configuration'),
+    },
+    {
+      category: t('proofStrip.compliance', 'Evidence'),
+      label: t('landingPage.proofStrip.claims.auditLogs', PROOF_STRIP.claims?.[4]?.label || 'Release-specific evidence'),
+    },
+  ];
+
+  const trustSignals = {
+    security: [
+      t('landingPage.trustSignals.security.item1', TRUST_SIGNALS.security?.[0] || 'Configure trusted issuers and keys explicitly'),
+      t('landingPage.trustSignals.security.item2', TRUST_SIGNALS.security?.[1] || 'Test signature, expiry, and failure handling'),
+      t('landingPage.trustSignals.security.item3', TRUST_SIGNALS.security?.[2] || 'Review key storage for the selected deployment'),
+    ],
+    infrastructure: [
+      t('landingPage.trustSignals.infrastructure.item1', TRUST_SIGNALS.infrastructure?.[0] || 'Customer or selected-partner operations'),
+      t('landingPage.trustSignals.infrastructure.item2', TRUST_SIGNALS.infrastructure?.[1] || 'Release-specific installation requirements'),
+      t('landingPage.trustSignals.infrastructure.item3', TRUST_SIGNALS.infrastructure?.[2] || 'Offline and headless profiles need validation'),
+      t('landingPage.trustSignals.infrastructure.item4', TRUST_SIGNALS.infrastructure?.[3] || 'No included managed production or uptime SLA'),
+    ],
+    compliance: [
+      t('landingPage.trustSignals.compliance.item1', TRUST_SIGNALS.compliance?.[0] || 'Define the required standard and profile'),
+      t('landingPage.trustSignals.compliance.item2', TRUST_SIGNALS.compliance?.[1] || 'Review evidence for the exact release'),
+      t('landingPage.trustSignals.compliance.item3', TRUST_SIGNALS.compliance?.[2] || 'Approve real-data handling separately'),
+      t('landingPage.trustSignals.compliance.item4', TRUST_SIGNALS.compliance?.[3] || 'Confirm acceptance requirements with the responsible organization'),
+    ],
+  };
+
+  const activeHeroStep =
+    HERO_INTERACTIVE_DEMO.steps.find((step) => step.id === activeHeroStepId) ||
+    HERO_INTERACTIVE_DEMO.steps[0];
+  const activeProofLabScenario =
+    INTERACTIVE_PROOF_LAB.scenarios.find((scenario) => scenario.id === activeProofLabScenarioId) ||
+    INTERACTIVE_PROOF_LAB.scenarios[0];
+  const activeProofLabRuntime = PROOF_LAB_RUNTIME[activeProofLabScenario.id] || PROOF_LAB_RUNTIME['retail-age'];
+  const activeProofLabPresentationData = createProofLabPresentationData(activeProofLabScenario.id);
+  const activeProofLabRequestPreview = createProofLabRequestPreview(activeProofLabScenario, activeProofLabRuntime);
+  const activeExperience =
+    END_USER_EXPERIENCES.journeys.find((journey) => journey.id === activeExperienceId) ||
+    END_USER_EXPERIENCES.journeys[0];
+  const heroProofClaims = proofClaims.slice(0, 3);
+  const deploymentPlaybooks = DEPLOYMENT_PLAYBOOKS.items
+    .map((item) => {
+      const matchingPost = BLOG_POSTS.find((post) => post.slug === item.slug);
+      return {
+        ...item,
+        title: matchingPost?.title || item.title,
+        summary: matchingPost?.summary || item.summary,
+        href: matchingPost ? `/blog/${matchingPost.slug}` : '/blog',
+      };
+    })
+    .filter((item) => Boolean(item.title));
+
+  const handleQuickStartSelection = (destination) => {
+    trackEvent('landing_quick_start_selected', {
+      page: 'landing',
+      section: 'quick_start',
+      card_id: destination.id,
+      card_title: destination.title,
+      role: destination.role,
+      destination_path: destination.path,
+    });
+  };
+
+  const handleDeploymentModeSelection = (mode) => {
+    trackEvent('landing_deployment_mode_selected', {
+      page: 'landing',
+      section: 'deployment_models',
+      card_id: mode.id,
+      card_title: mode.title,
+      badge: mode.badge,
+      destination_path: mode.path,
+    });
+  };
+
+  const handleLandingCtaClick = ({ section, ctaId, ctaLabel, destinationPath }) => {
+    trackEvent('landing_cta_clicked', {
+      page: 'landing',
+      section,
+      cta_id: ctaId,
+      cta_label: ctaLabel,
+      destination_path: destinationPath,
+    });
+  };
+
+  const handleFooterPricingClick = () => {
+    handleLandingCtaClick({
+      section: 'footer',
+      ctaId: 'view_pricing',
+      ctaLabel: t('landingPage.footer.viewPricing', 'View Pricing'),
+      destinationPath: '/pricing',
+    });
+    if (getPublicEntryCanonicalOrigin()) {
+      redirectBrowser('/pricing');
+    } else {
+      navigate('/pricing');
+    }
+  };
+
+  const handleProofLabRun = async () => {
+    setProofLabStatus('running');
+
+    trackEvent('landing_proof_lab_run', {
+      page: 'landing',
+      section: 'proof_lab',
+      scenario_id: activeProofLabScenario.id,
+      scenario_title: activeProofLabScenario.title,
+      endpoint: activeProofLabRequestPreview.endpoint,
+    });
+
+    const delay = () => new Promise((resolve) => window.setTimeout(resolve, 250));
+    await delay();
+
+    // Exercise the same pure demo request/result shape without initializing a product API.
+    resolveVerifierDemoRequest({ presentationData: activeProofLabPresentationData });
+    const result = createVerifierDemoVerificationResult(activeProofLabRuntime.expectedResult);
+
+    setProofLabResult(result);
+    setProofLabStatus('complete');
+  };
+
+  return (
+    <Box sx={{ scrollBehavior: 'smooth' }}>
+      {/* SEO Meta Tags */}
+      <SEOHead
+        title="Verifiable Identity Infrastructure"
+        description="Marty is customer-operated software for portable credentials, applicant and document verification, and Travel Trust. Explore defined workflows and release-specific evidence."
+        canonicalPath="/"
+        structuredData={organizationSchema()}
+        keywords={[
+          'verifiable credentials',
+          'digital wallet',
+          'EUDI Wallet',
+          'Open Badges',
+          'W3C VC',
+          'identity verification',
+          'ISO 18013-5',
+          'mDL',
+          'SD-JWT',
+          'OID4VP',
+          'Marty Identity Protocol',
+          'MIP',
+          'open standard',
+        ]}
+      />
+      {/* Auth Error Snackbar */}
+      <Snackbar
+        open={!!authError}
+        autoHideDuration={10000}
+        onClose={handleCloseError}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={handleCloseError}
+          severity="warning"
+          variant="filled"
+          sx={{ width: '100%' }}
+        >
+          {authError}
+        </Alert>
+      </Snackbar>
+      {/* ───────────────────────────────────────────────────────────  HERO  */}
+      <Box
+        sx={{
+          py: { xs: 6, md: 8 },
+          px: { xs: 2, md: 4 },
+          background: 'linear-gradient(135deg, #1976d2 0%, #0d47a1 100%)',
+          color: 'white',
+          borderRadius: 3,
+          mb: 0,
+          overflow: 'hidden',
+          ...fadeInSx(0),
+        }}
+      >
+        <Grid container spacing={4} alignItems="stretch">
+          <Grid item xs={12} lg={7}>
+            <Box
+              sx={{
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                textAlign: { xs: 'center', lg: 'left' },
+              }}
+            >
+              <Chip
+                label={t('landingPage.hero.eyebrow', 'Marty by ElevenID')}
+                sx={{
+                  alignSelf: { xs: 'center', lg: 'flex-start' },
+                  mb: 2,
+                  bgcolor: 'rgba(255,255,255,0.14)',
+                  color: 'common.white',
+                  fontWeight: 700,
+                }}
+              />
+              <Typography
+                variant="h3"
+                component="h1"
+                gutterBottom
+                fontWeight={800}
+                sx={{ fontSize: { xs: '2rem', md: '3rem' }, lineHeight: 1.1 }}
+              >
+                {t('valueProposition.headline', VALUE_PROPOSITION.headline)}
+              </Typography>
+              <Typography
+                variant="h6"
+                sx={{ mb: 2, opacity: 0.88, maxWidth: 720, mx: { xs: 'auto', lg: 0 }, fontStyle: 'italic', fontWeight: 400 }}
+              >
+                {t('valueProposition.supporting', VALUE_PROPOSITION.supportingSubheadline)}
+              </Typography>
+              <Typography
+                variant="h5"
+                sx={{ mb: 1, opacity: 0.95, maxWidth: 900, mx: { xs: 'auto', lg: 0 }, fontWeight: 600 }}
+              >
+                {t('valueProposition.subheadline', VALUE_PROPOSITION.subheadline)}
+              </Typography>
+              <Typography variant="body1" sx={{ mb: 3, opacity: 0.82, maxWidth: 760, mx: { xs: 'auto', lg: 0 } }}>
+                {t('valueProposition.extendedSubheadline', VALUE_PROPOSITION.extendedSubheadline)}
+              </Typography>
+              <Box
+                sx={{
+                  display: 'flex',
+                  gap: 1,
+                  flexWrap: 'wrap',
+                  justifyContent: { xs: 'center', lg: 'flex-start' },
+                  mb: 3,
+                }}
+              >
+                {heroProofClaims.map((claim) => (
+                  <Chip
+                    key={claim.label}
+                    label={claim.label}
+                    size="small"
+                    sx={{ bgcolor: 'rgba(255,255,255,0.12)', color: 'common.white', fontWeight: 600 }}
+                  />
+                ))}
+              </Box>
+              <Box
+                sx={{
+                  p: 2,
+                  mb: 4,
+                  borderRadius: 2,
+                  border: '1px solid rgba(255,255,255,0.16)',
+                  bgcolor: 'rgba(255,255,255,0.08)',
+                  maxWidth: 680,
+                  mx: { xs: 'auto', lg: 0 },
+                }}
+              >
+                <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.92)' }}>
+                  {t('valueProposition.concreteExample', VALUE_PROPOSITION.concreteExample)}
+                </Typography>
+              </Box>
+              <Box sx={{ display: 'flex', gap: 2, justifyContent: { xs: 'center', lg: 'flex-start' }, flexWrap: 'wrap' }}>
+                {SHOW_PUBLIC_CTA && <Button
+                  component={Link}
+                  to={publicEntryHref('/developers')}
+                  onClick={() => handleLandingCtaClick({
+                    section: 'hero',
+                    ctaId: 'start_verifying',
+                    ctaLabel: t('valueProposition.primaryCTA', VALUE_PROPOSITION.primaryCTA),
+                    destinationPath: '/developers',
+                  })}
+                  variant="contained"
+                  size="large"
+                  startIcon={<VerifiedUserIcon />}
+                  data-testid="get-started-btn"
+                  sx={{
+                    bgcolor: 'white',
+                    color: 'primary.main',
+                    fontWeight: 700,
+                    '&:hover': { bgcolor: 'grey.100', transform: 'translateY(-2px)', boxShadow: 4 },
+                    px: { xs: 3, md: 4 },
+                    py: 1.5,
+                    width: { xs: '100%', sm: 'auto' },
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  {t('valueProposition.primaryCTA', VALUE_PROPOSITION.primaryCTA)}
+                </Button>}
+                <Button
+                  component={Link}
+                  to={publicEntryHref(VALUE_PROPOSITION.secondaryCTA.path)}
+                  onClick={() => handleLandingCtaClick({
+                    section: 'hero',
+                    ctaId: 'view_verification_api',
+                    ctaLabel: t('valueProposition.secondaryCTA', VALUE_PROPOSITION.secondaryCTA.label),
+                    destinationPath: VALUE_PROPOSITION.secondaryCTA.path,
+                  })}
+                  variant="outlined"
+                  size="large"
+                  endIcon={<ArrowForwardIcon />}
+                  data-testid="hero-secondary-cta"
+                  sx={{
+                    borderColor: 'white',
+                    color: 'white',
+                    fontWeight: 600,
+                    '&:hover': { bgcolor: 'rgba(255,255,255,0.12)', borderColor: 'white', transform: 'translateY(-2px)' },
+                    px: { xs: 3, md: 4 },
+                    py: 1.5,
+                    width: { xs: '100%', sm: 'auto' },
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  {t('valueProposition.secondaryCTA', VALUE_PROPOSITION.secondaryCTA.label)}
+                </Button>
+              </Box>
+            </Box>
+          </Grid>
+
+          <Grid item xs={12} lg={5}>
+            <Paper
+              elevation={0}
+              sx={{
+                height: '100%',
+                p: { xs: 2.5, md: 3 },
+                bgcolor: 'rgba(7,17,36,0.28)',
+                border: '1px solid rgba(255,255,255,0.16)',
+                borderRadius: 3,
+                backdropFilter: 'blur(10px)',
+                color: 'common.white',
+              }}
+            >
+              <Typography variant="overline" sx={{ letterSpacing: 1.2, opacity: 0.75 }}>
+                {t('landingPage.heroDemo.eyebrow', HERO_INTERACTIVE_DEMO.eyebrow)}
+              </Typography>
+              <Typography variant="h5" fontWeight={800} sx={{ mb: 0.75 }}>
+                {t('landingPage.heroDemo.title', HERO_INTERACTIVE_DEMO.title)}
+              </Typography>
+              <Typography variant="body2" sx={{ mb: 2.5, color: 'rgba(255,255,255,0.82)' }}>
+                {t('landingPage.heroDemo.description', HERO_INTERACTIVE_DEMO.description)}
+              </Typography>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2.5 }}>
+                {HERO_INTERACTIVE_DEMO.steps.map((step, index) => (
+                  <Button
+                    key={step.id}
+                    size="small"
+                    variant={activeHeroStep.id === step.id ? 'contained' : 'outlined'}
+                    onClick={() => setActiveHeroStepId(step.id)}
+                    sx={{
+                      borderColor: 'rgba(255,255,255,0.24)',
+                      color: 'common.white',
+                      bgcolor: activeHeroStep.id === step.id ? 'rgba(255,255,255,0.18)' : 'transparent',
+                      '&:hover': {
+                        borderColor: 'rgba(255,255,255,0.4)',
+                        bgcolor: 'rgba(255,255,255,0.12)',
+                      },
+                    }}
+                  >
+                    {`${index + 1}. ${step.label}`}
+                  </Button>
+                ))}
+              </Box>
+              <Paper
+                elevation={0}
+                sx={{
+                  p: 2.5,
+                  bgcolor: 'rgba(255,255,255,0.08)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: 2,
+                }}
+              >
+                <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.72)', textTransform: 'uppercase', letterSpacing: 1.1 }}>
+                  {activeHeroStep.moment}
+                </Typography>
+                <Typography variant="h6" fontWeight={700} sx={{ mt: 0.75, mb: 1 }}>
+                  {activeHeroStep.headline}
+                </Typography>
+                <Typography variant="body2" sx={{ mb: 2, color: 'rgba(255,255,255,0.84)' }}>
+                  {activeHeroStep.summary}
+                </Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} sm={6}>
+                    <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.06)' }}>
+                      <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.72)', textTransform: 'uppercase' }}>
+                        Credential state
+                      </Typography>
+                      <Typography variant="body2" fontWeight={600} sx={{ mt: 0.75 }}>
+                        {activeHeroStep.credential}
+                      </Typography>
+                    </Box>
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.06)' }}>
+                      <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.72)', textTransform: 'uppercase' }}>
+                        Verification result
+                      </Typography>
+                      <Typography variant="body2" fontWeight={600} sx={{ mt: 0.75 }}>
+                        {activeHeroStep.decision}
+                      </Typography>
+                    </Box>
+                  </Grid>
+                </Grid>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 2 }}>
+                  {activeHeroStep.highlights.map((item) => (
+                    <Chip
+                      key={item}
+                      label={item}
+                      size="small"
+                      sx={{ bgcolor: 'rgba(255,255,255,0.1)', color: 'common.white' }}
+                    />
+                  ))}
+                </Box>
+                <Typography variant="body2" sx={{ mt: 2, pt: 2, borderTop: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.88)' }}>
+                  {activeHeroStep.reuseNote}
+                </Typography>
+              </Paper>
+            </Paper>
+          </Grid>
+        </Grid>
+      </Box>
+      <Section bgcolor="grey.50" sx={{ py: { xs: 5, md: 6 } }}>
+        <SectionHeading
+          subtitle="Whether you are evaluating identity infrastructure, integrating verification, or deploying credentials, jump directly to the path that fits."
+          sx={{ mb: 4 }}
+        >
+          Start where you are
+        </SectionHeading>
+        <Box
+          sx={{
+            display: 'grid',
+            gap: 3,
+            gridTemplateColumns: {
+              xs: '1fr',
+              md: 'repeat(3, minmax(0, 1fr))',
+            },
+          }}
+        >
+          {QUICK_START_PATHS.map((destination) => (
+            <Card
+              key={destination.id}
+              sx={{
+                height: '100%',
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: 3,
+                transition: 'all 0.2s ease',
+                '&:hover': { transform: 'translateY(-4px)', boxShadow: 4 },
+              }}
+            >
+              <CardActionArea component={Link} to={publicEntryHref(destination.path)} onClick={() => handleQuickStartSelection(destination)} sx={{ height: '100%' }}>
+                <CardContent sx={{ p: 3.5, height: '100%', display: 'flex', flexDirection: 'column' }}>
+                  <Typography variant="overline" sx={{ color: 'text.secondary', letterSpacing: 1.2 }}>
+                    {destination.role}
+                  </Typography>
+                  <Box sx={{ mb: 2, mt: 0.5 }}>{destination.icon}</Box>
+                  <Typography variant="h6" fontWeight={800} gutterBottom>
+                    {destination.title}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
+                    {destination.description}
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 3 }}>
+                    {destination.details.map((detail) => (
+                      <Chip key={detail} label={detail} size="small" />
+                    ))}
+                  </Box>
+                  <Button
+                    variant="text"
+                    component="span"
+                    endIcon={<ArrowForwardIcon />}
+                    sx={{ mt: 'auto', alignSelf: 'flex-start', px: 0, fontWeight: 700 }}
+                  >
+                    {destination.id === 'verify-credentials' && !SHOW_PUBLIC_CTA
+                      ? 'Explore Verification'
+                      : destination.cta}
+                  </Button>
+                </CardContent>
+              </CardActionArea>
+            </Card>
+          ))}
+        </Box>
+      </Section>
+      <Paper
+        elevation={0}
+        sx={{
+          py: 3,
+          px: { xs: 2, md: 3 },
+          mb: 0,
+          bgcolor: 'grey.900',
+          color: 'grey.100',
+          borderRadius: 0,
+        }}
+      >
+        <Typography variant="subtitle2" fontWeight={700} textAlign="center" sx={{ mb: 2 }}>
+          {t('landingPage.ecosystemSignals.title', ECOSYSTEM_SIGNALS.title)}
+        </Typography>
+        <Grid container spacing={2}>
+          {ECOSYSTEM_SIGNALS.categories.map((category) => (
+            <Grid item xs={12} md={4} key={category.label}>
+              <Box
+                sx={{
+                  height: '100%',
+                  p: 2,
+                  borderRadius: 2,
+                  bgcolor: 'rgba(255,255,255,0.04)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                }}
+              >
+                <Typography variant="caption" sx={{ color: 'grey.400', textTransform: 'uppercase', letterSpacing: 1.1 }}>
+                  {category.label}
+                </Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1.25 }}>
+                  {category.items.map((item) => (
+                    <Chip
+                      key={item}
+                      label={item}
+                      size="small"
+                      sx={{ bgcolor: 'rgba(255,255,255,0.08)', color: 'grey.100' }}
+                    />
+                  ))}
+                </Box>
+              </Box>
+            </Grid>
+          ))}
+        </Grid>
+      </Paper>
+      {/* ───────────────────────────────────────  IDV COMPARISON (side-by-side table) */}
+      <Section bgcolor="grey.50">
+        <Typography
+          variant="body1"
+          color="text.secondary"
+          fontStyle="italic"
+          textAlign="center"
+          sx={{ mb: 3 }}
+        >
+          Define what trust means in your workflow.
+        </Typography>
+        <SectionHeading
+          subtitle={t('idvComparison.takeaway', "Start with the questions your workflow must answer, then evaluate the selected implementation.")}
+          divider
+        >
+          {t('idvComparison.title', "Plan the Trust Exchange")}
+        </SectionHeading>
+
+        <Grid container spacing={3} sx={{ maxWidth: 900, mx: 'auto' }}>
+          {/* Traditional column */}
+          <Grid item xs={12} md={6}>
+            <Paper
+              elevation={0}
+              sx={{
+                p: 3,
+                height: '100%',
+                bgcolor: 'white',
+                border: '1px solid',
+                borderColor: 'grey.300',
+                borderRadius: 2,
+              }}
+            >
+              <Typography variant="h6" fontWeight={700} gutterBottom color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <PolicyIcon color="primary" /> {t('idvComparison.traditional.title', "Questions to Resolve")}
+              </Typography>
+              <List disablePadding>
+                {idvTraditionalItems.map((item, index) => (
+                  <ListItem key={index} sx={{ py: 0.75, px: 0 }}>
+                    <ListItemIcon sx={{ minWidth: 28 }}>
+                      <PolicyIcon fontSize="small" color="primary" />
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={item}
+                      slotProps={{
+                        primary: { variant: 'body2', color: 'text.secondary' }
+                      }}
+                    />
+                  </ListItem>
+                ))}
+              </List>
+            </Paper>
+          </Grid>
+
+          {/* ElevenID column */}
+          <Grid item xs={12} md={6}>
+            <Paper
+              elevation={3}
+              sx={{
+                p: 3,
+                height: '100%',
+                bgcolor: 'primary.main',
+                color: 'primary.contrastText',
+                borderRadius: 2,
+              }}
+            >
+              <Typography variant="h6" fontWeight={700} gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <CheckCircleIcon sx={{ color: 'success.light' }} /> {t('idvComparison.elevenid.title', 'Marty Evaluation')}
+              </Typography>
+              <List disablePadding>
+                {idvElevenIdItems.map((item, index) => (
+                  <ListItem key={index} sx={{ py: 0.75, px: 0 }}>
+                    <ListItemIcon sx={{ minWidth: 28 }}>
+                      <CheckCircleIcon fontSize="small" sx={{ color: 'success.light' }} />
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={
+                        item.bold ? (
+                          <span>
+                            <strong>{item.bold}</strong>
+                            {item.text.replace(item.bold, '').replace(/^[—–-]\s*/, '')}
+                          </span>
+                        ) : item.text
+                      }
+                      slotProps={{
+                        primary: { variant: 'body2', fontWeight: 500 }
+                      }}
+                    />
+                  </ListItem>
+                ))}
+              </List>
+            </Paper>
+          </Grid>
+        </Grid>
+
+        {/* CTA after comparison */}
+        <Box sx={{ textAlign: 'center', mt: 4 }}>
+          <Button
+            variant="outlined"
+            size="large"
+            component="a"
+            href={publicEntryHref('/from-idv-to-verifiable-identity')}
+            endIcon={<ArrowForwardIcon />}
+            sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
+          >
+            {t('idvComparison.cta', 'See how verification works')}
+          </Button>
+        </Box>
+      </Section>
+      {/* ───────────────────────────────────  THE IDENTITY PROBLEM (3 themes)  */}
+      <Section>
+        <Typography
+          variant="body1"
+          color="text.secondary"
+          fontStyle="italic"
+          textAlign="center"
+          sx={{ mb: 3 }}
+        >
+          So what breaks in today&apos;s identity systems?
+        </Typography>
+        <SectionHeading
+          subtitle={t(
+            'landingPage.identityProblem.description',
+            'Most organizations face fragmented systems, unclear trust, and growing compliance pressure.'
+          )}
+          divider
+        >
+          {t('landingPage.identityProblem.title', 'The Identity Problem')}
+        </SectionHeading>
+
+        <Grid container spacing={4} sx={{ maxWidth: 960, mx: 'auto' }}>
+          {identityProblemThemes.map((group, index) => (
+            <Grid item xs={12} md={4} key={index}>
+              <Card
+                elevation={2}
+                sx={{
+                  height: '100%',
+                  textAlign: 'center',
+                  transition: 'all 0.2s ease',
+                  '&:hover': { transform: 'translateY(-4px)', boxShadow: 6 },
+                }}
+              >
+                <CardContent sx={{ py: 4 }}>
+                  {group.icon}
+                  <Typography variant="h6" fontWeight={700} sx={{ mt: 1, mb: 1 }}>
+                    {group.theme}
+                  </Typography>
+                  {group.problems.map((p, i) => (
+                    <Typography key={i} variant="body2" color="text.secondary">
+                      {p}
+                    </Typography>
+                  ))}
+                </CardContent>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+      </Section>
+      {/* ───────────────────────────────────  HOW ELEVENID SOLVES IT  */}
+      <Section bgcolor="grey.50">
+        <Typography
+          variant="body1"
+          color="text.secondary"
+          fontStyle="italic"
+          textAlign="center"
+          sx={{ mb: 3 }}
+        >
+          Here&apos;s how we fix it.
+        </Typography>
+        <SectionHeading
+          subtitle={t(
+            'landingPage.solvesIt.intro',
+            'Govern identity with four primitives: trust profiles, credential templates, presentation policies, and flows.'
+          )}
+          divider
+        >
+          {t('landingPage.solvesIt.title', `How ${branding.appName} Solves It`)}
+        </SectionHeading>
+
+        <Grid container spacing={4}>
+          {features.map((feature, index) => (
+            <Grid item xs={12} md={4} key={index}>
+              <Card
+                sx={{
+                  height: '100%',
+                  textAlign: 'center',
+                  transition: 'all 0.2s ease',
+                  '&:hover': { transform: 'translateY(-4px)', boxShadow: 6 },
+                }}
+              >
+                <CardContent sx={{ py: 4 }}>
+                  {feature.icon}
+                  <Typography variant="h6" fontWeight={700} sx={{ mt: 2, mb: 1 }}>
+                    {feature.title}
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    {feature.description}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+      </Section>
+      {/* ───────────────────────────────────  HOW IT WORKS (visual flow)  */}
+      <Section>
+        <SectionHeading
+          subtitle={t(
+            'landingPage.howItWorks.description',
+            'Digital identity is a governed exchange between four actors.'
+          )}
+          divider
+        >
+          {t('landingPage.howItWorks.title', 'How It Works')}
+        </SectionHeading>
+
+        {/* Horizontal summary flow */}
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            gap: { xs: 1, md: 2 },
+            flexWrap: 'wrap',
+            mb: 4,
+          }}
+        >
+          {[
+            { label: 'Issuer', color: 'primary.main' },
+            null,
+            { label: 'Holder', color: 'secondary.main' },
+            null,
+            { label: 'Verifier', color: 'success.main' },
+            null,
+            { label: 'Trust Registry', color: 'warning.main', highlight: true },
+          ].map((item, i) =>
+            item === null ? (
+              <ArrowForwardIcon key={`arrow-${i}`} sx={{ color: 'grey.400' }} />
+            ) : (
+              <Paper
+                key={item.label}
+                elevation={item.highlight ? 4 : 1}
+                sx={{
+                  px: { xs: 2, md: 3 },
+                  py: 1.5,
+                  bgcolor: item.highlight ? 'warning.light' : 'white',
+                  border: item.highlight ? '2px solid' : '1px solid',
+                  borderColor: item.highlight ? 'warning.main' : 'grey.200',
+                  borderRadius: 2,
+                  fontWeight: 700,
+                  textAlign: 'center',
+                  minWidth: { xs: 80, md: 120 },
+                }}
+              >
+                <Typography variant="body2" fontWeight={700} color={item.color}>
+                  {item.label}
+                </Typography>
+              </Paper>
+            )
+          )}
+        </Box>
+
+        <Paper elevation={3} sx={{ p: { xs: 2, md: 4 }, bgcolor: 'grey.50' }}>
+          <UnifiedIdentityFlowDiagram interactive={true} />
+        </Paper>
+
+        {/* CTA after How It Works */}
+        <Box sx={{ textAlign: 'center', mt: 4 }}>
+          <Button
+            variant="contained"
+            size="large"
+            component="a"
+            href={publicEntryHref('/identity')}
+            endIcon={<ArrowForwardIcon />}
+            sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
+          >
+            {t('landingPage.howItWorks.cta', 'Try a live verification flow')}
+          </Button>
+        </Box>
+      </Section>
+      <Suspense fallback={<LazySectionFallback bgcolor="grey.50" minHeight={360} />}>
+        <EndUserExperienceSection
+          t={t}
+          activeExperience={activeExperience}
+          onSelectExperience={setActiveExperienceId}
+        />
+      </Suspense>
+      <Suspense fallback={<LazySectionFallback minHeight={420} />}>
+        <ProofLabSection
+          t={t}
+          isMobile={isMobile}
+          activeScenario={activeProofLabScenario}
+          onScenarioChange={setActiveProofLabScenarioId}
+          onRun={handleProofLabRun}
+          status={proofLabStatus}
+          result={proofLabResult}
+          requestPreview={activeProofLabRequestPreview}
+          presentationData={activeProofLabPresentationData}
+        />
+      </Suspense>
+      {/* ───────────────────────────────────  CHOOSE YOUR PATH  */}
+      <Section bgcolor="grey.50">
+        <SectionHeading
+          subtitle={t('landingPage.deploymentPlaybooks.subtitle', DEPLOYMENT_PLAYBOOKS.subtitle)}
+          divider
+        >
+          {t('landingPage.deploymentPlaybooks.title', DEPLOYMENT_PLAYBOOKS.title)}
+        </SectionHeading>
+
+        <Grid container spacing={3}>
+          {deploymentPlaybooks.map((playbook) => (
+            <Grid item xs={12} sm={6} lg={3} key={playbook.slug}>
+              <Card
+                elevation={2}
+                sx={{
+                  height: '100%',
+                  transition: 'all 0.2s ease',
+                  '&:hover': { transform: 'translateY(-4px)', boxShadow: 6 },
+                }}
+              >
+                <CardActionArea component="a" href={publicEntryHref(playbook.href)} sx={{ height: '100%' }}>
+                  <CardContent sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1.5, mb: 2 }}>
+                      <Box
+                        sx={{
+                          width: 48,
+                          height: 48,
+                          borderRadius: 2,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          bgcolor: 'grey.100',
+                        }}
+                      >
+                        {PLAYBOOK_ICONS[playbook.slug] || <VerifiedUserIcon sx={{ fontSize: 32, color: 'primary.main' }} />}
+                      </Box>
+                      <Chip label={playbook.badge} size="small" color="primary" variant="outlined" sx={{ fontWeight: 600 }} />
+                    </Box>
+                    <Typography variant="h6" fontWeight={700} gutterBottom>
+                      {playbook.title}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2, flexGrow: 1 }}>
+                      {playbook.summary}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 1.1 }}>
+                      What it proves
+                    </Typography>
+                    <Typography variant="body2" sx={{ mt: 0.75, mb: 2 }}>
+                      {playbook.proof}
+                    </Typography>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
+                      {playbook.signals.map((signal) => (
+                        <Chip key={signal} label={signal} size="small" />
+                      ))}
+                    </Box>
+                    <Button variant="text" component="span" endIcon={<ArrowForwardIcon />} sx={{ px: 0, mt: 'auto', alignSelf: 'flex-start' }}>
+                      {playbook.cta}
+                    </Button>
+                  </CardContent>
+                </CardActionArea>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+
+        <Box textAlign="center" sx={{ mt: 4 }}>
+          <Button variant="outlined" size="large" component="a" href={publicEntryHref('/blog')} endIcon={<ArrowForwardIcon />}>
+            Browse all deployment guides
+          </Button>
+        </Box>
+      </Section>
+      <Section bgcolor="grey.50">
+        <SectionHeading
+          subtitle={t('audienceRouting.subtitle', AUDIENCE_ROUTING.subtitle)}
+          divider
+        >
+          {t('audienceRouting.title', AUDIENCE_ROUTING.title)}
+        </SectionHeading>
+        <Grid container spacing={3} sx={{ maxWidth: 960, mx: 'auto' }}>
+          {AUDIENCE_ROUTING.paths.filter((path) => SHOW_PUBLIC_CTA || path.id !== 'developers').map((path) => (
+            <Grid item xs={12} md={4} key={path.id}>
+              <Card
+                elevation={2}
+                sx={{
+                  height: '100%',
+                  transition: 'all 0.2s ease',
+                  '&:hover': { transform: 'translateY(-6px)', boxShadow: 8 },
+                }}
+              >
+                <CardActionArea
+                  component="a"
+                  href={publicEntryHref(path.path)}
+                  sx={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}
+                >
+                  <CardContent sx={{ textAlign: 'center', py: 4, flexGrow: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <Box sx={{ color: `${path.color}.main`, mb: 1 }}>
+                      {AUDIENCE_ICONS[path.icon] || <BusinessIcon sx={{ fontSize: 40 }} />}
+                    </Box>
+                    <Typography variant="h5" fontWeight={700} color={`${path.color}.main`} gutterBottom>
+                      {t(`audienceRouting.${path.id}.title`, path.title)}
+                    </Typography>
+                    <Chip
+                      label={path.benefit}
+                      size="small"
+                      color={path.color}
+                      variant="outlined"
+                      sx={{ mb: 2, fontWeight: 600 }}
+                    />
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 3, flexGrow: 1 }}>
+                      {t(`audienceRouting.${path.id}.description`, path.description)}
+                    </Typography>
+                    <Button
+                      variant="outlined"
+                      component="span"
+                      color={path.color}
+                      endIcon={<ArrowForwardIcon />}
+                      sx={{ width: { xs: '100%', sm: 'auto' } }}
+                    >
+                      {t(`audienceRouting.${path.id}.cta`, path.cta)}
+                    </Button>
+                  </CardContent>
+                </CardActionArea>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+      </Section>
+      {/* ───────────────────────────────────  WHY THIS MATTERS  */}
+      <Section>
+        <SectionHeading divider>
+          {t('organizationOutcomes.title', ORGANIZATION_OUTCOMES.title)}
+        </SectionHeading>
+        <Grid container spacing={3} sx={{ maxWidth: 900, mx: 'auto' }}>
+          {ORGANIZATION_OUTCOMES.outcomes.map((outcome, index) => (
+            <Grid item xs={12} sm={6} key={index}>
+              <Card
+                elevation={2}
+                sx={{
+                  height: '100%',
+                  transition: 'all 0.2s ease',
+                  '&:hover': { transform: 'translateY(-3px)', boxShadow: 4 },
+                }}
+              >
+                <CardContent>
+                  <Box sx={{ display: 'flex', alignItems: 'start', gap: 1.5 }}>
+                    <TrendingUpIcon color="success" sx={{ mt: 0.3 }} />
+                    <Box>
+                      <Typography variant="body1" fontWeight={600}>
+                        {typeof outcome === 'string' ? outcome : outcome.text}
+                      </Typography>
+                      {typeof outcome !== 'string' && outcome.metric && (
+                        <Chip
+                          label={outcome.metric}
+                          size="small"
+                          color="success"
+                          variant="outlined"
+                          sx={{ mt: 1, fontWeight: 600, fontSize: '0.7rem' }}
+                        />
+                      )}
+                    </Box>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+      </Section>
+      <Suspense fallback={<LazySectionFallback minHeight={260} />}>
+        <ProductCapabilitiesSection t={t} />
+      </Suspense>
+      <Suspense fallback={<LazySectionFallback minHeight={420} />}>
+        <DeploymentModelsSection t={t} onSelectMode={handleDeploymentModeSelection} />
+      </Suspense>
+      <DeveloperQuickstartSection t={t} />
+      <StandardsArchitectureSection
+        t={t}
+        expandedLayer={expandedLayer}
+        onToggleLayer={setExpandedLayer}
+      />
+      {/* ───────────────────────────────────  TRUST SIGNALS (enterprise-grade)  */}
+      <Section bgcolor="grey.50">
+        <SectionHeading divider>
+          {t('landingPage.trustSignals.title', 'Enterprise-Grade Infrastructure')}
+        </SectionHeading>
+
+        <Grid container spacing={3}>
+          <Grid item xs={12} md={4}>
+            <Card elevation={2} sx={{ height: '100%', transition: 'all 0.2s ease', '&:hover': { boxShadow: 4 } }}>
+              <CardContent>
+                <Typography variant="h6" fontWeight={700} color="primary" gutterBottom>
+                  {t('landingPage.trustSignals.security.title', 'Security')}
+                </Typography>
+                <List dense>
+                  {trustSignals.security.map((item) => (
+                    <ListItem key={item} sx={{ py: 0.5 }}>
+                      <ListItemIcon sx={{ minWidth: 32 }}>
+                        <CheckCircleIcon fontSize="small" color="success" />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={item}
+                        slotProps={{
+                          primary: { variant: 'body2' }
+                        }}
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} md={4}>
+            <Card elevation={2} sx={{ height: '100%', transition: 'all 0.2s ease', '&:hover': { boxShadow: 4 } }}>
+              <CardContent>
+                <Typography variant="h6" fontWeight={700} color="secondary" gutterBottom>
+                  {t('landingPage.trustSignals.infrastructure.title', 'Infrastructure')}
+                </Typography>
+                <List dense>
+                  {trustSignals.infrastructure.map((item) => (
+                    <ListItem key={item} sx={{ py: 0.5 }}>
+                      <ListItemIcon sx={{ minWidth: 32 }}>
+                        <CheckCircleIcon fontSize="small" color="success" />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={item}
+                        slotProps={{
+                          primary: { variant: 'body2' }
+                        }}
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} md={4}>
+            <Card elevation={2} sx={{ height: '100%', transition: 'all 0.2s ease', '&:hover': { boxShadow: 4 } }}>
+              <CardContent>
+                <Typography variant="h6" fontWeight={700} color="success.main" gutterBottom>
+                  {t('landingPage.trustSignals.compliance.title', 'Compliance')}
+                </Typography>
+                <List dense>
+                  {trustSignals.compliance.map((item) => (
+                    <ListItem key={item} sx={{ py: 0.5 }}>
+                      <ListItemIcon sx={{ minWidth: 32 }}>
+                        <CheckCircleIcon fontSize="small" color="success" />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={item}
+                        slotProps={{
+                          primary: { variant: 'body2' }
+                        }}
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+      </Section>
+      {/* ─── Proof & Credibility Strip ─── */}
+      <Paper
+        elevation={0}
+        sx={{
+          py: 3,
+          px: 3,
+          bgcolor: 'grey.50',
+          borderRadius: 0,
+          border: '1px solid',
+          borderColor: 'grey.200'
+        }}
+      >
+        <Typography variant="subtitle1" fontWeight={700} textAlign="center" sx={{ mb: 2 }}>
+          {t('proofStrip.title', PROOF_STRIP.title)}
+        </Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 1.5 }}>
+          {proofClaims.map((claim) => (
+            <Chip
+              key={`${claim.category}:${claim.label}`}
+              label={`${claim.category}: ${claim.label}`}
+              variant="outlined"
+              sx={{ borderColor: 'grey.400', '&:hover': { borderColor: 'primary.main', bgcolor: 'primary.50' }, transition: 'all 0.2s ease' }}
+            />
+          ))}
+        </Box>
+      </Paper>
+      {/* ───────────────────────────────────  OPEN STANDARD (MIP)  */}
+      <Section>
+        <SectionHeading
+          subtitle={t('protocol.heroSubtitle', PROTOCOL.tagline)}
+          divider
+        >
+          {t('protocol.heroTitle', 'Built around an Open Draft Protocol')}
+        </SectionHeading>
+
+        <Paper
+          elevation={0}
+          sx={{
+            p: 4,
+            mb: 4,
+            bgcolor: 'grey.50',
+            borderRadius: 2,
+            textAlign: 'center',
+            border: '1px solid',
+            borderColor: 'grey.200',
+          }}
+        >
+          <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1, mb: 2 }}>
+            <Chip label={`Open Protocol · ${PROTOCOL.status}`} color="primary" size="small" sx={{ fontWeight: 700 }} />
+            <Chip label={`v${PROTOCOL.version}`} variant="outlined" size="small" />
+            <Chip label={PROTOCOL.license} variant="outlined" size="small" />
+          </Box>
+          <Typography variant="h6" fontWeight={600} color="primary.dark" sx={{ fontStyle: 'italic', maxWidth: 800, mx: 'auto', mb: 2 }}>
+            &ldquo;{PROTOCOL.thesis}&rdquo;
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 700, mx: 'auto' }}>
+            The Marty Identity Protocol (MIP) defines five primitives—Trust Profiles, Credential Templates,
+            Presentation Policies, Deployment Profiles, and Flows—that make digital identity management
+            explicit in the draft protocol model.
+          </Typography>
+        </Paper>
+
+        <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <Button
+            variant="contained"
+            size="large"
+            startIcon={<GitHubIcon />}
+            href={publicEntryHref(PROTOCOL.githubUrl)}
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
+          >
+            View Protocol on GitHub
+          </Button>
+          <Button
+            variant="outlined"
+            size="large"
+            component="a"
+            href={publicEntryHref('/protocol')}
+            endIcon={<ArrowForwardIcon />}
+            sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
+          >
+            Learn About MIP
+          </Button>
+        </Box>
+      </Section>
+      {/* ─────────────────────────  LEARN THE PROTOCOL  */}
+      <Section bgcolor="grey.50">
+        <Box textAlign="center" sx={{ mb: 5 }}>
+          <Typography variant="h3" fontWeight={800} gutterBottom>
+            Learn the Marty Protocol
+          </Typography>
+          <Typography variant="h6" color="text.secondary" sx={{ maxWidth: 620, mx: 'auto' }}>
+            Six structured chapters — from the foundations of verifiable identity to concrete implementations.
+          </Typography>
+        </Box>
+
+        {/* Chapter intro links */}
+        <Grid container spacing={2} sx={{ maxWidth: 960, mx: 'auto', mb: 4 }} justifyContent="center">
+          {GUIDE_CHAPTERS.map((ch) => {
+            const firstArticle = (GUIDE_ARTICLES_BY_CHAPTER[ch.id] || [])[0];
+            return (
+              <Grid item xs={6} sm={4} md={2} key={ch.id}>
+                <Card
+                  component="a"
+                  href={publicEntryHref(firstArticle ? `/blog/${firstArticle.slug}` : '/blog')}
+                  elevation={0}
+                  sx={{
+                    display: 'block',
+                    textAlign: 'center',
+                    p: 2,
+                    textDecoration: 'none',
+                    border: '1px solid',
+                    borderColor: 'divider',
+                    borderRadius: 2,
+                    bgcolor: 'background.paper',
+                    transition: 'all 0.18s ease',
+                    '&:hover': { borderColor: 'primary.main', transform: 'translateY(-2px)', boxShadow: 3 },
+                  }}
+                >
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: 'block', mb: 0.5 }}
+                  >
+                    Chapter {ch.id}
+                  </Typography>
+                  <Typography variant="body2" fontWeight={700} color="text.primary">
+                    {ch.title}
+                  </Typography>
+                </Card>
+              </Grid>
+            );
+          })}
+        </Grid>
+
+        {/* Compact protocol map */}
+        <Box sx={{ maxWidth: 900, mx: 'auto', my: 4 }}>
+          <InteractiveProtocolMap compact />
+        </Box>
+
+        <Box textAlign="center">
+          <Button
+            variant="contained"
+            size="large"
+            component="a"
+            href={publicEntryHref('/blog/foundations-identity')}
+            endIcon={<ArrowForwardIcon />}
+          >
+            Start with Foundations
+          </Button>
+          <Button
+            variant="text"
+            size="large"
+            component="a"
+            href={publicEntryHref('/blog')}
+            sx={{ ml: 2 }}
+          >
+            Browse All Guides
+          </Button>
+        </Box>
+      </Section>
+      {/* ─────────────────────────────  INSIGHTS & ARTICLES  */}
+      <Section>
+        <Box textAlign="center" sx={{ mb: 6 }}>
+          <Typography variant="h3" fontWeight={800} gutterBottom>
+            Insights &amp; Articles
+          </Typography>
+          <Typography variant="h6" color="text.secondary" sx={{ maxWidth: 600, mx: 'auto' }}>
+            Technical insights, implementation guides, and business perspectives from the Marty team.
+          </Typography>
+        </Box>
+        <Grid container spacing={3}>
+          {[...BLOG_POSTS]
+            .filter((p) => p.date <= new Date().toISOString().slice(0, 10))
+            .sort((a, b) => new Date(b.date) - new Date(a.date))
+            .slice(0, 3)
+            .map((post) => (
+              <Grid item xs={12} md={4} key={post.slug}>
+                <Card
+                  sx={{
+                    height: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    transition: 'all 0.2s ease',
+                    '&:hover': { transform: 'translateY(-4px)', boxShadow: 4 },
+                  }}
+                >
+                  <CardActionArea
+                    component="a"
+                    href={publicEntryHref(`/blog/${post.slug}`)}
+                    sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}
+                  >
+                    <CardContent sx={{ flexGrow: 1, width: '100%' }}>
+                      <Chip
+                        label={post.category}
+                        size="small"
+                        color="primary"
+                        variant="outlined"
+                        sx={{ mb: 1.5, fontWeight: 600 }}
+                      />
+                      <Typography variant="h6" fontWeight={700} gutterBottom>
+                        {post.title}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                        {post.summary}
+                      </Typography>
+                      <Typography variant="caption" color="text.disabled">
+                        {new Date(post.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} · {post.readTime}
+                      </Typography>
+                    </CardContent>
+                  </CardActionArea>
+                </Card>
+              </Grid>
+            ))}
+        </Grid>
+        <Box textAlign="center" sx={{ mt: 5 }}>
+          <Button
+            variant="outlined"
+            size="large"
+            component="a"
+            href={publicEntryHref('/blog')}
+            endIcon={<ArrowForwardIcon />}
+          >
+            View All Articles
+          </Button>
+        </Box>
+      </Section>
+      {/* ───────────────────────────────────  FOOTER CTA  */}
+      <Box
+        sx={{
+          textAlign: 'center',
+          py: { xs: 6, md: 8 },
+          px: 2,
+          background: 'linear-gradient(135deg, #1976d2 0%, #0d47a1 100%)',
+          color: 'white',
+          borderRadius: 2,
+          mt: 0,
+        }}
+      >
+        <Typography variant="h4" gutterBottom fontWeight={800}>
+          {t('landingPage.footer.title', 'Start with the verification surface.')}
+        </Typography>
+        <Typography variant="body1" sx={{ mb: 4, maxWidth: 680, mx: 'auto', opacity: 0.9 }}>
+          {SHOW_PUBLIC_PRICING_BUTTONS && !DISABLE_PUBLIC_PRICING_BUTTONS
+            ? t('landingPage.footer.description', 'Discuss a defined annual software license. Founding access is available for discussion; scope, rights, and terms require agreement.')
+            : t('landingPage.footer.descriptionComingSoon', 'Explore the documentation and a synthetic demonstration, then discuss the workflow and deployment your organization needs.')}
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
+          {SHOW_PUBLIC_CTA && <Button
+            component={Link}
+            to={publicEntryHref('/developers')}
+            onClick={() => handleLandingCtaClick({
+              section: 'footer',
+              ctaId: 'start_verifying',
+              ctaLabel: t('valueProposition.primaryCTA', VALUE_PROPOSITION.primaryCTA),
+              destinationPath: '/developers',
+            })}
+            variant="contained"
+            size="large"
+            startIcon={<VerifiedUserIcon />}
+            data-testid="footer-primary-cta"
+            sx={{
+              bgcolor: 'white',
+              color: 'primary.main',
+              fontWeight: 700,
+              px: 4,
+              '&:hover': { bgcolor: 'grey.100', transform: 'translateY(-2px)', boxShadow: 4 },
+              width: { xs: '100%', sm: 'auto' },
+              transition: 'all 0.2s ease',
+            }}
+          >
+            {t('valueProposition.primaryCTA', VALUE_PROPOSITION.primaryCTA)}
+          </Button>}
+          <Button
+            component={Link}
+            to={publicEntryHref(VALUE_PROPOSITION.secondaryCTA.path)}
+            onClick={() => handleLandingCtaClick({
+              section: 'footer',
+              ctaId: 'view_verification_api',
+              ctaLabel: t('valueProposition.secondaryCTA', VALUE_PROPOSITION.secondaryCTA.label),
+              destinationPath: VALUE_PROPOSITION.secondaryCTA.path,
+            })}
+            variant="outlined"
+            size="large"
+            endIcon={<ArrowForwardIcon />}
+            data-testid="footer-secondary-cta"
+            sx={{
+              borderColor: 'white',
+              color: 'white',
+              px: 4,
+              '&:hover': { bgcolor: 'rgba(255,255,255,0.12)', borderColor: 'white', transform: 'translateY(-2px)' },
+              width: { xs: '100%', sm: 'auto' },
+              transition: 'all 0.2s ease',
+            }}
+          >
+            {t('valueProposition.secondaryCTA', VALUE_PROPOSITION.secondaryCTA.label)}
+          </Button>
+          {SHOW_PUBLIC_PRICING_BUTTONS && (
+            <FutureFeatureButton
+              variant="outlined"
+              size="large"
+              disabled={DISABLE_PUBLIC_PRICING_BUTTONS}
+              onClick={handleFooterPricingClick}
+              data-testid="footer-pricing-cta"
+              sx={{
+                borderColor: 'white',
+                color: 'white',
+                px: 4,
+                '&:hover': { bgcolor: 'rgba(255,255,255,0.12)', borderColor: 'white', transform: 'translateY(-2px)' },
+                width: { xs: '100%', sm: 'auto' },
+                transition: 'all 0.2s ease',
+              }}
+              disabledSx={{
+                borderColor: 'rgba(255, 255, 255, 0.28)',
+                color: 'rgba(255, 255, 255, 0.62)',
+                bgcolor: 'rgba(255, 255, 255, 0.06)',
+              }}
+            >
+              {t('landingPage.footer.viewPricing', 'View Pricing')}
+            </FutureFeatureButton>
+          )}
+        </Box>
+      </Box>
+      {/* Orientation Banner */}
+      <Box
+        sx={{
+          mt: 4,
+          p: 2,
+          bgcolor: 'grey.50',
+          borderRadius: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 1
+        }}
+      >
+        <Typography variant="body2" color="text.secondary">
+          <strong>{t('landingPage.orientation.title', 'New to verifiable identity?')}</strong>
+        </Typography>
+        <Button
+          size="small"
+          component="a"
+          href={publicEntryHref('/identity')}
+          endIcon={<ArrowForwardIcon fontSize="small" />}
+          sx={{ textTransform: 'none' }}
+        >
+          {t('landingPage.orientation.cta', 'How It Works')}
+        </Button>
+      </Box>
+    </Box>
+  );
+}
+
+export default LandingPageContent;

@@ -10,6 +10,7 @@ import ErrorBoundary from '../../components/ErrorBoundary';
 import { TrustProvider } from '../../components/trust/TrustProvider';
 import { CommerceProvider } from '../../extensions/commerce';
 import PrerenderReadySignal from './PrerenderReadySignal';
+import WebSurfaceBoundary from './WebSurfaceBoundary';
 
 function LoadingFallback() {
   return (
@@ -31,7 +32,7 @@ function AppProviders({ children }) {
                 <CommerceProvider>
                   <AuthProvider>
                     <ConsoleProvider>
-                      {children}
+                      <WebSurfaceBoundary>{children}</WebSurfaceBoundary>
                     </ConsoleProvider>
                   </AuthProvider>
                 </CommerceProvider>

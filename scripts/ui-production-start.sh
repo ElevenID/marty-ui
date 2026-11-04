@@ -4,6 +4,7 @@ set -eu
 # Production assets remain prerendered. Only public UI settings are supplied at
 # startup; billing credentials never belong in this configuration.
 TARGET_DIR="/usr/share/nginx/html"
+RUNTIME_CONFIG_PATH="${MARTY_UI_RUNTIME_CONFIG_PATH:-${TARGET_DIR}/runtime-config.js}"
 . /scripts/load-secrets-env.sh
 ga_measurement_id="${GOOGLE_ANALYTICS_MEASUREMENT_ID:-}"
 site_verification="${GOOGLE_SITE_VERIFICATION:-}"
@@ -36,13 +37,14 @@ if [ -n "$site_verification" ]; then
 fi
 verification_replacement="$(printf '%s' "$verification_meta" | sed -e 's/[\\&|]/\\&/g')"
 
-cat > "${TARGET_DIR}/runtime-config.js.tmp" <<EOF
+mkdir -p "$(dirname "$RUNTIME_CONFIG_PATH")"
+cat > "${RUNTIME_CONFIG_PATH}.tmp" <<EOF
 window.__MARTY_RUNTIME_CONFIG__ = Object.assign({}, window.__MARTY_RUNTIME_CONFIG__, {
   googleAnalyticsMeasurementId: '${ga_measurement_id}',
   organizationCreationEnabled: ${organization_creation_enabled}
 });
 EOF
-mv "${TARGET_DIR}/runtime-config.js.tmp" "${TARGET_DIR}/runtime-config.js"
+mv "${RUNTIME_CONFIG_PATH}.tmp" "$RUNTIME_CONFIG_PATH"
 
 # Each prerendered route has its own HTML head. Replace only our public meta
 # value so a restart, update, or explicit empty value cannot retain stale data.

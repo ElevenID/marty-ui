@@ -1,12 +1,13 @@
+import { useSurfaceNavigate } from '../../application/routing/useSurfaceNavigate';
 import { Box, Typography, Button, Paper, Grid, Card, CardContent, Chip } from '@mui/material';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import { useNavigate } from 'react-router';
+
 import { DISABLE_PUBLIC_GET_STARTED_BUTTONS, SHOW_PUBLIC_GET_STARTED_BUTTONS } from '@ui-public-config';
 import FutureFeatureButton from '../FutureFeatureButton';
 import { SEOHead, softwareApplicationSchema } from '../seo';
 
 function EudiWalletVerificationPage() {
-  const navigate = useNavigate();
+  const navigate = useSurfaceNavigate();
   const structuredData = softwareApplicationSchema({
     name: 'EUDI Wallet Verification API',
     description: 'Evaluate the exact EUDI wallet, presentation profile, and trust requirements for a Marty integration.',

@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../extensions/commerce', () => ({
+vi.mock('../../extensions/commerce/public', () => ({
   renderCommercePublicRoutes: vi.fn(() => null),
 }));
 
@@ -28,7 +28,7 @@ vi.mock('../../components/pages/DemoPages', () => ({
 }));
 
 import { renderMarketingRoutes } from '../publicSite.public';
-import { renderCommercePublicRoutes } from '../../extensions/commerce';
+import { renderCommercePublicRoutes } from '../../extensions/commerce/public';
 
 function renderMarketingRoute(path: string, showDemos = true) {
   render(

@@ -1,3 +1,5 @@
+import { isWebsiteOwnedModule } from './website-source-ownership.mjs';
+
 const marketingPageNames = [
   'LandingPage', 'ProductPage', 'StandardsPage', 'ProtocolPage', 'IdentityGuidePage', 'FromIDVPage',
   'PublicIAPages', 'VerifiableCredentialApiPage', 'EudiWalletVerificationPage',
@@ -9,7 +11,8 @@ const marketingPageNames = [
 
 export function isProductionMarketingModule(moduleId) {
   const id = moduleId.replace(/\\/g, '/').split('?', 1)[0];
-  return id.includes('/@elevenid/marty-blog/')
+  return isWebsiteOwnedModule(id) || id.includes('/src/apps/website/')
+    || id.includes('/@elevenid/marty-blog/')
     || id.endsWith('/variants/publicSite.public.jsx')
     || id.endsWith('/data/marketingContent.js')
     || id.includes('/components/landing/')

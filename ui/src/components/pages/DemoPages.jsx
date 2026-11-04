@@ -1,5 +1,7 @@
+import { staticAssetHref } from '../../utils/staticAssetHref';
+import { useSurfaceNavigate } from '../../application/routing/useSurfaceNavigate';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link as RouterLink, Navigate, useNavigate, useParams } from 'react-router';
+import { Link as RouterLink, Navigate, useParams } from 'react-router';
 import {
   Alert,
   Box,
@@ -147,7 +149,7 @@ function ScenarioCard({ manifest, scenario }) {
         <Box sx={{ width: '100%', aspectRatio: '16 / 9', overflow: 'hidden', bgcolor: 'grey.900' }}>
           <Box
             component="img"
-            src={scenario.poster.src}
+            src={staticAssetHref(scenario.poster.src)}
             alt=""
             loading="lazy"
             sx={{ display: 'block', width: '100%', height: '100%', objectFit: 'cover' }}
@@ -183,7 +185,7 @@ function ScenarioCard({ manifest, scenario }) {
 }
 
 function ReleaseExperience({ index, manifest }) {
-  const navigate = useNavigate();
+  const navigate = useSurfaceNavigate();
   const [audience, setAudience] = useState('All');
   const [query, setQuery] = useState('');
 

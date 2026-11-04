@@ -1,3 +1,4 @@
+import { useSurfaceNavigate } from '../application/routing/useSurfaceNavigate';
 /**
  * From IDV to Verifiable Identity Page
  * 
@@ -8,14 +9,14 @@
 import { Box, Typography, Paper, Card, CardContent, Grid, List, ListItem, ListItemIcon, ListItemText, Divider, Button } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import { useNavigate } from 'react-router';
+
 import { SHOW_PUBLIC_CTA } from '@ui-public-config';
 import { SEOHead } from './seo';
 import { articleSchema, breadcrumbListSchema } from './seo/structuredData';
 import { useBranding } from '../hooks/useBranding';
 
 function FromIDVPage() {
-  const navigate = useNavigate();
+  const navigate = useSurfaceNavigate();
   const branding = useBranding();
 
   const infrastructurePrimitives = [
