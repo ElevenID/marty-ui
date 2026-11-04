@@ -34,6 +34,7 @@ test('full production binds the exact private source and requires it in the emit
     }
     const plugin = productionBuildContractPlugin(entry);
     plugin.generateBundle({}, { 'main.js': { type: 'chunk', modules: { [entry]: {} } } });
+    plugin.generateBundle({}, { 'main.js': { type: 'chunk', modules: { [entry.replaceAll('\\', '/') + '?version=1']: {} } } });
     assert.throws(() => plugin.generateBundle({}, {
       'main.js': { type: 'chunk', modules: { '/src/extensions/commerce/publicStub.jsx': {} } },
     }), /omitted/);

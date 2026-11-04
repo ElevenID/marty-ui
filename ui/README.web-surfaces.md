@@ -129,3 +129,16 @@ login handoffs. With full pages, it also checks paid-plan checkout and enabled
 sandbox-signup handoffs. A local application sentinel proves that the browser
 loads a receiving document. It does not simulate authentication, authorization,
 payment, or a live deployment; those remain separate integration qualifications.
+
+
+## Private pricing boundary
+
+Public pricing navigation and CTAs are disabled; pricing is omitted from crawler
+and prerender discovery. Detailed commercial pricing/claim modules are refused
+from combined, website and application output, including shared/lazy chunks from
+the private adapter. Existing route ownership still reserves `/pricing` to the
+website and `/pricing/checkout` to the application; it does not promise that
+those pages are available. The paired private adapter withholds both routes and
+plan checkout while retaining detailed source privately. Hiding a link or adding
+a client-side auth guard is insufficient to protect downloadable static data.
+Do not ship the private library directory or source maps as public assets.

@@ -26,7 +26,6 @@ ElevenID provides APIs for AI systems to verify credentials, badges, and identit
 ## Product
 
 - Product Overview: https://elevenidllc.com/product
-- Pricing: https://elevenidllc.com/pricing
 - Standards: https://elevenidllc.com/standards
 - Protocol: https://elevenidllc.com/protocol
 - AI Integration: https://elevenidllc.com/ai

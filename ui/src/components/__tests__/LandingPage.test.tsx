@@ -276,17 +276,8 @@ describe('LandingPage', () => {
       })
     );
 
-    await user.click(screen.getByTestId('footer-pricing-cta'));
-    expect(mockTrackEvent).toHaveBeenCalledWith(
-      'landing_cta_clicked',
-      expect.objectContaining({
-        page: 'landing',
-        section: 'footer',
-        cta_id: 'view_pricing',
-        destination_path: '/pricing',
-      })
-    );
-    expect(mockNavigate).toHaveBeenCalledWith('/pricing');
+    expect(screen.queryByTestId('footer-pricing-cta')).not.toBeInTheDocument();
+    expect(mockNavigate).not.toHaveBeenCalledWith('/pricing');
   });
 
   it('switches the interactive walkthrough and end-user journey views', async () => {

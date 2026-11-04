@@ -261,7 +261,6 @@ export default defineConfig(async ({ mode }) => {
     '/architecture',
     '/security',
     '/resources',
-    ...(productionCommerceEntry ? ['/pricing'] : []),
     ...demoRoutes,
     '/verifiable-credential-api',
     '/eudi-wallet-verification',
