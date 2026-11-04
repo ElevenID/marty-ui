@@ -39,6 +39,12 @@ MAX_WORKER_OUTPUT = 2 * 1024 * 1024
 MAX_PACKET = 65520
 SAFE_HEADERS = frozenset({"content-type", "content-length", "transfer-encoding", "content-encoding",
                           "x-github-request-id", "date"})
+GITHUB_MAIN_POLICY_REFUSAL = (
+    "error: GH013: Repository rule violations found for refs/heads/main.\n"
+    "Review all repository rules at https://github.com/ElevenID/marty-ui/rules?ref=refs%2Fheads%2Fmain\n"
+    "\n- Changes must be made through the merge queue\n"
+    "\n- Changes must be made through a pull request.\n\n"
+)
 
 
 class AtomicGitError(ValueError):
@@ -271,6 +277,17 @@ def parse_report(raw: bytes, spec: dict) -> dict:
 def admit_report(spec: dict, report: dict) -> str:
     spec = validate_spec(spec)
     if spec["operation_id"].startswith("capability-negative-"):
+        # GitHub can reject the stale A -> A command at its protected-branch
+        # policy layer before Git emits a stale-lock diagnostic. This proves
+        # only this exact policy refusal, not stale-CAS behavior or capability
+        # success. The operator also requires effective no-bypass protection,
+        # unchanged negative readbacks, and a successful paired C -> C write.
+        if report["refs"] == [
+            {"ref": "refs/heads/main", "status": "ng",
+             "reason": "push declined due to repository rule violations"},
+            {"ref": spec["commands"][1]["ref"], "status": "ng", "reason": "atomic transaction failed"},
+        ] and report["diagnostic"] == GITHUB_MAIN_POLICY_REFUSAL:
+            return "confirmed_main_policy_refusal"
         require(all(row["status"] == "ng" and row["reason"] == "atomic transaction failed"
                     for row in report["refs"]), "Negative transaction was not wholly refused at the atomic commit")
         main = spec["commands"][0]

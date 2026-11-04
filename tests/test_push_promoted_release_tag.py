@@ -141,7 +141,12 @@ class AtomicContractTests(unittest.TestCase):
         github.json.return_value = None
         native = mock.Mock()
         native.exchange.side_effect = self.native_receipt
-        inspection = {"rulesets_sha256": "sha256:" + "f" * 64, "rulesets": []}
+        inspection = {"rulesets_sha256": "sha256:" + "f" * 64, "rulesets": [{
+            "id": 1, "target": "branch", "enforcement": "active", "bypass_actors": [],
+            "source_type": "Repository", "source": "ElevenID/marty-ui",
+            "current_user_can_bypass": "never", "rules": [{"type": "merge_queue"}],
+            "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
+        }]}
         final = {**inspection, "rulesets": [{"id": 1}]} if changed_rules else inspection
         return github, native, inspection, final
 
@@ -160,7 +165,8 @@ class AtomicContractTests(unittest.TestCase):
         self.assertNotIn("observed_main_oid", requests[1])
         self.assertEqual(create.call_args.args[2], SOURCE)
         self.assertEqual(read.call_args.args[3], SOURCE)
-        self.assertEqual(result["schema"], "marty.release-tag-capability/v2")
+        self.assertEqual(result["schema"], "marty.release-tag-capability/v3")
+        self.assertEqual(result["main_protection_ruleset_ids"], [1])
         self.assertEqual(result["transport"], operator.atomic.TRANSPORT)
         self.assertIn("negative_transaction", result)
         self.assertNotIn("negative_response", result)
@@ -171,10 +177,71 @@ class AtomicContractTests(unittest.TestCase):
         with mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ""]), \
              mock.patch.object(operator, "create_tag_object", return_value={"sha": OBJECT}), \
              mock.patch.object(operator, "read_exact_tag"), \
-             mock.patch.object(operator, "inspect_repository", return_value=(123, MAIN, final)), \
+             mock.patch.object(operator, "inspect_repository", side_effect=[(123, MAIN, inspection),
+                                                                           (123, MAIN, final)]), \
              self.assertRaises(handoff.HandoffError):
             operator.qualify_capability(github, native, 123, MAIN, inspection)
         self.assertEqual(native.exchange.call_count, 2)
+
+    def test_policy_negative_requires_successful_positive_and_preserves_distinct_evidence(self) -> None:
+        for positive in ("confirmed_success", "confirmed_main_policy_refusal", "unadmitted"):
+            github, native, inspection, _ = self.capability_fixture()
+            def receipt(request):
+                result = self.native_receipt(request)
+                decision = "confirmed_main_policy_refusal" if "negative" in request["operation_id"] else positive
+                result["decision"] = result["mutation"]["outcome"] = decision
+                return result
+            native.exchange.side_effect = receipt
+            with self.subTest(positive=positive), \
+                 mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ""]), \
+                 mock.patch.object(operator, "create_tag_object", return_value={"sha": OBJECT}), \
+                 mock.patch.object(operator, "read_exact_tag") as read, \
+                 mock.patch.object(operator, "inspect_repository", return_value=(123, MAIN, inspection)) as inspect:
+                if positive == "confirmed_success":
+                    result = operator.qualify_capability(github, native, 123, MAIN, inspection)
+                    self.assertEqual(result["negative_transaction"]["decision"], "confirmed_main_policy_refusal")
+                    self.assertEqual(result["positive_transaction"]["decision"], "confirmed_success")
+                    self.assertEqual(inspect.call_count, 2)
+                    read.assert_called_once()
+                else:
+                    with self.assertRaises(handoff.HandoffError):
+                        operator.qualify_capability(github, native, 123, MAIN, inspection)
+                    read.assert_not_called()
+                self.assertEqual(native.exchange.call_count, 2)
+
+    def test_rule_drift_after_negative_prevents_positive_dispatch(self) -> None:
+        github, native, inspection, final = self.capability_fixture(changed_rules=True)
+        with mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ""]), \
+             mock.patch.object(operator, "create_tag_object", return_value={"sha": OBJECT}), \
+             mock.patch.object(operator, "read_exact_tag") as read, \
+             mock.patch.object(operator, "inspect_repository", return_value=(123, MAIN, final)), \
+             self.assertRaises(handoff.HandoffError):
+            operator.qualify_capability(github, native, 123, MAIN, inspection)
+        self.assertEqual(native.exchange.call_count, 1)
+        read.assert_not_called()
+
+    def test_effective_unbypassable_main_queue_is_required_before_any_write(self) -> None:
+        cases = [
+            ("id", True), ("target", "tag"), ("enforcement", "evaluate"),
+            ("source_type", "Organization"), ("source", "another/repository"),
+            ("bypass_actors", [{"actor_id": 1, "bypass_mode": "always"}]),
+            ("bypass_actors", None), ("current_user_can_bypass", "always"),
+            ("current_user_can_bypass", None), ("rules", [{"type": "pull_request"}]),
+            ("rules", None), ("conditions", None),
+            ("conditions", {"ref_name": {"include": ["refs/heads/other"], "exclude": []}}),
+            ("conditions", {"ref_name": {"include": ["~ALL"], "exclude": []}}),
+            ("conditions", {"ref_name": {"include": ["refs/heads/main"], "exclude": ["refs/heads/main"]}}),
+            ("conditions", {"ref_name": {"include": ["refs/heads/main"], "exclude": []},
+                            "repository_name": {"include": ["another"], "exclude": []}}),
+        ]
+        for field, value in cases:
+            github, native, inspection, _ = self.capability_fixture()
+            inspection["rulesets"][0][field] = value
+            with self.subTest(field=field, value=value), \
+                 mock.patch.object(operator, "create_tag_object") as create, self.assertRaises(handoff.HandoffError):
+                operator.qualify_capability(github, native, 123, MAIN, inspection)
+            create.assert_not_called()
+            native.exchange.assert_not_called()
 
     def test_unattributed_negative_prevents_positive_dispatch(self) -> None:
         github, native, inspection, _ = self.capability_fixture()
