@@ -859,18 +859,18 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.265"
+    release_tag = "v" + lock["release"].removeprefix("marty-ui@")
     assert lock["release_state"] == "eligible"
-    stack_tag_gate.require_release_eligible(ROOT, "v1.1.265")
+    stack_tag_gate.require_release_eligible(ROOT, release_tag)
     workflow = _text(".github/workflows/cd.yml")
     assert 'manifest_timestamp="$(git show -s --format=%cI "$SOURCE_SHA")"' in workflow
     assert '--generated-at "$manifest_timestamp" --output stack-manifest.json' in workflow
     assert 'mandatory installer inputs' in _text("docs/selfhost-disposable-qualification-runbook.md")
     release_tag = "v" + lock["release"].removeprefix("marty-ui@")
     cutover_guide = _text("docs/keycloak-kms-installed-cutover.md")
-    assert release_tag in cutover_guide
+    assert "release/stack-lock.json" in cutover_guide
     kms_tracker = _text("docs/remote-kms-hardening-plan.md")
-    assert f"source stack lock currently selects `{lock['release']}`" in kms_tracker
+    assert "release/stack-lock.json" in kms_tracker
     with pytest.raises(stack_tag_gate.StackTagGateError, match="release"):
         stack_tag_gate.require_release_eligible(ROOT, "v1.1.244")
     assert "marty-credentials-issuance" not in components

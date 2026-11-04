@@ -481,6 +481,18 @@ jobs:
             printf 'security=%s\n' "$security"
           } >> "$GITHUB_OUTPUT"
 
+  release-preflight:
+    name: Release Source Preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate source release metadata before expensive setup
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: python3 scripts/ci/check_release_preflight.py --source-sha "$SOURCE_SHA"
+
   lint:
     name: Lint Python
     runs-on: ubuntu-latest
@@ -503,7 +515,7 @@ jobs:
 
   fast-feedback:
     name: Fast Feedback
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -574,7 +586,7 @@ jobs:
 
   test-ui-crawler-artifacts:
     name: UI Crawler Build Artifacts
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -633,7 +645,7 @@ jobs:
 
   test-ui-crawler-nginx:
     name: UI Crawler Nginx Integration
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -651,7 +663,7 @@ jobs:
 
   test-ui:
     name: UI Tests (${{ matrix.shard }}/4)
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -718,7 +730,7 @@ jobs:
 
   test-services:
     name: Service Tests
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     # Retained Python tests use fake storage and their own loopback mTLS fixture.
@@ -780,7 +792,7 @@ jobs:
 
   test-rust-feature-probe:
     name: Rust Feature Regression Probe
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.rust_runtime == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -815,7 +827,7 @@ jobs:
 
   test-openbao-didcomm-plugin:
     name: Test OpenBao DIDComm plugin image
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.openbao == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -945,7 +957,7 @@ jobs:
 
   test-rust-services:
     name: Rust Service Tests (${{ matrix.lane }})
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     strategy:
@@ -2208,7 +2220,7 @@ jobs:
           retention-days: 7
   test-native-operator:
     name: Native KMS Operator (${{ matrix.arch }})
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ matrix.runner }}
     # Cold static compilation plus the required HTTPS/custody matrix exceeded
@@ -2276,7 +2288,7 @@ jobs:
 
   rust-lint-policy:
     name: Rust Lint and Packaging
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -2445,7 +2457,7 @@ jobs:
 
   test-rust-service-images:
     name: Rust Service Images
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.rust_runtime == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -2927,7 +2939,7 @@ jobs:
 
   public-protocol-contract:
     name: Public Protocol Contract
-    needs: changes
+    needs: [changes, release-preflight]
     if: >-
       needs.changes.outputs.ui == 'true' ||
       needs.changes.outputs.python == 'true' ||
@@ -2986,7 +2998,7 @@ jobs:
 
   test-release-contracts:
     name: Release Contract Tests
-    needs: changes
+    needs: [changes, release-preflight]
     if: >-
       needs.changes.outputs.release == 'true' ||
       needs.changes.outputs.verification == 'true' ||
@@ -3273,7 +3285,7 @@ jobs:
           tests/test_verification_candidate_workflow.py
   test-credential-lifecycle-browser:
     name: MIP 0.5 Credential Lifecycle Browser Gate
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -3336,7 +3348,7 @@ jobs:
 
   security:
     name: Security Scanning
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.security == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -3419,7 +3431,7 @@ jobs:
 
   rust-supply-chain:
     name: Rust Supply Chain
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -3437,7 +3449,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, test-native-operator, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
+    needs: [changes, release-preflight, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, test-native-operator, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -3457,6 +3469,7 @@ jobs:
       SECURITY_SELECTED: ${{ needs.changes.outputs.security }}
       CHANGES_RESULT: ${{ needs.changes.result }}
       LINT_RESULT: ${{ needs.lint.result }}
+      PREFLIGHT_RESULT: ${{ needs.release-preflight.result }}
       FAST_FEEDBACK_RESULT: ${{ needs.fast-feedback.result }}
       CRAWLER_ARTIFACTS_RESULT: ${{ needs.test-ui-crawler-artifacts.result }}
       CRAWLER_NGINX_RESULT: ${{ needs.test-ui-crawler-nginx.result }}
@@ -3481,7 +3494,7 @@ jobs:
           # Keep the explicit map in sync with ci-gate.needs. An added or
           # removed dependency must update the planned-result policy too.
           read -r -a results <<< "$CI_LANE_RESULTS"
-          [[ "${#results[@]}" -eq 18 ]]
+          [[ "${#results[@]}" -eq 19 ]]
           require_result() {
             local name="$1" actual="$2" expected="$3"
             if [[ "$actual" != "$expected" ]]; then
@@ -3533,6 +3546,7 @@ jobs:
           else
             require_result changes "$CHANGES_RESULT" success
             require_result lint "$LINT_RESULT" success
+            require_result release-preflight "$PREFLIGHT_RESULT" success
             require_selected fast-feedback "$FAST_FEEDBACK_RESULT" "$UI_SELECTED"
             require_selected test-ui-crawler-artifacts "$CRAWLER_ARTIFACTS_RESULT" "$UI_SELECTED"
             require_selected test-ui-crawler-nginx "$CRAWLER_NGINX_RESULT" "$UI_SELECTED"

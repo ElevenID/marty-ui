@@ -36,6 +36,11 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+      - name: Require valid eligible release inputs before external work
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: python scripts/ci/check_release_preflight.py --source-sha "$SOURCE_SHA" --require-eligible
+
       - name: Bind exact main and derive immutable nightly identity
         id: identity
         env:

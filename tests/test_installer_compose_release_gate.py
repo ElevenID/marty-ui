@@ -25,7 +25,7 @@ PINS = {
 @pytest.mark.parametrize(
     ("workflow", "job", "target"),
     [
-        ("nightly-release.yml", "prepare-installation", '"$RUNNER_TEMP/tools"'),
+        ("nightly-release.yml", "prepare-native", '"$RUNNER_TEMP/tools"'),
         ("cd.yml", "build-operator-catalog", '"$GITHUB_WORKSPACE/rust/target"'),
     ],
 )

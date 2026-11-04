@@ -447,7 +447,7 @@ def test_off_path_ci_qualifies_full_canvas_without_weakening_pr_gates() -> None:
 
 def _assert_python_service_job_preserves_full_suite(document) -> None:
     job = document["jobs"]["test-services"]
-    assert job["needs"] == "changes"
+    assert job["needs"] == ["changes", "release-preflight"]
     assert job["if"] == "needs.changes.outputs.python == 'true'"
     assert not job.get("continue-on-error", False)
     assert not job.get("services")
@@ -1616,11 +1616,11 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "rust-supply-chain",
     }
     for name in conditional_jobs:
-        assert jobs[name]["needs"] == "changes"
+        assert jobs[name]["needs"] == ["changes", "release-preflight"]
         assert jobs[name]["if"]
 
     gate_needs = set(jobs["ci-gate"]["needs"])
-    assert gate_needs == conditional_jobs | {"changes", "lint"}
+    assert gate_needs == conditional_jobs | {"changes", "lint", "release-preflight"}
     gate_script = jobs["ci-gate"]["steps"][0]["run"]
     assert (
         'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
@@ -1671,6 +1671,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert set(gate["needs"]) == {
         "changes",
         "lint",
+        "release-preflight",
         "public-protocol-contract",
         "test-release-contracts",
     } | set().union(*groups.values())
@@ -1727,7 +1728,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
             leaf_only or worker_only or flow_only or selfhost_only
         ):
             selected.add("rust_runtime")
-        active = {"changes", "lint"}
+        active = {"changes", "lint", "release-preflight"}
         for flag, names in groups.items():
             if flag in selected:
                 active.update(names)
@@ -1893,6 +1894,8 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert exercise((), {"test-rust-services": "success"}).returncode != 0
     assert exercise(("ui",), {"fast-feedback": "failure"}).returncode != 0
     assert exercise((), {"changes": "failure"}).returncode != 0
+    assert exercise((), {"release-preflight": "failure"}).returncode != 0
+    assert exercise((), {"release-preflight": "skipped"}).returncode != 0
     assert exercise((), selection_overrides={"RUST_SELECTED": ""}).returncode != 0
     assert exercise((), result_count=16).returncode != 0
     didcomm_mode = {"DIDCOMM_RELEASE_TEST_ONLY": "true"}
@@ -1985,7 +1988,7 @@ def test_independent_rust_lanes_remain_required_without_transferring_builds() ->
     jobs = document["jobs"]
     service_names = {step.get("name") for step in jobs["test-rust-services"]["steps"]}
     probe = jobs["test-rust-feature-probe"]
-    assert probe["needs"] == "changes"
+    assert probe["needs"] == ["changes", "release-preflight"]
     assert probe["if"] == "needs.changes.outputs.rust_runtime == 'true'"
     assert jobs["test-rust-services"]["if"] == "needs.changes.outputs.rust == 'true'"
     assert "test-rust-feature-probe" in jobs["ci-gate"]["needs"]

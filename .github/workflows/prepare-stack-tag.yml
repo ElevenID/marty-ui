@@ -65,6 +65,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Require valid eligible release inputs before external work
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: python scripts/ci/check_release_preflight.py --source-sha "$SOURCE_SHA" --require-eligible
+
       - name: Require an accepted official harness source
         env:
           GH_TOKEN: ${{ github.token }}
