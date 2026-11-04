@@ -889,7 +889,11 @@ pub fn provision(
         augmented_inputs(context, state, bootstrap, port)
     })?;
     checkpoint(Check::PriorOperation, || {
-        successful(&prior, &bootstrap.project, &context.infrastructure.engine_id)
+        successful(
+            &prior,
+            &bootstrap.project,
+            &context.infrastructure.engine_id,
+        )
     })?;
     state.with_inspection(|view| {
         for (directory, evidence) in [
@@ -1288,8 +1292,7 @@ fn inspect_retained_setup(
     })?;
     checked(Check::ConfigurationBinding, || {
         require(
-            prepared.environment == environment
-                && intent.configuration == value(&configuration)?,
+            prepared.environment == environment && intent.configuration == value(&configuration)?,
         )
     })?;
     checked(Check::ReleaseRuntime, || {
@@ -1403,9 +1406,8 @@ fn inspect_retained_setup(
         require(
             prepared.receipt.operation == RESPONDER_OPERATION
                 && installer_jobs::receipt_digest(&prepared.receipt)?
-                    == sha(&state.read_evidence(&format!(
-                        "compose-{RESPONDER_OPERATION}-result.json"
-                    ))?),
+                    == sha(&state
+                        .read_evidence(&format!("compose-{RESPONDER_OPERATION}-result.json"))?),
         )
     })?;
     checked(Check::CurrentInputReceipt, || {
@@ -1672,7 +1674,9 @@ pub fn resume(
     state.with_maintenance(|maintenance| {
         recovery::recover_runtime(context, maintenance, &prepared.inputs)
     })?;
-    checkpoint(Check::RuntimeHealth, || running(&observed, &session.status()?))?;
+    checkpoint(Check::RuntimeHealth, || {
+        running(&observed, &session.status()?)
+    })?;
     let connection = checkpoint(Check::OpenbaoConnection, || {
         let connection = connection(context, state, &prepared.inputs)?;
         require(
@@ -1741,7 +1745,9 @@ fn drive(
     drop(runtime);
     state.with_inspection(|view| {
         checkpoint(Check::Projection, || {
-            require(prepared.projection == ProjectionDirectory::observe(view, context.installation)?)
+            require(
+                prepared.projection == ProjectionDirectory::observe(view, context.installation)?,
+            )
         })?;
         load_prepared(view).map(|_| ())
     })?;

@@ -165,7 +165,10 @@ fn inspect_status(state: &LockedInspection) -> Value {
         Ok(hosting) => hosting,
         Err(check) => return report("refused", Some(check), false, false, None),
     };
-    let Some(parameters) = hosting.as_ref().and_then(|hosting| hosting.acme_parameters()) else {
+    let Some(parameters) = hosting
+        .as_ref()
+        .and_then(|hosting| hosting.acme_parameters())
+    else {
         return report("not_selected", None, false, false, None);
     };
     let environment = parameters.environment();

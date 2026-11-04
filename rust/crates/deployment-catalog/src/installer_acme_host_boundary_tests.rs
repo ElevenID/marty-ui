@@ -947,7 +947,9 @@ fn complete_pending_boundary_reopens_and_rejects_rebound_inputs_proofs_and_nativ
         let view = LockedInspection::open(&fixture.installation).unwrap();
         let expected_check = match mutation {
             "none" => None,
-            "environment" | "renewal-identity" | "renewal-observation" => Some(Check::PublicRenewal),
+            "environment" | "renewal-identity" | "renewal-observation" => {
+                Some(Check::PublicRenewal)
+            }
             "application-projection" => Some(Check::ApplicationPreparation),
             "custody-job" => Some(Check::EvidenceFingerprints),
             "native-setup" => Some(Check::CredentialsJob),
