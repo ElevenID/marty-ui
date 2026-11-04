@@ -125,8 +125,8 @@ NGINX_BIN=/path/to/nginx node scripts/smoke-website.mjs dist-website
 
 The smoke exercises slash routing, the protocol boundary, missing-resource
 responses, revision/cache headers, the proof lab, static catalog, demos, docs and
-login handoffs. With full pages, it also checks paid-plan checkout and enabled
-sandbox-signup handoffs. A local application sentinel proves that the browser
+login handoffs. For both page sets, it checks that pricing URLs return 404 and
+pricing/upgrade actions are absent, while retaining docs and login handoffs. A local application sentinel proves that the browser
 loads a receiving document. It does not simulate authentication, authorization,
 payment, or a live deployment; those remain separate integration qualifications.
 
