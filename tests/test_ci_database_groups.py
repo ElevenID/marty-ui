@@ -678,6 +678,65 @@ def test_repository_matrix_timing_labels_have_exact_rust_owners() -> None:
     assert worker.count("timing.success();") == 4
 
 
+def test_borrowed_preflight_timing_ids_are_exact_and_source_owned() -> None:
+    expected = {
+        "timeout.application_prompt",
+        "timeout.application_delayed_headers",
+        "timeout.roster_prompt",
+        "timeout.roster_delayed_headers",
+        "lease-expiry.renewal_lock_early_release",
+        "lease-expiry.renewal_lock_crosses_expiry",
+    }
+    assert GROUPS.BORROWED_PREFLIGHT_SCENARIOS == expected
+    support = (
+        ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
+    ).read_text(encoding="utf-8")
+    worker = (
+        ROOT
+        / "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs"
+    ).read_text(encoding="utf-8")
+    enum_owner = support.split("impl BorrowedPreflightCase {", 1)[1].split(
+        "// These are exact test-owned identities", 1
+    )[0]
+    assert set(re.findall(r'=> "([a-z_.-]+)"', enum_owner)) == expected
+    assert 'PhaseTimer::start("scenario", self.timing_name())' in enum_owner
+    # Do not restore the donor's arbitrary public phase/name constructor.
+    assert "pub(super) fn start(" not in support
+    routine = worker.split("async fn assert_borrowed_worker_cases(", 1)[1].split(
+        "#[test]", 1
+    )[0]
+    assert routine.index("BorrowedPreflightCase::from_script_case(script, case)") < (
+        routine.index("PublishedDatabase::start()")
+    )
+    assert routine.index("owned.close_verified().unwrap();") < routine.index(
+        "timer.success();"
+    )
+    assert ".map(|case| case.timer())" in routine
+    for name in expected:
+        assert enum_owner.count(f'"{name}"') == 1
+        for status in ("ok", "failed"):
+            marker = json.dumps(
+                {"phase": "scenario", "name": name, "duration_ms": 1, "status": status}
+            )
+            assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-worker")
+        for phase in ("fixture_seed", "cleanup"):
+            marker = json.dumps(
+                {"phase": phase, "name": name, "duration_ms": 1, "status": "ok"}
+            )
+            assert (
+                GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-worker")
+                is None
+            )
+    for name in ("timeout.unknown", "lease-expiry.unknown", "deadline.early_release"):
+        marker = json.dumps(
+            {"phase": "scenario", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        assert (
+            GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-worker")
+            is None
+        )
+
+
 def test_composite_phase_allowlist_matches_exact_instrumented_boundaries() -> None:
     source = (
         ROOT / "rust/services/issuance/tests/canvas_sync_worker_postgres_contract.rs"
