@@ -17,6 +17,52 @@ def quote(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
+NATIVE_DOCKER = None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def native_docker_recorder(tmp_path_factory):
+    global NATIVE_DOCKER
+    if os.name != "nt" or not POWERSHELL:
+        return
+    NATIVE_DOCKER = tmp_path_factory.mktemp("native-docker") / "docker-read.exe"
+    source = r"""
+using System;
+using System.IO;
+using System.Linq;
+using System.Web.Script.Serialization;
+public static class DockerRecorder {
+ public static int Main(string[] args) {
+  Func<string,string> env = key => Environment.GetEnvironmentVariable("MARTY_TEST_DOCKER_" + key);
+  File.AppendAllText(env("LOG"), new JavaScriptSerializer().Serialize(args) + "\n");
+  if(args[0] == "context") { Console.WriteLine(env("CONTEXT")); return 0; }
+  if(args[0] == "info") { Console.WriteLine("linux"); return 0; }
+  if(args[0] == "inspect") {
+   if(env("MISSING") == "1" && args.Last().Contains("unseal") &&
+      (!File.Exists(env("STARTED")) || env("PERMANENT") == "1")) {
+    Console.Error.WriteLine("PRIVATE_INSPECT_SENTINEL"); return 1;
+   }
+   Console.WriteLine("running|healthy"); return 0;
+  }
+  if(args.Contains("config") && env("FAILURE") == "1") {
+   Console.Error.WriteLine("PRIVATE_CONFIG_SENTINEL"); return 1;
+  }
+  if(args.Contains("--services")) {
+   Console.WriteLine("openbao");
+   Console.WriteLine(env("LEGACY") == "1" ? "openbao-bootstrap" : "openbao-unseal");
+  }
+  return 0;
+ }
+}
+"""
+    code = "Add-Type -TypeDefinition @'\n" + source + "\n'@ -OutputAssembly " + quote(NATIVE_DOCKER) + (
+        " -OutputType ConsoleApplication -ReferencedAssemblies System.Web.Extensions,System.Core"
+    )
+    result = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                             base64.b64encode(code.encode("utf-16le")).decode()],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+
 def invoke(tmp_path, *, check=True, omit=False, config_failure=False, missing=False,
            context="desktop-linux", retained=False, malformed=False, permanent=False, legacy_bao=False):
     stack = tmp_path / "stack with spaces"
@@ -45,7 +91,6 @@ def invoke(tmp_path, *, check=True, omit=False, config_failure=False, missing=Fa
     )
     script = r"""
 $env:COMPOSE_PROFILES = ''
-$global:helperStarted = $false
 $global:waited = $false
 function global:Start-Sleep { $global:waited = $true }
 function global:Get-Date {
@@ -55,45 +100,38 @@ function global:Get-Date {
     if ($Format) { return $date.ToString($Format) }
     return $date
 }
+function global:Get-Command {
+    param($Name, $CommandType, $ErrorAction)
+    return [pscustomobject]@{Source=NATIVE_DOCKER_PATH}
+}
 function global:docker {
     ConvertTo-Json -InputObject @($args) -Compress | Add-Content -LiteralPath LOG_PATH
     $global:LASTEXITCODE = 0
-    if ($args[0] -eq 'context') { Write-Output CONTEXT; return }
-    if ($args[0] -eq 'info') { Write-Output 'linux'; return }
-    if ($args[0] -eq 'inspect') {
-        if (MISSING -and $args[-1] -like '*unseal*' -and (-not $global:helperStarted -or PERMANENT)) {
-            # A native process, not Write-Error: exercises PS5.1 stderr semantics.
-            & $env:COMSPEC /d /c 'echo PRIVATE_INSPECT_SENTINEL 1>&2 & exit /b 1'
-            return
-        }
-        Write-Output 'running|healthy'; return
-    }
-    if ($args -contains '--services') {
-        Write-Output 'openbao'
-        if (LEGACY_BAO) { Write-Output 'openbao-bootstrap' }
-        else { Write-Output 'openbao-unseal' }
-        return
-    }
-    if ($args -contains 'up') { $global:helperStarted = $true }
-    if ($args -contains 'config' -and CONFIG_FAILURE) {
-        & $env:COMSPEC /d /c 'echo PRIVATE_CONFIG_SENTINEL 1>&2 & exit /b 1'
-    }
+    if ($args -contains 'up') { Set-Content -LiteralPath STARTED_PATH -Value 'started' }
 }
 & SCRIPT_PATH ARGUMENTS CHECK_ONLY
 """
     if os.name != "nt":
         pytest.skip("native Windows stderr regression")
+    started = tmp_path / "started"
     for key, value in {
-        "LOG_PATH": quote(log), "CONTEXT": quote(context), "SCRIPT_PATH": quote(ROOT / "scripts/recover-marty-after-reboot.ps1"),
+        "LOG_PATH": quote(log), "NATIVE_DOCKER_PATH": quote(NATIVE_DOCKER), "STARTED_PATH": quote(started),
+        "SCRIPT_PATH": quote(ROOT / "scripts/recover-marty-after-reboot.ps1"),
         "ARGUMENTS": args, "CHECK_ONLY": "-CheckOnly" if check else "",
-        "LEGACY_BAO": "$true" if legacy_bao else "$false",
-        "PERMANENT": "$true" if permanent else "$false",
-        "CONFIG_FAILURE": "$true" if config_failure else "$false", "MISSING": "$true" if missing else "$false",
     }.items():
         script = script.replace(key, value)
+    environment = {**os.environ, "MARTY_TEST_DOCKER_LOG": str(log), "MARTY_TEST_DOCKER_STARTED": str(started),
+                   "MARTY_TEST_DOCKER_CONTEXT": context, "MARTY_TEST_DOCKER_FAILURE": str(int(config_failure)),
+                   "MARTY_TEST_DOCKER_MISSING": str(int(missing)), "MARTY_TEST_DOCKER_PERMANENT": str(int(permanent)),
+                   "MARTY_TEST_DOCKER_LEGACY": str(int(legacy_bao))}
     result = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-EncodedCommand",
                              base64.b64encode(script.encode("utf-16le")).decode()],
-                            capture_output=True, encoding="utf-8", errors="replace", timeout=30)
+                            capture_output=True, encoding="utf-8", errors="replace", timeout=30, env=environment)
+    transcript = tmp_path / "marty-selfhost-prod/marty-recovery.log"
+    if transcript.exists():
+        contents = transcript.read_text(encoding="utf-8-sig", errors="replace")
+        assert "PRIVATE_CONFIG_SENTINEL" not in contents
+        assert "PRIVATE_INSPECT_SENTINEL" not in contents
     calls = [json.loads(line) for line in log.read_text(encoding="utf-8-sig").splitlines()] if log.exists() else []
     return result, calls, files
 

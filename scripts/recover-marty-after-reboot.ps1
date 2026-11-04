@@ -84,6 +84,40 @@ function Invoke-Step([string]$Name, [scriptblock]$Action) {
     if ($LASTEXITCODE -ne 0) { throw "$Name failed with exit code $LASTEXITCODE" }
 }
 
+function Invoke-DockerRead([string[]]$Arguments) {
+    # PowerShell 5.1 transcripts retain native stderr even when redirected.
+    # Capture it through Process pipes so no native error record is created.
+    function Quote-Argument([string]$Value) {
+        $escaped = [regex]::Replace($Value, '(\\*)("|$)', {
+            param($match)
+            $suffix = if ($match.Groups[2].Value -eq '"') { '\"' } else { '' }
+            return ('\' * (2 * $match.Groups[1].Value.Length)) + $suffix
+        })
+        return '"' + $escaped + '"'
+    }
+    $process = New-Object System.Diagnostics.Process
+    try {
+        $process.StartInfo.FileName = (Get-Command docker -CommandType Application -ErrorAction Stop).Source
+        $process.StartInfo.Arguments = ($Arguments | ForEach-Object { Quote-Argument $_ }) -join ' '
+        $process.StartInfo.UseShellExecute = $false
+        $process.StartInfo.CreateNoWindow = $true
+        $process.StartInfo.RedirectStandardOutput = $true
+        $process.StartInfo.RedirectStandardError = $true
+        if (-not $process.Start()) { throw 'start failed' }
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(120000)) {
+            $process.Kill()
+            throw 'timeout'
+        }
+        $output = $stdout.GetAwaiter().GetResult()
+        $discarded = $stderr.GetAwaiter().GetResult()
+        if ($output.Length -gt 1048576) { throw 'oversized output' }
+        return [pscustomobject]@{ Code = $process.ExitCode; Output = $output.TrimEnd([char[]]"`r`n") }
+    } catch { throw 'Docker read operation failed; native diagnostics were withheld.' }
+    finally { $process.Dispose() }
+}
+
 function Assert-ComposeInputs([string[]]$Arguments, [string[]]$RequiredServices = @()) {
     # Never print rendered configuration: it can contain interpolated secrets.
     for ($i = 0; $i -lt $Arguments.Count; $i += 2) {
@@ -94,20 +128,12 @@ function Assert-ComposeInputs([string[]]$Arguments, [string[]]$RequiredServices 
             }
         }
     }
-    $savedPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
-        docker compose @Arguments config --quiet *> $null
-        $code = $LASTEXITCODE
-    } finally { $ErrorActionPreference = $savedPreference }
-    if ($code -ne 0) { throw 'Recovery Compose preflight failed; no services were changed.' }
+    $result = Invoke-DockerRead (@('compose') + $Arguments + @('config', '--quiet'))
+    if ($result.Code -ne 0) { throw 'Recovery Compose preflight failed; no services were changed.' }
     if ($RequiredServices.Count) {
-        try {
-            $ErrorActionPreference = 'Continue'
-            $services = @(docker compose @Arguments config --services 2>$null)
-            $code = $LASTEXITCODE
-        } finally { $ErrorActionPreference = $savedPreference }
-        if ($code -ne 0 -or 'openbao-bootstrap' -in $services -or
+        $result = Invoke-DockerRead (@('compose') + $Arguments + @('config', '--services'))
+        $services = @($result.Output -split '\r?\n')
+        if ($result.Code -ne 0 -or 'openbao-bootstrap' -in $services -or
             @($RequiredServices | Where-Object { $_ -notin $services }).Count) {
             throw 'OpenBao recovery requires the persistent unseal service and an inactive bootstrap profile; no services were changed.'
         }
@@ -115,33 +141,28 @@ function Assert-ComposeInputs([string[]]$Arguments, [string[]]$RequiredServices 
 }
 
 function Test-ContainerReady([string]$Name) {
-    $savedPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
-        $status = docker inspect -f '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' $Name 2>$null
-        $code = $LASTEXITCODE
-    } finally { $ErrorActionPreference = $savedPreference }
-    if ($code -ne 0) { return $false }
-    $parts = ($status -split '\|', 2)
+    $result = Invoke-DockerRead @('inspect', '-f', '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}', $Name)
+    if ($result.Code -ne 0) { return $false }
+    $parts = ($result.Output -split '\|', 2)
     return $parts[0] -eq 'running' -and ($parts[1] -eq 'none' -or $parts[1] -eq 'healthy')
 }
 
 try {
     $deadline = (Get-Date).AddMinutes(5)
     do {
-        try { docker info *> $null; $dockerReady = ($LASTEXITCODE -eq 0) } catch { $dockerReady = $false }
+        try { $info = Invoke-DockerRead @('info'); $dockerReady = ($info.Code -eq 0) } catch { $dockerReady = $false }
         if (-not $dockerReady) { Start-Sleep -Seconds 5 }
     } while (-not $dockerReady -and (Get-Date) -lt $deadline)
     if (-not $dockerReady) { throw 'Docker Desktop did not become ready within five minutes.' }
 
     if ($ExpectedDockerContext) {
-        $context = docker context show
-        if ($LASTEXITCODE -ne 0 -or $context -ne $ExpectedDockerContext) {
+        $context = Invoke-DockerRead @('context', 'show')
+        if ($context.Code -ne 0 -or $context.Output -ne $ExpectedDockerContext) {
             throw 'Selected Docker context differs from retained recovery settings; no context was switched.'
         }
     }
-    $engine = docker info --format '{{.OSType}}' 2>$null
-    if ($LASTEXITCODE -ne 0 -or $engine -ne 'linux') { throw 'Recovery requires the selected Linux Docker engine.' }
+    $engine = Invoke-DockerRead @('info', '--format', '{{.OSType}}')
+    if ($engine.Code -ne 0 -or $engine.Output -ne 'linux') { throw 'Recovery requires the selected Linux Docker engine.' }
     if ($env:COMPOSE_PROFILES) { throw 'Clear COMPOSE_PROFILES; recovery must not activate initialization profiles.' }
 
     Push-Location $RepoRoot
