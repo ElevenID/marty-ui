@@ -96,7 +96,17 @@ def test_actual_source_server_dag_loses_only_console_and_tunnel_dependencies(
     assert (
         result["services"]["edge"]["environment"]["SELFHOST_CONSOLE_ENABLED"] == "false"
     )
-    assert "ui" not in result["services"]["edge"]["depends_on"]
+    assert "depends_on" not in base["services"]["edge"]
+    assert "depends_on" not in result["services"]["edge"]
+    assert {
+        name: service["depends_on"]
+        for name, service in result["services"].items()
+        if "depends_on" in service
+    } == {
+        name: service["depends_on"]
+        for name, service in base["services"].items()
+        if name not in MODULE.REMOVED_SERVICES and "depends_on" in service
+    }
     for name, service in result["services"].items():
         assert "build" not in service
         assert "extends" not in service

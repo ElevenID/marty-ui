@@ -41,7 +41,9 @@ EXPECTED_DEPENDENCIES = {
     "db-migrate": {"postgres": H, "redis": H, "revocation-profile-migrate": C},
     "deployment-profile": {"db-migrate": C},
     "device-registration": {"db-migrate": C, "redis": H},
-    "edge": {"flow": H, "gateway": H, "keycloak": H, "ui": H},
+    # The local edge liveness endpoint must remain available while product
+    # services are starting. Product readiness has separate upstream probes.
+    "edge": {},
     "flow": {"credential-template": H, "db-migrate": C,
              "deployment-profile": H, "issuance": H, "issuance-native": H,
              "organization": H, "presentation-policy": H, "redis": H,
