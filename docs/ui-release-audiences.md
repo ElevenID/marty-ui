@@ -96,6 +96,14 @@ independent.
 
 ## Public-only production pipeline
 
+The existing workflow now has `combined` (default), `website`, and `compose`
+operations. The section below describes the compatible combined path. For
+independent marketing publication, original-producer composition, retained-slot
+deployment, product adoption, and Windows reboot handling, follow
+[Independent website releases](independent-website-release.md). Website mode has
+no stable backend/tag prerequisite; composition selects existing successful
+website and combined producer attempts and builds no image.
+
 Run **Production website release** (`production-web-release.yml`) on `main`:
 
 ```sh

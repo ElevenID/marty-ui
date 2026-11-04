@@ -76,6 +76,9 @@ class Host:
     def check_public(self, metadata):
         self.event("public", metadata["revision"])
 
+    def check_edge(self, overlay, metadata):
+        self.event("edge", metadata["revision"])
+
 
 @pytest.fixture
 def host_candidate(candidate, tmp_path):
@@ -141,6 +144,51 @@ def test_exact_active_release_is_idempotent_and_conflicting_revision_rejected(ho
     assert host.events == [] and deploy.read_state(host.directory) == first
 
 
+def test_retained_cold_start_reverifies_routes_and_starts_only_active_previous_and_edge(host_candidate, monkeypatch):
+    host, kwargs, _, calls, verifiers = host_candidate
+    deploy.apply(host, kwargs["output"], **verifiers)
+    assets, _ = another_release(kwargs, "c" * 40)
+    state = deploy.apply(host, assets, **verifiers)
+    host.events.clear()
+    calls.clear()
+    def ingress_unavailable(_metadata):
+        raise ValueError("public ingress has not recovered yet")
+    monkeypatch.setattr(host, "check_public", ingress_unavailable)
+    assert deploy.start_current(host, **verifiers) == state
+    assert [event for event in host.events if event[0] == "stage"] == [
+        ("stage", "website-b", False, "c" * 40), ("stage", "website-a", False, WEBSITE_SOURCE)]
+    assert [call[0] for call in calls] == ["subject", "image", "subject", "image"]
+    assert deploy.read_state(host.directory) == state
+    with pytest.raises(ValueError, match="public ingress"):
+        deploy.check_current(host, **verifiers)
+    monkeypatch.setattr(host, "check_public", Host.check_public.__get__(host))
+    host.events.clear()
+    assert deploy.check_current(host, **verifiers) == state
+    assert host.events == [("public", "c" * 40)]
+
+
+@pytest.mark.parametrize("fault", ["route", "overlay", "receipt"])
+def test_retained_startup_rejects_changed_local_evidence_before_docker_mutations(host_candidate, fault):
+    host, kwargs, _, _, verifiers = host_candidate
+    deploy.apply(host, kwargs["output"], **verifiers)
+    paths = {"route": host.directory / "routes/active.conf", "overlay": host.directory / "compose.website.json",
+             "receipt": host.directory / "receipts" / WEBSITE_SOURCE / "website-release.json"}
+    if fault == "route":
+        paths[fault].write_text("location / { return 200; }\n")
+    elif fault == "overlay":
+        value = web.read(paths[fault])
+        value["services"]["website-a"]["image"] = "example.invalid/changed:latest"
+        write_json(paths[fault], value)
+    else:
+        value = web.read(paths[fault])
+        value["image"]["digest"] = "sha256:" + "9" * 64
+        write_json(paths[fault], value)
+    host.events.clear()
+    with pytest.raises(ValueError):
+        deploy.start_current(host, **verifiers)
+    assert host.events == []
+
+
 @pytest.mark.parametrize("operation", ["stage", "activate", "public"])
 def test_failed_candidate_restores_verified_previous_selection(host_candidate, operation):
     host, kwargs, _, _, verifiers = host_candidate
@@ -195,10 +243,49 @@ def test_website_rollback_retains_independently_upgraded_product_after_explicit_
     adopted = deploy.apply(host, assets, adopt_current_product=True, **verifiers)
     assert adopted["active"] == second["active"] and adopted["previous"] == first["active"]
     assert host.events == []
+    assert deploy.start_current(host, **verifiers) == adopted
+    host.events.clear()
     rolled = deploy.rollback(host, **verifiers)
     assert rolled["active"] == first["active"] and rolled["product"] == snapshot
     assert host.events[0] == ("stage", "website-a", False, WEBSITE_SOURCE)
     assert host.snapshot()[0] == snapshot
+
+
+@pytest.mark.parametrize("fault", ["public-env", "edge-network"])
+def test_adoption_refuses_website_configuration_migration_without_changing_state_or_overlay(host_candidate, fault):
+    host, kwargs, _, _, verifiers = host_candidate
+    original = deploy.apply(host, kwargs["output"], **verifiers)
+    before_state = (host.directory / "state.json").read_bytes()
+    before_overlay = (host.directory / "compose.website.json").read_bytes()
+    model = yaml.safe_load(host.base.read_text())
+    if fault == "public-env":
+        model["services"]["ui"]["environment"]["GOOGLE_SITE_VERIFICATION"] = "new-public-proof"
+    else:
+        model["networks"] = {"default": {}, "new-edge": {}}
+        model["services"]["edge"]["networks"] = ["new-edge"]
+    host.base.write_text(yaml.safe_dump(model))
+    host.events.clear()
+    with pytest.raises(ValueError, match="combined backout and new website cutover"):
+        deploy.apply(host, kwargs["output"], adopt_current_product=True, **verifiers)
+    assert host.events == [] and deploy.read_state(host.directory) == original
+    assert (host.directory / "state.json").read_bytes() == before_state
+    assert (host.directory / "compose.website.json").read_bytes() == before_overlay
+
+
+def test_product_adoption_cannot_change_retained_website_audience(host_candidate, monkeypatch):
+    host, kwargs, manifest, _, verifiers = host_candidate
+    state = deploy.apply(host, kwargs["output"], **verifiers)
+    wrong_audience = {**manifest, "production_pages": "full"}
+    @contextmanager
+    def incompatible(*_args, **_kwargs):
+        # Isolate the post-authentication adoption contract: a valid composition
+        # for another audience cannot adopt an existing website into that product.
+        yield wrong_audience, kwargs["website_assets"].parent
+    monkeypatch.setattr(composition, "verified_package", incompatible)
+    host.events.clear()
+    with pytest.raises(ValueError, match="retained website audience"):
+        deploy.apply(host, kwargs["output"], adopt_current_product=True, **verifiers)
+    assert host.events == [] and deploy.read_state(host.directory) == state
 
 
 def test_interrupted_activation_retains_journal_and_recovery_checks_original_receipt(host_candidate, monkeypatch):

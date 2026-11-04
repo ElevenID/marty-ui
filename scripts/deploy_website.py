@@ -362,6 +362,13 @@ class DockerHost:
     def stop_candidate(self, slot: str, overlay: Path) -> None:
         self.run(self.command(overlay=overlay) + ["stop", "--timeout", "10", slot])
 
+    def check_edge(self, overlay: Path, metadata: dict) -> None:
+        base = self.command(overlay=overlay) + ["exec", "-T", "edge", "wget", "-qO-"]
+        homepage = self.run(base + ["http://127.0.0.1/"])
+        ui.require("/_website/" + metadata["revision"] + "/" in homepage, "local edge website revision differs")
+        actual = json.loads(self.run(base + ["http://127.0.0.1/marty-website-release.json"]))
+        ui.require(actual == metadata, "local edge website metadata differs")
+
     def check_public(self, metadata: dict) -> None:
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, *_args, **_kwargs):
@@ -409,6 +416,66 @@ def remember_receipt(directory: Path, payload: Path, selection: dict) -> None:
 def read_state(directory: Path) -> dict | None:
     path = directory / "state.json"
     return validate_state(proof.read_metadata(path)) if path.exists() else None
+
+
+def retained_release(directory: Path, state: dict, slot: str, *, gh: Path, cosign: Path) -> dict:
+    selected = state["slots"][slot]
+    receipt = directory / "receipts" / selected["revision"]
+    release = proof.verify_website(receipt, gh=gh, cosign=cosign)
+    ui.require(release["revision"] == selected["revision"] and release["source_sha"] == selected["source_sha"]
+               and release["image"] == selected["image"]
+               and proof.file_digest(receipt / "website-release.json") == selected["release_sha256"]
+               and release["image_metadata"]["route_contract"] == web.route_identity(state["routes"]),
+               "retained website evidence differs")
+    return release
+
+
+def retained_configuration(host: DockerHost, state: dict, model: dict, *, adoption: bool = False) -> Path:
+    overlay = host.directory / "compose.website.json"
+    routes_directory = host.directory / "routes"
+    routes = routes_directory / "active.conf"
+    proof.verifier.local_file(routes, private=True, maximum=proof.JSON_LIMIT)
+    message = ("product adoption changes website runtime configuration; retain prior website-facing settings "
+               "or follow the runbook's combined backout and new website cutover") if adoption else "retained website routing or overlay differs"
+    ui.require(proof.read_metadata(overlay) == compose_overlay(state, model, routes_directory)
+               and routes.read_bytes() == render_routes(state), message)
+    verify_overlay_model(model, host.model(overlay=overlay), state, routes_directory)
+    return overlay
+
+
+def start_current(host: DockerHost, *, gh: Path, cosign: Path) -> dict:
+    """Start the retained website/edge before product readiness during host boot."""
+    with host_lock(host.directory):
+        ui.require(not (host.directory / "transaction.json").exists(), "unfinished website transaction; run --recover first")
+        state = read_state(host.directory)
+        ui.require(state is not None and state["host"] == host.identity(), "no retained website for this host")
+        actual, model = host.snapshot()
+        ui.require(actual == state["product"], "current product changed; adopt the upgraded product before website startup")
+        slots = [state["active"]] + ([state["previous"]] if state["previous"] else [])
+        releases = {slot: retained_release(host.directory, state, slot, gh=gh, cosign=cosign) for slot in slots}
+        overlay = retained_configuration(host, state, model)
+        for slot in slots:
+            host.stage(slot, overlay, releases[slot]["image_metadata"], pull=False)
+        host.activate(overlay)
+        # Boot may precede an external TLS/tunnel owner's recovery. Validate the
+        # local edge now; the boot wrapper checks the public origin afterwards.
+        host.check_edge(overlay, releases[state["active"]]["image_metadata"])
+        after, _ = host.snapshot()
+        ui.require(after == state["product"], "product changed during website startup")
+        return state
+
+
+def check_current(host: DockerHost, *, gh: Path, cosign: Path) -> dict:
+    """Verify the retained public selection after ingress recovery, without mutation."""
+    with host_lock(host.directory):
+        ui.require(not (host.directory / "transaction.json").exists(), "unfinished website transaction; run --recover first")
+        state = read_state(host.directory)
+        ui.require(state is not None and state["host"] == host.identity(), "no retained website for this host")
+        actual, _ = host.snapshot()
+        ui.require(actual == state["product"], "current product changed; explicit adoption is required")
+        release = retained_release(host.directory, state, state["active"], gh=gh, cosign=cosign)
+        host.check_public(release["image_metadata"])
+        return state
 
 
 def transition(host: DockerHost, current: dict | None, target: dict, model: dict, metadata: dict, *, stage: bool) -> dict:
@@ -479,7 +546,15 @@ def apply(host: DockerHost, assets: Path, *, gh: Path, cosign: Path, adopt_curre
             if adopt_current_product:
                 ui.require(current is not None and current["host"] == host.identity(), "product adoption requires the existing website host")
                 ui.require(web.route_identity(current["routes"]) == manifest["route_contract"], "new product cannot serve the retained website route contract")
+                for slot in [current["active"]] + ([current["previous"]] if current["previous"] else []):
+                    retained = retained_release(host.directory, current, slot, gh=gh, cosign=cosign)
+                    ui.require(retained["production_pages"] == manifest["production_pages"],
+                               "new product cannot serve the retained website audience")
                 updated = {**current, "product": actual}
+                # Adoption records an independently upgraded product; it does
+                # not migrate retained websites across new network/secret/env
+                # wiring. Refuse that different operation before changing state.
+                retained_configuration(host, updated, model, adoption=True)
                 atomic_write(host.directory / "state.json", ui.canonical(updated))
                 return updated
             target = next_state(current, manifest, routes, host.identity(), actual)
@@ -498,11 +573,7 @@ def rollback(host: DockerHost, *, gh: Path, cosign: Path) -> dict:
         ui.require(state is not None and state["previous"] is not None and state["host"] == host.identity(), "no previous website for this host")
         actual, model = host.snapshot()
         ui.require(actual == state["product"], "current product changed; adopt the upgraded product before website rollback")
-        selected = state["slots"][state["previous"]]
-        receipt = host.directory / "receipts" / selected["revision"]
-        release = proof.verify_website(receipt, gh=gh, cosign=cosign)
-        ui.require(release["image"] == selected["image"] and proof.file_digest(receipt / "website-release.json") == selected["release_sha256"]
-                   and release["image_metadata"]["route_contract"] == web.route_identity(state["routes"]), "previous website evidence differs")
+        release = retained_release(host.directory, state, state["previous"], gh=gh, cosign=cosign)
         target = {**state, "active": state["previous"], "previous": state["active"]}
         # Restarting the retained slot is safe after a host restart; no product role starts.
         return transition(host, state, target, model, release["image_metadata"], stage=False)
@@ -529,11 +600,7 @@ def recover(host: DockerHost, *, gh: Path, cosign: Path) -> dict | None:
         release = None
         if previous:
             validate_state(previous)
-            selection = previous["slots"][previous["active"]]
-            receipt = host.directory / "receipts" / selection["revision"]
-            release = proof.verify_website(receipt, gh=gh, cosign=cosign)
-            ui.require(proof.file_digest(receipt / "website-release.json") == selection["release_sha256"]
-                       and release["image"] == selection["image"], "recovery website evidence differs")
+            release = retained_release(host.directory, previous, previous["active"], gh=gh, cosign=cosign)
         ui.require(journal["candidate"] is None or journal["candidate"] in SLOTS and
                    (previous is None or journal["candidate"] not in {previous["active"], previous["previous"]}),
                    "recovery candidate overlaps a retained slot")
@@ -568,13 +635,18 @@ def main() -> None:
     mode.add_argument("--rollback", action="store_true")
     mode.add_argument("--recover", action="store_true")
     mode.add_argument("--adopt-current-product", action="store_true")
+    mode.add_argument("--start-current", action="store_true")
+    mode.add_argument("--check-current", action="store_true")
     args = parser.parse_args()
     host = DockerHost(stack=args.stack_dir, project=args.project, compose_files=args.compose_file, env_file=args.env_file,
                       openbao_file=args.openbao_compose_file, openbao_env_file=args.openbao_env_file,
                       openbao_project=args.openbao_project, public_origin=args.public_origin, ca_file=args.ca_file)
     ui.require(args.gh is not None and args.cosign is not None, "pinned gh and cosign verifiers are required")
     verifiers = dict(gh=args.gh.absolute(), cosign=args.cosign.absolute())
-    if args.recover:
+    if args.start_current or args.check_current:
+        ui.require(args.composition_dir is None, "startup uses retained original website evidence")
+        result = (start_current if args.start_current else check_current)(host, **verifiers)
+    elif args.recover:
         ui.require(args.composition_dir is None, "recovery uses only the existing transaction")
         result = recover(host, **verifiers)
     else:
