@@ -97,7 +97,7 @@ function Invoke-DockerRead([string[]]$Arguments) {
     }
     $process = New-Object System.Diagnostics.Process
     try {
-        $process.StartInfo.FileName = (Get-Command docker -CommandType Application -ErrorAction Stop).Source
+        $process.StartInfo.FileName = (Get-Command docker.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
         $process.StartInfo.Arguments = ($Arguments | ForEach-Object { Quote-Argument $_ }) -join ' '
         $process.StartInfo.UseShellExecute = $false
         $process.StartInfo.CreateNoWindow = $true

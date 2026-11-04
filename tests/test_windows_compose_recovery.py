@@ -102,7 +102,7 @@ function global:Get-Date {
 }
 function global:Get-Command {
     param($Name, $CommandType, $ErrorAction)
-    return [pscustomobject]@{Source=NATIVE_DOCKER_PATH}
+    return @([pscustomobject]@{Source=NATIVE_DOCKER_PATH}, [pscustomobject]@{Source='Z:/nonexistent-second-docker.exe'})
 }
 function global:docker {
     ConvertTo-Json -InputObject @($args) -Compress | Add-Content -LiteralPath LOG_PATH
