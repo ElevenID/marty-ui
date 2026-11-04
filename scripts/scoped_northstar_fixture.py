@@ -16,6 +16,8 @@ SOURCE = "27a273d8a9f82778a2b19f9981f56d073b2793f6"
 IMAGE = "sha256:366911734ad16cac52553148dd10c1f59bc2e90613ef7fc5c97485a701f0ff2e"
 TARGET = "/run/secrets/northstar_run"
 SERVER_TARGET = "/app/src/server.mjs"
+REPAIRED_MEMORY_BYTES = 256 * 1024 * 1024
+REPAIRED_SWAP_BYTES = 2 * REPAIRED_MEMORY_BYTES
 CODE_SOURCE = "ad286f6122abdc88e79b1d0f02669206dcafea14"
 SERVER_SHA256 = "50bf1bc507bd772f8711e95a21100c993722c33dab7d05bc29fd6363274ec754"
 
@@ -212,6 +214,7 @@ def model_delta(before, after, fixture, server):
     expected["services"][ROLE]["init"] = True
     expected["services"][ROLE]["volumes"] = [{"type": "bind", "source": str(server),
         "target": SERVER_TARGET, "read_only": True, "bind": {"create_host_path": False}}]
+    expected["services"][ROLE]["deploy"] = {"resources": {"limits": {"memory": str(REPAIRED_MEMORY_BYTES)}}}
     require(after == expected, "DELTA_OUTSIDE_REPAIRED_ASSET_AND_FIXTURE")
 
 
@@ -482,6 +485,13 @@ def candidate_guard(original, actual, *, fixture, provenance, running, host_moun
         b["Env"] = a["Env"]
     require(a == b, "CONFIG_CHANGED")
     ah, bh = deepcopy(original["HostConfig"]), deepcopy(actual["HostConfig"])
+    if server is not None:
+        require(ah.get("Memory") in (0, None) and ah.get("MemorySwap") in (0, None)
+                and bh.get("Memory") == REPAIRED_MEMORY_BYTES
+                and bh.get("MemorySwap") == REPAIRED_SWAP_BYTES,
+                "REPAIRED_MEMORY_BOUND_CHANGED")
+        bh["Memory"] = ah.get("Memory")
+        bh["MemorySwap"] = ah.get("MemorySwap")
     for field in ("Binds", "Mounts"):
         ah.pop(field, None);bh.pop(field, None)
     if server is not None:

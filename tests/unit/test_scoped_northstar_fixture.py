@@ -24,7 +24,7 @@ def original():
             "com.docker.compose.project.working_dir": "/owned", "com.docker.compose.version": "2.40.0"}),
         HostConfig=dict(Init=None, Binds=None, Mounts=[dict(Type="bind", Source="/owned/fixture.json",
             Target=m.TARGET, ReadOnly=True, BindOptions={"CreateMountpoint": False})],
-            ReadonlyRootfs=True, CapDrop=["ALL"], SecurityOpt=["no-new-privileges:true"]),
+            Memory=0, MemorySwap=0, ReadonlyRootfs=True, CapDrop=["ALL"], SecurityOpt=["no-new-privileges:true"]),
         Mounts=[dict(Type="bind", Source="/owned/fixture.json", Destination=m.TARGET,
             RW=False, Mode="ro", Propagation="rprivate")],
         NetworkSettings={"Networks": {"elevenid-beta-network": dict(NetworkID="1" * 64,
@@ -53,7 +53,7 @@ class Scenario:
         old_model = original_model(); old_model["secrets"]["northstar_run"]["file"] = str(self.old_fixture)
         server = UI / "demo-apps/northstar-admissions/src/server.mjs"
         new_model = copy.deepcopy(old_model); new_model["secrets"]["northstar_run"]["file"] = str(self.new_fixture)
-        new_model["services"][m.ROLE].update(init=True, volumes=[dict(type="bind", source=str(server),
+        new_model["services"][m.ROLE].update(init=True, deploy={"resources": {"limits": {"memory": str(m.REPAIRED_MEMORY_BYTES)}}}, volumes=[dict(type="bind", source=str(server),
             target=m.SERVER_TARGET, read_only=True, bind={"create_host_path": False})])
         provenance = {k: v for k, v in self.old["Config"]["Labels"].items() if k in (
             "com.docker.compose.config-hash", "com.docker.compose.project.config_files",
@@ -148,7 +148,7 @@ class Scenario:
         source = reps.daemon_source(model["secrets"]["northstar_run"]["file"])
         row["Mounts"][0]["Source"] = source; row["HostConfig"]["Mounts"][0]["Source"] = source
         if service.get("init") is True:
-            row["HostConfig"]["Init"] = True; source = reps.daemon_source(service["volumes"][0]["source"])
+            row["HostConfig"]["Init"] = True; row["HostConfig"].update(Memory=m.REPAIRED_MEMORY_BYTES, MemorySwap=m.REPAIRED_SWAP_BYTES); source = reps.daemon_source(service["volumes"][0]["source"])
             row["Mounts"].append(dict(Type="bind", Source=source, Destination=m.SERVER_TARGET, RW=False, Mode="", Propagation="rprivate"))
             row["HostConfig"]["Mounts"].append(dict(Type="bind", Source=source, Target=m.SERVER_TARGET, ReadOnly=True, BindOptions={}))
         row["State"].update(Running=False, Status="created", Pid=0, ExitCode=0,
@@ -386,7 +386,7 @@ class Controls(unittest.TestCase):
             mutations = [lambda r:r["Mounts"][1].update(Source="/foreign/server.mjs"),
                 lambda r:r["Mounts"][1].update(RW=True), lambda r:r["Mounts"].append(copy.deepcopy(r["Mounts"][1])),
                 lambda r:r["HostConfig"]["Mounts"][1].update(BindOptions={"Unreviewed": True}),
-                lambda r:r["HostConfig"].update(Init=False), lambda r:r["Config"]["Env"].append("OTHER=changed"),
+                lambda r:r["HostConfig"].update(Init=False), lambda r:r["HostConfig"].update(Memory=128*1024*1024), lambda r:r["Config"]["Env"].append("OTHER=changed"),
                 lambda r:r["Config"]["Labels"].update({"com.docker.compose.replace":"wrong"}),
                 lambda r:r.update(Image="sha256:"+"0"*64),
                 lambda r:next(iter(r["NetworkSettings"]["Networks"].values())).update(NetworkID="wrong")]
@@ -436,7 +436,8 @@ class CreatedRepresentationControls(unittest.TestCase):
                 lambda v:v["HostConfig"].update(Dns=["192.0.2.1"]),
                 lambda v:v["HostConfig"].update(DnsOptions=["ndots:1"]),
                 lambda v:v["HostConfig"].update(DnsSearch=["example.test"]),
-                lambda v:v["HostConfig"].update(OomKillDisable=True)):
+                lambda v:v["HostConfig"].update(OomKillDisable=True),
+                lambda v:v["HostConfig"].update(Memory=128*1024*1024)):
                 altered = copy.deepcopy(baseline);change(altered)
                 with self.assertRaises(ValueError):self.verify(s, altered)
 
@@ -444,7 +445,7 @@ class CreatedRepresentationControls(unittest.TestCase):
         before=original();actual=copy.deepcopy(before);actual["Id"]="c"*64
         actual["Config"]["Hostname"]="c"*12
         actual["Config"]["Labels"]["com.docker.compose.replace"]=before["Id"]
-        actual["HostConfig"]["Init"]=True
+        actual["HostConfig"]["Init"]=True;actual["HostConfig"].update(Memory=m.REPAIRED_MEMORY_BYTES,MemorySwap=m.REPAIRED_SWAP_BYTES)
         actual["State"].update(Status="created",ExitCode=0,StartedAt="0001-01-01T00:00:00Z",FinishedAt="0001-01-01T00:00:00Z")
         fixture=Path("C:/owned/fixture.json");before["Mounts"][0]["Source"]=reps.daemon_source(str(fixture));before["HostConfig"]["Mounts"][0]["Source"]=reps.daemon_source(str(fixture));actual["Mounts"][0]["Source"]=reps.daemon_source(str(fixture));actual["HostConfig"]["Mounts"][0]["Source"]=reps.daemon_source(str(fixture))
         server=Path("C:/owned/server.mjs");source=str(server)
