@@ -205,6 +205,47 @@ def test_core_hosting_separates_optional_connectors_from_the_frozen_model(render
     )
 
 
+def test_edge_startup_changes_only_reviewed_dependencies_and_health_target(rendered_models):
+    approved, current = rendered_models
+    original = approved["services"]["edge"]
+    selected = current["services"]["edge"]
+    assert original["depends_on"] == {
+        owner: {"condition": "service_healthy", "required": True}
+        for owner in ("ui", "gateway", "flow", "keycloak")
+    }
+    assert "depends_on" not in selected
+    assert original["healthcheck"]["test"] == [
+        "CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/ready",
+    ]
+    assert selected["healthcheck"] == {
+        **original["healthcheck"],
+        "test": ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/edge-healthz"],
+    }
+
+
+@pytest.mark.parametrize("fault", ["dependency", "readiness", "health-command", "health-timing", "port", "mount", "upstream"])
+def test_edge_review_does_not_allow_product_gates_or_unrelated_ingress_drift(rendered_models, fault):
+    approved, current = deepcopy(rendered_models)
+    edge = current["services"]["edge"]
+    if fault == "dependency":
+        edge["depends_on"] = {"gateway": {"condition": "service_healthy", "required": True}}
+    elif fault == "readiness":
+        edge["healthcheck"]["test"][-1] = "http://127.0.0.1/ready"
+    elif fault == "health-command":
+        edge["healthcheck"]["test"] = ["CMD", "true"]
+    elif fault == "health-timing":
+        edge["healthcheck"]["interval"] = "1s"
+    elif fault == "port":
+        assert edge["ports"][0].startswith("127.0.0.1:")
+        edge["ports"][0] = edge["ports"][0].replace("127.0.0.1:", "0.0.0.0:", 1)
+    elif fault == "mount":
+        edge["volumes"].pop()
+    else:
+        edge["environment"]["GATEWAY_UPSTREAM"] = "unreviewed:8000"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
 def test_web_selection_changes_only_the_reviewed_ui_inputs(rendered_models):
     approved, current = rendered_models
     original = approved["services"]["ui"]

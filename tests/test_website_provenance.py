@@ -58,13 +58,25 @@ def test_subject_verifies_exact_original_invocation_and_private_source(files, fu
     ("issuer", "https://example.invalid"), ("runInvocationURI", "https://github.com/ElevenID/marty-ui/actions/runs/21/attempts/1"),
     ("runnerEnvironment", "self-hosted"), ("sourceRepositoryURI", "https://github.com/fork/marty-subscriptions"),
     ("sourceRepositoryDigest", SOURCE), ("sourceRepositoryRef", "refs/heads/topic"),
-    ("sourceRepositoryIdentifier", "1"), ("buildSignerURI", "https://github.com/ElevenID/marty-subscriptions/.github/workflows/other.yml@refs/heads/main"),
+    ("sourceRepositoryIdentifier", "1"),
     ("githubWorkflowSHA", SOURCE),
 ])
 def test_certificate_rejects_any_changed_identity_field(key, value):
     producer = web.producer(SOURCE, ui.commerce_identity("full", PRIVATE), "21", "2")
     output = verified(producer)
     output[0]["verificationResult"]["signature"]["certificate"][key] = value
+    with pytest.raises(ValueError):
+        proof.verified_certificate(json.dumps(output), producer)
+
+
+def test_certificate_rejects_another_workflow_in_the_original_repository():
+    producer = web.producer(SOURCE, ui.commerce_identity("full", PRIVATE), "21", "2")
+    output = verified(producer)
+    certificate = output[0]["verificationResult"]["signature"]["certificate"]
+    # Change only the workflow, retaining the original repository/source. This
+    # also avoids coupling a synthetic negative fixture to a private repo URL.
+    certificate["buildSignerURI"] = certificate["buildSignerURI"].replace(
+        producer["workflow"], ".github/workflows/other.yml")
     with pytest.raises(ValueError):
         proof.verified_certificate(json.dumps(output), producer)
 
