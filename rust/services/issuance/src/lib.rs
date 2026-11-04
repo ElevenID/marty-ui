@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub use marty_response_compat::{lossless_json, lossless_json_tree, owned_json_value, python_text};
+mod legacy_json_compat;
 mod python_datetime;
 mod python_format;
 mod python_json_diagnostic;
