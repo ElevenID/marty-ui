@@ -8,11 +8,11 @@ on:
         required: true
         type: string
       resume_run_id:
-        description: Prior Stack release run containing a later transaction checkpoint
+        description: Historical input; bounded publication rejects resume dispatches
         required: false
         type: string
       resume_artifact:
-        description: Exact transaction artifact name from resume_run_id
+        description: Historical input; leave empty for a fresh original-attempt release
         required: false
         type: string
       selfhost_public_profile:
@@ -68,6 +68,21 @@ jobs:
       openbao_didcomm_digest: ${{ steps.identity.outputs.openbao_didcomm_digest }}
       keycloak_digest: ${{ steps.identity.outputs.keycloak_digest }}
     steps:
+      - name: Require a fresh bounded original release attempt
+        env:
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+          RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = ElevenID/marty-ui
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          if [ -n "$RESUME_RUN_ID" ] || [ -n "$RESUME_ARTIFACT" ]; then
+            echo '::error::The bounded release path requires one fresh original attempt. Expired or failed candidates need a new reviewed source and unused claim; resume is not supported.'
+            exit 1
+          fi
       - name: Download the exact claim or resume checkpoint
         env:
           CLAIM_RUN_ID: ${{ inputs.claim_run_id }}
@@ -814,7 +829,7 @@ jobs:
       contents: read
       packages: read
       attestations: read
-    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@7c91052734f2570e1988682fd70cf3d604513386
+    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@422088fa79f9bbea8b26fae89af7e9f5d9d62593
     with:
       lane: all
       collect_only: true
@@ -822,9 +837,10 @@ jobs:
       candidate_artifact: stack-release-official-candidate-${{ github.run_id }}
       candidate_manifest_sha256: ${{ needs.prepare-official-candidate.outputs.manifest_sha256 }}
       candidate_tag: ${{ needs.resolve-transaction.outputs.tag }}
-      harness_revision: 7c91052734f2570e1988682fd70cf3d604513386
+      harness_revision: 422088fa79f9bbea8b26fae89af7e9f5d9d62593
 
   official-gate-evidence:
+    timeout-minutes: 90
     needs: [resolve-transaction, prepare-official-candidate, official-interoperability]
     runs-on: ubuntu-latest
     permissions:
@@ -832,10 +848,11 @@ jobs:
       actions: read
     env:
       SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
-      HARNESS_SHA: 7c91052734f2570e1988682fd70cf3d604513386
+      HARNESS_SHA: 422088fa79f9bbea8b26fae89af7e9f5d9d62593
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
@@ -2095,8 +2112,8 @@ jobs:
   prepare-installer-inputs:
     # Mandatory build prerequisite only: no acceptance, admission, channel, or
     # installer release assets are created by this job. Old producer attempts
-    # cannot be relabelled on a rerun-failed attempt. Use a fresh dispatch with
-    # the supported same-source transaction checkpoint; preserve old artifacts.
+    # cannot be relabelled on a rerun-failed attempt. The bounded original run
+    # completes publication or fails closed; preserve its immutable artifacts.
     needs: [resolve-transaction, validate-stack, qualify-release, build-operator-catalog, prepare-selfhost-image-lock, preflight-selfhost-prepared-consumer, verifier-differential]
     runs-on: ubuntu-24.04
     permissions:
@@ -2242,6 +2259,7 @@ jobs:
           retention-days: 30
 
   publish-manifest:
+    timeout-minutes: 90
     needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, build-keycloak, qualify-release, build-operator-catalog, prepare-official-candidate, prepare-installer-inputs]
     runs-on: ubuntu-latest
     environment: stack-release
@@ -2267,6 +2285,10 @@ jobs:
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: transaction
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: stack-release-official-gate-${{ github.run_id }}
+          path: gates/official
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: operator-catalog-amd64-${{ github.run_id }}
@@ -2348,7 +2370,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --role ui)"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role ui)"
           test "$DIGEST" = "$(jq -er '.images.ui.digest' transaction/release-transaction.json)"
           if ! jq -e '.promoted_roles | index("ui") != null' transaction/release-transaction.json >/dev/null; then
             if [ "$tag_state" = absent ]; then
@@ -2378,7 +2400,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --role services)"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role services)"
           test "$DIGEST" = "$(jq -er '.images.services.digest' transaction/release-transaction.json)"
           if ! jq -e '.promoted_roles | index("services") != null' transaction/release-transaction.json >/dev/null; then
             if [ "$tag_state" = absent ]; then
@@ -2408,7 +2430,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --role migrations)"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role migrations)"
           test "$DIGEST" = "$(jq -er '.images.migrations.digest' transaction/release-transaction.json)"
           if ! jq -e '.promoted_roles | index("migrations") != null' transaction/release-transaction.json >/dev/null; then
             if [ "$tag_state" = absent ]; then
@@ -2432,7 +2454,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --role openbao_didcomm)"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role openbao_didcomm)"
           test "$DIGEST" = "$(jq -er '.images.openbao_didcomm.digest' transaction/release-transaction.json)"
           if ! jq -e '.promoted_roles | index("openbao_didcomm") != null' transaction/release-transaction.json >/dev/null; then
             if [ "$tag_state" = absent ]; then
@@ -2456,7 +2478,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --role keycloak)"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role keycloak)"
           test "$DIGEST" = "$(jq -er '.images.keycloak.digest' transaction/release-transaction.json)"
           if ! jq -e '.promoted_roles | index("keycloak") != null' transaction/release-transaction.json >/dev/null; then
             if [ "$tag_state" = absent ]; then
@@ -2598,33 +2620,56 @@ jobs:
             cp "$assets/$asset" "$asset"
           done
           operator_release_require_local_assets
-      - name: Create or verify the late annotated source tag
+      - name: Seal all signed publication bytes for the bounded tag handoff
         env:
-          CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}
-          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
-          TAG: ${{ needs.resolve-transaction.outputs.tag }}
-          TRANSACTION_ID: ${{ needs.resolve-transaction.outputs.transaction_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json
+          source scripts/operator-release-assets.sh
+          operator_release_verify_published_assets "$GITHUB_WORKSPACE" "$SOURCE_SHA" "$GITHUB_REPOSITORY" \
+            "$GITHUB_WORKSPACE/scripts/stable_installer_assets.py" "$TAG" \
+            "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+          python scripts/stable_publication_checkpoint.py prepare \
+            --assets "$GITHUB_WORKSPACE" --transaction transaction/release-transaction.json \
+            --official-gate gates/official/official-interoperability.json \
+            --source-sha "$SOURCE_SHA" --tag "$TAG" --claim-run-id "$CLAIM_RUN_ID" \
+            --output "$RUNNER_TEMP/stable-publication-checkpoint"
+      - id: publication_handoff
+        name: Preserve the exact publication checkpoint before the tag wait
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-publication-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/stable-publication-checkpoint/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Wait for the exact operator tag handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLICATION_ARTIFACT_ID: ${{ steps.publication_handoff.outputs.artifact-id }}
+          PUBLICATION_ARTIFACT_DIGEST: ${{ steps.publication_handoff.outputs.artifact-digest }}
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json
-          existing="$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")"
-          if [ -n "$existing" ]; then
-            git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
-            test "$(git cat-file -t "refs/tags/$TAG")" = tag
-            test "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$SOURCE_SHA"
-            git for-each-ref --format='%(contents)' "refs/tags/$TAG" > tag-message.txt
-            grep -Fx "Release-Transaction: $TRANSACTION_ID" tag-message.txt
-            grep -Fx "Claim-Run: $CLAIM_RUN_ID" tag-message.txt
-            grep -Fx "Source-SHA: $SOURCE_SHA" tag-message.txt
-          else
-            echo "::error::Qualified images are promoted and checkpointed. Push the exact annotated tag locally with scripts/push_promoted_release_tag.py using this run ID, then dispatch a resume from stack-release-promotion-complete-$GITHUB_RUN_ID. No Actions secret is required."
-            exit 1
-          fi
-      - name: Detect only an exact resumable immutable release
-        id: existing_release
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          python scripts/release_tag_handoff.py wait \
+            --checkpoint "$RUNNER_TEMP/stable-publication-checkpoint" \
+            --artifact-id "$PUBLICATION_ARTIFACT_ID" \
+            --artifact-digest "$PUBLICATION_ARTIFACT_DIGEST" \
+            --output "$RUNNER_TEMP/stable-tag-handoff.json"
+      - name: Preserve the authenticated operator handoff admission
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-tag-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/stable-tag-handoff.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Require the release coordinate to remain absent
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.resolve-transaction.outputs.tag }}
@@ -2639,38 +2684,11 @@ jobs:
             "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG")"
           case "$status" in
             404)
-              echo "exists=false" >> "$GITHUB_OUTPUT"
+              test "$(jq -er .message release-response.json)" = 'Not Found'
               ;;
             200)
-              test "$(jq -er .tag_name release-response.json)" = "$TAG"
-              test "$(jq -er .draft release-response.json)" = false
-              source scripts/operator-release-assets.sh
-              operator_release_require_local_assets
-              operator_release_require_remote_allowlist release-response.json
-              mkdir -m 700 existing-release
-              core_download=()
-              for asset in "${OPERATOR_RELEASE_ASSETS[@]}"; do core_download+=(--pattern "$asset"); done
-              gh release download "$TAG" --dir existing-release "${core_download[@]}"
-              operator_release_verify_published_assets existing-release "$SOURCE_SHA" "$GITHUB_REPOSITORY" \
-                "$GITHUB_WORKSPACE/scripts/stable_installer_assets.py" "$TAG" \
-                "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
-              # Preserve the existing release's original signed inventory and
-              # producer invocation; compare the four actual candidate payloads.
-              for payload in install.sh marty-deploy-linux-amd64 prepared-selfhost-bundle.zip prepared-selfhost-images.json; do
-                cmp --silent "$payload" "existing-release/$payload"
-              done
-              if ! cmp --silent stack-manifest.json existing-release/stack-manifest.json; then
-                echo '::error::Existing release manifest differs from this exact-source resume'
-                exit 1
-              fi
-              if ! cmp --silent release-transaction.json existing-release/release-transaction.json; then
-                echo '::error::Existing release transaction differs from this exact-source resume'
-                exit 1
-              fi
-              {
-                echo "exists=true"
-                echo "release_id=$(jq -er .id release-response.json)"
-              } >> "$GITHUB_OUTPUT"
+              echo '::error::An immutable release already owns this first-attempt coordinate'
+              exit 1
               ;;
             *)
               echo "::error::GitHub release lookup failed with HTTP $status"
@@ -2679,7 +2697,6 @@ jobs:
           esac
       - id: release
         name: Publish the qualified GitHub release and exact assets
-        if: steps.existing_release.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.resolve-transaction.outputs.tag }}
@@ -2688,9 +2705,17 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json
           source scripts/operator-release-assets.sh
           operator_release_require_local_assets
+          python scripts/stable_publication_checkpoint.py verify \
+            --checkpoint "$RUNNER_TEMP/stable-publication-checkpoint"
+          for asset in "${OPERATOR_RELEASE_ASSETS[@]}"; do
+            cmp --silent "$RUNNER_TEMP/stable-publication-checkpoint/assets/$asset" "$asset"
+          done
+          python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json
+          # Registry/API reads may outlast the original checkpoint deadline.
+          python scripts/stable_publication_checkpoint.py verify \
+            --checkpoint "$RUNNER_TEMP/stable-publication-checkpoint"
           gh release create "$TAG" --verify-tag --generate-notes "${OPERATOR_RELEASE_ASSETS[@]}"
           release_id="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)"
@@ -2706,20 +2731,19 @@ jobs:
             "$GITHUB_WORKSPACE/scripts/stable_installer_assets.py" "$TAG" \
             "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
           for asset in "${OPERATOR_RELEASE_ASSETS[@]}"; do
-            cmp --silent "$asset" "published-release-assets/$asset"
+            cmp --silent "$RUNNER_TEMP/stable-publication-checkpoint/assets/$asset" "published-release-assets/$asset"
           done
           echo "id=$release_id" >> "$GITHUB_OUTPUT"
       - name: Seal the published terminal transaction
         env:
           GH_TOKEN: ${{ github.token }}
-          EXISTING_RELEASE_ID: ${{ steps.existing_release.outputs.release_id }}
           RELEASE_ID: ${{ steps.release.outputs.id }}
           TAG: ${{ needs.resolve-transaction.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
-          release_id="${EXISTING_RELEASE_ID:-${RELEASE_ID:-$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)}}"
+          release_id="$RELEASE_ID"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
           manifest_digest="sha256:$(sha256sum stack-manifest.json | cut -d' ' -f1)"
           python scripts/release_transaction.py publish \
             --input release-transaction.json \

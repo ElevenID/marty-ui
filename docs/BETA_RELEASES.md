@@ -292,20 +292,27 @@ deployment and audit.
 
 ## Recovery dispatch
 
-The **Stack release** workflow re-downloads either the original claim or one
-explicit later checkpoint. Supply `resume_run_id` and `resume_artifact`
-together; the checkpoint allowlist, transaction identity, claim run, source
-SHA, stack-lock digest, state, image digests and attestations must all still
-match. Rerunning the original workflow run retains its exact source. A new
-dispatch is accepted only while protected `main` still equals the claimed
-source SHA, so current trusted workflow code is never selected from transaction
-data.
+The bounded **Stack release** path keeps one fresh original run at attempt 1
+through official review and publication. It rejects later attempts and the
+historical `resume_run_id` / `resume_artifact` inputs before building. A gate-only
+retry would mix producer attempt identities; a new dispatch at the review commit
+would change the signing source. Neither is a supported recovery shortcut.
 
-If exact-source completion is no longer possible, publish a conflict tombstone
-through `.github/workflows/tombstone-stack-release.yml`; never retarget or reuse
-the claimed coordinate. Do not create a tag or release by hand, substitute a
-different branch dispatch, or mix independently built component versions in
-beta.
+Complete actual official evidence is frozen before the fixed 60-minute review
+wait. After the record reaches protected main through its normal review gates,
+publication retains all 32 signed files and waits at most 15 minutes for the
+separate `.github/workflows/release-tag-handoff.yml` operator. That workflow uses
+an atomic main-and-tag compare and supplies an authenticated successful receipt.
+See [the official gate runbook](official-release-gate.md) for capability
+qualification, exact review-only ancestry, deadlines and failure handling.
+
+If exact-source completion is no longer possible, retain the failed evidence
+and consumed coordinate. The separate
+`.github/workflows/tombstone-stack-release.yml` records an authorized conflict;
+never retarget or reuse a claim. A future release needs a reviewed new source,
+fresh gates and an unused version. Do not create a tag or release by hand,
+substitute a different branch dispatch, or mix independently built component
+versions in beta.
 
 ## Durable runtime configuration staging
 

@@ -17,46 +17,45 @@ its independent image digests on every dispatch. The public
 release must already identify the same source commit. Do not use production
 credentials, a real CSCA/DSC, or a customer organization.
 
-The Stack publisher needs no tag secret. The first release run qualifies and
-promotes the five images, uploads `stack-release-promotion-complete-<run-id>`,
-then stops at the late tag gate. Its prepared inputs remain unqualified and
-cannot pass the terminal-success producer binding. There is no preparation
-bypass: the obsolete `prepare_selfhost_lock` dispatch input has been removed.
-From a clean checkout of the
-**same current main commit**, an operator with local `gh` authentication including workflow
-permission runs:
+The Stack publisher needs no stored tag secret. One fresh run at attempt 1
+qualifies the five images and collects all seven official lanes. Complete pending
+review evidence is frozen before a fixed 60-minute protected-main review wait.
+Missing capture evidence remains a failure. Every pending image needs the actual
+review described in [the official release gate](official-release-gate.md).
 
-```bash
-python3 scripts/push_promoted_release_tag.py \
-  --promotion-run-id <first-stack-release-run-id> \
-  --claim-run-id <prepare-stack-claim-run-id>
-```
+After qualification, the same attempt prepares the mandatory installer inputs,
+promotes the exact five image digests, signs and verifies all 32 release assets,
+and retains `stack-release-publication-inputs-<run-id>-1`. It then waits at most
+15 minutes for `.github/workflows/release-tag-handoff.yml` on protected main.
+Use that workflow's closed qualified-tag mode with the original CD and claim
+run IDs. It validates the immutable files, provenance, registry identities,
+exact review-only ancestry and live publisher state before an atomic main/tag
+compare. The publisher requires both the exact annotated tag and that actual
+operator run's successful bound receipt before publishing the original bytes.
 
-The helper validates the promoted transaction, current main, and all five
-registry digests before pushing the exact annotated tag. Resume Stack release
-from the same source with `claim_run_id`, `resume_run_id=<first run ID>`,
-`resume_artifact=stack-release-promotion-complete-<first run ID>`,
-and the **same four immutable external-image digests**. The resumed run verifies the tag, publishes the release, and, when
-all its jobs succeed, owns the prepared self-host bundle as a terminally
-successful producer. Reusing the first failed promotion run as a producer is
-not valid. Installer inputs bind the exact workflow run **and attempt** through
-local attestation bundles. After a failed build or publication attempt, use a
-**fresh Stack release dispatch** with the supported same-source transaction
-checkpoint described above. Rerunning failed jobs cannot relabel older artifacts
-with the new attempt; existing run-ID artifact names must not be overwritten to
-bypass that check. `installer-inputs-unqualified-<run-id>-<attempt>` is a mandatory
-build prerequisite, not installer acceptance or admission. Stack publication
-now signs the installer payloads and inventory and includes five verified offline
-provenance files in its exact 32-asset release set. Normal one-line installation
-still requires separate acceptance and admission evidence; publishing these
-inputs does not grant it. Existing stack qualification gates remain mandatory.
-The operator-only download helper also accepts the exact historical 19-asset
-release set through an explicit legacy policy; the publisher does not downgrade.
-An immutable-release retry verifies the original producer's proofs and compares
-the four actual installer payloads with the new candidate. A differing same-source
-rebuild refuses the retry and preserves the original release; reproducibility
-is not assumed, and signatures or inventory are not overwritten. Never put a
-cross-repository access token into an Actions secret for this handoff.
+Qualify the scoped operator's real API capability before consuming a claim.
+Default inspect mode is read-only. The dedicated non-semver audit-tag probe must
+prove stale-main rejection and successful current-main comparison without moving
+main. Do not use local Git push, an unconditional tag write, a new stored token
+or relaxed protections as substitutes.
+
+The publisher rejects later attempts and historical resume inputs before builds.
+Do not retry a failed gate or dispatch a new publisher at a review commit using
+older producer artifacts. The original run, attempt, inventory, certificates and
+signed files remain inseparable. If the fixed review or tag window expires,
+retain the failed evidence and consumed coordinate; a future candidate requires
+its own reviewed source, fresh gates and unused claim. No artifact overwrite or
+re-signing can repair an earlier invocation's identity.
+
+`installer-inputs-unqualified-<run-id>-<attempt>` remains a mandatory build
+prerequisite, not installed acceptance. Stack publication includes all five
+complete offline provenance sidecars in its exact 32-asset set. Normal one-line
+installation still requires separate acceptance and admission evidence;
+publishing these inputs does not grant it. The operator-only consumer can select
+the exact historical 19-asset policy explicitly; the publisher never downgrades.
+The final release readback checks every original asset byte and proof. Keep any
+private production UI package and its all-pages verification separate from
+unqualified billing runtime and from native Linux installer acceptance.
 
 The historical v1 qualification target is 32 GiB RAM and 20 GiB free disk for all
 locked images and fresh database state. The component rehearsal also requires

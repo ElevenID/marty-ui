@@ -74,8 +74,9 @@ means collection completed, not that every official result was `PASSED`.
 Standalone and scheduled suite calls still enforce their original raw exits.
 The independent candidate gate rejects genuine protocol/process failures and
 incomplete plans. Complete `REVIEW` cases can instead produce an immutable
-`official-review-input-<run-id>` artifact before the qualification step fails
-closed awaiting disposition. It contains only the exact candidate manifest,
+`official-review-input-<run-id>` artifact before the qualification step waits
+for at most 60 minutes for the exact protected-main disposition. It contains
+only the exact candidate manifest,
 sanitized summaries, origin attempt and canonical `review-request.json`.
 Raw exports, API readbacks and screenshot pixels must remain private.
 The shared harness encrypts the actual images and unchanged exports to the
@@ -108,13 +109,27 @@ case count. Original stock `REVIEW` results and exports stay unchanged. This is
 review disposition for the selected interoperability evidence, not paid OIDF
 certification or demo editorial/publication approval.
 
-Retry only the failed `official-gate-evidence` job after the record reaches
-protected main. It restores the same frozen seven-lane evidence and originating
-attempt, revalidates all bytes and reads the latest main record. No app image or
-protocol replay is needed for that review-only retry. An expired/ambiguous
-snapshot, changed candidate, changed evidence, or a newer lane run fails closed;
-start a new qualification run instead of falling back to an older approval.
-A rejection on current main cannot fall back to an older accepted record.
+The release stays on its original run and attempt 1 while the record passes
+normal protected-branch review and merge. Only an authenticated absence at an
+immutable protected-main commit is a waiting state. Authentication, transport,
+malformed evidence, rejection, unrelated source drift and the fixed 60-minute
+deadline fail closed. The validator builds once and the seven-lane packet is
+frozen once; waiting does not recollect protocols or rewrite evidence.
+
+The candidate source and review commit are separate identities. Every commit
+between them may change only `release/official-reviews/<run-id>-1.json`. The
+record must be absent at the candidate source and an ordinary non-executable
+file at the accepted main commit. Unrelated changes later reverted, another
+review file, a symlink, incomplete history or a non-descendant are refused.
+The exact accepted main commit is checked again before every public promotion
+and release write. A subsequent main commit stops this candidate; it never
+silently refreshes the accepted authorization.
+
+A failed or expired run must not be retried to manufacture another producer
+attempt. The workflow rejects later attempts and the historical `resume_run_id`
+and `resume_artifact` inputs before building. Retain the original evidence and
+claimed coordinates. Any recovery needs a separately reviewed source and a fresh
+unused claim; do not reuse the failed version or relabel existing signatures.
 
 The digest of the allowlisted receipt becomes required
 `official_interoperability` transaction evidence. The frozen public summaries
@@ -139,3 +154,64 @@ generates disposable Redis and device credentials alongside its other run inputs
 The adapter and product gate must complete protected integration and a real
 candidate execution before claiming release qualification. Keep beta runtime,
 disposable conformance stacks, demo acceptance and editorial review distinct.
+
+## Bounded publication and independent tag handoff
+
+After all qualification gates pass, the publisher promotes the five exact image
+digests in their existing order and signs the original release files. It verifies
+and seals all 32 public assets, including all 13 Cosign bundles and all five
+complete publication-provenance sidecars, into
+`stack-release-publication-inputs-<run-id>-1`. The separate request and unchanged
+official gate receipt bind the candidate, claim, original run, accepted main,
+exact asset sizes and hashes, and a fixed 15-minute tag-handoff deadline. This
+checkpoint is evidence, not a published release or installer admission.
+
+The operator dispatches `.github/workflows/release-tag-handoff.yml` on protected
+`main`. Its default inspect mode is read-only. The qualified-tag mode validates
+the live original publisher's waiting step, successful prerequisite jobs,
+authenticated artifacts, all original cryptographic proofs and unchanged review
+authority. It uses its own scoped ephemeral job token for GitHub metadata and
+ref operations; it does not build, sign, publish a release or handle private
+review images.
+
+The tag object targets the original candidate source. One GraphQL `updateRefs`
+transaction requires protected main to remain at the accepted review commit and
+the tag ref to remain absent. The main update is explicitly a no-op. Ordinary
+Git push cannot supply this compare: Git omits an unchanged-main command from
+the receive transaction, even when requested with a matching lease. Never use
+an unconditional tag creation or a force/tag-rule bypass as a fallback.
+GitHub documents the transaction and its `beforeOid` preconditions in the
+[Git GraphQL reference](https://docs.github.com/en/graphql/reference/git#updaterefs).
+
+The publisher waits for both the exact annotated tag and the actual successful
+operator workflow, authenticating its bound result artifact. Matching tag text
+alone is insufficient. A failed/cancelled operator, conflicting tag, changed
+main, invalid receipt or elapsed deadline stops publication. An uncertain write
+outcome permits readback only; never blindly replay a mutation or delete/rewrite
+an immutable tag. Atomicity covers the two refs, not registry state, workflow
+cancellation or later release publication; those remain independently checked.
+
+Immediately before creating the release, the publisher revalidates the original
+checkpoint and compares all 32 workspace files to its sealed bytes, then checks
+the accepted protected-main authority again. The original deadline is rechecked
+after those API/registry reads, so late admission cannot start release creation.
+An existing release is a collision
+on this first-attempt-only path. After creation, all 32 downloaded release files
+must match the sealed checkpoint and pass their original proof checks.
+
+Before consuming another claim, qualify this exact operator workflow and token
+against the real repository protections. Its capability mode uses a unique,
+non-semver `v-release-capability-<operator-run-id>-1` audit tag and a genuine
+ancestor with identical workflow files. The stale-main negative transaction
+must be rejected specifically for its before-OID precondition while both refs
+remain unchanged. The paired current-main transaction must create the exact
+annotated audit tag without moving main. Permission, transport or generic errors
+are not successful capability proof. Keep the immutable audit receipt and tag;
+do not weaken protections or obtain a broader credential to force success.
+
+Arrange access to the existing private review identity and enough time for normal
+review/merge before claiming a version. The 60-minute review and 15-minute tag
+bounds do not extend because a queue is slow. Final publication reads back all
+32 exact files and their proofs. Private full-production UI packaging follows
+authenticated stable publication separately; production pages do not establish
+completed billing-runtime behavior.

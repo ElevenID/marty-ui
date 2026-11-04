@@ -402,9 +402,16 @@ def test_stable_installer_publication_closes_payload_proofs_and_remote_bytes() -
     signing = names["Sign and checksum manifest evidence"]
     attest = next(i for i, step in enumerate(steps) if step.get("id") == "stable_installer_publication_provenance")
     export = names["Export and verify offline stable installer proofs"]
-    late_tag = names["Create or verify the late annotated source tag"]
+    seal = names["Seal all signed publication bytes for the bounded tag handoff"]
+    checkpoint = names["Preserve the exact publication checkpoint before the tag wait"]
+    late_tag = names["Wait for the exact operator tag handoff"]
     publish = names["Publish the qualified GitHub release and exact assets"]
-    assert checks < signing < attest < export < late_tag < publish
+    assert checks < signing < attest < export < seal < checkpoint < late_tag < publish
+    assert "operator_release_verify_published_assets" in steps[seal]["run"]
+    assert steps[checkpoint]["with"]["name"] == (
+        "stack-release-publication-inputs-${{ github.run_id }}-${{ github.run_attempt }}"
+    )
+    assert "release_tag_handoff.py wait" in steps[late_tag]["run"]
     subjects = steps[attest]["with"]["subject-path"].splitlines()
     assert len(subjects) == len(set(subjects)) == 27
     assert not any(name.endswith(".provenance.jsonl") for name in subjects)
@@ -422,11 +429,16 @@ def test_stable_installer_publication_closes_payload_proofs_and_remote_bytes() -
     assert 'gh release download "$TAG" --dir published-release-assets' in fresh
     assert 'operator_release_verify_published_assets published-release-assets' in fresh
     assert 'for asset in "${OPERATOR_RELEASE_ASSETS[@]}"' in fresh
-    assert 'cmp --silent "$asset" "published-release-assets/$asset"' in fresh
-    existing = steps[names["Detect only an exact resumable immutable release"]]["run"]
-    assert 'for payload in install.sh marty-deploy-linux-amd64 prepared-selfhost-bundle.zip prepared-selfhost-images.json' in existing
-    assert 'cmp --silent installer-inventory.json' not in existing
-    assert 'cmp --silent "$payload" "existing-release/$payload"' in existing
+    assert 'cmp --silent "$RUNNER_TEMP/stable-publication-checkpoint/assets/$asset" "published-release-assets/$asset"' in fresh
+    assert "stable_publication_checkpoint.py verify" in fresh
+    assert 'cmp --silent "$RUNNER_TEMP/stable-publication-checkpoint/assets/$asset" "$asset"' in fresh
+    assert fresh.index("stable_publication_checkpoint.py verify") < fresh.index("check_stack_pre_promotion.py") < fresh.index('gh release create "$TAG"')
+    assert fresh.index("check_stack_pre_promotion.py") < fresh.rindex("stable_publication_checkpoint.py verify") < fresh.index('gh release create "$TAG"')
+    existing = steps[names["Require the release coordinate to remain absent"]]["run"]
+    assert "200)" in existing and "first-attempt coordinate" in existing
+    assert "exit 1" in existing.split("200)", 1)[1].split(";;", 1)[0]
+    assert "gh release download" not in existing
+    assert "if" not in steps[publish]
     assert all("continue-on-error" not in steps[i] for i in (checks, signing, attest, export, publish))
 
 
@@ -465,19 +477,18 @@ def test_operator_release_builds_native_arches_and_verifies_provenance() -> None
         assert condition in installer
 
 
-def test_release_resume_accepts_original_signed_assets_after_bundle_regeneration(
+def test_original_publication_verifies_all_proofs_and_rejects_altered_payloads(
     tmp_path: Path,
 ) -> None:
-    """A retry may produce different valid Sigstore bundles for the same source."""
+    """The retained verifier checks every subject; the new path never adopts a retry."""
     workflow = yaml.safe_load(_text(".github/workflows/cd.yml"))
     step = next(
         step["run"] for step in workflow["jobs"]["publish-manifest"]["steps"]
-        if step.get("name") == "Detect only an exact resumable immutable release"
+        if step.get("name") == "Require the release coordinate to remain absent"
     )
-    assert "operator_release_verify_published_assets existing-release" in step
-    assert "cmp --silent stack-manifest.json existing-release/stack-manifest.json" in step
-    assert "cmp --silent release-transaction.json existing-release/release-transaction.json" in step
-    assert 'cmp --silent "$asset"' not in step
+    assert "first-attempt coordinate" in step
+    assert "exit 1" in step.split("200)", 1)[1].split(";;", 1)[0]
+    assert "existing-release" not in step
 
     old = tmp_path / "published"
     new = tmp_path / "regenerated"
@@ -1287,22 +1298,19 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
 
     assert "Require the exact claimed protected-main source" in workflow
     assert "+refs/heads/main:refs/remotes/origin/main" in workflow
-    assert "Create or verify the late annotated source tag" in workflow
-    helper = _text("scripts/push_promoted_release_tag.py")
-    assert 'command("git", "tag", "-a", tag, source' in helper
-    assert 'command("git", "push", "--atomic", "origin", f"{source}:refs/heads/main"' in helper
-    assert 'f"refs/tags/{tag}:refs/tags/{tag}"' in helper
-    assert 'test "$(git cat-file -t "refs/tags/$TAG")" = tag' in workflow
-    assert (
-        'test "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$SOURCE_SHA"' in workflow
-    )
-    assert 'grep -Fx "Release-Transaction: $TRANSACTION_ID"' in workflow
+    assert "Wait for the exact operator tag handoff" in workflow
+    helper = (_text("scripts/push_promoted_release_tag.py")
+              + _text("scripts/release_tag_handoff.py"))
+    assert "updateRefs" in helper
+    assert "beforeOid" in helper and "afterOid" in helper
+    assert '"--atomic"' not in helper
+    assert "git push" not in workflow
     assert workflow.index("stack-release-qualified-") < workflow.index(
-        "Create or verify the late annotated source tag"
+        "Wait for the exact operator tag handoff"
     )
 
 
-def test_workflow_changing_source_tag_uses_local_promotion_handoff() -> None:
+def test_workflow_changing_source_tag_uses_authenticated_operator_handoff() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
     assert "STACK_RELEASE_TAG_TOKEN" not in _text(".github/workflows/cd.yml")
 
@@ -1314,14 +1322,30 @@ def test_workflow_changing_source_tag_uses_local_promotion_handoff() -> None:
     assert checkout["with"]["persist-credentials"] is False
     tag_step = next(
         step for step in publisher["steps"]
-        if step.get("name") == "Create or verify the late annotated source tag"
+        if step.get("name") == "Wait for the exact operator tag handoff"
     )
-    assert "GH_TOKEN" not in tag_step["env"]
-    assert "stack-release-promotion-complete-$GITHUB_RUN_ID" in tag_step["run"]
-    assert "exit 1" in tag_step["run"]
+    assert tag_step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert "--artifact-id" in tag_step["run"]
+    assert "--artifact-digest" in tag_step["run"]
+    assert "release_tag_handoff.py wait" in tag_step["run"]
+    assert "gh release create" not in tag_step["run"]
     helper = _text("scripts/push_promoted_release_tag.py")
-    assert 'required_state="promoted"' in helper
-    assert "gh\", \"auth\", \"setup-git" in helper
+    assert "setup-git" not in helper
+    assert '"--atomic"' not in helper
+    assert "secrets.STACK_RELEASE_TAG_TOKEN" not in _text(".github/workflows/release-tag-handoff.yml")
+
+
+def test_bounded_publication_rejects_later_attempt_and_resume_before_builds() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    first = jobs["resolve-transaction"]["steps"][0]
+    assert first["name"] == "Require a fresh bounded original release attempt"
+    assert 'test "$GITHUB_RUN_ATTEMPT" = 1' in first["run"]
+    assert 'test "$GITHUB_EVENT_NAME" = workflow_dispatch' in first["run"]
+    assert 'test "$GITHUB_REF" = refs/heads/main' in first["run"]
+    assert '[ -n "$RESUME_RUN_ID" ] || [ -n "$RESUME_ARTIFACT" ]' in first["run"]
+    assert "exit 1" in first["run"]
+    assert jobs["official-gate-evidence"]["timeout-minutes"] == 90
+    assert jobs["publish-manifest"]["timeout-minutes"] == 90
 
 
 def test_stack_tag_requires_exact_main_gate_evidence() -> None:
