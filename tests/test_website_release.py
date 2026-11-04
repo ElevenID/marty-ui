@@ -61,6 +61,23 @@ def test_website_plan_does_not_require_stack_release_eligibility_or_version(sour
     assert web.plan(source, SOURCE)["revision"] == SOURCE
 
 
+@pytest.mark.parametrize("fault", [None, "source", "routes", "slim"])
+def test_prepublication_combined_marker_check_matches_exact_source_contract(source, fault):
+    marker = web.application_marker(source, SOURCE)
+    if fault == "source":
+        marker["source_sha"] = "9" * 40
+    elif fault == "routes":
+        marker["route_contract"]["sha256"] = "sha256:" + "9" * 64
+    elif fault == "slim":
+        marker["surface"] = "application"
+    path = source / "image-marker.json"
+    path.write_bytes(ui.canonical(marker))
+    result = subprocess.run([sys.executable, str(ROOT / "scripts/website_release.py"), "check-application",
+                             "--root", str(source), "--source-sha", SOURCE, "--application-marker", str(path)],
+                            capture_output=True, text=True)
+    assert (result.returncode == 0) == (fault is None), result.stderr
+
+
 @pytest.mark.parametrize("fault", ["foreign-uri", "missing-digest", "duplicate"])
 def test_independence_does_not_weaken_dependency_lock(source, fault):
     path = source / "release/stack-lock.json"

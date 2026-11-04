@@ -42,7 +42,7 @@ class Host:
         command += ["--project-name", "host-test", "-f", str(self.base)]
         if overlay:
             command += ["-f", str(overlay)]
-        result = json.loads(subprocess.run(command + ["config", "--format", "json"], check=True,
+        result = json.loads(subprocess.run(command + ["--profile", "*", "config", "--format", "json"], check=True,
                                            capture_output=True, text=True).stdout)
         if overlay and self.tamper_overlay:
             result["services"]["gateway"]["image"] = "example.invalid/changed@sha256:" + "a" * 64
@@ -230,13 +230,49 @@ def test_committed_activation_cleanup_never_reverts_new_state(host_candidate, mo
             raise OSError("interrupted cleanup")
         actual_write(path, payload)
     monkeypatch.setattr(deploy, "atomic_write", interrupt_cleanup)
-    with pytest.raises(ValueError, match="activation committed"):
+    with pytest.raises(ValueError, match="reached state commit"):
         deploy.apply(host, kwargs["output"], **verifiers)
     state = deploy.read_state(host.directory)
     assert state["active"] == "website-a" and (host.directory / "transaction.json").exists()
     assert not any(event[0] == "stop" for event in host.events)
     assert deploy.recover(host, **verifiers) == state
     assert not (host.directory / "transaction.json").exists()
+
+
+@pytest.mark.parametrize("phase", ["receipt", "journal", "state"])
+def test_directory_flush_failure_respects_durable_transaction_boundaries(host_candidate, monkeypatch, phase):
+    host, kwargs, _, _, verifiers = host_candidate
+    actual_sync = deploy.sync_directory
+    failed = False
+    def fail_at_boundary(path):
+        nonlocal failed
+        exists = (host.directory / "state.json").exists()
+        selected = phase == "receipt" and path == host.directory / "receipts" and (path / WEBSITE_SOURCE).exists()
+        selected |= phase == "journal" and path == host.directory and (path / "transaction.json").exists() and not exists
+        selected |= phase == "state" and path == host.directory and exists
+        if selected and not failed:
+            failed = True
+            raise OSError("injected directory persistence failure")
+        actual_sync(path)
+    monkeypatch.setattr(deploy, "sync_directory", fail_at_boundary)
+    with pytest.raises((OSError, ValueError)):
+        deploy.apply(host, kwargs["output"], **verifiers)
+    assert failed
+    if phase == "state":
+        assert deploy.read_state(host.directory)["active"] == "website-a"
+        assert not any(event[0] == "stop" for event in host.events)
+        assert WEBSITE_SOURCE in (host.directory / "routes/active.conf").read_text()
+        assert deploy.recover(host, **verifiers)["active"] == "website-a"
+    elif phase == "journal":
+        assert host.events == [] and deploy.read_state(host.directory) is None
+        assert (host.directory / "transaction.json").exists()
+        assert deploy.recover(host, **verifiers) is None
+    else:
+        assert host.events == [] and deploy.read_state(host.directory) is None
+        assert not (host.directory / "transaction.json").exists()
+        # A complete receipt whose rename was visible can be revalidated and
+        # durably retained; an incomplete receipt never becomes the final name.
+        assert deploy.apply(host, kwargs["output"], **verifiers)["active"] == "website-a"
 
 
 def test_host_lock_and_symlink_receipts_fail_closed(host_candidate, tmp_path):
@@ -285,3 +321,34 @@ def test_runtime_inspection_checks_configured_and_installed_image_identity(tmp_p
     container["Config"]["Image"] = "ghcr.io/elevenid/gateway:latest"
     with pytest.raises(ValueError, match="configured digest"):
         host.inspect_current({"gateway": image})
+
+
+def test_real_compose_snapshot_includes_product_and_openbao_bootstrap_profiles(tmp_path, monkeypatch):
+    image = "ghcr.io/elevenid/product@sha256:" + "1" * 64
+    bao = "ghcr.io/elevenid/openbao@sha256:" + "2" * 64
+    model = {"services": {name: {"image": image} for name in ("ui", "gateway", "edge", "keycloak-bootstrap")}}
+    model["services"]["keycloak-bootstrap"]["profiles"] = ["kms-init"]
+    provider = {"services": {name: {"image": bao} for name in deploy.OPENBAO_SERVICES}}
+    provider["services"]["openbao-bootstrap"]["profiles"] = ["kms-init"]
+    base, env, provider_file = tmp_path / "compose.yml", tmp_path / "env", tmp_path / "openbao.yml"
+    base.write_text(yaml.safe_dump(model))
+    provider_file.write_text(yaml.safe_dump(provider))
+    env.write_text("EXAMPLE=nonempty\n")
+    host = deploy.DockerHost(stack=tmp_path, project="profile-test", compose_files=[base], env_file=env,
+                            openbao_file=provider_file, openbao_env_file=env, openbao_project="profile-bao",
+                            public_origin="https://example.org")
+    mutations = []
+    def read_only_runtime(args, **_kwargs):
+        if "config" in args:
+            executable = os.environ.get("MARTY_INSTALLER_COMPOSE_EXECUTABLE")
+            command = [executable, *args[2:]] if executable else args
+            return subprocess.run(command, check=True, capture_output=True, text=True).stdout
+        assert "ps" in args, "snapshot must never mutate Docker"
+        mutations.append(args)
+        return ""  # Product containers may be absent during a website cold start.
+    monkeypatch.setattr(host, "run", read_only_runtime)
+    snapshot, rendered = host.snapshot()
+    assert set(snapshot["images"]) == set(model["services"])
+    assert snapshot["openbao_didcomm_image"] == bao
+    assert "keycloak-bootstrap" in rendered["services"]
+    assert any("openbao-bootstrap" in args for args in mutations)

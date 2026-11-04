@@ -217,19 +217,23 @@ def validate_combined_release(value: dict) -> dict:
                and value["audience"] == "production" and value["repository"] == ui.REPOSITORY
                and isinstance(value["version"], str) and ui.VERSION.fullmatch(value["version"]) is not None,
                "combined release identity differs")
-    private_sha = value.get("commerce_extension", {}).get("source_sha") if full else None
+    if full:
+        object_keys(value["commerce_extension"], {"repository", "source_sha"}, "combined commerce extension")
+    private_sha = value["commerce_extension"]["source_sha"] if full else None
     extension = ui.commerce_identity("full" if full else "public", private_sha)
     if full:
         ui.require(value["production_pages"] == "full" and value["commerce_extension"] == extension,
                    "combined commerce identity differs")
     p = value["producer"]
+    ui.require(isinstance(p, dict), "combined producer must be an object")
     expected_p = producer(source, extension, p.get("run_id"), p.get("run_attempt"))
     legacy_p = {key: item for key, item in expected_p.items() if key not in {"repository", "source_sha"}}
     if full:
         legacy_p.update(repository=ui.COMMERCE_REPOSITORY, source_sha=private_sha)
     ui.require(p == legacy_p, "combined producer identity differs")
+    object_keys(value["image"], {"uri", "digest", "platform"}, "combined image")
     ui.require(value["image"] == {"uri": ui.COMMERCE_IMAGE if full else ui.PUBLIC_IMAGE,
-               "digest": image_digest(value.get("image", {}).get("digest")), "platform": "linux/amd64"},
+               "digest": image_digest(value["image"]["digest"]), "platform": "linux/amd64"},
                "combined image differs")
     ui.check_image(value["image_metadata"], audience="production", source_sha=source, version=value["version"],
                    production_pages="full" if full else "public", commerce_source_sha=private_sha)
@@ -253,7 +257,7 @@ def compatibility_record(release: dict, marker: dict, release_bytes: bytes) -> d
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("plan", "record", "check-image", "compatibility"))
+    parser.add_argument("command", choices=("plan", "record", "check-image", "check-application", "compatibility"))
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--production-pages", choices=("public", "full"), default="public")
@@ -264,12 +268,16 @@ def main() -> None:
         parser.add_argument("--" + name)
     args = parser.parse_args()
     options = dict(production_pages=args.production_pages, commerce_source_sha=args.commerce_source_sha)
-    if args.command == "compatibility":
-        ui.require(args.application_release is not None and args.application_marker is not None, "application inputs required")
-        application = ui.validate_production_release(args.root, read(args.application_release), args.source_sha)
+    if args.command in {"check-application", "compatibility"}:
+        ui.require(args.application_marker is not None, "application marker required")
         marker = read(args.application_marker)
         ui.require(marker == application_marker(args.root, args.source_sha), "marker differs from exact source routes")
-        result = compatibility_record(application, marker, args.application_release.read_bytes())
+        if args.command == "compatibility":
+            ui.require(args.application_release is not None, "application release required")
+            application = ui.validate_production_release(args.root, read(args.application_release), args.source_sha)
+            result = compatibility_record(application, marker, args.application_release.read_bytes())
+        else:
+            result = marker
     elif args.command == "plan":
         result = plan(args.root, args.source_sha, **options)
     elif args.command == "check-image":

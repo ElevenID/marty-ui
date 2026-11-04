@@ -1,28 +1,50 @@
 name: Production website release
 
-run-name: Build production website from ${{ github.sha }}
+run-name: Production web ${{ inputs.mode || 'combined' }} from ${{ github.sha }}
 
 on:
   workflow_dispatch:
     inputs:
-      stack_release_tag:
-        description: Exact stable OpenBao backend release from this source (vX.Y.Z)
+      mode:
+        description: Combined legacy release, independent website, or signed composition
+        type: choice
+        options: [combined, website, compose]
+        default: combined
         required: true
+      stack_release_tag:
+        description: Combined mode only; exact stable OpenBao backend from this source (vX.Y.Z)
+        required: false
+        type: string
+      website_run_id:
+        description: Compose mode only; successful original website producer run
+        required: false
+        type: string
+      website_run_attempt:
+        description: Compose mode only; exact website producer attempt
+        required: false
+        type: string
+      application_run_id:
+        description: Compose mode only; successful original combined producer run
+        required: false
+        type: string
+      application_run_attempt:
+        description: Compose mode only; exact combined producer attempt
+        required: false
         type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: production-web-release
+  group: production-web-release-${{ inputs.mode || 'combined' }}
   cancel-in-progress: false
 
 env:
-  IMAGE: ghcr.io/elevenid/marty-ui-oss/ui-public
+  IMAGE: ${{ inputs.mode == 'website' && 'ghcr.io/elevenid/marty-ui-oss/website' || 'ghcr.io/elevenid/marty-ui-oss/ui-public' }}
 
 jobs:
   release:
-    if: github.repository == 'ElevenID/marty-ui'
+    if: github.repository == 'ElevenID/marty-ui' && inputs.mode != 'compose'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -31,6 +53,9 @@ jobs:
       id-token: write
       attestations: write
       artifact-metadata: write
+    env:
+      MODE: ${{ inputs.mode || 'combined' }}
+      BACKEND_TAG: ${{ inputs.stack_release_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -44,20 +69,47 @@ jobs:
           test "$GITHUB_REF" = refs/heads/main
           test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
-      - name: Freeze the production target and locked dependencies
+          [[ "$MODE" = combined || "$MODE" = website ]]
+          if [ "$MODE" = website ]; then test -z "$BACKEND_TAG"; fi
+      - name: Freeze the selected production surface and locked dependencies
         id: plan
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/ui_release.py plan --source-sha "$GITHUB_SHA" \
-            --output production-web/build-plan.json
+          umask 077
+          mkdir production-web
+          helper=scripts/ui_release.py
+          if [ "$MODE" = website ]; then helper=scripts/website_release.py; fi
+          python "$helper" plan --source-sha "$GITHUB_SHA" --output production-web/build-plan.json
           test "$(jq -r .image production-web/build-plan.json)" = "$IMAGE"
+          if [ "$MODE" = combined ]; then
+            test "$BACKEND_TAG" = "v$(jq -er .version production-web/build-plan.json)"
+          fi
           {
-            echo "version=$(jq -r .version production-web/build-plan.json)"
-            echo 'build_args<<WEBSITE_BUILD_ARGS'
+            echo "version=$(jq -r '.version // .revision' production-web/build-plan.json)"
+            echo "target=$(jq -er .target production-web/build-plan.json)"
+            echo 'build_args<<WEB_BUILD_ARGS'
             jq -r '.build_args | to_entries[] | "\(.key)=\(.value)"' production-web/build-plan.json
-            echo WEBSITE_BUILD_ARGS
+            echo WEB_BUILD_ARGS
           } >> "$GITHUB_OUTPUT"
+      - name: Prepare pinned verification tools and dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/install_web_verifiers.sh "$RUNNER_TEMP/web-verifiers"
+          python -m venv "$RUNNER_TEMP/web-python"
+          "$RUNNER_TEMP/web-python/bin/python" -m pip install --disable-pip-version-check \
+            --requirement scripts/selfhost-preview-tools.requirements.txt
+          echo "$RUNNER_TEMP/web-python/bin" >> "$GITHUB_PATH"
+      - name: Verify the exact combined backend prerequisite before any image build
+        if: env.MODE == 'combined'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/web_release_intake.py backend --tag "$BACKEND_TAG" --source-sha "$GITHUB_SHA" \
+            --assets "$RUNNER_TEMP/production-backend" --gh "$RUNNER_TEMP/web-verifiers/gh"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
         with:
           driver-opts: image=moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
@@ -66,20 +118,20 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Build the separate production website image by digest
+      - name: Build the selected production image by digest
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: docker/ui.Dockerfile
-          target: public
+          target: ${{ steps.plan.outputs.target }}
           platforms: linux/amd64
           build-args: ${{ steps.plan.outputs.build_args }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=production-web-ui
-          cache-to: type=gha,mode=max,scope=production-web-ui
+          cache-from: type=gha,scope=production-web-${{ env.MODE }}
+          cache-to: type=gha,mode=max,scope=production-web-${{ env.MODE }}
       - name: Verify the production image and prerendered homepage
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -90,104 +142,241 @@ jobs:
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           docker pull "$IMAGE@$DIGEST"
           test "$(docker inspect --format '{{ index .Config.Labels "io.elevenid.ui.audience" }}' "$IMAGE@$DIGEST")" = production
-          cleanup() {
-            status=$?
-            if [ "$status" -ne 0 ]; then
-              docker inspect --format '{{json .State}}' production-web-smoke || true
-              docker logs production-web-smoke || true
-            fi
-            docker rm -f production-web-smoke >/dev/null 2>&1 || true
-            exit "$status"
-          }
+          cleanup() { status=$?; docker rm -f production-web-smoke >/dev/null 2>&1 || true; exit "$status"; }
           trap cleanup EXIT
           docker run -d --name production-web-smoke -p 127.0.0.1:18080:80 "$IMAGE@$DIGEST"
-          # Docker may accept and reset a connection before Nginx is ready.
-          # Bound both individual requests and the complete startup retry window.
           curl --fail --silent --show-error --retry 30 --retry-all-errors --retry-delay 1 \
             --retry-max-time 30 --connect-timeout 2 --max-time 5 \
             http://127.0.0.1:18080/ --output "$RUNNER_TEMP/production-homepage.html"
-          grep --quiet 'ElevenID' "$RUNNER_TEMP/production-homepage.html"
+          grep --quiet ElevenID "$RUNNER_TEMP/production-homepage.html"
           ! grep --quiet 'Welcome to nginx' "$RUNNER_TEMP/production-homepage.html"
           grep --fixed-strings --quiet 'name="prerender-status-code" content="200"' "$RUNNER_TEMP/production-homepage.html"
           grep --fixed-strings --quiet 'data-seo-jsonld="true"' "$RUNNER_TEMP/production-homepage.html"
-          curl --fail --silent --show-error http://127.0.0.1:18080/product/ \
+          curl --fail --silent --show-error --connect-timeout 2 --max-time 10 http://127.0.0.1:18080/product/ \
             --output "$RUNNER_TEMP/production-product.html"
           grep --fixed-strings --quiet 'name="prerender-status-code" content="200"' "$RUNNER_TEMP/production-product.html"
           grep --fixed-strings --quiet 'data-seo-jsonld="true"' "$RUNNER_TEMP/production-product.html"
           grep --extended-regexp --quiet '<h1[[:space:]>]' "$RUNNER_TEMP/production-product.html"
           grep --fixed-strings --quiet 'rel="canonical" href="https://elevenidllc.com/product"' "$RUNNER_TEMP/production-product.html"
-          curl --fail --silent --show-error http://127.0.0.1:18080/marty-ui-release.json \
-            --output production-web/image-metadata.json
-          python scripts/ui_release.py check-image --audience production \
-            --source-sha "$GITHUB_SHA" --version "$VERSION" \
-            --image-metadata production-web/image-metadata.json
+          if [ "$MODE" = website ]; then
+            curl --fail --silent --show-error http://127.0.0.1:18080/healthz >/dev/null
+            curl --fail --silent --show-error http://127.0.0.1:18080/marty-website-release.json \
+              --output production-web/image-metadata.json
+            python scripts/website_release.py check-image --source-sha "$GITHUB_SHA" \
+              --image-metadata production-web/image-metadata.json
+            test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18080/login)" = 404
+            grep --fixed-strings --quiet "/_website/$GITHUB_SHA/" "$RUNNER_TEMP/production-homepage.html"
+          else
+            curl --fail --silent --show-error http://127.0.0.1:18080/marty-ui-release.json \
+              --output production-web/image-metadata.json
+            curl --fail --silent --show-error http://127.0.0.1:18080/marty-web-routes.json \
+              --output production-web/application-marker.json
+            python scripts/website_release.py check-application --source-sha "$GITHUB_SHA" \
+              --application-marker production-web/application-marker.json
+            python scripts/ui_release.py check-image --audience production --source-sha "$GITHUB_SHA" \
+              --version "$VERSION" --image-metadata production-web/image-metadata.json
+          fi
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        id: image_provenance
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
-      - name: Sign the image and its separate production manifest
+      - name: Sign the image and source-bound release subjects
+        id: record
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cosign sign --yes "$IMAGE@$DIGEST"
-          python scripts/ui_release.py record --source-sha "$GITHUB_SHA" \
-            --input-plan production-web/build-plan.json --image-digest "$DIGEST" \
-            --image-metadata production-web/image-metadata.json \
-            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --output production-web/production-web-release.json
-          cosign sign-blob --yes --bundle production-web/production-web-release.json.sigstore.json \
-            production-web/production-web-release.json
-      - name: Bind the production website to the exact stable OpenBao stack
-        env:
           GH_TOKEN: ${{ github.token }}
-          BACKEND_TAG: ${{ inputs.stack_release_tag }}
         shell: bash
         run: |
           set -euo pipefail
           umask 077
-          test "$BACKEND_TAG" = "v$(jq -er .version production-web/build-plan.json)"
-          python -m pip install --requirement scripts/selfhost-preview-tools.requirements.txt
-          verifier="$RUNNER_TEMP/production-installer-gh"
-          mkdir "$verifier"
-          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
-            --connect-timeout 20 --max-time 120 --max-filesize 15031001 \
-            https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz \
-            --output "$verifier/gh.tar.gz"
-          test "$(stat -c %s "$verifier/gh.tar.gz")" = 15031001
-          printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 \
-            "$verifier/gh.tar.gz" | sha256sum --check --strict
-          tar -xzf "$verifier/gh.tar.gz" --no-same-owner --no-same-permissions \
-            -C "$verifier" gh_2.103.2_linux_amd64/bin/gh
-          chmod 700 "$verifier/gh_2.103.2_linux_amd64/bin/gh"
-          assets="$RUNNER_TEMP/production-backend"
-          mkdir "$assets"
-          for name in install.sh marty-deploy-linux-amd64 prepared-selfhost-bundle.zip prepared-selfhost-images.json installer-inventory.json; do
-            gh release download "$BACKEND_TAG" --repo "$GITHUB_REPOSITORY" --dir "$assets" \
-              --pattern "$name" --pattern "$name.provenance.jsonl"
+          cosign="$RUNNER_TEMP/web-verifiers/cosign"
+          "$cosign" sign --yes "$IMAGE@$DIGEST"
+          if [ "$MODE" = website ]; then
+            python scripts/website_release.py record --source-sha "$GITHUB_SHA" \
+              --input-plan production-web/build-plan.json --image-digest "$DIGEST" \
+              --image-metadata production-web/image-metadata.json \
+              --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --output production-web/website-release.json
+            cp contracts/web-surface-routes.json production-web/web-surface-routes.json
+            subjects=(website-release.json)
+          else
+            python scripts/ui_release.py record --source-sha "$GITHUB_SHA" \
+              --input-plan production-web/build-plan.json --image-digest "$DIGEST" \
+              --image-metadata production-web/image-metadata.json \
+              --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --output production-web/production-web-release.json
+            python scripts/website_release.py compatibility --source-sha "$GITHUB_SHA" \
+              --application-release production-web/production-web-release.json \
+              --application-marker production-web/application-marker.json \
+              --output production-web/application-web-compatibility.json
+            python scripts/stable_installer_assets.py --phase verify-published \
+              --assets "$RUNNER_TEMP/production-backend" --source-sha "$GITHUB_SHA" --tag "$BACKEND_TAG" \
+              --gh "$RUNNER_TEMP/web-verifiers/gh"
+            python scripts/package_production_deployment.py \
+              --ui-release production-web/production-web-release.json --backend-assets "$RUNNER_TEMP/production-backend" \
+              --source-sha "$GITHUB_SHA" --tag "$BACKEND_TAG" --output-dir production-web/deployment
+            subjects=(production-web-release.json application-web-compatibility.json deployment/production-deployment.json deployment/production-openbao.zip)
+          fi
+          for name in "${subjects[@]}"; do
+            "$cosign" sign-blob --yes --bundle "production-web/$name.sigstore.json" "production-web/$name"
           done
-          python scripts/stable_installer_assets.py --phase verify-published \
-            --assets "$assets" --source-sha "$GITHUB_SHA" --tag "$BACKEND_TAG" \
-            --gh "$verifier/gh_2.103.2_linux_amd64/bin/gh"
-          python scripts/package_production_deployment.py \
-            --ui-release production-web/production-web-release.json --backend-assets "$assets" \
-            --source-sha "$GITHUB_SHA" --tag "$BACKEND_TAG" --output-dir production-web/deployment
-          for name in production-deployment.json production-openbao.zip; do
-            cosign sign-blob --yes --bundle "production-web/deployment/$name.sigstore.json" \
-              "production-web/deployment/$name"
-          done
+          {
+            echo 'subject_names<<WEB_NAMES'
+            printf '%s\n' "${subjects[@]}"
+            echo WEB_NAMES
+            echo 'subject_paths<<WEB_PATHS'
+            printf 'production-web/%s\n' "${subjects[@]}"
+            echo WEB_PATHS
+          } >> "$GITHUB_OUTPUT"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        id: release_provenance
         with:
-          subject-path: |
-            production-web/production-web-release.json
-            production-web/deployment/production-deployment.json
-            production-web/deployment/production-openbao.zip
+          subject-path: ${{ steps.record.outputs.subject_paths }}
+      - name: Reverify the exact producer and retain original offline proofs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_PROVENANCE: ${{ steps.image_provenance.outputs.bundle-path }}
+          RELEASE_PROVENANCE: ${{ steps.release_provenance.outputs.bundle-path }}
+          SUBJECTS: ${{ steps.record.outputs.subject_names }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          subject_args=()
+          while IFS= read -r name; do subject_args+=(--subject "$name"); done <<< "$SUBJECTS"
+          python scripts/web_producer_evidence.py --assets production-web "${subject_args[@]}" \
+            --repository "$GITHUB_REPOSITORY" --source-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --release-provenance "$RELEASE_PROVENANCE" --image-provenance "$IMAGE_PROVENANCE" \
+            --image "$IMAGE" --image-digest "$DIGEST" \
+            --gh "$RUNNER_TEMP/web-verifiers/gh" --cosign "$RUNNER_TEMP/web-verifiers/cosign"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: env.MODE == 'combined'
         with:
           name: production-web-${{ steps.plan.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: production-web/
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: env.MODE == 'combined'
+        with:
+          name: web-application-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            production-web/production-web-release.json
+            production-web/production-web-release.json.sigstore.json
+            production-web/production-web-release.json.provenance.jsonl
+            production-web/application-web-compatibility.json
+            production-web/application-web-compatibility.json.sigstore.json
+            production-web/application-web-compatibility.json.provenance.jsonl
+            production-web/image.provenance.jsonl
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: env.MODE == 'website'
+        with:
+          name: web-website-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            production-web/website-release.json
+            production-web/website-release.json.sigstore.json
+            production-web/website-release.json.provenance.jsonl
+            production-web/web-surface-routes.json
+            production-web/image.provenance.jsonl
+          if-no-files-found: error
+          retention-days: 90
+
+  compose:
+    if: github.repository == 'ElevenID/marty-ui' && inputs.mode == 'compose'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the exact protected-main composition source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+      - name: Prepare pinned verification tools and dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/install_web_verifiers.sh "$RUNNER_TEMP/web-verifiers"
+          python -m venv "$RUNNER_TEMP/web-python"
+          "$RUNNER_TEMP/web-python/bin/python" -m pip install --disable-pip-version-check \
+            --requirement scripts/selfhost-preview-tools.requirements.txt
+          echo "$RUNNER_TEMP/web-python/bin" >> "$GITHUB_PATH"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Authenticate exact original producers and compose their unchanged artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WEBSITE_RUN: ${{ inputs.website_run_id }}
+          WEBSITE_ATTEMPT: ${{ inputs.website_run_attempt }}
+          APPLICATION_RUN: ${{ inputs.application_run_id }}
+          APPLICATION_ATTEMPT: ${{ inputs.application_run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          gh="$RUNNER_TEMP/web-verifiers/gh"
+          cosign="$RUNNER_TEMP/web-verifiers/cosign"
+          python scripts/web_release_intake.py website --repository ElevenID/marty-ui \
+            --run-id "$WEBSITE_RUN" --run-attempt "$WEBSITE_ATTEMPT" --assets "$RUNNER_TEMP/selected-website" \
+            --gh "$gh" --cosign "$cosign"
+          python scripts/web_release_intake.py application --repository ElevenID/marty-ui \
+            --run-id "$APPLICATION_RUN" --run-attempt "$APPLICATION_ATTEMPT" --assets "$RUNNER_TEMP/selected-application" \
+            --gh "$gh" --cosign "$cosign"
+          source="$(jq -er .source_sha "$RUNNER_TEMP/selected-application/production-web-release.json")"
+          tag="v$(jq -er .version "$RUNNER_TEMP/selected-application/production-web-release.json")"
+          python scripts/web_release_intake.py backend --source-sha "$source" --tag "$tag" \
+            --assets "$RUNNER_TEMP/selected-backend" --gh "$gh"
+          python scripts/package_web_composition.py --website-assets "$RUNNER_TEMP/selected-website" \
+            --application-assets "$RUNNER_TEMP/selected-application" --backend-assets "$RUNNER_TEMP/selected-backend" \
+            --producer-repository "$GITHUB_REPOSITORY" --producer-source-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output-dir web-composition --gh "$gh" --cosign "$cosign"
+          for name in web-composition.json web-composition.zip; do
+            "$cosign" sign-blob --yes --bundle "web-composition/$name.sigstore.json" "web-composition/$name"
+          done
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        id: composition_provenance
+        with:
+          subject-path: |
+            web-composition/web-composition.json
+            web-composition/web-composition.zip
+      - name: Verify the composition signature and retain offline evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PROVENANCE: ${{ steps.composition_provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/web_producer_evidence.py --assets web-composition \
+            --subject web-composition.json --subject web-composition.zip \
+            --repository "$GITHUB_REPOSITORY" --source-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --release-provenance "$RELEASE_PROVENANCE" \
+            --gh "$RUNNER_TEMP/web-verifiers/gh" --cosign "$RUNNER_TEMP/web-verifiers/cosign"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: web-composition-${{ github.run_id }}-${{ github.run_attempt }}
+          path: web-composition/
           if-no-files-found: error
           retention-days: 90

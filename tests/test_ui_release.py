@@ -21,6 +21,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import ui_release as release  # noqa: E402
+import website_release as website  # noqa: E402
 
 SOURCE = "a" * 40
 IMAGE_DIGEST = "sha256:" + "b" * 64
@@ -179,10 +180,13 @@ def test_website_workflow_separates_source_build_signature_and_deployment():
     workflow = yaml.safe_load((ROOT / release.WORKFLOW).read_text())
     assert set(workflow.get("on", workflow.get(True))) == {"workflow_dispatch"}
     assert workflow["permissions"] == {"contents": "read"}
-    assert workflow["env"]["IMAGE"] == release.PUBLIC_IMAGE
+    assert release.PUBLIC_IMAGE in workflow["env"]["IMAGE"]
+    dispatch = workflow.get("on", workflow.get(True))["workflow_dispatch"]["inputs"]
+    assert dispatch["mode"]["default"] == "combined"
+    assert dispatch["mode"]["options"] == ["combined", "website", "compose"]
     job = workflow["jobs"]["release"]
     steps = job["steps"]
-    assert job["if"] == "github.repository == 'ElevenID/marty-ui'"
+    assert job["if"] == "github.repository == 'ElevenID/marty-ui' && inputs.mode != 'compose'"
     assert job["permissions"]["contents"] == "read"
     checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
     assert checkout["with"]["ref"] == "${{ github.sha }}"
@@ -192,24 +196,35 @@ def test_website_workflow_separates_source_build_signature_and_deployment():
     assert 'test "$GITHUB_REF" = refs/heads/main' in steps[guard]["run"]
     assert 'git rev-parse' in steps[guard]["run"] and 'git merge-base --is-ancestor' in steps[guard]["run"]
     build = next(step["with"] for step in steps if step.get("id") == "build")
-    assert build["file"] == "docker/ui.Dockerfile" and build["target"] == "public"
+    assert build["file"] == "docker/ui.Dockerfile" and build["target"] == "${{ steps.plan.outputs.target }}"
     assert "push-by-digest=true" in build["outputs"]
     assert "tags" not in build
     assert build["provenance"] == "mode=max" and build["sbom"] is True
     shell = "\n".join(step.get("run", "") for step in steps)
     assert "check-image --audience production" in shell
-    assert "cosign sign --yes" in shell and "cosign sign-blob --yes" in shell
+    assert '"$cosign" sign --yes' in shell and '"$cosign" sign-blob --yes' in shell
     attestations = [step["with"] for step in steps if step.get("uses", "").startswith("actions/attest-build-provenance@")]
     assert len(attestations) == 2
-    assert any("production-web/production-web-release.json" in item.get("subject-path", "").splitlines() for item in attestations)
-    assert any("production-web/deployment/production-openbao.zip" in item.get("subject-path", "").splitlines() for item in attestations)
+    assert any(item.get("subject-path") == "${{ steps.record.outputs.subject_paths }}" for item in attestations)
+    assert "subjects=(production-web-release.json application-web-compatibility.json deployment/production-deployment.json deployment/production-openbao.zip)" in shell
+    assert "subjects=(website-release.json)" in shell
+    prerequisite = next(index for index, step in enumerate(steps) if "combined backend prerequisite" in step.get("name", ""))
+    assert steps[prerequisite]["if"] == "env.MODE == 'combined'" and prerequisite < login
     assert shell.index("stable_installer_assets.py --phase verify-published") < shell.index("package_production_deployment.py")
-    assert "gh_2.103.2_linux_amd64.tar.gz" in shell
-    assert "62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8" in shell
-    assert '"$verifier/gh_2.103.2_linux_amd64/bin/gh"' in shell
+    verifier = (ROOT / "scripts/install_web_verifiers.sh").read_text()
+    assert "gh_2.103.2_linux_amd64.tar.gz" in verifier
+    assert "62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8" in verifier
+    assert '"$RUNNER_TEMP/web-verifiers/gh"' in shell
     assert '--gh "$(command -v gh)"' not in shell
     assert not any(command in shell for command in ("kubectl", "helm upgrade", "gh release create", "ssh "))
-    for step in steps:
+    compose = workflow["jobs"]["compose"]
+    assert compose["if"] == "github.repository == 'ElevenID/marty-ui' && inputs.mode == 'compose'"
+    assert compose["permissions"]["packages"] == "read" and compose["permissions"]["actions"] == "read"
+    compose_shell = "\n".join(step.get("run", "") for step in compose["steps"])
+    assert "web_release_intake.py website" in compose_shell and "web_release_intake.py application" in compose_shell
+    assert "--producer-source-sha" in compose_shell and "package_web_composition.py" in compose_shell
+    assert not any(step.get("uses", "").startswith("docker/build-push-action") for step in compose["steps"])
+    for step in [*steps, *compose["steps"]]:
         if "uses" in step:
             assert re.fullmatch(r"[^\s]+@[0-9a-f]{40}", step["uses"])
         if "run" in step:
@@ -253,7 +268,7 @@ def test_all_customer_producers_check_the_image_audience():
 
 @pytest.mark.parametrize("case", ["valid", "bare-spa", "customer-portal", "wrong-product-page",
                                   "unrendered-product", "unprerendered-home",
-                                  "startup-reset", "persistent-reset"])
+                                  "startup-reset", "persistent-reset", "incompatible-marker"])
 def test_production_smoke_requires_rendered_marketing_pages(tmp_path, case):
     workflow = yaml.safe_load((ROOT / release.WORKFLOW).read_text())
     smoke = next(step["run"] for step in workflow["jobs"]["release"]["steps"]
@@ -282,6 +297,10 @@ def test_production_smoke_requires_rendered_marketing_pages(tmp_path, case):
         "component": "ui", "release_version": "1.2.3", "marty_ui_sha": SOURCE,
         "audience": "production", "ui_variant": "public",
     }))
+    application_marker = website.application_marker(ROOT, SOURCE)
+    if case == "incompatible-marker":
+        application_marker["route_contract"]["sha256"] = "sha256:" + "9" * 64
+    (fixtures / "application-marker.json").write_bytes(release.canonical(application_marker))
 
     # Execute the real workflow smoke step; replace only registry/container/HTTP
     # access with deterministic fixture delivery. The image identity checker and
@@ -296,7 +315,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 url = next(arg for arg in sys.argv if arg.startswith('http://'))
 name = {'/': 'homepage.html', '/product/': 'product.html',
-        '/marty-ui-release.json': 'metadata.json'}[urlsplit(url).path]
+        '/marty-ui-release.json': 'metadata.json', '/marty-web-routes.json': 'application-marker.json'}[urlsplit(url).path]
 output = sys.argv[sys.argv.index('--output') + 1]
 Path(output).write_bytes((Path(os.environ['SMOKE_FIXTURES']) / name).read_bytes())
 """,
@@ -341,7 +360,7 @@ os.execv({curl!r}, [{curl!r}, *args])
                                               struct.pack("ii", 1, 0))
                         continue
                     name = {"/": "homepage.html", "/product/": "product.html",
-                            "/marty-ui-release.json": "metadata.json"}[path]
+                            "/marty-ui-release.json": "metadata.json", "/marty-web-routes.json": "application-marker.json"}[path]
                     body = (fixtures / name).read_bytes()
                     headers = (f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n"
                                "Connection: close\r\n\r\n").encode("ascii")
@@ -364,7 +383,7 @@ os.execv({curl!r}, [{curl!r}, *args])
             env={"PATH": str(binaries) + os.pathsep + os.environ["PATH"],
                  "RUNNER_TEMP": str(runtime), "SMOKE_FIXTURES": str(fixtures),
                  "IMAGE": release.PUBLIC_IMAGE, "DIGEST": IMAGE_DIGEST,
-                 "VERSION": "1.2.3", "GITHUB_SHA": SOURCE})
+                 "VERSION": "1.2.3", "GITHUB_SHA": SOURCE, "MODE": "combined"})
     finally:
         stopped.set()
         if server is not None:
@@ -375,7 +394,7 @@ os.execv({curl!r}, [{curl!r}, *args])
     elapsed = time.monotonic() - started
     assert (result.returncode == 0) == (case in ("valid", "startup-reset")), result.stderr
     if case == "startup-reset":
-        assert requests == ["/", "/", "/product/", "/marty-ui-release.json"]
+        assert requests == ["/", "/", "/product/", "/marty-ui-release.json", "/marty-web-routes.json"]
         assert "curl: (56)" in result.stderr
         assert (runtime / "production-homepage.html").read_bytes() == (fixtures / "homepage.html").read_bytes()
     elif case == "persistent-reset":

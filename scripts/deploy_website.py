@@ -19,6 +19,7 @@ import shutil
 import ssl
 import subprocess
 import tempfile
+import uuid
 from urllib.parse import urlsplit
 import urllib.request
 
@@ -177,18 +178,66 @@ def verify_overlay_model(original: dict, rendered: dict, state: dict, route_dire
     ui.require(actual == expected, "website Compose overlay changes product, ingress, networks, or secrets")
 
 
+def sync_directory(path: Path) -> None:
+    if os.name == "posix":
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def durable_replace(source: Path, target: Path) -> None:
+    if os.name == "nt":
+        # CPython's os.replace does not request write-through on Windows.
+        # Keep both names on the same volume, and request the documented
+        # MoveFileExW write-through behavior. Live Windows power-loss and Docker
+        # bind-mount qualification remains a separate deployment gate.
+        import ctypes
+        move = ctypes.WinDLL("kernel32", use_last_error=True).MoveFileExW
+        move.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32)
+        move.restype = ctypes.c_int
+        if not move(str(source), str(target), 0x1 | 0x8):
+            raise ctypes.WinError(ctypes.get_last_error())
+    else:
+        os.replace(source, target)
+        sync_directory(target.parent)
+
+
+def ensure_directory(path: Path) -> None:
+    ui.require(not any(part.is_symlink() for part in (path, *path.parents)), "website state directories must not use symlinks")
+    missing = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for current in reversed(missing):
+        current.mkdir(mode=0o700)
+        sync_directory(current.parent)
+
+
 def atomic_write(path: Path, payload: bytes | None) -> None:
+    ui.require(not path.is_symlink(), "website state files must not use symlinks")
     if payload is None:
-        path.unlink(missing_ok=True)
+        if path.exists():
+            if os.name == "nt":
+                # Persist removal from the significant name before deleting an
+                # inert tombstone. A stale tombstone cannot become a transaction.
+                removed = path.with_name(".website-removed-" + uuid.uuid4().hex)
+                durable_replace(path, removed)
+                removed.unlink()
+            else:
+                path.unlink()
+                sync_directory(path.parent)
         return
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    ensure_directory(path.parent)
     descriptor, name = tempfile.mkstemp(prefix=".website-write-", dir=path.parent)
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(name, path)
+        durable_replace(Path(name), path)
     finally:
         Path(name).unlink(missing_ok=True)
 
@@ -196,19 +245,21 @@ def atomic_write(path: Path, payload: bytes | None) -> None:
 @contextmanager
 def host_lock(directory: Path):
     ui.require(not any(path.is_symlink() for path in (directory, *directory.parents)), "website host state must not use symlinks")
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    ensure_directory(directory)
     if os.name == "posix":
         ui.require(directory.stat().st_uid == os.getuid() and not directory.stat().st_mode & 0o077, "website host state must be owner-private")
     lock = directory / "deploy.lock"
     try:
         lock.mkdir(mode=0o700)
+        sync_directory(directory)
     except FileExistsError:
         raise ValueError("website deployment is locked; confirm the recorded process has stopped before removing a stale deploy.lock") from None
     try:
-        (lock / "pid").write_text(str(os.getpid()))
+        atomic_write(lock / "pid", str(os.getpid()).encode())
         yield
     finally:
         shutil.rmtree(lock)
+        sync_directory(directory)
 
 
 class DockerHost:
@@ -249,10 +300,12 @@ class DockerHost:
         return result + [part for path in files for part in ("-f", str(path))]
 
     def model(self, *, overlay: Path | None = None, provider: bool = False) -> dict:
-        return json.loads(self.run(self.command(overlay=overlay, provider=provider) + ["config", "--format", "json"]))
+        # Render every role, including one-shot bootstrap profiles, while runtime
+        # up commands still select only the website slot and edge explicitly.
+        return json.loads(self.run(self.command(overlay=overlay, provider=provider) + ["--profile", "*", "config", "--format", "json"]))
 
     def inspect_current(self, images: dict, *, provider: bool = False) -> None:
-        command = self.command(provider=provider) + ["ps", "--all", "--quiet", *sorted(images)]
+        command = self.command(provider=provider) + ["--profile", "*", "ps", "--all", "--quiet", *sorted(images)]
         identifiers = self.run(command).split()
         for identifier in identifiers:
             ui.require(re.fullmatch(r"[0-9a-f]{12,64}", identifier), "invalid Compose container identity")
@@ -330,14 +383,27 @@ class DockerHost:
 
 def remember_receipt(directory: Path, payload: Path, selection: dict) -> None:
     receipt = directory / "receipts" / selection["revision"]
-    receipt.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    ensure_directory(receipt.parent)
     if receipt.exists():
         for name in composition.WEBSITE_FILES:
             proof.verifier.local_file(receipt / name, private=True)
             ui.require(proof.file_digest(receipt / name) == proof.file_digest(payload / name),
                        "website revision receipt already contains different evidence")
     else:
-        composition.copy_inputs(payload, composition.WEBSITE_FILES, receipt)
+        staged = Path(tempfile.mkdtemp(prefix=".website-receipt-", dir=receipt.parent))
+        try:
+            for name in composition.WEBSITE_FILES:
+                source = payload / name
+                proof.verifier.local_file(source, private=True, maximum=proof.PROOF_LIMIT)
+                atomic_write(staged / name, source.read_bytes())
+            sync_directory(staged)
+            durable_replace(staged, receipt)
+        finally:
+            if staged.exists():
+                shutil.rmtree(staged)
+                sync_directory(staged.parent)
+    sync_directory(receipt)
+    sync_directory(receipt.parent)
 
 
 def read_state(directory: Path) -> dict | None:
@@ -348,7 +414,7 @@ def read_state(directory: Path) -> dict | None:
 def transition(host: DockerHost, current: dict | None, target: dict, model: dict, metadata: dict, *, stage: bool) -> dict:
     directory = host.directory
     routes_directory = directory / "routes"
-    routes_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    ensure_directory(routes_directory)
     overlay, routes = directory / "compose.website.json", routes_directory / "active.conf"
     before_overlay = overlay.read_bytes() if overlay.exists() else None
     before_routes = routes.read_bytes() if routes.exists() else None
@@ -379,8 +445,13 @@ def transition(host: DockerHost, current: dict | None, target: dict, model: dict
         atomic_write(candidate_overlay, None)
         return target
     except Exception as original:
-        if committed:
-            raise ValueError("website activation committed; run --recover to finish transaction cleanup") from original
+        if committed or read_state(directory) == target:
+            # A directory flush can fail after a successful state rename. The
+            # visible state has crossed the commit boundary; never restore old
+            # routing while leaving that new state selected.
+            if (directory / "transaction.json").exists():
+                raise ValueError("website activation reached state commit; run --recover to finish transaction cleanup") from original
+            raise ValueError("website activation committed; repeat the same deployment to verify completed cleanup") from original
         try:
             atomic_write(routes, before_routes)
             # A missing prior overlay means the combined application was active.
@@ -447,6 +518,7 @@ def recover(host: DockerHost, *, gh: Path, cosign: Path) -> dict | None:
         target = validate_state(journal["target_state"])
         current = read_state(host.directory)
         if current == target:
+            sync_directory(host.directory)
             atomic_write(path, None)
             atomic_write(host.directory / "compose.candidate.json", None)
             return current
