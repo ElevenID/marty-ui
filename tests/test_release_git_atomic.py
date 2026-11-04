@@ -27,6 +27,22 @@ G = "a" * 40
 A = "c" * 40
 TAG = "v-release-capability-123-1"
 
+# Exact public Git response from run 41792570662, artifact 13304121134.
+# The artifact ZIP SHA-256 was verified against authenticated GitHub metadata:
+# af9c4f376e5109581e9f09c192f810dd215c94cec52e5d98d5fcc606d5104736.
+# This historical failed capability run is a parser fixture, not qualification.
+GITHUB_RULE_REFUSAL = (
+    b"0006\2\0"
+    b"0013\1" b"000eunpack ok\n"
+    b"010c\2error: GH013: Repository rule violations found for refs/heads/main.\n"
+    b"Review all repository rules at https://github.com/ElevenID/marty-ui/rules?ref=refs%2Fheads%2Fmain\n"
+    b"\n- Changes must be made through the merge queue\n"
+    b"\n- Changes must be made through a pull request.\n\n"
+    b"004c\1" b"0047ng refs/heads/main push declined due to repository rule violations\n"
+    b"0053\1" b"004eng refs/tags/v-release-capability-41792570662-1 atomic transaction failed\n"
+    b"0009\1" b"00000000"
+)
+
 
 def spec(negative: bool = False) -> dict:
     return atomic.transaction_spec(G if negative else R, R, TAG, A,
@@ -148,8 +164,32 @@ class LocalReceivePackTests(unittest.TestCase):
         diagnostic = value["mutation"]["report"]["diagnostic"]
         self.assertIn(f"is at {self.main} but expected {self.ancestor}", diagnostic)
         self.assertTrue(all(row["status"] == "ng" for row in value["mutation"]["report"]["refs"]))
+        self.assertEqual(value["request"]["observed_main_oid"], self.main)
+        self.assertEqual((self.repo / "received.commands").read_text().splitlines(), [
+            f"{self.ancestor} {self.ancestor} refs/heads/main",
+            f"{atomic.ZERO} {self.tag_object} refs/tags/{TAG}"])
         self.assert_main(self.main)
         self.assert_tag_absent()
+
+    def test_stale_and_current_noops_pass_a_hook_that_prohibits_main_updates(self) -> None:
+        # This local hook represents the branch-update distinction, not
+        # GitHub's implementation. Stock Git still performs the actual CAS.
+        hook = self.repo / "hooks/pre-receive"
+        hook.write_text("#!/bin/sh\n"
+                        "while read old new ref; do\n"
+                        '  if [ "$ref" = refs/heads/main ] && [ "$old" != "$new" ]; then\n'
+                        "    printf 'error: main updates require a pull request\\n' >&2\n"
+                        "    exit 1\n"
+                        "  fi\n"
+                        "done\n")
+        negative = self.native.exchange(self.local_spec(True))
+        self.assertEqual(negative["decision"], "confirmed_stale_main_refusal")
+        self.assert_main(self.main)
+        self.assert_tag_absent()
+        positive = self.native.exchange(self.local_spec())
+        self.assertEqual(positive["decision"], "confirmed_success")
+        self.assert_main(self.main)
+        self.assertEqual(self.object_git("rev-parse", "refs/tags/" + TAG).strip().decode(), self.tag_object)
 
     def test_negative_then_positive_is_two_distinct_admitted_attempts(self) -> None:
         self.native.exchange(self.local_spec(True))
@@ -165,6 +205,41 @@ class LocalReceivePackTests(unittest.TestCase):
         self.assert_main(self.later)
         self.assert_tag_absent()
         self.assertTrue(self.native.poisoned)
+
+    def test_negative_current_main_must_match_discovery_before_post(self) -> None:
+        self.object_git("update-ref", "refs/heads/main", self.later, self.main)
+        with self.assertRaises(atomic.AtomicGitError):
+            self.native.exchange(self.local_spec(True))
+        self.assertEqual([method for method, _ in self.http_calls], ["GET"])
+        self.assert_main(self.later)
+        self.assert_tag_absent()
+
+    def test_negative_main_race_cannot_be_mistaken_for_the_admitted_stale_proof(self) -> None:
+        self.before_post = lambda: self.object_git("update-ref", "refs/heads/main", self.later, self.main)
+        with self.assertRaises(atomic.AtomicGitError):
+            self.native.exchange(self.local_spec(True))
+        value = self.native.transactions[-1]
+        self.assertIn(f"is at {self.later} but expected {self.ancestor}", value["mutation"]["report"]["diagnostic"])
+        self.assertEqual(value["mutation"]["outcome"], "unknown")
+        self.assertEqual(value["decision"], "unadmitted")
+        self.assert_main(self.later)
+        self.assert_tag_absent()
+        with self.assertRaises(atomic.AtomicGitError):
+            self.native.exchange(self.local_spec())
+        self.assertEqual([method for method, _ in self.http_calls].count("POST"), 1)
+
+    def test_progress_keepalive_preserves_real_ref_results_and_raw_receipts(self) -> None:
+        self.after_post = lambda raw: http_result(b"0006\2\0" + raw, "POST")
+        for request in (self.local_spec(True), self.local_spec()):
+            value = self.native.exchange(request)
+            parsed = value["mutation"]["report"]
+            raw = base64.b64decode(value["mutation"]["https"]["body_base64"], validate=True)
+            self.assertTrue(raw.startswith(b"0006\2\0"))
+            self.assertEqual(parsed["keepalive_packets"], 1)
+            self.assertEqual(parsed["body_sha256"], atomic.digest(raw))
+            self.assertNotIn("\0", parsed["diagnostic"])
+        self.assert_main(self.main)
+        self.assertEqual(self.object_git("rev-parse", "refs/tags/" + TAG).strip().decode(), self.tag_object)
 
     def test_tag_collision_after_discovery_rolls_back_whole_transaction(self) -> None:
         self.before_post = lambda: self.object_git("update-ref", "refs/tags/" + TAG, self.ancestor)
@@ -212,6 +287,22 @@ class LocalReceivePackTests(unittest.TestCase):
         self.assertEqual(self.object_git("rev-parse", "refs/tags/" + TAG).strip().decode(), self.tag_object)
         self.assertEqual([method for method, _ in self.http_calls].count("POST"), 1)
 
+    def test_report_persistence_failure_after_real_commit_never_replays(self) -> None:
+        def persist() -> None:
+            self.saved.append(copy.deepcopy(self.native.transactions))
+            value = self.native.transactions[-1]
+            if value["mutation"] and "report" in value["mutation"]:
+                self.assertEqual(value["mutation"]["outcome"], "unknown")
+                raise OSError("synthetic decoded-report persistence outage")
+        self.native.persist = persist
+        with self.assertRaises(OSError):
+            self.native.exchange(self.local_spec())
+        with self.assertRaises(atomic.AtomicGitError):
+            self.native.exchange(self.local_spec())
+        self.assertEqual(self.object_git("rev-parse", "refs/tags/" + TAG).strip().decode(), self.tag_object)
+        self.assertEqual([method for method, _ in self.http_calls].count("POST"), 1)
+        self.assertEqual(self.native.transactions[-1]["decision"], "unadmitted")
+
 
 class ProtocolRefusalTests(unittest.TestCase):
     def test_supported_advertisement_binds_exact_main_tag_absence_and_capabilities(self) -> None:
@@ -219,6 +310,37 @@ class ProtocolRefusalTests(unittest.TestCase):
         self.assertEqual(value["main_oid"], R)
         self.assertIs(value["tag_absent"], True)
         self.assertEqual(value["object_format"], "sha1")
+
+    def test_negative_discovery_binds_current_separately_from_the_stale_noop(self) -> None:
+        request = spec(True)
+        value = atomic.parse_advertisement(advertisement(), request)
+        self.assertEqual(value["main_oid"], R)
+        frames = atomic.packets(atomic.request_bytes(request)[:-32], 2048)
+        self.assertIn((G + " " + G + " refs/heads/main").encode(), frames[0])
+        for wrong in (G, A):
+            with self.subTest(observed=wrong), self.assertRaises(atomic.AtomicGitError):
+                atomic.parse_advertisement(advertisement(main=wrong), request)
+
+    def test_negative_current_binding_cannot_be_missing_equal_malformed_or_used_on_other_operations(self) -> None:
+        invalid = []
+        missing = spec(True)
+        del missing["observed_main_oid"]
+        invalid.append(missing)
+        for observed in (G, atomic.ZERO, True, None, "not-an-object", "A" * 40):
+            invalid.append({**spec(True), "observed_main_oid": observed})
+        for current in (spec(), atomic.transaction_spec(R, R, "v1.2.3", A, "release-tag-123-1")):
+            invalid.append({**current, "observed_main_oid": R})
+        invalid.append({**spec(True), "unbound_current_oid": R})
+        for request in invalid:
+            with self.subTest(request=request), self.assertRaises(atomic.AtomicGitError):
+                atomic.request_bytes(request)
+
+    def test_negative_main_command_cannot_propose_current_or_any_other_new_value(self) -> None:
+        for proposed in (R, A, atomic.ZERO):
+            request = spec(True)
+            request["commands"][0]["new_oid"] = proposed
+            with self.subTest(proposed=proposed), self.assertRaises(atomic.AtomicGitError):
+                atomic.request_bytes(request)
 
     def test_missing_atomic_status_or_sideband_refuses_before_mutation(self) -> None:
         for capability in atomic.CAPABILITIES:
@@ -252,13 +374,35 @@ class ProtocolRefusalTests(unittest.TestCase):
             with self.subTest(raw=candidate[:20]), self.assertRaises(atomic.AtomicGitError):
                 atomic.parse_report(candidate, spec())
 
+    def test_only_the_exact_standalone_progress_nul_is_ignored(self) -> None:
+        raw = b"0006\2\0" + report(spec())[:-4] + b"0006\2\0" + b"0000"
+        parsed = atomic.parse_report(raw, spec())
+        self.assertEqual(parsed["keepalive_packets"], 2)
+        self.assertEqual(parsed["diagnostic"], "")
+        self.assertEqual(parsed["body_sha256"], atomic.digest(raw))
+        self.assertEqual(atomic.admit_report(spec(), parsed), "confirmed_success")
+        for payload in (b"\2\0\0", b"\2text\0", b"\2\0text", b"\2\1", b"\2\7",
+                        b"\2\177", b"\2\377", b"\1\0", b"\3\0", b"\1", b"\2"):
+            with self.subTest(payload=payload), self.assertRaises(atomic.AtomicGitError):
+                atomic.parse_report(atomic.pkt(payload) + report(spec()), spec())
+        with self.assertRaises(atomic.AtomicGitError):
+            atomic.parse_report(b"0006\2\0" + b"0000", spec())
+
+    def test_progress_keepalives_do_not_bypass_packet_or_byte_limits(self) -> None:
+        for raw in (b"0006\2\0" * 20000 + report(spec()),
+                    b"0006\2\0" * (atomic.MAX_STATUS // 6 + 1)):
+            with self.subTest(size=len(raw)), self.assertRaises(atomic.AtomicGitError):
+                atomic.parse_report(raw, spec())
+
     def test_partial_ok_ng_and_generic_errors_cannot_prove_stale_cas(self) -> None:
         before = spec(True)
         diagnostic = f"error: cannot lock ref 'refs/heads/main': is at {R} but expected {G}\n".encode()
         accepted = atomic.parse_report(report(before, ("ng", "ng"), diagnostic), before)
         self.assertEqual(atomic.admit_report(before, accepted), "confirmed_stale_main_refusal")
-        for outcomes, reason in [(("ok", "ng"), diagnostic), (("ng", "ng"), b"error: main requires a pull request\n"),
+        for outcomes, reason in [(("ok", "ng"), diagnostic), (("ng", "ok"), diagnostic), (("ok", "ok"), diagnostic),
+                                 (("ng", "ng"), b"error: main requires a pull request\n"),
                                  (("ng", "ng"), diagnostic.replace(G.encode(), A.encode())),
+                                 (("ng", "ng"), diagnostic.replace(R.encode(), A.encode())),
                                  (("ng", "ng"), diagnostic + diagnostic)]:
             with self.subTest(reason=reason[:40]), self.assertRaises(atomic.AtomicGitError):
                 atomic.admit_report(before, atomic.parse_report(report(before, outcomes, reason), before))
@@ -409,6 +553,58 @@ class ExecutionCustodyTests(unittest.TestCase):
         patch = mock.patch.dict(os.environ, {}, clear=True)
         patch.start()
         self.addCleanup(patch.stop)
+
+    def test_actual_github_rule_refusal_is_preserved_but_cannot_authorize_positive_or_replay(self) -> None:
+        current = "296917da3baf572e5fbc425e6f3e86392bdba698"
+        ancestor = "4882496b125a3df4d639c94f471880b66c51a9d4"
+        tag_object = "53c73031586843e81ad65c9b3e1f2e8e27d88e8f"
+        audit_tag = "v-release-capability-41792570662-1"
+        request = atomic.transaction_spec(ancestor, current, audit_tag, tag_object,
+                                          "capability-negative-41792570662-1")
+        self.assertEqual(len(GITHUB_RULE_REFUSAL), 465)
+        self.assertEqual(hashlib.sha256(GITHUB_RULE_REFUSAL).hexdigest(),
+                         "a1e03714848c99445adfe85976ac18ccf37ed7a24ded7bb7764e68ca3ac6ae59")
+        calls = []
+        saved = []
+        def http(method, body):
+            calls.append(method)
+            return http_result(advertisement(main=current) if method == "GET" else GITHUB_RULE_REFUSAL, method)
+        native = atomic.NativeGit(runner=mock.Mock(), deadline=lambda: datetime.now(timezone.utc) + timedelta(seconds=10),
+                                  persist=lambda: saved.append(copy.deepcopy(native.transactions)), http=http)
+        with self.assertRaisesRegex(atomic.AtomicGitError, "Negative transaction was not wholly refused"):
+            native.exchange(request)
+        value = saved[-1][-1]
+        parsed = value["mutation"]["report"]
+        self.assertEqual(parsed["keepalive_packets"], 1)
+        self.assertIn("GH013", parsed["diagnostic"])
+        self.assertIn("Changes must be made through the merge queue", parsed["diagnostic"])
+        self.assertEqual(parsed["refs"], [
+            {"ref": "refs/heads/main", "status": "ng", "reason": "push declined due to repository rule violations"},
+            {"ref": "refs/tags/" + audit_tag, "status": "ng", "reason": "atomic transaction failed"}])
+        self.assertEqual(parsed["body_sha256"], atomic.digest(GITHUB_RULE_REFUSAL))
+        self.assertEqual(base64.b64decode(value["mutation"]["https"]["body_base64"]), GITHUB_RULE_REFUSAL)
+        self.assertEqual(value["decision"], "unadmitted")
+        self.assertEqual(value["mutation"]["outcome"], "unknown")
+        self.assertTrue(native.poisoned)
+        positive = atomic.transaction_spec(current, current, audit_tag, tag_object,
+                                           "capability-positive-41792570662-1")
+        for retry in (request, positive):
+            with self.assertRaises(atomic.AtomicGitError):
+                native.exchange(retry)
+        self.assertEqual(calls, ["GET", "POST"])
+
+    def test_a_main_movement_cannot_start_discovery_or_write_an_intent(self) -> None:
+        request = spec(True)
+        request["commands"][0]["new_oid"] = R
+        http = mock.Mock()
+        persist = mock.Mock()
+        native = atomic.NativeGit(runner=mock.Mock(), deadline=lambda: datetime.now(timezone.utc) + timedelta(seconds=10),
+                                  persist=persist, http=http)
+        with self.assertRaises(atomic.AtomicGitError):
+            native.exchange(request)
+        http.assert_not_called()
+        persist.assert_not_called()
+        self.assertEqual(native.transactions, [])
 
     def test_expired_deadline_cannot_start_discovery_or_read_credentials(self) -> None:
         http = mock.Mock()

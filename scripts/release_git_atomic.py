@@ -151,14 +151,23 @@ def transaction_spec(before: str, main: str, tag: str, obj: str, operation: str)
     else:
         require(cap_tag is not None and cap_tag[1] == match[2], "Capability tag and operator differ")
         require((before != main) == (match[1] == "capability-negative"), "Capability main assertion differs")
-    return {"operation_id": operation, "commands": [
-        {"ref": "refs/heads/main", "old_oid": before, "new_oid": main},
+    # Every main command is a no-op at its asserted value. The negative probe
+    # models a stale A -> A assertion while discovery independently binds C;
+    # proposing A -> C would instead exercise protected-branch update rules.
+    result = {"operation_id": operation, "commands": [
+        {"ref": "refs/heads/main", "old_oid": before, "new_oid": before},
         {"ref": f"refs/tags/{tag}", "old_oid": ZERO, "new_oid": obj},
     ]}
+    if match[1] == "capability-negative":
+        result["observed_main_oid"] = main
+    return result
 
 
 def validate_spec(value: object) -> dict:
-    require(isinstance(value, dict) and set(value) == {"operation_id", "commands"}, "Atomic request shape differs")
+    require(isinstance(value, dict) and isinstance(value.get("operation_id"), str), "Atomic request shape differs")
+    negative = value["operation_id"].startswith("capability-negative-")
+    keys = {"operation_id", "commands"} | ({"observed_main_oid"} if negative else set())
+    require(set(value) == keys, "Atomic request shape differs")
     commands = value["commands"]
     require(isinstance(commands, list) and len(commands) == 2
             and all(isinstance(item, dict) and set(item) == {"ref", "old_oid", "new_oid"} for item in commands),
@@ -166,7 +175,9 @@ def validate_spec(value: object) -> dict:
     require(commands[0]["ref"] == "refs/heads/main" and isinstance(commands[1]["ref"], str)
             and commands[1]["ref"].startswith("refs/tags/") and commands[1]["old_oid"] == ZERO,
             "Atomic request must assert main and create an absent tag")
-    expected = transaction_spec(commands[0]["old_oid"], commands[0]["new_oid"],
+    require(commands[0]["old_oid"] == commands[0]["new_oid"], "Atomic request cannot propose a main movement")
+    observed_main = value["observed_main_oid"] if negative else commands[0]["new_oid"]
+    expected = transaction_spec(commands[0]["old_oid"], observed_main,
                                 commands[1]["ref"][10:], commands[1]["new_oid"], value["operation_id"])
     require(value == expected, "Atomic request differs from its canonical identity")
     return expected
@@ -200,9 +211,10 @@ def parse_advertisement(raw: bytes, spec: dict) -> dict:
                 and ref_name(parts[1]) and parts[1] not in refs, "Git ref advertisement is malformed or duplicated")
         refs[parts[1]] = parts[0]
     main, tag = spec["commands"]
-    require(refs.get(main["ref"]) == main["new_oid"], "Advertised main differs from the admitted main")
+    observed_main = spec.get("observed_main_oid", main["new_oid"])
+    require(refs.get(main["ref"]) == observed_main, "Advertised main differs from the admitted main")
     require(tag["ref"] not in refs and tag["ref"] + "^{}" not in refs, "Advertised tag already exists")
-    return {"capabilities": capabilities, "object_format": "sha1", "main_oid": main["new_oid"],
+    return {"capabilities": capabilities, "object_format": "sha1", "main_oid": observed_main,
             "tag_absent": True, "ref_count": len(refs), "body_sha256": digest(raw)}
 
 
@@ -222,8 +234,15 @@ def parse_report(raw: bytes, spec: dict) -> dict:
     require(outer[-1] is None and all(frame is not None for frame in outer[:-1]), "Sideband stream is incomplete")
     status = bytearray()
     diagnostic = bytearray()
+    keepalive_packets = 0
     for frame in outer[:-1]:
         assert frame is not None
+        # GitHub's observed standalone progress keepalive has no diagnostic
+        # text. Do not strip NULs from any other progress or status payload.
+        # The complete packet bytes remain in the HTTP receipt and body hash.
+        if frame == b"\2\0":
+            keepalive_packets += 1
+            continue
         require(len(frame) > 1 and frame[0] in {1, 2}, "Fatal or unsupported sideband channel")
         target = status if frame[0] == 1 else diagnostic
         target.extend(frame[1:])
@@ -246,7 +265,7 @@ def parse_report(raw: bytes, spec: dict) -> dict:
     require(all(value in {9, 10, 13} or 32 <= value <= 126 for value in diagnostic),
             "Git diagnostic is not bounded printable text")
     return {"unpack": "ok", "refs": reports, "diagnostic": diagnostic.decode("ascii"),
-            "body_sha256": digest(raw)}
+            "keepalive_packets": keepalive_packets, "body_sha256": digest(raw)}
 
 
 def admit_report(spec: dict, report: dict) -> str:
@@ -255,7 +274,7 @@ def admit_report(spec: dict, report: dict) -> str:
         require(all(row["status"] == "ng" and row["reason"] == "atomic transaction failed"
                     for row in report["refs"]), "Negative transaction was not wholly refused at the atomic commit")
         main = spec["commands"][0]
-        expected = ("cannot lock ref 'refs/heads/main': is at " + main["new_oid"]
+        expected = ("cannot lock ref 'refs/heads/main': is at " + spec["observed_main_oid"]
                     + " but expected " + main["old_oid"])
         lines = report["diagnostic"].splitlines()
         require(len(lines) == 1 and lines[0] in {expected, "error: " + expected},
@@ -364,8 +383,14 @@ class NativeGit:
         observation["mutation"]["https"] = response_http
         _, raw = validate_http(response_http, method="POST")
         report = parse_report(raw, spec)
+        # Preserve a well-formed refusal (including GitHub rule diagnostics)
+        # before admission. It remains unknown, consumed and poisoned unless
+        # the exact operation-specific evidence is subsequently accepted.
+        observation["mutation"]["report"] = report
+        self.persist()
+        self._remaining()
         decision = admit_report(spec, report)
-        observation["mutation"].update(report=report, outcome=decision)
+        observation["mutation"]["outcome"] = decision
         observation["decision"] = decision
         self.persist()
         self._remaining()

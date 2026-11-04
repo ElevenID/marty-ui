@@ -145,7 +145,7 @@ class AtomicContractTests(unittest.TestCase):
         final = {**inspection, "rulesets": [{"id": 1}]} if changed_rules else inspection
         return github, native, inspection, final
 
-    def test_capability_preserves_stale_before_only_then_noop_and_ancestor_tag_target(self) -> None:
+    def test_capability_preserves_stale_noop_then_current_noop_and_ancestor_tag_target(self) -> None:
         github, native, inspection, final = self.capability_fixture()
         with mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ""]), \
              mock.patch.object(operator, "create_tag_object", return_value={"sha": OBJECT}) as create, \
@@ -154,8 +154,10 @@ class AtomicContractTests(unittest.TestCase):
             result = operator.qualify_capability(github, native, 123, MAIN, inspection)
         requests = [call.args[0] for call in native.exchange.call_args_list]
         self.assertEqual(len(requests), 2)
-        self.assertEqual(requests[0]["commands"][0], {"ref": "refs/heads/main", "old_oid": SOURCE, "new_oid": MAIN})
+        self.assertEqual(requests[0]["commands"][0], {"ref": "refs/heads/main", "old_oid": SOURCE, "new_oid": SOURCE})
+        self.assertEqual(requests[0]["observed_main_oid"], MAIN)
         self.assertEqual(requests[1]["commands"][0], {"ref": "refs/heads/main", "old_oid": MAIN, "new_oid": MAIN})
+        self.assertNotIn("observed_main_oid", requests[1])
         self.assertEqual(create.call_args.args[2], SOURCE)
         self.assertEqual(read.call_args.args[3], SOURCE)
         self.assertEqual(result["schema"], "marty.release-tag-capability/v2")
@@ -184,6 +186,31 @@ class AtomicContractTests(unittest.TestCase):
             operator.qualify_capability(github, native, 123, MAIN, inspection)
         self.assertEqual(native.exchange.call_count, 1)
         read.assert_not_called()
+
+    def test_negative_readback_drift_prevents_positive_dispatch(self) -> None:
+        for changed in ("main", "tag"):
+            with self.subTest(changed=changed):
+                github, native, inspection, _ = self.capability_fixture()
+                github.main.side_effect = [{"commit": {"sha": MAIN}},
+                                           {"commit": {"sha": OBJECT if changed == "main" else MAIN}}]
+                github.json.side_effect = [None, {"object": {"sha": OBJECT}} if changed == "tag" else None]
+                with mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ""]), \
+                     mock.patch.object(operator, "create_tag_object", return_value={"sha": OBJECT}), \
+                     mock.patch.object(operator, "read_exact_tag") as read, \
+                     self.assertRaises(handoff.HandoffError):
+                    operator.qualify_capability(github, native, 123, MAIN, inspection)
+                self.assertEqual(native.exchange.call_count, 1)
+                read.assert_not_called()
+
+    def test_missing_multiple_or_invalid_parents_prevent_any_capability_write(self) -> None:
+        for parents in ("", SOURCE + " " + OBJECT, "not-a-commit"):
+            with self.subTest(parents=parents):
+                github, native, inspection, _ = self.capability_fixture()
+                with mock.patch.object(handoff, "git", return_value=parents), \
+                     mock.patch.object(operator, "create_tag_object") as create, self.assertRaises(handoff.HandoffError):
+                    operator.qualify_capability(github, native, 123, MAIN, inspection)
+                create.assert_not_called()
+                native.exchange.assert_not_called()
 
     def test_changed_workflows_prevent_any_capability_object_or_native_write(self) -> None:
         github, native, inspection, _ = self.capability_fixture()
