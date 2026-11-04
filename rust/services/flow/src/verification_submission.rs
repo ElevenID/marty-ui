@@ -71,6 +71,8 @@ pub enum FlowVerificationSubmissionError {
     Record(#[from] FlowRecordError),
     #[error("FLOW.VERIFICATION_SUBMISSION_INVALID_STATE")]
     InvalidState,
+    #[error(transparent)]
+    Definition(#[from] crate::DefinedVerificationError),
     #[error("FLOW.VERIFICATION_SUBMISSION_INVALID_CONTEXT: {0}")]
     InvalidContext(&'static str),
     #[error("FLOW.VERIFICATION_SUBMISSION_STATE_MISMATCH")]
@@ -185,6 +187,7 @@ pub async fn prepare_verification_submission(
         return Err(FlowVerificationSubmissionError::InvalidState);
     }
     let expected_status = instance.status;
+    crate::defined_verification::validate_defined_submission(providers, &instance).await?;
     let context = instance
         .context
         .as_object()
@@ -409,6 +412,7 @@ pub async fn prepare_verification_submission(
         "warnings": warnings,
         "submission_digest": submission_digest
     }));
+    crate::record_defined_verification_progress(&mut instance, true, now)?;
     record_verification_result_message(&mut instance, &policy_id, options, now)?;
     instance.kernel()?;
     let callback = build_callback(&instance, &policy_id, options, now)?;

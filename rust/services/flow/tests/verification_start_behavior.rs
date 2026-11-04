@@ -468,3 +468,301 @@ async fn configured_identity_and_haip_gates_apply_before_persistence() {
     .to_string()
     .contains("HAIP_DISABLED"));
 }
+
+fn website_definition() -> marty_flow::FlowDefinitionRecord {
+    let mut record = marty_flow::create_definition_record(
+        marty_flow::parse_request(json!({
+            "organization_id": "org-1", "name": "Website verification",
+            "flow_type": "oid4vp_presentation", "presentation_policy_id": "policy-1"
+        }))
+        .unwrap(),
+        now(),
+    )
+    .unwrap();
+    record.status = marty_flow::DefinitionStatus::Active;
+    record
+}
+
+#[tokio::test]
+async fn selected_definition_uses_canonical_wallet_lifecycle_and_pins_its_version() {
+    let definition = website_definition();
+    let binding = marty_flow::VerificationDefinitionBinding {
+        organization_id: "org-1".into(),
+        definition_id: definition.id.clone(),
+        version: definition.version,
+    };
+    let mut prepared = marty_flow::prepare_defined_verification_start(
+        &providers("org-1"),
+        &WebhookDestinationRegistry::default(),
+        &definition,
+        &binding,
+        "did:web:verifier.example",
+        &VerificationStartOptions::default(),
+        VerificationStartContext {
+            public_base_url: "https://verifier.example",
+            allow_http_loopback: false,
+            principal_id: "website-operator",
+            now: now(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(prepared.instance.flow_definition_id, definition.id);
+    assert_eq!(prepared.response.flow_definition_id, definition.id);
+    assert_eq!(
+        prepared.instance.context["_marty_verification_definition"]["binding"]["version"],
+        1
+    );
+    assert!(prepared
+        .response
+        .qr_code_data
+        .starts_with("openid4vp://authorize?"));
+    assert_eq!(
+        prepared.instance.context["presentation_policy_id"],
+        "policy-1"
+    );
+    // Rebuilding the same query assigns a new query ID, but must preserve
+    // the admitted claims/formats. Canonical request retrieval checks the pin.
+    let retrieval = marty_flow::prepare_verification_request(
+        &providers("org-1"),
+        prepared.instance.clone(),
+        "https://verifier.example",
+        &marty_flow::VerificationRequestRetrievalOptions::default(),
+        now(),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        retrieval,
+        marty_flow::PreparedVerificationRequest::Ready(_)
+    ));
+    let mut changed = prepared.instance.clone();
+    changed.context["_marty_verification_request_digest"] = json!("changed-policy-query");
+    assert!(marty_flow::prepare_verification_request(
+        &providers("org-1"),
+        changed,
+        "https://verifier.example",
+        &marty_flow::VerificationRequestRetrievalOptions::default(),
+        now(),
+    )
+    .await
+    .is_err());
+    assert_eq!(prepared.instance.step_history.len(), 2);
+    assert_eq!(prepared.instance.step_history[0]["status"], "completed");
+    let before = prepared.instance.step_history.clone();
+    marty_flow::record_defined_verification_progress(&mut prepared.instance, false, now()).unwrap();
+    let after_request = prepared.instance.step_history.clone();
+    assert_eq!(after_request.len(), 3);
+    assert_eq!(before[0], after_request[0]);
+    marty_flow::record_defined_verification_progress(&mut prepared.instance, false, now()).unwrap();
+    assert_eq!(prepared.instance.step_history, after_request);
+    assert!(
+        marty_flow::record_defined_verification_progress(&mut prepared.instance, true, now())
+            .is_err()
+    );
+    prepared.instance.status = marty_verification::flow::FlowInstanceStatus::Failed;
+    marty_flow::record_defined_verification_progress(&mut prepared.instance, true, now()).unwrap();
+    assert_eq!(prepared.instance.step_history.len(), 4);
+    assert_eq!(prepared.instance.step_history[3]["status"], "failed");
+    assert!(prepared.instance.current_step_id.is_none());
+    assert!(
+        !serde_json::to_string(&prepared.instance.projection().unwrap())
+            .unwrap()
+            .contains("_marty_verification_definition")
+    );
+}
+
+#[tokio::test]
+async fn definition_binding_rejects_changes_or_extra_work_before_signing() {
+    let definition = website_definition();
+    let binding = marty_flow::VerificationDefinitionBinding {
+        organization_id: "org-1".into(),
+        definition_id: definition.id.clone(),
+        version: definition.version,
+    };
+    for variant in 0..8 {
+        let mut candidate = definition.clone();
+        match variant {
+            0 => candidate.organization_id = "foreign".into(),
+            1 => candidate.version += 1,
+            2 => candidate.status = marty_flow::DefinitionStatus::Paused,
+            3 => {
+                candidate
+                    .hooks
+                    .insert("on_start".into(), vec![json!({"action": "approval"})]);
+            }
+            4 => candidate.preconditions.push("approved".into()),
+            5 => candidate.steps[1]["config"]["protocol_step"] = json!("approval"),
+            6 => candidate.default_timeout_seconds = 61,
+            _ => candidate.presentation_policy_id = None,
+        }
+        let result = marty_flow::prepare_defined_verification_start(
+            &FlowProviderRegistry::default(),
+            &WebhookDestinationRegistry::default(),
+            &candidate,
+            &binding,
+            "did:web:verifier.example",
+            &VerificationStartOptions::default(),
+            VerificationStartContext {
+                public_base_url: "https://verifier.example",
+                allow_http_loopback: false,
+                principal_id: "website-operator",
+                now: now(),
+            },
+        )
+        .await;
+        assert!(
+            matches!(
+                result,
+                Err(marty_flow::DefinedVerificationError::DefinitionUnavailable
+                    | marty_flow::DefinedVerificationError::UnsupportedDefinition)
+            ),
+            "variant {variant}: {result:?}"
+        );
+    }
+}
+
+struct WebsiteEvaluation {
+    allow: bool,
+    seen: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl PresentationPolicyProvider for WebsiteEvaluation {
+    async fn get_policy(&self, id: &str) -> Result<PresentationPolicyReference, FlowProviderError> {
+        Policies {
+            organization_id: "org-1",
+        }
+        .get_policy(id)
+        .await
+    }
+    async fn evaluate(
+        &self,
+        request: &PresentationEvaluationRequest,
+    ) -> Result<PresentationEvaluationResult, FlowProviderError> {
+        self.seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(request.organization_id, "org-1");
+        assert_eq!(request.principal_id, "website-operator");
+        assert_eq!(request.policy_id, "policy-1");
+        Ok(PresentationEvaluationResult {
+            authentication_diagnostic: None,
+            result: if self.allow { "passed" } else { "failed" }.into(),
+            decision: if self.allow { "allow" } else { "deny" }.into(),
+            decision_reason: None,
+            verified_claims: [("given_name".into(), json!("Synthetic holder"))].into(),
+            credential_results: vec![
+                json!({"signature_valid": true, "trust_check_passed": self.allow}),
+            ],
+            error_codes: vec![],
+            warnings: vec![],
+        })
+    }
+}
+
+#[tokio::test]
+async fn selected_definition_completes_only_from_the_canonical_evaluator_and_scrubs_denied_claims()
+{
+    for allow in [true, false] {
+        let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut registry = providers("org-1");
+        registry.presentation_policy = Some(Arc::new(WebsiteEvaluation {
+            allow,
+            seen: seen.clone(),
+        }));
+        let definition = website_definition();
+        let binding = marty_flow::VerificationDefinitionBinding {
+            organization_id: "org-1".into(),
+            definition_id: definition.id.clone(),
+            version: definition.version,
+        };
+        let prepared = marty_flow::prepare_defined_verification_start(
+            &registry,
+            &WebhookDestinationRegistry::default(),
+            &definition,
+            &binding,
+            "did:web:verifier.example",
+            &VerificationStartOptions::default(),
+            VerificationStartContext {
+                public_base_url: "https://verifier.example",
+                allow_http_loopback: false,
+                principal_id: "website-operator",
+                now: now(),
+            },
+        )
+        .await
+        .unwrap();
+        let marty_flow::PreparedVerificationRequest::Ready(request) =
+            marty_flow::prepare_verification_request(
+                &registry,
+                prepared.instance,
+                "https://verifier.example",
+                &marty_flow::VerificationRequestRetrievalOptions::default(),
+                now(),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("fresh request expected")
+        };
+        let input = marty_flow::VerificationSubmissionInput {
+            vp_token: "unit-test.presentation.token".into(),
+            presentation_submission: None,
+            state: request
+                .instance
+                .context
+                .get("oid4vp_expected_state")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            audience_override: None,
+        };
+        let options = marty_flow::VerificationSubmissionOptions {
+            callback_destinations: WebhookDestinationRegistry::default(),
+            callback_secret: None,
+            verifier_sender_id: "website-verifier".into(),
+            nonce_ttl_seconds: 900,
+            callback_retention_seconds: 900,
+            callback_max_attempts: 10,
+        };
+        let mut changed = request.instance.clone();
+        changed.context["_marty_verification_request_digest"] = json!("changed");
+        assert!(marty_flow::prepare_verification_submission(
+            &registry,
+            changed,
+            input.clone(),
+            &options,
+            now()
+        )
+        .await
+        .is_err());
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let marty_flow::PreparedVerificationSubmission::Final(finalization) =
+            marty_flow::prepare_verification_submission(
+                &registry,
+                request.instance,
+                input,
+                &options,
+                now(),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("canonical terminal evaluation expected")
+        };
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(finalization.instance.flow_definition_id, definition.id);
+        assert_eq!(finalization.instance.step_history.len(), 4);
+        assert_eq!(
+            finalization.instance.step_history[3]["status"],
+            if allow { "completed" } else { "failed" }
+        );
+        assert_eq!(
+            finalization.instance.result.as_ref().unwrap()["verified_claims"],
+            if allow {
+                json!({"given_name": "Synthetic holder"})
+            } else {
+                json!({})
+            }
+        );
+        assert!(finalization.instance.current_step_id.is_none());
+    }
+}

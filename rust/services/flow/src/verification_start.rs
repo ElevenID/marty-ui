@@ -237,6 +237,15 @@ pub async fn prepare_profiled_verification_start(
         serde_json::to_value(&identity).map_err(|_| FlowVerificationStartError::Serialization)?,
     );
     context.insert("request_uri".into(), json!(request_uri));
+    if let Some(presentation) = presentation.as_ref() {
+        context.insert(
+            crate::defined_verification::REQUEST_DIGEST.into(),
+            json!(
+                crate::defined_verification::verification_request_digest(presentation)
+                    .map_err(|_| FlowVerificationStartError::Serialization)?
+            ),
+        );
+    }
     if is_siop {
         context.insert("response_type".into(), json!("id_token"));
     } else {
