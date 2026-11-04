@@ -40,6 +40,11 @@ services:
   nginx-proxy:
     image: nginx:alpine
     container_name: tunnel-nginx-proxy
+    mem_limit: ${MARTY_NGINX_PROXY_MEMORY_LIMIT:-256m}
+    deploy:
+      resources:
+        limits:
+          memory: ${MARTY_NGINX_PROXY_MEMORY_LIMIT:-256m}
     ports:
       - "9080:80"
     volumes:
@@ -79,6 +84,11 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:2024.12.2
     container_name: cloudflared-tunnel
+    mem_limit: ${MARTY_CLOUDFLARED_MEMORY_LIMIT:-256m}
+    deploy:
+      resources:
+        limits:
+          memory: ${MARTY_CLOUDFLARED_MEMORY_LIMIT:-256m}
     command: tunnel --no-autoupdate run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
@@ -92,6 +102,11 @@ services:
   docs:
     image: ${MARTY_DOCS_IMAGE:?set MARTY_DOCS_IMAGE to an immutable documentation image digest}
     container_name: marty-docs
+    mem_limit: ${MARTY_DOCS_MEMORY_LIMIT:-256m}
+    deploy:
+      resources:
+        limits:
+          memory: ${MARTY_DOCS_MEMORY_LIMIT:-256m}
     networks:
       - marty-network
     restart: unless-stopped

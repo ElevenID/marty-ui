@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 GRAPHS = (
     ("docker-compose.base.yml",),
     ("docker-compose.base.yml", "docker-compose.beta.yml"),
+    ("docker-compose.base.yml", "docker-compose.beta.yml",
+     "docker-compose.profile.tunnel.yml", "docker-compose.profile.passport-native-beta.yml"),
     ("docker-compose.selfhost.prod.yml", "docker-compose.selfhost.bundle.override.yml"),
     ("docker-compose.selfhost.openbao.yml",),
     ("docker-compose.ui-prod.yml",),
@@ -29,7 +31,7 @@ def render(files, tmp_path, overrides=None):
         pytest.skip("Docker Compose is unavailable")
     # Do not inherit local deployment secrets, .env files or memory overrides.
     env = {key: value for key, value in os.environ.items()
-           if key in {"PATH", "HOME", "USERPROFILE", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP"}}
+           if key.upper() in {"PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "TEMP", "TMP", "PROGRAMFILES"}}
     for source in ROOT.glob("docker-compose*.yml"):
         for key in re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", source.read_text()):
             env[key] = "synthetic-required-value"
@@ -64,6 +66,11 @@ def test_defaults_bound_every_service_and_keycloak_heap(files, tmp_path):
         deploy_limit = service.get("deploy", {}).get("resources", {}).get("limits", {}).get("memory")
         if deploy_limit is not None:
             assert int(deploy_limit) == int(service["mem_limit"]), name
+    if "passport-beta-bureau" in services:
+        for name in ("nginx-proxy", "cloudflared", "docs",
+                     "passport-callback-signer", "passport-beta-bureau"):
+            service = services[name]
+            assert int(service["deploy"]["resources"]["limits"]["memory"]) == int(service["mem_limit"])
     if "keycloak" in services:
         keycloak = services["keycloak"]
         assert int(keycloak["mem_limit"]) == 2 * 1024**3
@@ -72,7 +79,7 @@ def test_defaults_bound_every_service_and_keycloak_heap(files, tmp_path):
         )
 
 
-@pytest.mark.parametrize("files", GRAPHS[:3])
+@pytest.mark.parametrize("files", GRAPHS[:4])
 def test_keycloak_tuning_keeps_compose_and_deploy_limits_consistent(files, tmp_path):
     services = render(files, tmp_path, {"MARTY_KEYCLOAK_MEMORY_LIMIT": "3g"})
     keycloak = services["keycloak"]

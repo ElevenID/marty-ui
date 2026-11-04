@@ -58,8 +58,6 @@ class Scenario:
         provenance = {k: v for k, v in self.old["Config"]["Labels"].items() if k in (
             "com.docker.compose.config-hash", "com.docker.compose.project.config_files",
             "com.docker.compose.project.working_dir", "com.docker.compose.version")}
-        provenance["com.docker.compose.config-hash"] = "new-hash"
-        self.provenance = provenance
         cases = [{"signal": "SIGTERM", "init": False}, {"signal": "SIGINT", "init": True}]
         proof_input = self.save("signal-input.json", dict(scope="LOCAL_SOURCE_CONTROLS_ONLY", image=m.IMAGE,
             server=self.core.ref(server), cases=cases, executeAuthorized=True, sourceSha256="a" * 64))
@@ -82,7 +80,7 @@ class Scenario:
             newModels={m.ROLE: self.save("new-model.json", new_model)},
             oldFixture=self.core.ref(self.old_fixture), newFixture=self.core.ref(self.new_fixture),
             oldPublicManifest=self.core.ref(self.old_fixture), publicManifest=self.core.ref(self.new_fixture),
-            provenance={"apply": provenance, "rollback": provenance}, retainedContainers=snapshots,
+            provenance={}, retainedContainers=snapshots,
             codeOverlay=dict(sourceRevision=m.CODE_SOURCE, server=self.core.ref(server),
                 signalProof=dict(input=proof_input, intent=proof_intent, result=proof_result,
                     terminals=[self.save("terminal-"+char+".json", dict(Id=char*64, Image=m.IMAGE,
@@ -92,6 +90,12 @@ class Scenario:
                 restartAutomatically=False, forcedStatelessNodeContainer=self.old["Id"])),
                 after=self.save("stop-after.json", {self.old["Id"]: self.old})),
             functionalStartupAuthorized=startup, preflightAuthorized=True, executeAuthorized=True, rollbackAuthorized=True)
+        for mode, models in (("apply", "newModels"), ("rollback", "oldModels")):
+            model_path = self.core.read_ref(self.config[models][m.ROLE])
+            self.config["provenance"][mode] = {**provenance,
+                "com.docker.compose.config-hash": "new-hash" if mode == "apply" else "old-hash",
+                "com.docker.compose.project.config_files": str(model_path),
+                "com.docker.compose.project.working_dir": str(model_path.parent)}
         self.g = types.SimpleNamespace(engine=lambda: None, inspect=self.inspect, old_guard=self.old_guard,
             observe=self.observe, observe_lines=self.lines, command=self.command, compose=self.compose,
             IMAGE_IDS={}, IMAGE_CONFIG={}, NETWORK_IDS={})
@@ -138,7 +142,8 @@ class Scenario:
             if self.rows[cid]["Config"]["Labels"]["com.docker.compose.service"] == m.ROLE:
                 replaced_cid = cid; del self.rows[cid]
         self.counter += 1; row = copy.deepcopy(self.old); row["Id"] = ("f" if self.counter == 1 else "e") * 64
-        row["Config"]["Hostname"] = row["Id"][:12]; row["Config"]["Labels"].update(self.provenance)
+        row["Config"]["Hostname"] = row["Id"][:12]; row["Config"]["Labels"].update(self.config["provenance"][
+            "apply" if Path(model_path) == self.core.read_ref(self.config["newModels"][m.ROLE]) else "rollback"])
         row["Config"]["Labels"]["com.docker.compose.replace"] = replaced_cid
         source = reps.daemon_source(model["secrets"]["northstar_run"]["file"])
         row["Mounts"][0]["Source"] = source; row["HostConfig"]["Mounts"][0]["Source"] = source
@@ -183,6 +188,18 @@ class Scenario:
 
 
 class Controls(unittest.TestCase):
+    def test_stale_apply_or_rollback_model_provenance_refuses_before_any_effect(self):
+        for mode in ("apply", "rollback"):
+            for field in ("com.docker.compose.project.config_files", "com.docker.compose.project.working_dir"):
+                with self.subTest(mode=mode, field=field), tempfile.TemporaryDirectory() as root:
+                    scenario = self.scenario(root)
+                    before = copy.deepcopy(scenario.rows)
+                    scenario.config["provenance"][mode][field] = str(Path(root) / "historical-model.json")
+                    with self.assertRaisesRegex(ValueError, "COMPOSE_MODEL_PROVENANCE_CHANGED"):
+                        scenario.new_operation("stale-provenance-output")
+                    self.assertEqual(scenario.calls, [])
+                    self.assertEqual(scenario.rows, before)
+
     def scenario(self, root, **kwargs): return Scenario(Path(root), **kwargs)
     def recovered_successor(self, root):
         scenario = self.scenario(root, startup=True)

@@ -232,6 +232,16 @@ def execution_type(core):
             require(len(identities) == 22 and ROLE not in identities, "PRODUCT22_REQUIRED")
             require(callable(representations.host_mounts) and callable(representations.daemon_source)
                     and callable(observe_external), "REVIEWED_VERIFIERS_REQUIRED")
+            # Compose receives exactly this bound file, with its parent as the
+            # default project working directory. Refuse stale declared labels
+            # before the shared operation can create or replace a container.
+            for mode, models in (("apply", "newModels"), ("rollback", "oldModels")):
+                model_path = core.read_ref(config[models][ROLE])
+                require(model_path.is_absolute(), "ABSOLUTE_COMPOSE_MODEL_REQUIRED")
+                expected = {"com.docker.compose.project.config_files": str(model_path),
+                            "com.docker.compose.project.working_dir": str(model_path.parent)}
+                require(all(config["provenance"][mode].get(key) == value
+                            for key, value in expected.items()), "COMPOSE_MODEL_PROVENANCE_CHANGED")
             self.c, self.output, self.g = config, Path(output), transport
             self.models = {ROLE: core.load(config["oldModels"][ROLE])}
             self.changed = {ROLE: core.load(config["newModels"][ROLE])}
