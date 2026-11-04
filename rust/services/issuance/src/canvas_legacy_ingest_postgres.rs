@@ -6,6 +6,8 @@ use serde_json::{json, Map, Value};
 use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
 use tracing::error;
 
+use crate::legacy_json_compat::untrimmed_json_text as text;
+
 use crate::{
     canvas_award_candidate_approval::{
         project_approval_binding, CanvasApplicationApprovalSnapshot,
@@ -1044,14 +1046,6 @@ fn timestamp(value: Option<&Value>) -> Result<DateTime<Utc>, CanvasLegacyIngestE
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&Utc))
         .ok_or(CanvasLegacyIngestError::RepositoryUnavailable)
-}
-
-fn text(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(value)) => value.clone(),
-        Some(Value::Null) | None => String::new(),
-        Some(value) => value.to_string().trim_matches('"').to_owned(),
-    }
 }
 
 fn repository_error(error: sqlx::Error) -> CanvasLegacyRepositoryError {

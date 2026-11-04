@@ -123,22 +123,7 @@ fn open_child(parent: &File, name: &str, flags: i32) -> Result<File> {
 }
 
 fn validate_retained_entries(held: &File, expected_host_uid: HelperOutputOwner) -> Result<()> {
-    for (name, is_dir, mode) in [
-        ("output", true, 0o700),
-        ("transfer-pending.json", false, 0o600),
-    ] {
-        let m = open_child(held, name, libc::O_PATH)?
-            .metadata()
-            .map_err(|_| REFUSAL)?;
-        require(
-            !m.file_type().is_symlink()
-                && m.is_dir() == is_dir
-                && (is_dir || (m.is_file() && m.nlink() == 1))
-                && m.uid() == expected_host_uid.uid()
-                && m.mode() & 0o7777 == mode,
-        )?;
-    }
-    Ok(())
+    installer_helper_output::validate_retained_entries(held, expected_host_uid, REFUSAL)
 }
 
 fn validate_delivery(
@@ -981,8 +966,9 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
-            assert!(
-                validate_retained_entries(&held, owner).is_err(),
+            assert_eq!(
+                validate_retained_entries(&held, owner).unwrap_err(),
+                REFUSAL,
                 "accepted {mutation}"
             );
         }

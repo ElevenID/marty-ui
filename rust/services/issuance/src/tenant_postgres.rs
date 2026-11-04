@@ -9,6 +9,8 @@ use serde_json::Value;
 use sqlx::{postgres::PgRow, PgPool, Row};
 use tracing::error;
 
+use crate::legacy_json_compat::json_truthy as python_truthy;
+
 use crate::tenant_discovery::{TenantDiscoveryError, TenantDiscoveryRepository};
 
 #[derive(Clone)]
@@ -206,17 +208,6 @@ fn truthy_string(value: Option<&Value>) -> Option<String> {
         Value::Bool(value) => Some(if *value { "True" } else { "False" }.to_owned()),
         Value::Number(value) => Some(value.to_string()),
         _ => None,
-    }
-}
-
-fn python_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
     }
 }
 
