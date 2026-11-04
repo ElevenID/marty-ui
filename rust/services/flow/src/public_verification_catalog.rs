@@ -20,7 +20,7 @@ const MAXIMUM_SCENARIOS: usize = 8;
 const MAXIMUM_CHOICES: usize = 8;
 
 /// Operator configuration. Never serialize this as the public catalog response.
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicVerificationCatalogConfig {
     pub organization_id: String,
@@ -29,7 +29,7 @@ pub struct PublicVerificationCatalogConfig {
     pub scenarios: Vec<PublicVerificationScenarioConfig>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicVerificationScenarioConfig {
     pub id: String,
@@ -37,7 +37,7 @@ pub struct PublicVerificationScenarioConfig {
     pub choices: Vec<PublicVerificationChoiceConfig>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicVerificationChoiceConfig {
     pub id: String,
@@ -47,8 +47,33 @@ pub struct PublicVerificationChoiceConfig {
     pub policy_configuration_digest: String,
 }
 
+/// Server-owned execution settings and request-local visitor admission. The
+/// HTTP adapter must construct this from trusted configuration, not principal
+/// headers supplied by the visitor.
+pub struct PublicVerificationStartInvocation<'a> {
+    pub selection: &'a PublicVerificationSelection,
+    pub browser_origin: &'a str,
+    pub issuer_did: &'a str,
+    pub context: crate::VerificationStartContext<'a>,
+    pub session_key: &'a crate::PublicVerificationSessionKey,
+}
+
+#[derive(Debug, Error)]
+pub enum PublicVerificationStartError {
+    #[error(transparent)]
+    Catalog(#[from] PublicVerificationCatalogError),
+    #[error(transparent)]
+    Definition(#[from] crate::DefinedVerificationError),
+    #[error(transparent)]
+    Provider(#[from] crate::FlowProviderError),
+    #[error(transparent)]
+    Session(#[from] crate::PublicVerificationSessionError),
+    #[error("FLOW.PUBLIC_VERIFICATION_OPERATOR_INVALID")]
+    InvalidOperator,
+}
+
 /// Validated configuration is immutable; edits require a new catalog revision.
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct PublicVerificationCatalog {
     config: PublicVerificationCatalogConfig,
     revision: String,
@@ -102,6 +127,87 @@ pub struct PublicVerificationChoiceView<'a> {
 }
 
 impl PublicVerificationCatalog {
+    pub(crate) fn organization_id(&self) -> &str {
+        &self.config.organization_id
+    }
+
+    pub(crate) fn origin(&self) -> &str {
+        &self.config.application_origin
+    }
+
+    /// Canonical launch preparation after consent. Persistence/idempotent
+    /// reconciliation and quotas belong to the HTTP/repository adapter.
+    pub async fn prepare_selection(
+        &self,
+        providers: &crate::FlowProviderRegistry,
+        callbacks: &mmf_push::WebhookDestinationRegistry,
+        definition: &FlowDefinitionRecord,
+        options: &crate::VerificationStartOptions,
+        invocation: PublicVerificationStartInvocation<'_>,
+    ) -> Result<crate::PreparedVerificationStart, PublicVerificationStartError> {
+        self.require_origin(Some(invocation.browser_origin))?;
+        let choice = self.select(invocation.selection)?;
+        // A request-local gateway API actor must never turn an anonymous
+        // capability into organization management authority.
+        if providers.gateway_api_key_actor.is_some()
+            || invocation.context.principal_id.trim().is_empty()
+        {
+            return Err(PublicVerificationStartError::InvalidOperator);
+        }
+        choice.definition.validate(definition)?;
+        if definition.presentation_policy_id.as_deref()
+            != Some(choice.presentation_policy_id.as_str())
+        {
+            return Err(PublicVerificationCatalogError::ConfigurationChanged.into());
+        }
+        providers
+            .authorize(
+                invocation.context.principal_id,
+                &self.config.organization_id,
+                "flow-instance:start",
+                false,
+            )
+            .await?;
+        crate::validate_definition_references(
+            providers,
+            invocation.context.principal_id,
+            &self.config.organization_id,
+            &crate::definition_references(definition),
+            true,
+        )
+        .await?;
+        // PostgreSQL persists timestamps at microsecond precision. Normalize
+        // before constructing both the canonical instance and private access
+        // deadline so a reloaded retry has exactly the same lifetime.
+        let mut context = invocation.context;
+        context.now = chrono::DateTime::from_timestamp_micros(context.now.timestamp_micros())
+            .ok_or(crate::DefinedVerificationError::Start(
+                crate::FlowVerificationStartError::InvalidClock,
+            ))?;
+        let mut prepared =
+            crate::defined_verification::prepare_admitted_defined_verification_start(
+                providers,
+                callbacks,
+                definition,
+                &choice.definition,
+                invocation.issuer_did,
+                options,
+                context,
+                invocation.session_key.instance_id(
+                    &self.config.organization_id,
+                    &self.config.application_origin,
+                ),
+                Some(&choice.policy_configuration_digest),
+            )
+            .await?;
+        invocation.session_key.bind(
+            &mut prepared.instance,
+            &self.config.application_origin,
+            invocation.selection,
+        )?;
+        Ok(prepared)
+    }
+
     pub fn from_json(
         contents: &str,
         allow_http_loopback: bool,

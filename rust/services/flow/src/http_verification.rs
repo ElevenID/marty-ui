@@ -32,6 +32,7 @@ const NONCE_TTL_SECONDS: u64 = 900;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FlowHttpVerificationOptions {
+    pub public_verification: Option<crate::PublicVerificationOptions>,
     pub callback_destinations: WebhookDestinationRegistry,
     pub callback_secret: Option<String>,
     pub request_object: RequestObjectOptions,
@@ -47,6 +48,7 @@ pub struct FlowHttpVerificationOptions {
 impl Default for FlowHttpVerificationOptions {
     fn default() -> Self {
         Self {
+            public_verification: None,
             callback_destinations: WebhookDestinationRegistry::default(),
             callback_secret: None,
             request_object: RequestObjectOptions::default(),
@@ -65,6 +67,7 @@ impl FlowHttpVerificationOptions {
     #[must_use]
     pub fn from_config(config: &crate::FlowServiceConfig) -> Self {
         Self {
+            public_verification: config.public_verification.clone(),
             callback_destinations: config.callback_destinations.clone(),
             callback_secret: config.webhook_secret.clone(),
             request_object: config.request_object_options(),

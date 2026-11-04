@@ -13,8 +13,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-    prepare_profiled_verification_start, ApprovalStrategy, DefinitionStatus, FlowDefinitionRecord,
-    FlowInstanceRecord, FlowProviderRegistry, FlowType, FlowVerificationStartError, Oid4vpProfile,
+    ApprovalStrategy, DefinitionStatus, FlowDefinitionRecord, FlowInstanceRecord,
+    FlowProviderRegistry, FlowType, FlowVerificationStartError, Oid4vpProfile,
     PreparedVerificationStart, RequestTransport, RequestUriMethod, StartVerificationFlowRequest,
     VerificationResponseType, VerificationStartContext, VerificationStartOptions,
 };
@@ -232,6 +232,32 @@ pub async fn prepare_defined_verification_start(
     options: &VerificationStartOptions,
     context: VerificationStartContext<'_>,
 ) -> Result<PreparedVerificationStart, DefinedVerificationError> {
+    prepare_admitted_defined_verification_start(
+        providers,
+        callbacks,
+        definition,
+        binding,
+        issuer_did,
+        options,
+        context,
+        uuid::Uuid::new_v4(),
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn prepare_admitted_defined_verification_start(
+    providers: &FlowProviderRegistry,
+    callbacks: &WebhookDestinationRegistry,
+    definition: &FlowDefinitionRecord,
+    binding: &VerificationDefinitionBinding,
+    issuer_did: &str,
+    options: &VerificationStartOptions,
+    context: VerificationStartContext<'_>,
+    instance_id: uuid::Uuid,
+    expected_policy_digest: Option<&str>,
+) -> Result<PreparedVerificationStart, DefinedVerificationError> {
     binding.validate(definition)?;
     let policy_configuration_digest = providers
         .presentation_policy
@@ -248,7 +274,10 @@ pub async fn prepare_defined_verification_start(
     if !valid_policy_digest(&policy_configuration_digest) {
         return Err(DefinedVerificationError::InvalidSnapshot);
     }
-    let mut prepared = prepare_profiled_verification_start(
+    if expected_policy_digest.is_some_and(|expected| expected != policy_configuration_digest) {
+        return Err(DefinedVerificationError::ConfigurationChanged);
+    }
+    let mut prepared = crate::verification_start::prepare_profiled_verification_start_with_id(
         providers,
         callbacks,
         StartVerificationFlowRequest {
@@ -268,6 +297,7 @@ pub async fn prepare_defined_verification_start(
         },
         options,
         context,
+        instance_id,
     )
     .await?;
     prepared

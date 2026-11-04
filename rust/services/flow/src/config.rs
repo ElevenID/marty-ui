@@ -32,6 +32,7 @@ impl Environment {
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct FlowServiceConfig {
+    pub public_verification: Option<crate::PublicVerificationOptions>,
     pub environment: Environment,
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
@@ -250,6 +251,21 @@ impl FlowServiceConfig {
     ) -> Result<Self, FlowConfigError> {
         let values = values.into_iter().collect::<BTreeMap<_, _>>();
         let environment = parse_environment(value(&values, "ENVIRONMENT").unwrap_or("production"))?;
+        let public_verification = value(&values, "FLOW_PUBLIC_VERIFICATION_CONFIG_FILE")
+            .map(|path| {
+                let name = "FLOW_PUBLIC_VERIFICATION_CONFIG_FILE";
+                let size = fs::metadata(path)
+                    .map_err(|_| FlowConfigError::File { name })?
+                    .len();
+                if size > 65_536 {
+                    return Err(invalid(name));
+                }
+                let contents =
+                    fs::read_to_string(path).map_err(|_| FlowConfigError::File { name })?;
+                crate::PublicVerificationOptions::from_json(&contents, !environment.is_deployed())
+                    .map_err(|_| invalid(name))
+            })
+            .transpose()?;
         let http_addr = listener_address(
             &values,
             "FLOW_HTTP_ADDR",
@@ -567,6 +583,7 @@ impl FlowServiceConfig {
         }
 
         Ok(Self {
+            public_verification,
             environment,
             http_addr,
             grpc_addr,
