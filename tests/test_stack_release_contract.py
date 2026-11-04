@@ -1300,9 +1300,13 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
     assert "+refs/heads/main:refs/remotes/origin/main" in workflow
     assert "Wait for the exact operator tag handoff" in workflow
     helper = (_text("scripts/push_promoted_release_tag.py")
-              + _text("scripts/release_tag_handoff.py"))
-    assert "updateRefs" in helper
-    assert "beforeOid" in helper and "afterOid" in helper
+              + _text("scripts/release_tag_handoff.py")
+              + _text("scripts/release_git_atomic.py"))
+    assert '"atomic", "report-status", "side-band-64k"' in helper
+    assert '"old_oid"' in helper and '"new_oid"' in helper
+    assert "marty.native-git-atomic-transaction/v1" in helper
+    assert "marty.release-tag-operator-observations/v2" in helper
+    assert "updateRefs" not in helper
     assert '"--atomic"' not in helper
     assert "git push" not in workflow
     assert workflow.index("stack-release-qualified-") < workflow.index(

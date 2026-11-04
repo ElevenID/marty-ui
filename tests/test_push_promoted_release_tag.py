@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import copy
+import io
+import json
 import sys
 import tempfile
 import unittest
@@ -113,57 +115,135 @@ class OperatorStateTests(unittest.TestCase):
 
 
 class AtomicContractTests(unittest.TestCase):
-    def test_atomic_mutation_asserts_main_and_absent_tag_without_force(self) -> None:
-        request = operator.atomic_request(MAIN, MAIN, "v1.2.3", OBJECT, "synthetic")
-        self.assertIn("updateRefs", request["query"])
-        refs = request["variables"]["input"]["refUpdates"]
-        self.assertEqual(refs, [
-            {"name": "refs/heads/main", "beforeOid": MAIN, "afterOid": MAIN, "force": False},
-            {"name": "refs/tags/v1.2.3", "beforeOid": "0" * 40, "afterOid": OBJECT, "force": False},
-        ])
+    def setUp(self) -> None:
+        patch = mock.patch.dict(operator.os.environ, {}, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
 
-    def test_capability_negative_differs_only_in_stale_precondition(self) -> None:
-        negative = operator.atomic_request(SOURCE, MAIN, "v-release-capability-123-1", OBJECT, "same")
-        positive = operator.atomic_request(MAIN, MAIN, "v-release-capability-123-1", OBJECT, "same")
-        negative["variables"]["input"]["refUpdates"][0]["beforeOid"] = MAIN
-        self.assertEqual(negative, positive)
+    @staticmethod
+    def native_receipt(request: dict) -> dict:
+        negative = request["operation_id"].startswith("capability-negative-")
+        outcome = "confirmed_stale_main_refusal" if negative else "confirmed_success"
+        return {"transport": operator.atomic.TRANSPORT, "request": request,
+                "not_after": "2026-01-01T00:10:00Z",
+                "discovery": {"admitted": {"main_oid": MAIN, "tag_absent": True,
+                                           "body_sha256": "sha256:" + "d" * 64}},
+                "mutation": {"method": "POST", "path": operator.atomic.RECEIVE_PATH,
+                             "requested_at": "2026-01-01T00:00:00Z", "body_sha256": "sha256:" + "e" * 64,
+                             "body_bytes": 400, "outcome": outcome,
+                             "report": {"unpack": "ok", "refs": [], "diagnostic": "synthetic caller fixture"}},
+                "decision": outcome}
 
-    def test_arbitrary_refs_and_unqualified_names_refuse(self) -> None:
-        for name in ("main", "v1.2.3/other", "v1.2.3;echo x", "v-release-capability-123-2", "nightly"):
-            with self.subTest(name=name), self.assertRaises(handoff.HandoffError):
-                operator.atomic_request(MAIN, MAIN, name, OBJECT, "test")
+    def capability_fixture(self, changed_rules: bool = False):
+        github = mock.Mock()
+        github.deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+        github.main.return_value = {"commit": {"sha": MAIN}}
+        github.json.return_value = None
+        native = mock.Mock()
+        native.exchange.side_effect = self.native_receipt
+        inspection = {"rulesets_sha256": "sha256:" + "f" * 64, "rulesets": []}
+        final = {**inspection, "rulesets": [{"id": 1}]} if changed_rules else inspection
+        return github, native, inspection, final
 
-    def test_only_attributable_stale_main_error_is_capability_evidence(self) -> None:
-        accepted = {"data": {"updateRefs": None}, "errors": [{
-            "message": "Reference refs/heads/main before OID does not match the expected value"}]}
-        self.assertTrue(operator.stale_main_rejection(200, accepted, SOURCE, MAIN))
-        for message in ("Resource not accessible by integration", "Non-fast-forward update refused",
-                        "Could not resolve node", "main requires merge queue", "Network timeout"):
-            with self.subTest(message=message):
-                value = {"data": {"updateRefs": None}, "errors": [{"message": message}]}
-                self.assertFalse(operator.stale_main_rejection(200, value, SOURCE, MAIN))
-        self.assertFalse(operator.stale_main_rejection(403, accepted, SOURCE, MAIN))
+    def test_capability_preserves_stale_before_only_then_noop_and_ancestor_tag_target(self) -> None:
+        github, native, inspection, final = self.capability_fixture()
+        with mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ""]), \
+             mock.patch.object(operator, "create_tag_object", return_value={"sha": OBJECT}) as create, \
+             mock.patch.object(operator, "read_exact_tag") as read, \
+             mock.patch.object(operator, "inspect_repository", return_value=(123, MAIN, final)):
+            result = operator.qualify_capability(github, native, 123, MAIN, inspection)
+        requests = [call.args[0] for call in native.exchange.call_args_list]
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[0]["commands"][0], {"ref": "refs/heads/main", "old_oid": SOURCE, "new_oid": MAIN})
+        self.assertEqual(requests[1]["commands"][0], {"ref": "refs/heads/main", "old_oid": MAIN, "new_oid": MAIN})
+        self.assertEqual(create.call_args.args[2], SOURCE)
+        self.assertEqual(read.call_args.args[3], SOURCE)
+        self.assertEqual(result["schema"], "marty.release-tag-capability/v2")
+        self.assertEqual(result["transport"], operator.atomic.TRANSPORT)
+        self.assertIn("negative_transaction", result)
+        self.assertNotIn("negative_response", result)
+        self.assertNotIn("graphql", str(native.mock_calls))
 
-    def test_graphql_null_partial_and_unknown_results_refuse_safely(self) -> None:
-        for value in ({}, {"data": None}, {"data": {"updateRefs": None}},
-                      {"data": {"updateRefs": {"clientMutationId": "foreign"}}},
-                      {"data": {"updateRefs": {"clientMutationId": "expected"}}, "errors": [{"message": "failed"}]}):
-            with self.subTest(value=value), self.assertRaises(handoff.HandoffError):
-                operator.require_graph_success(200, value, "expected")
-        operator.require_graph_success(200, {"data": {"updateRefs": {"clientMutationId": "expected"}}}, "expected")
+    def test_capability_final_rule_drift_is_not_accepted(self) -> None:
+        github, native, inspection, final = self.capability_fixture(changed_rules=True)
+        with mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ""]), \
+             mock.patch.object(operator, "create_tag_object", return_value={"sha": OBJECT}), \
+             mock.patch.object(operator, "read_exact_tag"), \
+             mock.patch.object(operator, "inspect_repository", return_value=(123, MAIN, final)), \
+             self.assertRaises(handoff.HandoffError):
+            operator.qualify_capability(github, native, 123, MAIN, inspection)
+        self.assertEqual(native.exchange.call_count, 2)
 
-    def test_noop_cas_model_has_no_partial_change_on_stale_before(self) -> None:
-        # A synthetic server model checks the documented all-or-nothing request
-        # contract. Only the prospective native capability run proves GitHub.
-        current = {"refs/heads/main": MAIN}
-        request = operator.atomic_request(SOURCE, MAIN, "v-release-capability-123-1", OBJECT, "test")
-        updates = request["variables"]["input"]["refUpdates"]
-        before = copy.deepcopy(current)
-        admitted = all(current.get(item["name"], operator.ZERO) == item["beforeOid"] for item in updates)
-        if admitted:
-            current.update({item["name"]: item["afterOid"] for item in updates})
-        self.assertFalse(admitted)
-        self.assertEqual(current, before)
+    def test_unattributed_negative_prevents_positive_dispatch(self) -> None:
+        github, native, inspection, _ = self.capability_fixture()
+        native.exchange.side_effect = operator.atomic.AtomicGitError("synthetic generic refusal")
+        with mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ""]), \
+             mock.patch.object(operator, "create_tag_object", return_value={"sha": OBJECT}), \
+             mock.patch.object(operator, "read_exact_tag") as read, \
+             self.assertRaises(operator.atomic.AtomicGitError):
+            operator.qualify_capability(github, native, 123, MAIN, inspection)
+        self.assertEqual(native.exchange.call_count, 1)
+        read.assert_not_called()
+
+    def test_changed_workflows_prevent_any_capability_object_or_native_write(self) -> None:
+        github, native, inspection, _ = self.capability_fixture()
+        with mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ".github/workflows/changed.yml"]), \
+             mock.patch.object(operator, "create_tag_object") as create, self.assertRaises(handoff.HandoffError):
+            operator.qualify_capability(github, native, 123, MAIN, inspection)
+        create.assert_not_called()
+        native.exchange.assert_not_called()
+
+    def test_rest_intent_persistence_failure_prevents_subprocess_dispatch(self) -> None:
+        github = handoff.GitHub(observer=mock.Mock(side_effect=OSError("synthetic audit outage")))
+        with mock.patch.object(handoff, "command") as command, self.assertRaises(OSError):
+            github.response("repos/ElevenID/marty-ui/git/tags", method="POST", payload={"synthetic": True})
+        command.assert_not_called()
+        self.assertEqual(len(github.mutations), 1)
+        self.assertEqual(github.mutations[0]["outcome"], "unknown")
+
+    def test_rest_transport_timeout_retains_consumed_intent_without_retry(self) -> None:
+        persisted = []
+        github = handoff.GitHub(observer=lambda: persisted.append(copy.deepcopy(github.mutations)))
+        with mock.patch.object(handoff, "command", side_effect=TimeoutError("synthetic")) as command, \
+             self.assertRaises(TimeoutError):
+            github.response("repos/ElevenID/marty-ui/git/tags", method="POST", payload={"synthetic": True})
+        self.assertEqual(command.call_count, 1)
+        self.assertEqual(persisted[0][0]["outcome"], "unknown")
+
+    def test_inspect_entry_writes_distinct_v2_observation_without_any_git_transport(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "tag-handoff-result.json"
+            args = ["operator", "--mode", "inspect", "--output", str(output)]
+            with mock.patch.object(operator.sys, "argv", args), \
+                 mock.patch.object(operator, "inspect_repository", return_value=(123, MAIN, {"rulesets": []})), \
+                 mock.patch.object(operator.atomic.NativeGit, "exchange") as exchange:
+                self.assertEqual(operator.main(), 0)
+            exchange.assert_not_called()
+            self.assertEqual(json.loads(output.read_bytes())["status"], "inspected")
+            audit = json.loads(output.with_name("operator-api-receipt.json").read_bytes())
+            self.assertEqual(audit["schema"], "marty.release-tag-operator-observations/v2")
+            self.assertEqual(audit["rest_api_mutations"], [])
+            self.assertEqual(audit["git_transactions"], [])
+
+    def test_unknown_entry_outcome_preserves_intent_and_only_fixed_error_output(self) -> None:
+        def lose_result(github, *args):
+            github.mutations.append({"outcome": "unknown", "request": {"synthetic": True}})
+            github.observer()
+            raise TimeoutError("synthetic private transport detail")
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "tag-handoff-result.json"
+            args = ["operator", "--mode", "qualify-capability", "--output", str(output)]
+            stdout = io.StringIO()
+            with mock.patch.object(operator.sys, "argv", args), mock.patch.object(operator.sys, "stdout", stdout), \
+                 mock.patch.object(operator, "inspect_repository", return_value=(123, MAIN, {"rulesets": []})), \
+                 mock.patch.object(operator, "qualify_capability", side_effect=lose_result) as qualify:
+                self.assertEqual(operator.main(), 1)
+            self.assertEqual(qualify.call_count, 1)
+            self.assertNotIn("private transport detail", stdout.getvalue())
+            self.assertEqual(json.loads(output.read_bytes())["status"], "refused")
+            audit = json.loads(output.with_name("operator-api-receipt.json").read_bytes())
+            self.assertEqual(audit["rest_api_mutations"][0]["outcome"], "unknown")
+            self.assertIs(audit["automatic_retry_or_cleanup_performed"], False)
 
 
 class CryptoDelegationTests(unittest.TestCase):

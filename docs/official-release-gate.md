@@ -174,14 +174,31 @@ authority. It uses its own scoped ephemeral job token for GitHub metadata and
 ref operations; it does not build, sign, publish a release or handle private
 review images.
 
-The tag object targets the original candidate source. One GraphQL `updateRefs`
-transaction requires protected main to remain at the accepted review commit and
-the tag ref to remain absent. The main update is explicitly a no-op. Ordinary
-Git push cannot supply this compare: Git omits an unchanged-main command from
-the receive transaction, even when requested with a matching lease. Never use
-an unconditional tag creation or a force/tag-rule bypass as a fallback.
-GitHub documents the transaction and its `beforeOid` preconditions in the
-[Git GraphQL reference](https://docs.github.com/en/graphql/reference/git#updaterefs).
+The tag object targets the original candidate source. One native Git
+`receive-pack` transaction explicitly sends both the expected-current-to-same
+main command and the absent-to-annotated-object tag command. Discovery must
+advertise `atomic`, `report-status`, `side-band-64k` and the exact admitted main;
+the target tag must be absent. The request includes Git's required empty pack
+because REST has already created and verified the annotated object. Ordinary
+Git push cannot supply this compare: its sender omits an unchanged-main command,
+even when requested with a matching lease. The earlier GraphQL `updateRefs`
+route rejected the annotated object type and is not a fallback. Never use an
+unconditional tag creation, lightweight intermediate tag or protection bypass.
+The wire and atomic contracts are documented in
+[Git's pack protocol](https://git-scm.com/docs/gitprotocol-pack.html) and
+[protocol capabilities](https://git-scm.com/docs/gitprotocol-capabilities).
+
+The transport uses the same workflow token and permissions over canonical
+GitHub HTTPS. A short-lived isolated worker receives the credential through
+bounded private stdin; the parent enforces the remaining absolute deadline.
+It does not follow redirects or retry an unknown write. Each consumed intent
+is preserved in an exclusive private audit file before dispatch. The
+`marty.release-tag-operator-observations/v2` record keeps REST mutations and
+native Git transactions distinct, retaining the bounded packet bytes, safe
+HTTP metadata, command hashes, status reports and diagnostics. Its artifact
+member retains the existing `operator-api-receipt.json` name. The generic
+successful handoff result keeps its closed v1 candidate bindings; it is emitted
+only after the native transaction and unchanged-main/rules/tag readbacks pass.
 
 The publisher waits for both the exact annotated tag and the actual successful
 operator workflow, authenticating its bound result artifact. Matching tag text
@@ -203,11 +220,19 @@ Before consuming another claim, qualify this exact operator workflow and token
 against the real repository protections. Its capability mode uses a unique,
 non-semver `v-release-capability-<operator-run-id>-1` audit tag and a genuine
 ancestor with identical workflow files. The stale-main negative transaction
-must be rejected specifically for its before-OID precondition while both refs
-remain unchanged. The paired current-main transaction must create the exact
-annotated audit tag without moving main. Permission, transport or generic errors
-are not successful capability proof. Keep the immutable audit receipt and tag;
-do not weaken protections or obtain a broader credential to force success.
+keeps the requested new main equal to current main, uses the ancestor only as
+the expected old value, and must return two refused refs plus the exact
+main/current/expected diagnostic through sideband. Both refs must remain
+unchanged on independent readback. A generic atomic-failure status is
+insufficient. The paired current-main transaction must report both refs
+successful and create the exact annotated audit tag without moving main.
+The v2 capability result summarizes those native observations; all raw bounded
+wire evidence remains in the observations artifact. Recheck the same rules
+afterward. Local bare-Git tests establish protocol behavior, and do not replace
+this actual GitHub qualification under the existing protections. Permission,
+type, transport or generic errors are not successful capability proof. Keep
+the immutable audit receipt and tag; do not weaken protections or obtain a
+broader credential to force success.
 
 Arrange access to the existing private review identity and enough time for normal
 review/merge before claiming a version. The 60-minute review and 15-minute tag
