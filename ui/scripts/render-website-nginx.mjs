@@ -11,6 +11,7 @@ export function renderWebsiteNginx(revision) {
     `set $marty_website_revision "${revision}";`,
   ];
   for (const route of WEB_SURFACE_ROUTES.website.exact_paths) {
+    if (/^\/pricing\/?$/.test(route)) continue; // Ownership is reserved; commercial details are withheld.
     const files = /\.(?:txt|xml|json)$/.test(route);
     const candidate = route === '/' ? '/index.html' : `${route.replace(/\/$/, '')}/index.html`;
     lines.push(`location = ${route} {`,

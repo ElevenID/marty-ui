@@ -6,12 +6,10 @@ import { useSurfaceNavigate } from '../../application/routing/useSurfaceNavigate
  * Primary keyword: "verifiable credential API"
  */
 
-import { Box, Typography, Button, Card, CardContent, Grid, List, ListItem, ListItemIcon, ListItemText, Paper, Chip, Divider } from '@mui/material';
+import { Box, Typography, Button, Card, CardContent, Grid, List, ListItem, ListItemIcon, ListItemText, Paper, Chip } from '@mui/material';
 
 import {
-  DISABLE_PUBLIC_GET_STARTED_BUTTONS,
   DISABLE_PUBLIC_PRICING_BUTTONS,
-  SHOW_PUBLIC_GET_STARTED_BUTTONS,
   SHOW_PUBLIC_PRICING_BUTTONS,
 } from '@ui-public-config';
 import { SEOHead, softwareApplicationSchema } from '../seo';
@@ -22,7 +20,6 @@ import CloudIcon from '@mui/icons-material/Cloud';
 import StorageIcon from '@mui/icons-material/Storage';
 import SecurityIcon from '@mui/icons-material/Security';
 import SpeedIcon from '@mui/icons-material/Speed';
-import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 
@@ -73,11 +70,11 @@ function VerifiableCredentialApiPage() {
           Evaluate defined credential and document checks in your environment
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
-          {SHOW_PUBLIC_GET_STARTED_BUTTONS && (
+          {SHOW_PUBLIC_PRICING_BUTTONS && (
             <FutureFeatureButton
               variant="contained"
               size="large"
-              disabled={DISABLE_PUBLIC_GET_STARTED_BUTTONS}
+              disabled={DISABLE_PUBLIC_PRICING_BUTTONS}
               sx={{ bgcolor: 'white', color: 'primary.main', '&:hover': { bgcolor: 'grey.100' } }}
               onClick={() => navigate('/pricing')}
               disabledSx={{

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { renderWebsiteNginx } from './render-website-nginx.mjs';
 import { test } from 'node:test';
 import { WEB_SURFACE_ROUTES, WEB_ROUTE_CONTRACT, canonicalJson, getWebSurface } from './web-surface-contract.mjs';
 import { validateWebSurfaceContract } from '../src/application/routing/webSurfaceContract.mjs';
@@ -28,4 +29,14 @@ test('canonical contract digest uses sorted compact JSON without a trailing newl
   assert.equal(canonicalJson({ b: 2, a: { d: 4, c: 3 } }), '{"a":{"c":3,"d":4},"b":2}');
   assert.equal(WEB_ROUTE_CONTRACT.version, 1);
   assert.match(WEB_ROUTE_CONTRACT.sha256, /^sha256:[0-9a-f]{64}$/);
+});
+
+
+test('pricing ownership remains reserved while its website fallback is withheld', () => {
+  const config = renderWebsiteNginx('a'.repeat(40));
+  assert.equal(getWebSurface('/pricing'), 'website');
+  assert.equal(getWebSurface('/pricing/checkout'), 'application');
+  assert.ok(config.includes('location = /product {'));
+  assert.ok(!config.includes('location = /pricing {'));
+  assert.ok(!config.includes('location = /pricing/ {'));
 });
