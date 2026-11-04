@@ -1,7 +1,7 @@
 import { lazy } from 'react';
 import { DISABLE_PUBLIC_GET_STARTED_BUTTONS } from '@ui-public-config';
 import { useAuth } from '../hooks/useAuth';
-import { renderCommercePublicRoutes } from '../extensions/commerce';
+import { renderCommercePublicRoutes } from '../extensions/commerce/public';
 import { renderWebsiteContentRoutes } from './marketingRoutes';
 
 const LandingPage = lazy(() => import('../components/LandingPage'));

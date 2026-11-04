@@ -11,6 +11,10 @@ fn retained(fixture: &Fixture) -> Ledger {
 
 fn advance_to_due(fixture: &Fixture) {
     let saved = retained(fixture);
+    advance_to_retained_due(fixture, &saved);
+}
+
+fn advance_to_retained_due(fixture: &Fixture, saved: &Ledger) {
     let deadline = saved
         .retry()
         .map(|retry| retry.next_attempt_at)
@@ -65,7 +69,7 @@ fn unchanged_pending_polls_exceed_the_phase_ledger_limit_and_still_complete() {
         assert_eq!(saved.digest, baseline.digest);
         assert_eq!(saved.state.order, baseline.state.order);
         assert_eq!(std::fs::read(&fixture.ca.projection).unwrap(), projection);
-        advance_to_due(&fixture);
+        advance_to_retained_due(&fixture, &saved);
     }
     fixture.ca.state.lock().unwrap().hold_pending = false;
     assert!(fixture.finish().candidate.is_some());
@@ -82,8 +86,8 @@ fn unchanged_processing_polls_exceed_the_phase_ledger_limit_and_still_complete()
     let fixture = Fixture::new();
     let baseline = processing(&fixture);
     let projection = std::fs::read(&fixture.ca.projection).unwrap();
+    advance_to_retained_due(&fixture, &baseline);
     for _ in 0..520 {
-        advance_to_due(&fixture);
         let outcome = fixture.run().unwrap();
         assert_eq!(outcome.report["stage"], "certificate_pending");
         assert!(outcome.candidate.is_none());
@@ -92,9 +96,9 @@ fn unchanged_processing_polls_exceed_the_phase_ledger_limit_and_still_complete()
         assert_eq!(saved.digest, baseline.digest);
         assert_eq!(saved.state.order, baseline.state.order);
         assert_eq!(std::fs::read(&fixture.ca.projection).unwrap(), projection);
+        advance_to_retained_due(&fixture, &saved);
     }
     fixture.ca.state.lock().unwrap().hold_processing = false;
-    advance_to_due(&fixture);
     assert!(fixture.run().unwrap().candidate.is_some());
     assert!(public_snapshot(&fixture).challenges.is_empty());
     let ca = fixture.ca.state.lock().unwrap();
