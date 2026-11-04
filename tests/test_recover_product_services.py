@@ -81,11 +81,12 @@ def test_wrapper_cannot_inject_an_action_or_expand_profile_selection(arguments):
 def test_powershell_split_branch_delegates_mutation_to_explicit_product_owner():
     source = (ROOT / "scripts/recover-marty-after-reboot.ps1").read_text()
     start = source.index("Invoke-Step 'Recover product while retaining the selected website overlay'")
-    block = source[start:source.index("} elseif", start)]
+    block = source[start:source.index("} else", start)]
     assert "'recover_product_services.py') -- @ProductionComposeArgs" in block
     assert "docker compose" not in block
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable fixture; Windows wrapper has native-process tests")
 @pytest.mark.parametrize("config_failure", [False, True])
 def test_real_cli_argument_boundary_and_config_exit_status(tmp_path, config_failure):
     binaries = tmp_path / "bin"
