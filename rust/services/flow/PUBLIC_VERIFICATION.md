@@ -1,6 +1,6 @@
 # Public website verification sessions
 
-This surface runs a server-selected, active OID4VP verification definition. Visitors can select approved scenarios and requirements without organization membership. The catalog and session implementation are preparatory: gateway integration, the visitor page, demo-holder credentials, retention qualification and real wallet/signing qualification are still required. No sample verification is simulated by these endpoints.
+This surface runs a server-selected, active OID4VP verification definition. Visitors can select approved scenarios and requirements without organization membership. Flow sessions and narrow gateway forwarding have local contract qualification. The visitor page, demo-holder credentials, retention qualification and real wallet/signing qualification are still required. No sample verification is simulated by these endpoints.
 
 ## Configuration and admission
 
@@ -66,6 +66,10 @@ Session expiry follows the governed definition. Result access ends ten minutes a
 Cancellation uses the repository's terminal-state predicate. A completion that wins the race remains completed; a cancellation that wins prevents the competing nonterminal update. Cancellation does not require the current policy provider to be available.
 
 ## Qualification and enablement
+
+Gateway exposes only the four declared public routes and preserves protected Flow management. It rejects duplicate Origin/capability headers before map conversion, enforces a 4 KiB public request limit, strips browser credentials/authority headers, and supplies only its configured workload credential. Public session operations bypass the gateway's general idempotency cache and ETag/conditional-response handling; Flow owns capability-bound reconciliation. Anonymous gateway request limits remain active, and no-store headers cover failures as well as successful responses.
+
+The browser transport in `ui/src/services/publicVerificationApi.js` uses the same Rust/WASM API client package as the UI, with cookies omitted. It keeps capabilities in request headers, binds responses to the selected request/session, checks pending wallet URI structure and terminal verdict consistency, and projects only public fields. It does not implement local cryptographic verification or synthesize an example result. The approved experience is example-first with optional requirement controls and a secondary wallet path; the signed example/temporary-holder producer remains required before that default can be enabled.
 
 `verification_start_behavior` covers catalog-to-canonical preparation, authorization, pinned policy admission, capability scope and bounded projection. Its explicitly ignored `public_http_postgres_retry_quota_and_cancel_races` test requires `FLOW_PUBLIC_VERIFICATION_TEST_URL`, restricted to a fresh loopback database named `marty_public_verification_test`. It creates its own schema and refuses shared runtime database names. Local PostgreSQL tests use mock external providers and do not prove a wallet or signing/KMS integration.
 

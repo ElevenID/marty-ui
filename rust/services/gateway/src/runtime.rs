@@ -460,6 +460,7 @@ pub fn gateway_router(state: Arc<GatewayRuntimeState>) -> Router {
             Arc::clone(&state),
             mip_version_middleware,
         ))
+        .layer(middleware::from_fn(crate::public_verification::no_store))
         .with_state(state)
 }
 
@@ -669,7 +670,9 @@ async fn entity_tag_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    if request.uri().path() == "/v1/notifications/events/push" {
+    if request.uri().path() == "/v1/notifications/events/push"
+        || crate::public_verification::is_public_path(request.uri().path())
+    {
         return next.run(request).await;
     }
     let method = request.method().as_str().to_owned();
@@ -727,7 +730,12 @@ async fn tenant_authorization_middleware(
     next: Next,
 ) -> Response {
     let (parts, body) = request.into_parts();
-    let body = match to_bytes(body, state.maximum_body_bytes).await {
+    let maximum_body_bytes = if crate::public_verification::is_public_path(parts.uri.path()) {
+        4_096.min(state.maximum_body_bytes)
+    } else {
+        state.maximum_body_bytes
+    };
+    let body = match to_bytes(body, maximum_body_bytes).await {
         Ok(body) => body,
         Err(_) => {
             return error_response(
@@ -935,6 +943,11 @@ async fn idempotency_middleware(
     request: Request,
     next: Next,
 ) -> Response {
+    // The capability, admitted selection and stored nonce form the public
+    // launch identity. A general body/Idempotency-Key cache cannot replace it.
+    if crate::public_verification::is_public_path(request.uri().path()) {
+        return next.run(request).await;
+    }
     // Validate before IdempotencyBegin::Replay, not just before proxying.
     if invalid_passport_cancellation_key(
         request.method().as_str(),
@@ -1258,6 +1271,14 @@ async fn proxy_handler(
         }
     };
     let public_path = parts.uri.path().to_owned();
+    if crate::public_verification::is_public_path(&public_path)
+        && !crate::public_verification::unambiguous_headers(&parts.headers)
+    {
+        return detail_response(
+            400,
+            "Origin and verification session capability must occur once",
+        );
+    }
     if invalid_passport_cancellation_key(
         parts.method.as_str(),
         &public_path,
@@ -1322,6 +1343,9 @@ async fn proxy_handler(
     let mut gateway_request = GatewayRequest::new(method, &upstream_path, now_ms());
     gateway_request.query = query_pairs(parts.uri.query());
     gateway_request.headers = request_headers(&parts.headers);
+    if crate::public_verification::is_public_path(&public_path) {
+        crate::public_verification::restrict_headers(&mut gateway_request.headers);
+    }
     // Only the authorized Gateway producer may attach this proof. A public
     // caller's header must never be forwarded to Signing Keys.
     gateway_request
@@ -6074,6 +6098,179 @@ mod tests {
         state_mut.memberships = Arc::new(ActorIdentityProvider);
         state_mut.device_registration_gateway_key = Some("d".repeat(32));
         (gateway_router(state), recorder)
+    }
+
+    #[tokio::test]
+    async fn public_verification_forwards_capability_without_browser_authority_or_cache_reuse() {
+        let (router, recorder) = actor_test_router();
+        let id = "54cfd66e-b7ed-8926-9f8b-18e63fa83797";
+        for (method, path) in [
+            ("GET", "/v1/flows/public/verification/catalog".into()),
+            ("POST", "/v1/flows/public/verification/sessions".into()),
+            (
+                "GET",
+                format!("/v1/flows/public/verification/sessions/{id}"),
+            ),
+            (
+                "POST",
+                format!("/v1/flows/public/verification/sessions/{id}/cancel"),
+            ),
+        ] {
+            let request = Request::builder()
+                .method(method)
+                .uri(&path)
+                .header("content-type", "application/json")
+                .header("origin", "https://site.example")
+                .header("x-verification-session", "opaque-visitor-capability")
+                .header("x-user-id", "forged")
+                .header("x-organization-id", "forged")
+                .header("x-api-key-id", "forged")
+                .header("x-api-key-scopes", "*")
+                .header("x-service-token", "forged")
+                .header("x-authenticated-user-id", "forged")
+                .header("authorization", "Bearer irrelevant")
+                .header("cookie", "sessionId=actor-session")
+                .header("if-none-match", "*")
+                .header("idempotency-key", "shared-key")
+                .body(Body::from(if method == "POST" { "{}" } else { "" }))
+                .unwrap();
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            assert!(response.headers().get("etag").is_none());
+        }
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 4);
+            for (service, request) in calls.iter() {
+                assert_eq!(service, "flows");
+                assert_eq!(request.header("origin"), Some("https://site.example"));
+                assert_eq!(
+                    request.header("x-verification-session"),
+                    Some("opaque-visitor-capability")
+                );
+                for name in [
+                    "x-user-id",
+                    "x-organization-id",
+                    "x-api-key-id",
+                    "x-api-key-scopes",
+                    "x-authenticated-user-id",
+                    "authorization",
+                    "cookie",
+                    "idempotency-key",
+                ] {
+                    assert_eq!(request.header(name), None, "{name}");
+                }
+                assert_eq!(
+                    request.header("x-service-token"),
+                    Some("s".repeat(32).as_str())
+                );
+            }
+        }
+        for path in [
+            "/v1/flows/definitions",
+            "/v1/flows/instances",
+            "/v1/flows/instances/flow-1/result",
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header("x-verification-session", "opaque-visitor-capability")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        }
+        assert_eq!(recorder.0.lock().unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn public_verification_rejects_header_ambiguity_and_oversized_requests_before_forwarding()
+    {
+        let (router, recorder) = actor_test_router();
+        for name in ["origin", "x-verification-session"] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/v1/flows/public/verification/sessions")
+                .header("content-type", "application/json")
+                .header(name, "first")
+                .body(Body::from("{}"))
+                .unwrap();
+            request
+                .headers_mut()
+                .append(name, HeaderValue::from_static("second"));
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+        }
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/flows/public/verification/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from("x".repeat(4_097)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert!(recorder.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn public_verification_keeps_anonymous_request_limits_and_ignores_capability_for_gateway_cache_identity(
+    ) {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let mut state = Arc::into_inner(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ))
+        .unwrap();
+        state.rate_limiter =
+            Arc::new(GatewayRateLimiter::new(Arc::new(InMemoryRateLimiter::default()), 2).unwrap());
+        let router = gateway_router(Arc::new(state.with_client_ip_observation(false)));
+        for index in 0..3 {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/flows/public/verification/sessions")
+                        .header("content-type", "application/json")
+                        .header("x-verification-session", format!("capability-{index}"))
+                        .header("idempotency-key", "same-key")
+                        .header("x-forwarded-for", format!("203.0.113.{index}"))
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if index < 2 {
+                    StatusCode::OK
+                } else {
+                    StatusCode::TOO_MANY_REQUESTS
+                }
+            );
+            assert_eq!(response.headers()["cache-control"], "no-store");
+        }
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(
+            calls[0].1.header("x-verification-session"),
+            Some("capability-0")
+        );
+        assert_eq!(
+            calls[1].1.header("x-verification-session"),
+            Some("capability-1")
+        );
     }
 
     #[tokio::test]

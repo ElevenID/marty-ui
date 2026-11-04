@@ -244,6 +244,28 @@ impl GatewayContract {
             priority: route_priority("/v1/flows/physical-start-intents"),
             tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
         })?;
+        for &(method, path) in crate::public_verification::ROUTES {
+            table.add(RouteConfig {
+                name: format!("flow-public:{}:{path}", method_name(method)),
+                pattern: path.into(),
+                match_type: if path.contains('{') {
+                    RouteMatchType::Template
+                } else {
+                    RouteMatchType::Exact
+                },
+                upstream_service: "flows".into(),
+                methods: BTreeSet::from([method]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 10_000,
+                retries: 0,
+                auth_required: false,
+                authentication_type: AuthenticationType::None,
+                priority: route_priority(path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
         Ok(table)
     }
 
@@ -812,7 +834,8 @@ pub(crate) fn mdoc_crl_operator_path(path: &str) -> bool {
 }
 
 fn public_route(path: &str) -> bool {
-    public_mdoc_crl_path(path)
+    crate::public_verification::is_public_path(path)
+        || public_mdoc_crl_path(path)
         || path == "/openapi.json"
         || path == "/v1/protocol-support"
         || path == "/docs"
@@ -1140,6 +1163,7 @@ mod tests {
             EXPECTED_ROUTE_COUNT
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
         );
@@ -1161,6 +1185,39 @@ mod tests {
             .upstream_service,
             "organizations"
         );
+    }
+
+    #[test]
+    fn public_verification_routes_are_narrow_and_do_not_open_flow_management() {
+        let table = GatewayContract::load().unwrap().route_table().unwrap();
+        let id = "54cfd66e-b7ed-8926-9f8b-18e63fa83797";
+        for &(method, template) in crate::public_verification::ROUTES {
+            let path = template.replace("{session_id}", id);
+            let selected = route_for(&table, method, &path).unwrap();
+            assert_eq!(selected.route.upstream_service, "flows");
+            assert!(!selected.route.auth_required);
+            assert_eq!(selected.route.retries, 0);
+            assert!(!route_ownership(&path).requires_authentication);
+            assert!(crate::authorization::skips_tenant_authorization(&path));
+        }
+        for path in [
+            "/v1/flows/definitions",
+            "/v1/flows/instances",
+            "/v1/flows/instances/flow-1/result",
+            "/v1/flows/public/verification/sessions/54cfd66e-b7ed-8926-9f8b-18e63fa83797/result",
+        ] {
+            assert!(route_ownership(path).requires_authentication, "{path}");
+            assert!(
+                !crate::authorization::skips_tenant_authorization(path),
+                "{path}"
+            );
+        }
+        assert!(route_for(
+            &table,
+            HttpMethod::Delete,
+            "/v1/flows/public/verification/catalog"
+        )
+        .is_err());
     }
 
     #[test]
@@ -1364,6 +1421,7 @@ mod tests {
             EXPECTED_ROUTE_COUNT
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
         );
@@ -1376,6 +1434,7 @@ mod tests {
             EXPECTED_ROUTE_COUNT
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
                 + 3
@@ -1386,6 +1445,7 @@ mod tests {
             EXPECTED_ROUTE_COUNT
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
                 + 16

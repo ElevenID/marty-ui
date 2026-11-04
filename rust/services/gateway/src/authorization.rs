@@ -972,7 +972,8 @@ static SKIP_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 });
 
 pub fn skips_tenant_authorization(path: &str) -> bool {
-    crate::contract::public_mdoc_crl_path(path)
+    crate::public_verification::is_public_path(path)
+        || crate::contract::public_mdoc_crl_path(path)
         || SKIP_PATTERNS.iter().any(|pattern| pattern.is_match(path))
 }
 

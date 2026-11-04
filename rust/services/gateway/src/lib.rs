@@ -21,6 +21,7 @@ pub mod organization_contract;
 pub mod passport_gateway;
 pub mod presentation_policy_contract;
 pub mod providers;
+pub mod public_verification;
 pub mod registry;
 pub mod response_projection;
 pub mod runtime;
