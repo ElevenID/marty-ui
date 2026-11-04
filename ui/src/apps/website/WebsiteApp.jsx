@@ -53,7 +53,7 @@ function WebsiteShell() {
             {tabs.map((tab) => <Tab key={tab.path} label={t(tab.labelKey, tab.defaultLabel)} component={Link}
               to={publicEntryHref(tab.path)} disabled={Boolean(tab.disabled)} />)}
           </Tabs>
-          {SHOW_PUBLIC_CTA && <Button component={Link} to={publicEntryHref('/developers')} sx={{ whiteSpace: 'nowrap', display: { xs: 'none', md: 'inline-flex' } }}>
+          {SHOW_PUBLIC_CTA && <Button component={Link} to={publicEntryHref('/verify')} sx={{ whiteSpace: 'nowrap', display: { xs: 'none', md: 'inline-flex' } }}>
             {t('navigation.startVerifying', 'Start Verifying')}
           </Button>}
         </Box>

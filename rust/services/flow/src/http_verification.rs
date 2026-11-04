@@ -294,6 +294,7 @@ async fn retrieve_request_object(
     wallet_nonce: Option<String>,
 ) -> Result<Response, FlowHttpError> {
     let current = required_instance(state, instance_id).await?;
+    crate::public_verification_session::require_wallet_session(&current)?;
     let expected_status = current.status;
     let expected_updated_at = current.updated_at;
     let now = Utc::now().max(expected_updated_at + Duration::microseconds(1));
@@ -383,6 +384,7 @@ async fn submit_direct_post(
     Form(form): Form<DirectPostForm>,
 ) -> Result<Json<Value>, FlowHttpError> {
     let instance = required_instance(&state, &instance_id).await?;
+    crate::public_verification_session::require_wallet_session(&instance)?;
     let (input, instance) = direct_post_input(&state, instance, form).await?;
     let result = evaluate_submission(&state, instance, input, false).await?;
     if result.decision.as_deref() != Some("allow") || result.result.as_deref() != Some("passed") {
@@ -476,6 +478,7 @@ async fn submit_dc_api(
         ));
     }
     let mut instance = required_instance(&state, &instance_id).await?;
+    crate::public_verification_session::require_wallet_session(&instance)?;
     let mut data = Value::Object(request.data.into_iter().collect());
     let mut response_mode = None;
     if let Some(response) = data
@@ -552,7 +555,7 @@ async fn submit_dc_api(
     )))
 }
 
-async fn evaluate_submission(
+pub(crate) async fn evaluate_submission(
     state: &FlowHttpState,
     instance: crate::FlowInstanceRecord,
     input: VerificationSubmissionInput,

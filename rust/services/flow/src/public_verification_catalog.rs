@@ -27,6 +27,8 @@ pub struct PublicVerificationCatalogConfig {
     pub application_origin: String,
     pub notice: String,
     pub scenarios: Vec<PublicVerificationScenarioConfig>,
+    #[serde(default)]
+    pub examples: Vec<crate::PublicVerificationExampleConfig>,
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -104,6 +106,8 @@ pub struct PublicVerificationSelection {
     pub scenario_id: String,
     pub choice_id: String,
     pub consent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub example_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -111,6 +115,7 @@ pub struct PublicVerificationCatalogView<'a> {
     pub revision: &'a str,
     pub notice: &'a str,
     pub scenarios: Vec<PublicVerificationScenarioView<'a>>,
+    pub examples: Vec<crate::PublicVerificationExampleView<'a>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -129,6 +134,10 @@ pub struct PublicVerificationChoiceView<'a> {
 impl PublicVerificationCatalog {
     pub(crate) fn organization_id(&self) -> &str {
         &self.config.organization_id
+    }
+
+    pub(crate) fn has_examples(&self) -> bool {
+        !self.config.examples.is_empty()
     }
 
     pub(crate) fn origin(&self) -> &str {
@@ -251,6 +260,7 @@ impl PublicVerificationCatalog {
                 }
             }
         }
+        crate::public_verification_example::validate_examples(&config.examples, &scenarios)?;
         let revision = marty_oid4vp_contract::digest_domain_json(
             "marty.public-verification/catalog/v1",
             &config,
@@ -264,6 +274,12 @@ impl PublicVerificationCatalog {
         PublicVerificationCatalogView {
             revision: &self.revision,
             notice: &self.config.notice,
+            examples: self
+                .config
+                .examples
+                .iter()
+                .map(|example| example.public_view())
+                .collect(),
             scenarios: self
                 .config
                 .scenarios
@@ -298,6 +314,18 @@ impl PublicVerificationCatalog {
         }
     }
 
+    pub(crate) fn example(
+        &self,
+        scenario_id: &str,
+        id: &str,
+    ) -> Result<&crate::PublicVerificationExampleConfig, PublicVerificationCatalogError> {
+        self.config
+            .examples
+            .iter()
+            .find(|example| example.id == id && example.scenario_id == scenario_id)
+            .ok_or(PublicVerificationCatalogError::ChoiceUnavailable)
+    }
+
     pub fn select(
         &self,
         selection: &PublicVerificationSelection,
@@ -307,6 +335,9 @@ impl PublicVerificationCatalog {
         }
         if selection.catalog_revision != self.revision {
             return Err(PublicVerificationCatalogError::CatalogChanged);
+        }
+        if let Some(id) = &selection.example_id {
+            self.example(&selection.scenario_id, id)?;
         }
         self.config
             .scenarios
@@ -342,14 +373,14 @@ impl PublicVerificationChoiceConfig {
     }
 }
 
-fn bounded_text(value: &str, maximum: usize) -> bool {
+pub(crate) fn bounded_text(value: &str, maximum: usize) -> bool {
     !value.is_empty()
         && value.len() <= maximum
         && value.trim() == value
         && !value.chars().any(char::is_control)
 }
 
-fn slug(value: &str) -> bool {
+pub(crate) fn slug(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 48
         && value

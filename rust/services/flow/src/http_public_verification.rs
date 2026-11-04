@@ -20,6 +20,9 @@ use crate::{
     PublicVerificationStartInvocation, VerificationStartContext,
 };
 
+#[path = "http_public_example.rs"]
+mod example_http;
+
 pub const PUBLIC_VERIFICATION_SESSION_HEADER: &str = "x-verification-session";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -139,11 +142,13 @@ impl PublicVerificationOptions {
         {
             return Err(PublicVerificationCatalogError::InvalidConfiguration);
         }
+        let catalog =
+            PublicVerificationCatalog::from_json(&raw.catalog.to_string(), allow_http_loopback)?;
+        if catalog.has_examples() && raw.demo_holder_did.is_none() {
+            return Err(PublicVerificationCatalogError::InvalidConfiguration);
+        }
         Ok(Self {
-            catalog: PublicVerificationCatalog::from_json(
-                &raw.catalog.to_string(),
-                allow_http_loopback,
-            )?,
+            catalog,
             principal_id: raw.principal_id,
             issuer_did: raw.issuer_did,
             demo_holder_did: raw.demo_holder_did,
@@ -178,6 +183,10 @@ pub(crate) fn flow_public_verification_routes() -> Router<FlowHttpState> {
         .route(
             "/v1/flows/public/verification/sessions/{session_id}/cancel",
             post(cancel),
+        )
+        .route(
+            "/v1/flows/public/verification/sessions/{session_id}/example",
+            post(example_http::example),
         )
         .layer(DefaultBodyLimit::max(4_096))
         .layer(middleware::map_response(no_store))

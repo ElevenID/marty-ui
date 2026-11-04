@@ -39,6 +39,8 @@ struct SessionSnapshot {
     catalog_revision: String,
     scenario_id: String,
     choice_id: String,
+    #[serde(default)]
+    example_id: Option<String>,
     access_expires_at: DateTime<Utc>,
 }
 
@@ -60,6 +62,10 @@ pub struct PublicVerificationSessionView {
     pub session_id: String,
     pub scenario_id: String,
     pub choice_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub example_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub example_status: Option<crate::PublicVerificationExampleStatus>,
     pub catalog_revision: String,
     pub status: PublicVerificationSessionStatus,
     pub expires_at: DateTime<Utc>,
@@ -137,6 +143,7 @@ impl PublicVerificationSessionKey {
             catalog_revision: selection.catalog_revision.clone(),
             scenario_id: selection.scenario_id.clone(),
             choice_id: selection.choice_id.clone(),
+            example_id: selection.example_id.clone(),
             access_expires_at: expiry
                 .checked_add_signed(Duration::seconds(RESULT_ACCESS_SECONDS))
                 .ok_or(PublicVerificationSessionError::InvalidState)?,
@@ -196,6 +203,7 @@ impl PublicVerificationSessionKey {
             || snapshot.catalog_revision != selection.catalog_revision
             || snapshot.scenario_id != selection.scenario_id
             || snapshot.choice_id != selection.choice_id
+            || snapshot.example_id != selection.example_id
         {
             return Err(PublicVerificationSessionError::SelectionConflict);
         }
@@ -255,11 +263,12 @@ impl PublicVerificationSessionKey {
             }
             _ => None,
         };
-        let wallet_uri = if matches!(
-            status,
-            PublicVerificationSessionStatus::AwaitingWallet
-                | PublicVerificationSessionStatus::Verifying
-        ) {
+        let wallet_uri = if snapshot.example_id.is_none()
+            && matches!(
+                status,
+                PublicVerificationSessionStatus::AwaitingWallet
+                    | PublicVerificationSessionStatus::Verifying
+            ) {
             Some(
                 instance
                     .context
@@ -276,6 +285,17 @@ impl PublicVerificationSessionKey {
             session_id: instance.id.clone(),
             scenario_id: snapshot.scenario_id,
             choice_id: snapshot.choice_id,
+            example_status: if snapshot.example_id.is_some()
+                && matches!(
+                    status,
+                    PublicVerificationSessionStatus::AwaitingWallet
+                        | PublicVerificationSessionStatus::Verifying
+                ) {
+                crate::public_verification_example::example_status(instance)?
+            } else {
+                None
+            },
+            example_id: snapshot.example_id,
             catalog_revision: snapshot.catalog_revision,
             status,
             expires_at: expiry,
@@ -284,4 +304,24 @@ impl PublicVerificationSessionKey {
             wallet_uri,
         })
     }
+}
+
+/// A sample-bound session must not accept a different credential from an
+/// external wallet while its server-side specimen is being processed.
+pub(crate) fn require_wallet_session(
+    instance: &FlowInstanceRecord,
+) -> Result<(), crate::FlowHttpError> {
+    if instance
+        .context
+        .get(PUBLIC_SESSION)
+        .and_then(|value| value.get("example_id"))
+        .is_some_and(|value| !value.is_null())
+    {
+        return Err(crate::FlowHttpError::new(
+            axum::http::StatusCode::NOT_FOUND,
+            "verification_unavailable",
+            "Verification request unavailable",
+        ));
+    }
+    Ok(())
 }

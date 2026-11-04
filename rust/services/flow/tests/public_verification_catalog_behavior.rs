@@ -37,6 +37,7 @@ fn selection(catalog: &PublicVerificationCatalog) -> PublicVerificationSelection
         scenario_id: "age".into(),
         choice_id: "over-18".into(),
         consent: true,
+        example_id: None,
     }
 }
 
@@ -290,5 +291,44 @@ fn choice_rejects_wrong_definition_policy_version_or_configuration() {
             Err(Error::ConfigurationChanged),
             "variant {variant}"
         );
+    }
+}
+
+#[test]
+fn signed_examples_are_bounded_scenario_scoped_revision_bound_and_private() {
+    let mut value = configuration();
+    value["examples"] = json!([{"id":"fictional-adult","scenario_id":"age","label":"Fictional adult", "description":"Signed fictional age claims, unchanged by request controls.",
+        "profile":{"credential_template_id":"private-template", "issuer_did":"did:web:demo.example:issuer", "vct":"urn:marty:demo:age:1"}, "credential":"private.signed.credential~"}]);
+    let configured = catalog(&value);
+    let public = serde_json::to_value(configured.public_view()).unwrap();
+    assert_eq!(public["examples"][0]["id"], "fictional-adult");
+    assert!(!public.to_string().contains("private"));
+    let mut request = selection(&configured);
+    request.example_id = Some("fictional-adult".into());
+    assert!(configured.select(&request).is_ok());
+    request.example_id = Some("arbitrary-input".into());
+    assert!(matches!(
+        configured.select(&request),
+        Err(Error::ChoiceUnavailable)
+    ));
+    let mut renewed = value.clone();
+    renewed["examples"][0]["credential"] = json!("new.signed.credential~");
+    assert_ne!(
+        configured.public_view().revision,
+        catalog(&renewed).public_view().revision
+    );
+    for variant in 0..5 {
+        let mut invalid = value.clone();
+        match variant {
+            0 => invalid["examples"][0]["scenario_id"] = json!("membership"),
+            1 => invalid["examples"][0]["credential"] = json!("not-a-signed-specimen"),
+            2 => invalid["examples"][0]["credential"] = json!("x".repeat(16_385)),
+            3 => invalid["examples"][0]["callback_url"] = json!("https://attacker.example"),
+            _ => {
+                let duplicate = invalid["examples"][0].clone();
+                invalid["examples"].as_array_mut().unwrap().push(duplicate);
+            }
+        }
+        assert!(PublicVerificationCatalog::from_json(&invalid.to_string(), false).is_err());
     }
 }

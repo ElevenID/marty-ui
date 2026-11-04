@@ -40,7 +40,16 @@ function publicCatalog(value) {
     });
     return { id: scenario.id, label: scenario.label, choices };
   });
-  return { revision: value.revision, notice: value.notice, scenarios };
+  const examples = value.examples ?? [];
+  if (!Array.isArray(examples) || examples.length > 16) throw invalidResponse();
+  const exampleIds = new Set();
+  const projectedExamples = examples.map(example => {
+    if (!example || !validSlug(example.id) || exampleIds.has(example.id) || !scenarioIds.has(example.scenario_id)
+      || !text(example.label, 120) || !text(example.description, 400)) throw invalidResponse();
+    exampleIds.add(example.id);
+    return { id: example.id, scenario_id: example.scenario_id, label: example.label, description: example.description };
+  });
+  return { revision: value.revision, notice: value.notice, scenarios, examples: projectedExamples };
 }
 
 function publicSession(value) {
@@ -49,10 +58,14 @@ function publicSession(value) {
     || !text(value.expires_at, 64) || !text(value.access_expires_at, 64)
     || !Number.isFinite(Date.parse(value.expires_at)) || !Number.isFinite(Date.parse(value.access_expires_at))
     || Date.parse(value.access_expires_at) !== Date.parse(value.expires_at) + 600_000) throw invalidResponse();
+  if (value.example_id !== undefined && !validSlug(value.example_id)) throw invalidResponse();
+  if (value.example_status !== undefined && (!value.example_id
+    || !['running', 'input_rejected', 'retry_available', 'retry_exhausted'].includes(value.example_status)
+    || !['awaiting_wallet', 'verifying'].includes(value.status))) throw invalidResponse();
   const pending = value.status === 'awaiting_wallet' || value.status === 'verifying';
   if (value.status === 'completed' ? value.verified !== true
     : value.status === 'failed' ? value.verified !== false : value.verified !== undefined) throw invalidResponse();
-  if (pending) {
+  if (pending && !value.example_id) {
     if (!text(value.wallet_uri, 8192)) throw invalidResponse();
     try {
       const uri = new URL(value.wallet_uri);
@@ -68,8 +81,10 @@ function publicSession(value) {
   // Keep only the visitor contract. Never pass generic claims/provider data to
   // the page or its recovery storage if an upstream response adds extra fields.
   return { session_id: value.session_id, scenario_id: value.scenario_id, choice_id: value.choice_id,
+    ...(value.example_id ? { example_id: value.example_id } : {}),
+    ...(value.example_status ? { example_status: value.example_status } : {}),
     catalog_revision: value.catalog_revision, status: value.status, expires_at: value.expires_at,
-    access_expires_at: value.access_expires_at, ...(pending ? { wallet_uri: value.wallet_uri } : {}),
+    access_expires_at: value.access_expires_at, ...(pending && !value.example_id ? { wallet_uri: value.wallet_uri } : {}),
     ...(['completed', 'failed'].includes(value.status) ? { verified: value.verified } : {}) };
 }
 
@@ -98,15 +113,22 @@ export const publicVerificationApi = {
   async launch(selection, key, options) {
     // The capability remains in a header across retries, never in a URL/body.
     const body = { catalog_revision: selection.catalog_revision, scenario_id: selection.scenario_id,
-      choice_id: selection.choice_id, consent: selection.consent === true };
+      choice_id: selection.choice_id, consent: selection.consent === true,
+      ...(selection.example_id !== undefined ? { example_id: selection.example_id } : {}) };
+    if (body.example_id !== undefined && !validSlug(body.example_id)) throw new Error('Invalid example selection');
     const session = publicSession(await client.post(`${prefix}/sessions`, body, capabilityOptions(key, options)));
     if (session.catalog_revision !== body.catalog_revision || session.scenario_id !== body.scenario_id
-      || session.choice_id !== body.choice_id) throw invalidResponse();
+      || session.choice_id !== body.choice_id || session.example_id !== body.example_id) throw invalidResponse();
     return session;
   },
   async session(id, key, options) {
     const session = publicSession(await client.get(sessionPath(id), capabilityOptions(key, options)));
     if (session.session_id !== id) throw invalidResponse();
+    return session;
+  },
+  async example(id, key, options) {
+    const session = publicSession(await client.post(`${sessionPath(id)}/example`, {}, capabilityOptions(key, options)));
+    if (session.session_id !== id || !session.example_id) throw invalidResponse();
     return session;
   },
   async cancel(id, key, options) {

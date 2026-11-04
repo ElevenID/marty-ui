@@ -7,6 +7,7 @@ import AuthCallback from '../../components/AuthCallback';
 import WalletSetup from '../../components/WalletSetup';
 import InviteAcceptPage from '../../components/InviteAcceptPage';
 import ApplyPage from '../../components/ApplyPage';
+import PublicVerificationPage from '../../components/pages/PublicVerificationPage';
 import ApiDocumentation from '../../components/ApiDocumentation';
 import MyOrganizationsPage from '../../components/pages/MyOrganizationsPage';
 import DiscoverOrganizationsPage from '../../components/pages/DiscoverOrganizationsPage';
@@ -89,6 +90,7 @@ function PublicRoutes() {
         <Route path="/" element={renderPublicRoot({ isAuthenticated, isAdministrator, isVendor, isApplicant })} />
         <Route path="/login" element={<LoginPage fallbackRedirectTo={loginFallbackRedirect} />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/verify" element={<PublicVerificationPage />} />
         <Route path="/apply" element={<ApplyPage />} />
         <Route path="/apply/:credentialType" element={<ApplyPage />} />
 

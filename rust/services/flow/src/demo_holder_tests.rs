@@ -79,11 +79,20 @@ impl SigningIdentityProvider for OpaqueSigner {
         &self,
         request: &SigningRequest,
     ) -> Result<crate::SigningResult, FlowProviderError> {
-        assert_eq!(request.key_purpose, DEMO_HOLDER_PURPOSE);
-        assert_eq!(request.credential_format, DEMO_HOLDER_FORMAT);
+        let signing_key = match request.key_purpose.as_str() {
+            DEMO_HOLDER_PURPOSE => {
+                assert_eq!(request.credential_format, DEMO_HOLDER_FORMAT);
+                7
+            }
+            "oid4vp_request_signing" => {
+                assert_eq!(request.credential_format, "oauth-authz-req+jwt");
+                5
+            }
+            _ => panic!("unexpected signing purpose"),
+        };
         self.calls.fetch_add(1, Ordering::SeqCst);
         let input = URL_SAFE_NO_PAD.decode(&request.payload_b64url).unwrap();
-        let signature: Signature = key(if self.corrupt { 9 } else { 7 }).sign(&input);
+        let signature: Signature = key(if self.corrupt { 9 } else { signing_key }).sign(&input);
         Ok(crate::SigningResult {
             issuer_did: request.issuer_did.clone(),
             verification_method_id: request.verification_method_id.clone(),
@@ -266,6 +275,7 @@ async fn setup(
             scenario_id: "age".into(),
             choice_id: "over-18".into(),
             consent: true,
+            example_id: None,
         },
     )
     .unwrap();
@@ -510,4 +520,366 @@ async fn reloaded_claims_cannot_replace_the_admitted_disclosure_even_with_the_sa
         ))
     ));
     assert_eq!(signer.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn example_lease_recovers_without_parallel_signing_or_unbounded_retries() {
+    use crate::public_verification_example::*;
+    let (_, instance, _, _, _) = setup(Arc::new(OpaqueSigner::new())).await;
+    let now = Utc::now();
+    let (first, owner) = claim_example(&instance, now).unwrap().unwrap();
+    assert!(claim_example(&first, now).unwrap().is_none());
+    let next_time = now + chrono::Duration::seconds(91);
+    let (second, next_owner) = claim_example(&first, next_time).unwrap().unwrap();
+    assert_ne!(owner, next_owner);
+    assert!(require_example_owner(&second, owner, next_time).is_err());
+    let released = finish_example_attempt(&second, next_owner, false, next_time).unwrap();
+    let (third, _) = claim_example(&released, next_time).unwrap().unwrap();
+    assert!(
+        claim_example(&third, next_time + chrono::Duration::seconds(91))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(third.expires_at, instance.expires_at);
+    let mut cancelled = first.clone();
+    cancelled.status = FlowInstanceStatus::Cancelled;
+    assert!(claim_example(&cancelled, now).unwrap().is_none());
+    let rejected = finish_example_attempt(&first, owner, true, now).unwrap();
+    assert_eq!(
+        example_status(&rejected).unwrap(),
+        Some(PublicVerificationExampleStatus::InputRejected)
+    );
+    assert!(claim_example(&rejected, next_time).unwrap().is_none());
+    let mut corrupted = first;
+    corrupted.context[EXAMPLE_OPERATION] = json!({"input_rejected":false});
+    assert!(claim_example(&corrupted, now).is_err());
+}
+
+#[tokio::test]
+async fn example_submission_preserves_the_emitted_core_dcql_and_session_binding() {
+    use crate::public_verification_example::example_submission;
+    let signer = Arc::new(OpaqueSigner::new());
+    let (providers, instance, holder, profile, _) = setup(signer.clone()).await;
+    let ready = crate::prepare_verification_request(
+        &providers,
+        instance,
+        "https://demo.example",
+        &Default::default(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let crate::PreparedVerificationRequest::Ready(ready) = ready else {
+        panic!("request expired");
+    };
+    let instance = ready.instance;
+    let presentation = holder
+        .presentation(&providers, &instance, &profile, &credential(ISSUER, 7))
+        .await
+        .unwrap()
+        .into_compact();
+    let input = example_submission(&instance, presentation.clone()).unwrap();
+    assert!(input.presentation_submission.is_none());
+    assert!(input.audience_override.is_none());
+    let wire: Value = serde_json::from_str(&input.vp_token).unwrap();
+    let id = instance.context["mip_messages"]["presentation_request"]["payload"]["dcql_query"]
+        ["credentials"][0]["id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(wire, json!({id: [presentation]}));
+    verify_sd_jwt(
+        wire[id][0].as_str().unwrap(),
+        &jwk(3).to_string(),
+        Some(
+            instance.context["oid4vp_client_id"]
+                .as_str()
+                .unwrap()
+                .into(),
+        ),
+        Some(instance.context["nonce"].as_str().unwrap().into()),
+    )
+    .unwrap();
+    assert_eq!(signer.calls.load(Ordering::SeqCst), 2);
+    let mut tampered = instance.clone();
+    tampered.context["mip_messages"]["presentation_request"]["payload"]["nonce"] = json!("changed");
+    assert!(example_submission(&tampered, "not-a-presentation".into()).is_err());
+}
+
+struct EvaluatingPolicy;
+#[async_trait]
+impl crate::PresentationPolicyProvider for EvaluatingPolicy {
+    async fn configuration_digest(&self, id: &str) -> Result<String, FlowProviderError> {
+        Policy(Arc::new(AtomicBool::new(false)))
+            .configuration_digest(id)
+            .await
+    }
+    async fn get_policy(
+        &self,
+        id: &str,
+    ) -> Result<crate::PresentationPolicyReference, FlowProviderError> {
+        Policy(Arc::new(AtomicBool::new(false)))
+            .get_policy(id)
+            .await
+    }
+    async fn evaluate(
+        &self,
+        request: &crate::PresentationEvaluationRequest,
+    ) -> Result<crate::PresentationEvaluationResult, FlowProviderError> {
+        assert_eq!(
+            request.context[crate::defined_verification::EXPECTED_POLICY_DIGEST],
+            json!(format!("sha256:{}", "a".repeat(64)))
+        );
+        let transport = request
+            .oid4vp_transport
+            .as_ref()
+            .expect("canonical emitted OID4VP query is required");
+        assert_eq!(transport.query_kind, marty_oid4vp_contract::QueryKind::Dcql);
+        let disclosed = verify_sd_jwt(
+            &request.presentation,
+            &jwk(3).to_string(),
+            Some(request.audience.clone()),
+            Some(request.nonce.clone()),
+        )
+        .unwrap();
+        assert_eq!(disclosed["credentialSubject"]["age_over_18"], true);
+        assert!(disclosed["credentialSubject"].get("nickname").is_none());
+        Ok(crate::PresentationEvaluationResult {
+            result: "passed".into(),
+            decision: "allow".into(),
+            decision_reason: None,
+            verified_claims: Default::default(),
+            credential_results: vec![json!({"signature_valid":true})],
+            authentication_diagnostic: None,
+            error_codes: vec![],
+            warnings: vec![],
+        })
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires fresh task-owned loopback marty_public_verification_test PostgreSQL"]
+async fn public_example_http_uses_capability_cas_and_canonical_nonce_finalization() {
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
+    use std::str::FromStr;
+    use tower::ServiceExt;
+    let url =
+        std::env::var("FLOW_PUBLIC_VERIFICATION_TEST_URL").expect("disposable DB URL required");
+    let options = sqlx::postgres::PgConnectOptions::from_str(&url).unwrap();
+    assert!(matches!(options.get_host(), "127.0.0.1" | "localhost"));
+    assert_eq!(
+        options.get_database(),
+        Some("marty_public_verification_test")
+    );
+    let pool = sqlx::PgPool::connect_with(options).await.unwrap();
+    sqlx::raw_sql("CREATE SCHEMA deployment_profile_service; CREATE TABLE deployment_profile_service.deployment_profiles (id text PRIMARY KEY, enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb)").execute(&pool).await.unwrap();
+    crate::migrate_flow_schema(&pool).await.unwrap();
+    let repository = crate::PostgresFlowRepository::new(pool.clone());
+    let signer = Arc::new(OpaqueSigner::new());
+    let (mut providers, mut instance, _, profile, _) = setup(signer.clone()).await;
+    providers.presentation_policy = Some(Arc::new(EvaluatingPolicy));
+    let mut definition = crate::create_definition_record(crate::parse_request(json!({"organization_id":ORG,"name":"Synthetic age example","flow_type":"oid4vp_presentation","presentation_policy_id":"demo-policy"})).unwrap(), Utc::now()).unwrap();
+    definition.id = instance.flow_definition_id.clone();
+    definition.status = crate::DefinitionStatus::Active;
+    repository.save_definition(&definition).await.unwrap();
+    let config = json!({"principal_id":"demo-operator","issuer_did":"did:web:demo.example:verifier","demo_holder_did":HOLDER,
+        "limits":{"starts_per_minute":10,"starts_per_day":100,"maximum_active":10},"catalog":{
+        "organization_id":ORG,"application_origin":"https://demo.example","notice":"Present a fictional age claim.",
+        "scenarios":[{"id":"age","label":"Age","choices":[{"id":"over-18","label":"18 or older", "definition":{"organization_id":ORG,"definition_id":definition.id,"version":definition.version},"presentation_policy_id":"demo-policy","policy_configuration_digest":format!("sha256:{}","a".repeat(64))}]}],
+        "examples":[{"id":"fictional-adult","scenario_id":"age","label":"Fictional adult","description":"A signed fictional age credential.","profile":profile,"credential":credential(ISSUER,7)}]}});
+    let runtime = crate::PublicVerificationOptions::from_json(&config.to_string(), false).unwrap();
+    let key_string = URL_SAFE_NO_PAD.encode([13; 32]);
+    let key = crate::PublicVerificationSessionKey::parse(&key_string).unwrap();
+    instance
+        .context
+        .as_object_mut()
+        .unwrap()
+        .remove(crate::public_verification_session::PUBLIC_SESSION);
+    // Database timestamps are microseconds, as in the public launch adapter.
+    instance.expires_at = instance
+        .expires_at
+        .map(|v| chrono::DateTime::from_timestamp_micros(v.timestamp_micros()).unwrap());
+    let catalog =
+        crate::PublicVerificationCatalog::from_json(&config["catalog"].to_string(), false).unwrap();
+    key.bind(
+        &mut instance,
+        "https://demo.example",
+        &crate::PublicVerificationSelection {
+            catalog_revision: catalog.public_view().revision.into(),
+            scenario_id: "age".into(),
+            choice_id: "over-18".into(),
+            example_id: Some("fictional-adult".into()),
+            consent: true,
+        },
+    )
+    .unwrap();
+    repository
+        .save_started_instance(&instance, None)
+        .await
+        .unwrap();
+    let router = crate::flow_read_router(crate::FlowHttpState {
+        service_authenticator: None,
+        repository: repository.clone(),
+        providers: Arc::new(providers),
+        public_base_url: "https://demo.example".into(),
+        verification: crate::FlowHttpVerificationOptions {
+            public_verification: Some(runtime),
+            ..Default::default()
+        },
+        application_approval: Default::default(),
+    });
+    let endpoint = format!(
+        "/v1/flows/public/verification/sessions/{}/example",
+        instance.id
+    );
+    async fn call(
+        router: &axum::Router,
+        path: &str,
+        key: &str,
+        origin: &str,
+        body: &str,
+    ) -> (StatusCode, Value) {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("origin", origin)
+                    .header("x-verification-session", key)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_owned()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 32_768).await.unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+    assert_eq!(
+        call(
+            &router,
+            &endpoint,
+            &URL_SAFE_NO_PAD.encode([17; 32]),
+            "https://demo.example",
+            "{}"
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &router,
+            &endpoint,
+            &key_string,
+            "https://attacker.example",
+            "{}"
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &router,
+            &endpoint,
+            &key_string,
+            "https://demo.example",
+            r#"{"vp_token":"injected"}"#
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(signer.calls.load(Ordering::SeqCst), 0);
+    // A known protocol ID must not let an external wallet substitute a
+    // different credential for the consent-bound fictional specimen.
+    for (method, suffix, content_type, body) in [
+        ("GET", "request", "application/json", ""),
+        (
+            "POST",
+            "submit",
+            "application/x-www-form-urlencoded",
+            "vp_token=injected",
+        ),
+        (
+            "POST",
+            "submit/dc-api",
+            "application/json",
+            r#"{"data":{"vp_token":"injected"}}"#,
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(format!("/v1/flows/instances/{}/{suffix}", instance.id))
+                    .header("content-type", content_type)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{suffix}");
+    }
+    let (first, second) = tokio::join!(
+        call(
+            &router,
+            &endpoint,
+            &key_string,
+            "https://demo.example",
+            "{}"
+        ),
+        call(
+            &router,
+            &endpoint,
+            &key_string,
+            "https://demo.example",
+            "{}"
+        )
+    );
+    assert!(
+        matches!(first.0, StatusCode::OK | StatusCode::ACCEPTED),
+        "{first:?}"
+    );
+    assert!(
+        matches!(second.0, StatusCode::OK | StatusCode::ACCEPTED),
+        "{second:?}"
+    );
+    let (status, result) = call(
+        &router,
+        &endpoint,
+        &key_string,
+        "https://demo.example",
+        "{}",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["status"], "completed");
+    assert_eq!(result["verified"], true);
+    assert!(result.get("wallet_uri").is_none());
+    assert!(result.get("example_status").is_none());
+    assert!(!result.to_string().contains("eyJ") && !result.to_string().contains("nickname"));
+    assert_eq!(
+        signer.calls.load(Ordering::SeqCst),
+        2,
+        "one request signature and one holder signature, even with retries"
+    );
+    let stored = repository.instance(&instance.id).await.unwrap().unwrap();
+    assert_eq!(stored.status, FlowInstanceStatus::Completed);
+    assert_eq!(
+        stored.result.as_ref().unwrap()["evaluation_result"],
+        "passed"
+    );
+    assert!(stored.result.as_ref().unwrap()["submission_digest"].is_string());
+    pool.close().await;
 }

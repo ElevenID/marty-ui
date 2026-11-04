@@ -75,4 +75,18 @@ describe('public verification transport', () => {
     respond({ ...session, wallet_uri: undefined, status: 'cancelled' });
     expect((await publicVerificationApi.cancel(id, key)).status).toBe('cancelled');
   });
+  it('binds the specimen to launch and keeps signed fixture material out of catalog responses', async () => {
+    respond({ ...session, wallet_uri: undefined, example_id: 'fictional-adult', example_status: 'running' });
+    const value = await publicVerificationApi.launch({ ...selection, example_id: 'fictional-adult' }, key);
+    expect(value.example_id).toBe('fictional-adult');
+    const fetch = respond({ ...session, wallet_uri: undefined, example_id: 'fictional-adult', example_status: 'input_rejected' });
+    expect((await publicVerificationApi.example(id, key)).example_status).toBe('input_rejected');
+    expect(String(fetch.mock.calls[0][0])).toContain(`/sessions/${id}/example`);
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({});
+    respond({ ...session, wallet_uri: undefined, example_id: 'different-specimen' });
+    await expect(publicVerificationApi.launch({ ...selection, example_id: 'fictional-adult' }, key)).rejects.toThrow();
+    respond({ revision, notice: 'Fictional examples only', scenarios: [{ id: 'age', label: 'Age', choices: [{ id: 'over-18', label: '18 or older' }] }], examples: [{ id: 'adult', scenario_id: 'age', label: 'Fictional adult', description: 'Fixed signed age claims', credential: 'private.signed.bytes', profile: { issuer_did: 'private-issuer' } }] });
+    expect(JSON.stringify(await publicVerificationApi.catalog())).not.toContain('private');
+  });
+
 });

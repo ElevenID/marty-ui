@@ -160,6 +160,7 @@ mod public_session {
             scenario_id: "age".into(),
             choice_id: "over-18".into(),
             consent: true,
+            example_id: None,
         }
     }
 

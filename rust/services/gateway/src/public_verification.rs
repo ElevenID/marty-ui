@@ -20,6 +20,10 @@ pub const ROUTES: &[(HttpMethod, &str)] = &[
         HttpMethod::Post,
         "/v1/flows/public/verification/sessions/{session_id}/cancel",
     ),
+    (
+        HttpMethod::Post,
+        "/v1/flows/public/verification/sessions/{session_id}/example",
+    ),
 ];
 
 #[must_use]
@@ -33,7 +37,10 @@ pub fn is_public_path(path: &str) -> bool {
     let Some(tail) = path.strip_prefix("/v1/flows/public/verification/sessions/") else {
         return false;
     };
-    let id = tail.strip_suffix("/cancel").unwrap_or(tail);
+    let id = tail
+        .strip_suffix("/cancel")
+        .or_else(|| tail.strip_suffix("/example"))
+        .unwrap_or(tail);
     id.len() == 36 && uuid::Uuid::parse_str(id).is_ok()
 }
 
