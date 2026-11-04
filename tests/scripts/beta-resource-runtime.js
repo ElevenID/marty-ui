@@ -15,7 +15,12 @@ function mountDigest(row){
   return {type:m.Type,source:m.Source,destination:m.Destination,name:m.Name||null,rw:m.RW};
  });
  // Lazy lookup keeps the shared runtime's resource-adapter import acyclic.
- const rows=require('./functional-debug-runtime').comparableBinaryMounts(mounts);
+ const {comparableBinaryMounts}=require('./functional-debug-runtime');
+ const rows=mounts.map(mount=>{
+  assert(typeof mount.source==='string'&&mount.source.length>0&&!/[\x00-\x1f\x7f]/.test(mount.source),'RESOURCE_MOUNT_SOURCE');
+  // Docker volume sources are opaque engine identities, not host-path aliases.
+  return mount.type==='bind'?comparableBinaryMounts([mount])[0]:mount;
+ });
  assert.equal(new Set(rows.map(x=>x.destination)).size,rows.length,'RESOURCE_MOUNT_DUPLICATE');
  rows.sort((a,b)=>a.destination<b.destination?-1:a.destination>b.destination?1:0);
  return sha({schema:'marty.beta-resource-mounts/v2',mounts:rows});

@@ -106,3 +106,20 @@ test('resource v2 refuses an old unversioned-normalization config proof',()=>{
  const f=fixture();f.values.configs.schema='marty.beta-resource-config-digests/v1';
  assert.throws(()=>authority(f.profile,f.context));
 });
+
+
+test('named volume identities remain exact while relative bind sources are refused',()=>{
+ const volume={Type:'volume',Source:'a'.repeat(64),Destination:'/openbao/file',Name:'owned',RW:true};
+ const row={Mounts:[volume]};
+ assert.equal(mountDigest(row),mountDigest(structuredClone(row)));
+ for(const [field,value]of [['Source','b'.repeat(64)],['Name','foreign'],['RW',false],['Destination','/foreign'],['Type','tmpfs']]){
+  const changed=structuredClone(row);changed.Mounts[0][field]=value;
+  assert.notEqual(mountDigest(row),mountDigest(changed),field+' must remain bound');
+ }
+ const changed=structuredClone(row);changed.Mounts[0].Type='bind';
+ assert.throws(()=>mountDigest(changed),/Unsupported host mount alias/);
+ for(const source of ['',null,'bad\0source']){
+  const changed=structuredClone(row);changed.Mounts[0].Source=source;
+  assert.throws(()=>mountDigest(changed),/RESOURCE_MOUNT_SOURCE/);
+ }
+});
