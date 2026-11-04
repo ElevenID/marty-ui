@@ -121,4 +121,42 @@ function verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDi
  checkConfiguration(liveUi,'ui-prod',a.ui.modelPath,a.ui.modelSha256);
  return a;
 }
-module.exports={authority,verifyAncillary,mountDigest,CONFIG_DIGEST_SCHEMA};
+function resourceSuccessor(previousRef,profile,context){
+ assert.deepEqual(Object.keys(profile).sort(),['schema','scope','releaseQualified','recordingQualified','baseProfile','resourceRecreation'].sort(),
+  'RESOURCE_SUCCESSOR_COMPOSITION_CHANGED');
+ assert.equal(profile.baseProfile.sha256,previousRef.sha256,'RESOURCE_SUCCESSOR_BASE_CHANGED');
+ const previous=context.boundJson(previousRef);
+ assert.deepEqual(context.boundJson(profile.baseProfile),previous,'RESOURCE_SUCCESSOR_BASE_CHANGED');
+ const a=authority(profile,context),before=context.expectedRuntime(previous),after=a.rows;
+ const cid=row=>row.requiredContainerId||row.requiredObservation?.containerId;
+ const ancillary=['docs','nginx-proxy','openbao','postgres','redis','keycloak'];
+ const roles=[...before.map(row=>row.role).filter(role=>role!=='ui-prod'),...ancillary].sort();
+ assert.equal(roles.length,27);assert.equal(new Set(roles).size,27,'RESOURCE_SUCCESSOR_ROLES_CHANGED');
+ assert.deepEqual(Object.keys(a.input.before).sort(),roles,'RESOURCE_SUCCESSOR_ROLES_CHANGED');
+ assert.deepEqual(Object.keys(a.cap.allRunningRoles).sort(),roles,'RESOURCE_SUCCESSOR_ROLES_CHANGED');
+ const fixed=new Set(['openbao','postgres','redis','keycloak']);
+ assert.deepEqual(Object.keys(a.input.targets).sort(),roles.filter(role=>!fixed.has(role)),
+  'RESOURCE_SUCCESSOR_TARGETS_CHANGED');
+ const replacements=roles.map(role=>{
+  const oldCid=a.input.before[role].id,capCid=a.cap.allRunningRoles[role].id;
+  assert(HASH.test(oldCid)&&HASH.test(capCid),'RESOURCE_SUCCESSOR_ID_CHANGED');
+  assert.equal(capCid===oldCid,fixed.has(role),'RESOURCE_SUCCESSOR_UNAUTHORIZED_RECREATION');
+  if(role==='keycloak')assert.equal(a.kc.oldCid,oldCid,'RESOURCE_SUCCESSOR_KEYCLOAK_PREIMAGE_CHANGED');
+  return {role,oldCid,newCid:role==='keycloak'?a.kc.newCid:capCid};
+ });
+ replacements.push({role:'ui-prod',oldCid:a.ui.oldCid,newCid:a.ui.newCid});
+ const oldIds=replacements.map(row=>row.oldCid),newIds=replacements.map(row=>row.newCid);
+ assert(oldIds.every(id=>HASH.test(id))&&newIds.every(id=>HASH.test(id)));
+ assert.equal(new Set(oldIds).size,28,'RESOURCE_SUCCESSOR_DUPLICATE_ID');
+ assert.equal(new Set(newIds).size,28,'RESOURCE_SUCCESSOR_DUPLICATE_ID');
+ for(const row of replacements)assert(row.newCid===row.oldCid||!oldIds.includes(row.newCid),
+  'RESOURCE_SUCCESSOR_REUSED_ID');
+ for(const [rows,key]of [[before,'oldCid'],[after,'newCid']]){
+  assert.equal(rows.length,22);assert.equal(new Set(rows.map(row=>row.role)).size,22);
+  for(const row of rows)assert.equal(replacements.find(next=>next.role===row.role)?.[key],cid(row),
+   'RESOURCE_SUCCESSOR_RETAINED_ROLE_CHANGED');
+ }
+ return {kind:'resource-recreation',replacements,uiGlobalIds:a.ui.globalIds};
+}
+
+module.exports={resourceSuccessor,authority,verifyAncillary,mountDigest,CONFIG_DIGEST_SCHEMA};

@@ -60,10 +60,49 @@ def asset_contract(config, core):
     return server
 
 
+def resource_recreation_successor_cohort(config, previous, baseline, core, transition):
+    """Only the maintained resource receipt validator can supply this typed map."""
+    require(set(transition) == {"kind", "replacements", "uiGlobalIds"}, "RESOURCE_SUCCESSOR_FIELDS_CHANGED")
+    before = {role: core.load(ref)["Id"] for role, ref in previous["retainedContainers"].items()}
+    after = {role: core.load(ref)["Id"] for role, ref in config["retainedContainers"].items()}
+    require(len(before) == len(after) == 22 and set(before) == set(after) and ROLE not in before,
+            "RESOURCE_SUCCESSOR_RETAINED_ROLES_CHANGED")
+    roles = (set(before) - {"ui-prod"}) | {"docs", "nginx-proxy", "openbao", "postgres", "redis", "keycloak", "ui-prod"}
+    rows = transition["replacements"]
+    require(isinstance(rows, list) and len(rows) == len(roles) == 28
+            and all(isinstance(row, dict) and set(row) == {"role", "oldCid", "newCid"} for row in rows)
+            and {row["role"] for row in rows} == roles, "RESOURCE_SUCCESSOR_ROLE_MAP_CHANGED")
+    mappings = {row["role"]: row for row in rows}
+    old = [row["oldCid"] for row in rows]
+    new = [row["newCid"] for row in rows]
+    require(len(set(old)) == len(set(new)) == 28
+            and all(isinstance(cid, str) and re.fullmatch(r"[a-f0-9]{64}", cid) for cid in (*old, *new))
+            and all(row["newCid"] == row["oldCid"] or row["newCid"] not in old for row in rows),
+            "RESOURCE_SUCCESSOR_ID_MAP_CHANGED")
+    require(all(mappings[role]["oldCid"] == before[role] and mappings[role]["newCid"] == after[role]
+                for role in before), "RESOURCE_SUCCESSOR_RETAINED_ROLE_CHANGED")
+    fixed = {"openbao", "postgres", "redis"}
+    require(all((row["oldCid"] == row["newCid"]) == (row["role"] in fixed) for row in rows),
+            "RESOURCE_SUCCESSOR_UNAUTHORIZED_RECREATION")
+    require(len(baseline) == len(set(baseline)) and set(old).issubset(baseline),
+            "RESOURCE_SUCCESSOR_NOT_PREIMAGE")
+    ui_ids = transition["uiGlobalIds"]
+    intermediate = (set(baseline) - set(old)) | {row["oldCid"] if row["role"] == "keycloak" else row["newCid"] for row in rows}
+    require(isinstance(ui_ids, list) and len(ui_ids) == len(set(ui_ids)) == len(baseline)
+            and set(ui_ids) == intermediate, "RESOURCE_SUCCESSOR_INTERMEDIATE_COHORT_CHANGED")
+    actual = core.load(config["globalCohortPreimage"])
+    require(isinstance(actual, list) and len(actual) == len(set(actual)) == len(baseline)
+            and set(actual) == (set(baseline) - set(old)) | set(new),
+            "RESOURCE_SUCCESSOR_COHORT_CHANGED")
+    return actual
+
+
 def retained_role_successor_cohort(config, previous, baseline, core, runtime_successor):
     """A reviewed caller delegates profile validation to the shared native validator."""
     require(callable(runtime_successor), "RECOVERED_OFF_COHORT_SUCCESSOR_REQUIRED")
     transition = runtime_successor(previous["runtimeAuthority"], config["runtimeAuthority"])
+    if transition.get("kind") == "resource-recreation":
+        return resource_recreation_successor_cohort(config, previous, baseline, core, transition)
     require(set(transition) == {"role", "oldCid", "newCid"}
             and transition["role"] == "issuance-native", "RECOVERED_OFF_SUCCESSOR_SCOPE_CHANGED")
     old, new = transition["oldCid"], transition["newCid"]

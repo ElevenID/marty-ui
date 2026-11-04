@@ -2,7 +2,7 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const crypto=require('node:crypto');
-const {authority,verifyAncillary,mountDigest,CONFIG_DIGEST_SCHEMA}=require('./beta-resource-runtime');
+const {resourceSuccessor,authority,verifyAncillary,mountDigest,CONFIG_DIGEST_SCHEMA}=require('./beta-resource-runtime');
 const {verifyFunctionalRuntime}=require('./functional-debug-runtime');
 const sha=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const hex=n=>n.toString(16).padStart(64,'0');
@@ -121,5 +121,41 @@ test('named volume identities remain exact while relative bind sources are refus
  for(const source of ['',null,'bad\0source']){
   const changed=structuredClone(row);changed.Mounts[0].Source=source;
   assert.throws(()=>mountDigest(changed),/RESOURCE_MOUNT_SOURCE/);
+ }
+});
+
+function successorFixture(){
+ const f=fixture();
+ for(const role of ['openbao','postgres','redis']){
+  const cap=f.values.cap.allRunningRoles[role],old=f.values.input.before[role];
+  f.values.ui.globalIds=f.values.ui.globalIds.map(id=>id===cap.id?old.id:id);
+  cap.id=old.id;delete f.values.input.targets[role];
+ }
+ f.values.cap.roles=Object.keys(f.values.input.targets);
+ return f;
+}
+
+test('resource successor derives only exact cap/UI/Keycloak replacements from validated receipts',()=>{
+ const f=successorFixture(),result=resourceSuccessor(f.profile.baseProfile,f.profile,f.context);
+ assert.equal(result.kind,'resource-recreation');assert.equal(result.replacements.length,28);
+ assert.equal(result.replacements.filter(row=>row.oldCid!==row.newCid).length,25);
+ assert.deepEqual(result.replacements.filter(row=>row.oldCid===row.newCid).map(row=>row.role).sort(),
+  ['openbao','postgres','redis']);
+ assert.equal(result.replacements.find(row=>row.role==='keycloak').newCid,f.values.kc.newCid);
+ assert.equal(result.replacements.find(row=>row.role==='ui-prod').newCid,f.values.ui.newCid);
+});
+
+test('resource successor refuses base/composition/role/target/reused-ID ambiguity',()=>{
+ for(const kind of ['base','composition','role','target','fixed','duplicate','reuse','keycloak']){
+  const f=successorFixture(),previous={...f.profile.baseProfile};
+  if(kind==='base')previous.sha256=hex(1999);
+  if(kind==='composition')f.profile.issuanceFenceNativeOverlay={};
+  if(kind==='role')f.values.input.before.foreign=f.values.input.before.docs;
+  if(kind==='target')f.values.input.targets.openbao=268435456;
+  if(kind==='fixed')f.values.cap.allRunningRoles.redis.id=hex(1999);
+  if(kind==='duplicate')f.values.cap.allRunningRoles.docs.id=f.values.cap.allRunningRoles['nginx-proxy'].id;
+  if(kind==='reuse')f.values.cap.allRunningRoles.docs.id=f.values.input.before['nginx-proxy'].id;
+  if(kind==='keycloak')f.values.kc.oldCid=hex(1999);
+  assert.throws(()=>resourceSuccessor(previous,f.profile,f.context),undefined,kind);
  }
 });

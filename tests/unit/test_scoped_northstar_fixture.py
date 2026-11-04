@@ -500,4 +500,42 @@ class OwnedNetworkTransitionTests(unittest.TestCase):
                     m.owned_network_transition(before, after, known_cids={"b" * 64},
                         container_name="elevenid-beta-northstar-admissions-1")
 
+class ResourceSuccessorControls(unittest.TestCase):
+    @staticmethod
+    def fixture():
+        retained = ["ui-prod"] + ["retained-" + str(i) for i in range(21)]
+        roles = retained + ["docs", "nginx-proxy", "openbao", "postgres", "redis", "keycloak"]
+        fixed = {"openbao", "postgres", "redis"}
+        rows = [{"role": role, "oldCid": f"{i+1:064x}",
+            "newCid": f"{i+1 if role in fixed else i+101:064x}"} for i, role in enumerate(roles)]
+        before = {row["role"]:{"Id":row["oldCid"]} for row in rows if row["role"] in retained}
+        after = {row["role"]:{"Id":row["newCid"]} for row in rows if row["role"] in retained}
+        baseline = [row["oldCid"] for row in rows] + ["a"*64,"b"*64]
+        final = [row["newCid"] for row in rows] + ["a"*64,"b"*64]
+        transition = {"kind":"resource-recreation", "replacements":rows,
+            "uiGlobalIds":[row["oldCid"] if row["role"]=="keycloak" else row["newCid"] for row in rows]+["a"*64,"b"*64]}
+        previous = {"retainedContainers":before,"runtimeAuthority":{"profile":"before"}}
+        config = {"retainedContainers":after,"globalCohortPreimage":final,"runtimeAuthority":{"profile":"after"}}
+        core = types.SimpleNamespace(load=lambda value:value)
+        return config, previous, baseline, core, transition
+
+    def test_resource_recreation_is_exact_named_mapping_with_unchanged_unrelated_ids(self):
+        c,p,b,core,t=self.fixture()
+        self.assertEqual(m.retained_role_successor_cohort(c,p,b,core,lambda *_:t),c["globalCohortPreimage"])
+
+    def test_resource_recreation_refuses_foreign_missing_duplicate_or_composed_cohort(self):
+        for kind in ("foreign", "missing", "duplicate", "intermediate", "role", "fixed", "retained", "reused", "composition"):
+            c,p,b,core,t=self.fixture()
+            if kind=="foreign":c["globalCohortPreimage"][-1]="c"*64
+            if kind=="missing":c["globalCohortPreimage"].pop()
+            if kind=="duplicate":c["globalCohortPreimage"].append(c["globalCohortPreimage"][0])
+            if kind=="intermediate":t["uiGlobalIds"][-1]="c"*64
+            if kind=="role":t["replacements"][-1]["role"]="foreign"
+            if kind=="fixed":t["replacements"][-3]["newCid"]="c"*64
+            if kind=="retained":c["retainedContainers"]["retained-0"]["Id"]="c"*64
+            if kind=="reused":t["replacements"][0]["newCid"]=t["replacements"][1]["oldCid"]
+            if kind=="composition":t["role"]="issuance-native"
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                m.retained_role_successor_cohort(c,p,b,core,lambda *_:t)
+
 if __name__ == "__main__": unittest.main()
