@@ -1,4 +1,6 @@
 import { publicEntryHref } from './publicEntry';
+import { safeNavigationDestination } from './safeNavigation';
+import { getWebSurface } from './webSurface';
 
 const CONSOLE_PREFIX = '/console';
 
@@ -6,12 +8,13 @@ export function isConsolePath(pathname = '') {
   return pathname === CONSOLE_PREFIX || pathname.startsWith(`${CONSOLE_PREFIX}/`);
 }
 
-export function shouldBrowserRedirect({ currentPathname = '', destination = '' }) {
-  if (!destination) {
-    return false;
-  }
-
-  return isConsolePath(destination) && !isConsolePath(currentPathname);
+export function shouldBrowserRedirect({ currentPathname = '', destination = '', surface }) {
+  const safe = safeNavigationDestination(destination);
+  if (!safe || destination.startsWith('#')) return false;
+  const target = new URL(safe, typeof window === 'undefined' ? 'https://marty.invalid/' : window.location.href);
+  const current = surface === 'website' || surface === 'application' ? surface : getWebSurface(currentPathname);
+  return getWebSurface(target.pathname) !== current
+    || (isConsolePath(target.pathname) !== isConsolePath(currentPathname));
 }
 
 function resolveDestinationUrl(destination, location) {
@@ -37,10 +40,11 @@ function isSameLocationDestination(destination, location) {
 }
 
 export function redirectBrowser(destination, { replace = true, location = window.location } = {}) {
-  if (!destination) {
+  const safe = safeNavigationDestination(destination, location);
+  if (!safe) {
     return false;
   }
-  destination = publicEntryHref(destination);
+  destination = publicEntryHref(destination.startsWith('#') ? destination : safe);
 
   // Guard against no-op redirects that can cause hard-refresh loops.
   if (isSameLocationDestination(destination, location)) {

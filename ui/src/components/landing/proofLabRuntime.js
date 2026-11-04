@@ -1,7 +1,7 @@
 import {
   createVerifierDemoMockPresentation,
   serializeVerifierDemoPresentation,
-} from '../../application/verifier';
+} from '../../application/verifier/verifierDemoFlow';
 
 export const PROOF_LAB_RUNTIME = {
   'retail-age': {

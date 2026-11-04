@@ -121,3 +121,21 @@ def test_composite_keeps_digest_only_build_and_original_caller_attestation():
     assert shared[0]["with"]["producer"] == "product"
     assert any(step.get("uses", "").startswith("actions/attest-build-provenance@") for step in steps)
     assert not any(step.get("uses", "").startswith("docker/build-push-action@") for step in steps)
+
+
+def test_nightly_reuses_verified_recipe_without_changing_signer_or_cache_authority():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/nightly-release.yml").read_text())
+    steps = workflow["jobs"]["build-images"]["steps"]
+    shared = [step for step in steps if step.get("uses") == "./.github/actions/build-product-image"]
+    assert len(shared) == 1 and shared[0]["id"] == "build"
+    assert shared[0]["with"] == {
+        "producer": "nightly", "source-sha": "${{ github.sha }}",
+        "version": "${{ needs.admit.outputs.version }}", "image-plan": "${{ toJSON(matrix) }}",
+    }
+    assert not any(step.get("uses", "").startswith("docker/build-push-action@") for step in steps)
+    cache = next(step for step in steps if step.get("name") == "Expose existing read-only compiler cache")
+    assert "core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY')" in cache["with"]["script"]
+    attestation = next(step for step in steps if step.get("uses", "").startswith("actions/attest-build-provenance@"))
+    assert attestation["with"]["subject-digest"] == "${{ steps.build.outputs.digest }}"
+    signer = next(step for step in steps if step.get("name") == "Sign and record exact image identity")
+    assert signer["env"]["DIGEST"] == "${{ steps.build.outputs.digest }}"

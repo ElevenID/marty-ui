@@ -8,6 +8,7 @@ and private producers retain their distinct source and certificate identities.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -17,6 +18,14 @@ import website_release as web
 
 PROOF_LIMIT = 4 * 1024 * 1024
 JSON_LIMIT = 1024 * 1024
+
+
+def file_digest(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            hasher.update(chunk)
+    return "sha256:" + hasher.hexdigest()
 
 
 def validate_producer(producer: dict) -> dict:
@@ -90,12 +99,12 @@ def verify_subject(subject: Path, *, producer: dict, gh: Path, cosign: Path,
         verifier.local_file(path, private=True, maximum=None if path == subject else PROOF_LIMIT)
     for path in (gh, cosign):
         verifier.local_file(path)
-    before = {path: ui.digest(path.read_bytes()) for path in (subject, provenance, signature)}
+    before = {path: file_digest(path) for path in (subject, provenance, signature)}
     output = runner([str(gh), "attestation", "verify", str(subject), "--bundle", str(provenance),
                      *attestation_arguments(producer)])
     verified_certificate(output, producer)
     runner([str(cosign), "verify-blob", str(subject), "--bundle", str(signature), *signature_arguments(producer)])
-    ui.require(all(ui.digest(path.read_bytes()) == digest for path, digest in before.items()),
+    ui.require(all(file_digest(path) == digest for path, digest in before.items()),
                "web evidence changed during verification")
 
 

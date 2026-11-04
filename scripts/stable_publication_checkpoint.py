@@ -133,8 +133,12 @@ def _active(request: dict, now: datetime | None) -> None:
     _require(created <= _clock(now) < expires, "Checkpoint is future or expired")
 
 
-def validate_request(request: object, *, now: datetime | None = None) -> dict:
-    """Validate the closed request and its active, original fixed deadline."""
+def validate_request_identity(request: object) -> dict:
+    """Validate archived identity without granting publication authority.
+
+    Only a separately authenticated v2 candidate may use historical evidence.
+    The v1 loader and CLI still require the active original deadline.
+    """
     _require(type(request) is dict and set(request) == REQUEST_FIELDS, "Checkpoint request fields differ")
     _require(request["schema"] == SCHEMA and request["repository"] == REPOSITORY,
              "Checkpoint schema or repository differs")
@@ -177,6 +181,14 @@ def validate_request(request: object, *, now: datetime | None = None) -> dict:
         _require(authority["protected_main_commit"] == request["source_sha"]
                  and authority["record_sha256"] is None and authority["request_sha256"] is None,
                  "All-pass checkpoint cannot advance the original source")
+    _require(_timestamp(request["not_after"]) - _timestamp(request["created_at"])
+             == timedelta(seconds=LIFETIME_SECONDS), "Checkpoint deadline must span exactly 900 seconds")
+    return request
+
+
+def validate_request(request: object, *, now: datetime | None = None) -> dict:
+    """Validate the closed request and its active, original fixed deadline."""
+    validate_request_identity(request)
     _active(request, now)
     return request
 

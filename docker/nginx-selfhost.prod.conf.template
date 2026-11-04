@@ -14,6 +14,16 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
 
+    # Optional, authenticated website deployment routes. With no mounted *.conf
+    # file the existing combined application routing is unchanged.
+    include /etc/nginx/marty-website/*.conf;
+
+    location = /edge-healthz {
+        default_type text/plain;
+        add_header Cache-Control "no-store" always;
+        return 200 "ok\n";
+    }
+
     location /api/ {
         set $backend_api ${GATEWAY_UPSTREAM};
         proxy_pass http://$backend_api/api/;

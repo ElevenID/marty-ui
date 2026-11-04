@@ -123,21 +123,12 @@ jobs:
             core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
       - name: Build existing production recipe by digest
         id: build
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        uses: ./.github/actions/build-product-image
         with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          target: ${{ matrix.target }}
-          platforms: linux/amd64
-          build-args: ${{ matrix.build_args }}
-          outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
-          provenance: mode=max
-          sbom: true
-          cache-from: type=gha,scope=marty-ui-public-services
-          secret-envs: |
-            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
-            sccache_url=SCCACHE_GHA_CACHE_URL
-            sccache_mode=SCCACHE_GHA_RW_MODE
+          producer: nightly
+          source-sha: ${{ github.sha }}
+          version: ${{ needs.admit.outputs.version }}
+          image-plan: ${{ toJSON(matrix) }}
       - name: Reject production website images from the customer release
         if: matrix.role == 'ui' || matrix.role == 'ui_selfhost'
         env:

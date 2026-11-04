@@ -41,10 +41,47 @@
       "/sitemap.xml",
       "/sitemap-index.xml",
       "/llms.txt",
-      "/marty-website-release.json"
+      "/marty-website-release.json",
+      "/product/",
+      "/solutions/",
+      "/developers/",
+      "/architecture/",
+      "/security/",
+      "/verification/",
+      "/verifiable-credential-api/",
+      "/eudi-wallet-verification/",
+      "/iso-18013-5-mdoc-verification/",
+      "/sd-jwt-verification/",
+      "/open-badges-verification/",
+      "/issuance/",
+      "/open-badges-issuance/",
+      "/trust-registry-infrastructure/",
+      "/identity/",
+      "/why-verifiable-identity/",
+      "/from-idv-to-verifiable-identity/",
+      "/standards/",
+      "/protocol/",
+      "/ai/",
+      "/what-is-verifiable-identity/",
+      "/what-is-credential-verification/",
+      "/what-is-open-badge/",
+      "/what-is-digital-credential/",
+      "/what-is-marty-protocol/",
+      "/privacy-policy/",
+      "/privacy/",
+      "/terms-of-service/",
+      "/terms/",
+      "/pricing/"
     ],
-    "path_prefixes": ["/blog/", "/authors/", "/demos/", "/_website/"],
-    "filename_patterns": ["^/sitemap-[^/]+\\.xml$"]
+    "path_prefixes": [
+      "/blog/",
+      "/authors/",
+      "/demos/",
+      "/_website/"
+    ],
+    "filename_patterns": [
+      "^/sitemap-[^/]+\\.xml$"
+    ]
   },
   "fallback": "application"
 }

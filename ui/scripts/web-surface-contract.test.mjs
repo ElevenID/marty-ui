@@ -4,7 +4,7 @@ import { WEB_SURFACE_ROUTES, WEB_ROUTE_CONTRACT, canonicalJson, getWebSurface } 
 import { validateWebSurfaceContract } from '../src/application/routing/webSurfaceContract.mjs';
 
 test('marketing routes are explicit while application, protocol, and unknown routes remain outside', () => {
-  for (const route of ['/', '/product', '/pricing', '/resources', '/blog/example', '/demos/latest/example',
+  for (const route of ['/', '/product', '/product/', '/pricing', '/pricing/', '/resources', '/blog/example', '/demos/latest/example',
     '/_website/abc/assets/main.js', '/robots.txt', '/sitemap-0.xml']) assert.equal(getWebSurface(route), 'website', route);
   for (const route of ['/login', '/login/error', '/auth/callback', '/console', '/console/org', '/docs',
     '/pricing/checkout', '/resources/', '/v1/protocol-support', '/wallet/setup', '/unknown', '/blogger',

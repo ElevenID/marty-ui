@@ -1,7 +1,8 @@
+import { useSurfaceNavigate } from '../../application/routing/useSurfaceNavigate';
 import { Box, Typography, Paper, Grid, Button, Divider, Chip } from '@mui/material';
 import { SEOHead } from '../seo';
 import { breadcrumbListSchema, protocolSchema } from '../seo/structuredData';
-import { useNavigate } from 'react-router';
+
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 const primitives = [
@@ -14,7 +15,7 @@ const primitives = [
 ];
 
 function WhatIsMartyProtocolPage() {
-  const navigate = useNavigate();
+  const navigate = useSurfaceNavigate();
 
   return (
     <Box>

@@ -1,5 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isConsolePath, redirectBrowser, shouldBrowserRedirect } from './appHandoff';
+
+const originalUrl = window.location.href;
+afterEach(() => {
+  delete (window as any).__MARTY_RUNTIME_CONFIG__;
+  (globalThis as any).jsdom.reconfigure({ url: originalUrl });
+});
 
 describe('appHandoff', () => {
   describe('isConsolePath', () => {
@@ -81,5 +87,38 @@ describe('appHandoff', () => {
       expect(location.assign).toHaveBeenCalledWith('/login');
       expect(location.replace).not.toHaveBeenCalled();
     });
+  });
+});
+
+
+describe('surface navigation boundaries', () => {
+  it('hands website/application changes to the browser and retains same-surface navigation', () => {
+    for (const [currentPathname, destination] of [['/product', '/login?next=%2Fconsole#start'], ['/pricing', '/pricing/checkout?plan=pilot'], ['/login', '/product#details'], ['/console/org', '/']]) {
+      expect(shouldBrowserRedirect({ currentPathname, destination })).toBe(true);
+    }
+    for (const [currentPathname, destination] of [['/product', '/standards'], ['/login', '/auth/callback'], ['/product', '#details']]) {
+      expect(shouldBrowserRedirect({ currentPathname, destination })).toBe(false);
+    }
+  });
+
+  it('rejects external, protocol-relative, malformed, and unsafe-scheme handoffs', () => {
+    const location = { href: 'https://marty.example.com/login', replace: vi.fn(), assign: vi.fn() };
+    for (const destination of ['https://example.invalid/', '//example.invalid/pricing', 'javascript:/pricing/?alert(1):alert(1)', 'data:text/html,hello', '/\\evil.example/', ' /pricing', '/pricing\n']) {
+      expect(shouldBrowserRedirect({ currentPathname: '/login', destination })).toBe(false);
+      expect(redirectBrowser(destination, { location })).toBe(false);
+    }
+    expect(location.replace).not.toHaveBeenCalled();
+    expect(location.assign).not.toHaveBeenCalled();
+  });
+
+  it('retains only the explicitly configured canonical-origin handoff', () => {
+    const alias = 'https://203.0.113.10:8443';
+    const canonical = 'https://marty.example.com:8443';
+    (globalThis as any).jsdom.reconfigure({ url: `${alias}/` });
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { hosting: { canonicalOrigin: canonical, publicEntryOrigins: [alias] } };
+    const location = { href: `${alias}/`, replace: vi.fn() };
+    expect(redirectBrowser(`${canonical}/login?next=%2Fconsole#sign-in`, { location })).toBe(true);
+    expect(location.replace).toHaveBeenCalledWith(`${canonical}/login?next=%2Fconsole#sign-in`);
+    expect(redirectBrowser('https://unlisted.example.com/login', { location })).toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import i18n from 'i18next';
+import { staticAssetHref } from '../utils/staticAssetHref';
 import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 import HttpBackend from 'i18next-http-backend';
@@ -51,7 +52,7 @@ i18n
     // Backend options
     backend: {
       // Path to load translation files
-      loadPath: '/locales/{{lng}}/{{ns}}.json',
+      loadPath: staticAssetHref('/locales/{{lng}}/{{ns}}.json'),
       
       // Allow cross-domain requests
       crossDomain: false,
