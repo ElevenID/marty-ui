@@ -280,7 +280,8 @@ def admit_report(spec: dict, report: dict) -> str:
         # GitHub can reject the stale A -> A command at its protected-branch
         # policy layer before Git emits a stale-lock diagnostic. This proves
         # only this exact policy refusal, not stale-CAS behavior or capability
-        # success. The operator also requires effective no-bypass protection,
+        # success. The operator also requires explicit current-credential
+        # no-bypass protection under the exact visible main merge-queue policy,
         # unchanged negative readbacks, and a successful paired C -> C write.
         if report["refs"] == [
             {"ref": "refs/heads/main", "status": "ng",
