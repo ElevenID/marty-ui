@@ -36,6 +36,16 @@ use crate::{
 };
 
 const PAR_TTL_SECONDS: u64 = 90;
+
+/// Durable identity shared by authorization-only transaction creation and grant lookup.
+pub(crate) fn authorization_transaction_id(session_id: &str) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("marty:oid4vci:authorization-session:{session_id}").as_bytes(),
+    )
+    .to_string()
+}
+
 const PAR_MAX_PAYLOAD_BYTES: usize = 16 * 1024;
 // The gateway transport owns the released 10 MiB request envelope. Do not add
 // a smaller application limit to protocol bodies that had no Python limit.

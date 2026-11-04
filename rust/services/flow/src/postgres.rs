@@ -6,6 +6,7 @@ use serde_json::Value;
 use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
+use crate::repository::valid_sha256;
 use crate::{
     checked_public_record, ApplicationEventReceipt, FlowArtifactRecord, FlowDefinitionRecord,
     FlowInstanceRecord, FlowRecordError, PhysicalStartSnapshot, PlannedApplicationFlowRecord,
@@ -1338,13 +1339,6 @@ fn timestamp(value: u64) -> Result<DateTime<Utc>, RepositoryError> {
 
 fn storage(error: sqlx::Error) -> RepositoryError {
     RepositoryError::Storage(error.to_string())
-}
-
-fn valid_sha256(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 const DEFINITION_SELECT: &str =

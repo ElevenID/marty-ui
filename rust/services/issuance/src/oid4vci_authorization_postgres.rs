@@ -8,10 +8,10 @@ use uuid::Uuid;
 
 use crate::{
     oid4vci_authorization::{
-        AccessTokenGrant, AuthorizationParameters, AuthorizationSessionWrite,
-        DeferredCredentialLookup, DeferredCredentialRecord, DeferredStatus, NotificationLookup,
-        NotificationRequest, Oid4vciAuthorizationRepository, Oid4vciAuthorizationRepositoryError,
-        RegisteredAuthorizationClient,
+        authorization_transaction_id, AccessTokenGrant, AuthorizationParameters,
+        AuthorizationSessionWrite, DeferredCredentialLookup, DeferredCredentialRecord,
+        DeferredStatus, NotificationLookup, NotificationRequest, Oid4vciAuthorizationRepository,
+        Oid4vciAuthorizationRepositoryError, RegisteredAuthorizationClient,
     },
     token_postgres::hash_access_token,
 };
@@ -452,14 +452,6 @@ fn linked_grants(
             == session
                 .try_get::<DateTime<chrono::Utc>, _>("access_token_expires_at")
                 .map_err(row_error)?)
-}
-
-fn authorization_transaction_id(session_id: &str) -> String {
-    Uuid::new_v5(
-        &Uuid::NAMESPACE_URL,
-        format!("marty:oid4vci:authorization-session:{session_id}").as_bytes(),
-    )
-    .to_string()
 }
 
 fn notification_event_id(transaction_id: &str, request: &NotificationRequest) -> String {
