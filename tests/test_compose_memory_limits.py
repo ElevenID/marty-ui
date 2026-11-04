@@ -66,6 +66,11 @@ def test_defaults_bound_every_service_and_keycloak_heap(files, tmp_path):
         deploy_limit = service.get("deploy", {}).get("resources", {}).get("limits", {}).get("memory")
         if deploy_limit is not None:
             assert int(deploy_limit) == int(service["mem_limit"]), name
+    if "passport-beta-bureau" in services:
+        for name in ("nginx-proxy", "cloudflared", "docs",
+                     "passport-callback-signer", "passport-beta-bureau"):
+            service = services[name]
+            assert int(service["deploy"]["resources"]["limits"]["memory"]) == int(service["mem_limit"])
     if "keycloak" in services:
         keycloak = services["keycloak"]
         assert int(keycloak["mem_limit"]) == 2 * 1024**3
