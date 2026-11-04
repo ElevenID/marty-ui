@@ -798,6 +798,7 @@ fn initial_replacement_never_crosses_application_or_lifecycle_ownership() {
 #[ignore = "requires an ordinary nonroot OS identity for rootless prepared-boundary admission"]
 fn recurring_setup_retains_provenance_without_reapplying_original_storage_observations() {
     let fixture = boundary_fixture();
+    let journal = files::read(fixture.installation.join("installation.json")).unwrap();
     fixture
         .state
         .with_inspection(|view| load_prepared(view).map(|_| ()))
@@ -820,6 +821,17 @@ fn recurring_setup_retains_provenance_without_reapplying_original_storage_observ
                 context.compose_inputs.project,
                 view.journal().compose_project()
             );
+            let status = preparation_status(view);
+            assert_eq!(status["state"], "prepared");
+            assert_eq!(status["check"], Value::Null);
+            assert_eq!(status["initial_preparation"]["checked"], true);
+            assert_eq!(status["initial_preparation"]["matches"], false);
+            assert_eq!(
+                status["initial_preparation"]["check"],
+                "application_preparation"
+            );
+            assert_eq!(status["continuation_authorized"], false);
+            assert_eq!(status["installation_ready"], false);
             Ok(())
         })
         .unwrap();
@@ -833,6 +845,16 @@ fn recurring_setup_retains_provenance_without_reapplying_original_storage_observ
     assert!(
         fixture.state.with_inspection(maintenance_context).is_err(),
         "immutable setup evidence still binds maintenance"
+    );
+    let status = fixture
+        .state
+        .with_inspection(|view| Ok(preparation_status(view)))
+        .unwrap();
+    assert_eq!(status["state"], "refused");
+    assert_eq!(status["check"], "evidence_fingerprints");
+    assert_eq!(
+        files::read(fixture.installation.join("installation.json")).unwrap(),
+        journal
     );
 }
 
@@ -923,11 +945,59 @@ fn complete_pending_boundary_reopens_and_rejects_rebound_inputs_proofs_and_nativ
         }
         drop(fixture.state);
         let view = LockedInspection::open(&fixture.installation).unwrap();
+        let expected_check = match mutation {
+            "none" => None,
+            "environment" | "renewal-identity" | "renewal-observation" => Some(Check::PublicRenewal),
+            "application-projection" => Some(Check::ApplicationPreparation),
+            "custody-job" => Some(Check::EvidenceFingerprints),
+            "native-setup" => Some(Check::CredentialsJob),
+            "operator" => Some(Check::OperatorBinding),
+            "projection-directory" => Some(Check::Projection),
+            "source-layer" => Some(Check::InputCustody),
+            "prepared-ready" => Some(Check::PreparationState),
+            "prepared-port" => Some(Check::RuntimeInputs),
+            "prepared-runtime" => Some(Check::ServiceSelection),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            inspect_retained_setup(&view, true).err(),
+            expected_check,
+            "{mutation}"
+        );
         assert_eq!(
             continuation_available(&view).is_ok(),
             mutation == "none",
             "{mutation}"
         );
+        if let Some(check) = expected_check {
+            assert_eq!(continuation_available(&view).unwrap_err(), check.refusal());
+        }
+        let status = installer_acme::status(&view).unwrap();
+        assert_eq!(status["configured"], false);
+        assert_eq!(status["environments"], serde_json::json!([]));
+        let host = &status["host_preparation"];
+        if mutation == "application-projection" {
+            assert_eq!(host["state"], "prepared");
+            assert_eq!(host["initial_preparation"]["matches"], false);
+            assert_eq!(
+                host["initial_preparation"]["check"],
+                "application_preparation"
+            );
+        } else if let Some(check) = expected_check {
+            assert_eq!(host["state"], "refused", "{mutation}");
+            assert_eq!(host["check"], check.code(), "{mutation}");
+        } else {
+            assert_eq!(host["state"], "prepared");
+            assert_eq!(host["initial_preparation"]["matches"], true);
+            assert_eq!(host["initial_preparation"]["check"], Value::Null);
+        }
+        assert_eq!(host["runtime_observed"], false);
+        assert_eq!(host["continuation_authorized"], false);
+        assert_eq!(host["setup_replay_authorized"], false);
+        assert_eq!(host["installation_ready"], false);
+        assert!(!status
+            .to_string()
+            .contains(fixture.installation.to_str().unwrap()));
         if mutation == "none" {
             let context = continuation_context(&view).unwrap();
             assert_eq!(context.compose_inputs.services, [RESPONDER]);
