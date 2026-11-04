@@ -316,6 +316,14 @@ Without split state, its legacy recovery path remains. For separately installed
 bundle hosts, configure equivalent commands using the exact saved `$Common`
 arguments and trusted tooling checkout.
 
+After the website owner releases its lock, product recovery uses
+`recover_product_services.py` to read the exact invocation's active service list.
+It refuses failed, empty, malformed, or duplicate inventories, removes the edge
+and all three website slots, and passes an explicit nonempty product list with
+`--no-deps` to Compose. Inactive initialization profiles stay inactive. An unlocked
+product recovery therefore cannot recreate a website-owned container from a stale
+overlay during a concurrent website promotion.
+
 Every operator or scheduled product `docker compose up` must include
 `.marty-website/compose.website.json` **after** the existing product file list once
 the website split is active. Omitting it during an edge recreation removes its

@@ -110,7 +110,11 @@ try {
         $productionServices = @('marty-selfhost-prod-edge-1', 'marty-selfhost-prod-gateway-1', 'marty-selfhost-prod-cloudflared-1', 'marty-selfhost-prod-ui-1', 'marty-selfhost-prod-applicant-1', 'marty-selfhost-prod-issuance-1')
         if ($HasIndependentWebsite) {
             Invoke-Step 'Recover product while retaining the selected website overlay' {
-                docker compose @ProductionComposeArgs up -d --no-build --wait
+                # The website lock was released after --start-current. Select
+                # only default-active product roles with --no-deps; an unlocked
+                # recovery must never reconcile edge/website slots from a stale
+                # Compose model during a concurrent website promotion.
+                & $env:MARTY_WEBSITE_PYTHON (Join-Path $PSScriptRoot 'recover_product_services.py') -- @ProductionComposeArgs
             }
         } elseif (@($productionServices | Where-Object { -not (Test-ContainerReady $_) }).Count -gt 0) {
             Invoke-Step 'Recover self-host production stack' {
