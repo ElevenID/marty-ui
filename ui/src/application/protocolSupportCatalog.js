@@ -63,4 +63,3 @@ export function normalizeProtocolSupportCatalog(raw) {
   });
   return { ...catalog, entities };
 }
-

@@ -64,9 +64,9 @@ import {
 } from '../application/routing/landingEntry';
 import { redirectBrowser } from '../application/routing/appHandoff';
 import GitHubIcon from '@mui/icons-material/GitHub';
-import { 
-  IDENTITY_CONCEPTS, 
-  PRODUCTS, 
+import {
+  IDENTITY_CONCEPTS,
+  PRODUCTS,
   TRUST_SIGNALS,
   ORGANIZATION_OUTCOMES,
   AUDIENCE_ROUTING,
@@ -453,10 +453,10 @@ function LandingPageContent({ isLoading = false }) {
             'OID4VP',
           ]}
         />
-        <Box 
-          display="flex" 
-          justifyContent="center" 
-          alignItems="center" 
+        <Box
+          display="flex"
+          justifyContent="center"
+          alignItems="center"
           minHeight="50vh"
           flexDirection="column"
           gap={2}
@@ -705,9 +705,9 @@ function LandingPageContent({ isLoading = false }) {
         onClose={handleCloseError}
         anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
       >
-        <Alert 
-          onClose={handleCloseError} 
-          severity="warning" 
+        <Alert
+          onClose={handleCloseError}
+          severity="warning"
           variant="filled"
           sx={{ width: '100%' }}
         >
@@ -1631,12 +1631,12 @@ function LandingPageContent({ isLoading = false }) {
         </Grid>
       </Section>
       {/* ─── Proof & Credibility Strip ─── */}
-      <Paper 
-        elevation={0} 
-        sx={{ 
-          py: 3, 
-          px: 3, 
-          bgcolor: 'grey.50', 
+      <Paper
+        elevation={0}
+        sx={{
+          py: 3,
+          px: 3,
+          bgcolor: 'grey.50',
           borderRadius: 0,
           border: '1px solid',
           borderColor: 'grey.200'
@@ -1859,10 +1859,10 @@ function LandingPageContent({ isLoading = false }) {
         </Box>
       </Section>
       {/* ───────────────────────────────────  FOOTER CTA  */}
-      <Box 
-        sx={{ 
-          textAlign: 'center', 
-          py: { xs: 6, md: 8 }, 
+      <Box
+        sx={{
+          textAlign: 'center',
+          py: { xs: 6, md: 8 },
           px: 2,
           background: 'linear-gradient(135deg, #1976d2 0%, #0d47a1 100%)',
           color: 'white',
@@ -1955,11 +1955,11 @@ function LandingPageContent({ isLoading = false }) {
         </Box>
       </Box>
       {/* Orientation Banner */}
-      <Box 
-        sx={{ 
-          mt: 4, 
-          p: 2, 
-          bgcolor: 'grey.50', 
+      <Box
+        sx={{
+          mt: 4,
+          p: 2,
+          bgcolor: 'grey.50',
           borderRadius: 1,
           display: 'flex',
           alignItems: 'center',

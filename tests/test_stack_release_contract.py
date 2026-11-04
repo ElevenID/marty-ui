@@ -438,7 +438,13 @@ def test_stable_installer_publication_closes_payload_proofs_and_remote_bytes() -
     assert "200)" in existing and "first-attempt coordinate" in existing
     assert "exit 1" in existing.split("200)", 1)[1].split(";;", 1)[0]
     assert "gh release download" not in existing
-    assert "if" not in steps[publish]
+    assert steps[publish]["if"] == "inputs.publication_contract == 'v1'"
+    candidate = steps[names["Seal the immutable v2 publication candidate"]]
+    assert candidate["if"] == "inputs.publication_contract == 'v2'"
+    assert late_tag < names["Seal the immutable v2 publication candidate"] < publish
+    # The prospective v2 branch still uses all original qualification and
+    # signing gates; only its final release mutation moves to a fresh publisher.
+    assert all("if" not in steps[i] for i in (checks, signing, attest, export, seal, late_tag))
     assert all("continue-on-error" not in steps[i] for i in (checks, signing, attest, export, publish))
 
 
@@ -1300,9 +1306,13 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
     assert "+refs/heads/main:refs/remotes/origin/main" in workflow
     assert "Wait for the exact operator tag handoff" in workflow
     helper = (_text("scripts/push_promoted_release_tag.py")
-              + _text("scripts/release_tag_handoff.py"))
-    assert "updateRefs" in helper
-    assert "beforeOid" in helper and "afterOid" in helper
+              + _text("scripts/release_tag_handoff.py")
+              + _text("scripts/release_git_atomic.py"))
+    assert '"atomic", "report-status", "side-band-64k"' in helper
+    assert '"old_oid"' in helper and '"new_oid"' in helper
+    assert "marty.native-git-atomic-transaction/v1" in helper
+    assert "marty.release-tag-operator-observations/v2" in helper
+    assert "updateRefs" not in helper
     assert '"--atomic"' not in helper
     assert "git push" not in workflow
     assert workflow.index("stack-release-qualified-") < workflow.index(
