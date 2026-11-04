@@ -3,7 +3,7 @@
 // transaction is required to prove a browser handoff occurred.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -17,6 +17,8 @@ const dist = path.resolve(process.argv[2] || path.join(uiRoot, 'dist-website'));
 const metadata = JSON.parse(readFileSync(path.join(dist, 'marty-website-release.json'), 'utf8'));
 const nginxPath = (value) => JSON.stringify(value.replaceAll('\\', '/'));
 const temporary = mkdtempSync(path.join(tmpdir(), 'marty-website-smoke-'));
+// The portable Windows build nests its default temporary paths under temp/.
+mkdirSync(path.join(temporary, 'temp'));
 const socket = http.createServer();
 await new Promise((resolve) => socket.listen(0, '127.0.0.1', resolve));
 const nginxPort = socket.address().port;
