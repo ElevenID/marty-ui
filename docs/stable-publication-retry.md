@@ -1,10 +1,13 @@
 # Stable publication after successful qualification
 
-New `Stack release` dispatches default to `publication_contract=v2`. The original
-run still builds, qualifies, signs, promotes the exact image digests, and completes
-the bounded annotated-tag handoff. It then seals a data-only candidate containing
-the original checkpoint, signed assets, operator admission, policy digest, and a
-closed inventory of file hashes. It must finish successfully before publication.
+`Stack release` dispatches default to `publication_contract=v1`, preserving the
+existing publisher while the new path is qualified. Select
+`publication_contract=v2` explicitly for an approved rollout. The original run
+still builds, qualifies, signs, promotes the exact image digests, and completes
+the bounded annotated-tag handoff. For v2 it then seals a data-only candidate
+containing the original checkpoint, signed assets, operator admission, policy
+digest, and a closed inventory of file hashes. It must finish successfully before
+publication.
 
 `Publish stable candidate` starts from that successful completion. The publisher
 uses reviewed code from protected `main`, authenticates the original CD run and
@@ -69,9 +72,27 @@ place. Staged installed-journey acceptance, anonymous clean-host replay, install
 admission, and signed channel promotion are still required for stable installer
 activation; publication alone grants none of those approvals.
 
-Before enabling v2 in normal operations, review the `stack-release` environment
-protection and run an approved non-production rehearsal with real GitHub OIDC,
-attestation verification, and release permissions. Local failure-injection tests
-exercise custody, authority, conflicts, deadline checks, partial upload recovery,
-and workflow wiring using explicitly synthetic proof adapters. They do not claim
-to have produced or accepted a live release signature.
+Merge readiness and runtime activation are separate gates:
+
+1. Before merge, require the source and workflow reviews, local contract tests,
+   and required pull-request/merge-queue checks. Keep v1 as the default. The
+   trusted producer and publisher require protected-main code, so their exact
+   live OIDC path cannot be qualified by dispatching the draft branch.
+2. After merge, review the `stack-release` environment protection and obtain
+   approval for the first live v2 release. Select `publication_contract=v2`
+   explicitly and use the ordinary admitted release claim and qualified source.
+   Verify the original CD result, candidate, signatures, publisher ownership,
+   exact release assets, and downstream installer gates before routine v2 use.
+3. A later reviewed change may make v2 the default after that evidence is accepted.
+   Until then, ordinary dispatches continue to use v1.
+
+There is no sandbox or dry-run target in the v2 publisher. A live invocation
+creates or completes a stable release in `ElevenID/marty-ui` and marks it latest.
+Treat that invocation as a release operation; do not use an ordinary dispatch as
+an isolated rehearsal or bypass source/repository checks to simulate one.
+
+Local failure-injection tests exercise custody, authority, conflicts, deadline
+checks, partial upload recovery, and workflow wiring using explicitly synthetic
+proof adapters. They do not claim to have produced or accepted a live release
+signature. Website activation and production deployment keep their own runtime
+qualification gates.

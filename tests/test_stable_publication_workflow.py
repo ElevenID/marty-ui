@@ -14,8 +14,10 @@ def load(name):
 def test_candidate_is_sealed_after_admission_and_original_cd_stays_first_attempt():
     workflow = load("cd.yml")
     inputs = workflow[True]["workflow_dispatch"]["inputs"]
-    assert inputs["publication_contract"]["default"] == "v2"
-    assert inputs["publication_contract"]["options"] == ["v2", "v1"]
+    # Landing the implementation must not switch ordinary dispatches to an
+    # unqualified publisher. The first live v2 use is an explicit rollout.
+    assert inputs["publication_contract"]["default"] == "v1"
+    assert inputs["publication_contract"]["options"] == ["v1", "v2"]
     jobs = workflow["jobs"]
     early = jobs["resolve-transaction"]["steps"][0]["run"]
     assert 'test "$GITHUB_RUN_ATTEMPT" = 1' in early

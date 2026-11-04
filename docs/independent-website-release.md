@@ -17,6 +17,15 @@ remain separate from production marketing.
 
 ## First cutover
 
+The reviewed code lands before live qualification of the new producer identities.
+Before merge, complete the source/build/contract checks and required repository
+checks. Merge the public PR before its private companion. The workflows retain
+`combined` as their default; merging does not activate split routing on a host.
+Protected-main admission is required for live signed production artifacts, so do
+not make that post-merge qualification a prerequisite for merging the code.
+Website activation still requires the real host and application/billing checks
+below; a source merge is not evidence that those checks passed.
+
 1. Merge the public frontend/producer/edge changes and the private adapters and
    producer changes. The private producer explicitly selects a public main-lineage
    commit containing these shared helpers. It does not execute code from a

@@ -80,6 +80,14 @@ METADATA_IDENTITY_LINES = {
         '    return {"repository": COMMERCE_REPOSITORY, "source_sha": source_sha}',
         '        producer.update(repository=COMMERCE_REPOSITORY, source_sha=commerce_source_sha)',
     ),
+    "scripts/website_release.py": (
+        'REPOSITORIES = {ui.REPOSITORY: "1140864197", ui.COMMERCE_REPOSITORY: "1207411806"}',
+        '    return {"repository": ui.COMMERCE_REPOSITORY if extension else ui.REPOSITORY,',
+        '        legacy_p.update(repository=ui.COMMERCE_REPOSITORY, source_sha=private_sha)',
+    ),
+    "scripts/website_provenance.py": (
+        '    ui.require(producer["repository"] == (ui.COMMERCE_REPOSITORY if private_image else ui.REPOSITORY),',
+    ),
 }
 IGNORED_PARTS = {"__pycache__", "node_modules", "dist", "build", "artifacts"}
 COMMERCIAL_CATALOG_KEYS = {
