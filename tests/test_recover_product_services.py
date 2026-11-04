@@ -86,6 +86,16 @@ def test_powershell_split_branch_delegates_mutation_to_explicit_product_owner():
     assert "docker compose" not in block
 
 
+def test_powershell_forwards_explicit_registry_config_to_both_website_recovery_modes():
+    source = (ROOT / "scripts/recover-marty-after-reboot.ps1").read_text()
+    assert source.startswith("[CmdletBinding()]\nparam(")
+    assert "[string]$RegistryConfig," in source
+    assert "'ExpectedDockerContext', 'RegistryConfig')" in source
+    assert "$WebsiteArguments += @('--registry-config', $RegistryConfig)" in source
+    assert "$WebsiteArguments[0] = '--check-current'" in source
+    assert source.count("'deploy_website.py') @WebsiteArguments") == 2
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX executable fixture; Windows wrapper has native-process tests")
 @pytest.mark.parametrize("config_failure", [False, True])
 def test_real_cli_argument_boundary_and_config_exit_status(tmp_path, config_failure):

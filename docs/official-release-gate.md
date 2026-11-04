@@ -221,20 +221,34 @@ against the real repository protections. Its capability mode uses a unique,
 non-semver `v-release-capability-<operator-run-id>-1` audit tag and a genuine
 ancestor with identical workflow files. The stale-main negative transaction
 asserts the ancestor as both old and new main, modelling a formerly admitted
-no-op after main advanced. Its separate `observed_main_oid` binds discovery and
-the diagnostic to current main; the request never proposes an ancestor-to-current
-branch update. It must return two refused refs plus the exact
-main/current/expected diagnostic through sideband. Both refs must remain
-unchanged on independent readback. A generic atomic-failure status is
-insufficient. The paired current-main transaction must report both refs
-successful and create the exact annotated audit tag without moving main.
-The v2 capability result summarizes those native observations; all raw bounded
-wire evidence remains in the observations artifact. Recheck the same rules
-afterward. The parser counts and ignores only the observed standalone progress
+no-op after main advanced. Its separate `observed_main_oid` binds discovery to
+current main; the request never proposes an ancestor-to-current
+branch update. Before writing, the operator requires an active repository-owned
+merge-queue ruleset applying exactly to main, with no additional conditions,
+excluded refs or bypass actors and
+the current credential unable to bypass it. The negative transaction must
+return either the exact main/current/expected stale-lock diagnostic with both
+refs atomically refused, or GitHub's exact main-policy GH013 diagnostic for
+the merge queue and pull request, with main refused for rule violations and
+the run-bound tag refused by the atomic transaction. The latter is recorded as
+`confirmed_main_policy_refusal`; it is not proof of Git's stale-lock layer.
+Both refs must remain unchanged on independent readback, and the complete
+operator context and ruleset snapshot must still match before the positive
+transaction. A generic atomic failure, other GH013 diagnostic, or policy
+refusal on a positive or production transaction is insufficient.
+
+The paired current-main transaction must report both refs successful and
+create the exact annotated audit tag without moving main. The v3 capability
+result distinguishes the negative evidence and records the protecting ruleset
+IDs; all raw bounded wire evidence remains in the observations artifact.
+Recheck the same rules afterward. The parser counts and ignores only the observed standalone progress
 NUL packet; raw packets remain intact. NULs within text or status and unsupported
 control bytes are refused.
-Decoded rule refusals are preserved before admission and cannot authorize the
-positive transaction. Local bare-Git tests establish protocol behavior, and do
+Decoded refusals are preserved before admission. No negative result alone is
+successful qualification, and historical failed runs remain failed. In run
+41894878943 the corrected stale no-op was rejected by GitHub policy before
+the stale-lock layer; the positive transaction was never sent. A fresh paired
+qualification is required after this correction. Local bare-Git tests establish protocol behavior, and do
 not replace this actual GitHub qualification under the existing protections. Permission,
 type, transport or generic errors are not successful capability proof. Keep
 the immutable audit receipt and tag; do not weaken protections or obtain a

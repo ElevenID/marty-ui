@@ -76,6 +76,7 @@ def invoke(tmp_path, *, check=True, omit=False, config_failure=False, missing=Fa
         "ProductionEnvFile": str(files[3]), "OpenbaoComposeFile": str(files[2]),
         "ProductionProject": "isolated-product", "OpenbaoProject": "isolated-bao",
         "ExpectedDockerContext": "desktop-linux",
+        "RegistryConfig": str(stack / "private-registry/config.json"),
     }
     config = tmp_path / "recovery.json"
     config.write_text(json.dumps({"schema": "marty.windows-recovery/v1", "parameters": settings}))
@@ -87,6 +88,7 @@ def invoke(tmp_path, *, check=True, omit=False, config_failure=False, missing=Fa
         + " -OpenbaoComposeFile " + quote(files[2])
         + " -ProductionProject isolated-product -OpenbaoProject isolated-bao"
         + " -ExpectedDockerContext desktop-linux"
+        + " -RegistryConfig " + quote(settings["RegistryConfig"])
         + ("" if omit else " -ProductionComposeFile @(" + ",".join(quote(p) for p in files[:2]) + ")")
     )
     script = r"""

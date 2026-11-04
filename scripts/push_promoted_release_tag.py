@@ -251,8 +251,29 @@ def read_exact_tag(github: handoff.GitHub, tag: str, object_sha: str, source: st
     return value
 
 
+def require_capability_main_protection(inspection: dict) -> list[int]:
+    # Keep the policy-negative experiment tied to an active, unbypassable
+    # main merge queue. Do not infer a pull-request ruleset from GH013: that
+    # requirement can be supplied separately by classic branch protection.
+    rulesets = inspection.get("rulesets")
+    handoff.require(isinstance(rulesets, list), "Capability ruleset snapshot is unavailable")
+    protecting = [value["id"] for value in rulesets if isinstance(value, dict)
+                  and handoff.positive(value.get("id"))
+                  and value.get("target") == "branch" and value.get("enforcement") == "active"
+                  and value.get("source_type") == "Repository" and value.get("source") == REPOSITORY
+                  and value.get("conditions") == {
+                      "ref_name": {"include": ["refs/heads/main"], "exclude": []}}
+                  and value.get("bypass_actors") == [] and value.get("current_user_can_bypass") == "never"
+                  and isinstance(value.get("rules"), list)
+                  and any(isinstance(rule, dict) and rule.get("type") == "merge_queue"
+                          for rule in value["rules"])]
+    handoff.require(protecting, "Capability requires an active exact-main merge queue with no bypass")
+    return sorted(protecting)
+
+
 def qualify_capability(github: handoff.GitHub, native: atomic.NativeGit,
                        run_id: int, main: str, inspection: dict) -> dict:
+    protection_ids = require_capability_main_protection(inspection)
     parents = handoff.git("show", "-s", "--format=%P", main, deadline=github.deadline).split()
     handoff.require(len(parents) == 1 and handoff.SHA.fullmatch(parents[0]) is not None,
                     "Capability needs a real distinct first-parent ancestor")
@@ -274,19 +295,25 @@ def qualify_capability(github: handoff.GitHub, native: atomic.NativeGit,
     # The transport binds discovery to C without proposing an A -> C update.
     negative = native.exchange(atomic.transaction_spec(ancestor, main, tag, obj["sha"],
                                                         f"capability-negative-{run_id}-1"))
+    handoff.require(negative["decision"] in {"confirmed_stale_main_refusal", "confirmed_main_policy_refusal"},
+                    "Negative capability evidence was not admitted")
     handoff.require(github.main()["commit"]["sha"] == main
                     and github.json(f"repos/{REPOSITORY}/git/ref/tags/{tag}", absent=True) is None,
                     "Negative atomic capability transaction unexpectedly changed a ref")
+    handoff.require(inspect_repository(github) == (run_id, main, inspection),
+                    "Operator context or repository rules changed before the positive capability transaction")
     positive = native.exchange(atomic.transaction_spec(main, main, tag, obj["sha"],
                                                         f"capability-positive-{run_id}-1"))
+    handoff.require(positive["decision"] == "confirmed_success", "Positive capability transaction did not succeed")
     read_exact_tag(github, tag, obj["sha"], ancestor, message)
     handoff.require(github.main()["commit"]["sha"] == main, "Main changed during capability qualification")
     final_run, final_source, final_inspection = inspect_repository(github)
     handoff.require((final_run, final_source, final_inspection) == (run_id, main, inspection),
                     "Operator context or repository rules changed during capability qualification")
-    return {"schema": "marty.release-tag-capability/v2", "status": "success", "repository": REPOSITORY,
+    return {"schema": "marty.release-tag-capability/v3", "status": "success", "repository": REPOSITORY,
             "operator_run_id": run_id, "operator_run_attempt": 1, "operator_source_sha": main,
             "ancestor_source_sha": ancestor, "audit_tag": tag, "tag_object_sha": obj["sha"],
+            "main_protection_ruleset_ids": protection_ids,
             "transport": atomic.TRANSPORT,
             "negative_transaction": transaction_summary(negative), "positive_transaction": transaction_summary(positive),
             "main_before_sha": main, "main_after_sha": main, "completed_at": utc_now(), **inspection}

@@ -36,7 +36,11 @@ Do not edit deployment inputs during recovery. For an independent website,
 omit `ProductionComposeFile`: authenticated `.marty-website/state.json` owns the
 exact invocation and retained website overlay. Configure the existing
 `MARTY_WEBSITE_PYTHON`, `MARTY_WEBSITE_GH` and `MARTY_WEBSITE_COSIGN` tools under
-the same operator account; see [independent website recovery](independent-website-release.md).
+the same operator account. Add `RegistryConfig` to `parameters` with the absolute
+path to that account's private Docker `config.json`, and configure `DOCKER_CONFIG`
+to its parent for the actual pulls. Direct invocations use `-RegistryConfig`.
+The saved configuration retains the path only; never put credential contents in
+it. See [independent website recovery](independent-website-release.md).
 
 ```powershell
 $Tooling = 'C:/Marty/tooling'

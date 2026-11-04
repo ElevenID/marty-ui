@@ -418,10 +418,11 @@ def read_state(directory: Path) -> dict | None:
     return validate_state(proof.read_metadata(path)) if path.exists() else None
 
 
-def retained_release(directory: Path, state: dict, slot: str, *, gh: Path, cosign: Path) -> dict:
+def retained_release(directory: Path, state: dict, slot: str, *, gh: Path, cosign: Path,
+                     registry_config: Path | None = None) -> dict:
     selected = state["slots"][slot]
     receipt = directory / "receipts" / selected["revision"]
-    release = proof.verify_website(receipt, gh=gh, cosign=cosign)
+    release = proof.verify_website(receipt, gh=gh, cosign=cosign, registry_config=registry_config)
     ui.require(release["revision"] == selected["revision"] and release["source_sha"] == selected["source_sha"]
                and release["image"] == selected["image"]
                and proof.file_digest(receipt / "website-release.json") == selected["release_sha256"]
@@ -443,7 +444,7 @@ def retained_configuration(host: DockerHost, state: dict, model: dict, *, adopti
     return overlay
 
 
-def start_current(host: DockerHost, *, gh: Path, cosign: Path) -> dict:
+def start_current(host: DockerHost, *, gh: Path, cosign: Path, registry_config: Path | None = None) -> dict:
     """Start the retained website/edge before product readiness during host boot."""
     with host_lock(host.directory):
         ui.require(not (host.directory / "transaction.json").exists(), "unfinished website transaction; run --recover first")
@@ -452,7 +453,8 @@ def start_current(host: DockerHost, *, gh: Path, cosign: Path) -> dict:
         actual, model = host.snapshot()
         ui.require(actual == state["product"], "current product changed; adopt the upgraded product before website startup")
         slots = [state["active"]] + ([state["previous"]] if state["previous"] else [])
-        releases = {slot: retained_release(host.directory, state, slot, gh=gh, cosign=cosign) for slot in slots}
+        releases = {slot: retained_release(host.directory, state, slot, gh=gh, cosign=cosign,
+                                           registry_config=registry_config) for slot in slots}
         overlay = retained_configuration(host, state, model)
         for slot in slots:
             host.stage(slot, overlay, releases[slot]["image_metadata"], pull=False)
@@ -465,7 +467,7 @@ def start_current(host: DockerHost, *, gh: Path, cosign: Path) -> dict:
         return state
 
 
-def check_current(host: DockerHost, *, gh: Path, cosign: Path) -> dict:
+def check_current(host: DockerHost, *, gh: Path, cosign: Path, registry_config: Path | None = None) -> dict:
     """Verify the retained public selection after ingress recovery, without mutation."""
     with host_lock(host.directory):
         ui.require(not (host.directory / "transaction.json").exists(), "unfinished website transaction; run --recover first")
@@ -473,7 +475,8 @@ def check_current(host: DockerHost, *, gh: Path, cosign: Path) -> dict:
         ui.require(state is not None and state["host"] == host.identity(), "no retained website for this host")
         actual, _ = host.snapshot()
         ui.require(actual == state["product"], "current product changed; explicit adoption is required")
-        release = retained_release(host.directory, state, state["active"], gh=gh, cosign=cosign)
+        release = retained_release(host.directory, state, state["active"], gh=gh, cosign=cosign,
+                                   registry_config=registry_config)
         host.check_public(release["image_metadata"])
         return state
 
@@ -536,18 +539,20 @@ def transition(host: DockerHost, current: dict | None, target: dict, model: dict
         raise ValueError("website activation failed; previous selection was restored") from original
 
 
-def apply(host: DockerHost, assets: Path, *, gh: Path, cosign: Path, adopt_current_product: bool = False) -> dict:
+def apply(host: DockerHost, assets: Path, *, gh: Path, cosign: Path, adopt_current_product: bool = False,
+          registry_config: Path | None = None) -> dict:
     with host_lock(host.directory):
         ui.require(not (host.directory / "transaction.json").exists(), "unfinished website transaction; run --recover first")
         current = read_state(host.directory)
-        with composition.verified_package(assets, gh=gh, cosign=cosign) as (manifest, payload):
+        with composition.verified_package(assets, gh=gh, cosign=cosign, registry_config=registry_config) as (manifest, payload):
             actual, model = host.snapshot(manifest)
             routes = web.read(payload / "website/web-surface-routes.json")
             if adopt_current_product:
                 ui.require(current is not None and current["host"] == host.identity(), "product adoption requires the existing website host")
                 ui.require(web.route_identity(current["routes"]) == manifest["route_contract"], "new product cannot serve the retained website route contract")
                 for slot in [current["active"]] + ([current["previous"]] if current["previous"] else []):
-                    retained = retained_release(host.directory, current, slot, gh=gh, cosign=cosign)
+                    retained = retained_release(host.directory, current, slot, gh=gh, cosign=cosign,
+                                                registry_config=registry_config)
                     ui.require(retained["production_pages"] == manifest["production_pages"],
                                "new product cannot serve the retained website audience")
                 updated = {**current, "product": actual}
@@ -566,20 +571,21 @@ def apply(host: DockerHost, assets: Path, *, gh: Path, cosign: Path, adopt_curre
             return transition(host, current, target, model, metadata, stage=True)
 
 
-def rollback(host: DockerHost, *, gh: Path, cosign: Path) -> dict:
+def rollback(host: DockerHost, *, gh: Path, cosign: Path, registry_config: Path | None = None) -> dict:
     with host_lock(host.directory):
         ui.require(not (host.directory / "transaction.json").exists(), "unfinished website transaction; run --recover first")
         state = read_state(host.directory)
         ui.require(state is not None and state["previous"] is not None and state["host"] == host.identity(), "no previous website for this host")
         actual, model = host.snapshot()
         ui.require(actual == state["product"], "current product changed; adopt the upgraded product before website rollback")
-        release = retained_release(host.directory, state, state["previous"], gh=gh, cosign=cosign)
+        release = retained_release(host.directory, state, state["previous"], gh=gh, cosign=cosign,
+                                   registry_config=registry_config)
         target = {**state, "active": state["previous"], "previous": state["active"]}
         # Restarting the retained slot is safe after a host restart; no product role starts.
         return transition(host, state, target, model, release["image_metadata"], stage=False)
 
 
-def recover(host: DockerHost, *, gh: Path, cosign: Path) -> dict | None:
+def recover(host: DockerHost, *, gh: Path, cosign: Path, registry_config: Path | None = None) -> dict | None:
     with host_lock(host.directory):
         path = host.directory / "transaction.json"
         ui.require(path.exists(), "no interrupted website transaction exists")
@@ -600,7 +606,8 @@ def recover(host: DockerHost, *, gh: Path, cosign: Path) -> dict | None:
         release = None
         if previous:
             validate_state(previous)
-            release = retained_release(host.directory, previous, previous["active"], gh=gh, cosign=cosign)
+            release = retained_release(host.directory, previous, previous["active"], gh=gh, cosign=cosign,
+                                       registry_config=registry_config)
         ui.require(journal["candidate"] is None or journal["candidate"] in SLOTS and
                    (previous is None or journal["candidate"] not in {previous["active"], previous["previous"]}),
                    "recovery candidate overlaps a retained slot")
@@ -631,6 +638,7 @@ def main() -> None:
     parser.add_argument("--composition-dir", type=Path)
     parser.add_argument("--gh", type=Path)
     parser.add_argument("--cosign", type=Path)
+    parser.add_argument("--registry-config", type=Path, help="explicit private Docker config.json for private OCI proofs")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--rollback", action="store_true")
     mode.add_argument("--recover", action="store_true")
@@ -642,7 +650,7 @@ def main() -> None:
                       openbao_file=args.openbao_compose_file, openbao_env_file=args.openbao_env_file,
                       openbao_project=args.openbao_project, public_origin=args.public_origin, ca_file=args.ca_file)
     ui.require(args.gh is not None and args.cosign is not None, "pinned gh and cosign verifiers are required")
-    verifiers = dict(gh=args.gh.absolute(), cosign=args.cosign.absolute())
+    verifiers = dict(gh=args.gh.absolute(), cosign=args.cosign.absolute(), registry_config=args.registry_config)
     if args.start_current or args.check_current:
         ui.require(args.composition_dir is None, "startup uses retained original website evidence")
         result = (start_current if args.start_current else check_current)(host, **verifiers)

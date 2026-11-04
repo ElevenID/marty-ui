@@ -86,6 +86,7 @@ METADATA_IDENTITY_LINES = {
         '        legacy_p.update(repository=ui.COMMERCE_REPOSITORY, source_sha=private_sha)',
     ),
     "scripts/website_provenance.py": (
+        '    if repository == ui.COMMERCE_REPOSITORY:',
         '    ui.require(producer["repository"] == (ui.COMMERCE_REPOSITORY if private_image else ui.REPOSITORY),',
     ),
 }
