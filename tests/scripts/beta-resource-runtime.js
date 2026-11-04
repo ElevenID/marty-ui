@@ -5,7 +5,21 @@ const HASH=/^[a-f0-9]{64}$/;
 const sha=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 function envMap(rows){assert(Array.isArray(rows),'RESOURCE_ENV_SCHEMA');const pairs=rows.map(text=>{assert(typeof text==='string');const i=text.indexOf('=');assert(i>0,'RESOURCE_ENV_SCHEMA');return [text.slice(0,i),text.slice(i+1)]});assert.equal(new Set(pairs.map(pair=>pair[0])).size,pairs.length,'RESOURCE_ENV_DUPLICATE');return Object.fromEntries(pairs);}
 function envDigest(value){return sha(Object.entries(value).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0));}
-function mountDigest(row){const rows=(row.Mounts||[]).map(m=>({type:m.Type,source:m.Source,destination:m.Destination,name:m.Name||null,rw:m.RW===true}));assert.equal(new Set(rows.map(x=>x.destination)).size,rows.length,'RESOURCE_MOUNT_DUPLICATE');rows.sort((a,b)=>a.destination<b.destination?-1:a.destination>b.destination?1:0);return sha(rows);}
+const CONFIG_DIGEST_SCHEMA='marty.beta-resource-config-digests/v2';
+function mountDigest(row){
+ assert(Array.isArray(row.Mounts),'RESOURCE_MOUNT_SCHEMA');
+ const mounts=row.Mounts.map(m=>{
+  assert(typeof m.Type==='string'&&m.Type.length>0&&typeof m.Destination==='string'
+   &&m.Destination.startsWith('/')&&typeof m.RW==='boolean','RESOURCE_MOUNT_SCHEMA');
+  assert(m.Name===undefined||m.Name===null||typeof m.Name==='string','RESOURCE_MOUNT_SCHEMA');
+  return {type:m.Type,source:m.Source,destination:m.Destination,name:m.Name||null,rw:m.RW};
+ });
+ // Lazy lookup keeps the shared runtime's resource-adapter import acyclic.
+ const rows=require('./functional-debug-runtime').comparableBinaryMounts(mounts);
+ assert.equal(new Set(rows.map(x=>x.destination)).size,rows.length,'RESOURCE_MOUNT_DUPLICATE');
+ rows.sort((a,b)=>a.destination<b.destination?-1:a.destination>b.destination?1:0);
+ return sha({schema:'marty.beta-resource-mounts/v2',mounts:rows});
+}
 function authority(profile,{boundJson,expectedRuntime,receiptDigests}){
  assert.equal(profile.schema,'marty.functional-mixed-runtime/v2');
  assert.equal(profile.scope,'FUNCTIONAL_ONLY');
@@ -25,7 +39,7 @@ function authority(profile,{boundJson,expectedRuntime,receiptDigests}){
  assert.equal(new Set(ui.globalIds).size,ui.globalIds.length,'RESOURCE_GLOBAL_IDS_DUPLICATE');
  for(const role of Object.keys(cap.allRunningRoles))assert(ui.globalIds.includes(cap.allRunningRoles[role].id),'RESOURCE_REQUIRED_ID_MISSING:'+role);
  assert(ui.globalIds.includes(ui.newCid)&&!ui.globalIds.includes(ui.oldCid),'RESOURCE_UI_ID_SET_CHANGED');
- assert.equal(configs.schema,'marty.beta-resource-config-digests/v1');
+ assert.equal(configs.schema,CONFIG_DIGEST_SCHEMA);
  assert.equal(configs.capResultSha256,r.capResult.sha256);assert.equal(configs.uiResultSha256,r.uiResult.sha256);assert.equal(configs.keycloakResultSha256,r.keycloakResult.sha256);
  assert.equal(configs.rows.length,Object.keys(input.before).length+1);assert.equal(new Set(configs.rows.map(x=>x.cid)).size,configs.rows.length);
  assert.equal(kc.state,'KEYCLOAK_HEAP_UPDATED');assert.equal(kc.productionTouched,false);
@@ -102,4 +116,4 @@ function verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDi
  checkConfiguration(liveUi,'ui-prod',a.ui.modelPath,a.ui.modelSha256);
  return a;
 }
-module.exports={authority,verifyAncillary};
+module.exports={authority,verifyAncillary,mountDigest,CONFIG_DIGEST_SCHEMA};
