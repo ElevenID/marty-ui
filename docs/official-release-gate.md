@@ -220,16 +220,22 @@ Before consuming another claim, qualify this exact operator workflow and token
 against the real repository protections. Its capability mode uses a unique,
 non-semver `v-release-capability-<operator-run-id>-1` audit tag and a genuine
 ancestor with identical workflow files. The stale-main negative transaction
-keeps the requested new main equal to current main, uses the ancestor only as
-the expected old value, and must return two refused refs plus the exact
+asserts the ancestor as both old and new main, modelling a formerly admitted
+no-op after main advanced. Its separate `observed_main_oid` binds discovery and
+the diagnostic to current main; the request never proposes an ancestor-to-current
+branch update. It must return two refused refs plus the exact
 main/current/expected diagnostic through sideband. Both refs must remain
 unchanged on independent readback. A generic atomic-failure status is
 insufficient. The paired current-main transaction must report both refs
 successful and create the exact annotated audit tag without moving main.
 The v2 capability result summarizes those native observations; all raw bounded
 wire evidence remains in the observations artifact. Recheck the same rules
-afterward. Local bare-Git tests establish protocol behavior, and do not replace
-this actual GitHub qualification under the existing protections. Permission,
+afterward. The parser counts and ignores only the observed standalone progress
+NUL packet; raw packets remain intact. NULs within text or status and unsupported
+control bytes are refused.
+Decoded rule refusals are preserved before admission and cannot authorize the
+positive transaction. Local bare-Git tests establish protocol behavior, and do
+not replace this actual GitHub qualification under the existing protections. Permission,
 type, transport or generic errors are not successful capability proof. Keep
 the immutable audit receipt and tag; do not weaken protections or obtain a
 broader credential to force success.

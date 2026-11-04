@@ -270,6 +270,8 @@ def qualify_capability(github: handoff.GitHub, native: atomic.NativeGit,
                f"Rulesets-SHA256: {inspection['rulesets_sha256']}\n")
     obj = create_tag_object(github, tag, ancestor, message)
     handoff.require(github.main()["commit"]["sha"] == main, "Main changed before capability comparison")
+    # Model an admitted A -> A no-op that has become stale at current C.
+    # The transport binds discovery to C without proposing an A -> C update.
     negative = native.exchange(atomic.transaction_spec(ancestor, main, tag, obj["sha"],
                                                         f"capability-negative-{run_id}-1"))
     handoff.require(github.main()["commit"]["sha"] == main
