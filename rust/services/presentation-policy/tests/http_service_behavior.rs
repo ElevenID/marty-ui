@@ -36,6 +36,11 @@ fn http_json_cannot_claim_internal_oid4vp_transport_or_trust() {
     spoofed["trusted_internal_context"] = json!(true);
     spoofed["oid4vp_transport"] = json!({"query_kind": "dcql"});
     assert!(serde_json::from_value::<EvaluatePresentationRequest>(spoofed).is_err());
+    let spoofed_admission = json!({
+        "vp_token": "header.payload.signature",
+        "expected_configuration_digest": format!("sha256:{}", "a".repeat(64)),
+    });
+    assert!(serde_json::from_value::<EvaluatePresentationRequest>(spoofed_admission).is_err());
 }
 
 #[derive(Default)]

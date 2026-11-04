@@ -407,3 +407,106 @@ async fn exact_internal_operations_use_service_auth_while_management_requires_a_
         .unwrap_err();
     assert_eq!(unauthenticated.code(), Code::Unauthenticated);
 }
+
+struct CountingFacts(Arc<std::sync::atomic::AtomicUsize>);
+#[async_trait]
+impl PresentationVerificationOrchestrator for CountingFacts {
+    async fn verify(
+        &self,
+        policy: &PresentationPolicy,
+        request: &EvaluatePresentationRequest,
+    ) -> Result<Value, PresentationVerificationError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        VerifiedFacts.verify(policy, request).await
+    }
+}
+
+#[tokio::test]
+async fn configuration_precondition_uses_the_policy_actually_evaluated() {
+    let org = Uuid::new_v4();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let repository = Arc::new(Repository::default());
+    let service = PresentationPolicyGrpcService::new(
+        Arc::new(PolicyApplication::new(
+            repository.clone(),
+            Arc::new(Authorization(org)),
+        )),
+        Arc::new(CountingFacts(calls.clone())),
+        Some(TOKEN.into()),
+        true,
+    )
+    .unwrap();
+    let created = service
+        .create_policy(authenticated(create_request(org)))
+        .await
+        .unwrap()
+        .into_inner();
+    let active = service
+        .activate_policy(authenticated(PolicyIdRequest {
+            policy_id: created.id.clone(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let admitted = active.configuration_digest;
+    assert_eq!(admitted.len(), 71);
+    let run = |expected: String| {
+        authenticated(EvaluatePresentationMessage {
+            policy_id: created.id.clone(),
+            vp_token: "header.payload.signature".into(),
+            nonce: "challenge-1".into(),
+            audience: "https://verifier.example".into(),
+            expected_configuration_digest: expected,
+            ..EvaluatePresentationMessage::default()
+        })
+    };
+    let evaluated = service
+        .evaluate_presentation(run(admitted.clone()))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(evaluated.configuration_digest, admitted);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    // Simulate another authorized configuration writer between admission and
+    // evaluation, keeping the claim name, policy ID and version unchanged.
+    let id = Uuid::parse_str(&created.id).unwrap();
+    let mut changed = repository.get(id).await.unwrap().unwrap();
+    changed.credential_requirements[0].requested_claims[0].constraints[0].constraint_type =
+        marty_presentation_policy::ConstraintType::Equals;
+    changed.credential_requirements[0].requested_claims[0].constraints[0].value =
+        Some(json!("other@example.test"));
+    repository.save(&changed).await.unwrap();
+    let updated = service
+        .get_policy(authenticated(GetPolicyRequest {
+            policy_id: created.id.clone(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_ne!(updated.configuration_digest, admitted);
+    let stale = service
+        .evaluate_presentation(run(admitted))
+        .await
+        .unwrap_err();
+    assert_eq!(stale.code(), Code::Aborted);
+    assert!(stale.message().contains("configuration changed"));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    for invalid in ["bad".to_owned(), "A".repeat(64)] {
+        assert_eq!(
+            service
+                .evaluate_presentation(run(invalid))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::FailedPrecondition
+        );
+    }
+    let current = service
+        .evaluate_presentation(run(updated.configuration_digest.clone()))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(current.configuration_digest, updated.configuration_digest);
+    assert_eq!(current.decision, "deny");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+}

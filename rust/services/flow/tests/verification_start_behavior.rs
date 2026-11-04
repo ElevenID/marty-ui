@@ -42,6 +42,10 @@ struct Policies {
 
 #[async_trait]
 impl PresentationPolicyProvider for Policies {
+    async fn configuration_digest(&self, _policy_id: &str) -> Result<String, FlowProviderError> {
+        Ok(format!("sha256:{}", "a".repeat(64)))
+    }
+
     async fn get_policy(
         &self,
         policy_id: &str,
@@ -629,6 +633,10 @@ struct WebsiteEvaluation {
 
 #[async_trait]
 impl PresentationPolicyProvider for WebsiteEvaluation {
+    async fn configuration_digest(&self, _policy_id: &str) -> Result<String, FlowProviderError> {
+        Ok(format!("sha256:{}", "a".repeat(64)))
+    }
+
     async fn get_policy(&self, id: &str) -> Result<PresentationPolicyReference, FlowProviderError> {
         Policies {
             organization_id: "org-1",
@@ -644,6 +652,10 @@ impl PresentationPolicyProvider for WebsiteEvaluation {
         assert_eq!(request.organization_id, "org-1");
         assert_eq!(request.principal_id, "website-operator");
         assert_eq!(request.policy_id, "policy-1");
+        assert_eq!(
+            request.context["_marty_expected_policy_configuration_digest"],
+            format!("sha256:{}", "a".repeat(64))
+        );
         Ok(PresentationEvaluationResult {
             authentication_diagnostic: None,
             result: if self.allow { "passed" } else { "failed" }.into(),
@@ -765,4 +777,113 @@ async fn selected_definition_completes_only_from_the_canonical_evaluator_and_scr
         );
         assert!(finalization.instance.current_step_id.is_none());
     }
+}
+
+struct ChangingRules(Arc<std::sync::atomic::AtomicUsize>);
+#[async_trait]
+impl PresentationPolicyProvider for ChangingRules {
+    async fn configuration_digest(&self, _policy_id: &str) -> Result<String, FlowProviderError> {
+        Ok(format!(
+            "sha256:{}",
+            if self.0.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                "a"
+            } else {
+                "b"
+            }
+            .repeat(64)
+        ))
+    }
+    async fn get_policy(&self, id: &str) -> Result<PresentationPolicyReference, FlowProviderError> {
+        Policies {
+            organization_id: "org-1",
+        }
+        .get_policy(id)
+        .await
+    }
+    async fn evaluate(
+        &self,
+        _request: &PresentationEvaluationRequest,
+    ) -> Result<PresentationEvaluationResult, FlowProviderError> {
+        panic!("changed admission must not reach evaluation")
+    }
+}
+
+#[tokio::test]
+async fn unchanged_wallet_query_cannot_hide_a_changed_business_rule() {
+    let generation = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut registry = providers("org-1");
+    registry.presentation_policy = Some(Arc::new(ChangingRules(generation.clone())));
+    let definition = website_definition();
+    let binding = marty_flow::VerificationDefinitionBinding {
+        organization_id: "org-1".into(),
+        definition_id: definition.id.clone(),
+        version: 1,
+    };
+    let prepared = marty_flow::prepare_defined_verification_start(
+        &registry,
+        &WebhookDestinationRegistry::default(),
+        &definition,
+        &binding,
+        "did:web:verifier.example",
+        &VerificationStartOptions::default(),
+        VerificationStartContext {
+            public_base_url: "https://verifier.example",
+            allow_http_loopback: false,
+            principal_id: "website-operator",
+            now: now(),
+        },
+    )
+    .await
+    .unwrap();
+    let marty_flow::PreparedVerificationRequest::Ready(request) =
+        marty_flow::prepare_verification_request(
+            &registry,
+            prepared.instance.clone(),
+            "https://verifier.example",
+            &marty_flow::VerificationRequestRetrievalOptions::default(),
+            now(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("fresh request expected")
+    };
+    generation.store(1, std::sync::atomic::Ordering::SeqCst);
+    assert!(marty_flow::prepare_verification_request(
+        &registry,
+        prepared.instance,
+        "https://verifier.example",
+        &marty_flow::VerificationRequestRetrievalOptions::default(),
+        now(),
+    )
+    .await
+    .is_err());
+    let input = marty_flow::VerificationSubmissionInput {
+        vp_token: "unit-test.presentation.token".into(),
+        presentation_submission: None,
+        state: request
+            .instance
+            .context
+            .get("oid4vp_expected_state")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        audience_override: None,
+    };
+    let options = marty_flow::VerificationSubmissionOptions {
+        callback_destinations: WebhookDestinationRegistry::default(),
+        callback_secret: None,
+        verifier_sender_id: "website-verifier".into(),
+        nonce_ttl_seconds: 900,
+        callback_retention_seconds: 900,
+        callback_max_attempts: 10,
+    };
+    assert!(marty_flow::prepare_verification_submission(
+        &registry,
+        request.instance,
+        input,
+        &options,
+        now()
+    )
+    .await
+    .is_err());
 }

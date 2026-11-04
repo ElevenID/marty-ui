@@ -308,6 +308,7 @@ impl PresentationPolicyService for PresentationPolicyGrpcService {
             .map(parse_oid4vp_transport)
             .transpose()?;
         let evaluation = EvaluatePresentationRequest {
+            expected_configuration_digest: optional_text(input.expected_configuration_digest),
             vp_token: Value::String(input.vp_token),
             trust_profile_id: optional_text(input.trust_profile_id),
             nonce: optional_text(input.nonce),
@@ -393,11 +394,18 @@ fn policy_message(policy: &PresentationPolicy) -> Result<PolicyResponse, Status>
         version: i32::try_from(policy.version).unwrap_or(i32::MAX),
         created_at: policy.created_at.to_rfc3339(),
         updated_at: policy.updated_at.to_rfc3339(),
+        configuration_digest: crate::policy_configuration_digest(policy)
+            .map_err(|_| Status::internal("Policy configuration could not be bound"))?,
     })
 }
 
 fn evaluation_message(value: &Value) -> Result<PolicyEvaluationResponse, Status> {
     Ok(PolicyEvaluationResponse {
+        configuration_digest: value
+            .get("configuration_digest")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
         result: text(value, "result")?,
         policy_id: text(value, "policy_id")?,
         policy_name: text(value, "policy_name")?,

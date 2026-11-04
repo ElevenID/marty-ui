@@ -500,12 +500,11 @@ impl GrpcPresentationPolicyProvider {
     }
 }
 
-#[async_trait]
-impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
-    async fn get_policy(
+impl GrpcPresentationPolicyProvider {
+    async fn fetch_policy(
         &self,
         policy_id: &str,
-    ) -> Result<PresentationPolicyReference, FlowProviderError> {
+    ) -> Result<crate::presentation_policy_proto::PolicyResponse, FlowProviderError> {
         let mut client = self.client.clone();
         let response = client
             .get_policy(self.auth.request(GetPolicyRequest {
@@ -520,6 +519,28 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
                 "policy identity mismatch",
             ));
         }
+        Ok(response)
+    }
+}
+
+#[async_trait]
+impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
+    async fn configuration_digest(&self, policy_id: &str) -> Result<String, FlowProviderError> {
+        let digest = self.fetch_policy(policy_id).await?.configuration_digest;
+        if !crate::defined_verification::valid_policy_digest(&digest) {
+            return Err(invalid_response(
+                "presentation_policy",
+                "complete policy configuration binding unavailable",
+            ));
+        }
+        Ok(digest)
+    }
+
+    async fn get_policy(
+        &self,
+        policy_id: &str,
+    ) -> Result<PresentationPolicyReference, FlowProviderError> {
+        let response = self.fetch_policy(policy_id).await?;
         Ok(PresentationPolicyReference {
             id: response.id,
             organization_id: response.organization_id,
@@ -535,11 +556,31 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
         &self,
         request: &PresentationEvaluationRequest,
     ) -> Result<PresentationEvaluationResult, FlowProviderError> {
+        let expected = match request
+            .context
+            .get(crate::defined_verification::EXPECTED_POLICY_DIGEST)
+        {
+            None => String::new(),
+            Some(serde_json::Value::String(value))
+                if crate::defined_verification::valid_policy_digest(value) =>
+            {
+                value.clone()
+            }
+            Some(_) => {
+                return Err(invalid_response(
+                    "presentation_policy",
+                    "invalid policy configuration precondition",
+                ))
+            }
+        };
+        let mut context = request.context.clone();
+        context.remove(crate::defined_verification::EXPECTED_POLICY_DIGEST);
         let mut client = self.client.clone();
         let response = client
             .evaluate_presentation(
                 self.auth.request_for_principal(
                     EvaluatePresentationRequest {
+                        expected_configuration_digest: expected.clone(),
                         policy_id: request.policy_id.clone(),
                         vp_token: request.presentation.clone(),
                         nonce: request.nonce.clone(),
@@ -550,7 +591,7 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or_default()
                             .into(),
-                        context_json: serde_json::to_string(&request.context).map_err(|_| {
+                        context_json: serde_json::to_string(&context).map_err(|_| {
                             invalid_response(
                                 "presentation_policy",
                                 "evaluation context is not serializable",
@@ -579,6 +620,12 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
             return Err(invalid_response(
                 "presentation_policy",
                 "evaluation identity mismatch",
+            ));
+        }
+        if !expected.is_empty() && response.configuration_digest != expected {
+            return Err(invalid_response(
+                "presentation_policy",
+                "evaluation policy configuration binding mismatch",
             ));
         }
         Ok(PresentationEvaluationResult {

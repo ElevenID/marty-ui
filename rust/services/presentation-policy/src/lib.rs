@@ -22,10 +22,10 @@ pub use config::{
 };
 pub use control_plane::NativePresentationControlPlane;
 pub use domain::{
-    evaluate_verified_facts_json, normalize_credential_format, AlternativeRequirement,
-    ClaimConstraint, ConstraintType, CredentialRequirement, DisplayMetadata, FreshnessPolicy,
-    HolderBinding, IssuerConstraints, PolicyDomainError, PolicyStatus, PresentationPolicy,
-    RequestPurpose, RequestedClaim,
+    evaluate_verified_facts_json, normalize_credential_format, policy_configuration_digest,
+    AlternativeRequirement, ClaimConstraint, ConstraintType, CredentialRequirement,
+    DisplayMetadata, FreshnessPolicy, HolderBinding, IssuerConstraints, PolicyDomainError,
+    PolicyStatus, PresentationPolicy, RequestPurpose, RequestedClaim,
 };
 pub use grpc_security::PresentationGrpcSecurity;
 pub use grpc_service::PresentationPolicyGrpcService;

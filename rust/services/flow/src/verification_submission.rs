@@ -187,7 +187,8 @@ pub async fn prepare_verification_submission(
         return Err(FlowVerificationSubmissionError::InvalidState);
     }
     let expected_status = instance.status;
-    crate::defined_verification::validate_defined_submission(providers, &instance).await?;
+    let expected_policy_digest =
+        crate::defined_verification::validate_defined_submission(providers, &instance).await?;
     let context = instance
         .context
         .as_object()
@@ -217,6 +218,12 @@ pub async fn prepare_verification_submission(
         evaluation_transport(context, presentation_submission.as_ref(), &raw_vp_token)?;
     let vp_token = select_vp_token(&raw_vp_token);
     let mut evaluation_context = BTreeMap::new();
+    if let Some(digest) = expected_policy_digest {
+        evaluation_context.insert(
+            crate::defined_verification::EXPECTED_POLICY_DIGEST.into(),
+            json!(digest),
+        );
+    }
     if context
         .get("oid4vp_verifier_context")
         .and_then(Value::as_bool)

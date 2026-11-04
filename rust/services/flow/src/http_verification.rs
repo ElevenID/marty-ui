@@ -852,10 +852,34 @@ impl From<FlowVerificationStartError> for FlowHttpError {
     }
 }
 
+impl From<crate::DefinedVerificationError> for FlowHttpError {
+    fn from(error: crate::DefinedVerificationError) -> Self {
+        match error {
+            crate::DefinedVerificationError::Start(error) => error.into(),
+            crate::DefinedVerificationError::ConfigurationChanged => Self::new(
+                StatusCode::CONFLICT,
+                "verification_configuration_changed",
+                "Verification requirements changed; start a new session",
+            ),
+            crate::DefinedVerificationError::InvalidSnapshot => Self::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_stored_flow_state",
+                "Stored verification configuration is invalid",
+            ),
+            _ => Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "verification_definition_unavailable",
+                "The configured verification flow is unavailable",
+            ),
+        }
+    }
+}
+
 impl From<FlowVerificationRequestError> for FlowHttpError {
     fn from(error: FlowVerificationRequestError) -> Self {
         match error {
             FlowVerificationRequestError::Provider(error) => error.into(),
+            FlowVerificationRequestError::Definition(error) => error.into(),
             FlowVerificationRequestError::MethodNotAllowed => Self::new(
                 StatusCode::METHOD_NOT_ALLOWED,
                 "verification_request_method_not_allowed",
@@ -880,6 +904,7 @@ impl From<FlowVerificationSubmissionError> for FlowHttpError {
     fn from(error: FlowVerificationSubmissionError) -> Self {
         match error {
             FlowVerificationSubmissionError::Provider(error) => error.into(),
+            FlowVerificationSubmissionError::Definition(error) => error.into(),
             FlowVerificationSubmissionError::Record(_)
             | FlowVerificationSubmissionError::InvalidContext(_) => Self::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -993,5 +1018,43 @@ mod tests {
         assert_eq!(response["request_uri"], response["siop_uri"]);
         assert!(response.get("flow_definition_id").is_none());
         assert!(response.get("status").is_none());
+    }
+}
+
+#[cfg(test)]
+mod definition_admission_error_tests {
+    use super::*;
+    #[tokio::test]
+    async fn definition_admission_failures_preserve_restart_and_dependency_semantics() {
+        let changed: FlowHttpError = FlowVerificationRequestError::Definition(
+            crate::DefinedVerificationError::ConfigurationChanged,
+        )
+        .into();
+        let response = changed.into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "verification_configuration_changed");
+        let unavailable: FlowHttpError =
+            FlowVerificationSubmissionError::Definition(crate::DefinedVerificationError::Start(
+                FlowVerificationStartError::Provider(crate::FlowProviderError::Unavailable {
+                    provider: "presentation_policy_admission",
+                }),
+            ))
+            .into();
+        assert_eq!(
+            unavailable.into_response().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let malformed: FlowHttpError = FlowVerificationRequestError::Definition(
+            crate::DefinedVerificationError::InvalidSnapshot,
+        )
+        .into();
+        assert_eq!(
+            malformed.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }

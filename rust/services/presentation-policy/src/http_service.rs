@@ -26,6 +26,10 @@ const MAX_PRESENTATION_BYTES: usize = 1_000_000;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvaluatePresentationRequest {
+    /// Set by the internal gRPC adapter from the server-owned Flow admission.
+    /// Public HTTP JSON cannot select or assert this session precondition.
+    #[serde(skip)]
+    pub expected_configuration_digest: Option<String>,
     pub vp_token: Value,
     pub trust_profile_id: Option<String>,
     pub nonce: Option<String>,
@@ -497,6 +501,7 @@ async fn evaluate_inline(
     };
     policy.validate().map_err(domain_error)?;
     let request = EvaluatePresentationRequest {
+        expected_configuration_digest: None,
         vp_token: input.vp_token,
         trust_profile_id: input.trust_profile_id,
         nonce: input.nonce,
@@ -528,6 +533,7 @@ pub(crate) async fn evaluate_policy(
         )));
     }
     validate_evaluation_request(request)?;
+    validate_policy_admission(policy, request)?;
     let material = verification
         .verify_material(policy, request)
         .await
@@ -552,6 +558,7 @@ fn evaluate_verified_material_for_policy(
     policy: &PresentationPolicy,
     request: &EvaluatePresentationRequest,
 ) -> Result<Value, PresentationPolicyHttpError> {
+    let configuration_digest = validate_policy_admission(policy, request)?;
     let VerifiedPolicyMaterial {
         mut policy_facts,
         authenticated_outer_jti,
@@ -567,13 +574,42 @@ fn evaluate_verified_material_for_policy(
     let output = evaluate_verified_facts_json(&policy_facts.to_string()).map_err(domain_error)?;
     let native: Value = serde_json::from_str(&output)
         .map_err(|_| service_unavailable("PRESENTATION_POLICY.INVALID_NATIVE_RESULT"))?;
-    Ok(project_evaluation(
+    let mut result = project_evaluation(
         native,
         request,
         &policy_facts,
         authentication_diagnostic.as_ref(),
         authenticated_outer_jti.as_deref(),
-    ))
+    );
+    if let Some(digest) = configuration_digest {
+        result["configuration_digest"] = Value::String(digest);
+    }
+    Ok(result)
+}
+
+fn validate_policy_admission(
+    policy: &PresentationPolicy,
+    request: &EvaluatePresentationRequest,
+) -> Result<Option<String>, PresentationPolicyHttpError> {
+    let Some(expected) = request.expected_configuration_digest.as_deref() else {
+        return Ok(None);
+    };
+    if !expected.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }) {
+        return Err(bad_request("Invalid policy configuration precondition"));
+    }
+    let actual = crate::policy_configuration_digest(policy).map_err(domain_error)?;
+    if actual != expected {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "Policy configuration changed; start a new verification session",
+        ));
+    }
+    Ok(Some(actual))
 }
 
 fn build_policy(

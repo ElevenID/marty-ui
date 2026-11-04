@@ -131,6 +131,7 @@ pub async fn prepare_verification_request(
     if let Some(artifacts) = artifacts.as_ref() {
         crate::defined_verification::validate_defined_request(&instance, artifacts)?;
     }
+    crate::defined_verification::validate_defined_configuration(providers, &instance).await?;
     let mut request_options = options.request_object.clone();
     request_options.wallet_nonce = options.wallet_nonce.clone();
     request_options.compatibility = options.compatibility;

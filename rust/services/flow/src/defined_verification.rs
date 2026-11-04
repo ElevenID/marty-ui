@@ -21,6 +21,7 @@ use crate::{
 
 const SNAPSHOT: &str = "_marty_verification_definition";
 pub(crate) const REQUEST_DIGEST: &str = "_marty_verification_request_digest";
+pub(crate) const EXPECTED_POLICY_DIGEST: &str = "_marty_expected_policy_configuration_digest";
 const STEPS: [&str; 4] = [
     "create_request",
     "wallet_selection",
@@ -42,6 +43,58 @@ pub struct VerificationDefinitionBinding {
 struct DefinitionSnapshot {
     binding: VerificationDefinitionBinding,
     step_ids: Vec<String>,
+    policy_configuration_digest: String,
+}
+
+pub(crate) fn valid_policy_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
+}
+
+fn admitted_policy_digest(
+    instance: &FlowInstanceRecord,
+) -> Result<Option<String>, DefinedVerificationError> {
+    let Some(raw) = instance.context.get(SNAPSHOT) else {
+        return Ok(None);
+    };
+    let snapshot: DefinitionSnapshot = serde_json::from_value(raw.clone())
+        .map_err(|_| DefinedVerificationError::InvalidSnapshot)?;
+    if snapshot.binding.organization_id != instance.organization_id
+        || snapshot.binding.definition_id != instance.flow_definition_id
+        || !valid_policy_digest(&snapshot.policy_configuration_digest)
+    {
+        return Err(DefinedVerificationError::InvalidSnapshot);
+    }
+    Ok(Some(snapshot.policy_configuration_digest))
+}
+
+pub(crate) async fn validate_defined_configuration(
+    providers: &FlowProviderRegistry,
+    instance: &FlowInstanceRecord,
+) -> Result<Option<String>, DefinedVerificationError> {
+    let expected = admitted_policy_digest(instance)?;
+    if let Some(expected) = expected.as_deref() {
+        let policy_id = instance
+            .context
+            .get("presentation_policy_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(DefinedVerificationError::InvalidSnapshot)?;
+        let actual = providers
+            .presentation_policy
+            .as_ref()
+            .ok_or(FlowVerificationStartError::InvalidPolicy)?
+            .configuration_digest(policy_id)
+            .await
+            .map_err(FlowVerificationStartError::Provider)?;
+        if actual != expected {
+            return Err(DefinedVerificationError::ConfigurationChanged);
+        }
+    }
+    Ok(expected)
 }
 
 #[derive(Debug, Error)]
@@ -52,6 +105,8 @@ pub enum DefinedVerificationError {
     UnsupportedDefinition,
     #[error("FLOW.VERIFICATION_DEFINITION_SNAPSHOT_INVALID")]
     InvalidSnapshot,
+    #[error("FLOW.VERIFICATION_CONFIGURATION_CHANGED")]
+    ConfigurationChanged,
     #[error(transparent)]
     Start(#[from] FlowVerificationStartError),
 }
@@ -62,7 +117,8 @@ pub(crate) fn verification_request_digest(
     let mut value =
         serde_json::to_value(artifacts).map_err(|_| DefinedVerificationError::InvalidSnapshot)?;
     // The builder assigns a fresh presentation-definition ID on every read.
-    // Query formats, requirements, claims and constraints must remain identical.
+    // Query formats and disclosed claim selection must remain identical.
+    // Business-rule binding is checked separately against the policy owner.
     value["presentation_definition"]
         .as_object_mut()
         .ok_or(DefinedVerificationError::InvalidSnapshot)?
@@ -91,7 +147,8 @@ pub(crate) fn validate_defined_request(
 pub(crate) async fn validate_defined_submission(
     providers: &FlowProviderRegistry,
     instance: &FlowInstanceRecord,
-) -> Result<(), DefinedVerificationError> {
+) -> Result<Option<String>, DefinedVerificationError> {
+    let expected = validate_defined_configuration(providers, instance).await?;
     if instance.context.get(SNAPSHOT).is_some() {
         let policy = instance
             .context
@@ -104,7 +161,7 @@ pub(crate) async fn validate_defined_submission(
                 .map_err(FlowVerificationStartError::Presentation)?;
         validate_defined_request(instance, &artifacts)?;
     }
-    Ok(())
+    Ok(expected)
 }
 
 impl VerificationDefinitionBinding {
@@ -176,6 +233,21 @@ pub async fn prepare_defined_verification_start(
     context: VerificationStartContext<'_>,
 ) -> Result<PreparedVerificationStart, DefinedVerificationError> {
     binding.validate(definition)?;
+    let policy_configuration_digest = providers
+        .presentation_policy
+        .as_ref()
+        .ok_or(FlowVerificationStartError::InvalidPolicy)?
+        .configuration_digest(
+            definition
+                .presentation_policy_id
+                .as_deref()
+                .ok_or(DefinedVerificationError::UnsupportedDefinition)?,
+        )
+        .await
+        .map_err(FlowVerificationStartError::Provider)?;
+    if !valid_policy_digest(&policy_configuration_digest) {
+        return Err(DefinedVerificationError::InvalidSnapshot);
+    }
     let mut prepared = prepare_profiled_verification_start(
         providers,
         callbacks,
@@ -212,6 +284,7 @@ pub async fn prepare_defined_verification_start(
     let snapshot = DefinitionSnapshot {
         binding: binding.clone(),
         step_ids: graph.steps.iter().map(|step| step.id.clone()).collect(),
+        policy_configuration_digest,
     };
     prepared.instance.context[SNAPSHOT] =
         serde_json::to_value(&snapshot).map_err(|_| DefinedVerificationError::InvalidSnapshot)?;
@@ -239,6 +312,7 @@ pub fn record_defined_verification_progress(
     if snapshot.binding.organization_id != instance.organization_id
         || snapshot.binding.definition_id != instance.flow_definition_id
         || snapshot.binding.version == 0
+        || !valid_policy_digest(&snapshot.policy_configuration_digest)
         || snapshot.step_ids.len() != STEPS.len()
         || (terminal
             && !matches!(

@@ -250,6 +250,7 @@ fn policy_evaluation_message(
     let context_json = serde_json::to_string(&request.context)
         .map_err(|_| unavailable("evaluation context is not serializable"))?;
     Ok(EvaluatePresentationRequest {
+        expected_configuration_digest: String::new(),
         policy_id: request.policy_id.clone(),
         vp_token: request.presentation.clone(),
         nonce: request.nonce.clone(),
