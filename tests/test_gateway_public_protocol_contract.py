@@ -67,6 +67,14 @@ def _vector_owner_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pa
         ),
         encoding="utf-8",
     )
+    classifier = tmp_path / "scripts/ci/affected_components.sh"
+    classifier.parent.mkdir(parents=True)
+    classifier.write_text(
+        (Path(__file__).resolve().parents[1] / "scripts/ci/affected_components.sh").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(protocol_contract, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(
         protocol_contract,
@@ -227,8 +235,11 @@ def test_vector_owner_guard_rejects_unowned_vectors_and_missing_workspace_gate(
             '\'["canvas","contracts","selfhost"]\' || needs.changes.outputs.rust_matrix) }}',
             "'[\"selfhost\"]' || needs.changes.outputs.rust_matrix) }}",
         ),
-        ('rust_matrix=\'["canvas","contracts","selfhost"]\'', "rust_matrix='[\"canvas\"]'"),
-        ("rust_matrix='[\"contracts\"]'", "rust_matrix='[\"canvas\"]'"),
+        ("needs: [changes, release-preflight]", "needs: changes"),
+        ("needs: [changes, release-preflight]", "needs: release-preflight"),
+        ("source scripts/ci/affected_components.sh", "true"),
+        ("rust_matrix: ${{ steps.classify.outputs.rust_matrix }}", "rust_matrix: '[\"canvas\"]'"),
+        ("plan: ${{ steps.classify.outputs.plan }}", "plan: '{}'"),
         (
             "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance",
             "cargo test --locked -p marty-canvas-acceptance",
@@ -248,6 +259,13 @@ def test_vector_owner_guard_rejects_unowned_vectors_and_missing_workspace_gate(
             '"$RUST_MATRIX" == \'["canvas","contracts","selfhost"]\' ]]',
             '"$RUST_MATRIX" == \'["contracts"]\' ]]',
         ),
+        (
+            'if [[ "${{ github.event_name }}" == merge_group && "$WEBSITE_ONLY" != true ]]; then',
+            'if false; then',
+        ),
+        ("CI_PLAN: ${{ needs.changes.outputs.plan }}", "CI_PLAN: '{}'"),
+        ("CI_NEEDS_JSON: ${{ toJSON(needs) }}", "CI_NEEDS_JSON: '{}'"),
+        ("run: python3 scripts/ci/affected_components.py gate", "run: true"),
     ],
 )
 def test_vector_workspace_owner_rejects_missing_contracts_or_protected_canvas(
@@ -260,6 +278,44 @@ def test_vector_workspace_owner_rejects_missing_contracts_or_protected_canvas(
     assert workflow.count(old) >= 1
     with pytest.raises(AssertionError, match="workspace test owner"):
         _assert_full_workspace_ci_owner(workflow.replace(old, new))
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ('rust_matrix=\'["canvas","contracts","selfhost"]\'', "rust_matrix='[\"canvas\"]'"),
+        ("rust_matrix='[\"contracts\"]'", "rust_matrix='[\"canvas\"]'"),
+        ('elif [[ "$EVENT_NAME" != pull_request ]]; then\n  all=true',
+         'elif [[ "$EVENT_NAME" == pull_request ]]; then\n  all=true'),
+        ('elif [[ "$EVENT_NAME" != pull_request ]]; then\n  all=true',
+         'elif [[ "$EVENT_NAME" != pull_request ]]; then\n  all=false'),
+        ('if [[ "$all" == true ]]; then\n  ui=true\n  python=true\n  rust=true',
+         'if [[ "$all" == true ]]; then\n  ui=true\n  python=true\n  rust=false'),
+        ("python3 scripts/ci/affected_components.py emit", "true"),
+    ],
+)
+def test_vector_workspace_owner_checks_the_extracted_classifier(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, old: str, new: str
+) -> None:
+    _vector_owner_fixture(monkeypatch, tmp_path)
+    workflow = (tmp_path / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    classifier = tmp_path / "scripts/ci/affected_components.sh"
+    source = classifier.read_text(encoding="utf-8")
+    _assert_full_workspace_ci_owner(workflow)
+    assert source.count(old) >= 1
+    classifier.write_text(source.replace(old, new), encoding="utf-8")
+    with pytest.raises(AssertionError, match="workspace test owner"):
+        _assert_full_workspace_ci_owner(workflow)
+
+
+def test_vector_workspace_owner_rejects_missing_extracted_classifier(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _vector_owner_fixture(monkeypatch, tmp_path)
+    workflow = (tmp_path / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    (tmp_path / "scripts/ci/affected_components.sh").unlink()
+    with pytest.raises(AssertionError, match="workspace test owner.*classifier is missing"):
+        _assert_full_workspace_ci_owner(workflow)
 
 
 def test_vector_workspace_owner_ignores_stale_matrix_copy_outside_strategy() -> None:
