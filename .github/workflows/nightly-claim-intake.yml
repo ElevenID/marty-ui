@@ -25,20 +25,22 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = ElevenID/marty-ui
           [[ "$CLAIM_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          intake_dir="$RUNNER_TEMP/nightly-claim-intake"
+          mkdir -p "$intake_dir"
           gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$CLAIM_RUN_ID" > preparation-run.json
+            "repos/$GITHUB_REPOSITORY/actions/runs/$CLAIM_RUN_ID" > "$intake_dir/preparation-run.json"
           jq -e --argjson id "$CLAIM_RUN_ID" \
             '.id == $id and .path == ".github/workflows/prepare-nightly-claim.yml" and
              .event == "workflow_dispatch" and .head_branch == "main" and
              .status == "completed" and .conclusion == "success" and
-             (.head_sha | test("^[0-9a-f]{40}$"))' preparation-run.json
+             (.head_sha | test("^[0-9a-f]{40}$"))' "$intake_dir/preparation-run.json"
           gh run download "$CLAIM_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --name "nightly-claim-$CLAIM_RUN_ID" --dir claim
-          test "$(find claim -mindepth 1 -maxdepth 1 -printf '%f:%y\n')" = 'nightly-claim.json:f'
-          test "$(wc -c < claim/nightly-claim.json)" -le 65536
+            --name "nightly-claim-$CLAIM_RUN_ID" --dir "$intake_dir/claim"
+          test "$(find "$intake_dir/claim" -mindepth 1 -maxdepth 1 -printf '%f:%y\n')" = 'nightly-claim.json:f'
+          test "$(wc -c < "$intake_dir/claim/nightly-claim.json")" -le 65536
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
@@ -50,11 +52,12 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
           current_main="$(git rev-parse 'refs/remotes/origin/main^{commit}')"
           test "$(git rev-parse 'HEAD^{commit}')" = "$current_main"
+          intake_dir="$RUNNER_TEMP/nightly-claim-intake"
           python scripts/nightly_claim.py intake \
-            --claim claim/nightly-claim.json --run-json preparation-run.json \
+            --claim "$intake_dir/claim/nightly-claim.json" --run-json "$intake_dir/preparation-run.json" \
             --current-main-sha "$current_main" \
             --policy .github/stack-tag-policy.json \
             --output admitted-nightly-claim.json
