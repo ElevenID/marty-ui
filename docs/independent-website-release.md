@@ -177,6 +177,48 @@ qualification. Configure registry read access and verifier network access under
 the deployment account. Never substitute a moving `latest` download or an
 executable supplied by the composition archive.
 
+### Explicit private access
+
+Private website/application images require a separately supplied, authorized
+package-read credential. Pass `--registry-config /absolute/private/config.json`
+to private image proof verification, producer retention, Actions intake,
+composition packaging, and every website deployment/recovery command. Python
+callers use `registry_config=Path(...)`, including `verified_package`. This
+configuration must contain a static `auths["ghcr.io"].auth` value: canonical
+base64 of the GitHub username and token separated by a colon. On POSIX the file
+must be operator-owned mode0600 in an operator-owned private directory; Windows
+requires equivalent account ACLs. No credential helper is executed. Verification
+copies only this one registry entry into a temporary private configuration and
+removes it when the subprocess finishes. Other registries, helper programs,
+proxy/TLS environment overrides and ambient tokens are excluded.
+
+This flag authorizes the **proof verifier's registry reads**. Ordinary Docker
+pulls still use the deployment account's existing Docker configuration and
+daemon/context. Select that same static credential file, or explicitly set
+`DOCKER_CONFIG` to its containing directory while preserving the reviewed
+Docker endpoint. The existing Windows reboot wrapper accepts the matching
+`-RegistryConfig` path and forwards it for both retained website startup and
+the later public check. Include the path in the Linux boot owner's exact command
+as well. Credential bytes and paths are not embedded in compositions, website
+receipts or deployment state; the operator can rotate credentials separately.
+
+`web_release_intake.py website` and `application` select `GH_TOKEN` by default,
+matching the existing public workflow's explicit token environment. Use
+`--github-token-env GH_TOKEN` to name that selection or `--github-token-env GITHUB_TOKEN`
+to select the other supported variable. There is no fallback to another variable
+or a stored CLI login when the selected token is missing. The selected token
+is validated once and used only for the fixed GitHub Actions attempt, artifact
+list and artifact ZIP GET endpoints on `github.com`. Metadata and ZIP download
+share the same selected token. The token is never a command-line argument.
+This applies to public Actions intake too; the public producer already supplies
+its workflow token explicitly. Stable backend downloads, local file signatures,
+and public image proof verification keep the anonymous verifier. API custody,
+archive size/hash, original signatures and exact producer identity checks remain
+required; having access does not qualify an artifact.
+
+An operator must establish actual read access before using the private path.
+Synthetic local test credentials do not establish live package access.
+
 Keep the stack's `.marty-website` directory, downloaded composition, tools, and
 retained receipts writable only by the deployment owner. POSIX mode checks are
 enforced; Windows requires equivalent account ACLs. Use a trusted CA bundle with

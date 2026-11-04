@@ -113,7 +113,7 @@ def test_symlink_evidence_and_verifier_failure_are_rejected(files):
 
 
 @pytest.mark.parametrize("full", [False, True])
-def test_image_proof_binds_original_producer_and_exact_oci_digest(files, full):
+def test_image_proof_binds_original_producer_and_exact_oci_digest(files, full, monkeypatch):
     producer = web.producer(SOURCE, ui.commerce_identity("full", PRIVATE) if full else None, "21", "2")
     image = {"uri": web.COMMERCE_IMAGE if full else web.PUBLIC_IMAGE, "digest": DIGEST, "platform": "linux/amd64"}
     calls = []
@@ -122,8 +122,15 @@ def test_image_proof_binds_original_producer_and_exact_oci_digest(files, full):
         if args[1] == "attestation":
             return json.dumps(verified(producer))
         return json.dumps([{"critical": {"image": {"docker-manifest-digest": DIGEST}}}])
+    registry = files / "selected-config.json"
+    registry_calls = []
+    def private_run(args, *, config):
+        registry_calls.append(config)
+        return run(args)
+    monkeypatch.setattr(proof.auth, "registry_command", private_run)
     proof.verify_image(image, files / "image.provenance.jsonl", producer=producer,
-                       gh=files / "gh", cosign=files / "cosign", runner=run)
+                       gh=files / "gh", cosign=files / "cosign", runner=run, registry_config=registry)
+    assert registry_calls == ([registry, registry] if full else [])
     assert "oci://" + image["uri"] + "@" + DIGEST in calls[0]
     assert ("--no-public-good" in calls[0]) is full
     assert "--no-public-good" not in calls[1]
@@ -133,6 +140,16 @@ def test_image_proof_binds_original_producer_and_exact_oci_digest(files, full):
     with pytest.raises(ValueError, match="producer differ"):
         proof.verify_image(wrong, files / "image.provenance.jsonl", producer=producer,
                            gh=files / "gh", cosign=files / "cosign", runner=run)
+
+
+def test_private_image_requires_explicit_registry_access_before_verifier_execution(files):
+    producer = web.producer(SOURCE, ui.commerce_identity("full", PRIVATE), "21", "2")
+    image = {"uri": web.COMMERCE_IMAGE, "digest": DIGEST, "platform": "linux/amd64"}
+    def unexpected(_args):
+        pytest.fail("missing explicit auth must fail before executing a verifier")
+    with pytest.raises(ValueError, match="requires --registry-config"):
+        proof.verify_image(image, files / "image.provenance.jsonl", producer=producer,
+                           gh=files / "gh", cosign=files / "cosign", runner=unexpected)
 
 
 def test_image_signature_cannot_name_another_digest(files):

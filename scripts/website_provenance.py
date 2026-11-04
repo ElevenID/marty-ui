@@ -14,6 +14,7 @@ from pathlib import Path
 
 import ui_release as ui
 import verify_installer_provenance as verifier
+import web_auth as auth
 import website_release as web
 
 PROOF_LIMIT = 4 * 1024 * 1024
@@ -114,7 +115,7 @@ def verify_subject(subject: Path, *, producer: dict, gh: Path, cosign: Path,
 
 
 def verify_image(image: dict, provenance: Path, *, producer: dict, gh: Path, cosign: Path,
-                 runner: verifier.Run = verifier.command) -> None:
+                 runner: verifier.Run = verifier.command, registry_config: Path | None = None) -> None:
     web.object_keys(image, {"uri", "digest", "platform"}, "web image")
     allowed = {web.PUBLIC_IMAGE, web.COMMERCE_IMAGE, ui.PUBLIC_IMAGE, ui.COMMERCE_IMAGE}
     ui.require(image["uri"] in allowed and image["platform"] == "linux/amd64", "unknown web image")
@@ -125,12 +126,17 @@ def verify_image(image: dict, provenance: Path, *, producer: dict, gh: Path, cos
     verifier.local_file(provenance, maximum=PROOF_LIMIT, private=True)
     for path in (gh, cosign):
         verifier.local_file(path)
+    if private_image:
+        ui.require(registry_config is not None, "private web OCI verification requires --registry-config")
+        image_runner = lambda args: auth.registry_command(args, config=registry_config)
+    else:
+        image_runner = runner
     before = ui.digest(provenance.read_bytes())
     reference = image["uri"] + "@" + image["digest"]
-    output = runner([str(gh), "attestation", "verify", "oci://" + reference, "--bundle", str(provenance),
-                     *attestation_arguments(producer)])
+    output = image_runner([str(gh), "attestation", "verify", "oci://" + reference, "--bundle", str(provenance),
+                           *attestation_arguments(producer)])
     verified_certificate(output, producer)
-    verified = parse_verified_json(runner([str(cosign), "verify", reference, *signature_arguments(producer)]))
+    verified = parse_verified_json(image_runner([str(cosign), "verify", reference, *signature_arguments(producer)]))
     try:
         ui.require(isinstance(verified, list) and len(verified) > 0
                    and all(item["critical"]["image"]["docker-manifest-digest"] == image["digest"] for item in verified),
@@ -146,20 +152,22 @@ def read_metadata(path: Path) -> dict:
 
 
 def verify_website(directory: Path, *, gh: Path, cosign: Path, source_sha: str | None = None,
-                   commerce_source_sha: str | None = None, runner: verifier.Run = verifier.command) -> dict:
+                   commerce_source_sha: str | None = None, runner: verifier.Run = verifier.command,
+                   registry_config: Path | None = None) -> dict:
     path = directory / "website-release.json"
     release = web.validate_release(read_metadata(path), source_sha=source_sha, commerce_source_sha=commerce_source_sha)
     routes = read_metadata(directory / "web-surface-routes.json")
     ui.require(web.route_identity(routes) == release["image_metadata"]["route_contract"], "website route contract differs")
     verify_subject(path, producer=release["producer"], gh=gh, cosign=cosign, runner=runner)
     verify_image(release["image"], directory / "image.provenance.jsonl", producer=release["producer"],
-                 gh=gh, cosign=cosign, runner=runner)
+                 gh=gh, cosign=cosign, runner=runner, registry_config=registry_config)
     ui.require(read_metadata(path) == release, "website metadata changed after verification")
     return release
 
 
 def verify_application(directory: Path, *, gh: Path, cosign: Path,
-                       runner: verifier.Run = verifier.command) -> tuple[dict, dict]:
+                       runner: verifier.Run = verifier.command,
+                       registry_config: Path | None = None) -> tuple[dict, dict]:
     path = directory / "production-web-release.json"
     release = web.validate_combined_release(read_metadata(path))
     compatibility_path = directory / "application-web-compatibility.json"
@@ -170,7 +178,7 @@ def verify_application(directory: Path, *, gh: Path, cosign: Path,
     for subject in (path, compatibility_path):
         verify_subject(subject, producer=producer, gh=gh, cosign=cosign, runner=runner)
     verify_image(release["image"], directory / "image.provenance.jsonl", producer=producer,
-                 gh=gh, cosign=cosign, runner=runner)
+                 gh=gh, cosign=cosign, runner=runner, registry_config=registry_config)
     ui.require(read_metadata(path) == release and read_metadata(compatibility_path) == compatibility,
                "application metadata changed after verification")
     return release, compatibility
@@ -182,10 +190,11 @@ def main() -> None:
     parser.add_argument("--assets", type=Path, required=True)
     parser.add_argument("--gh", type=Path, required=True)
     parser.add_argument("--cosign", type=Path, required=True)
+    parser.add_argument("--registry-config", type=Path, help="explicit private Docker config.json for private OCI reads")
     parser.add_argument("--source-sha")
     parser.add_argument("--commerce-source-sha")
     args = parser.parse_args()
-    kwargs = dict(gh=args.gh.absolute(), cosign=args.cosign.absolute())
+    kwargs = dict(gh=args.gh.absolute(), cosign=args.cosign.absolute(), registry_config=args.registry_config)
     if args.command == "website":
         ui.require(args.source_sha is not None, "expected public website source is required")
         verify_website(args.assets.absolute(), source_sha=args.source_sha,

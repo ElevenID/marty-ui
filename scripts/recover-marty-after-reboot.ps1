@@ -1,3 +1,5 @@
+param([string]$RegistryConfig)
+
 $ErrorActionPreference = 'Stop'
 
 $env:Path = "C:\Program Files\Docker\Docker\resources\bin;$env:Path"
@@ -84,6 +86,9 @@ try {
                 $ProductionComposeArgs += @('-f', [string]$composeFile)
             }
             if ($WebsiteHost.ca_file) { $WebsiteArguments += @('--ca-file', [string]$WebsiteHost.ca_file) }
+            if (-not [string]::IsNullOrWhiteSpace($RegistryConfig)) {
+                $WebsiteArguments += @('--registry-config', $RegistryConfig)
+            }
             Invoke-Step 'Restore authenticated website and edge before product readiness' {
                 & $env:MARTY_WEBSITE_PYTHON (Join-Path $PSScriptRoot 'deploy_website.py') @WebsiteArguments
             }

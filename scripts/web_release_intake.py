@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import argparse
 import io
-import json
 from pathlib import Path
 import stat
-import subprocess
 import tempfile
 import urllib.parse
 import urllib.request
@@ -22,10 +20,11 @@ import installer_release as installer
 import package_web_composition as composition
 import stable_installer_assets as stable
 import ui_release as ui
+import web_auth as auth
 import website_provenance as proof
 import website_release as web
 
-MAX_ARCHIVE = 32 * 1024 * 1024
+MAX_ARCHIVE = auth.ARCHIVE_LIMIT
 
 
 def attempt_identity(value: dict, *, repository: str, run_id: str, attempt: str) -> dict:
@@ -63,14 +62,6 @@ def archive_selection(value: dict, *, kind: str, producer: dict) -> dict:
     return artifact
 
 
-def download_archive(args: list[str]) -> bytes:
-    # The API's checked size bounds this authenticated hosted artifact; the byte
-    # count/digest and expanded ZIP closure are checked again before any extraction.
-    result = subprocess.run(args, capture_output=True, timeout=180, check=False)
-    ui.require(result.returncode == 0 and 0 < len(result.stdout) <= MAX_ARCHIVE, "producer artifact download failed")
-    return result.stdout
-
-
 def extract_receipt(raw: bytes, *, kind: str, destination: Path) -> None:
     expected = set(composition.WEBSITE_FILES if kind == "website" else composition.APPLICATION_FILES)
     ui.require(0 < len(raw) <= MAX_ARCHIVE, "producer archive exceeds limit")
@@ -95,19 +86,20 @@ def extract_receipt(raw: bytes, *, kind: str, destination: Path) -> None:
 
 
 def fetch(kind: str, *, repository: str, run_id: str, attempt: str, destination: Path,
-          gh: Path, cosign: Path, runner=proof.verifier.command, downloader=download_archive) -> dict:
+          gh: Path, cosign: Path, registry_config: Path | None = None,
+          github_token_env: str | None = "GH_TOKEN", reader: auth.GitHubReader | None = None) -> dict:
     ui.require(kind in {"website", "application"} and repository in web.REPOSITORIES
                and all(isinstance(x, str) and ui.RUN.fullmatch(x) for x in (run_id, attempt)),
                "invalid original producer selection")
     proof.verifier.local_file(gh)
-    prefix = f"repos/{repository}/actions"
-    api = [str(gh), "api", "--hostname", "github.com", "-H", "X-GitHub-Api-Version: 2022-11-28"]
-    attempt_record = proof.parse_verified_json(runner(api + [f"{prefix}/runs/{run_id}/attempts/{attempt}"]))
+    if reader is None:
+        reader = auth.GitHubReader(gh=gh, repository=repository, run_id=run_id,
+                                  attempt=attempt, kind=kind, token_env=github_token_env)
+    attempt_record = proof.parse_verified_json(reader.attempt())
     producer = attempt_identity(attempt_record, repository=repository, run_id=run_id, attempt=attempt)
-    name = f"web-{kind}-{run_id}-{attempt}"
-    listed = proof.parse_verified_json(runner(api + [f"{prefix}/runs/{run_id}/artifacts?name={name}&per_page=100"]))
+    listed = proof.parse_verified_json(reader.artifacts())
     artifact = archive_selection(listed, kind=kind, producer=producer)
-    raw = downloader(api + [f"{prefix}/artifacts/{artifact['id']}/zip"])
+    raw = reader.archive(artifact["id"], maximum=artifact["size_in_bytes"])
     ui.require(len(raw) == artifact["size_in_bytes"] and ui.digest(raw) == artifact["digest"],
                "producer artifact bytes differ from GitHub metadata")
     ui.require(not destination.exists(), "web evidence destination already exists")
@@ -115,10 +107,10 @@ def fetch(kind: str, *, repository: str, run_id: str, attempt: str, destination:
         held = Path(temporary) / "receipt"
         extract_receipt(raw, kind=kind, destination=held)
         if kind == "website":
-            release = proof.verify_website(held, gh=gh, cosign=cosign)
+            release = proof.verify_website(held, gh=gh, cosign=cosign, registry_config=registry_config)
             actual = release["producer"]
         else:
-            release, compatibility = proof.verify_application(held, gh=gh, cosign=cosign)
+            release, compatibility = proof.verify_application(held, gh=gh, cosign=cosign, registry_config=registry_config)
             actual = compatibility["producer"]
         ui.require(actual == producer, "original evidence does not belong to the selected producer attempt")
         files = composition.WEBSITE_FILES if kind == "website" else composition.APPLICATION_FILES
@@ -164,10 +156,15 @@ def main() -> None:
     parser.add_argument("--assets", type=Path, required=True)
     parser.add_argument("--gh", type=Path)
     parser.add_argument("--cosign", type=Path)
+    parser.add_argument("--registry-config", type=Path, help="explicit private Docker config.json for private OCI reads")
+    parser.add_argument("--github-token-env", choices=("GH_TOKEN", "GITHUB_TOKEN"),
+                        help="GitHub token variable for fixed Actions GETs; website/application default: GH_TOKEN")
     parser.add_argument("--tag")
     parser.add_argument("--source-sha")
     args = parser.parse_args()
     if args.kind == "backend":
+        ui.require(args.registry_config is None and args.github_token_env is None,
+                   "public stable backend intake does not use private credentials")
         ui.require(args.tag and args.source_sha and args.gh, "backend needs exact source/tag and pinned verifier")
         backend(args.tag, destination=args.assets.absolute())
         stable.verify_published(args.assets.absolute(), source_sha=args.source_sha, tag=args.tag, gh=args.gh.absolute())
@@ -175,7 +172,8 @@ def main() -> None:
         ui.require(args.repository and args.run_id and args.run_attempt and args.gh and args.cosign,
                    "producer selection and pinned verifiers are required")
         fetch(args.kind, repository=args.repository, run_id=args.run_id, attempt=args.run_attempt,
-              destination=args.assets.absolute(), gh=args.gh.absolute(), cosign=args.cosign.absolute())
+              destination=args.assets.absolute(), gh=args.gh.absolute(), cosign=args.cosign.absolute(),
+              registry_config=args.registry_config, github_token_env=args.github_token_env or "GH_TOKEN")
 
 
 if __name__ == "__main__":
