@@ -1,0 +1,90 @@
+# Windows Docker Desktop recovery
+
+Use the existing Compose recovery wrapper from a trusted tooling checkout. Keep
+the deployment directory separate from that checkout. Retain the **complete,
+ordered** base/overlay list, environment file, projects and selected Docker
+context from the reviewed installed deployment. Recovery is not an upgrade or a
+substitute for signed release/composition verification. Do not derive a new
+deployment solely from one container's Compose labels: a project may contain
+containers created with different historical invocations.
+
+Save a nonsecret operator-owned JSON file outside public source:
+
+```json
+{
+  "schema": "marty.windows-recovery/v1",
+  "parameters": {
+    "StackDirectory": "C:/Marty/deployment",
+    "ExpectedDockerContext": "desktop-linux",
+    "ProductionProject": "marty-production",
+    "ProductionEnvFile": "C:/Marty/private/production.env",
+    "ProductionComposeFile": [
+      "C:/Marty/deployment/docker-compose.yml",
+      "C:/Marty/private/production-ui-overlay.yml"
+    ],
+    "OpenbaoProject": "marty-openbao",
+    "OpenbaoComposeFile": "C:/Marty/deployment/docker-compose.selfhost.openbao.yml",
+    "OpenbaoEnvFile": "C:/Marty/private/production.env"
+  }
+}
+```
+
+These are examples, not host settings. Paths must be existing absolute paths.
+The retained file contains paths and project/context identifiers, never token,
+unseal-key or environment contents. Restrict writes to the recovery operator.
+Do not edit deployment inputs during recovery. For an independent website,
+omit `ProductionComposeFile`: authenticated `.marty-website/state.json` owns the
+exact invocation and retained website overlay. Configure the existing
+`MARTY_WEBSITE_PYTHON`, `MARTY_WEBSITE_GH` and `MARTY_WEBSITE_COSIGN` tools under
+the same operator account; see [independent website recovery](independent-website-release.md).
+
+```powershell
+$Tooling = 'C:/Marty/tooling'
+$Configuration = 'C:/Marty/private/windows-recovery.json'
+& "$Tooling/scripts/recover-marty-after-reboot.ps1" -RecoveryConfigurationFile $Configuration -CheckOnly
+```
+
+`-CheckOnly` checks the selected Linux engine/context, file availability, active
+website transaction/lock guards and Compose configuration without starting or
+recreating containers. It writes the ordinary recovery transcript; it suppresses
+rendered configuration and native configuration diagnostics. It does not verify
+signatures, mount contents, state consistency, registry admission, website
+availability or restart/reboot behavior. An absent or incompatible retained input
+is a refusal, not permission to fall back to a smaller file list.
+
+After backup/rollback preparation and the applicable restart authorization,
+omit `-CheckOnly` to recover. Combined recovery always runs idempotent
+`up -d --no-build --wait` for the full active model, including ingress and
+dependencies; no forced recreation is requested. Compose can recreate a service
+whose model changed, so use only the reviewed retained inputs. OpenBao and its
+persistent unseal helper must both become ready before product recovery. The
+wrapper never runs the opt-in bootstrap profile. Clear `COMPOSE_PROFILES`.
+Existing Raft state and keys must already belong to the selected deployment.
+
+Beta is independent and is excluded by default. `RecoverBeta: true` explicitly
+enables the legacy beta invocation in this wrapper; use its dedicated recovery
+owner when beta has newer retained overlays. Production recovery is not authority
+to reconcile another team's beta runtime.
+
+For an authorized startup installation:
+
+```powershell
+& "$Tooling/scripts/install-marty-boot-recovery.ps1" -RecoveryConfigurationFile $Configuration
+```
+
+The installer first runs the exact saved configuration preflight. It registers
+the historical `Marty-Recovery-At-Boot` task name for compatibility, but now runs
+**at operator logon**, delayed two minutes, under the current interactive user
+with limited privileges. It does not change/start Windows services or use SYSTEM.
+Configure Docker Desktop to start for that user. The task retains the selected
+context and refuses a different selection; it never switches contexts. Ordinary
+PowerShell execution policy must permit the trusted local scripts. Installing a
+task is not a test of application restart, Docker Desktop restart, user logon or
+full-host reboot. Qualify each separately and do not claim unattended pre-logon
+availability. Inspect existing task ownership/authorization before replacement.
+
+Rehearse with a separate Compose project, loopback ports and test-only bind
+storage. Record the ordered invocation, image identities, mount markers and
+container identities before/after recovery. Application login, registration,
+consoles, KMS-backed operations and credential flows need separate runtime tests.
+Marketing/pricing page availability does not qualify billing or real payments.
