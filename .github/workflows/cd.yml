@@ -15,6 +15,12 @@ on:
         description: Historical input; leave empty for a fresh original-attempt release
         required: false
         type: string
+      publication_contract:
+        description: v2 separates publication retry from successful original qualification; v1 retains the legacy publisher
+        required: false
+        default: v2
+        type: choice
+        options: [v2, v1]
       selfhost_public_profile:
         description: Customer application profile (both exclude production marketing pages)
         required: false
@@ -72,6 +78,8 @@ jobs:
         env:
           RESUME_RUN_ID: ${{ inputs.resume_run_id }}
           RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
+          PUBLICATION_CONTRACT: ${{ inputs.publication_contract }}
+          PUBLISH_CLOUDFLARE_ADDON: ${{ inputs.publish_cloudflare_addon }}
         shell: bash
         run: |
           set -euo pipefail
@@ -79,6 +87,11 @@ jobs:
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_RUN_ATTEMPT" = 1
+          case "$PUBLICATION_CONTRACT" in v1|v2) ;; *) exit 1 ;; esac
+          if [ "$PUBLICATION_CONTRACT" = v2 ] && [ "$PUBLISH_CLOUDFLARE_ADDON" = true ]; then
+            echo '::error::The optional Cloudflare producer requires publication_contract=v1; v2 core publication has a closed asset inventory.'
+            exit 1
+          fi
           if [ -n "$RESUME_RUN_ID" ] || [ -n "$RESUME_ARTIFACT" ]; then
             echo '::error::The bounded release path requires one fresh original attempt. Expired or failed candidates need a new reviewed source and unused claim; resume is not supported.'
             exit 1
@@ -2113,7 +2126,7 @@ jobs:
     # Mandatory build prerequisite only: no acceptance, admission, channel, or
     # installer release assets are created by this job. Old producer attempts
     # cannot be relabelled on a rerun-failed attempt. The bounded original run
-    # completes publication or fails closed; preserve its immutable artifacts.
+    # completes qualification or fails closed; preserve its immutable artifacts.
     needs: [resolve-transaction, validate-stack, qualify-release, build-operator-catalog, prepare-selfhost-image-lock, preflight-selfhost-prepared-consumer, verifier-differential]
     runs-on: ubuntu-24.04
     permissions:
@@ -2259,6 +2272,9 @@ jobs:
           retention-days: 30
 
   publish-manifest:
+    concurrency:
+      group: stable-release-coordinate-${{ needs.resolve-transaction.outputs.tag }}
+      cancel-in-progress: false
     timeout-minutes: 90
     needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, build-keycloak, qualify-release, build-operator-catalog, prepare-official-candidate, prepare-installer-inputs]
     runs-on: ubuntu-latest
@@ -2669,7 +2685,29 @@ jobs:
           path: ${{ runner.temp }}/stable-tag-handoff.json
           if-no-files-found: error
           retention-days: 90
+      - name: Seal the immutable v2 publication candidate
+        if: inputs.publication_contract == 'v2'
+        run: |
+          set -euo pipefail
+          umask 077
+          python scripts/stable_publication_candidate.py seal \
+            --checkpoint "$RUNNER_TEMP/stable-publication-checkpoint" \
+            --tag-admission "$RUNNER_TEMP/stable-tag-handoff.json" \
+            --output "$RUNNER_TEMP/stable-publication-candidate-v2"
+      - name: Preserve candidate for a separate successful-run publisher
+        if: inputs.publication_contract == 'v2'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stable-publication-candidate-v2-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.resolve-transaction.outputs.tag }}
+          path: ${{ runner.temp }}/stable-publication-candidate-v2/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Record the independent publication handoff
+        if: inputs.publication_contract == 'v2'
+        run: |
+          printf '%s\n' 'The immutable v2 candidate is sealed. Publish stable candidate starts only after this original Stack release run completes successfully. Retry publication by a fresh manual publisher dispatch naming this original run; never rerun original CD.' >> "$GITHUB_STEP_SUMMARY"
       - name: Require the release coordinate to remain absent
+        if: inputs.publication_contract == 'v1'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.resolve-transaction.outputs.tag }}
@@ -2697,6 +2735,7 @@ jobs:
           esac
       - id: release
         name: Publish the qualified GitHub release and exact assets
+        if: inputs.publication_contract == 'v1'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.resolve-transaction.outputs.tag }}
@@ -2735,6 +2774,7 @@ jobs:
           done
           echo "id=$release_id" >> "$GITHUB_OUTPUT"
       - name: Seal the published terminal transaction
+        if: inputs.publication_contract == 'v1'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.release.outputs.id }}
@@ -2752,12 +2792,14 @@ jobs:
             --publication-run-id "$GITHUB_RUN_ID" \
             --output published-release-transaction.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: inputs.publication_contract == 'v1'
         with:
           name: stack-release-published-${{ github.run_id }}
           path: published-release-transaction.json
           if-no-files-found: error
           retention-days: 90
       - name: Record required stable installer qualification
+        if: inputs.publication_contract == 'v1'
         env:
           TAG: ${{ needs.resolve-transaction.outputs.tag }}
           SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
@@ -2774,7 +2816,7 @@ jobs:
 
   publish-cloudflare-addon:
     # An explicit optional producer. Core publication never depends on this job.
-    if: ${{ inputs.publish_cloudflare_addon }}
+    if: ${{ inputs.publish_cloudflare_addon && inputs.publication_contract == 'v1' }}
     needs: [resolve-transaction, publish-manifest]
     env:
       TAG: ${{ needs.resolve-transaction.outputs.tag }}

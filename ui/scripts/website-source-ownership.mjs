@@ -1,8 +1,7 @@
 import { lstatSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
+const repositoryRoot = path.resolve(import.meta.dirname, '../..');
 export function validateWebsiteSourceOwnership(value, root = repositoryRoot) {
   if (!value || Array.isArray(value) || Object.keys(value).sort().join(',') !== 'modules,schema_version'
     || value.schema_version !== 1 || !Array.isArray(value.modules) || !value.modules.length
@@ -17,7 +16,7 @@ export function validateWebsiteSourceOwnership(value, root = repositoryRoot) {
 }
 
 export const WEBSITE_SOURCE_OWNERSHIP = validateWebsiteSourceOwnership(JSON.parse(readFileSync(
-  new URL('../../contracts/website-source-ownership.json', import.meta.url), 'utf8',
+  path.join(repositoryRoot, 'contracts/website-source-ownership.json'), 'utf8',
 )));
 export function isWebsiteOwnedModule(moduleId) {
   const id = moduleId.replace(/\\/g, '/').split('?', 1)[0];

@@ -753,8 +753,8 @@ def _assert_final_public_ui_runtime_stage(dockerfile: str) -> None:
     )
     public_lines = dockerfile[stages[-1].end():].splitlines()
     for required in (
-        'RUN test "$UI_VARIANT" = public',
-        'LABEL io.elevenid.ui.audience="production"',
+        'RUN test "$UI_VARIANT" = public && test "$UI_SURFACE" = combined',
+        'LABEL io.elevenid.ui.audience="production" io.elevenid.ui.surface="combined"',
         "COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html",
         "COPY scripts/ui-production-start.sh /docker-entrypoint.d/40-ui-production.sh",
         "COPY scripts/load-secrets-env.sh /scripts/load-secrets-env.sh",

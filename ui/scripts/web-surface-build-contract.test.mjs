@@ -49,6 +49,13 @@ test('website output rejects application services, contexts, consoles and privat
   }
 });
 
+test('application rejects private marketing modules in the final host bundle', () => {
+  for (const suffix of ['website.jsx', 'components/PricingPage.jsx', 'data/pricingPageContent.js', 'seo/SEOHead.jsx']) {
+    assert.equal(forbiddenWebSurfaceModule('application', `/private/src/${suffix}`, '/private/src/application.jsx'), true);
+  }
+  assert.equal(forbiddenWebSurfaceModule('application', '/private/src/data/pricingPlans.js', '/private/src/application.jsx'), false);
+});
+
 test('revision identifies all source inputs and cannot be supplied independently', () => {
   assert.equal(websiteBuildRevision({ sourceSha }), sourceSha);
   assert.equal(websiteBuildRevision({ sourceSha, commerceSha, pages: 'full' }), `${sourceSha}-${commerceSha}`);

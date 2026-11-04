@@ -14,9 +14,10 @@ export function websiteBuildRevision({ sourceSha = 'development', commerceSha, p
 
 export function forbiddenWebSurfaceModule(surface, moduleId, commerceEntry) {
   const id = moduleId.replace(/\\/g, '/').split('?', 1)[0];
-  if (surface === 'application') return isProductionMarketingModule(id);
+  const privateRoot = commerceEntry?.replace(/\\/g, '/').replace(/\/(?:website|application)\.jsx$/, '/');
+  if (surface === 'application') return isProductionMarketingModule(id)
+    || Boolean(privateRoot && id.startsWith(privateRoot) && /^(?:website\.jsx|components\/PricingPage\.jsx|data\/pricingPageContent\.js|seo\/SEOHead\.jsx)$/.test(id.slice(privateRoot.length)));
   if (surface !== 'website') return false;
-  const privateRoot = commerceEntry?.replace(/\\/g, '/').replace(/\/website\.jsx$/, '/');
   return id.includes('/@elevenid/marty-api-core/')
     || /\/src\/apps\/(?:public|console)\//.test(id)
     || /\/src\/(?:bootstrapApp\.jsx|hooks\/useAuth\.js|services\/(?:api(?:\.[jt]s|\/)|authApi\.js))/.test(id)
@@ -25,6 +26,7 @@ export function forbiddenWebSurfaceModule(surface, moduleId, commerceEntry) {
 }
 
 export function webSurfaceBuildContractPlugin({ surface, sourceSha = 'development', revision, pages = 'public', commerceSha, commerceEntry }) {
+  if (!['combined', 'website', 'application'].includes(surface)) throw new Error('Unknown UI surface');
   const websiteRevision = surface === 'website' ? websiteBuildRevision({ sourceSha, commerceSha, pages, revision }) : null;
   return {
     name: 'web-surface-build-contract',

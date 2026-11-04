@@ -35,23 +35,35 @@ jobs:
         run: |
           set -euo pipefail
           test "$CODEQL_ADVANCED_ENABLED" = "true"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate the complete source-bound analysis diff
+        env:
+          CODEQL_SCOPE_FILE: ${{ runner.temp }}/codeql-scope.json
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+          SOURCE_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: python3 scripts/ci/codeql_scope.py
       - name: Classify Actions analysis scope
         id: scope
+        env:
+          CODEQL_SCOPE_FILE: ${{ runner.temp }}/codeql-scope.json
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
+            const { readFileSync } = require('node:fs');
+            const scope = JSON.parse(readFileSync(process.env.CODEQL_SCOPE_FILE, 'utf8'));
+            if (scope.event !== context.eventName) throw new Error('CodeQL event mismatch');
             if (context.eventName !== 'pull_request') {
-              core.setOutput('analyze', 'true');
+              core.setOutput('analyze', String(!(context.eventName === 'merge_group' && scope.website_only)));
               return;
             }
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
-              per_page: 100,
-            });
+            const files = scope.files;
             const analyze = files.some(({ filename }) =>
-              filename.startsWith('.github/')
+              filename.startsWith('.github/') || filename.startsWith('scripts/ci/') ||
+              filename === 'contracts/website-source-ownership.json'
             );
             core.info(analyze
               ? 'GitHub Actions changes require CodeQL analysis.'
@@ -60,10 +72,6 @@ jobs:
       - name: Record scoped analysis skip
         if: steps.scope.outputs.analyze != 'true'
         run: echo "Actions CodeQL is not affected by this pull request."
-      - if: steps.scope.outputs.analyze == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
       - name: Initialize Actions analysis
         if: steps.scope.outputs.analyze == 'true'
         uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2

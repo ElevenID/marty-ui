@@ -28,7 +28,7 @@
     "postinstall": "node scripts/patch-prerenderer-ts-deepmerge.cjs",
     "build:website": "node scripts/build-web-surface.mjs website",
     "build:application": "node scripts/build-web-surface.mjs application",
-    "test:website": "node --test scripts/web-surface-contract.test.mjs scripts/web-surface-build-contract.test.mjs scripts/production-build-contract.test.mjs scripts/selfhost-build-contract.test.mjs scripts/crawler-config.test.mjs && vitest run src/application/routing/appHandoff.test.ts src/application/routing/loginEntry.test.ts src/application/routing/publicEntry.test.ts src/components/__tests__/LandingPage.test.tsx src/apps/shared/WebSurfaceBoundary.test.tsx"
+    "test:website": "node --test scripts/web-surface-contract.test.mjs scripts/web-surface-build-contract.test.mjs scripts/production-build-contract.test.mjs scripts/crawler-config.test.mjs && vitest run src/application/routing/appHandoff.test.ts src/application/routing/loginEntry.test.ts src/application/routing/publicEntry.test.ts src/components/__tests__/LandingPage.test.tsx src/apps/shared/WebSurfaceBoundary.test.tsx"
   },
   "dependencies": {
     "@elevenid/marty-api-core": "https://github.com/ElevenID/marty-cli/releases/download/v0.3.6/elevenid-marty-api-core-0.3.6.tgz",

@@ -13,7 +13,9 @@ export function shouldBrowserRedirect({ currentPathname = '', destination = '', 
   if (!safe || destination.startsWith('#')) return false;
   const target = new URL(safe, typeof window === 'undefined' ? 'https://marty.invalid/' : window.location.href);
   const current = surface === 'website' || surface === 'application' ? surface : getWebSurface(currentPathname);
-  return getWebSurface(target.pathname) !== current
+  const currentOrigin = typeof window === 'undefined' ? 'https://marty.invalid' : window.location.origin;
+  return publicEntryHref(safe) !== safe || target.origin !== currentOrigin
+    || getWebSurface(target.pathname) !== current
     || (isConsolePath(target.pathname) !== isConsolePath(currentPathname));
 }
 

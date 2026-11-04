@@ -120,5 +120,8 @@ describe('surface navigation boundaries', () => {
     expect(redirectBrowser(`${canonical}/login?next=%2Fconsole#sign-in`, { location })).toBe(true);
     expect(location.replace).toHaveBeenCalledWith(`${canonical}/login?next=%2Fconsole#sign-in`);
     expect(redirectBrowser('https://unlisted.example.com/login', { location })).toBe(false);
+    expect(shouldBrowserRedirect({ currentPathname: '/login', destination: `${canonical}/pricing/checkout?plan=pilot#pay` })).toBe(true);
+    expect(shouldBrowserRedirect({ currentPathname: '/login', destination: '/pricing/checkout?plan=pilot#pay' })).toBe(true);
+    expect(shouldBrowserRedirect({ currentPathname: '/product', destination: '#local' })).toBe(false);
   });
 });
