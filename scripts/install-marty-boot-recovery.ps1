@@ -1,30 +1,34 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$RecoveryConfigurationFile
+)
 $ErrorActionPreference = 'Stop'
 
-$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-$principal = New-Object Security.Principal.WindowsPrincipal($identity)
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    throw 'This installer must run from an elevated Administrator PowerShell session.'
+# Docker Desktop belongs to the signed-in user's session and Docker context.
+# A SYSTEM boot task cannot assume that user's daemon, registry or proof tools.
+if (-not [IO.Path]::IsPathRooted($RecoveryConfigurationFile) -or
+    -not (Test-Path -LiteralPath $RecoveryConfigurationFile -PathType Leaf) -or
+    $RecoveryConfigurationFile.Contains('"')) {
+    throw 'An existing absolute nonsecret recovery configuration path is required.'
 }
-
-$repoRoot = Split-Path -Parent $PSScriptRoot
 $recoveryScript = Join-Path $PSScriptRoot 'recover-marty-after-reboot.ps1'
-if (-not (Test-Path -LiteralPath $recoveryScript)) {
-    throw "Recovery script not found: $recoveryScript"
-}
+$repoRoot = Split-Path -Parent $PSScriptRoot
+# Validate the exact saved invocation before replacing any task. Run in a child
+# process because the recovery wrapper deliberately exits with its result.
+& PowerShell.exe -NoProfile -NonInteractive -File $recoveryScript `
+    -RecoveryConfigurationFile $RecoveryConfigurationFile -CheckOnly *> $null
+if ($LASTEXITCODE -ne 0) { throw 'Recovery preflight failed; the scheduled task was not changed.' }
 
-Set-Service -Name 'com.docker.service' -StartupType Automatic
-Start-Service -Name 'com.docker.service' -ErrorAction SilentlyContinue
-
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $taskAction = New-ScheduledTaskAction `
     -Execute 'PowerShell.exe' `
-    -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$recoveryScript`"" `
+    -Argument "-NoProfile -NonInteractive -File `"$recoveryScript`" -RecoveryConfigurationFile `"$RecoveryConfigurationFile`"" `
     -WorkingDirectory $repoRoot
-$taskTrigger = New-ScheduledTaskTrigger -AtStartup
+$taskTrigger = New-ScheduledTaskTrigger -AtLogOn -User $identity.Name
 $taskTrigger.Delay = 'PT2M'
 $taskPrincipal = New-ScheduledTaskPrincipal `
-    -UserId 'SYSTEM' `
-    -LogonType ServiceAccount `
-    -RunLevel Highest
+    -UserId $identity.Name -LogonType Interactive -RunLevel Limited
 $taskSettings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 20) `
@@ -38,10 +42,6 @@ Register-ScheduledTask `
     -Trigger $taskTrigger `
     -Principal $taskPrincipal `
     -Settings $taskSettings `
-    -Description 'Recover Marty production and beta Docker Compose stacks after Windows boot.' `
+    -Description 'Recover the retained Marty Compose deployment after operator logon and Docker Desktop startup.' `
     -Force | Out-Null
-
-$service = Get-Service -Name 'com.docker.service'
-$task = Get-ScheduledTask -TaskName 'Marty-Recovery-At-Boot'
-Write-Host "Docker service: status=$($service.Status) startup=$($service.StartType)"
-Write-Host "Recovery task: state=$($task.State) trigger=AtStartup delay=PT2M principal=SYSTEM"
+Write-Host 'Recovery task retained for this operator at logon; full-host boot recovery is not qualified.'

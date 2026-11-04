@@ -363,7 +363,11 @@ split state, runs these checks around its existing recovery sequence, and retain
 the recorded website overlay in subsequent product Compose operations. For that
 script, configure `MARTY_WEBSITE_PYTHON`, `MARTY_WEBSITE_GH`, and
 `MARTY_WEBSITE_COSIGN` under the recovery account to the reviewed executable paths.
-Without split state, its legacy recovery path remains. For separately installed
+Supply its private registry file with `-RegistryConfig` or the `RegistryConfig`
+path in the retained recovery configuration, and select its parent using
+`DOCKER_CONFIG` for actual image pulls.
+Without split state, provide the complete retained Compose invocation; see
+[Windows Compose recovery](windows-compose-recovery.md). Beta recovery is opt-in. For separately installed
 bundle hosts, configure equivalent commands using the exact saved `$Common`
 arguments and trusted tooling checkout.
 
