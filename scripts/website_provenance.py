@@ -80,9 +80,14 @@ def verified_certificate(output: str, producer: dict) -> None:
 def attestation_arguments(producer: dict) -> list[str]:
     validate_producer(producer)
     repository = producer["repository"]
-    return ["--repo", repository, "--signer-workflow", repository + "/" + producer["workflow"],
-            "--source-ref", web.REF, "--source-digest", producer["source_sha"], "--deny-self-hosted-runners",
-            "--predicate-type", "https://slsa.dev/provenance/v1", "--format", "json"]
+    arguments = ["--repo", repository, "--signer-workflow", repository + "/" + producer["workflow"],
+                 "--source-ref", web.REF, "--source-digest", producer["source_sha"], "--deny-self-hosted-runners",
+                 "--predicate-type", "https://slsa.dev/provenance/v1", "--format", "json"]
+    if repository == ui.COMMERCE_REPOSITORY:
+        # Private producers retain local bundles from GitHub's private Sigstore
+        # even when their plan does not provide GitHub attestation storage.
+        arguments.append("--no-public-good")
+    return arguments
 
 
 def signature_arguments(producer: dict) -> list[str]:

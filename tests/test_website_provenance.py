@@ -50,6 +50,8 @@ def test_subject_verifies_exact_original_invocation_and_private_source(files, fu
     assert calls[0][calls[0].index("--source-digest") + 1] == (PRIVATE if full else SOURCE)
     assert calls[0][calls[0].index("--repo") + 1] == producer["repository"]
     assert "--deny-self-hosted-runners" in calls[0]
+    assert ("--no-public-good" in calls[0]) is full
+    assert "--no-public-good" not in calls[1]
     assert calls[0][calls[0].index("--bundle") + 1] == str(files / "subject.json.provenance.jsonl")
     assert calls[1][calls[1].index("--certificate-identity") + 1].endswith(producer["workflow"] + "@refs/heads/main")
 
@@ -123,6 +125,8 @@ def test_image_proof_binds_original_producer_and_exact_oci_digest(files, full):
     proof.verify_image(image, files / "image.provenance.jsonl", producer=producer,
                        gh=files / "gh", cosign=files / "cosign", runner=run)
     assert "oci://" + image["uri"] + "@" + DIGEST in calls[0]
+    assert ("--no-public-good" in calls[0]) is full
+    assert "--no-public-good" not in calls[1]
     assert image["uri"] + "@" + DIGEST in calls[1]
     wrong = copy.deepcopy(image)
     wrong["uri"] = web.PUBLIC_IMAGE if full else web.COMMERCE_IMAGE

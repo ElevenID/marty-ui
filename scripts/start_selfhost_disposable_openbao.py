@@ -70,7 +70,7 @@ def verify_model(model: object, image: str, state: Path, secret_root: Path,
     for name, service in services.items():
         if not isinstance(service, dict) or service.get("image") != image:
             raise ValueError("rendered OpenBao image differs from the lock")
-        keys = {"image", "networks", "restart", "volumes", "entrypoint", "command"}
+        keys = {"image", "networks", "restart", "volumes", "entrypoint", "command", "mem_limit"}
         if name == "openbao":
             keys.update({"depends_on", "ports", "healthcheck"})
         elif name in {"openbao-unseal", "openbao-bootstrap"}:
@@ -79,6 +79,14 @@ def verify_model(model: object, image: str, state: Path, secret_root: Path,
             keys.add("profiles")
         if set(service) - keys or service.get("networks") != {"default": None}:
             raise ValueError("rendered OpenBao has unsafe runtime overrides")
+        # Compose serializes UnitBytes (a signed 64-bit count) as a decimal
+        # string. Keep the shipped limits and legitimate operator overrides,
+        # but refuse missing/unlimited limits and every other resource field.
+        memory = service.get("mem_limit")
+        if (not isinstance(memory, str)
+                or re.fullmatch(r"[1-9][0-9]{0,18}", memory) is None
+                or int(memory) >= 2**63):
+            raise ValueError("rendered OpenBao memory limit must be a positive bounded byte count")
         expected_entrypoint = {
             "openbao-tls-init": ["/usr/local/bin/selfhost-tls-init"],
             "openbao": None,
