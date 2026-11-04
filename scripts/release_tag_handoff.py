@@ -2,7 +2,7 @@
 """Bound the original CD attempt to an authenticated operator tag result.
 
 This module never executes a release payload and never changes a Git reference.
-The separate operator entry point owns the two explicitly reviewed API writes.
+The separate operator entry point owns the reviewed REST and native Git writes.
 """
 from __future__ import annotations
 
@@ -178,11 +178,13 @@ def parse_http(raw: bytes) -> tuple[int, bytes]:
 
 
 class GitHub:
-    def __init__(self, executable: str = "gh", *, deadline: datetime | None = None) -> None:
+    def __init__(self, executable: str = "gh", *, deadline: datetime | None = None,
+                 observer: Callable[[], None] | None = None) -> None:
         self.executable = executable
         self.deadline = deadline
         self.mutations: list[dict] = []
         self.crypto: list[dict] = []
+        self.observer = observer
 
     def response(self, path: str, *, method: str = "GET", payload: object | None = None) -> tuple[int, bytes]:
         require(path.startswith(f"repos/{REPOSITORY}/") or path in {f"repos/{REPOSITORY}", "graphql"},
@@ -199,10 +201,14 @@ class GitHub:
                            "requested_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                            "outcome": "unknown"}
             self.mutations.append(observation)
+            if self.observer is not None:
+                self.observer()
         code, raw = command(args, input_bytes=body, timeout=remaining(self.deadline))
         status, response = parse_http(raw)
         if observation is not None:
             observation.update(http_status=status, response=decode(response), outcome="response_received")
+            if self.observer is not None:
+                self.observer()
         require(code == 0 or status >= 400 or path == "graphql" and status == 200,
                 "GitHub command failed without an HTTP refusal")
         return status, response

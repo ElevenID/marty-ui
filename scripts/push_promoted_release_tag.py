@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -20,17 +21,17 @@ from pathlib import Path
 
 if __package__:
     from . import release_tag_handoff as handoff
+    from . import release_git_atomic as atomic
     from .release_review_main import gate_authority, require_review_only_history
     from .release_transaction import IMAGE_URIS, validate_resume
 else:
     import release_tag_handoff as handoff
+    import release_git_atomic as atomic
     from release_review_main import gate_authority, require_review_only_history
     from release_transaction import IMAGE_URIS, validate_resume
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = handoff.REPOSITORY
-ZERO = "0" * 40
-MUTATION = "mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }"
 MANDATORY_PUBLISH_STEPS = frozenset({
     "Revalidate exact installer inputs before any publication signing",
     "Verify exact operator binary provenance before signing",
@@ -48,6 +49,90 @@ LANES = frozenset({"oid4vci-issuer", "oid4vp-final", "oid4vp-url-query", "oid4vp
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class ObservationJournal:
+    """Exclusive private audit identity; fsync the consumed intent before I/O."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        self.descriptor = -1
+        try:
+            parent = os.fstat(self.directory)
+            handoff.require(parent.st_uid == os.geteuid() and not parent.st_mode & 0o022,
+                            "Operator audit directory is not exclusively writable by its owner")
+            self.descriptor = os.open(path.name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                      0o600, dir_fd=self.directory)
+            self.identity = self.fingerprint(os.fstat(self.descriptor))
+            self.parent_identity = (parent.st_dev, parent.st_ino, parent.st_uid, parent.st_gid, parent.st_mode)
+        except BaseException:
+            self.close()
+            raise
+
+    @staticmethod
+    def fingerprint(value: os.stat_result) -> tuple:
+        handoff.require(stat.S_ISREG(value.st_mode) and value.st_uid == os.geteuid()
+                        and stat.S_IMODE(value.st_mode) == 0o600 and value.st_nlink == 1,
+                        "Operator audit custody changed")
+        return (value.st_dev, value.st_ino, value.st_size, value.st_uid, value.st_gid,
+                value.st_mode, value.st_nlink, value.st_mtime_ns, value.st_ctime_ns)
+
+    def unchanged(self) -> None:
+        parent = os.stat(self.path.parent, follow_symlinks=False)
+        handoff.require((parent.st_dev, parent.st_ino, parent.st_uid, parent.st_gid, parent.st_mode)
+                        == self.parent_identity, "Operator audit parent changed")
+        handoff.require(self.fingerprint(os.fstat(self.descriptor)) == self.identity
+                        and self.fingerprint(os.stat(self.path.name, dir_fd=self.directory, follow_symlinks=False))
+                        == self.identity, "Operator audit path changed")
+
+    def write(self, value: dict) -> None:
+        raw = handoff.encoded(value)
+        handoff.require(len(raw) <= handoff.MAX_JSON, "Operator observation exceeds its bound")
+        token = os.environ.get("GH_TOKEN", "")
+        handoff.require(not token or token.encode() not in raw, "Operator observation failed credential redaction")
+        self.unchanged()
+        descriptor, temporary = tempfile.mkstemp(prefix=".tag-operator-audit-", dir=self.path.parent)
+        try:
+            os.fchmod(descriptor, 0o600)
+            remaining = memoryview(raw)
+            while remaining:
+                written = os.write(descriptor, remaining)
+                handoff.require(written > 0, "Operator audit write failed")
+                remaining = remaining[written:]
+            os.fsync(descriptor)
+            self.unchanged()
+            temporary_name = Path(temporary).name
+            handoff.require(self.fingerprint(os.fstat(descriptor))
+                            == self.fingerprint(os.stat(temporary_name, dir_fd=self.directory, follow_symlinks=False)),
+                            "Operator audit temporary changed")
+            os.replace(temporary_name, self.path.name, src_dir_fd=self.directory, dst_dir_fd=self.directory)
+            os.fsync(self.directory)
+            os.close(self.descriptor)
+            self.descriptor = descriptor
+            descriptor = -1
+            self.identity = self.fingerprint(os.fstat(self.descriptor))
+            self.unchanged()
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            if os.path.lexists(temporary):
+                os.unlink(temporary)
+
+    def close(self) -> None:
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+        os.close(self.directory)
+
+
+def transaction_summary(value: dict) -> dict:
+    return {"transport": value["transport"], "request": value["request"],
+            "not_after": value["not_after"],
+            "discovery": value["discovery"]["admitted"],
+            "mutation": {key: value["mutation"][key] for key in
+                         ("method", "path", "requested_at", "body_sha256", "body_bytes", "outcome", "report")},
+            "decision": value["decision"]}
 
 
 def inspect_repository(github: handoff.GitHub) -> tuple[int, str, dict]:
@@ -74,7 +159,8 @@ def inspect_repository(github: handoff.GitHub) -> tuple[int, str, dict]:
                         "Ruleset identity changed")
         details.append(value)
     return operator_run, source, {"repository_id": repository["id"], "repository_node_id": repository["node_id"],
-                                  "rulesets": details, "rulesets_sha256": handoff.sha256(handoff.encoded(details))}
+                                  "rulesets": sorted(details, key=lambda value: value["id"]),
+                                  "rulesets_sha256": handoff.sha256(handoff.encoded(sorted(details, key=lambda value: value["id"])))}
 
 
 def validate_waiting_jobs(jobs: list[dict], run_id: int, source: str) -> None:
@@ -135,54 +221,6 @@ def waiting_run(github: handoff.GitHub, run_id: int, source: str) -> None:
     validate_waiting_jobs(jobs, run_id, source)
 
 
-def atomic_request(main_before: str, main_after: str, tag: str, tag_object: str,
-                   client_id: str) -> dict:
-    handoff.require(all(handoff.SHA.fullmatch(value) is not None
-                        for value in (main_before, main_after, tag_object)), "Invalid atomic object identity")
-    handoff.require(handoff.TAG.fullmatch(tag) is not None
-                    or re.fullmatch(r"v-release-capability-[1-9][0-9]*-1", tag) is not None,
-                    "Atomic ref is outside the closed tag contract")
-    return {"query": MUTATION, "variables": {"input": {
-        "repositoryId": handoff.REPOSITORY_NODE, "clientMutationId": client_id,
-        "refUpdates": [
-            {"name": "refs/heads/main", "beforeOid": main_before, "afterOid": main_after, "force": False},
-            {"name": f"refs/tags/{tag}", "beforeOid": ZERO, "afterOid": tag_object, "force": False},
-        ],
-    }}}
-
-
-def graph_result(github: handoff.GitHub, request: dict) -> tuple[int, dict]:
-    status, raw = github.response("graphql", method="POST", payload=request)
-    value = handoff.decode(raw)
-    handoff.require(isinstance(value, dict), "Atomic GitHub response is malformed; outcome is unknown")
-    return status, value
-
-
-def require_graph_success(status: int, value: dict, client_id: str) -> None:
-    data = value.get("data")
-    updated = data.get("updateRefs") if isinstance(data, dict) else None
-    handoff.require(status == 200 and not value.get("errors")
-                    and isinstance(updated, dict) and updated.get("clientMutationId") == client_id,
-                    "Atomic ref mutation did not return exact success; outcome must be inspected, never replayed")
-
-
-def stale_main_rejection(status: int, value: dict, before: str, current: str) -> bool:
-    if status != 200 or value.get("data") not in (None, {"updateRefs": None}):
-        return False
-    errors = value.get("errors")
-    if not isinstance(errors, list) or len(errors) != 1 or not isinstance(errors[0], dict):
-        return False
-    message = errors[0].get("message")
-    if not isinstance(message, str) or len(message) > 2048:
-        return False
-    lower = message.lower()
-    main_named = "refs/heads/main" in lower or re.search(r"\bmain\b", lower) is not None
-    explicit_before = "before" in lower and ("oid" in lower or "sha" in lower) and any(
-        word in lower for word in ("match", "expected", "stale", "changed"))
-    explicit_values = before in lower and current in lower and any(word in lower for word in ("expected", "match", "stale"))
-    return bool(main_named and (explicit_before or explicit_values))
-
-
 def create_tag_object(github: handoff.GitHub, tag: str, source: str, message: str) -> dict:
     status, raw = github.response(f"repos/{REPOSITORY}/git/tags", method="POST", payload={
         "tag": tag, "message": message, "object": source, "type": "commit",
@@ -213,7 +251,8 @@ def read_exact_tag(github: handoff.GitHub, tag: str, object_sha: str, source: st
     return value
 
 
-def qualify_capability(github: handoff.GitHub, run_id: int, main: str, inspection: dict) -> dict:
+def qualify_capability(github: handoff.GitHub, native: atomic.NativeGit,
+                       run_id: int, main: str, inspection: dict) -> dict:
     parents = handoff.git("show", "-s", "--format=%P", main, deadline=github.deadline).split()
     handoff.require(len(parents) == 1 and handoff.SHA.fullmatch(parents[0]) is not None,
                     "Capability needs a real distinct first-parent ancestor")
@@ -231,26 +270,23 @@ def qualify_capability(github: handoff.GitHub, run_id: int, main: str, inspectio
                f"Rulesets-SHA256: {inspection['rulesets_sha256']}\n")
     obj = create_tag_object(github, tag, ancestor, message)
     handoff.require(github.main()["commit"]["sha"] == main, "Main changed before capability comparison")
-    negative = atomic_request(ancestor, main, tag, obj["sha"], f"capability-negative-{run_id}-1")
-    status, refusal = graph_result(github, negative)
-    # A generic error, permission refusal or non-fast-forward rejection is not
-    # evidence that the server enforced the beforeOid assertion.
-    handoff.require(stale_main_rejection(status, refusal, ancestor, main),
-                    "Capability did not return an attributable stale-main precondition refusal")
+    negative = native.exchange(atomic.transaction_spec(ancestor, main, tag, obj["sha"],
+                                                        f"capability-negative-{run_id}-1"))
     handoff.require(github.main()["commit"]["sha"] == main
                     and github.json(f"repos/{REPOSITORY}/git/ref/tags/{tag}", absent=True) is None,
                     "Negative atomic capability transaction unexpectedly changed a ref")
-    positive_id = f"capability-positive-{run_id}-1"
-    positive = atomic_request(main, main, tag, obj["sha"], positive_id)
-    status, response = graph_result(github, positive)
-    require_graph_success(status, response, positive_id)
+    positive = native.exchange(atomic.transaction_spec(main, main, tag, obj["sha"],
+                                                        f"capability-positive-{run_id}-1"))
     read_exact_tag(github, tag, obj["sha"], ancestor, message)
     handoff.require(github.main()["commit"]["sha"] == main, "Main changed during capability qualification")
-    return {"schema": "marty.release-tag-capability/v1", "status": "success", "repository": REPOSITORY,
+    final_run, final_source, final_inspection = inspect_repository(github)
+    handoff.require((final_run, final_source, final_inspection) == (run_id, main, inspection),
+                    "Operator context or repository rules changed during capability qualification")
+    return {"schema": "marty.release-tag-capability/v2", "status": "success", "repository": REPOSITORY,
             "operator_run_id": run_id, "operator_run_attempt": 1, "operator_source_sha": main,
             "ancestor_source_sha": ancestor, "audit_tag": tag, "tag_object_sha": obj["sha"],
-            "negative_request": negative, "negative_response": refusal,
-            "positive_request": positive, "positive_response": response,
+            "transport": atomic.TRANSPORT,
+            "negative_transaction": transaction_summary(negative), "positive_transaction": transaction_summary(positive),
             "main_before_sha": main, "main_after_sha": main, "completed_at": utc_now(), **inspection}
 
 
@@ -312,8 +348,8 @@ def promoted_digests(transaction: dict, deadline: datetime) -> None:
                         f"Promoted {role} digest differs from the qualified transaction")
 
 
-def create_qualified_tag(github: handoff.GitHub, operator_run: int, main: str, cd_run: int,
-                         claim_run: str, gh: Path, cosign: Path) -> dict:
+def create_qualified_tag(github: handoff.GitHub, native: atomic.NativeGit, operator_run: int, main: str, cd_run: int,
+                         claim_run: str, gh: Path, cosign: Path, inspection: dict) -> dict:
     if __package__:
         from .stable_publication_checkpoint import (
             CHECKPOINT_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, load_checkpoint, request_digest,
@@ -382,12 +418,14 @@ def create_qualified_tag(github: handoff.GitHub, operator_run: int, main: str, c
         # object/ref and require exact API inspection before any later action.
         waiting_run(github, cd_run, source)
         handoff.require(github.main()["commit"]["sha"] == main, "Protected main changed before atomic tag handoff")
-        client_id = f"release-tag-{operator_run}-1"
-        status, response = graph_result(github, atomic_request(main, main, request["tag"], tag_object["sha"], client_id))
-        require_graph_success(status, response, client_id)
+        native.exchange(atomic.transaction_spec(main, main, request["tag"], tag_object["sha"],
+                                                f"release-tag-{operator_run}-1"))
         read_exact_tag(github, request["tag"], tag_object["sha"], source, message)
         handoff.require(github.main()["commit"]["sha"] == main, "Main changed after atomic tag creation")
         waiting_run(github, cd_run, source)
+        final_run, final_source, final_inspection = inspect_repository(github)
+        handoff.require((final_run, final_source, final_inspection) == (operator_run, main, inspection),
+                        "Operator context or repository rules changed during tag creation")
         handoff.remaining(github.deadline)
         return {
             "schema": "marty.release-tag-handoff-result/v1", "status": "success", "mode": "create-qualified-tag",
@@ -413,8 +451,32 @@ def main() -> int:
     result = {"schema": "marty.release-tag-operator-refusal/v1", "status": "refused", "mode": args.mode,
               "repository": REPOSITORY, "automatic_retry_or_cleanup_performed": False}
     github = handoff.GitHub(deadline=datetime.now(timezone.utc) + timedelta(minutes=10))
+    native = None
+    journal = None
+    exit_code = 1
+
+    def observations() -> dict:
+        run = os.environ.get("GITHUB_RUN_ID", "")
+        source = os.environ.get("GITHUB_SHA", "")
+        return {"schema": "marty.release-tag-operator-observations/v2", "repository": REPOSITORY,
+                "mode": args.mode, "operator_run_id": run if re.fullmatch(r"[1-9][0-9]*", run) else "",
+                "operator_run_attempt": "1" if os.environ.get("GITHUB_RUN_ATTEMPT") == "1" else "",
+                "operator_source_sha": source if handoff.SHA.fullmatch(source) else "",
+                "rest_api_mutations": github.mutations, "git_transactions": native.transactions if native else [],
+                "crypto": github.crypto, "automatic_retry_or_cleanup_performed": False}
+
+    def persist() -> None:
+        handoff.require(journal is not None, "Operator audit is unavailable")
+        journal.write(observations())
+
     try:
         handoff.require(not args.output.exists() and not args.output.is_symlink(), "Operator output already exists")
+        audit = args.output.with_name("operator-api-receipt.json")
+        handoff.require(audit != args.output, "Operator result and audit paths must differ")
+        journal = ObservationJournal(audit)
+        native = atomic.NativeGit(runner=handoff.command, deadline=lambda: github.deadline, persist=persist)
+        github.observer = persist
+        persist()
         operator_run, source, inspection = inspect_repository(github)
         if args.mode in {"inspect", "qualify-capability"}:
             handoff.require(not args.promotion_run_id and not args.claim_run_id and args.gh is None and args.cosign is None,
@@ -424,37 +486,43 @@ def main() -> int:
                           "operator_run_id": operator_run, "operator_run_attempt": 1, "operator_source_sha": source,
                           "read_only": True, "completed_at": utc_now(), **inspection}
             else:
-                result = qualify_capability(github, operator_run, source, inspection)
+                result = qualify_capability(github, native, operator_run, source, inspection)
         else:
             handoff.require(re.fullmatch(r"[1-9][0-9]*", args.promotion_run_id) is not None
                             and re.fullmatch(r"[1-9][0-9]*", args.claim_run_id) is not None
                             and handoff.positive(int(args.promotion_run_id)) and handoff.positive(int(args.claim_run_id))
                             and args.gh is not None and args.cosign is not None,
                             "Qualified tag creation requires exact run IDs and admitted verifier binaries")
-            result = create_qualified_tag(github, operator_run, source, int(args.promotion_run_id), args.claim_run_id,
-                                          args.gh.resolve(strict=True), args.cosign.resolve(strict=True))
-        args.output.write_bytes(handoff.encoded(result))
-        return 0
+            result = create_qualified_tag(github, native, operator_run, source, int(args.promotion_run_id), args.claim_run_id,
+                                          args.gh.resolve(strict=True), args.cosign.resolve(strict=True), inspection)
+        exit_code = 0
     except (OSError, ValueError, KeyError, TypeError, UnicodeError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
         # Errors are classifications only. Never echo command output, credentials
         # or redirected archive URLs. An unknown mutation outcome stays unknown.
         result["error_type"] = type(error).__name__
         result["completed_at"] = utc_now()
-        if not args.output.exists() and not args.output.is_symlink():
-            args.output.write_bytes(handoff.encoded(result))
         print("Release tag operator refused; inspect its bound receipt. No automatic mutation retry or cleanup.")
-        return 1
     finally:
-        audit = args.output.with_name("operator-api-receipt.json")
-        if not audit.exists() and not audit.is_symlink():
-            audit.write_bytes(handoff.encoded({
-                "schema": "marty.release-tag-operator-observations/v1", "repository": REPOSITORY,
-                "mode": args.mode, "operator_run_id": os.environ.get("GITHUB_RUN_ID", ""),
-                "operator_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
-                "operator_source_sha": os.environ.get("GITHUB_SHA", ""),
-                "mutations": github.mutations, "crypto": github.crypto,
-                "automatic_retry_or_cleanup_performed": False,
-            }))
+        if journal is not None:
+            try:
+                persist()
+            except (OSError, ValueError):
+                exit_code = 1
+                result = {"schema": "marty.release-tag-operator-refusal/v1", "status": "refused", "mode": args.mode,
+                          "repository": REPOSITORY, "error_type": "ObservationError", "completed_at": utc_now(),
+                          "automatic_retry_or_cleanup_performed": False}
+                print("Release tag operator could not preserve its complete audit; no automatic retry is allowed.")
+            finally:
+                journal.close()
+    if not args.output.exists() and not args.output.is_symlink():
+        try:
+            with args.output.open("xb") as output:
+                output.write(handoff.encoded(result))
+        except OSError:
+            return 1
+    else:
+        return 1
+    return exit_code
 
 
 if __name__ == "__main__":
