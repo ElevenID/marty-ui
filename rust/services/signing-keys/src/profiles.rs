@@ -22,6 +22,7 @@ const KEY_PURPOSES: &[&str] = &[
     "mdoc_iaca",
     "x509_doc_signer",
     "holder_binding",
+    "demo_holder_binding",
     "presentation_signing",
     "oid4vp_request_signing",
     "vdsnc_signing",
@@ -321,6 +322,66 @@ mod managed_reference_tests {
     use super::*;
 
     #[test]
+    fn demo_holder_profiles_keep_a_distinct_es256_sd_jwt_identity() {
+        let body = json!({"issuer_did":"did:web:demo.example:holder", "signing_service_id":"managed-openbao-transit",
+            "key_purpose":"demo_holder_binding", "credential_format":"SD_JWT_VC", "algorithm":"ES256"});
+        let normalize = |body| {
+            normalize_profile(
+                "org-1",
+                NormalizeProfileRequest {
+                    body,
+                    existing: None,
+                    now: Some("2026-11-04T00:00:00Z".into()),
+                    profile_id: Some("demo-holder".into()),
+                },
+            )
+        };
+        let profile = normalize(body.clone()).unwrap();
+        assert_eq!(
+            profile_wire_format(profile.as_object().unwrap()).as_deref(),
+            Some("dc+sd-jwt")
+        );
+        for (field, value) in [
+            ("algorithm", "EdDSA"),
+            ("algorithm", "RS256"),
+            ("algorithm", ""),
+            ("credential_format", "VC_JWT"),
+            ("credential_format", "MDOC"),
+            ("credential_format", ""),
+        ] {
+            let mut invalid = body.clone();
+            invalid[field] = json!(value);
+            assert!(normalize(invalid).is_err(), "{field}={value}");
+        }
+        assert_eq!(
+            custody_format(&CustodyFormatRequest {
+                key_purpose: "demo_holder_binding".into(),
+                credential_format: "SD_JWT_VC".into()
+            })
+            .unwrap()
+            .wire_format,
+            "dc+sd-jwt"
+        );
+        assert!(custody_format(&CustodyFormatRequest {
+            key_purpose: "demo_holder_binding".into(),
+            credential_format: "VC_JWT".into()
+        })
+        .is_err());
+        assert_eq!(
+            crate::domain::managed_key_purposes("demo-holder-tenant-key"),
+            &["demo_holder_binding"]
+        );
+        assert!(
+            !crate::domain::managed_key_purposes("cred-issuer-tenant-key")
+                .contains(&"demo_holder_binding")
+        );
+        assert!(
+            !crate::domain::managed_key_purposes("oid4vp-verifier-tenant-key")
+                .contains(&"demo_holder_binding")
+        );
+    }
+
+    #[test]
     fn profile_storage_rejects_nested_private_material_on_write_and_read() {
         let public = json!({
             "id": "profile-1", "organization_id": "org-1",
@@ -536,6 +597,13 @@ pub fn normalize_profile(
     if key_purpose == "mdoc_iaca" && (credential_format != "MDOC" || algorithm != "ES256") {
         return Err(ProfileError::Invalid(
             "Managed mdoc IACA requires MDOC and ES256.".into(),
+        ));
+    }
+    if key_purpose == "demo_holder_binding"
+        && (credential_format != "SD_JWT_VC" || algorithm != "ES256")
+    {
+        return Err(ProfileError::Invalid(
+            "Demo holder keys require SD_JWT_VC and ES256.".into(),
         ));
     }
     let issuer_mode = string_field("issuer_mode", "org_managed");
@@ -815,6 +883,11 @@ pub fn find_profiles(
 pub fn custody_format(
     request: &CustodyFormatRequest,
 ) -> Result<CustodyFormatResponse, ProfileError> {
+    if request.key_purpose == "demo_holder_binding" && request.credential_format != "SD_JWT_VC" {
+        return Err(ProfileError::Invalid(
+            "Demo holder keys require the SD_JWT_VC family.".into(),
+        ));
+    }
     if request.key_purpose == "mdoc_iaca" && !request.credential_format.eq_ignore_ascii_case("MDOC")
     {
         return Err(ProfileError::Invalid(

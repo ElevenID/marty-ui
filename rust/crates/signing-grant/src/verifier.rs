@@ -12,7 +12,7 @@ use crate::{
     verify_envelope, GrantBinding, GrantEnvelope, GrantError, SigningOrigin,
 };
 
-const ORIGINS: [SigningOrigin; 7] = SigningOrigin::ALL;
+const ORIGINS: [SigningOrigin; 8] = SigningOrigin::ALL;
 
 #[derive(Clone)]
 pub struct GrantVerifier {
@@ -58,6 +58,7 @@ impl GrantVerifier {
     ) -> Result<Self, GrantProviderError> {
         let clients = ORIGINS
             .into_iter()
+            .filter(|origin| config.is_configured(*origin))
             .map(|origin| {
                 config
                     .client(origin)

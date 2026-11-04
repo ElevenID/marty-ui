@@ -67,6 +67,7 @@ pub struct FlowServiceConfig {
     pub issuer_sign_key: Option<String>,
     pub sign_grant_bao_addr: Option<String>,
     pub sign_grant_mint_token_file: Option<PathBuf>,
+    pub demo_holder_sign_grant_mint_token_file: Option<PathBuf>,
     pub issuance_url: String,
     pub issuance_native_url: String,
     pub issuance_api_key: Option<String>,
@@ -174,6 +175,10 @@ impl fmt::Debug for FlowServiceConfig {
             .field(
                 "sign_grant_mint_token_file",
                 &self.sign_grant_mint_token_file,
+            )
+            .field(
+                "demo_holder_sign_grant_mint_token_configured",
+                &self.demo_holder_sign_grant_mint_token_file.is_some(),
             )
             .field("issuance_url", &self.issuance_url)
             .field("issuance_native_url", &self.issuance_native_url)
@@ -618,6 +623,11 @@ impl FlowServiceConfig {
             issuer_sign_key,
             sign_grant_bao_addr,
             sign_grant_mint_token_file,
+            demo_holder_sign_grant_mint_token_file: value(
+                &values,
+                "FLOW_DEMO_HOLDER_SIGN_GRANT_MINT_TOKEN_FILE",
+            )
+            .map(PathBuf::from),
             issuance_url,
             issuance_native_url,
             issuance_api_key,

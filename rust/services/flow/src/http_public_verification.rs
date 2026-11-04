@@ -76,6 +76,8 @@ struct RawOptions {
     catalog: Value,
     principal_id: String,
     issuer_did: String,
+    #[serde(default)]
+    demo_holder_did: Option<String>,
     limits: PublicVerificationLimits,
 }
 
@@ -86,6 +88,7 @@ pub struct PublicVerificationOptions {
     catalog: PublicVerificationCatalog,
     principal_id: String,
     issuer_did: String,
+    demo_holder_did: Option<String>,
     limits: PublicVerificationLimits,
 }
 
@@ -96,6 +99,9 @@ impl fmt::Debug for PublicVerificationOptions {
 }
 
 impl PublicVerificationOptions {
+    pub(crate) fn demo_holder_enabled(&self) -> bool {
+        self.demo_holder_did.is_some()
+    }
     pub fn from_json(
         contents: &str,
         allow_http_loopback: bool,
@@ -126,6 +132,10 @@ impl PublicVerificationOptions {
                 .issuer_did
                 .chars()
                 .any(|ch| ch.is_whitespace() || ch.is_control())
+            || raw
+                .demo_holder_did
+                .as_deref()
+                .is_some_and(|did| !valid_holder_did(did) || did == raw.issuer_did)
         {
             return Err(PublicVerificationCatalogError::InvalidConfiguration);
         }
@@ -136,9 +146,25 @@ impl PublicVerificationOptions {
             )?,
             principal_id: raw.principal_id,
             issuer_did: raw.issuer_did,
+            demo_holder_did: raw.demo_holder_did,
             limits: raw.limits,
         })
     }
+}
+
+fn valid_holder_did(did: &str) -> bool {
+    did.len() <= 512
+        && !did.chars().any(|ch| ch.is_control() || ch.is_whitespace())
+        && did
+            .strip_prefix("did:")
+            .and_then(|rest| rest.split_once(':'))
+            .is_some_and(|(method, id)| {
+                !method.is_empty()
+                    && !id.is_empty()
+                    && method
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            })
 }
 
 pub(crate) fn flow_public_verification_routes() -> Router<FlowHttpState> {
@@ -542,5 +568,36 @@ mod tests {
             headers.append(name, HeaderValue::from_static("second"));
             assert!(single_header(&headers, name).is_err());
         }
+    }
+
+    #[test]
+    fn demo_holder_is_optional_and_must_be_a_distinct_well_formed_identity() {
+        assert!(
+            !PublicVerificationOptions::from_json(&configuration().to_string(), false)
+                .unwrap()
+                .demo_holder_enabled()
+        );
+        for did in [
+            "",
+            "did:",
+            "did:web:",
+            "did:web:verifier.example",
+            "did:Web:holder.example",
+            "did:web:holder example",
+        ] {
+            let mut value = configuration();
+            value["demo_holder_did"] = json!(did);
+            assert!(
+                PublicVerificationOptions::from_json(&value.to_string(), false).is_err(),
+                "{did}"
+            );
+        }
+        let mut value = configuration();
+        value["demo_holder_did"] = json!("did:web:demo.example:holder");
+        assert!(
+            PublicVerificationOptions::from_json(&value.to_string(), false)
+                .unwrap()
+                .demo_holder_enabled()
+        );
     }
 }

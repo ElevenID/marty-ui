@@ -178,6 +178,11 @@ pub fn key_purposes() -> Vec<KeyPurpose> {
             credential_formats: &["jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "zk_mdoc"],
         },
         KeyPurpose {
+            id: "demo_holder_binding",
+            allowed_algorithms: &["ES256"],
+            credential_formats: &["dc+sd-jwt"],
+        },
+        KeyPurpose {
             id: "oid4vp_request_signing",
             allowed_algorithms: &["ES256"],
             credential_formats: &["oauth-authz-req+jwt"],
@@ -212,7 +217,9 @@ pub fn managed_key_prefix_for_purpose(purpose: &str) -> Option<&'static str> {
 }
 
 pub fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
-    if reference.starts_with("oid4vp-verifier-") {
+    if reference.starts_with("demo-holder-") {
+        &["demo_holder_binding"]
+    } else if reference.starts_with("oid4vp-verifier-") {
         &["oid4vp_request_signing"]
     } else if reference.starts_with("cred-holder-") {
         &["holder_binding"]
