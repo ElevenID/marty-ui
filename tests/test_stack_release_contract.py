@@ -1112,13 +1112,16 @@ def test_release_workflows_never_checkout_dispatch_or_transaction_data() -> None
         assert all(reference not in workflow for reference in forbidden_refs)
 
 
-def test_stack_release_uses_read_only_default_permissions() -> None:
+def test_stack_release_uses_read_only_defaults_and_scoped_operator_dispatch() -> None:
     document = yaml.safe_load(_text(".github/workflows/cd.yml"))
 
     assert document["permissions"] == {"contents": "read"}
-    for job in document["jobs"].values():
+    for name, job in document["jobs"].items():
         permissions = job.get("permissions", {})
-        assert permissions.get("actions") != "write"
+        if name == "publish-manifest":
+            assert permissions.get("actions") == "write"
+        else:
+            assert permissions.get("actions") != "write"
         assert permissions.get("security-events") != "write"
 
 
@@ -1398,6 +1401,13 @@ def test_workflow_changing_source_tag_uses_authenticated_operator_handoff() -> N
     assert "--artifact-id" in tag_step["run"]
     assert "--artifact-digest" in tag_step["run"]
     assert "release_tag_handoff.py wait" in tag_step["run"]
+    assert '--dispatch-receipt "$RUNNER_TEMP/stable-tag-dispatch.json"' in tag_step["run"]
+    dispatch_receipt = next(
+        step for step in publisher["steps"]
+        if step.get("with", {}).get("path") == "${{ runner.temp }}/stable-tag-dispatch.json"
+    )
+    assert dispatch_receipt["uses"].startswith("actions/upload-artifact@")
+    assert dispatch_receipt["with"]["if-no-files-found"] == "error"
     assert "gh release create" not in tag_step["run"]
     helper = _text("scripts/push_promoted_release_tag.py")
     assert "setup-git" not in helper
@@ -1414,7 +1424,7 @@ def test_bounded_publication_rejects_later_attempt_and_resume_before_builds() ->
     assert 'test "$GITHUB_REF" = refs/heads/main' in first["run"]
     assert '[ -n "$RESUME_RUN_ID" ] || [ -n "$RESUME_ARTIFACT" ]' in first["run"]
     assert "exit 1" in first["run"]
-    assert jobs["official-gate-evidence"]["timeout-minutes"] == 90
+    assert jobs["official-gate-evidence"]["timeout-minutes"] == 30
     assert jobs["publish-manifest"]["timeout-minutes"] == 90
 
 
