@@ -127,7 +127,7 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::{mint_bound, HEADER_NAME};
+    use crate::{minter::GrantMinter, HEADER_NAME};
 
     #[tokio::test]
     #[ignore = "requires marked disposable loopback OpenBao and Redis with scoped grant tokens"]
@@ -194,22 +194,32 @@ mod tests {
 
         let mint_token = std::env::var("MARTY_TEST_GRANT_MINT_TOKEN").expect("mint token");
         let verify_token = std::env::var("MARTY_TEST_GRANT_VERIFY_TOKEN").expect("verify token");
-        assert_ne!(mint_token, verify_token);
-        assert_ne!(mint_token, root);
-        assert_ne!(verify_token, root);
+        assert!(mint_token != verify_token && mint_token != root && verify_token != root);
+        let origin = match std::env::var("MARTY_TEST_GRANT_ORIGIN").as_deref() {
+            Err(std::env::VarError::NotPresent) | Ok("gateway_service") => {
+                SigningOrigin::GatewayService
+            }
+            Ok("flow_demo_holder") => SigningOrigin::FlowDemoHolder,
+            _ => panic!("unsupported disposable grant origin"),
+        };
         let mut token_file = tempfile::NamedTempFile::new().expect("temporary token file");
         token_file
             .write_all(verify_token.as_bytes())
             .expect("write verify token");
-        let client = TransitGrantClient::for_origin(&endpoint, SigningOrigin::GatewayService)
-            .expect("mounted Gateway grant key");
+        let mut mint_file = tempfile::NamedTempFile::new().expect("temporary mint file");
+        mint_file
+            .write_all(mint_token.as_bytes())
+            .expect("write scoped mint token");
+        let minter =
+            GrantMinter::for_managed_openbao(&endpoint, origin, mint_file.path().to_owned())
+                .expect("fixed-origin minter");
         let verifier = GrantVerifier::for_managed_openbao(
             &endpoint,
             token_file.path().to_owned(),
             RedisGrantReplayStore::new(redis),
         )
         .expect("grant verifier");
-        let binding = GrantBinding {
+        let mut binding = GrantBinding {
             origin: SigningOrigin::GatewayService,
             operation_id: "disposable-gateway-sign-1",
             organization_id: "disposable-org-1",
@@ -221,9 +231,16 @@ mod tests {
             algorithm: "ES256",
             payload: b"exact.payload",
         };
-        let grant = mint_bound(&client, &mint_token, &binding)
-            .await
-            .expect("OpenBao mint");
+        if origin == SigningOrigin::FlowDemoHolder {
+            binding.origin = origin;
+            binding.operation_id = "disposable-demo-holder-sign-1";
+            binding.route = "/internal/compat/issuer-dids/sign";
+            binding.service_id = None;
+            binding.issuer_did = Some("did:web:fixture.invalid:orgs:demo-holder");
+            binding.key_reference = Some("demo-holder-disposable-es256");
+            binding.key_purpose = "demo_holder_binding";
+        }
+        let grant = minter.mint(&binding).await.expect("OpenBao mint");
         let header = grant.to_header_value().expect(HEADER_NAME);
         let (first, second) = tokio::join!(
             verifier.authorize(&header, &binding),

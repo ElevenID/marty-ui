@@ -72,6 +72,13 @@ Provision the distinct grant MAC authority
 Default bootstrap still creates the seven original grant origins. This overlay
 does not provision the new origin or update verifier policy; stage and qualify
 those separately before using it.
+Reviewed operator inputs are in [openbao/](openbao/): the non-exportable HMAC
+key specification, its single-path mint policy, and a verifier policy containing
+the original seven verification paths plus this eighth origin. Compare the
+existing verifier policy before applying a change; preserve unexpected/custom
+rules for explicit disposition rather than replacing them blindly. A later
+default initializer run restores its seven-origin policy, so an enabled demo
+needs the reviewed extension reconciled again before admission resumes.
 Flow's dedicated token may update only
 `transit/hmac/marty-sign-grant-flow-demo-holder-v1/sha2-256`. It must not mint
 wallet-request, issuer, certificate or other grant origins. Signing Keys needs
@@ -80,6 +87,23 @@ verification permission on
 minting permission. Keep existing origin authorities and token boundaries.
 The credential holder's asymmetric key is separate from this grant MAC key.
 Qualify these actual permissions and negative origin/purpose cases before use.
+
+The existing disposable probe has a selected local qualification mode:
+
+```sh
+python scripts/probe_signing_keys_openbao_policy.py --public-demo-grant
+```
+
+It first discovers the exact native test, then creates its own pinned,
+loopback-only TLS OpenBao and marked Redis fixtures. It applies these policy
+inputs only there, checks all eight origins' MAC isolation and the demo token's
+provisioning/signing denials, and runs the native file-backed demo minter and
+one-use verifier race. It verifies removal of both owned container IDs. The
+regular `--grant-verifier` probe also includes this case. This qualifies grant
+authority and replay only; asymmetric holder signing, governance/profile
+readiness and real-wallet presentation still need separate qualification.
+There is no endpoint/operator-secret option for pointing this probe at an
+existing deployment.
 
 Stage two absolute host file paths in protected operator storage, outside Git:
 
