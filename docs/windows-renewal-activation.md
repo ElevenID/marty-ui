@@ -39,6 +39,40 @@ Both native mirrors must match the held Windows bytes exactly. Native checks the
 use private mode0700/0600 snapshots materialized from those held bytes in isolated
 tmpfs, so later changes to shared staging mirrors cannot change the checked data.
 
+`selfhost_windows_renewal_native.export_generation(config, mirror)` provides the
+read-only byte transport needed by the recurring producer/export path. The caller
+holds the existing selected-generation lease and supplies its retained transaction
+configuration and a normalized generation-directory URI below `/control`.
+The adapter holds and hashes the Compose model and derives the exact inventory
+from its secret declarations. It checks the existing project control volume,
+then uses the pinned helper with network disabled and the volume mounted read-only.
+Its Docker log driver is disabled so private chunks are not retained as daemon logs.
+It neither mounts the Bao/database volumes nor exports enrollment/session files.
+
+The helper checks private root/file modes, root ownership, regular single-link
+files, no-follow opens and stable file identities. Data must be bounded UTF-8,
+with empty files preserved. Held no-follow ancestor directory descriptors anchor
+all relative file opens; all files stay open through the final identity and
+namespace rechecks. Its manifest and each 12,000-byte chunk bind the same
+whole-payload hash. Responses stay below the existing owned runner's bounded
+output tail; the Windows caller checks exact indices, lengths, inventory and the
+final payload hash before returning any byte map. The limit is 512 files of at
+most64KiB each and8MiB for the complete encoded payload. A ten-minute fetch budget
+is checked again after final decoding and held-input exit. Engine inspection and
+the owned runner's separate bounded cleanup remain existing dependencies; this
+is not a newly qualified hard whole-call or unattended timing guarantee. Failed
+owned-process failures become fresh fixed-message uncertainty exceptions carrying
+only the process-cleanup flag and empty tails; their original private chunk frames
+and exception chains do not propagate. Parser/UTF-8 failures likewise become a
+fixed refusal without retaining private exception payloads.
+
+Export returns private bytes to its caller, never host stdout. It writes no
+Windows files, mints no credentials, selects no generation and grants no native
+admission. A producer must retain its durable attempt evidence, materialize the
+result under the existing private Windows input owner, and pass the unchanged
+native generation/token/certificate checks before registered activation. This
+transport alone does not implement producer scheduling or expired-leaf recovery.
+
 The private project lock and output files must already exist. The lock is named
 `.<project>.renewal.lock` beside the generation directories. `intent`, `result`,
 `new_log` and `rollback_log` must be distinct empty private files in one separate

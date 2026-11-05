@@ -12,9 +12,154 @@ import hashlib
 import json
 import re
 import subprocess
+import time
 from pathlib import Path, PurePosixPath
 
 from selfhost_windows_inputs import hold_private_input
+
+EXPORT_CHUNK_BYTES = 12000
+EXPORT_LIMIT_BYTES = 8 * 1024 * 1024
+EXPORT_WORKER = r'''
+import base64,contextlib,hashlib,json,os,pathlib,stat,sys
+d=json.load(sys.stdin);root=pathlib.Path(d['mirror'])
+def identity(m):
+ return (m.st_dev,m.st_ino,m.st_mode,m.st_uid,m.st_gid,m.st_nlink,m.st_size,m.st_mtime_ns,m.st_ctime_ns)
+with contextlib.ExitStack() as held:
+ directory_flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW
+ fd=os.open('/control',directory_flags);held.callback(os.close,fd)
+ origin=os.fstat(fd);assert stat.S_ISDIR(origin.st_mode) and origin.st_uid==origin.st_gid==0
+ directories=[]
+ for name in root.parts[2:]:
+  parent=fd;fd=os.open(name,directory_flags,dir_fd=parent);held.callback(os.close,fd)
+  original=os.fstat(fd);assert stat.S_ISDIR(original.st_mode) and original.st_uid==original.st_gid==0
+  directories.append((parent,name,fd,original))
+ assert stat.S_IMODE(original.st_mode)==0o700
+ assert sorted(os.listdir(fd))==d['names']
+ files=[];values={}
+ for name in d['names']:
+  original=os.stat(name,dir_fd=fd,follow_symlinks=False)
+  assert stat.S_ISREG(original.st_mode) and stat.S_IMODE(original.st_mode)==0o600
+  assert original.st_uid==original.st_gid==0 and original.st_nlink==1 and original.st_size<=65536
+  handle=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=fd)
+  f=held.enter_context(os.fdopen(handle,'rb'))
+  assert identity(os.fstat(f.fileno()))==identity(original)
+  files.append((name,f,original))
+ for name,f,original in files:
+  raw=f.read(65537)
+  assert len(raw)<=65536 and b'\0' not in raw and b'PRIVATE KEY' not in raw
+  raw.decode('utf-8');values[name]=base64.b64encode(raw).decode('ascii')
+ for name,f,original in files:
+  assert identity(os.fstat(f.fileno()))==identity(original)
+  assert identity(os.stat(name,dir_fd=fd,follow_symlinks=False))==identity(original)
+ assert sorted(os.listdir(fd))==d['names']
+ for parent,name,handle,original in reversed(directories):
+  assert identity(os.fstat(handle))==identity(original)
+  assert identity(os.stat(name,dir_fd=parent,follow_symlinks=False))==identity(original)
+ assert identity(os.stat('/control',follow_symlinks=False))==identity(origin)
+payload=json.dumps(values,sort_keys=True,separators=(',',':')).encode()
+assert 0<len(payload)<=8388608
+digest=hashlib.sha256(payload).hexdigest();parts=(len(payload)+11999)//12000
+if d['part'] is None:result={'length':len(payload),'sha256':digest,'parts':parts}
+else:
+ assert digest==d['sha256'] and type(d['part']) is int and 0<=d['part']<parts
+ result={'sha256':digest,'part':d['part'],'chunk':payload[d['part']*12000:(d['part']+1)*12000].decode('ascii')}
+encoded=json.dumps(result);assert len(encoded.encode())<=29000
+print(encoded)
+'''
+
+
+def export_generation(config, mirror):
+    """Return private leaf bytes through bounded read-only chunks, never stdout.
+
+    The generation owner must hold its project lease and run native admission
+    over the resulting held Windows files. Export alone admits no credentials,
+    writes no host files and cannot select, mint or activate a generation.
+    """
+    from selfhost_windows_renewal import UncertainComposeMutation
+    uncertain=False;owned_processes_zero=False
+    try:
+        return _export_generation(config,mirror)
+    except UncertainComposeMutation as error:
+        uncertain=True
+        owned_processes_zero=getattr(error,'owned_processes_zero',False) is True
+    except Exception:
+        pass
+    # Raise outside the except suite: parser/UTF8 exceptions retain private
+    # data, and uncertain exceptions retain private chunks in their traceback
+    # or prior exception chain even after their direct tails are cleared.
+    if uncertain:
+        clean=UncertainComposeMutation('Windows generation export requires transport inspection')
+        clean.stdout=clean.stderr=b'';clean.owned_processes_zero=owned_processes_zero
+        raise clean
+    raise ValueError('Windows generation export refused')
+
+
+def _export_generation(config, mirror):
+    from selfhost_windows_renewal import Docker, run_owned_mutation
+    from selfhost_windows_selection import decode
+
+    def require(value):
+        if not value:raise ValueError('Windows generation export refused')
+    config=json.loads(json.dumps(config));project=config['project'];native=config['native']
+    require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',project))
+    require(native['control_volume']==project+'-renewal-control')
+    require(re.fullmatch(r'[a-z0-9./_-]+@sha256:[0-9a-f]{64}',native['helper_image']))
+    require(isinstance(mirror,str))
+    path=PurePosixPath(mirror)
+    require(str(path)==mirror and path.is_relative_to('/control') and len(path.parts)>=4
+            and '..' not in path.parts and path.name in {'generation','application-generation','application-mail-generation'})
+    require(all(re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,127}',name) for name in path.parts[2:]))
+    deadline=time.monotonic()+600
+    with hold_private_input(Path(config['compose_file']),max_bytes=2*1024*1024) as raw:
+        require(hashlib.sha256(raw).hexdigest()==config['compose_sha256'])
+        model=decode(raw)
+        require(isinstance(model,dict) and isinstance(model.get('secrets'),dict))
+        names=sorted(model['secrets'])
+        require(0<len(names)<=512 and all(re.fullmatch(r'[a-z][a-z0-9_]{0,127}',name) for name in names))
+        docker=Docker(config['docker_host'],config['engine_id'])
+        volumes=docker.json(['volume','inspect',native['control_volume']])
+        require(isinstance(volumes,list) and len(volumes)==1 and volumes[0]['Name']==native['control_volume']
+                and volumes[0]['Driver']=='local' and volumes[0].get('Options') in (None,{}))
+        def fetch(part=None,digest=None):
+            remaining=deadline-time.monotonic();require(remaining>0)
+            request={'mirror':mirror,'names':names,'part':part,'sha256':digest}
+            args=[*docker.prefix,'run','--rm','--pull','never','-i','--log-driver','none','--network','none','--read-only',
+                '--cap-drop','ALL','--security-opt','no-new-privileges','--memory','128m','--cpus','1',
+                '--mount',f'type=volume,src={native["control_volume"]},dst=/control,readonly,volume-nocopy',
+                '--entrypoint','python',native['helper_image'],'-c',EXPORT_WORKER]
+            p=run_owned_mutation(args,stdin_bytes=json.dumps(request).encode(),timeout=min(60,remaining))
+            require(p.returncode==0 and 0<len(p.stdout)<=29000)
+            require(time.monotonic()<deadline)
+            return decode(p.stdout)
+        manifest=fetch()
+        require(isinstance(manifest,dict) and set(manifest)=={'length','sha256','parts'})
+        length=manifest['length'];digest=manifest['sha256'];parts=manifest['parts']
+        require(type(length) is int and 0<length<=EXPORT_LIMIT_BYTES
+                and isinstance(digest,str) and re.fullmatch(r'[0-9a-f]{64}',digest)
+                and type(parts) is int and parts==(length+EXPORT_CHUNK_BYTES-1)//EXPORT_CHUNK_BYTES)
+        chunks=[]
+        for index in range(parts):
+            part=fetch(index,digest)
+            require(isinstance(part,dict) and set(part)=={'sha256','part','chunk'}
+                    and part['sha256']==digest and type(part['part']) is int and part['part']==index
+                    and isinstance(part['chunk'],str) and part['chunk'].isascii())
+            chunk=part['chunk'].encode('ascii')
+            require(len(chunk)==min(EXPORT_CHUNK_BYTES,length-index*EXPORT_CHUNK_BYTES))
+            chunks.append(chunk)
+        payload=b''.join(chunks)
+        require(len(payload)==length and hashlib.sha256(payload).hexdigest()==digest)
+        encoded=decode(payload)
+        require(isinstance(encoded,dict) and sorted(encoded)==names
+                and json.dumps(encoded,sort_keys=True,separators=(',',':')).encode()==payload)
+        values={}
+        for name in names:
+            require(isinstance(encoded[name],str) and len(encoded[name])<=87384)
+            value=base64.b64decode(encoded[name],validate=True)
+            require(len(value)<=65536 and base64.b64encode(value).decode('ascii')==encoded[name]
+                    and b'\0' not in value and b'PRIVATE KEY' not in value)
+            value.decode('utf-8');values[name]=value
+    require(time.monotonic()<deadline)
+    return values
 
 AUTHORITY_WORKER = r'''
 import hashlib,json,os,pathlib,subprocess,sys
