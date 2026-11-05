@@ -18,8 +18,12 @@ import selfhost_windows_renewal as renewal
 SCHEMA = 'marty.windows-product-transition/v1'
 PROVIDER_ROLES = renewal.BAO_ROLES | {'openbao-bootstrap'}
 HISTORICAL_ROLES = frozenset({'openbao-tls-init'})
+MIGRATION_ROLES = frozenset({'db-migrate'})
 UI_FIXTURE_TARGETS = frozenset({'/opt/marty-ui-static', '/etc/nginx/conf.d/default.conf',
                               '/scripts/load-secrets-env.sh', '/docker-entrypoint.d/40-ui-selfhost.sh'})
+UI_SHORT_FIXTURES = {'/etc/nginx/conf.d/default.conf': './ui/nginx.spa.conf',
+                     '/scripts/load-secrets-env.sh': './scripts/load-secrets-env.sh',
+                     '/docker-entrypoint.d/40-ui-selfhost.sh': './scripts/ui-selfhost-start.sh'}
 IMAGE = re.compile(r'[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}\Z')
 MIGRATION_INPUTS = frozenset({'services/Dockerfile.migrations', 'services/Dockerfile.migrations.dockerignore',
                              'scripts/load-secrets-env.sh', 'scripts/run-migrations-with-secrets.sh',
@@ -45,12 +49,15 @@ def fixture_target(mount):
         target = mount.get('target')
         if target not in UI_FIXTURE_TARGETS:
             return None
-        require(mount.get('type') == 'bind' and mount.get('read_only') is True,
+        require(mount.get('type') == 'bind' and mount.get('read_only') is True
+                and isinstance(mount.get('source'), str) and mount['source'],
                 'UI fixture replacement cannot remove writable storage')
         return target
     require(isinstance(mount, str), 'Invalid UI mount')
     for target in UI_FIXTURE_TARGETS:
         if mount.endswith(':'+target+':ro'):
+            require(target in UI_SHORT_FIXTURES and mount == UI_SHORT_FIXTURES[target]+':'+target+':ro',
+                    'Short UI fixture source is not the retained code bind')
             return target
         require(not mount.endswith(':'+target) and not mount.endswith(':'+target+':rw'),
                 'UI fixture replacement cannot remove writable storage')
@@ -82,6 +89,8 @@ def product_model(before, admitted):
         require(isinstance(service, dict) and not service.get('build'))
         service['image'] = admitted['openbao_didcomm_image'] if role in PROVIDER_ROLES else images[role]
     ui = after['services']['ui']
+    require(ui.get('entrypoint') is None and ui.get('command') is None,
+            'Packaged UI requires its authenticated image startup configuration')
     mounts = ui.get('volumes', [])
     found = [fixture_target(mount) for mount in mounts]
     targets = [target for target in found if target is not None]
@@ -99,15 +108,83 @@ def checked_model_change(before, after, admitted):
     declared = {role for role in before['services'] if before['services'][role] != after['services'][role]}
     mutable = declared - renewal.INITIALIZERS - HISTORICAL_ROLES
     return {'declared_roles': sorted(declared), 'mutable_roles': sorted(mutable),
+            'provider_roles': sorted(mutable & PROVIDER_ROLES),
+            'migration_roles': sorted(mutable & MIGRATION_ROLES),
+            'application_roles': sorted(mutable-PROVIDER_ROLES-MIGRATION_ROLES),
             'historical_roles': sorted(declared & HISTORICAL_ROLES),
             'initializers_never_run': sorted(renewal.INITIALIZERS)}
+
+
+def checked_runtime_change(before, after, old_model, new_model, admitted, image_ids):
+    """Prove the narrow runtime data edge, without granting journal authority.
+
+    The caller must separately authenticate/pin image metadata, hold model and
+    credential inputs, prove custody/readiness and retain real execution receipts.
+    Here every mount (including credentials) must survive byte-for-byte except
+    the four exact read-only UI fixtures. Initializer identities cannot change.
+    An image config ID is not a registry signature or a reversible schema proof.
+    """
+    change = checked_model_change(old_model, new_model, admitted)
+    require(isinstance(before, list) and isinstance(after, list))
+    def indexed(items):
+        result = {}
+        for item in items:
+            require(isinstance(item, dict) and renewal._project(item) is not None)
+            role = renewal._service(item)
+            require(role in old_model['services'] and role not in result)
+            require(isinstance(item.get('Id'), str) and re.fullmatch(r'[0-9a-f]{64}', item['Id']))
+            require(isinstance(item.get('Image'), str) and re.fullmatch(r'sha256:[0-9a-f]{64}', item['Image']))
+            require(isinstance(item.get('Mounts'), list))
+            require(all(isinstance(mount, dict) for mount in item['Mounts']))
+            destinations = [mount.get('Destination') for mount in item['Mounts']]
+            require(all(isinstance(target, str) and target.startswith('/') for target in destinations)
+                    and len(destinations) == len(set(destinations)), 'Ambiguous runtime mounts')
+            result[role] = item
+        require(len({item['Id'] for item in result.values()}) == len(result), 'Duplicate runtime container identity')
+        return result
+    old = indexed(before);new = indexed(after)
+    roles = set(old_model['services'])-renewal.INITIALIZERS
+    require(set(old) == set(new) == roles, 'Runtime product role closure differs')
+    projects = {renewal._project(item) for item in [*before, *after]}
+    require(len(projects) == 1 and all(isinstance(name, str) and
+            re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}', name) for name in projects),
+            'Runtime product project differs')
+    require(isinstance(image_ids, dict) and set(image_ids) == roles-HISTORICAL_ROLES
+            and all(isinstance(value, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', value)
+                    for value in image_ids.values()), 'Qualified image ID closure differs')
+    fixture_removed = bool(old_model['services']['ui'].get('volumes')) and (
+        old_model['services']['ui'].get('volumes') != new_model['services']['ui'].get('volumes'))
+    for role in sorted(roles):
+        prior = old[role];current = new[role]
+        if role in HISTORICAL_ROLES:
+            require(current == prior, 'Historical initializer changed')
+            continue
+        require(current['Image'] == image_ids[role], 'Runtime image differs from qualified image')
+        mounts = deepcopy(prior['Mounts'])
+        if role == 'ui' and fixture_removed:
+            fixtures = [mount for mount in mounts if mount['Destination'] in UI_FIXTURE_TARGETS]
+            require({mount['Destination'] for mount in fixtures} == UI_FIXTURE_TARGETS
+                    and all(mount.get('Type') == 'bind' and mount.get('RW') is False for mount in fixtures),
+                    'Runtime UI fixture mounts differ')
+            mounts = [mount for mount in mounts if mount['Destination'] not in UI_FIXTURE_TARGETS]
+        require(sorted(mounts, key=lambda mount: mount['Destination']) ==
+                sorted(current['Mounts'], key=lambda mount: mount['Destination']),
+                'Product transition changed retained storage or credentials')
+        if role not in change['mutable_roles']:
+            require(current == prior, 'Unchanged runtime role changed')
+    # Match the existing generation owner's newline-terminated data fingerprint.
+    return {'before_sha256': hashlib.sha256(canonical(renewal.data_mounts(before))+b'\n').hexdigest(),
+            'after_sha256': hashlib.sha256(canonical(renewal.data_mounts(after))+b'\n').hexdigest(),
+            'roles': sorted(roles), 'ui_fixture_mounts_removed': fixture_removed}
 
 
 def migration_sources(checkout, source_sha):
     """Fingerprint migration source inputs, not a claim of reversible DB writes.
 
-    Runtime schema/custody checks remain required. Changed migration inputs need
-    separate qualified migration evidence and cannot use image-only rollback.
+    This is a diagnostic filename inventory, not the executable build closure:
+    compiler dependencies and ordinary startup source can also change database
+    behavior. Equality never authorizes migration execution or image rollback.
+    Separate qualified schema/custody and migration evidence remain required.
     """
     require(isinstance(source_sha, str) and re.fullmatch(r'[0-9a-f]{40}', source_sha))
     result = subprocess.run(['git', '--no-replace-objects', '-C', str(Path(checkout)),
