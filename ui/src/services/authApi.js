@@ -181,7 +181,7 @@ export async function updateProfilePicture(pictureDataUrl) {
   }
 }
 
-export async function startPasskeyEnrollment(redirectUri = '/console/profile') {
+export async function startPasskeyEnrollment(redirectUri = '/console/applicant/profile') {
   const response = await fetch(`${AUTH_BASE_URL}/passkeys/enroll`, {
     method: 'POST',
     credentials: 'include',

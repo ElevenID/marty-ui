@@ -633,6 +633,22 @@ class LoginLab(base.ApplicationLab):
                 before = page.request.get(origin + "/v1/auth/me").json()
                 assert before["authenticated"] is True
                 assert before["user"]["email"] == email
+                management = urllib.parse.urlparse(
+                    page.get_by_role(
+                        "link", name="Manage passkeys", exact=True
+                    ).get_attribute("href")
+                )
+                assert management.path.endswith("/account/account-security/signing-in")
+                returns = urllib.parse.parse_qs(management.query)["referrer_uri"]
+                assert returns == [origin + "/console/applicant/profile"]
+                return_page = context.new_page()
+                try:
+                    return_page.goto(returns[0])
+                    return_page.get_by_test_id("profile-passkey-enrollment").wait_for(
+                        state="visible", timeout=30000
+                    )
+                finally:
+                    return_page.close()
                 self.application_baseline_user = before["user"]
                 for headers in ({}, {"Origin": "https://untrusted.example.invalid"}):
                     assert (

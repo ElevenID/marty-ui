@@ -544,7 +544,7 @@ async fn me(State(state): State<AuthHttpState>, headers: HeaderMap) -> Response 
         .as_ref()
         .is_some_and(|session| state.application.passkey_enrollment_available(session));
     let return_uri = format!(
-        "{}/console/profile",
+        "{}/console/applicant/profile",
         request_ui_base(&state.origins, &headers).trim_end_matches('/')
     );
     let management_url = session.as_ref().and_then(|session| {
@@ -596,7 +596,7 @@ async fn update_me(
         state.application.passkey_management_url(
             &session,
             &format!(
-                "{}/console/profile",
+                "{}/console/applicant/profile",
                 request_ui_base(&state.origins, &headers).trim_end_matches('/')
             ),
         ),

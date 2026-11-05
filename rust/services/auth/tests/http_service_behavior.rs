@@ -698,7 +698,7 @@ async fn callback_me_update_and_logout_preserve_browser_boundary_behavior() {
     assert_eq!(authenticated_body["user"]["email"], "alice@example.com");
     assert_eq!(
         app.management_returns.lock().unwrap().last().unwrap(),
-        "https://elevenidllc.com/console/profile"
+        "https://elevenidllc.com/console/applicant/profile"
     );
     assert_eq!(
         authenticated_body["user"]["passkey_management_url"],
