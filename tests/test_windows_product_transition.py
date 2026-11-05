@@ -270,3 +270,29 @@ def test_qualified_image_and_mounts_cannot_hide_wrong_compose_configuration(tmp_
     gateway = next(item for item in after if product.renewal._service(item) == 'gateway')
     gateway['Config']['Labels']['com.docker.compose.config-hash'] = '5'*64
     with pytest.raises(ValueError):context._candidate(after, before_intent=False)
+
+
+@pytest.mark.parametrize('entry', ['file', 'directory'])
+def test_pending_product_outcome_blocks_credential_owners_without_rewriting_history(monkeypatch, entry):
+    import selfhost_windows_selection as selection
+    from test_selfhost_windows_selection import fixture
+    with fixture(monkeypatch) as (_root, _phase, _tx, _outcome, path, cfg):
+        selection.adopt(path)
+        journal = selection.directory(cfg)
+        saved = {item.name: item.read_bytes() for item in journal.iterdir()}
+        guard = product.renewal.product_transition_guard(cfg)
+        if entry == 'file':guard.write_bytes(b'PUBLIC_SYNTHETIC_PENDING_PRODUCT')
+        else:guard.mkdir()
+        assert product.renewal.recovery_pending(cfg)
+        def forbidden(*_args, **_kwargs):raise AssertionError('Pending product outcome must not reach runtime')
+        monkeypatch.setattr(selection, '_prove', forbidden)
+        monkeypatch.setattr(selection, '_inspect', forbidden)
+        for operation in (selection.adopt, selection.prepare, selection.complete, selection.status,
+                          selection.reconcile_existing, selection.reconcile_materialized):
+            with pytest.raises(ValueError):operation(path)
+        with pytest.raises(ValueError):
+            with selection.selected_inputs(path):raise AssertionError('Must not expose a credential lease')
+        with pytest.raises(ValueError):
+            with selection.activation_admission(cfg, {}, {}, b'', b''):raise AssertionError('Must not admit activation')
+        assert saved == {item.name: item.read_bytes() for item in journal.iterdir()}
+        assert guard.exists()

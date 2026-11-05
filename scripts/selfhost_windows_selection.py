@@ -194,6 +194,10 @@ def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_
         config = decode(raw_config);expected = binding(config)
         root = directory(config);parent = root.parent
         stack.enter_context(renewal.hold_private_input(parent/f'.{config["project"]}.renewal.lock', exclusive=True))
+        # Unknown product outcomes cannot fall back to credential operations.
+        # Only a future typed product reconciliation owner may consume this
+        # guard; a config flag or an ordinary continuation is not authority.
+        require(not renewal.namespace_entry_exists(renewal.product_transition_guard(config)))
         stack.enter_context(renewal.hold_storage_namespace(parent))
         if create and not renewal.namespace_entry_exists(root):
             with _held_private_input(parent, directory=True):pass
