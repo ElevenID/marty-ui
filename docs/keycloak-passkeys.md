@@ -199,6 +199,15 @@ with no relay. The test registers a passkey for the original Keycloak subject
 without existing browser SSO, checks the unchanged Badge session and retained
 password, then performs a fresh passkey application login.
 
+The same journey rejects a credential with an altered signature, a wrong state,
+an expired persisted transaction and a replay of the consumed submission. It
+also tries each Auth finalization nonce and verifies that no rejected or replayed
+transaction can create or restore a Marty session. The expiry fixture changes
+only its owned database transaction deadline; it does not claim a wall-clock
+credential-expiry test. Native identical consumed submissions return400, while
+conflicting terminal submissions use409. Failure details stay in the private
+output directory.
+
 Badge lookup currently includes Keycloak's `default-roles-11id` umbrella marker;
 OIDC returns the application's business roles. This fixture permits only that
 known marker difference between methods and compares every application identity,

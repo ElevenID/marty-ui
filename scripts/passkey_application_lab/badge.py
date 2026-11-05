@@ -384,6 +384,8 @@ class BadgeLab(workload.WorkloadMixin, app.LoginLab):
                         "Real Badge login did not start; private rendered diagnostic retained"
                     )
                 link = page.locator("#wallet-link").get_attribute("href")
+                auth_nonce = page.locator("body").get_attribute("data-nonce")
+                assert auth_nonce
                 query = urllib.parse.parse_qs(urllib.parse.urlparse(link).query)
                 uri = query.get("request_uri", [""])[0]
                 assert uri.startswith(origin + "/v1/flows/instances/")
@@ -716,6 +718,15 @@ class BadgeLab(workload.WorkloadMixin, app.LoginLab):
                 self.note(
                     "Real Badge session native email enrollment and fresh same-account passkey application login PASSED"
                 )
+                assert page.request.post(
+                    origin + "/v1/auth/logout",
+                    headers={"Origin": origin},
+                    max_redirects=0,
+                ).status in (302, 303)
+                context.clear_cookies()
+                self.verify_badge_rejections(
+                    browser, origin, issued[0]["credential"], payload, auth_nonce
+                )
             except Exception as error:
                 self.save_browser_failure(page, "badge", error, browser_errors)
                 raise
@@ -727,3 +738,170 @@ class BadgeLab(workload.WorkloadMixin, app.LoginLab):
                     body={"smtpServer": self.smtp_original},
                 )
                 browser.close()
+
+    def verify_badge_rejections(
+        self, browser, origin, credential, completed_request, completed_nonce
+    ):
+        """Exercise real admission/callback/session boundaries with owned data."""
+        import uuid
+
+        results = {}
+        fresh = browser.new_context()
+        try:
+            assert (
+                fresh.request.get(origin + "/v1/auth/me").json()["authenticated"]
+                is False
+            )
+            query_id = completed_request["dcql_query"]["credentials"][0]["id"]
+            replay = fresh.request.post(
+                completed_request["response_uri"],
+                form={
+                    "vp_token": json.dumps({query_id: [credential]}),
+                    "state": completed_request["state"],
+                },
+            )
+            (app.base.OUT / "badge-replay-response.json").write_text(
+                json.dumps({"status": replay.status, "body": replay.text()}),
+                encoding="utf-8",
+            )
+            assert replay.status == 400, (
+                "Consumed direct-post transaction must reject replay"
+            )
+            final = fresh.request.get(
+                origin
+                + "/v1/auth/credential-login/finalize?"
+                + urllib.parse.urlencode({"nonce": completed_nonce}),
+                max_redirects=0,
+            )
+            assert final.status in (302, 303) and "auth_error=" in final.headers.get(
+                "location", ""
+            )
+            assert (
+                fresh.request.get(origin + "/v1/auth/me").json()["authenticated"]
+                is False
+            )
+            results["consumed_replay"] = {
+                "submission_status": replay.status,
+                "finalize_cannot_restore_session": True,
+            }
+        finally:
+            fresh.close()
+
+        for case in ("invalid_signature", "wrong_state", "expired_transaction"):
+            context = browser.new_context()
+            page = context.new_page()
+            try:
+                assert page.goto(origin + "/v1/auth/credential-login").status == 200
+                nonce = page.locator("body").get_attribute("data-nonce")
+                link = page.locator("#wallet-link").get_attribute("href")
+                uri = urllib.parse.parse_qs(urllib.parse.urlparse(link).query)[
+                    "request_uri"
+                ][0]
+                assert uri.startswith(origin + "/v1/flows/instances/")
+                request = page.request.get(uri)
+                assert request.status == 200
+                pieces = request.text().strip().split(".")
+                assert len(pieces) == 3
+                payload = json.loads(
+                    base64.urlsafe_b64decode(pieces[1] + "=" * (-len(pieces[1]) % 4))
+                )
+                query_id = payload["dcql_query"]["credentials"][0]["id"]
+                submit_uri = payload["response_uri"]
+                assert submit_uri.startswith(origin + "/v1/flows/instances/")
+                selected, state = credential, payload["state"]
+                if case == "invalid_signature":
+                    parts = credential.split(".")
+                    parts[2] = ("A" if parts[2][0] != "A" else "B") + parts[2][1:]
+                    selected = ".".join(parts)
+                elif case == "wrong_state":
+                    state = "untrusted-disposable-state"
+                else:
+                    # Arrange an expired persisted instance, not a fake verifier
+                    # result or a claim of waiting for the signed JWT to expire.
+                    instance = str(
+                        uuid.UUID(urllib.parse.urlparse(submit_uri).path.split("/")[-2])
+                    )
+                    organization = str(uuid.UUID(self.settings["MARTY_ORG_ID"]))
+                    pg = self.context["container"].replace("-oidc-", "-pg-")
+                    inspected = json.loads(app.native.docker("inspect", pg))[0]
+                    assert (
+                        inspected["Config"]["Labels"]["marty.test"]
+                        == "keycloak-passkeys"
+                    )
+                    assert (
+                        self.context["network"]
+                        in inspected["NetworkSettings"]["Networks"]
+                    )
+                    sql = f"WITH changed AS (UPDATE flow_service.flow_instances SET expires_at=NOW()-INTERVAL '1 second' WHERE id='{instance}' AND organization_id='{organization}' RETURNING id) SELECT count(*) FROM changed;"
+                    assert (
+                        app.native.docker(
+                            "exec",
+                            pg,
+                            "psql",
+                            "-At",
+                            "-v",
+                            "ON_ERROR_STOP=1",
+                            "-U",
+                            "keycloak",
+                            "-d",
+                            "marty",
+                            "-c",
+                            sql,
+                        ).strip()
+                        == "1"
+                    )
+                response = context.request.post(
+                    submit_uri,
+                    form={
+                        "vp_token": json.dumps({query_id: [selected]}),
+                        "state": state,
+                    },
+                )
+                expected = 410 if case == "expired_transaction" else 400
+                (app.base.OUT / ("badge-negative-" + case + ".json")).write_text(
+                    json.dumps(
+                        {"status": response.status, "body": response.json()}, indent=2
+                    ),
+                    encoding="utf-8",
+                )
+                assert response.status == expected, (
+                    "Native Badge rejection failed: " + case
+                )
+                assert (
+                    context.request.get(origin + "/v1/auth/me").json()["authenticated"]
+                    is False
+                )
+                final = context.request.get(
+                    origin
+                    + "/v1/auth/credential-login/finalize?"
+                    + urllib.parse.urlencode({"nonce": nonce}),
+                    max_redirects=0,
+                )
+                assert final.status in (
+                    302,
+                    303,
+                ) and "auth_error=" in final.headers.get("location", "")
+                assert (
+                    context.request.get(origin + "/v1/auth/me").json()["authenticated"]
+                    is False
+                )
+                results[case] = {
+                    "submission_status": response.status,
+                    "finalize_cannot_create_session": True,
+                }
+            finally:
+                context.close()
+        (app.base.OUT / "badge-rejection-result.json").write_text(
+            json.dumps(
+                {
+                    "scope": "real native submission, callback and Marty session admission",
+                    "expiry_fixture": "owned persisted transaction deadline; signed credential/request lifetime is not altered",
+                    "cases": results,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        self.note(
+            "Native Badge signature/state/expired-transaction/replay denials and no-session finalization PASSED"
+        )
