@@ -238,6 +238,15 @@ def test_large_docker_inventories_are_batched_below_windows_command_limit(monkey
     assert len(batches) == 38
 
 
+def test_mount_order_is_not_identity_but_every_field_and_duplicate_is_preserved():
+    mounts = [{'Destination': '/a', 'Source': 'C:/one', 'RW': False},
+              {'Destination': '/b', 'Source': 'C:/two', 'RW': True}]
+    assert renewal.canonical_mounts(mounts) == renewal.canonical_mounts(list(reversed(mounts)))
+    changed = deepcopy(mounts);changed[0]['RW'] = True
+    assert renewal.canonical_mounts(mounts) != renewal.canonical_mounts(changed)
+    assert renewal.canonical_mounts(mounts) != renewal.canonical_mounts(mounts + [mounts[0]])
+
+
 @pytest.mark.parametrize('raw', [b'\xff' * 60000, b'\0' * 60000, ('\u03bb' * 60000).encode()],
                          ids=['invalid-utf8', 'nul-bytes', 'multibyte-utf8'])
 def test_diagnostics_remain_valid_bounded_utf8_after_replacement(raw):

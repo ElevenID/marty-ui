@@ -117,8 +117,15 @@ def _service(item):
 def observations(items, project, changing):
     return {x['Id']: {'image': x['Image'], 'status': x['State']['Status'],
                      'started': x['State']['StartedAt'], 'restarts': x['RestartCount'],
-                     'mounts': x['Mounts']}
+                     'mounts': canonical_mounts(x['Mounts'])}
             for x in items if _project(x) != project or _service(x) not in changing}
+
+
+def canonical_mounts(mounts):
+    require(isinstance(mounts, list) and all(isinstance(m, dict) for m in mounts))
+    # The engine constructs this array from a map; order is not identity.
+    # Sorting retains every field and duplicate, so actual changes still refuse.
+    return sorted(mounts, key=lambda m: json.dumps(m, sort_keys=True, separators=(',', ':')))
 
 
 def windows_source(raw):
@@ -399,7 +406,8 @@ class Docker:
                                capture_output=True, timeout=60)
             require(p.returncode == 0, 'Kernel mount metadata unavailable')
             after = self.json(['inspect', x['Id']])[0]
-            require(all(after.get(k) == x.get(k) for k in ['Id', 'Created', 'Mounts', 'RestartCount'])
+            require(all(after.get(k) == x.get(k) for k in ['Id', 'Created', 'RestartCount'])
+                    and canonical_mounts(after['Mounts']) == canonical_mounts(x['Mounts'])
                     and after.get('HostConfig', {}).get('PidMode') == x['HostConfig']['PidMode']
                     and all(after['State'].get(k) == x['State'].get(k)
                             for k in ['Pid', 'StartedAt', 'Status']), 'Metadata container identity changed')
