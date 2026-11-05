@@ -99,6 +99,15 @@ composite proof against its freshly built images. This is synthetic-account and
 virtual-device evidence; actual Google/Open Badge application journeys and
 physical/cross-device behavior remain rollout gates.
 
+Google's provider prompt defaults to `select_account` when it is unset or empty;
+the configurator preserves an explicit provider prompt. This keeps Marty's fresh
+Keycloak authentication request (`prompt=consent login`, `max_age=0`) while
+preventing the unsupported `login` value from being forwarded to Google. The
+native redirect test covers passkeys enabled and disabled and stops before
+contacting Google. It does not establish a completed Google sign-in. Operators
+with an explicit prompt must keep it within Google's supported `none`, `consent`
+and `select_account` values, subject to [Google's prompt rules](https://developers.google.com/identity/openid-connect/openid-connect#prompt).
+
 Users should enroll only from a trusted authenticated account, with appropriate
 fresh authentication. Keep email verification and existing linking policies.
 Encourage a second passkey and a verified recovery method; second-factor recovery

@@ -169,6 +169,77 @@ def configure(fixture, enabled, rp="localhost"):
     return result
 
 
+def test_native_google_redirect_uses_supported_prompt_without_weakening_keycloak_login(keycloak):
+    """Inspect the native 302 locally; never send a request to Google."""
+    from playwright.sync_api import sync_playwright
+
+    provider_url = keycloak["admin"] + "/identity-provider/instances/google"
+    original = request(provider_url, token=keycloak["token"])
+    original_enabled = request(keycloak["admin"], token=keycloak["token"]).get(
+        "webAuthnPolicyPasswordlessPasskeysEnabled", False)
+    source = (ROOT / "scripts/setup-keycloak.sh").read_text(encoding="utf-8").rsplit('main "$@"', 1)[0]
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel="chrome", headless=True)
+            try:
+                for enabled in ("true", "false"):
+                    assert configure(keycloak, enabled).returncode == 0
+                    for explicit_prompt in (None, "consent select_account"):
+                        config = {"clientId": "synthetic-google-client", "clientSecret": "synthetic-google-secret",
+                                  "defaultScope": "openid email profile", "loginHint": "false"}
+                        if explicit_prompt is not None:
+                            config["prompt"] = explicit_prompt
+                        request(provider_url, token=keycloak["token"], method="PUT",
+                                body={**original, "enabled": True, "config": config})
+                        result = subprocess.run(["docker", "exec", "-i", "-e", "KEYCLOAK_ADMIN_PASSWORD",
+                            "-e", "KEYCLOAK_ADMIN=" + keycloak.get("admin_username", "passkey-test-admin"),
+                            "-e", "KC_URL=http://localhost:8080",
+                            "-e", "KEYCLOAK_REALM=" + keycloak["realm"], "-e", "GOOGLE_CLIENT_ID=synthetic-google-client",
+                            "-e", "GOOGLE_CLIENT_SECRET=synthetic-google-secret", keycloak["container"], "bash"],
+                            input=(source + "authenticate_keycloak\nconfigure_google_idp\n").encode(),
+                            env={**os.environ, **keycloak["env"]}, capture_output=True, timeout=60)
+                        assert result.returncode == 0, "Native Google configuration failed"
+                        expected = explicit_prompt or "select_account"
+                        stored = request(provider_url, token=keycloak["token"])
+                        assert stored["enabled"] is True
+                        assert stored["config"]["prompt"] == expected
+                        assert stored["config"]["defaultScope"] == config["defaultScope"]
+                        with browser.new_context() as context:
+                            page = context.new_page()
+                            captured = []
+
+                            def intercept(route):
+                                response = route.fetch(max_redirects=0)
+                                assert response.status in (302, 303)
+                                location = urllib.parse.urlparse(response.headers["location"])
+                                assert location.hostname == "accounts.google.com"
+                                captured.append(urllib.parse.parse_qs(location.query))
+                                route.fulfill(content_type="text/plain", body="Google redirect inspected locally")
+
+                            page.route("**/broker/google/login?**", intercept)
+                            page.route("https://accounts.google.com/**", lambda route: route.abort())
+                            verifier = secrets.token_urlsafe(48)
+                            params = {"client_id": "passkey-test-ui", "response_type": "code", "scope": "openid profile email",
+                                "redirect_uri": keycloak["base"] + "/callback", "state": secrets.token_urlsafe(24),
+                                "nonce": secrets.token_urlsafe(24), "prompt": "consent login", "max_age": "0",
+                                "code_challenge_method": "S256", "code_challenge": base64.urlsafe_b64encode(
+                                    hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()}
+                            page.goto(keycloak["base"] + f"/realms/{keycloak['realm']}/protocol/openid-connect/auth?"
+                                      + urllib.parse.urlencode(params))
+                            page.locator("#social-google").click()
+                            page.get_by_text("Google redirect inspected locally", exact=True).wait_for()
+                            assert len(captured) == 1
+                            assert captured[0]["prompt"] == [expected]
+                            assert captured[0]["client_id"] == ["synthetic-google-client"]
+                            assert captured[0]["state"]
+                            assert set(expected.split()) <= {"none", "consent", "select_account"}
+            finally:
+                browser.close()
+    finally:
+        request(provider_url, token=keycloak["token"], method="PUT", body=original)
+        assert configure(keycloak, str(original_enabled).lower()).returncode == 0
+
+
 def test_native_email_action_enrolls_a_verified_existing_account_without_password(keycloak):
     from playwright.sync_api import sync_playwright
 

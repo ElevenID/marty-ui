@@ -93,6 +93,8 @@ def qualify_passkeys(context):
         # These exercise the installed canonical configurator/theme/provider,
         # native browser WebAuthn, signed email and shared database removal lock.
         print("Both disposable Keycloak nodes observed the two-member cluster; starting native lifecycle checks", flush=True)
+        native.test_native_google_redirect_uses_supported_prompt_without_weakening_keycloak_login(fixture)
+        print("Native supported Google redirect/default and explicit prompt preservation passed with passkeys on/off", flush=True)
         native.test_native_email_action_enrolls_a_verified_existing_account_without_password(fixture)
         print("Native email, console, cross-node removal and surviving login passed", flush=True)
         native.test_native_enrollment_and_delete_actions_cancel_without_mutating_credentials(fixture)

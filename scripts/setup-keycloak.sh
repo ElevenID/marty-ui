@@ -984,14 +984,30 @@ configure_google_idp() {
     fi
     
     log_info "Patching Google Identity Provider..."
-    
-    local payload
+
+    # Google does not accept OIDC's `login` prompt. Marty deliberately requests
+    # fresh Keycloak authentication, so do not pass that client prompt through
+    # to Google. Retain an operator's explicit provider prompt.
+    local current_config prompt_setting="" payload
+    # Do not filter with --fields config: kcadm omits nested map entries. The
+    # full representation can contain credentials; capture it without logging.
+    if ! current_config=$("$KCADM" get identity-provider/instances/google -r "$REALM" 2>/dev/null); then
+        log_error "Cannot read Google IdP prompt configuration"
+        return 1
+    fi
+    if ! printf '%s' "$current_config" | grep -Eq '"config"[[:space:]]*:[[:space:]]*\{'; then
+        log_error "Google IdP config readback is incomplete"
+        return 1
+    fi
+    if ! printf '%s' "$current_config" | grep -Eq '"prompt"[[:space:]]*:[[:space:]]*"[^"]+'; then
+        prompt_setting=',"prompt":"select_account"'
+    fi
     payload=$(create_temp_file)
     TEMP_FILES="${TEMP_FILES:-} $payload"
     cat > "$payload" <<EOF
 {"enabled":true,"config":{
   "clientId":"$(json_escape "$GOOGLE_CID")",
-  "clientSecret":"$(json_escape "$GOOGLE_SEC")"
+  "clientSecret":"$(json_escape "$GOOGLE_SEC")"${prompt_setting}
 }}
 EOF
     if ! kcadm_secret_safe update identity-provider/instances/google \
@@ -1002,6 +1018,13 @@ EOF
     fi
     rm -f -- "$payload"
     verify_google_idp_enabled true || return 1
+    if [ -n "$prompt_setting" ]; then
+        if ! current_config=$("$KCADM" get identity-provider/instances/google -r "$REALM" 2>/dev/null) ||
+           ! printf '%s' "$current_config" | grep -Eq '"prompt"[[:space:]]*:[[:space:]]*"select_account"'; then
+            log_error "Google IdP prompt does not match the supported default"
+            return 1
+        fi
+    fi
     log_success "Google IdP configured and verified"
 }
 
