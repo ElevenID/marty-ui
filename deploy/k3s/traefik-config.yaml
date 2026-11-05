@@ -1,0 +1,20 @@
+# AWS trial security group already permits HTTP-01 on 80 and operator HTTPS on
+# 8443. ServiceLB is supplied by K3s; this does not provision an AWS load balancer.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    ports:
+      web:
+        exposedPort: 80
+      websecure:
+        exposedPort: 8443
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
