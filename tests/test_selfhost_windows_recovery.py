@@ -38,9 +38,13 @@ def candidate(monkeypatch, *, warm=False, fault=None):
             def containers(self):return deepcopy(items)
             def compose(self,*_a):return [*self.prefix,'compose']
             def json(self,_a):return deepcopy(model)
+            def volumes(self):return {}
+            def native_witnesses(self,*_a):return {}
         observed = {'docker': Docker(), 'owned': deepcopy(baseline), 'baseline': baseline,
                     'services': roles, 'model': model, 'command': ['SYNTHETIC_COMPOSE'], 'data_sha256': 'd'*64,
                     'cwd': root}
+        observed['context']=selection.renewal.ForeignContext(observed['docker'],cfg['project'],set(),
+            baseline,{},cfg['native']['helper_image'])
         def native(*_a, **_kw):
             events.append('native')
             if fault == 'native':raise ValueError('PUBLIC_NATIVE_REFUSAL')

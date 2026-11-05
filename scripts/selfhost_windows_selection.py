@@ -302,6 +302,8 @@ def _inspect(config, choice, values, stack, *, expected_data=None, require_ready
                 stack.enter_context(renewal.hold_storage_namespace(path))
     require(mounts > 0)
     return {'data_sha256': data_hash, 'docker': docker, 'baseline': baseline,
+            'context': renewal.ForeignContext(docker, config['project'], set(), baseline, volumes,
+                                              config['native']['helper_image']),
             'owned': owned, 'services': services, 'model': models[choice], 'command': commands[choice],
             'cwd': Path(config['compose_file']).parent}
 
@@ -317,8 +319,7 @@ def _prove(config, choice, values, stack, *, expected_data=None, authority_file=
     observed = _inspect(config, choice, values, stack, expected_data=expected_data)
     docker = observed['docker']
     _native_current(config, choice, values, docker, authority_file)
-    require(renewal.observations(docker.containers(), config['project'], set())
-            == renewal.observations(observed['baseline'], config['project'], set()))
+    observed['context'].check(before_intent=True)
     return observed['data_sha256']
 
 
@@ -576,6 +577,7 @@ def _stage(config,choice,values,record,root,logical_project,stack):
     stack.enter_context(renewal.hold_storage_namespace(root))
     with _held_private_input(root,directory=True):pass
     observed=_inspect(config,choice,values,stack,expected_data=record['data_sha256'])
+    observed['context'].check(before_intent=True)
     docker=observed['docker'];cycle_id=root.name.removeprefix('windows-renewal-')
     secrets=parent/('candidate-secrets-renewal-'+cycle_id)
     require(not renewal.namespace_entry_exists(secrets));secrets.mkdir()
@@ -620,6 +622,7 @@ def _stage(config,choice,values,record,root,logical_project,stack):
     checkpoint('authority','completed',{})
     checkpoint('current','started',{})
     require(_prove(config,choice,values,stack,expected_data=record['data_sha256'],authority_file=authority)==record['data_sha256'])
+    observed['context'].check(before_intent=True)
     checkpoint('current','completed',{})
     renewed=produce_generation(next_config,values[choice],logical_project,cycle_id,stage['services_image'],checkpoint)
     require(set(renewed)==set(values[choice]))
@@ -628,11 +631,11 @@ def _stage(config,choice,values,record,root,logical_project,stack):
     held=stack.enter_context(renewal.hold_private_generation(secrets,sorted(renewed)));require(held==renewed)
     preflight(next_config['native'],config['project'],values[choice],held,docker.prefix)
     require(_prove(config,choice,values,stack,expected_data=record['data_sha256'],authority_file=authority)==record['data_sha256'])
-    require(renewal.observations(docker.containers(),config['project'],set())
-        ==renewal.observations(observed['baseline'],config['project'],set()))
+    items=observed['context'].check(before_intent=True)
     checkpoint('materialize','completed',{})
     receipts={name:renewal.read_private_bytes(root/name) for name in names}
     require(all(receipts.values()))
+    _retired_stage_helpers(items,_checked_stage_receipts(stage,config,receipts),cycle_id)
     hashes={name:digest(raw) for name,raw in receipts.items()}
     result={'schema':STAGE_SCHEMA,'guard_sha256':digest(packed(stage)),
         'config_sha256':digest(next_raw),'next_config':str(next_path),'authority_file':authority,
@@ -716,6 +719,14 @@ def _checked_stage_receipts(stage,config,raws,*,materialize_pending=False):
     return helpers
 
 
+def _retired_stage_helpers(items,helpers,cycle):
+    """A storage-disjoint helper is still an unfinished producer, not churn."""
+    ids={h['id'] for h in helpers.values()};names={'/'+h['name'] for h in helpers.values()}
+    require(not any(x['Id'] in ids or x.get('Name') in names
+        or (x.get('Config',{}).get('Labels') or {}).get('marty.windows.renewal')==cycle
+        for x in items))
+
+
 def reconcile_materialized(config_path):
     """Reprove fully produced bytes and publish metadata; never mint or activate.
 
@@ -788,14 +799,10 @@ def reconcile_materialized(config_path):
             ==renewal.env_body(old_env,Path(next_config['current_secrets'])))
         new=stack.enter_context(renewal.hold_private_generation(Path(next_config['renewed_secrets']),sorted(values[record['choice']])))
         docker=observed['docker']
-        helper_ids={h['id'] for h in helpers.values()};helper_names={'/'+h['name'] for h in helpers.values()}
-        require(not any(x['Id'] in helper_ids or x.get('Name') in helper_names
-            or (x.get('Config',{}).get('Labels') or {}).get('marty.windows.renewal')==cycle
-            for x in docker.containers()))
+        _retired_stage_helpers(docker.containers(),helpers,cycle)
         _native_current(config,record['choice'],values,docker,stage['authority_file'])
         preflight(next_config['native'],config['project'],values[record['choice']],new,docker.prefix)
-        require(renewal.observations(docker.containers(),config['project'],set())
-            ==renewal.observations(observed['baseline'],config['project'],set()))
+        _retired_stage_helpers(observed['context'].check(before_intent=True),helpers,cycle)
         completed=packed({'phase':'materialize','event':'completed','metadata':{}})
         require(receipts['materialize.completed.json'] in (b'',completed))
         if not receipts['materialize.completed.json']:
@@ -957,8 +964,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
                         expected_data=record['data_sha256'],require_ready=False)
                     from selfhost_windows_recovery import plan
                     plan(observed)
-                    require(renewal.observations(observed['docker'].containers(),cfg['project'],set())
-                            ==renewal.observations(observed['baseline'],cfg['project'],set()))
+                    observed['context'].check(before_intent=True)
                     return {'services':len(observed['services']),'configuration_verified':True,
                             'native_admission':False,'runtime_readiness':False}
         def recover_existing(output_dir, authority_file=None, *, preparation_sha256=None, fresh_authority=False):

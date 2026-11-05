@@ -110,9 +110,19 @@ existing result size limit. Unknown storage, missing witnesses, overlap, candida
 drift or exhausted observation budget forbids further writes, including automatic
 rollback. Diagnostic-write failure preserves that classification. Docker has no
 cross-client transaction lock: this qualification cannot prevent another client
-from changing the engine after its closing census. Staging, selection proof and
-recovery checks retain their existing strict census policy; this activation
-change does not qualify unattended recovery or periodic renewal by itself.
+from changing the engine after its closing census.
+
+Selected-generation native admission, read-only configuration checks, staging and
+materialized-stage reconciliation use the same context proof with no changing
+candidate roles. Every candidate observation must therefore stay fixed across
+those operations. Staging rechecks before allocating its operation and before
+credential production. Finalization still requires all producer helper IDs,
+names and cycle labels absent, including helpers appearing during native proof;
+a disjoint helper is not treated as unrelated activity. Existing phase receipts,
+guard transfer, held-input exits and atomic publication remain mandatory.
+Existing-ID start/recovery, model repair and journal continuation retain their
+strict census policy. These changes do not qualify unattended recovery or
+periodic renewal without actual runtime tests.
 
 An ordinary failure in a freshly qualified context
 recreates the prior generation and verifies it. Failure of rollback, held-input
