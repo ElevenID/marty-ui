@@ -1,0 +1,219 @@
+"""Typed product successors of the existing Windows credential journal.
+
+This module validates retained transition evidence; it never executes Compose,
+verifies a release by declaration, mints credentials or rewrites a predecessor.
+The deployment boundary must authenticate the composition and collect real
+custody/schema/runtime receipts before publishing a product selection.
+"""
+from copy import deepcopy
+from pathlib import Path
+import re
+
+import selfhost_windows_selection as selection
+import selfhost_windows_product as product
+
+SCHEMA = 'marty.windows-product-successor/v1'
+INTENT = 'product.intent.json'
+DECISION = 'product.selection.json'
+FILES = {INTENT, DECISION}
+ARTIFACTS = {'web-composition.json', 'web-composition.json.sigstore.json',
+             'web-composition.json.provenance.jsonl', 'web-composition.zip',
+             'web-composition.zip.sigstore.json', 'web-composition.zip.provenance.jsonl'}
+PHASES = {'intent.json', 'result.json', 'before.json', 'after.json', 'schema-before.json',
+          'schema-after.json', 'provider-before.json', 'provider-after.json', 'admission.json', 'new.log'}
+
+
+def require(value):
+    selection.require(value)
+
+
+def sha(value):
+    return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) is not None
+
+
+def successor_configuration(config, model, root):
+    """A new product binding with empty credential-operation outputs, not a rotation."""
+    from selfhost_windows_model import MODEL_KEYS
+    require(set(model) == MODEL_KEYS and Path(root).is_absolute())
+    result = deepcopy(config)
+    result.pop('_historical_compose_sha256', None)
+    result.update(model)
+    for key in ('intent', 'result', 'new_log', 'rollback_log'):
+        result[key] = str(Path(root)/'activation'/('credential-'+key+'.json'))
+    result['step_receipts'] = [{key: str(Path(root)/'activation'/f'credential-{index:03}-{key}.json')
+                               for key in step} for index, step in enumerate(config['step_receipts'])]
+    return result
+
+
+def anchor(raw, expected):
+    from selfhost_windows_continuation import checkpoint
+    intents, records = selection._parse(raw, expected)
+    require(len(intents) == len(records))
+    sequence = len(records)
+    carry = checkpoint(raw)
+    return intents[sequence], records[sequence], sequence+(carry['sequence_offset'] if carry else 0)
+
+
+def validate_marker(raw, expected, current_model, journal):
+    """A dangling product intent seals its predecessor; it never admits fallback."""
+    from selfhost_windows_continuation import INTENT as continuation_intent
+    value = selection.decode(raw[INTENT])
+    require(continuation_intent not in raw)
+    require(type(value) is dict and set(value) == {
+        'schema', 'project', 'engine_id', 'source_dir', 'target_dir', 'source_sha256',
+        'selection_sequence', 'generation_sequence', 'selection_sha256', 'selected_sha256',
+        'old', 'new', 'attempt_dir', 'config_sha256', 'composition_sha256',
+        'image_ids', 'configuration_hashes', 'data_before_sha256', 'data_after_sha256',
+        'observations_before_sha256', 'schema_before_sha256', 'provider_before_sha256', 'candidate_only'})
+    require(value['schema'] == SCHEMA and value['candidate_only'] is True
+            and value['project'] == expected['project'] and value['engine_id'] == expected['engine_id']
+            and value['source_dir'] == str(journal) and value['old'] == current_model)
+    require(value['source_sha256'] == {name: selection.digest(body) for name, body in raw.items()
+                                      if name not in FILES})
+    _intent, record, generation = anchor(raw, expected)
+    require(type(value['selection_sequence']) is int and value['selection_sequence'] == record['sequence']
+            and type(value['generation_sequence']) is int and value['generation_sequence'] == generation
+            and value['selection_sha256'] == selection.digest(raw[f'{record["sequence"]:06}.selection.json'])
+            and value['selected_sha256'] == selection.digest(selection.packed(record['selected']))
+            and value['data_before_sha256'] == record['data_sha256'])
+    require(all(sha(value[key]) for key in ('config_sha256', 'data_before_sha256', 'data_after_sha256',
+                'observations_before_sha256', 'schema_before_sha256', 'provider_before_sha256')))
+    require(type(value['composition_sha256']) is dict and set(value['composition_sha256']) == ARTIFACTS
+            and all(sha(item) for item in value['composition_sha256'].values()))
+    target = Path(value['target_dir']);root = Path(value['attempt_dir'])
+    require(target.parent == root.parent == Path(expected['root'])
+            and re.fullmatch(re.escape('.'+expected['project']+'.generation-product-')+r'[0-9a-f]{32}', target.name)
+            and re.fullmatch(r'windows-product-[0-9a-f]{32}', root.name))
+    require(type(value['new']) is dict and set(value['new']) == {'compose_file', 'compose_sha256'}
+            and sha(value['new']['compose_sha256'])
+            and Path(value['new']['compose_file']).parent == Path(current_model['compose_file']).parent
+            and value['new']['compose_file'] != current_model['compose_file'])
+    return value
+
+
+def hold_transition(marker, hashes, stack):
+    """Retain the earlier owner-verified subjects and real execution evidence.
+
+    Replay checks immutable custody, not new signature admission. A new deploy
+    must always use verified_package and authenticate every original subject.
+    """
+    from selfhost_windows_inputs import _held_private_input
+    from selfhost_windows_renewal import hold_private_input, hold_storage_namespace
+    root = Path(marker['attempt_dir'])
+    stack.enter_context(hold_storage_namespace(root))
+    stack.enter_context(_held_private_input(root, directory=True))
+    models = []
+    for model in (marker['old'], marker['new']):
+        body = stack.enter_context(hold_private_input(Path(model['compose_file']), max_bytes=2*1024*1024))
+        require(selection.digest(body) == model['compose_sha256'])
+        models.append(selection.decode(body))
+    inputs = root/'inputs'
+    stack.enter_context(_held_private_input(inputs, directory=True))
+    require({item.name for item in inputs.iterdir()} == ARTIFACTS)
+    artifact_bodies = {}
+    for name in sorted(ARTIFACTS):
+        maximum = min(product.composition.MAX_ARCHIVE_BYTES, 256*1024*1024) if name == 'web-composition.zip' else 4*1024*1024
+        body = stack.enter_context(hold_private_input(inputs/name, max_bytes=maximum))
+        require(selection.digest(body) == marker['composition_sha256'][name])
+        if name == 'web-composition.json':artifact_bodies[name] = body
+    manifest = product.composition.validate_record(selection.decode(artifact_bodies['web-composition.json']))
+    change = product.checked_model_change(*models, manifest)
+    roles = set(models[0]['services'])-product.renewal.INITIALIZERS
+    layers = product.renewal.dependency_layers(models[1], roles, set(change['mutable_roles']))
+    names = PHASES | {f'{index:03}.{event}.json' for index in range(len(layers)) for event in ('started', 'completed')}
+    require(type(hashes) is dict and set(hashes) == names and all(sha(value) for value in hashes.values()))
+    require({item.name for item in root.iterdir()} == names | {'inputs', 'activation', 'config.private.json'})
+    bodies = {name: stack.enter_context(hold_private_input(root/name, max_bytes=2*1024*1024)) for name in names}
+    require(all(selection.digest(body) == hashes[name] for name, body in bodies.items()))
+    require(selection.decode(bodies['intent.json']) == marker)
+    require(selection.digest(bodies['before.json']) == marker['observations_before_sha256'])
+    require(selection.decode(bodies['admission.json']) == {'schema': SCHEMA,
+        'composition_id': manifest['composition_id'], 'subjects_verified': True, 'images_verified': True})
+    before = selection.decode(bodies['before.json']);after = selection.decode(bodies['after.json'])
+    edge = product.checked_runtime_change(before, after, *models, manifest, marker['image_ids'],
+                                           expected_project=marker['project'])
+    require(edge['before_sha256'] == marker['data_before_sha256']
+            and edge['after_sha256'] == marker['data_after_sha256'])
+    # Replaying the exact context also binds actual old/new Compose hashes.
+    context = product.ProductContext(None, marker['project'], before, {}, 'retained-proof',
+        old_model=models[0], new_model=models[1], admitted=manifest, image_ids=marker['image_ids'],
+        configuration_hashes=marker['configuration_hashes'])
+    context._candidate(after, before_intent=False)
+    for category in ('schema', 'provider'):
+        require(selection.digest(bodies[category+'-before.json']) == marker[category+'_before_sha256'])
+        require(bodies[category+'-before.json'] == bodies[category+'-after.json'])
+        witness = selection.decode(bodies[category+'-before.json'])
+        if category == 'schema':
+            require(type(witness) is dict and set(witness) == {'schema', 'probe', 'databases'}
+                    and witness['schema'] == 'marty.windows-postgres-schema/v1'
+                    and witness['probe'] == 'catalog-and-migration-ledger/v1'
+                    and type(witness['databases']) is dict and witness['databases']
+                    and all(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9_]{0,62}', name)
+                            and type(row) is dict and set(row) == {'catalog_sha256', 'migration_sha256'}
+                            and all(sha(item) for item in row.values()) for name, row in witness['databases'].items()))
+        else:
+            require(type(witness) is dict and set(witness) == {'schema', 'cluster_id', 'ca_sha256',
+                    'plugin_sha256', 'unseal_sha256', 'ready_sha256', 'bao_sha256', 'bao_version'}
+                    and witness['schema'] == 'marty.windows-provider-custody/v1'
+                    and isinstance(witness['cluster_id'], str)
+                    and re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', witness['cluster_id'])
+                    and isinstance(witness['bao_version'], str) and witness['bao_version'].startswith('OpenBao v2.5.5 ')
+                    and all(sha(witness[key]) for key in ('ca_sha256', 'plugin_sha256', 'unseal_sha256', 'ready_sha256', 'bao_sha256')))
+    for index, layer in enumerate(layers):
+        for event in ('started', 'completed'):
+            require(selection.decode(bodies[f'{index:03}.{event}.json']) == {'index': index, 'roles': layer, 'event': event})
+    require(selection.decode(bodies['result.json']) == {'schema': SCHEMA, 'project': marker['project'],
+        'result': 'product-transitioned', 'generation_sequence': marker['generation_sequence'],
+        'selected_sha256': marker['selected_sha256'], 'data_sha256': marker['data_after_sha256'],
+        'composition_id': manifest['composition_id'], 'credential_rotation': False})
+    return manifest
+
+
+def seed(raw, expected, current_model, marker, hashes, stack):
+    """Derive a product successor with the exact previous credential identity."""
+    from selfhost_windows_continuation import CHECKPOINT
+    from selfhost_windows_model import effective_config, immutable_binding, model_binding
+    from selfhost_windows_renewal import hold_private_input
+    require(validate_marker(raw, expected, current_model, Path(marker['source_dir'])) == marker)
+    hold_transition(marker, hashes, stack)
+    first, prior, generation = anchor(raw, expected)
+    old_config_raw = stack.enter_context(hold_private_input(Path(first['config_path'])))
+    require(selection.digest(old_config_raw) == first['config_file_sha256'])
+    old_config = selection.decode(old_config_raw)
+    require(selection.config_digest(old_config) == first['config_sha256']
+            and immutable_binding(selection.binding(old_config)) == immutable_binding(expected))
+    root = Path(marker['attempt_dir'])
+    config_path = root/'config.private.json'
+    config_raw = stack.enter_context(hold_private_input(config_path))
+    config = selection.decode(config_raw)
+    require(selection.digest(config_raw) == marker['config_sha256'] and config == successor_configuration(
+        effective_config(old_config, current_model), marker['new'], root))
+    activation = root/'activation'
+    from selfhost_windows_inputs import _held_private_input
+    stack.enter_context(_held_private_input(activation, directory=True))
+    paths = [Path(config[key]) for key in ('intent', 'result', 'new_log', 'rollback_log')]
+    paths += [Path(path) for step in config['step_receipts'] for path in step.values()]
+    require(len(set(paths)) == len(paths) and {item.name for item in activation.iterdir()} == {path.name for path in paths})
+    require(all(stack.enter_context(hold_private_input(path)) == b'' for path in paths))
+    first = deepcopy(first)
+    first.update(sequence=1, parent=None, operation='product-successor', config_path=str(config_path),
+        config_file_sha256=selection.digest(config_raw), config_sha256=selection.config_digest(config),
+        result_before_sha256=selection.digest(b''))
+    selected = deepcopy(prior)
+    selected.update(sequence=1, parent=None, intent_sha256=selection.digest(selection.packed(first)),
+        decision='product-selected-'+prior['choice'], data_sha256=marker['data_after_sha256'],
+        result_sha256=selection.digest(b''), transition_intent_sha256=selection.digest(b''))
+    require(selected['selected'] == prior['selected'])
+    carry = {'schema': SCHEMA, 'source_dir': marker['source_dir'],
+        'intent_sha256': selection.digest(selection.packed(marker)),
+        'sequence_offset': generation-1, 'generation_model': model_binding(config),
+        'first_intent': first, 'first_selection': selected}
+    return {'owner.json': selection.packed({'schema': selection.SCHEMA, 'binding': dict(expected, **marker['new'])}),
+            CHECKPOINT: selection.packed(carry), '000001.intent.json': selection.packed(first),
+            '000001.selection.json': selection.packed(selected)}
+
+
+def decision(marker, initial, phases):
+    return {'schema': SCHEMA, 'intent_sha256': selection.digest(selection.packed(marker)),
+            'target_entries_sha256': {name: selection.digest(body) for name, body in initial.items()},
+            'phase_sha256': phases, 'candidate_only': True}
