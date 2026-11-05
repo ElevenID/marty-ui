@@ -69,7 +69,13 @@ Returned Compose invocations that leave a role in `created`, paused or another
 nonprogressing state fail promptly rather than polling for a first start that
 Docker will not perform. A mutating CLI timeout is an uncertain outcome: preserve
 its bounded diagnostics and intent, and do not launch automatic rollback. The
-Windows standard subprocess timeout does not contain a Compose plugin child;
-owned-process containment and dependency-layer qualification remain blockers to
-exposing a CLI or unattended lifecycle. This guard does not claim bounded process
-cleanup or Docker daemon operation quiescence.
+Windows mutation runner uses an unnamed noninheritable kill-on-close Job Object
+with no breakaway flags. Its isolated Python helper waits for an input gate before
+launching Docker; job assignment precedes every command byte. Output drains into
+bounded tails. Normal completion requires zero active job processes and bounded
+reader completion. Timeout, surviving descendants or containment failure preserve
+uncertainty even after owned-process termination. Synthetic Windows tests cover
+nonzero exits, large output, gate-assignment failure, timeouts and surviving
+grandchildren. Dependency-layer and real Docker containment qualification remain
+blockers to exposing a CLI or unattended lifecycle. Job termination does not prove
+Docker daemon operation quiescence. See [Microsoft Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).

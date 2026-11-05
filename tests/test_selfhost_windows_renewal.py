@@ -1,9 +1,9 @@
 """Model refusal cases and real NTFS transaction/rollback boundaries."""
-from copy import deepcopy
 import json
 import os
-from pathlib import Path, PureWindowsPath
 import sys
+from copy import deepcopy
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import selfhost_windows_renewal as renewal
 from activate_selfhost_renewed_secrets import RENEWED_TOKEN_FILES
-
 
 PROJECT = 'marty-production-synthetic'
 
@@ -256,7 +255,7 @@ def test_diagnostics_remain_valid_bounded_utf8_after_replacement(raw):
 
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Windows metadata aliases')
 def test_junction_alias_to_candidate_storage_refuses_even_for_read_only_consumer():
-    from test_selfhost_windows_inputs import private_fixture, powershell
+    from test_selfhost_windows_inputs import powershell, private_fixture
     with private_fixture() as (root, _):
         data = root / 'data';data.mkdir();alias = root / 'alias'
         powershell("New-Item -ItemType Junction -Path '"+str(alias).replace("'", "''")+
@@ -273,11 +272,12 @@ def test_junction_alias_to_candidate_storage_refuses_even_for_read_only_consumer
 
 @pytest.mark.skipif(os.name != 'nt', reason='Actual bounded Windows log writer')
 def test_real_recreate_writes_bounded_malformed_diagnostics(monkeypatch):
-    from test_selfhost_windows_inputs import private_fixture
     import subprocess
+
+    from test_selfhost_windows_inputs import private_fixture
     with private_fixture() as (root, path):
         path.write_bytes(b'');m = model(root);rows = states(m);services = {x['Service'] for x in rows}
-        monkeypatch.setattr(renewal.subprocess, 'run', lambda *_a, **_k:
+        monkeypatch.setattr(renewal, 'run_owned_mutation', lambda *_a, **_k:
                             subprocess.CompletedProcess([], 0, b'\xff' * 60000, b''))
         monkeypatch.setattr(renewal, 'statuses', lambda *_a, **_k: rows)
         renewal.recreate(None, ['OWNED_SYNTHETIC_COMPOSE'], {'gateway'}, services, m, path)
@@ -286,15 +286,16 @@ def test_real_recreate_writes_bounded_malformed_diagnostics(monkeypatch):
 
 @pytest.mark.skipif(os.name != 'nt', reason='Real NTFS Compose log boundary')
 def test_recreate_polls_starting_roles_without_rerunning_completed_jobs(monkeypatch):
-    from test_selfhost_windows_inputs import private_fixture
     import subprocess
+
+    from test_selfhost_windows_inputs import private_fixture
     with private_fixture() as (root, path):
         path.write_bytes(b'');m = model(root);ready = states(m);services = {x['Service'] for x in ready}
         starting = deepcopy(ready);next(x for x in starting if x['Service'] == 'gateway')['Health'] = 'starting'
         sequence = iter([starting, starting, ready]);calls = []
         def up(args, **_):
             calls.append(args);return subprocess.CompletedProcess(args, 0, b'PUBLIC_SYNTHETIC_LOG', b'')
-        monkeypatch.setattr(renewal.subprocess, 'run', up)
+        monkeypatch.setattr(renewal, 'run_owned_mutation', up)
         monkeypatch.setattr(renewal, 'statuses', lambda *_a, **_k: next(sequence))
         monkeypatch.setattr(renewal.time, 'sleep', lambda _: None)
         renewal.recreate(None, ['SYNTHETIC_COMPOSE'], {'gateway'}, services, m, path)
@@ -303,15 +304,16 @@ def test_recreate_polls_starting_roles_without_rerunning_completed_jobs(monkeypa
 
 @pytest.mark.skipif(os.name != 'nt', reason='Real NTFS Compose log boundary')
 def test_partial_creation_does_not_restart_a_successful_completed_job(monkeypatch):
-    from test_selfhost_windows_inputs import private_fixture
     import subprocess
+
+    from test_selfhost_windows_inputs import private_fixture
     with private_fixture() as (root, path):
         path.write_bytes(b'');m = model(root);ready = states(m);services = {x['Service'] for x in ready}
         partial = [x for x in ready if x['Service'] != 'gateway'];calls = []
         assert next(x for x in partial if x['Service'] == 'db-migrate')['ExitCode'] == 0
         def up(args, **_):
             calls.append(args);return subprocess.CompletedProcess(args, 1, b'PARTIAL_CREATION', b'')
-        monkeypatch.setattr(renewal.subprocess, 'run', up)
+        monkeypatch.setattr(renewal, 'run_owned_mutation', up)
         monkeypatch.setattr(renewal, 'statuses', lambda *_a, **_k: partial)
         with pytest.raises(ValueError, match='incomplete'):
             renewal.recreate(None, ['SYNTHETIC_COMPOSE'], {'gateway', 'db-migrate'}, services, m, path)
@@ -320,15 +322,16 @@ def test_partial_creation_does_not_restart_a_successful_completed_job(monkeypatc
 
 @pytest.mark.skipif(os.name != 'nt', reason='Actual held NTFS transaction')
 def test_returned_up_with_created_role_refuses_without_readiness_sleep(monkeypatch):
-    from test_selfhost_windows_inputs import private_fixture
     import subprocess
+
+    from test_selfhost_windows_inputs import private_fixture
     with private_fixture() as (root, path):
         path.write_bytes(b'');m = model(root);rows = states(m);services = {x['Service'] for x in rows}
         next(x for x in rows if x['Service'] == 'gateway')['State'] = 'created'
         calls = []
         def up(args, **_):
             calls.append(args);return subprocess.CompletedProcess(args, 1, b'CREATED_NOT_STARTED', b'')
-        monkeypatch.setattr(renewal.subprocess, 'run', up)
+        monkeypatch.setattr(renewal, 'run_owned_mutation', up)
         monkeypatch.setattr(renewal, 'statuses', lambda *_a, **_k: rows)
         monkeypatch.setattr(renewal.time, 'sleep', lambda _: pytest.fail('Created containers cannot first-start themselves'))
         with pytest.raises(ValueError, match='not started'):
@@ -338,13 +341,14 @@ def test_returned_up_with_created_role_refuses_without_readiness_sleep(monkeypat
 
 @pytest.mark.skipif(os.name != 'nt', reason='Real NTFS private timeout diagnostic')
 def test_mutating_timeout_preserves_diagnostic_and_uncertain_classification(monkeypatch):
-    from test_selfhost_windows_inputs import private_fixture
     import subprocess
+
+    from test_selfhost_windows_inputs import private_fixture
     with private_fixture() as (root, path):
         path.write_bytes(b'');m = model(root);services = {x['Service'] for x in states(m)}
         def timeout(*_a, **_k):
             raise subprocess.TimeoutExpired('SYNTHETIC_COMPOSE', 240, output=b'PUBLIC_SYNTHETIC_TIMEOUT', stderr=b'\xff')
-        monkeypatch.setattr(renewal.subprocess, 'run', timeout)
+        monkeypatch.setattr(renewal, 'run_owned_mutation', timeout)
         with pytest.raises(renewal.UncertainComposeMutation):
             renewal.recreate(None, ['SYNTHETIC_COMPOSE'], {'gateway'}, services, m, path)
         assert b'PUBLIC_SYNTHETIC_TIMEOUT' in path.read_bytes()
@@ -356,8 +360,9 @@ def test_mutating_timeout_preserves_diagnostic_and_uncertain_classification(monk
 @pytest.mark.skipif(os.name != 'nt', reason='Actual held NTFS transaction')
 @pytest.mark.parametrize('fail_new', [False, True, 'rollback', 'unselected', 'uncertain'])
 def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreation(monkeypatch, fail_new):
-    from test_selfhost_windows_inputs import private_fixture
     import hashlib
+
+    from test_selfhost_windows_inputs import private_fixture
     with private_fixture() as (root, _):
         old_root, new_root = root / 'old', root / 'new';old_root.mkdir();new_root.mkdir()
         old_m, new_m = model(old_root), model(new_root)
@@ -454,3 +459,52 @@ def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreat
         # Locks are released but durable one-shot intent prevents a blind retry.
         with pytest.raises(ValueError): renewal.activate(cfg)
         (old_root / 'smtp_password').write_bytes(b'AFTER_RELEASE')
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Actual Win32 owned job containment')
+def test_owned_cli_job_returns_nonzero_and_drains_bounded_output():
+    import sys
+    result = renewal.run_owned_mutation([sys.executable, '-I', '-S', '-c',
+        'import sys;sys.stdout.write("x"*200000);sys.stderr.write("y"*200000);sys.exit(7)'], timeout=10)
+    assert result.returncode == 7
+    assert result.stdout == b'x' * 30000 and result.stderr == b'y' * 30000
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Actual Win32 owned descendant containment')
+@pytest.mark.parametrize('parent_exits', [False, True])
+def test_owned_cli_job_terminates_descendant_and_keeps_outcome_uncertain(tmp_path, parent_exits):
+    import sys
+    marker = tmp_path / 'synthetic-child-started'
+    child = ('import pathlib,time;pathlib.Path('+repr(str(marker))+').write_text("PUBLIC_SYNTHETIC");'
+             'print("PUBLIC_SYNTHETIC_CHILD",flush=True);time.sleep(120)')
+    parent = ('import subprocess,sys,pathlib,time;subprocess.Popen([sys.executable,"-I","-S","-c",'
+              +repr(child)+']);'
+              '\nwhile not pathlib.Path('+repr(str(marker))+').exists():time.sleep(.01)\n'
+              + ('sys.exit(0)' if parent_exits else 'time.sleep(120)'))
+    started = renewal.time.monotonic()
+    with pytest.raises(renewal.UncertainComposeMutation) as caught:
+        renewal.run_owned_mutation([sys.executable, '-I', '-S', '-c', parent], timeout=3)
+    assert renewal.time.monotonic() - started < 15
+    assert marker.read_text() == 'PUBLIC_SYNTHETIC'
+    assert caught.value.owned_processes_zero is True
+    assert b'PUBLIC_SYNTHETIC_CHILD' in caught.value.stdout
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Actual Win32 blocked gate assignment')
+def test_owned_cli_assignment_failure_never_releases_command_gate(tmp_path, monkeypatch):
+    import ctypes
+    import sys
+    marker = tmp_path / 'must-not-exist'
+    actual = ctypes.WinDLL
+    class DeniedAssignment:
+        def __init__(self):
+            self.dll = actual('kernel32', use_last_error=True)
+        def __getattr__(self, name):
+            if name == 'AssignProcessToJobObject':
+                return lambda *_: False
+            return getattr(self.dll, name)
+    monkeypatch.setattr(ctypes, 'WinDLL', lambda *_a, **_k: DeniedAssignment())
+    with pytest.raises(ValueError, match='containment unavailable'):
+        renewal.run_owned_mutation([sys.executable, '-I', '-S', '-c',
+            'import pathlib;pathlib.Path('+repr(str(marker))+').write_text("BAD")'], timeout=3)
+    assert not marker.exists()

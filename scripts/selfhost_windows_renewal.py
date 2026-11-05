@@ -7,21 +7,31 @@ initialization. Every publication/admission/cutover gate remains external.
 """
 from __future__ import annotations
 
-from contextlib import ExitStack
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
 import re
 import subprocess
+import sys
+import threading
 import time
+from contextlib import ExitStack
+from pathlib import Path, PurePosixPath
 
 from activate_selfhost_renewed_secrets import (
-    COMPLETED_SERVICES, checked_secret_mounts, compose_args, healthy, owned_service_closure,
-    require_rootless_migration, statuses,
+    COMPLETED_SERVICES,
+    checked_secret_mounts,
+    compose_args,
+    healthy,
+    owned_service_closure,
+    require_rootless_migration,
+    statuses,
 )
 from selfhost_windows_inputs import (
-    hold_private_generation, hold_private_input, hold_storage_namespace, read_private_bytes,
+    hold_private_generation,
+    hold_private_input,
+    hold_storage_namespace,
+    read_private_bytes,
     write_empty_private_file,
 )
 from selfhost_windows_renewal_native import preflight as native_preflight
@@ -428,6 +438,155 @@ def bounded_diagnostic(raw):
 class UncertainComposeMutation(RuntimeError):
     """The mutating CLI did not establish a completed operation boundary."""
 
+    def __init__(self, message):
+        super().__init__(message)
+        self.stdout = b''
+        self.stderr = b''
+        self.owned_processes_zero = False
+
+
+def run_owned_mutation(arguments, timeout=240):
+    """Contain only this gated CLI tree; daemon work remains outside the job.
+
+    No command is sent until its blocked helper belongs to a nonbreakaway,
+    noninheritable kill-on-close job. Output drains continuously into bounded
+    tails. Every abnormal post-gate outcome is uncertain, never rollback-ready.
+    """
+    import ctypes
+    from ctypes import wintypes as w
+
+    require(os.name == 'nt' and isinstance(arguments, list) and arguments
+            and all(isinstance(x, str) and '\0' not in x for x in arguments))
+    require(type(timeout) in {int, float} and 0 < timeout <= 240)
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    pointer = ctypes.c_void_p
+
+    class Limits(ctypes.Structure):
+        _fields_ = [('process_time', ctypes.c_longlong), ('job_time', ctypes.c_longlong),
+                    ('flags', w.DWORD), ('min_ws', ctypes.c_size_t), ('max_ws', ctypes.c_size_t),
+                    ('process_limit', w.DWORD), ('affinity', ctypes.c_size_t),
+                    ('priority', w.DWORD), ('scheduling', w.DWORD)]
+
+    class ExtendedLimits(ctypes.Structure):
+        _fields_ = [('basic', Limits), ('io', ctypes.c_ulonglong * 6),
+                    ('process_memory', ctypes.c_size_t), ('job_memory', ctypes.c_size_t),
+                    ('peak_process', ctypes.c_size_t), ('peak_job', ctypes.c_size_t)]
+
+    class Accounting(ctypes.Structure):
+        _fields_ = [('times', ctypes.c_longlong * 4), ('faults', w.DWORD),
+                    ('total', w.DWORD), ('active', w.DWORD), ('terminated', w.DWORD)]
+
+    def bind(name, args, result):
+        function = getattr(kernel, name);function.argtypes = args;function.restype = result
+        return function
+
+    create = bind('CreateJobObjectW', [pointer, w.LPCWSTR], w.HANDLE)
+    configure = bind('SetInformationJobObject', [w.HANDLE, ctypes.c_int, pointer, w.DWORD], w.BOOL)
+    query = bind('QueryInformationJobObject', [w.HANDLE, ctypes.c_int, pointer, w.DWORD, pointer], w.BOOL)
+    inherit = bind('SetHandleInformation', [w.HANDLE, w.DWORD, w.DWORD], w.BOOL)
+    assign = bind('AssignProcessToJobObject', [w.HANDLE, w.HANDLE], w.BOOL)
+    open_process = bind('OpenProcess', [w.DWORD, w.BOOL, w.DWORD], w.HANDLE)
+    terminate = bind('TerminateJobObject', [w.HANDLE, w.UINT], w.BOOL)
+    close = bind('CloseHandle', [w.HANDLE], w.BOOL)
+    job = create(None, None);require(bool(job), 'Owned CLI job unavailable')
+    process = None;gated = False;tails = [bytearray(), bytearray()];threads = [];errors = []
+    mutex = threading.Lock()
+
+    def active():
+        account = Accounting()
+        require(bool(query(job, 1, ctypes.byref(account), ctypes.sizeof(account), None)),
+                'Owned CLI accounting unavailable')
+        return account.active
+
+    def drain(stream, index):
+        try:
+            while True:
+                chunk = stream.read(4096)
+                if not chunk:
+                    return
+                with mutex:
+                    tails[index].extend(chunk);del tails[index][:-30000]
+        except Exception:
+            errors.append('output')
+
+    try:
+        limits = ExtendedLimits();limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE, no breakaway
+        require(bool(inherit(job, 1, 0)) and bool(configure(job, 9, ctypes.byref(limits), ctypes.sizeof(limits))),
+                'Owned CLI job configuration unavailable')
+        helper = ('import json,sys; d=json.load(sys.stdin); import subprocess; '
+                  'sys.exit(subprocess.run(d["argv"],stdin=subprocess.DEVNULL,close_fds=True).returncode)')
+        process = subprocess.Popen([sys.executable, '-I', '-S', '-c', helper],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   creationflags=subprocess.CREATE_NO_WINDOW, close_fds=True)
+        handle = open_process(0x0101, False, process.pid)  # SET_QUOTA | TERMINATE, this blocked helper only
+        require(bool(handle), 'Owned CLI helper unavailable')
+        try:
+            require(bool(assign(job, handle)), 'Owned CLI containment unavailable')
+        finally:
+            close(handle)
+        for index, stream in enumerate([process.stdout, process.stderr]):
+            thread = threading.Thread(target=drain, args=(stream, index), daemon=True)
+            threads.append(thread);thread.start()
+        payload = json.dumps({'argv': arguments}).encode()
+        require(len(payload) <= 128 * 1024, 'Owned CLI request too large')
+
+        def release_gate():
+            try:
+                process.stdin.write(payload);process.stdin.close()
+            except Exception:
+                errors.append('gate')
+
+        writer = threading.Thread(target=release_gate, daemon=True);threads.append(writer)
+        gated = True;writer.start()
+        code = process.wait(timeout=timeout)
+        # The helper process handle may signal just before job accounting drops
+        # its final exiting member. Bound that kernel-accounting transition.
+        accounting_deadline = time.monotonic() + 1
+        while active() and time.monotonic() < accounting_deadline:
+            time.sleep(0.01)
+        require(active() == 0, 'Owned CLI descendant survived command completion')
+        deadline = time.monotonic() + 10
+        for thread in threads:
+            thread.join(max(0, deadline - time.monotonic()))
+        require(not any(thread.is_alive() for thread in threads) and not errors,
+                'Owned CLI output did not finish')
+        for stream in [process.stdin, process.stdout, process.stderr]:
+            stream.close()
+        return subprocess.CompletedProcess(arguments, code, bytes(tails[0]), bytes(tails[1]))
+    except Exception:
+        if gated:
+            # Even a fully terminated CLI tree cannot prove daemon quiescence.
+            deadline = time.monotonic() + 10
+            zero = False
+            try:
+                terminated = bool(terminate(job, 124))
+                while terminated and time.monotonic() < deadline:
+                    if active() == 0:
+                        zero = True;break
+                    time.sleep(0.05)
+            except Exception:
+                pass  # Keep uncertainty even when containment accounting fails.
+            for thread in threads:
+                try:
+                    thread.join(max(0, deadline - time.monotonic()))
+                except Exception:
+                    pass
+            error = UncertainComposeMutation('Owned Compose outcome requires operator recovery')
+            error.stdout, error.stderr = bytes(tails[0]), bytes(tails[1])
+            error.owned_processes_zero = zero
+            raise error from None
+        if process is not None and not gated:
+            # No command bytes were sent; this is only our blocked gate process.
+            process.kill()
+            process.wait(timeout=10)
+        raise
+    finally:
+        if not close(job) and gated:
+            error = UncertainComposeMutation('Owned Compose job close requires operator recovery')
+            error.stdout, error.stderr = bytes(tails[0]), bytes(tails[1])
+            error.owned_processes_zero = False
+            raise error from None
+
 
 def recreate(docker, command, changing, services, model, log):
     deadline = time.monotonic() + 600
@@ -435,10 +594,9 @@ def recreate(docker, command, changing, services, model, log):
     uncertain = False
     try:
         try:
-            p = subprocess.run([*command, 'up', '-d', '--no-deps', '--no-build',
-                                '--pull', 'never', '--force-recreate', *sorted(changing)],
-                               capture_output=True, timeout=240)
-        except subprocess.TimeoutExpired as error:
+            p = run_owned_mutation([*command, 'up', '-d', '--no-deps', '--no-build',
+                                    '--pull', 'never', '--force-recreate', *sorted(changing)])
+        except (subprocess.TimeoutExpired, UncertainComposeMutation) as error:
             uncertain = True
             tail = ((error.stdout or b'') + (error.stderr or b''))[-60000:]
             raise UncertainComposeMutation('Compose timeout requires operator recovery') from None
