@@ -582,7 +582,7 @@ class LoginLab(base.ApplicationLab):
                 page = context.new_page()
                 cdp = context.new_cdp_session(page)
                 cdp.send("WebAuthn.enable")
-                cdp.send(
+                self.virtual_device = cdp.send(
                     "WebAuthn.addVirtualAuthenticator",
                     {
                         "options": {
@@ -595,6 +595,7 @@ class LoginLab(base.ApplicationLab):
                         }
                     },
                 )["authenticatorId"]
+                self.virtual_cdp = cdp
                 target = origin + getattr(
                     self, "profile_path", "/console/applicant/profile"
                 )
@@ -607,14 +608,18 @@ class LoginLab(base.ApplicationLab):
                 page.locator("#password").fill(password)
                 page.locator("#kc-login").click()
 
-                def finish():
-                    deadline = time.monotonic() + 35
+                def finish(phase="signin"):
+                    deadline = time.monotonic() + (
+                        75 if getattr(self, "require_otp", False) else 35
+                    )
                     while time.monotonic() < deadline:
                         if page.url.startswith(target):
                             page.get_by_test_id("profile-passkey-enrollment").wait_for(
                                 state="visible", timeout=30000
                             )
                             return
+                        if self.authentication_step(page, origin, phase):
+                            continue
                         if page.locator("#kc-oauth-grant").is_visible():
                             page.locator("#kc-oauth-grant").locator(
                                 "[name=accept]"
@@ -649,12 +654,16 @@ class LoginLab(base.ApplicationLab):
                 )
                 url = response.json()["authorization_url"]
                 page.goto(url)
-                deadline = time.monotonic() + 35
+                deadline = time.monotonic() + (
+                    75 if getattr(self, "require_otp", False) else 35
+                )
                 while not page.locator("#registerWebAuthn").is_visible():
                     if time.monotonic() >= deadline:
                         raise RuntimeError(
                             "Native enrollment did not reach its registration action"
                         )
+                    if self.authentication_step(page, origin, "enrollment"):
+                        continue
                     if page.locator("#kc-oauth-grant").is_visible():
                         page.locator("#kc-oauth-grant").locator("[name=accept]").click()
                     elif page.locator("#password").is_visible():
@@ -672,7 +681,7 @@ class LoginLab(base.ApplicationLab):
                     lambda dialog: dialog.accept("Application virtual passkey"),
                 )
                 page.locator("#registerWebAuthn").click(timeout=30000)
-                finish()
+                finish("enrollment")
                 after = page.request.get(origin + "/v1/auth/me").json()
                 fields = [
                     "user_id",
@@ -737,6 +746,9 @@ class LoginLab(base.ApplicationLab):
                 raise
             finally:
                 browser.close()
+
+    def authentication_step(self, page, origin, phase):
+        return False
 
     def save_browser_failure(self, page, name, error, browser_errors=()):
         """Keep the original failure even if a navigation races the snapshot."""

@@ -174,6 +174,17 @@ seeded administrator. Workload certificates use independent non-exportable
 Transit keys and exact SPIFFE role identities; sensitive RPCs use workload mTLS.
 This remains a local development stack with a Chrome virtual authenticator.
 
+Use `--administrator --require-otp` for privileged application assurance. The
+fixture copies the owned browser flow for its test client, retains unrelated
+conditions, disables the native passkey credential exemption and requires OTP.
+It verifies native OTP setup before application login, wrong-code rejection
+without a new Marty session, failed reauthentication before enrollment, and a
+fresh passkey assertion followed by required OTP. Administrator identity and
+authorization remain unchanged and governed access still succeeds. The client
+binding is restored and the owned flow removed before the parent custody checks.
+This qualifies the selected test policy; deployment-specific step-up/LoA settings
+remain subject to their policy owner's rollout qualification.
+
 Add `--badge` for the complete native Open Badge regression. The fixture first
 checks administrator passkey login, establishes the applicant's real OIDC
 identity, and issues a Badge containing that applicant's actual member ID. Its

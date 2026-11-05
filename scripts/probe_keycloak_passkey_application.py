@@ -52,12 +52,21 @@ def main():
         help="Also issue a real test Badge, verify its login and enroll through captured native email",
     )
     parser.add_argument(
+        "--require-otp",
+        action="store_true",
+        help="Qualify native required OTP with --administrator (separate from --badge)",
+    )
+    parser.add_argument(
         "--output-dir",
         required=True,
         type=Path,
         help="New private directory outside the source checkout",
     )
     args = parser.parse_args()
+    if args.require_otp and (not args.administrator or args.badge):
+        parser.error(
+            "--require-otp needs --administrator and cannot be combined with --badge"
+        )
     output = args.output_dir.resolve()
     if output.is_relative_to(ROOT) or output.exists():
         parser.error("--output-dir must be a new directory outside the source checkout")
@@ -105,9 +114,11 @@ def main():
     model.prepare()
     login = load("passkey_application_login", "login.py")
     workload = load("passkey_application_workloads", "workloads.py")
+    mfa = load("passkey_application_mfa", "mfa.py")
 
-    class QualifiedApplication(workload.WorkloadMixin, login.LoginLab):
+    class QualifiedApplication(mfa.MfaMixin, workload.WorkloadMixin, login.LoginLab):
         profile_path = "/console/applicant/profile"
+        require_otp = args.require_otp
 
         def setup_client(self, admin, token, origin):
             applicant = super().setup_client(admin, token, origin)
@@ -143,12 +154,16 @@ def main():
                 ),
                 token=token,
             )[0]["id"]
+            if self.require_otp:
+                self.prepare_mfa(admin, token, subject)
             return email, password, subject
 
         def browser_journey(self, *arguments):
             super().browser_journey(*arguments)
             expected = "administrator" if args.administrator else "applicant"
             assert self.application_baseline_user["user_type"] == expected
+            if self.require_otp:
+                self.verify_mfa(arguments[0])
 
     application_class = (
         load("passkey_application_badge", "badge.py").BadgeLab
@@ -177,6 +192,7 @@ def main():
                 if args.badge
                 else ("administrator" if args.administrator else "applicant"),
                 "parent_custody_checks": True,
+                "privileged_otp_qualification": args.require_otp,
                 "badge_login_and_native_email_enrollment": args.badge,
                 "physical_device_or_google_login": False,
             },
