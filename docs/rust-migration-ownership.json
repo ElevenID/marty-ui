@@ -707,6 +707,10 @@
       }
     ],
     "approved_imports": [
+      {"path": "scripts/passkey_application_lab/login.py", "statement": "from cryptography import x509", "reason": "Disposable application acceptance fixture validates public certificates, CSR signatures and SANs from its owned OpenBao PKI; private signing and TLS keys remain non-exportable in Transit."},
+      {"path": "scripts/passkey_application_lab/login.py", "statement": "from cryptography.hazmat.primitives import serialization", "reason": "Disposable application acceptance fixture compares public certificate/CSR key encodings; it neither generates nor exports product signing or TLS private keys."},
+      {"path": "scripts/passkey_application_lab/workloads.py", "statement": "from cryptography import x509", "reason": "Disposable application acceptance fixture validates public workload certificates, CSR signatures and exact SPIFFE identities from its owned OpenBao PKI; runtime cryptography stays in native services and Transit."},
+      {"path": "scripts/passkey_application_lab/workloads.py", "statement": "from cryptography.hazmat.primitives import serialization", "reason": "Disposable application acceptance fixture compares only public workload certificate/CSR key encodings; all workload private keys remain non-exportable in its owned Transit mount."},
       {"path": "scripts/run_canvas_timeout_consumer_oracle.py", "statement": "from cryptography import x509", "reason": "Test-only ephemeral loopback TLS certificate; never a service crypto owner or deployment trust source."},
       {"path": "scripts/run_canvas_timeout_consumer_oracle.py", "statement": "from cryptography.hazmat.primitives import hashes, serialization", "reason": "Test-only ephemeral loopback TLS certificate; never a service crypto owner or deployment trust source."},
       {"path": "scripts/run_canvas_timeout_consumer_oracle.py", "statement": "from cryptography.hazmat.primitives.asymmetric import rsa", "reason": "Test-only ephemeral loopback TLS certificate; never a service crypto owner or deployment trust source."},
