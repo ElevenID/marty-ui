@@ -246,6 +246,8 @@ def _finish_publication(config,pending,target_name,body,*,allow_existing=False):
     names=set(pending['receipt_sha256'])|{target_name}
     selection.require(target_name in {'result.json','reconciliation.json'})
     selection.require(pending['receipt_sha256'].get('intent.json')==pending['guard_sha256'])
+    from selfhost_windows_continuation import resolve, hold_ancestry, check_ancestry
+    history=[]
     with ExitStack() as protected:
         protected.enter_context(renewal.hold_storage_namespace(parent))
         protected.enter_context(renewal.hold_storage_namespace(root))
@@ -255,10 +257,26 @@ def _finish_publication(config,pending,target_name,body,*,allow_existing=False):
                 selection.require(not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(config)))
                 selection.require(not renewal.namespace_entry_exists(renewal.renewal_staging_guard(config)))
                 selection.require(not renewal.namespace_entry_exists(renewal.model_repair_guard(config)))
+                selection.require(not renewal.namespace_entry_exists(renewal.continuation_guard(config)))
                 selection.require(set(p.name for p in root.iterdir())==names)
                 for name,sha in pending['receipt_sha256'].items():
                     selection.require(selection.digest(receipts.enter_context(renewal.hold_private_input(root/name)))==sha)
-                selection.require(selection.digest(receipts.enter_context(renewal.hold_private_input(guard)))==pending['guard_sha256'])
+                guard_raw=receipts.enter_context(renewal.hold_private_input(guard))
+                selection.require(selection.digest(guard_raw)==pending['guard_sha256'])
+                # Recheck the same selected owner, retaining every sealed
+                # ancestor through this publication-lock and receipt exit.
+                cfg=selection.decode(selection.packed(config));cfg.pop('_historical_compose_sha256',None)
+                journal=selection.directory(cfg)
+                receipts.enter_context(renewal.hold_storage_namespace(journal))
+                with _held_private_input(journal,directory=True):pass
+                raw=selection._read(journal,receipts);ancestors=[]
+                expected,journal,raw,_models=resolve(cfg,journal,raw,receipts,ancestry=ancestors)
+                intents,records=selection._parse(raw,expected)
+                selection.require(len(intents)==len(records))
+                selected=records[len(records)];intent=selection.decode(guard_raw)
+                selection.require(intent['sequence']==selected['sequence']
+                    and intent['selected']==selected['selected'] and intent['data_sha256']==selected['data_sha256'])
+                hold_ancestry([*ancestors,(journal,dict(raw))],receipts,protected,history)
                 saved=renewal.read_private_bytes(root/target_name)
                 selection.require(not saved or allow_existing and saved==body)
                 if not saved:renewal.write_empty_private_file(root/target_name,body.decode())
@@ -272,6 +290,7 @@ def _finish_publication(config,pending,target_name,body,*,allow_existing=False):
     selection.require(renewal.read_private_bytes(root/target_name)==body)
     selection.require(selection.digest(renewal.read_private_bytes(guard))==pending['guard_sha256'])
     selection.require(set(p.name for p in root.iterdir())==names)
+    check_ancestry(history)
     guard.unlink()
 
 

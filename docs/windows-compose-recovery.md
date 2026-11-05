@@ -165,7 +165,22 @@ retain their historical behavior. Installing this task does not test logon, engi
 or host reboot, and does not provide pre-logon availability.
 
 Normal recovery does not renew or repair expired generations or resume an
-uncertain earlier attempt. Explicit online renewal uses the same entrypoint:
+uncertain earlier attempt.
+
+For a failed staging attempt whose producer phases all completed and whose
+Windows files are fully materialized, the explicit library operation
+`selfhost_windows_selection.reconcile_materialized(selection_config_path)`
+revalidates the selected generation, immutable next configuration, phase/helper
+receipts, retired producer helpers, storage/readiness and old/new native admission.
+It can finish the materialization checkpoint and staging publication metadata.
+It never invokes the producer, refreshes authority, activates services, changes a
+selection or clears the staging guard. The existing `prepare` and activation
+protocol remains required afterward. Earlier producer failures and partial
+activation refuse. Matching interrupted metadata writes can be completed after
+fresh proofs; corrupt nonempty records are preserved and refused. All held-input
+and namespace exit checks must pass before publication.
+
+Explicit online renewal uses the same entrypoint:
 
 ```powershell
 & "$Tooling/scripts/recover-marty-after-reboot.ps1" `
@@ -198,17 +213,73 @@ these or qualify unattended availability. Each tick performs a full renewal and
 recreates credential-consuming application roles, so qualify its availability
 impact too. Keep tooling at a reviewed, stable installed checkpoint rather than
 an active development checkout before installing a real task.
-The current append-only selection journal is bounded at 256 operations. Renewal
-refuses before minting when full; it never truncates or resets history. Its
-remaining capacity and a supported history-preserving continuation are additional
-unattended qualification requirements. Do not treat an indefinite trigger as
-proof of indefinite renewal capacity.
+Each append-only selection journal segment is bounded at 256 operations. Before
+minting at a full segment, renewal continues the existing selection into a new
+private segment, then acquires a fresh lease for normal staging. The stable
+managed manifest and all earlier configurations, models and journal records stay
+unchanged. The sealed predecessor binds the exact target owner and checkpoint;
+the checkpoint carries the selected input hashes, original generation/model
+bindings and cumulative sequence. Local segment numbering starts at one without
+resetting the cumulative sequence or discarding history. Neither continuation
+nor its receipt grants native admission, production admission or automatic
+lifecycle qualification. Subsequent staging and activation retain every native
+custody and lifetime check. Expired credentials are not repaired by continuation.
 
-The renewal task uses an interactive, limited operator logon trigger with a
-two-minute delay and repetition, no immediate failure retries, a one-hour task
-limit and IgnoreNew concurrency. The duration is omitted for
+Old owner versions reject continuation markers rather than falling back. Install
+and qualify the reviewed continuation-capable tooling before enabling a real
+timer. Retain every sealed segment and its referenced source files. Reads verify
+the full chain and keep sealed predecessors held; storage and validation cost
+grow with retained history. Actual continuation at the segment limit remains a
+host qualification requirement, along with trigger timing and outage behavior.
+
+An interrupted continuation stays blocked by its intent or guard. Explicit
+`selfhost_windows_continuation.reconcile(selection_config_path)` only reconciles
+this metadata operation: under the shared project lock it verifies the chain,
+reconstructs a missing guard, completes derived missing/empty checkpoint files,
+and publishes the exact linked decision after held-input exit checks. It does
+not invoke Docker mutations or replay any credential producer. Nonempty changed
+checkpoint files, unknown entries, altered predecessors or other operation
+guards refuse reconciliation; preserve that evidence for operator investigation.
+The guard clears last. A complete decision with a late publication failure can
+be reconciled without rewriting its existing bytes.
+
+The renewal task uses an interactive, limited operator principal. One logon
+trigger requests one online renewal after a two-minute delay. A separate
+[time trigger](https://learn.microsoft.com/en-us/windows/win32/taskschd/timetrigger)
+starts recurrence in the current signed-in session: its default first boundary
+is one qualified interval after definition creation, recorded explicitly in
+UTC. The logon trigger does not repeat, so it cannot create a second recurring
+schedule. There are no immediate failure retries; the task retains a one-hour
+limit and IgnoreNew concurrency. The time trigger's duration is omitted for
 [indefinite repetition](https://learn.microsoft.com/en-us/windows/win32/taskschd/repetitionpattern-duration).
 It requires the signed-in operator session; it is not a SYSTEM boot service.
+Both triggers use the same `-RenewCredentials` action. They do not start stopped
+or unhealthy workloads before staging. The existing retained-ID recovery path
+must restore that foundation first; recovery/logon ordering remains a separate
+host qualification requirement.
+For a finite candidate qualification, pass the same `-RenewalWindowMinutes`
+to installer and verifier. Zero (default) retains indefinite renewal; an explicit
+positive window, at most 1440 minutes, must end after the first scheduled run.
+Windows may normalize stored trigger times to a local UTC offset and account
+names to a shorter spelling. Verification requires explicit time offsets and
+compares absolute instants; accounts must resolve to the current operator's exact
+Windows SID. Unzoned timestamps and unresolved or foreign accounts are refused.
+Both logon and time triggers receive that exact UTC end boundary, measured from
+the recorded definition date. This bounds future trigger starts even if the test
+controller exits. It does not stop an in-flight renewal, delete the task, prove
+daemon quiescence, or authorize retry after an unknown outcome. Retain the task,
+source and operation evidence until instances are idle and ownership is verified.
+The scheduler's [EndBoundary contract](https://learn.microsoft.com/en-us/windows/win32/taskschd/trigger-endboundary)
+prevents later trigger starts; `StopAtDurationEnd` remains false to avoid killing
+an active credential transaction.
+
+For a separately reviewed qualification, `-FirstRenewalDelaySeconds` can select
+an earlier first boundary, from 15 seconds through the qualified interval in
+seconds. Zero selects the default full interval. This only changes the first
+boundary; subsequent ticks retain the qualified interval. The installer records
+its UTC definition date and derives the first boundary from that same timestamp.
+No clock or time-zone settings are changed. Registration can enable the first
+scheduled invocation shortly afterward, so qualify its exact effects beforehand.
 Create-only registration and the same project guards prevent replacement or
 uncertain-operation replay. The installer preflight is check-only and never
 mints. Actual task registration, invocation, repetition/logon timing, separately
@@ -228,7 +299,14 @@ After separate registration, check the exact managed task without elevation:
 
 The verifier requires the current operator's separate root-folder task and the
 exact installed action, interpreter, configuration, working directory, trigger
-and settings. It refuses active or mismatched tasks. Its read-only runtime
+and settings. Managed actions use the system PowerShell path with an explicitly
+hidden window; the default legacy action is unchanged. Renewal verification requires exactly one nonrepeating logon
+trigger and one repeating UTC time trigger, with no expiry or random delay.
+It compares the definition date and first boundary against the expected delay;
+pass the same `-FirstRenewalDelaySeconds` when an earlier first run was installed.
+Older logon-only renewal definitions refuse verification; create-only installation
+does not replace them. Their retirement or replacement requires ownership review.
+The verifier refuses active or mismatched tasks. Its read-only runtime
 preflight uses the existing owned-process job and bounded drains, with an
 independent `-PreflightTimeoutSeconds` budget (default 240; range 1–240), matching
 the existing owned transport's maximum. Larger values refuse before task access.

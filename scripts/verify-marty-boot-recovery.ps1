@@ -6,6 +6,8 @@ param(
     [switch]$RenewCredentials,
     [string]$LogicalTlsProject,
     [int]$RenewalIntervalMinutes = 0,
+    [int]$FirstRenewalDelaySeconds = 0,
+    [int]$RenewalWindowMinutes = 0,
     [switch]$CheckOnly,
     [int]$TimeoutSeconds = 3600,
     [int]$PreflightTimeoutSeconds = 240,
@@ -29,10 +31,15 @@ if ($ManagedPython) {
     }
     if ($RenewCredentials) {
         if ($LogicalTlsProject -cnotmatch '\Amarty-(selfhost|production)-[a-z0-9][a-z0-9-]{0,59}\z' -or
-            $RenewalIntervalMinutes -lt 15 -or $RenewalIntervalMinutes -gt 240) {
+            $RenewalIntervalMinutes -lt 15 -or $RenewalIntervalMinutes -gt 240 -or
+            ($FirstRenewalDelaySeconds -ne 0 -and ($FirstRenewalDelaySeconds -lt 15 -or
+                $FirstRenewalDelaySeconds -gt 60*$RenewalIntervalMinutes)) -or
+            $RenewalWindowMinutes -lt 0 -or $RenewalWindowMinutes -gt 1440 -or
+            ($RenewalWindowMinutes -gt 0 -and 60*$RenewalWindowMinutes -le $(if ($FirstRenewalDelaySeconds) {$FirstRenewalDelaySeconds} else {60*$RenewalIntervalMinutes}))) {
             throw 'Use the exact enrolled namespace and installed renewal interval.'
         }
-    } elseif ($LogicalTlsProject -or $PSBoundParameters.ContainsKey('RenewalIntervalMinutes')) {
+    } elseif ($LogicalTlsProject -or $PSBoundParameters.ContainsKey('RenewalIntervalMinutes') -or
+        $PSBoundParameters.ContainsKey('FirstRenewalDelaySeconds') -or $PSBoundParameters.ContainsKey('RenewalWindowMinutes')) {
         throw 'Renewal settings require RenewCredentials.'
     }
     if ($StatusFile -and (-not [IO.Path]::IsPathRooted($StatusFile) -or
@@ -41,35 +48,82 @@ if ($ManagedPython) {
         throw 'Use a new absolute status file in an existing directory.'
     }
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $userIds = @($identity.Name, $identity.User.Value)
+    function Test-ManagedOperator([string]$UserId) {
+        if ([string]::IsNullOrWhiteSpace($UserId)) { return $false }
+        if ($UserId -eq $identity.User.Value) { return $true }
+        try {
+            # Task Scheduler may serialize the same local account without its
+            # machine prefix. Resolve its SID rather than trusting name suffixes.
+            $account = [Security.Principal.NTAccount]::new($UserId)
+            return $account.Translate([Security.Principal.SecurityIdentifier]).Value -eq $identity.User.Value
+        } catch { return $false }
+    }
     $recoveryScript = Join-Path $PSScriptRoot 'recover-marty-after-reboot.ps1'
     $repoRoot = Split-Path -Parent $PSScriptRoot
     $powerShellPath = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell/v1.0/powershell.exe'
-    $expectedArguments = "-NoProfile -NonInteractive -File `"$recoveryScript`" -RecoveryConfigurationFile `"$RecoveryConfigurationFile`" -ManagedPython `"$ManagedPython`" -WaitForEngine"
+    $expectedArguments = "-NoProfile -NonInteractive -WindowStyle Hidden -File `"$recoveryScript`" -RecoveryConfigurationFile `"$RecoveryConfigurationFile`" -ManagedPython `"$ManagedPython`" -WaitForEngine"
     if ($RenewCredentials) { $expectedArguments += " -RenewCredentials -LogicalTlsProject `"$LogicalTlsProject`"" }
 
     function Assert-ManagedTask($Task) {
+        $expectedTriggers = if ($RenewCredentials) { 2 } else { 1 }
         if ($Task.TaskName -cne $TaskName -or $Task.TaskPath -ne '\' -or
-            $Task.Principal.UserId -notin $userIds -or
+            -not (Test-ManagedOperator $Task.Principal.UserId) -or
             [string]$Task.Principal.LogonType -ne 'Interactive' -or
             [string]$Task.Principal.RunLevel -ne 'Limited' -or
-            @($Task.Actions).Count -ne 1 -or @($Task.Triggers).Count -ne 1) {
+            @($Task.Actions).Count -ne 1 -or @($Task.Triggers).Count -ne $expectedTriggers) {
             throw 'The task does not belong to the expected managed interactive operator.'
         }
-        $action = @($Task.Actions)[0];$trigger = @($Task.Triggers)[0]
+        $logons = @($Task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' })
+        if ($logons.Count -ne 1) { throw 'Expected exactly one operator logon trigger.' }
+        $action = @($Task.Actions)[0];$trigger = $logons[0]
         if ($action.Execute -ine $powerShellPath -or $action.Arguments -cne $expectedArguments -or
             $action.WorkingDirectory -ine $repoRoot -or
             $trigger.CimClass.CimClassName -ne 'MSFT_TaskLogonTrigger' -or
-            $trigger.UserId -notin $userIds -or $trigger.Delay -ne 'PT2M' -or -not $trigger.Enabled -or
+            -not (Test-ManagedOperator $trigger.UserId) -or $trigger.Delay -ne 'PT2M' -or -not $trigger.Enabled -or
             -not $Task.Settings.Enabled -or -not $Task.Settings.StartWhenAvailable -or
             [string]$Task.Settings.MultipleInstances -ne 'IgnoreNew') {
             throw 'The managed task action, trigger or execution settings differ from the expected invocation.'
         }
         if ($RenewCredentials) {
-            if ($trigger.Repetition.Interval -ne ('PT'+$RenewalIntervalMinutes+'M') -or
-                $trigger.Repetition.Duration -or $trigger.Repetition.StopAtDurationEnd -or
-                $Task.Settings.ExecutionTimeLimit -ne 'PT1H' -or $Task.Settings.RestartCount -ne 0) {
+            $timers = @($Task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskTimeTrigger' })
+            if ($timers.Count -ne 1) { throw 'Expected exactly one independent renewal time trigger.' }
+            $timer = $timers[0]
+            if ($trigger.Repetition.Interval -or $trigger.Repetition.Duration -or
+                -not $timer.Enabled -or [string]$timer.RandomDelay -notin @('', 'PT0S') -or
+                $timer.Repetition.Interval -ne ('PT'+$RenewalIntervalMinutes+'M') -or
+                $timer.Repetition.Duration -or $timer.Repetition.StopAtDurationEnd -or
+                $Task.Settings.ExecutionTimeLimit -ne 'PT1H' -or $Task.Settings.RestartCount -ne 0 -or
+                [string]$Task.Settings.RestartInterval -notin @('', 'PT0S')) {
                 throw 'The renewal repetition or no-replay settings differ from the expected definition.'
+            }
+            $registration = [DateTimeOffset]::MinValue;$boundary = [DateTimeOffset]::MinValue
+            # The scheduler normalizes trigger boundaries to the local offset
+            # even when UTC was registered. Require an explicit offset and
+            # compare DateTimeOffset instants; never assume an unzoned time.
+            $offsetPattern = '\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?(Z|[+-]\d{2}:\d{2})\z'
+            if ([string]$Task.Date -cnotmatch $offsetPattern -or [string]$timer.StartBoundary -cnotmatch $offsetPattern -or
+                -not [DateTimeOffset]::TryParse([string]$Task.Date, [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::None, [ref]$registration) -or
+                -not [DateTimeOffset]::TryParse([string]$timer.StartBoundary, [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::None, [ref]$boundary)) {
+                throw 'Renewal registration and first-run boundaries must have explicit time offsets.'
+            }
+            $firstDelay = if ($FirstRenewalDelaySeconds) { $FirstRenewalDelaySeconds } else { 60*$RenewalIntervalMinutes }
+            if (($boundary-$registration).TotalSeconds -ne $firstDelay -or $registration -gt [DateTimeOffset]::UtcNow.AddSeconds(60)) {
+                throw 'The first renewal boundary differs from the expected delay or registration clock.'
+            }
+            foreach ($renewalTrigger in @($trigger, $timer)) {
+                if ($RenewalWindowMinutes) {
+                    $end = [DateTimeOffset]::MinValue
+                    if ([string]$renewalTrigger.EndBoundary -cnotmatch $offsetPattern -or
+                        -not [DateTimeOffset]::TryParse([string]$renewalTrigger.EndBoundary, [Globalization.CultureInfo]::InvariantCulture,
+                            [Globalization.DateTimeStyles]::None, [ref]$end) -or
+                        $end -ne $registration.AddMinutes($RenewalWindowMinutes)) {
+                        throw 'Both renewal triggers must expire at the exact qualified instant.'
+                    }
+                } elseif ($renewalTrigger.EndBoundary) {
+                    throw 'An indefinite renewal task must not contain a trigger expiry.'
+                }
             }
         } elseif ($trigger.Repetition.Interval -or $Task.Settings.ExecutionTimeLimit -ne 'PT20M' -or
             $Task.Settings.RestartCount -ne 3 -or $Task.Settings.RestartInterval -ne 'PT2M') {

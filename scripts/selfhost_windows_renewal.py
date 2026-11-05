@@ -82,6 +82,10 @@ def model_repair_guard(config):
     return Path(config['current_secrets']).parent / ('.'+config['project']+'.model-repair.json')
 
 
+def continuation_guard(config):
+    return Path(config['current_secrets']).parent / ('.'+config['project']+'.selection-continuation.json')
+
+
 def namespace_entry_exists(path):
     """Any entry blocks admission, including a dangling link; never follow it."""
     try:
@@ -95,7 +99,8 @@ def recovery_pending(config):
     return (namespace_entry_exists(recovery_guard(config))
             or namespace_entry_exists(recovery_preparation_guard(config))
             or namespace_entry_exists(renewal_staging_guard(config))
-            or namespace_entry_exists(model_repair_guard(config)))
+            or namespace_entry_exists(model_repair_guard(config))
+            or namespace_entry_exists(continuation_guard(config)))
 
 
 def windows_healthy(items, services, model):
@@ -354,6 +359,10 @@ def disjoint_storage(items, project, volumes, witnesses=None):
                 continue
             overlap = x == y if a != 'windows' else x[1] in y[2] or y[1] in x[2]
             require(not overlap, 'Candidate writable storage overlaps another project')
+    # Inspect strings do not establish a stable Windows namespace. Return the
+    # actual object/ancestor identities so callers can bracket junction changes.
+    return sorted((str(value[0]), value[1], sorted(value[2]))
+                  for kind, value in [*owned, *foreign] if kind == 'windows')
 
 
 def data_mounts(items):
@@ -405,12 +414,22 @@ class Docker:
     def volumes(self):
         p = subprocess.run([*self.prefix, 'volume', 'ls', '-q'], capture_output=True, timeout=30)
         require(p.returncode == 0)
-        names = p.stdout.decode('ascii').split()
-        # Anonymous volume inventories can exceed CreateProcessW's 32767-char
-        # command line. Docker names are bounded; batches of64 stay below it.
+        names = p.stdout.decode('ascii').splitlines()
+        # Anonymous inventories can contain thousands of names. Preserve the
+        # CreateProcessW limit without paying one CLI startup per64 names: names
+        # are validated ASCII, then bounded by both command length and row count.
         rows = []
-        for start in range(0, len(names), 64):
-            rows.extend(self.json(['volume', 'inspect', *names[start:start + 64]]))
+        command_size = len(subprocess.list2cmdline([*self.prefix, 'volume', 'inspect'])) + 1
+        batch = [];size = command_size
+        for name in names:
+            require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,254}', name), 'Invalid Docker volume name')
+            if batch and (len(batch) == 256 or size + len(name) + 1 > 24 * 1024):
+                rows.extend(self.json(['volume', 'inspect', *batch]))
+                batch = [];size = command_size
+            require(size + len(name) + 1 <= 24 * 1024)
+            batch.append(name);size += len(name) + 1
+        if batch:
+            rows.extend(self.json(['volume', 'inspect', *batch]))
         return {v['Name']: {k: v.get(k) for k in ['Name', 'Driver', 'Mountpoint', 'Options']} for v in rows}
 
     def compose(self, project, env, source):
@@ -476,6 +495,141 @@ class UncertainComposeMutation(RuntimeError):
         self.stdout = b''
         self.stderr = b''
         self.owned_processes_zero = False
+
+
+class UnsafeRenewalContext(UncertainComposeMutation):
+    """No further Compose writes, including rollback, are currently safe."""
+
+
+def context_snapshot(items):
+    """Stable inspect fields needed to bracket a storage proof, without secrets."""
+    result = observations(items, '', set())
+    require(len(result) == len(items), 'Duplicate container identities')
+    for item in items:
+        result[item['Id']].update(
+            created=item.get('Created'), project=_project(item), service=_service(item),
+            pid=item['State'].get('Pid'), exit_code=item['State'].get('ExitCode'),
+            pid_mode=item.get('HostConfig', {}).get('PidMode'),
+            config_hash=(item.get('Config', {}).get('Labels') or {}).get('com.docker.compose.config-hash'))
+    return result
+
+
+class ForeignContext:
+    """Requalify independent engine clients; never retry a workload mutation.
+
+    Docker has no cross-client transaction lock. This establishes a fresh,
+    bracketed observation before each write, not protection against future
+    changes by another engine client. Unknown/unsafe context forbids rollback.
+    """
+
+    def __init__(self, docker, project, changing, baseline, volumes, helper_image):
+        self.docker, self.project, self.changing = docker, project, changing
+        self.helper_image = helper_image
+        self.initial = context_snapshot(baseline)
+        self.owned = [x for x in baseline if _project(x) == project]
+        self.services = {_service(x) for x in self.owned}
+        self.protected = {k: v for k, v in self.initial.items()
+                          if v['project'] == project and v['service'] not in changing}
+        self.foreign = {k: v for k, v in self.initial.items() if v['project'] != project}
+        self.volumes = volumes
+        self.proofs = []
+        self.proof_count = 0
+        self.proof_sha256 = None
+
+    def _record_proof(self, proof, *, deadline=None):
+        raw = json.dumps(proof, sort_keys=True).encode()
+        chain = hashlib.sha256((self.proof_sha256 or '').encode() + raw).hexdigest()
+        # Context evidence must not exhaust the existing 64KiB result limit
+        # after physical activation. Keep a byte-bounded recent sample and an
+        # aggregate chain/count covering every accepted context change.
+        recent = [*self.proofs, proof]
+        while len(json.dumps(recent, sort_keys=True).encode()) > 8192:
+            recent.pop(0)
+        require(deadline is None or time.monotonic() < deadline, 'Storage qualification deadline reached')
+        self.proofs = recent
+        self.proof_count += 1
+        self.proof_sha256 = chain
+
+    def _candidate(self, items, *, before_intent):
+        owned = [x for x in items if _project(x) == self.project]
+        require(len(owned) == len(self.services) and {_service(x) for x in owned} == self.services,
+                'Candidate role closure changed')
+        snapshot = context_snapshot(owned)
+        require({k: v for k, v in snapshot.items() if v['service'] not in self.changing} == self.protected,
+                'Protected candidate observations changed')
+        require(data_mounts(owned) == data_mounts(self.owned), 'Candidate data mounts or image identity changed')
+        if before_intent:
+            require(snapshot == {k: v for k, v in self.initial.items() if v['project'] == self.project},
+                    'Candidate observations changed before intent')
+        return snapshot
+
+    def check(self, *, before_intent=False):
+        failed = False
+        try:
+            return self._check(before_intent=before_intent)
+        except UnsafeRenewalContext:
+            raise
+        except Exception:
+            failed = True
+        # Do not retain an inspect/JSON exception (possibly raw daemon output)
+        # as __context__ in the public failure classification.
+        if failed:
+            raise UnsafeRenewalContext('Renewal context requires fresh operator qualification')
+
+    def _check(self, *, before_intent):
+        deadline = time.monotonic() + 60
+        seen = dict(self.foreign)
+        for _attempt in range(3):
+            require(time.monotonic() < deadline, 'Storage qualification deadline reached')
+            items = self.docker.containers()
+            self._candidate(items, before_intent=before_intent)
+            snapshot = context_snapshot(items)
+            foreign = {k: v for k, v in snapshot.items() if v['project'] != self.project}
+            for key in seen.keys() & foreign.keys():
+                require(all(foreign[key][field] == seen[key][field]
+                            for field in ('image', 'created', 'mounts', 'project', 'service', 'pid_mode', 'config_hash')),
+                        'Surviving foreign container identity changed')
+            seen.update(foreign)
+            volumes = self.docker.volumes()
+            require(time.monotonic() < deadline, 'Storage qualification deadline reached')
+            # Even identical inspect strings do not hold foreign NTFS paths or
+            # kernel mounts. Refresh those identities at every write boundary.
+            witnesses = self.docker.native_witnesses(items, self.project, volumes, self.helper_image)
+            storage = disjoint_storage(items, self.project, volumes, witnesses)
+            after_volumes = self.docker.volumes()
+            after = self.docker.containers()
+            # Candidate changes during read-only proof are never churn retries.
+            require(self._candidate(after, before_intent=before_intent)
+                    == self._candidate(items, before_intent=before_intent),
+                    'Candidate changed during storage qualification')
+            require(time.monotonic() < deadline, 'Storage qualification deadline reached')
+            if context_snapshot(after) != snapshot or after_volumes != volumes:
+                continue
+            require(disjoint_storage(after, self.project, after_volumes, witnesses) == storage,
+                    'Windows storage namespace changed during qualification')
+            if foreign == self.foreign and volumes == self.volumes:
+                require(time.monotonic() < deadline, 'Storage qualification deadline reached')
+                return after
+            evidence = [{'project': key[0], 'source': key[1],
+                         **{k: sorted(v) if isinstance(v, set) else v for k, v in value.items()}}
+                        for key, value in sorted(witnesses.items(), key=lambda pair: json.dumps(pair[0]))]
+            digest = hashlib.sha256(json.dumps({'containers': snapshot, 'volumes': volumes, 'windows_storage': storage,
+                                               'witnesses': evidence}, sort_keys=True).encode()).hexdigest()
+            changes = {'added': sorted(foreign.keys() - self.foreign.keys()),
+                       'removed': sorted(self.foreign.keys() - foreign.keys()),
+                       'updated': sorted(k for k in foreign.keys() & self.foreign.keys()
+                                         if foreign[k] != self.foreign[k])}
+            # Bounded ID samples keep the existing private result size limit;
+            # full category counts and digests identify larger churn sets.
+            drift = {name: {'count': len(ids), 'ids': ids[:4],
+                            'sha256': hashlib.sha256(json.dumps(ids).encode()).hexdigest()}
+                     for name, ids in changes.items()}
+            require(time.monotonic() < deadline, 'Storage qualification deadline reached')
+            self._record_proof({'sha256': digest, 'foreign_containers': len(foreign),
+                                'native_witnesses': len(witnesses), 'drift': drift}, deadline=deadline)
+            self.foreign, self.volumes = foreign, volumes
+            return after
+        raise UnsafeRenewalContext('Foreign container inventory did not stabilize')
 
 
 def dependency_layers(model, services, changing):
@@ -724,6 +878,11 @@ def recreate(docker, command, changing, services, model, log, progress=None):
                 progress('completed', index, layer)
                 require(time.monotonic() < deadline, 'Windows renewal phase deadline reached')
             ready = selected
+    except UncertainComposeMutation:
+        # A refused boundary callback also forbids rollback. Preserve this even
+        # if publishing the diagnostic in finally fails independently.
+        uncertain = True
+        raise
     finally:
         try:
             write_empty_private_file(log, bounded_diagnostic(tail))
@@ -808,10 +967,9 @@ def activate(config):
                         require(path is not None)
                         stack.enter_context(hold_storage_namespace(path))
             data_before = data_mounts(owned)
-            protected = observations(baseline, project, changing)
+            context = ForeignContext(docker, project, changing, baseline, volumes, config['native']['helper_image'])
             native_preflight(config['native'], project, old_bytes, new_bytes, docker.prefix)
-            require(observations(docker.containers(), project, set()) == observations(baseline, project, set()),
-                    'Container observations changed before intent')
+            context.check(before_intent=True)
             write_empty_private_file(outputs['intent'], json.dumps({
                 'schema': SCHEMA, 'project': project, 'compose_sha256': config['compose_sha256'],
                 'current_env': str(old_env), 'renewed_env': str(new_env),
@@ -822,9 +980,7 @@ def activate(config):
                 'candidate_only': True}) + '\n')
             started = True
             def verify(command, root, model):
-                items = docker.containers()
-                require(observations(items, project, changing) == protected,
-                        'Unselected container observations changed')
+                items = context.check()
                 require(windows_healthy(statuses(command, cwd=source.parent), services, model))
                 owned_now = [x for x in items if _project(x) == project]
                 require(data_mounts(owned_now) == data_before, 'Data mounts or image identity changed')
@@ -836,6 +992,8 @@ def activate(config):
                 def progress(phase):
                     def record(event, index, layer):
                         require(layer == layers[index] and event in {'started', 'completed'})
+                        if event == 'started':
+                            context.check()
                         write_empty_private_file(Path(steps[index][phase + '_' + event]),
                                                  json.dumps({'roles': layer, 'event': event, 'time': time.time()}) + '\n')
                     return record
@@ -852,7 +1010,10 @@ def activate(config):
                 result = {'result': 'rolled_back', 'secret_mounts': mounts}
             result.update(schema=SCHEMA, project=project, services=len(services),
                           recreated_roles=sorted(changing), candidate_only=True,
-                          production_admission=False, automatic_lifecycle=False)
+                          production_admission=False, automatic_lifecycle=False,
+                          foreign_context_proofs=context.proofs,
+                          foreign_context_proof_count=context.proof_count,
+                          foreign_context_proof_sha256=context.proof_sha256)
         # Never publish success before all held-input exit checks have passed.
         write_empty_private_file(outputs['result'], json.dumps(result) + '\n')
     except Exception:
