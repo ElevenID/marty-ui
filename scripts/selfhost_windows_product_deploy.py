@@ -102,8 +102,8 @@ def start(config, choice, values, record, raw, source, assets, *, gh, cosign, re
     ids = qualified_images(docker, old, new, owned)
     edge = predicted_edge(owned, old, new, admitted, ids, config['project'])
     require(edge['before_sha256'] == record['data_sha256'])
-    schema_before = selection.packed(probe.schema_snapshot(docker, observed['baseline'], config['project']))
-    provider_before = selection.packed(probe.provider_snapshot(docker, observed['baseline'], config['project'], config['native']['ca_file']))
+    schema_before = selection.packed(probe.schema_snapshot(docker, owned, config['project']))
+    provider_before = selection.packed(probe.provider_snapshot(docker, owned, config['project'], config['native']['ca_file']))
     cycle = uuid.uuid4().hex;parent = Path(config['current_secrets']).parent
     root = parent/('windows-product-'+cycle)
     target = parent/('.'+config['project']+'.generation-product-'+cycle)
@@ -197,8 +197,8 @@ def start(config, choice, values, record, raw, source, assets, *, gh, cosign, re
         expected_project=config['project']) == edge)
     write('after.json', selection.packed(after_owned))
     require(renewal.windows_healthy(renewal.statuses(command, cwd=new_path.parent), roles, normalized))
-    schema_after = selection.packed(probe.schema_snapshot(docker, after, config['project']))
-    provider_after = selection.packed(probe.provider_snapshot(docker, after, config['project'], config['native']['ca_file']))
+    schema_after = selection.packed(probe.schema_snapshot(docker, after_owned, config['project']))
+    provider_after = selection.packed(probe.provider_snapshot(docker, after_owned, config['project'], config['native']['ca_file']))
     require(schema_after == schema_before and provider_after == provider_before)
     write('schema-after.json', schema_after);write('provider-after.json', provider_after)
     native('after')
@@ -250,15 +250,17 @@ def reconcile_once(config_path, *, authority_file):
     return journal.finish(config_path, marker, phases, authority_file=authority_file)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(argv=None):
+    class PrivateParser(argparse.ArgumentParser):
+        def error(self, _message):raise ValueError('Invalid Windows product arguments')
+    parser = PrivateParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
     for name in ('assets', 'gh', 'cosign', 'registry-config'):
         parser.add_argument('--'+name, type=Path)
     parser.add_argument('--reconcile', action='store_true')
     parser.add_argument('--authority-file', help='existing scoped token path inside the private control volume')
-    args = parser.parse_args()
     try:
+        args = parser.parse_args(argv)
         forward = (args.assets, args.gh, args.cosign, args.registry_config)
         if args.reconcile:
             require(args.authority_file is not None and not any(forward))

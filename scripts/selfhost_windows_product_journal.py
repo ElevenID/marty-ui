@@ -304,9 +304,10 @@ def finish(config_path, marker, phases, *, authority_file):
                     expected_data=marker['data_after_sha256'])
                 profile = probe.LedgerProfile(**selection.decode(renewal.read_private_bytes(
                     Path(marker['attempt_dir'])/'schema-after.json'))['database_roles'])
+                owned = [item for item in observed['baseline'] if renewal._project(item) == cfg['project']]
                 for category, witness in (
-                    ('schema', probe.schema_snapshot(observed['docker'], observed['baseline'], cfg['project'], profile=profile)),
-                    ('provider', probe.provider_snapshot(observed['docker'], observed['baseline'], cfg['project'], cfg['native']['ca_file']))):
+                    ('schema', probe.schema_snapshot(observed['docker'], owned, cfg['project'], profile=profile)),
+                    ('provider', probe.provider_snapshot(observed['docker'], owned, cfg['project'], cfg['native']['ca_file']))):
                     require(selection.packed(witness) == renewal.read_private_bytes(
                         Path(marker['attempt_dir'])/(category+'-after.json')))
                 observed['context'].check(before_intent=True)

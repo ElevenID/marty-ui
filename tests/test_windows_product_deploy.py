@@ -35,6 +35,10 @@ def runtime(monkeypatch, fault=None, *, extended=False):
         admitted['composition_id'] = product.composition.ui.digest(product.composition.ui.canonical(admitted))
         product.composition.validate_record(admitted)
         new = product.product_model(old, admitted)
+        foreign = deepcopy(current[0])
+        foreign['Id'] = 'b'*64
+        foreign['Config']['Labels']['com.docker.compose.project'] = 'marty-production-foreign'
+        foreign['Mounts'][0].update(Name='foreign-data', Source='/foreign-data')
         roles = {product.renewal._service(item) for item in current}
         events = [];mutation_layers = []
         schema = selection.decode((data['attempt']/'schema-before.json').read_bytes())
@@ -47,7 +51,7 @@ def runtime(monkeypatch, fault=None, *, extended=False):
             def compose(self, project, env, source):
                 assert project == data['config']['project']
                 return ['docker', 'compose', '--file', str(source)]
-            def containers(self):return deepcopy(current)
+            def containers(self):return deepcopy([*current, foreign])
             def volumes(self):return {}
             def hashes(self, command):
                 model = selection.decode(Path(command[-1]).read_bytes())
@@ -67,7 +71,7 @@ def runtime(monkeypatch, fault=None, *, extended=False):
         def inspect(cfg, _choice, _values, _stack, *, expected_data):
             selection.require(expected_data == selection.digest(selection.packed(product.renewal.data_mounts(current))))
             model = selection.decode(Path(cfg['compose_file']).read_bytes())
-            return {'docker': docker, 'owned': docker.containers(), 'baseline': docker.containers(),
+            return {'docker': docker, 'owned': deepcopy(current), 'baseline': docker.containers(),
                 'services': roles, 'model': model, 'command': docker.compose(cfg['project'], '', cfg['compose_file']),
                 'context': Context()}
         monkeypatch.setattr(selection, '_inspect', inspect)
@@ -79,11 +83,13 @@ def runtime(monkeypatch, fault=None, *, extended=False):
             yield admitted, assets
         monkeypatch.setattr(product.composition, 'verified_package', verified)
         def foreign_check(self, *, before_intent):
+            assert self.foreign and foreign['Id'] in self.foreign
             rows = docker.containers();self._candidate(rows, before_intent=before_intent)
             return rows
         monkeypatch.setattr(product.renewal.ForeignContext, '_check', foreign_check)
         def witness(category):
             def snapshot(*_args, **_kwargs):
+                assert _args[1] and all(product.renewal._project(item) == data['config']['project'] for item in _args[1])
                 events.append(category)
                 if mutation_layers and fault == category+'-drift':return {'drift': True}
                 return schema if category == 'schema' else provider
@@ -226,3 +232,12 @@ def test_incomplete_execution_reconciliation_does_not_call_native_or_compose_aga
             deploy.reconcile_once(data['path'], authority_file='/control/recovery-session-'+'1'*32+'/token')
         assert data['events'] == events
         assert product.renewal.product_transition_guard(data['config']).exists()
+
+
+@pytest.mark.parametrize('arguments', [[], ['--config', 'PRIVATE_SENTINEL', '--unknown=PRIVATE_SENTINEL'],
+                                    ['--config', 'PRIVATE_SENTINEL', '--reconcile']])
+def test_cli_refusal_never_echoes_private_argument_values(arguments, capsys):
+    with pytest.raises(SystemExit) as refused:deploy.main(arguments)
+    captured = capsys.readouterr()
+    assert 'PRIVATE_SENTINEL' not in str(refused.value)+captured.out+captured.err
+    assert not captured.out and not captured.err
