@@ -17,7 +17,7 @@ import subprocess
 import time
 
 from activate_selfhost_renewed_secrets import (
-    checked_secret_mounts, compose_args, healthy, owned_service_closure,
+    COMPLETED_SERVICES, checked_secret_mounts, compose_args, healthy, owned_service_closure,
     require_rootless_migration, statuses,
 )
 from selfhost_windows_inputs import (
@@ -406,9 +406,21 @@ def recreate(docker, command, changing, services, model, log):
             tail = (tail + p.stdout + p.stderr)[-60000:]
             # A nonzero Compose invocation can leave a partially recreated set;
             # inspect authoritative state before deciding to retry or roll back.
-            if windows_healthy(statuses(command, cwd=Path.cwd()), services, model):
-                return
-            time.sleep(5)
+            while time.monotonic() < deadline:
+                items = statuses(command, cwd=Path.cwd())
+                if windows_healthy(items, services, model):
+                    return
+                present = {x.get('Service') for x in items}
+                if present != services or len(items) != len(services):
+                    break  # bounded up retry for incomplete creation only
+                for item in items:
+                    state = item.get('State', '').lower()
+                    completed = item['Service'] in COMPLETED_SERVICES | {'openbao-tls-init'}
+                    if state in {'dead', 'exited'} and (not completed or item.get('ExitCode') != 0):
+                        raise RuntimeError('Owned role exited during renewal')
+                # Existing starting/running roles need readiness polling, not
+                # another up invocation that reruns completed migrations/jobs.
+                time.sleep(2)
         raise RuntimeError('Windows renewal did not become ready')
     finally:
         write_empty_private_file(log, bounded_diagnostic(tail))
