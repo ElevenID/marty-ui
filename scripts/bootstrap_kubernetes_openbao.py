@@ -32,6 +32,7 @@ import zipfile
 
 sys.dont_write_bytecode = True
 import installer_release as release
+from installer_candidate_authorize import read_record
 from passport_remote_tls import SELFHOST_TLS_FILES, SELFHOST_CERT_FILES, accept_remote_tls
 from prepare_kubernetes_helm_values import prepare
 from provision_selfhost_disposable_tls import verified_key_metadata
@@ -161,12 +162,40 @@ def root_command(transport: Transport, token: str, command: list[str], *, timeou
     )
 
 
-def bundle_file(assets: Path, name: str) -> bytes:
-    with zipfile.ZipFile(assets / "prepared-selfhost-bundle.zip") as archive:
+def bundle_file(contents: bytes, name: str) -> bytes:
+    with zipfile.ZipFile(io.BytesIO(contents)) as archive:
         info = archive.getinfo("selfhost-prepared/" + name)
         require(not info.is_dir() and info.file_size < 1024 * 1024,
                 "signed bootstrap script is missing or oversized")
         return archive.read(info)
+
+
+def authenticated_bootstrap_inputs(assets: Path, identity: dict) -> tuple[bytes, bytes]:
+    """Consume exact bytes bound by the in-process prepare() result.
+
+    The caller must supply prepare()'s returned identity, never a values file.
+    Keep the small init script in memory so later cluster operations do not
+    reopen a potentially changed staged bundle.
+    """
+    inventory_bytes = read_record(assets / "installer-inventory.json")
+    require(hashlib.sha256(inventory_bytes).hexdigest() == identity["inventorySha256"],
+            "authenticated installer inventory changed")
+    inventory = release.decode(inventory_bytes)
+
+    def payload(name: str, expected_sha: str) -> bytes:
+        maximum = release.ARTIFACT_MAX_BYTES[name]
+        with (assets / name).open("rb") as stream:
+            contents = stream.read(maximum + 1)
+        require(len(contents) <= maximum and hashlib.sha256(contents).hexdigest() == expected_sha,
+                "authenticated installer artifact changed")
+        return contents
+
+    operator = payload("marty-deploy-linux-amd64", identity["operatorSha256"])
+    bundle_sha = next(entry["sha256"] for entry in inventory["artifacts"]
+                      if entry["name"] == "prepared-selfhost-bundle.zip")
+    init_script = bundle_file(payload("prepared-selfhost-bundle.zip", bundle_sha),
+                              "docker/openbao-init.sh")
+    return operator, init_script
 
 
 def take_tls_outputs(payload: bytes, output: Path) -> None:
@@ -195,10 +224,13 @@ def prepare_namespace(transport: Transport, bootstrap_id: str) -> None:
             "namespace workload inspection", "get",
             "deployments,statefulsets,jobs,pods,persistentvolumeclaims", "-o", "json"))
         require(not workloads["items"], "namespace must have no existing workloads or PVCs")
-        for name in ("marty-openbao-seal", "marty-secrets", "keycloak-kms"):
-            existing = transport.kubectl("namespace Secret inspection", "get", "secret",
-                                          name, "--ignore-not-found", "-o", "name")
-            require(not existing.strip(), "namespace already contains Marty credentials")
+        catalog = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())
+        destinations = {entry["name"] for entry in catalog["secrets"]} | {
+            "marty-openbao-seal", "notification-workload-tls", "notification-tls-kms", "marty-operator",
+        }
+        existing = transport.kubectl("namespace Secret inspection", "get", "secret",
+                                    *sorted(destinations), "--ignore-not-found", "-o", "name")
+        require(not existing.strip(), "namespace already contains Marty credentials")
     else:
         transport.create({"apiVersion": "v1", "kind": "Namespace",
             "metadata": {"name": transport.namespace,
@@ -333,13 +365,7 @@ def bootstrap(args: argparse.Namespace) -> None:
         build_run_attempt=args.build_run_attempt, chart_source_sha=args.chart_source_sha,
         gh=args.gh, cosign=args.cosign, output=state / "marty-images.json",
         openbao_output=state / "openbao-images.json")
-    inventory = release.verify_inventory_assets(args.assets, source_sha=args.runtime_source_sha,
-        release_tag=args.release_tag, build_run_id=args.build_run_id,
-        build_run_attempt=args.build_run_attempt)
-    operator_bytes = (args.assets / "marty-deploy-linux-amd64").read_bytes()
-    operator_sha = next(row["sha256"] for row in inventory["artifacts"]
-                        if row["name"] == "marty-deploy-linux-amd64")
-    require(hashlib.sha256(operator_bytes).hexdigest() == operator_sha, "verified operator changed")
+    operator_bytes, init_script_bytes = authenticated_bootstrap_inputs(args.assets, values["release"])
     operator = state / "marty-deploy"
     write_new(operator, operator_bytes, 0o700)
     # The signed runtime identity is intentionally separate from chart HEAD.
@@ -413,7 +439,7 @@ def bootstrap(args: argparse.Namespace) -> None:
     write_new(ca_path, ca)
     files: dict[str, Path] = {"OPENBAO_TLS_CA_CERT": ca_path}
     init_script = "/tmp/marty-openbao-init-" + nonce + ".sh"
-    transport.upload("openbao-0", init_script, bundle_file(args.assets, "docker/openbao-init.sh"))
+    transport.upload("openbao-0", init_script, init_script_bytes)
     root_command(transport, root_token, ["env", "DIDCOMM_KMS_PLUGIN_REQUIRED=true",
                                        "/bin/sh", init_script], timeout=600)
     for name, policies in TOKEN_POLICIES.items():

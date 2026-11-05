@@ -174,7 +174,7 @@ helm upgrade --install marty deploy/helm/marty --namespace marty-dev \
   -f deploy/helm/marty/values-k3s-dev.yaml \
   -f /root/marty-k3s/bootstrap/marty-images.json \
   -f /root/marty-k3s/installation.yaml \
-  --wait --wait-for-jobs --timeout 20m
+  --wait --wait-for-jobs --timeout 35m
 ```
 
 Regular Jobs avoid a pre/post-install-hook readiness deadlock with the database
