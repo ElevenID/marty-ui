@@ -284,6 +284,7 @@ def test_ip_ingress_omits_disallowed_hosts_and_preserves_https_port(tmp_path: Pa
     assert "hosts" not in ingress["tls"][0]
     config = resources(rendered, "ConfigMap")["marty-config"]["data"]
     assert config["UI_BASE_URL"] == "https://192.0.2.20:8443"
+    assert config["PUBLIC_DOMAIN"] == "192.0.2.20:8443"
     assert config["KC_HOSTNAME"] == "https://192.0.2.20:8443"
     assert config["MARTY_ISSUER_DID"] == "did:web:192.0.2.20%3A8443:orgs:marty"
 

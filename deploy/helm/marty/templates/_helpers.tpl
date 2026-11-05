@@ -34,7 +34,7 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
 {{- end -}}
 {{- end -}}
 {{- $_ := set $cfg "BAO_ADDR" .Values.openbao.address -}}
-{{- $_ := set $cfg "PUBLIC_DOMAIN" $host -}}
+{{- $_ := set $cfg "PUBLIC_DOMAIN" (trimSuffix "/" (trimPrefix "https://" $origin)) -}}
 {{- $_ := set $cfg "PUBLIC_API_URL" $origin -}}
 {{- $_ := set $cfg "UI_BASE_URL" $origin -}}
 {{- $_ := set $cfg "KC_HOSTNAME" $origin -}}
