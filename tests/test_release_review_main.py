@@ -21,14 +21,22 @@ RUN = 17
 
 
 def gate_fixture(review: bool = False) -> dict:
-    # Binding/transport fixtures only; unchanged Rust tests own actual official
-    # module, pixel and disposition qualification.
-    value = {"schema": "marty.official-release-gate/v1", "source_sha": SOURCE,
+    # Binding/transport fixtures only; Rust tests own actual protocol and
+    # browser outcome qualification.
+    value = {"schema": "marty.official-release-gate/v2", "source_sha": SOURCE,
              "harness_sha": "c" * 40, "manifest_sha256": "sha256:" + "d" * 64,
              "run_id": RUN, "qualification_context": "PRE_PUBLICATION_CANDIDATE",
              "lanes": [{"lane": lane, "summary_sha256": "sha256:" + "e" * 64}
-                       for lane in sorted(policy.LANES)]}
+                       for lane in sorted(policy.LANES)],
+             "automated_qualification": {
+                 "schema": "marty.automated-official-qualification/v1",
+                 "policy": "marty.official-verifier-outcome/v1", "evidence_run_attempt": 1,
+                 "request_sha256": "sha256:" + "1" * 64, "automated_cases": 13,
+                 "original_official_results_unchanged": True,
+             }}
     if review:
+        value["schema"] = "marty.official-release-gate/v1"
+        value.pop("automated_qualification")
         value["review_disposition"] = {
             "schema": "marty.accepted-official-review/v1", "protected_main_commit": MAIN,
             "record_sha256": "sha256:" + "f" * 64, "request_sha256": "sha256:" + "1" * 64,
@@ -49,17 +57,20 @@ class TestGateAuthority(unittest.TestCase):
         raw = json.dumps(gate, separators=(",", ":")).encode()
         return policy.gate_authority(raw, transaction_for(raw), run_id=RUN, **kwargs)
 
-    def test_all_pass_keeps_candidate_main(self) -> None:
+    def test_automatic_qualification_keeps_candidate_main(self) -> None:
         value = self.authority(gate_fixture())
         assert value["protected_main_commit"] == SOURCE
         assert value["review_required"] is False and value["record_sha256"] is None
         assert value["origin_attempt"] == 1
 
-    def test_review_keeps_candidate_and_authorization_identities_separate(self) -> None:
-        value = self.authority(gate_fixture(True))
-        assert value["source_sha"] == SOURCE and value["protected_main_commit"] == MAIN
-        assert value["review_required"] is True
-        assert value["record_sha256"] == "sha256:" + "f" * 64
+    def test_historical_v1_receipts_cannot_authorize_automated_publication(self) -> None:
+        for reviewed in (False, True):
+            with self.subTest(reviewed=reviewed):
+                value = gate_fixture(reviewed)
+                value["schema"] = "marty.official-release-gate/v1"
+                value.pop("automated_qualification", None)
+                with self.assertRaisesRegex(policy.ReviewMainError, "automated v2"):
+                    self.authority(value)
 
     def test_changed_gate_bytes_cannot_use_the_old_transaction_binding(self) -> None:
         raw = json.dumps(gate_fixture()).encode()
@@ -98,16 +109,20 @@ class TestGateAuthority(unittest.TestCase):
             with self.assertRaisesRegex(policy.ReviewMainError, "malformed"):
                 policy.gate_authority(raw, transaction_for(raw), run_id=RUN)
 
-    def test_unaccepted_or_foreign_review_metadata_fails(self) -> None:
-        changes = [("protected_main_commit", SOURCE), ("evidence_run_attempt", 2),
+    def test_incomplete_foreign_or_mislabeled_automated_metadata_fails(self) -> None:
+        changes = [("policy", "unknown-policy"), ("evidence_run_attempt", 2),
                    ("evidence_run_attempt", True), ("original_official_results_unchanged", False),
-                   ("original_official_results_unchanged", 1), ("reviewed_cases", 0),
-                   ("record_sha256", None), ("reviewer", {"kind": [], "github_login": "reviewer"})]
+                   ("original_official_results_unchanged", 1), ("automated_cases", -1),
+                   ("automated_cases", 14), ("automated_cases", True), ("request_sha256", None)]
         for key, value in changes:
             with self.subTest(field=key, value=value):
-                gate = gate_fixture(True); gate["review_disposition"][key] = value
+                gate = gate_fixture(); gate["automated_qualification"][key] = value
                 with self.assertRaises(policy.ReviewMainError):
                     self.authority(gate)
+        value = gate_fixture()
+        value["review_disposition"] = gate_fixture(True)["review_disposition"]
+        with self.assertRaises(policy.ReviewMainError):
+            self.authority(value)
 
 
 class TestReviewHistory(unittest.TestCase):

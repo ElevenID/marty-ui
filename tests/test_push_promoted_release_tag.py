@@ -506,7 +506,7 @@ class ProductionReservationTests(unittest.TestCase):
         self.fixture = fixtures.CheckpointTests()
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
-        self.fixture.make_fixture(reviewed=True)
+        self.fixture.make_fixture()
         self.request = self.fixture.prepare(now=datetime.now(timezone.utc))
         self.source_root = self.fixture.base / "source"
         (self.source_root / "release").mkdir(parents=True)
@@ -531,7 +531,7 @@ class ProductionReservationTests(unittest.TestCase):
                 "digest": handoff.sha256(stream.getvalue()), "size_in_bytes": len(stream.getvalue()),
                 "workflow_run": {"id": run, "head_sha": SOURCE, "head_branch": "main", "run_attempt": 1}}
         self.refs, self.objects, self.writes, self.gates = {}, {}, [], []
-        self.main_sha = MAIN
+        self.main_sha = SOURCE
         self.failure = None
         self.cd_status, self.cd_attempt, self.claim_conclusion = "in_progress", 1, "success"
         self.inspection = ReservationContractTests().capability_fixture()[2]
@@ -627,8 +627,8 @@ class ProductionReservationTests(unittest.TestCase):
             held.enter_context(mock.patch.object(operator, "require_review_only_history", side_effect=gate("review")))
             held.enter_context(mock.patch.object(operator, "verify_crypto", side_effect=gate("crypto")))
             held.enter_context(mock.patch.object(operator, "promoted_digests", side_effect=gate("digests")))
-            held.enter_context(mock.patch.object(operator, "inspect_repository", side_effect=lambda _: (operator_run, MAIN, self.inspection)))
-            return operator.create_qualified_tag(github, self.native, operator_run, MAIN, self.fixtures.RUN,
+            held.enter_context(mock.patch.object(operator, "inspect_repository", side_effect=lambda _: (operator_run, SOURCE, self.inspection)))
+            return operator.create_qualified_tag(github, self.native, operator_run, SOURCE, self.fixtures.RUN,
                 self.fixtures.CLAIM, self.fixture.base / "gh", self.fixture.base / "cosign", inspection)
 
     def ref_writes(self):
@@ -718,7 +718,7 @@ class ProductionReservationTests(unittest.TestCase):
             for changed in ("main-drift", "rules-drift", "expired", "cd-stopped", "ref-drift"):
                 with self.subTest(stage=stage, changed=changed):
                     self.refs.clear(); self.objects.clear(); self.writes.clear()
-                    self.main_sha, self.cd_status = MAIN, "in_progress"
+                    self.main_sha, self.cd_status = SOURCE, "in_progress"
                     self.inspection = ReservationContractTests().capability_fixture()[2]
                     self.failure = stage + "-" + changed
                     with self.assertRaises(handoff.HandoffError):

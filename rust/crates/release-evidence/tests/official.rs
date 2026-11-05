@@ -1,4 +1,5 @@
 use marty_release_evidence::official::{validate_official_suite, LANES};
+use marty_release_evidence::official_automation::validate_automated_official_suite;
 use marty_release_evidence::official_review::{
     prepare_official_review, validate_official_review, validate_official_suite_with_review,
     OfficialReviewPlan,
@@ -459,6 +460,308 @@ fn cli_preserves_the_exact_approval_subject_and_cannot_default_to_approval() {
         let file = summaries.join(format!("official-{lane}-17-1/summary.json"));
         assert_eq!(
             fs::read(file).unwrap(),
+            serde_json::to_vec(original).unwrap()
+        );
+    }
+}
+
+fn rename_review_module(value: &mut Value, name: &str) {
+    let modules = &mut value["official_evidence"][0]["evidence"]["module_results"];
+    modules["modules"][0]["test_name"] = json!(name);
+    modules["pending_review"][0] = json!(name);
+    modules["plan_coverage"]["expected_modules"][0] = json!(name);
+    modules["plan_coverage"]["module_bindings"][0]["test_name"] = json!(name);
+    value["review_requests"][0]["modules"][0]["test_name"] = json!(name);
+}
+
+fn automated_values() -> [Value; 7] {
+    let mut values = review_values();
+    for value in &mut values[1..5] {
+        rename_review_module(value, "oid4vp-1final-verifier-happy-flow");
+        value["review_requests"][0]["modules"][0]["automated_assessment"] = json!({
+            "policy":"marty.official-verifier-outcome/v1",
+            "upstream_condition":"ExpectVerifierSuccessfulVerificationPage",
+            "flow_instance_sha256":"sha256:".to_owned()+&"6".repeat(64),
+            "api_outcome":{"status":"completed","result":"passed","decision":"allow"},
+            "browser_result_match":true,"ui_instance_match":true,"ui_decision":"allow",
+            "ui_verified_visible":true,"ui_error_absent":true,
+        });
+    }
+    values
+}
+
+fn automated_receipt(values: &[Value]) -> Result<Value, &'static str> {
+    validate_automated_official_suite(
+        MANIFEST,
+        &review_bytes(values),
+        &"a".repeat(40),
+        &"b".repeat(40),
+        17,
+        1,
+    )
+    .map(|receipt| serde_json::to_value(receipt).unwrap())
+}
+
+#[test]
+fn automated_qualification_preserves_raw_results_and_has_no_human_disposition() {
+    for values in [LANES.map(summary), automated_values()] {
+        let before = review_bytes(&values);
+        let plan = review_plan(&values).unwrap();
+        let receipt = automated_receipt(&values).unwrap();
+        assert_eq!(receipt["schema"], "marty.official-release-gate/v2");
+        assert_eq!(receipt["source_sha"], "a".repeat(40));
+        assert!(receipt.get("review_disposition").is_none());
+        let automated = &receipt["automated_qualification"];
+        assert_eq!(
+            automated["schema"],
+            "marty.automated-official-qualification/v1"
+        );
+        assert_eq!(automated["policy"], "marty.official-verifier-outcome/v1");
+        assert_eq!(automated["evidence_run_attempt"], 1);
+        assert_eq!(automated["automated_cases"], plan.pending.len());
+        assert_eq!(automated["original_official_results_unchanged"], true);
+        assert_eq!(
+            automated["request_sha256"],
+            format!("sha256:{:x}", Sha256::digest(plan.bytes().unwrap()))
+        );
+        assert_eq!(review_bytes(&values), before);
+        for pending in plan.pending {
+            assert_eq!(pending.module.official_result, "REVIEW");
+        }
+    }
+}
+
+#[test]
+fn automatic_outcome_requires_every_bound_api_and_browser_assertion() {
+    assert!(automated_receipt(&review_values()).is_err());
+    for (pointer, replacement) in [
+        ("", Value::Null),
+        ("/policy", json!("unknown-policy")),
+        (
+            "/upstream_condition",
+            json!("ExpectVerifierRejectedPresentationPage"),
+        ),
+        ("/upstream_condition", json!("UnrecognizedManualObligation")),
+        ("/flow_instance_sha256", json!("not-a-digest")),
+        ("/api_outcome/status", json!("pending")),
+        ("/api_outcome/result", json!("failed")),
+        ("/api_outcome/decision", json!("deny")),
+        ("/browser_result_match", json!(false)),
+        ("/ui_instance_match", json!(false)),
+        ("/ui_decision", json!("deny")),
+        ("/ui_verified_visible", json!(false)),
+        ("/ui_error_absent", json!(false)),
+        ("/ui_error_absent", json!("true")),
+    ] {
+        let mut values = automated_values();
+        let assessment = &mut values[1]["review_requests"][0]["modules"][0]["automated_assessment"];
+        *assessment.pointer_mut(pointer).unwrap() = replacement;
+        assert!(automated_receipt(&values).is_err(), "must reject {pointer}");
+    }
+    for field in [
+        "policy",
+        "upstream_condition",
+        "flow_instance_sha256",
+        "api_outcome",
+        "browser_result_match",
+        "ui_instance_match",
+        "ui_decision",
+        "ui_verified_visible",
+        "ui_error_absent",
+    ] {
+        let mut values = automated_values();
+        values[1]["review_requests"][0]["modules"][0]["automated_assessment"]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        assert!(
+            automated_receipt(&values).is_err(),
+            "must reject absent {field}"
+        );
+    }
+    let mut values = automated_values();
+    values[1]["review_requests"][0]["modules"][0]["automated_assessment"]["human_approved"] =
+        json!(true);
+    assert!(automated_receipt(&values).is_err());
+    let mut values = automated_values();
+    values[1]["review_requests"][0]["modules"][0]["automated_assessment"]["api_outcome"]["extra"] =
+        json!(true);
+    assert!(automated_receipt(&values).is_err());
+}
+
+#[test]
+fn only_pinned_positive_obligations_in_applicable_lanes_are_automated() {
+    let names = [
+        "oid4vp-1final-verifier-happy-flow",
+        "oid4vp-1final-verifier-minimal-cnf-jwk",
+        "oid4vp-1final-verifier-request-uri-method-post",
+        "oid4vp-1final-verifier-request-uri-fetched-twice",
+        "oid4vp-1final-verifier-invalid-signature",
+        "oid4vp-1final-verifier-happy-flow[unverified=variant]",
+    ];
+    for index in 1..5 {
+        for (name_index, name) in names.iter().enumerate() {
+            let mut values = automated_values();
+            rename_review_module(&mut values[index], name);
+            let expected = name_index < 4
+                && !(LANES[index] == "oid4vp-mdoc" && name_index == 1)
+                && !(LANES[index] == "oid4vp-url-query" && matches!(name_index, 2 | 3));
+            assert_eq!(
+                automated_receipt(&values).is_ok(),
+                expected,
+                "wrong applicability for {} in {}",
+                name,
+                LANES[index]
+            );
+        }
+    }
+    let mut values = automated_values();
+    values[0] = values[1].clone();
+    values[0]["lane"] = json!("oid4vci-issuer");
+    assert!(automated_receipt(&values).is_err());
+}
+
+#[test]
+fn automated_outcomes_cannot_excuse_protocol_failure_or_relabel_review() {
+    for (pointer, replacement) in [
+        ("/result/passed", json!(true)),
+        ("/result/exit_code", json!(0)),
+        (
+            "/official_evidence/0/evidence/result/process_exit_code",
+            json!(1),
+        ),
+        (
+            "/official_evidence/0/evidence/module_results/modules/2/result",
+            json!("FAILED"),
+        ),
+        (
+            "/official_evidence/0/evidence/module_results/plan_coverage/complete",
+            json!(false),
+        ),
+        (
+            "/review_requests/0/modules/0/official_result",
+            json!("PASSED"),
+        ),
+        ("/review_requests/0/modules/0/test_id", json!("foreign")),
+        (
+            "/review_requests/0/modules/0/screenshot_sha256",
+            json!("missing"),
+        ),
+        ("/browser_evidence/status", json!("failed")),
+    ] {
+        let mut values = automated_values();
+        *values[1].pointer_mut(pointer).unwrap() = replacement;
+        assert!(automated_receipt(&values).is_err(), "must reject {pointer}");
+    }
+    for attempt in [0, 2] {
+        assert!(validate_automated_official_suite(
+            MANIFEST,
+            &review_bytes(&automated_values()),
+            &"a".repeat(40),
+            &"b".repeat(40),
+            17,
+            attempt,
+        )
+        .is_err());
+    }
+}
+
+#[test]
+fn one_verified_flow_cannot_cover_two_different_pending_cases() {
+    let mut values = automated_values();
+    let name = "oid4vp-1final-verifier-minimal-cnf-jwk";
+    let modules = &mut values[1]["official_evidence"][0]["evidence"]["module_results"];
+    modules["modules"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"test_name":name,"status":"FINISHED","result":"REVIEW"}));
+    modules["pending_review"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!(name));
+    modules["counts"]["REVIEW"] = json!(2);
+    modules["plan_coverage"]["exported_module_count"] = json!(4);
+    modules["plan_coverage"]["expected_modules"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!(name));
+    modules["plan_coverage"]["module_bindings"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"test_name":name,"test_id":"positive2"}));
+    let mut extra = values[1]["review_requests"][0]["modules"][0].clone();
+    extra["test_name"] = json!(name);
+    extra["test_id"] = json!("positive2");
+    values[1]["review_requests"][0]["modules"]
+        .as_array_mut()
+        .unwrap()
+        .push(extra);
+    assert!(review_plan(&values).is_ok());
+    assert!(automated_receipt(&values).is_err());
+    values[1]["review_requests"][0]["modules"][1]["automated_assessment"]["flow_instance_sha256"] =
+        json!("sha256:".to_owned() + &"7".repeat(64));
+    assert!(automated_receipt(&values).is_ok());
+}
+
+#[test]
+fn automated_cli_is_explicit_and_never_falls_back_to_manual_approval() {
+    use std::{fs, process::Command};
+    let root = tempfile::tempdir().unwrap();
+    let manifest = root.path().join("manifest.json");
+    fs::write(&manifest, MANIFEST).unwrap();
+    let values = automated_values();
+    let summaries = root.path().join("summaries");
+    for (lane, value) in LANES.iter().zip(&values) {
+        let directory = summaries.join(format!("official-{lane}-17-1"));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("summary.json"),
+            serde_json::to_vec(value).unwrap(),
+        )
+        .unwrap();
+    }
+    let arguments = [
+        manifest.to_str().unwrap(),
+        &"a".repeat(40),
+        &"b".repeat(40),
+        "17",
+        "1",
+        summaries.to_str().unwrap(),
+    ];
+    let binary = env!("CARGO_BIN_EXE_validate-official-suite");
+    let output = Command::new(binary)
+        .arg("--automated")
+        .args(arguments)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let receipt: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(receipt, automated_receipt(&values).unwrap());
+    assert!(!Command::new(binary)
+        .args(arguments)
+        .output()
+        .unwrap()
+        .status
+        .success());
+    for flags in [
+        vec!["--automated", "--with-main-review", "ignored", "ignored"],
+        vec!["--prepare-review", "--automated"],
+    ] {
+        let rejected = Command::new(binary)
+            .args(flags)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success());
+        assert!(rejected.stdout.is_empty());
+    }
+    for (lane, original) in LANES.iter().zip(&values) {
+        assert_eq!(
+            fs::read(summaries.join(format!("official-{lane}-17-1/summary.json"))).unwrap(),
             serde_json::to_vec(original).unwrap()
         );
     }
