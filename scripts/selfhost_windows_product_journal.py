@@ -268,7 +268,8 @@ def finish(config_path, marker, phases, *, authority_file):
                 _intents, records = selection._parse(raw, expected)
                 current_model = history(raw, expected, records)[1]
                 require(validate_marker(raw, expected, current_model, active) == marker)
-                initial = seed(raw, expected, current_model, marker, phases, receipts)
+                require(protected.enter_context(renewal.hold_private_input(Path(config_path))) == _body)
+                initial = seed(raw, expected, current_model, marker, phases, protected)
                 body = decision(marker, initial, phases)
                 guard = renewal.product_transition_guard(cfg)
                 originals = dict(raw)
@@ -291,11 +292,24 @@ def finish(config_path, marker, phases, *, authority_file):
                 require({p.name for p in target.iterdir()} == set(initial))
                 new_config = selection.decode(receipts.enter_context(renewal.hold_private_input(
                     Path(marker['attempt_dir'])/'config.private.json')))
-                values, snapshots = selection._inputs(new_config, stack)
+                values, snapshots = selection._inputs(new_config, protected)
                 require(snapshots == selection.decode(initial['000001.intent.json'])['inputs'])
                 choice = records[len(records)]['choice']
                 require(selection._prove(new_config, choice, values, stack,
                     expected_data=marker['data_after_sha256'], authority_file=authority_file) == marker['data_after_sha256'])
+                # Delayed publication must not reuse an earlier compatibility
+                # observation after a database/provider change.
+                import selfhost_windows_product_probe as probe
+                observed = selection._inspect(new_config, choice, values, stack,
+                    expected_data=marker['data_after_sha256'])
+                profile = probe.LedgerProfile(**selection.decode(renewal.read_private_bytes(
+                    Path(marker['attempt_dir'])/'schema-after.json'))['database_roles'])
+                for category, witness in (
+                    ('schema', probe.schema_snapshot(observed['docker'], observed['baseline'], cfg['project'], profile=profile)),
+                    ('provider', probe.provider_snapshot(observed['docker'], observed['baseline'], cfg['project'], cfg['native']['ca_file']))):
+                    require(selection.packed(witness) == renewal.read_private_bytes(
+                        Path(marker['attempt_dir'])/(category+'-after.json')))
+                observed['context'].check(before_intent=True)
                 if DECISION in raw:require(raw[DECISION] == selection.packed(body))
                 else:selection._append(journal, raw, DECISION, body, stack)
                 require(protected.enter_context(renewal.hold_private_input(journal/DECISION)) == selection.packed(body))
@@ -311,6 +325,14 @@ def finish(config_path, marker, phases, *, authority_file):
     require(all(renewal.read_private_bytes(target/name) == saved for name, saved in initial.items()))
     require(renewal.read_private_bytes(journal/DECISION) == selection.packed(body))
     require(renewal.read_private_bytes(guard) == selection.packed(marker))
+    # File handles release in reverse order. Revalidate the entire retained
+    # transition after the outer exits, including directories where a new
+    # unknown child could have appeared while existing files stayed held.
+    with ExitStack() as final:
+        require(seed(raw, expected, current_model, marker, phases, final) == initial)
+        require(final.enter_context(renewal.hold_private_input(Path(config_path))) == _body)
+        _values, final_snapshots = selection._inputs(new_config, final)
+        require(final_snapshots == snapshots)
     check_ancestry(earlier)
     guard.unlink()
     return {'schema': SCHEMA, 'project': marker['project'], 'result': 'product-selected',

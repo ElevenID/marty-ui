@@ -121,6 +121,15 @@ def installed(monkeypatch, *, publish=True):
             else:
                 selection._new_private(product.renewal.product_transition_guard(config), selection.packed(marker))
         phase['data'] = edge['after_sha256']
+        if not publish:
+            class Context:
+                def check(self, *, before_intent):assert before_intent
+            def inspect(_cfg, _choice, _values, _stack, *, expected_data):
+                selection.require(expected_data == phase['data'])
+                return {'docker': object(), 'baseline': after, 'context': Context()}
+            monkeypatch.setattr(selection, '_inspect', inspect)
+            monkeypatch.setattr(probe, 'schema_snapshot', lambda *_args, **_kwargs: schema)
+            monkeypatch.setattr(probe, 'provider_snapshot', lambda *_args, **_kwargs: provider)
         yield {'root': root, 'path': path, 'config': config, 'new_config': new_config, 'source': source,
                'target': target, 'attempt': attempt, 'marker': marker, 'previous': previous, 'initial': initial,
                'phase': phase, 'tx': tx, 'outcome': outcome, 'phase_hashes': phase_hashes}
@@ -260,7 +269,7 @@ def test_forward_publication_completes_only_derived_metadata_and_requires_fresh_
         assert all((data['source']/name).read_bytes() == body for name, body in data['previous'].items())
 
 
-@pytest.mark.parametrize('fault', ['unknown-target', 'corrupt-target', 'missing-native', 'live-drift', 'authority'])
+@pytest.mark.parametrize('fault', ['unknown-target', 'corrupt-target', 'missing-native', 'live-drift', 'schema-drift', 'provider-drift', 'authority'])
 def test_forward_publication_refuses_ambiguous_execution_and_preserves_guard(monkeypatch, fault):
     with installed(monkeypatch, publish=False) as data:
         if fault in {'unknown-target', 'corrupt-target'}:
@@ -268,6 +277,8 @@ def test_forward_publication_refuses_ambiguous_execution_and_preserves_guard(mon
             (data['target']/('unknown' if fault == 'unknown-target' else 'owner.json')).write_bytes(b'PUBLIC_UNKNOWN')
         elif fault == 'missing-native':(data['attempt']/'native-after.completed.json').write_bytes(b'')
         elif fault == 'live-drift':data['phase']['data'] = 'e'*64
+        elif fault in {'schema-drift', 'provider-drift'}:
+            monkeypatch.setattr(probe, fault.split('-')[0]+'_snapshot', lambda *_args, **_kwargs: {'drift': True})
         authority = '/control/../other' if fault == 'authority' else '/control/product/token'
         with pytest.raises(ValueError):
             journal.finish(data['path'], data['marker'], data['phase_hashes'], authority_file=authority)
@@ -297,3 +308,46 @@ def test_product_publication_keeps_predecessor_sealed_across_project_lock_exit(m
             journal.finish(data['path'], data['marker'], data['phase_hashes'], authority_file='/control/product/token')
             assert not product.renewal.product_transition_guard(data['config']).exists()
         assert injected == [True]
+
+
+@pytest.mark.parametrize('tamper', ['phase', 'model', 'config', 'credentials', 'attempt-child', 'input-child', 'activation-child'])
+def test_final_transition_evidence_is_checked_after_outer_publication_exits(monkeypatch, tamper):
+    with installed(monkeypatch, publish=False) as data:
+        original = product.renewal.hold_storage_namespace;injected = []
+        @contextmanager
+        def namespace(path, *args, **kwargs):
+            with original(path, *args, **kwargs) as value:yield value
+            # The attempt namespace preceded all transition file handles;
+            # these files have now been released, while guard still exists.
+            if path == data['attempt'] and (data['source']/journal.DECISION).exists() and not injected:
+                injected.append(True)
+                paths = {'phase': data['attempt']/'native-after.completed.json',
+                         'model': Path(data['new_config']['compose_file']),
+                         'config': data['attempt']/'config.private.json',
+                         'credentials': Path(data['new_config']['renewed_env']),
+                         'attempt-child': data['attempt']/'unknown',
+                         'input-child': data['attempt']/'inputs/unknown',
+                         'activation-child': data['attempt']/'activation/unknown'}
+                paths[tamper].write_bytes(b'PUBLIC_LATE_TAMPER')
+        monkeypatch.setattr(product.renewal, 'hold_storage_namespace', namespace)
+        with pytest.raises((ValueError, OSError)):
+            journal.finish(data['path'], data['marker'], data['phase_hashes'], authority_file='/control/product/token')
+        assert injected == [True]
+        assert product.renewal.product_transition_guard(data['config']).exists()
+
+
+def test_final_operator_configuration_is_checked_after_its_last_handle_exit(monkeypatch):
+    with installed(monkeypatch, publish=False) as data:
+        original = product.renewal.hold_private_input;injected = []
+        @contextmanager
+        def held(path, *args, **kwargs):
+            with original(path, *args, **kwargs) as value:yield value
+            if path == data['path'] and (data['source']/journal.DECISION).exists() and not injected:
+                try:path.write_bytes(b'PUBLIC_LATE_OPERATOR_CHANGE')
+                except OSError:pass
+                else:injected.append(True)
+        monkeypatch.setattr(product.renewal, 'hold_private_input', held)
+        with pytest.raises(ValueError):
+            journal.finish(data['path'], data['marker'], data['phase_hashes'], authority_file='/control/product/token')
+        assert injected == [True]
+        assert product.renewal.product_transition_guard(data['config']).exists()
