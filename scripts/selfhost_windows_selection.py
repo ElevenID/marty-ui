@@ -664,6 +664,7 @@ def _finish_stage(config,pending,*,resume=False):
                 require(set(p.name for p in (root/'activation').iterdir())=={'config.private.json',*(Path(p).name for p in paths)})
         held.callback(memberships)
         held.enter_context(renewal.hold_private_input(Path(config['current_secrets']).parent/f'.{config["project"]}.renewal.lock',exclusive=True))
+        require(not renewal.namespace_entry_exists(renewal.product_transition_guard(config)))
         held.enter_context(renewal.hold_storage_namespace(root))
         require(digest(held.enter_context(renewal.hold_private_input(renewal.renewal_staging_guard(config))))==result['guard_sha256'])
         for name,sha in result['phase_sha256'].items():
