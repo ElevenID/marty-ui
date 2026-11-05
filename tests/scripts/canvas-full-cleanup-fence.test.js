@@ -60,8 +60,56 @@ test('foreign binding or failed fence preserves existing receipt and prevents re
 test('unknown application after activation remains fail closed before any binding mutation', async () => {
   const { calls, state, operations } = fixture();
   state.applicationId = undefined;
+  state.owned.martyLearnerLaunchIntent = true;
   const report = { pendingOperations: [] };
   await assert.rejects(retireCaptureIssuance(state, report, undefined, operations));
   assert.deepEqual(calls, []);
   assert.equal(report.issuanceRetirement, undefined);
+});
+
+test('activated prelaunch binding uses the maintained fenced application absence proof', async () => {
+  const { state, operations } = fixture();
+  state.applicationId = undefined;
+  state.owned.martyBindingActivationAttempted = true;
+  const steps = [];
+  let disabled = false;
+  state.marty.get = async route => {
+    if (route.endsWith('/canvas-sync-jobs?organization_id=' + ORG + '&limit=500')) {
+      steps.push('jobs'); return [{ id: 'job-owned', organization_id: ORG,
+        binding_id: BINDING, platform_id: PLATFORM, target_type: 'background_roster',
+        application_id: null, status: 'succeeded' }];
+    }
+    if (route.includes('/canvas-award-candidates?')) { steps.push('candidates');
+      return [{ organization_id: ORG, binding_id: BINDING,
+        application_id: null, status: 'pending_claim' }];
+    }
+    if (route.endsWith(`/program-bindings/${BINDING}/applications`)) {
+      steps.push('applications');
+      return { organization_id: ORG, binding_id: BINDING, platform_id: PLATFORM,
+        binding_disabled: disabled, complete: true, applications: [] };
+    }
+    assert.equal(route, `/v1/integrations/canvas/program-bindings/${BINDING}`);
+    steps.push('binding-get');
+    return { id: BINDING, organization_id: ORG, platform_id: PLATFORM,
+      display_name: 'Portable Canvas badge run-owned', enabled: !disabled,
+      activated_at: disabled ? null : '2026-11-05T00:00:00Z' };
+  };
+  state.marty.post = async route => {
+    assert.equal(route, `/v1/integrations/canvas/program-bindings/${BINDING}/deactivate`);
+    steps.push('binding-deactivate'); disabled = true; return {};
+  };
+  const receipt = { complete: true, noApplication: true };
+  operations.retireCanvasApplication = async input => {
+    steps.push('application-retire');
+    assert.equal(input.applicationId, undefined);
+    assert.equal(disabled, true);
+    input.reconcile();
+    return receipt;
+  };
+  const report = { pendingOperations: [] };
+  assert.equal(await retireCaptureIssuance(state, report, undefined, operations), receipt);
+  assert.equal(state.prelaunchAbsenceConfirmed, true);
+  assert.equal(report.issuanceRetirement, receipt);
+  assert.deepEqual(steps, ['binding-get', 'binding-deactivate', 'binding-get',
+    'jobs', 'candidates', 'applications', 'binding-get', 'binding-get', 'application-retire']);
 });

@@ -54,6 +54,7 @@ function requireCurrentEngineeringRuntime(summary, runtime) {
 }
 
 async function retireCaptureIssuance(state, report, applicationId, operations = stock) {
+  await operations.reconcileCanvasPrelaunchApplicationAbsence(state);
   operations.requireCanvasSetupMutationReconciliation(state);
   // The live Issuance transaction guard fences old LTI sessions only after the
   // exact owned binding has been disabled and read back.
