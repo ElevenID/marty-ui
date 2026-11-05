@@ -53,6 +53,21 @@ function requireCurrentEngineeringRuntime(summary, runtime) {
     'Stock Canvas engineering observation differs from the functional run');
 }
 
+async function retireCaptureIssuance(state, report, applicationId, operations = stock) {
+  operations.requireCanvasSetupMutationReconciliation(state);
+  // The live Issuance transaction guard fences old LTI sessions only after the
+  // exact owned binding has been disabled and read back.
+  await operations.fenceOwnedCanvasBinding(state);
+  const receipt = await operations.retireCanvasApplication({
+    marty: state.marty, applicationId, organizationId: state.organizationId,
+    credentialTemplateId: state.templates?.credential?.id, transactionId: report.transactionId,
+    bindingId: state.binding?.id,
+    reconcile: () => requireCaptureMutationReconciliation(report),
+  });
+  report.issuanceRetirement = receipt;
+  return receipt;
+}
+
 async function main() {
   const scenario = process.argv[2];
   assert.ok(['canvas-learning-achievement', 'external-evidence-to-credential'].includes(scenario));
@@ -253,15 +268,8 @@ async function main() {
     }
     if (session) await cleanup('wallet-session', () => session.close());
     const state = setup || setupState;
-    const retired = await cleanup('owned-issuance-retirement', async () => {
-      stock.requireCanvasSetupMutationReconciliation(state);
-      report.issuanceRetirement = await stock.retireCanvasApplication({
-        marty: state.marty, applicationId, organizationId: state.organizationId,
-        credentialTemplateId: state.templates?.credential?.id, transactionId: report.transactionId,
-        bindingId: state.binding?.id,
-        reconcile: () => requireCaptureMutationReconciliation(report),
-      });
-    });
+    const retired = await cleanup('owned-issuance-retirement',
+      () => retireCaptureIssuance(state, report, applicationId));
     report.resourceRetirementConfirmed = retired;
     let disconnected = retired;
     if (retired && state.marty && state.platformId && (state.oauthConnected||state.oauthMayExist)) disconnected = await cleanup('oauth-disconnect', async () => {
@@ -302,4 +310,5 @@ if (require.main === module) main().catch(error => {
   process.stderr.write(`Canvas capture initialization failed (${code}).\n`);
   process.exitCode = 1;
 });
-module.exports = { main, localOverlayBinding, localFunctionalRuntimeBinding, requireCurrentEngineeringRuntime };
+module.exports = { main, localOverlayBinding, localFunctionalRuntimeBinding, requireCurrentEngineeringRuntime,
+  retireCaptureIssuance };
