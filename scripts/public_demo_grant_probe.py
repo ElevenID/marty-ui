@@ -376,6 +376,9 @@ def qualify(call, root, environment, *, runner=subprocess.run):
         "publicGatewayBrowserJourneyQualified": browser_receipt is not None,
         "browser": browser_receipt,
         "publicGatewayJourneyQualified": True,
+        "coreWalletProtocolQualified": True,
+        "coreWalletCasesPassed": 2,
+        "externalWalletQualified": False,
         "walletQualified": False,
         "deployedConfigurationChanged": False,
     }

@@ -416,6 +416,10 @@ pub async fn run(
     if browser_enabled {
         cases.push((3, "age_over_18", Some(true)));
     }
+    cases.extend([
+        (4, "age_over_18", Some(true)),
+        (5, "age_over_21", Some(false)),
+    ]);
     for (index, claim, verified) in cases {
         let origin = if index == 3 {
             browser_worker.as_ref().unwrap().origin.as_str()
@@ -520,6 +524,22 @@ pub async fn run(
             },
         )
         .await;
+        if index >= 4 {
+            let id = WalletPeer {
+                issuer: &issuer,
+                verifier: &verifier,
+                holder,
+                signing: &signing,
+                credential: &compact,
+                claim,
+            }
+            .run(&gateway.router, origin, verified.unwrap())
+            .await;
+            let consumed: i64 = sqlx::query_scalar("SELECT count(*) FROM flow_service.flow_nonce_consumptions WHERE flow_instance_id=$1")
+                .bind(id).fetch_one(&pool).await.unwrap();
+            assert_eq!(consumed, 1, "wallet allow/deny finalizes exactly once");
+            continue;
+        }
         if index == 3 {
             let worker = browser_worker.take().unwrap();
             let result = tokio::task::spawn_blocking(move || worker.run())
@@ -753,6 +773,226 @@ pub async fn run(
         assert!(gateway.observed.load(std::sync::atomic::Ordering::SeqCst) >= 5);
     }
     pool.close().await;
+}
+
+/// Independent Core wallet API caller: no DemoHolder or example endpoint, no
+/// instance-context reads and no locally generated/private signing keys.
+struct WalletPeer<'a> {
+    issuer: &'a SigningIdentity,
+    verifier: &'a SigningIdentity,
+    holder: &'a SigningIdentity,
+    signing: &'a HttpSigningProvider,
+    credential: &'a str,
+    claim: &'a str,
+}
+impl WalletPeer<'_> {
+    async fn run(&self, app: &Router, origin: &str, expected: bool) -> String {
+        let base = "/v1/flows/public/verification";
+        let key = URL_SAFE_NO_PAD.encode(if expected { [74; 32] } else { [75; 32] });
+        let (status, catalog) =
+            public_call(app, origin, "GET", &format!("{base}/catalog"), &key, None).await;
+        assert_eq!(status, 200);
+        let mut selection = json!({"catalog_revision":catalog["revision"],"scenario_id":"age","choice_id":"threshold"});
+        let (status, preview) = public_call(
+            app,
+            origin,
+            "POST",
+            &format!("{base}/preview"),
+            &key,
+            Some(&selection),
+        )
+        .await;
+        assert_eq!(status, 200);
+        selection["request_digest"] = preview["request_digest"].clone();
+        selection["consent"] = json!(true);
+        let (status, session) = public_call(
+            app,
+            origin,
+            "POST",
+            &format!("{base}/sessions"),
+            &key,
+            Some(&selection),
+        )
+        .await;
+        assert_eq!(status, 201, "{session}");
+        let id = session["session_id"].as_str().unwrap();
+        let wallet_uri = reqwest::Url::parse(session["wallet_uri"].as_str().unwrap()).unwrap();
+        let parameters: std::collections::BTreeMap<_, _> =
+            wallet_uri.query_pairs().into_owned().collect();
+        let request_uri = reqwest::Url::parse(&parameters["request_uri"]).unwrap();
+        assert_eq!(request_uri.origin().ascii_serialization(), origin);
+        assert_eq!(
+            request_uri.path(),
+            format!("/v1/flows/instances/{id}/request")
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(request_uri.path())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        let compact = String::from_utf8(
+            to_bytes(response.into_body(), 65536)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        let jwk: marty_verification::jwk::Jwk =
+            serde_json::from_value(json!(self.verifier.public_jwk)).unwrap();
+        let (_, payload) = marty_verification::jwk::jws_verify(&compact, &jwk).unwrap();
+        let request: Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(request["client_id"], parameters["client_id"]);
+        assert_eq!(request["state"], id);
+        let response_uri = reqwest::Url::parse(request["response_uri"].as_str().unwrap()).unwrap();
+        assert_eq!(response_uri.origin().ascii_serialization(), origin);
+        assert_eq!(
+            response_uri.path(),
+            format!("/v1/flows/instances/{id}/submit")
+        );
+        let query = &request["dcql_query"]["credentials"][0];
+        assert_eq!(query["format"], "dc+sd-jwt");
+        assert_eq!(query["meta"]["vct_values"], json!([VCT]));
+        assert_eq!(query["claims"].as_array().unwrap().len(), 1);
+        assert_eq!(query["claims"][0]["path"], json!([self.claim]));
+        let keys = marty_oid4vci::TrustedSdJwtIssuerKeys::new(vec![
+            marty_oid4vci::ResolvedSdJwtIssuerKey::new(
+                ISSUER,
+                Some(self.issuer.verification_method_id.clone()),
+                marty_oid4vci::types::SigningAlgorithm::ES256,
+                json!(self.issuer.public_jwk).to_string(),
+            ),
+        ])
+        .unwrap();
+        let prepared = marty_oid4vci::wallet::WalletEngine::new()
+            .prepare_verified_sd_jwt_presentation(
+                self.credential,
+                &[self.claim.to_owned()],
+                request["nonce"].as_str().unwrap(),
+                request["client_id"].as_str().unwrap(),
+                &json!(self.holder.public_jwk).to_string(),
+                &keys,
+            )
+            .unwrap();
+        let signed = self
+            .signing
+            .sign(&SigningRequest {
+                operation_id: id.to_owned(),
+                organization_id: self.holder.organization_id.clone(),
+                issuer_did: self.holder.issuer_did.clone(),
+                verification_method_id: self.holder.verification_method_id.clone(),
+                signing_key_reference: self.holder.signing_key_reference.clone(),
+                key_purpose: "demo_holder_binding".into(),
+                credential_format: "dc+sd-jwt".into(),
+                algorithm: "ES256".into(),
+                payload_b64url: URL_SAFE_NO_PAD.encode(prepared.signing_input()),
+            })
+            .await
+            .unwrap();
+        let presentation = prepared
+            .complete(&URL_SAFE_NO_PAD.decode(signed.signature_raw_b64url).unwrap())
+            .unwrap();
+        let disclosed: Vec<Value> = presentation
+            .split('~')
+            .skip(1)
+            .filter(|part| !part.is_empty() && !part.contains('.'))
+            .map(|part| {
+                serde_json::from_slice::<Value>(&URL_SAFE_NO_PAD.decode(part).unwrap()).unwrap()[1]
+                    .clone()
+            })
+            .collect();
+        assert_eq!(
+            disclosed,
+            vec![json!(self.claim)],
+            "wallet discloses only the requested claim"
+        );
+        let token = json!({query["id"].as_str().unwrap(): [presentation]}).to_string();
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("vp_token", &token)
+            .append_pair("state", id)
+            .finish();
+        let mut invalid_signature = token.clone().into_bytes();
+        let position = token.rfind('.').unwrap() + 1;
+        invalid_signature[position] = if invalid_signature[position] == b'A' {
+            b'B'
+        } else {
+            b'A'
+        };
+        let invalid_signature = String::from_utf8(invalid_signature).unwrap();
+        for (candidate, state) in [(&token, "wrong-state"), (&invalid_signature, id)] {
+            let invalid_body = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("vp_token", candidate)
+                .append_pair("state", state)
+                .finish();
+            let rejected = app
+                .clone()
+                .oneshot(
+                    Request::post(response_uri.path())
+                        .header("content-type", "application/x-www-form-urlencoded")
+                        .body(Body::from(invalid_body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                rejected.status().as_u16(),
+                400,
+                "wallet authentication rejection"
+            );
+            let (status, pending) = public_call(
+                app,
+                origin,
+                "GET",
+                &format!("{base}/sessions/{id}"),
+                &key,
+                None,
+            )
+            .await;
+            assert_eq!(status, 200);
+            assert_eq!(pending["status"], "awaiting_wallet", "{pending}");
+            assert!(
+                pending["verified"].is_null(),
+                "invalid input is not a policy verdict"
+            );
+        }
+        for replay in [false, true] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post(response_uri.path())
+                        .header("content-type", "application/x-www-form-urlencoded")
+                        .body(Body::from(body.clone()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            if replay || !expected {
+                assert!(
+                    !response.status().is_success(),
+                    "deny and replay cannot report success"
+                );
+            } else {
+                assert_eq!(response.status().as_u16(), 200);
+            }
+        }
+        let (status, result) = public_call(
+            app,
+            origin,
+            "GET",
+            &format!("{base}/sessions/{id}"),
+            &key,
+            None,
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(result["verified"], expected, "{result}");
+        assert!(!result.to_string().contains(self.credential));
+        id.to_owned()
+    }
 }
 fn build_policy(org: &str, id: &str, claim: &str) -> pp::PresentationPolicy {
     let now = Utc::now();
