@@ -32,8 +32,15 @@ verification, set `MARTY_PASSKEY_TEST_IMAGE` to the pinned upstream26.8 image an
 `py -3.12 -m pytest -q tests/test_keycloak_passkey_live.py`. The fixture mounts
 only this provider and the theme; it does not require or weaken the remote KMS
 image. It uses only synthetic accounts and non-relaying SMTP captures. Passing
-these H2/virtual-device tests does not establish production PostgreSQL/cluster,
-packaged remote-KMS, physical-device or real provider qualification.
+these H2/virtual-device tests alone does not establish PostgreSQL/cluster or
+packaged remote-KMS behavior. For that combined proof, select the owned images
+with `MARTY_PASSKEY_PACKAGED_IMAGE` and `MARTY_PASSKEY_PACKAGED_OPENBAO_IMAGE`,
+then run `pytest -q -s tests/test_keycloak_passkey_packaged.py`. It starts two
+Keycloak instances sharing disposable PostgreSQL and remote KMS, requires both
+to observe the two-member cluster, races credential removals across the nodes,
+and completes the existing cookie/CIBA/key-loss/custody regression with passkeys
+enabled. Physical devices and actual Google/Open Badge application journeys
+still require separate qualification.
 
 Version-matched source contracts:
 - [Native removal helper](https://github.com/keycloak/keycloak/blob/26.8.0/services/src/main/java/org/keycloak/authentication/requiredactions/util/CredentialDeleteHelper.java)

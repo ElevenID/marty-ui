@@ -61,6 +61,8 @@ socketserver.TCPServer(("0.0.0.0", 1025), SMTP).serve_forever()
 
 
 def docker(*args, **kwargs):
+    if "env" in kwargs:
+        kwargs["env"] = {**os.environ, **kwargs["env"]}
     return subprocess.run(["docker", *args], check=True, capture_output=True, text=True,
                           timeout=60, **kwargs).stdout.strip()
 
@@ -86,7 +88,8 @@ def request(url, *, token=None, body=None, form=None, method=None):
 def keycloak():
     name = "marty-passkey-test-" + secrets.token_hex(5)
     password = secrets.token_urlsafe(32)
-    env = dict(os.environ, KC_BOOTSTRAP_ADMIN_PASSWORD=password, KEYCLOAK_ADMIN_PASSWORD=password)
+    # Keep the pytest fixture representation free of inherited host/CI secrets.
+    env = {"KC_BOOTSTRAP_ADMIN_PASSWORD": password, "KEYCLOAK_ADMIN_PASSWORD": password}
     container = None
     smtp = None
     network = None
@@ -138,7 +141,7 @@ def keycloak():
             return request(base + "/realms/master/protocol/openid-connect/token", form={
                 "grant_type": "password", "client_id": "admin-cli", "username": "passkey-test-admin", "password": password})["access_token"]
 
-        yield {"name": name, "container": container, "smtp": smtp, "base": base,
+        yield {"name": name, "container": container, "smtp": smtp, "base": base, "realm": "passkey-test",
                "admin": admin, "token": admin_token, "env": env}
     finally:
         if container:
@@ -154,10 +157,11 @@ def keycloak():
 def configure(fixture, enabled, rp="localhost"):
     script = (ROOT / "scripts/setup-keycloak.sh").read_text(encoding="utf-8").rsplit('main "$@"', 1)[0]
     result = subprocess.run(["docker", "exec", "-i", "-e", "KEYCLOAK_ADMIN_PASSWORD",
-        "-e", "KEYCLOAK_ADMIN=passkey-test-admin", "-e", "KC_URL=http://localhost:8080",
-        "-e", "KEYCLOAK_REALM=passkey-test", "-e", "KEYCLOAK_PASSKEYS_ENABLED=" + enabled,
+        "-e", "KEYCLOAK_ADMIN=" + fixture.get("admin_username", "passkey-test-admin"), "-e", "KC_URL=http://localhost:8080",
+        "-e", "KEYCLOAK_REALM=" + fixture["realm"], "-e", "KEYCLOAK_PASSKEYS_ENABLED=" + enabled,
         "-e", "KEYCLOAK_PASSKEY_RP_ID=" + rp, fixture["container"], "bash"],
-        input=(script + "authenticate_keycloak\nconfigure_passkey_login\n").encode("utf-8"), env=fixture["env"],
+        input=(script + "authenticate_keycloak\nconfigure_passkey_login\n").encode("utf-8"),
+        env={**os.environ, **fixture["env"]},
         capture_output=True, timeout=60)
     result.stdout = result.stdout.decode("utf-8")
     result.stderr = result.stderr.decode("utf-8")
@@ -232,8 +236,8 @@ def test_native_email_action_enrolls_a_verified_existing_account_without_passwor
 
 def qualify_native_lifecycle(keycloak, page, cdp, device, subject, credentials_url, action_query):
     """Exercise native account APIs, including the concurrent deletion race."""
-    issuer = keycloak["base"] + "/realms/passkey-test/protocol/openid-connect"
-    account = keycloak["base"] + "/realms/passkey-test/account/credentials"
+    issuer = keycloak["base"] + f"/realms/{keycloak['realm']}/protocol/openid-connect"
+    account = keycloak["base"] + f"/realms/{keycloak['realm']}/account/credentials"
 
     def account_token():
         verifier = secrets.token_urlsafe(48)
@@ -260,7 +264,7 @@ def qualify_native_lifecycle(keycloak, page, cdp, device, subject, credentials_u
     assert len(request(credentials_url, token=keycloak["token"])) == 1
     request(account + "/" + credential_id + "/label", token=token, method="PUT", body="Travel key")
     assert request(credentials_url, token=keycloak["token"])[0]["userLabel"] == "Travel key"
-    page.goto(keycloak["base"] + "/realms/passkey-test/account/account-security/signing-in")
+    page.goto(keycloak["base"] + f"/realms/{keycloak['realm']}/account/account-security/signing-in")
     try:
         page.get_by_text("Travel key", exact=True).wait_for(timeout=30000)
     except Exception as error:
@@ -294,16 +298,18 @@ def qualify_native_lifecycle(keycloak, page, cdp, device, subject, credentials_u
     assert next(item for item in request(account, token=token) if item["type"] == "webauthn-passwordless")["removeable"] is True
     barrier = threading.Barrier(2)
 
-    def remove(credential):
+    def remove(indexed):
+        index, credential = indexed
+        endpoint = keycloak.get("replica_account", account) if index else account
         barrier.wait(timeout=10)
         try:
-            request(account + "/" + credential["id"], token=token, method="DELETE")
+            request(endpoint + "/" + credential["id"], token=token, method="DELETE")
             return 204
         except urllib.error.HTTPError as error:
             return error.code
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(remove, stored))
+        results = list(pool.map(remove, enumerate(stored)))
     assert sorted(results) == [204, 400], results
     remaining = request(credentials_url, token=keycloak["token"])
     assert len(remaining) == 1 and remaining[0]["type"] == "webauthn-passwordless"
@@ -324,8 +330,91 @@ def qualify_native_lifecycle(keycloak, page, cdp, device, subject, credentials_u
         account_token()
         after = fresh_cdp.send("WebAuthn.getCredentials", {"authenticatorId": fresh_device})["credentials"][0]
         assert after["signCount"] > survivor["signCount"]
+        # The native AIA must enforce the same policy after confirmation, even
+        # when its challenge was shown for a credential that cannot be removed.
+        verifier = secrets.token_urlsafe(48)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        parameters = {"client_id": "passkey-test-ui", "response_type": "code", "scope": "openid",
+                      "redirect_uri": keycloak["base"] + "/callback", "state": secrets.token_urlsafe(24),
+                      "nonce": secrets.token_urlsafe(24), "code_challenge": challenge, "code_challenge_method": "S256",
+                      "kc_action": "delete_credential:" + remaining[0]["id"]}
+        page.goto(issuer + "/auth?" + urllib.parse.urlencode(parameters))
+        page.locator("#kc-accept").click(timeout=30000)
+        page.get_by_text("Credential type cannot be removed", exact=False).wait_for(timeout=10000)
+        assert [item["id"] for item in request(credentials_url, token=keycloak["token"])] == [remaining[0]["id"]]
     finally:
         fresh.close()
+
+
+def test_native_enrollment_and_delete_actions_cancel_without_mutating_credentials(keycloak):
+    from playwright.sync_api import sync_playwright
+
+    assert configure(keycloak, "true").returncode == 0
+    address = "native-actions@example.invalid"
+    password = secrets.token_urlsafe(24)
+    request(keycloak["admin"] + "/users", token=keycloak["token"], body={
+        "username": address, "email": address, "emailVerified": True, "enabled": True,
+        "firstName": "Synthetic", "lastName": "Actions",
+        "credentials": [{"type": "password", "value": password, "temporary": False}]})
+    query = urllib.parse.urlencode({"email": address, "exact": "true"})
+    subject = request(keycloak["admin"] + "/users?" + query, token=keycloak["token"])[0]["id"]
+    credentials_url = keycloak["admin"] + "/users/" + subject + "/credentials"
+    issuer = keycloak["base"] + f"/realms/{keycloak['realm']}/protocol/openid-connect"
+
+    def begin(page, action):
+        verifier = secrets.token_urlsafe(48)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        params = {"client_id": "passkey-test-ui", "response_type": "code", "scope": "openid",
+                  "redirect_uri": keycloak["base"] + "/callback", "state": secrets.token_urlsafe(24),
+                  "nonce": secrets.token_urlsafe(24), "code_challenge": challenge, "code_challenge_method": "S256",
+                  "kc_action": action}
+        page.goto(issuer + "/auth?" + urllib.parse.urlencode(params))
+        return verifier
+
+    def complete(page, verifier, status):
+        page.wait_for_url(keycloak["base"] + "/callback?**", timeout=30000)
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query)
+        assert params["kc_action_status"] == [status]
+        token = request(issuer + "/token", form={"grant_type": "authorization_code", "client_id": "passkey-test-ui",
+            "code": params["code"][0], "code_verifier": verifier, "redirect_uri": keycloak["base"] + "/callback"})["access_token"]
+        assert request(issuer + "/userinfo", token=token)["sub"] == subject
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(channel="chrome", headless=True)
+        try:
+            context = browser.new_context()
+            page = context.new_page()
+            cdp = context.new_cdp_session(page)
+            cdp.send("WebAuthn.enable")
+            cdp.send("WebAuthn.addVirtualAuthenticator", {"options": {
+                "protocol": "ctap2", "transport": "internal", "hasResidentKey": True,
+                "hasUserVerification": True, "isUserVerified": True, "automaticPresenceSimulation": True}})
+            verifier = begin(page, "webauthn-register-passwordless")
+            page.locator("#username").fill(address)
+            page.locator("#password").fill(password)
+            page.locator("#kc-login").click()
+            original = request(credentials_url, token=keycloak["token"])
+            page.locator("#cancelWebAuthnAIA").click(timeout=30000)
+            complete(page, verifier, "cancelled")
+            assert request(credentials_url, token=keycloak["token"]) == original
+
+            verifier = begin(page, "webauthn-register-passwordless")
+            page.once("dialog", lambda dialog: dialog.accept("Actions key"))
+            page.locator("#registerWebAuthn").click(timeout=30000)
+            complete(page, verifier, "success")
+            stored = request(credentials_url, token=keycloak["token"])
+            credential_id = next(item["id"] for item in stored if item["type"] == "webauthn-passwordless")
+            verifier = begin(page, "delete_credential:" + credential_id)
+            page.locator("#kc-decline").click(timeout=30000)
+            complete(page, verifier, "cancelled")
+            assert request(credentials_url, token=keycloak["token"]) == stored
+
+            verifier = begin(page, "delete_credential:" + credential_id)
+            page.locator("#kc-accept").click(timeout=30000)
+            complete(page, verifier, "success")
+            assert request(credentials_url, token=keycloak["token"]) == original
+        finally:
+            browser.close()
 
 
 def test_real_realm_reconciliation_preserves_providers_and_policy_on_rollback(keycloak):
@@ -372,7 +461,7 @@ def test_virtual_authenticator_enrollment_and_login_keep_the_same_subject(keyclo
     user_query = "/users?" + urllib.parse.urlencode({"email": email, "exact": "true"})
     users = request(keycloak["admin"] + user_query, token=keycloak["token"])
     subject = users[0]["id"]
-    issuer = keycloak["base"] + "/realms/passkey-test/protocol/openid-connect"
+    issuer = keycloak["base"] + f"/realms/{keycloak['realm']}/protocol/openid-connect"
 
     def authorization(enroll=False):
         verifier = secrets.token_urlsafe(48)
@@ -471,7 +560,7 @@ def test_virtual_authenticator_enrollment_and_login_keep_the_same_subject(keyclo
             assert len(request(keycloak["admin"] + user_query, token=keycloak["token"])) == 1
             assert page_errors == []
             if mode == "modal":
-                account = keycloak["base"] + "/realms/passkey-test/account/credentials"
+                account = keycloak["base"] + f"/realms/{keycloak['realm']}/account/credentials"
                 metadata = request(account, token=login_token)
                 assert next(item for item in metadata if item["type"] == "webauthn-passwordless")["removeable"] is True
                 credential_id = next(item["id"] for item in stored if item["type"] == "webauthn-passwordless")

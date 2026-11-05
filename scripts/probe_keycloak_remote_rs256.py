@@ -391,7 +391,10 @@ def verify_jwt(jwt: str, jwks: dict, expected_kid: str,
 
 
 def probe(keycloak_image: str, openbao_image: str, jar: Path,
-          require_browser: bool = False) -> None:
+          require_browser: bool = False,
+          qualify_ready: Callable[[dict], None] | None = None) -> None:
+    if qualify_ready is not None and not require_browser:
+        raise ValueError("Additional qualification requires the packaged browser/KMS fixture")
     if not require_browser and not jar.is_file():
         raise RuntimeError("Build keycloak/openbao-provider with Maven first")
     suffix = secrets.token_hex(5)
@@ -619,6 +622,8 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 *(["--add-host", host_gateway_alias(network)]
                   if require_browser and os.name != "nt" else []),
                 *provider_mount,
+                *(["--mount", f"type=bind,src={ROOT / 'config/keycloak/themes/11id'},dst=/opt/keycloak/themes/11id,readonly"]
+                  if qualify_ready is not None else []),
                 "--mount", f"type=bind,src={ca_dir / 'ca.crt'},dst=/run/kms/ca.crt,readonly",
                 "--mount", f"type=bind,src={scoped_token},dst=/run/kms/token,readonly",
                 "--mount", f"type=bind,src={cert_dir},dst=/run/kms/certs,readonly",
@@ -642,6 +647,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                    f"http://host.docker.internal:{ciba_device.server_port}/"]
                   if ciba_device else []),
                 keycloak_image, "start-dev",
+                *(["--cache=ispn", "--cache-stack=jdbc-ping"] if qualify_ready is not None else []),
             )
             started_kc = True
             port = run("docker", "port", kc_name, "8080/tcp").rsplit(":", 1)[-1]
@@ -769,6 +775,17 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                                        base + "/realms/11id")
             if realm_modulus == master_modulus:
                 raise RuntimeError("master and 11id reused one remote RSA key")
+            if qualify_ready is not None:
+                # In-process test seam; capabilities remain confined to this
+                # disposable PostgreSQL/OpenBao/Keycloak fixture and its lifetime.
+                qualify_ready({"container": kc_name, "network": network, "base": base})
+                # Extended native/device checks can outlive the short master
+                # access token. Refresh our admin capability rather than change
+                # the realm's token lifetime or reuse the callback's token.
+                token = http_json(base + "/realms/master/protocol/openid-connect/token", {
+                    "client_id": "admin-cli", "grant_type": "password",
+                    "username": "probe", "password": "synthetic-probe-only",
+                })["access_token"]
             if require_browser:
                 callback = base + "/probe-callback"
                 for realm in ("master", "11id"):

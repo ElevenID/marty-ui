@@ -83,8 +83,14 @@ each counting the other's credential as a remaining method. Provisioning checks
 the selected passwordless factory's priority and lifecycle protocol marker before
 enabling managed passkeys. A stock upstream image alone cannot satisfy that gate.
 The image remains pinned to Keycloak26.8.0; qualify this internal SPI and JPA
-contract again on any upgrade. Full provider, production database, packaged KMS
-and physical-device journeys remain rollout gates.
+contract again on any upgrade. The disposable packaged qualification now covers
+two clustered Keycloak instances sharing PostgreSQL and remote KMS, native email
+and password enrollment, Account Console, native action cancellation and deletion,
+cross-node last-method protection, fresh surviving-key/password authentication,
+cookie rotation, CIBA and KMS-loss/custody checks. The CI image lane runs this
+composite proof against its freshly built images. This is synthetic-account and
+virtual-device evidence; actual Google/Open Badge application journeys and
+physical/cross-device behavior remain rollout gates.
 
 Users should enroll only from a trusted authenticated account, with appropriate
 fresh authentication. Keep email verification and existing linking policies.

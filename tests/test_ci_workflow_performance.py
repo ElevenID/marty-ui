@@ -1460,9 +1460,15 @@ def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> No
         step for step in job["steps"]
         if step.get("name") == "Qualify Keycloak browser, CIBA, KMS-loss, and PostgreSQL custody"
     )
-    assert "scripts/probe_keycloak_remote_rs256.py --require-browser" in keycloak_gate["run"]
-    assert "--keycloak-image marty-keycloak-openbao:ci" in keycloak_gate["run"]
-    assert "--openbao-image marty-openbao-didcomm:ci" in keycloak_gate["run"]
+    assert keycloak_gate["env"]["MARTY_PASSKEY_PACKAGED_IMAGE"] == "marty-keycloak-openbao:ci"
+    assert keycloak_gate["env"]["MARTY_PASSKEY_PACKAGED_OPENBAO_IMAGE"] == "marty-openbao-didcomm:ci"
+    assert "tests/test_keycloak_passkey_packaged.py::test_packaged_passkeys_keep_remote_custody_and_surviving_authentication_methods" in keycloak_gate["run"]
+    assert "google-chrome --version" in keycloak_gate["run"]
+    # The composite proof must still invoke the complete prior custody/browser
+    # probe, and add qualification inside its live PostgreSQL/KMS lifetime.
+    packaged = (ROOT / "tests/test_keycloak_passkey_packaged.py").read_text()
+    assert "kms.probe(KEYCLOAK_IMAGE, OPENBAO_IMAGE" in packaged
+    assert "require_browser=True, qualify_ready=qualify_passkeys" in packaged
     storage_gate = next(
         step
         for step in job["steps"]

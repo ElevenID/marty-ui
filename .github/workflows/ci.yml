@@ -534,12 +534,16 @@ jobs:
         run: cargo build --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
       - name: Qualify Keycloak browser, CIBA, KMS-loss, and PostgreSQL custody
         shell: bash
+        env:
+          MARTY_PASSKEY_PACKAGED_IMAGE: marty-keycloak-openbao:ci
+          MARTY_PASSKEY_PACKAGED_OPENBAO_IMAGE: marty-openbao-didcomm:ci
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check cryptography==44.0.3
-          python3 scripts/probe_keycloak_remote_rs256.py --require-browser \
-            --keycloak-image marty-keycloak-openbao:ci \
-            --openbao-image marty-openbao-didcomm:ci
+          python3 -m pip install --disable-pip-version-check cryptography==44.0.3 pytest==8.3.5 playwright==1.56.0
+          google-chrome --version
+          docker image inspect "$MARTY_PASSKEY_PACKAGED_IMAGE" >/dev/null
+          docker image inspect "$MARTY_PASSKEY_PACKAGED_OPENBAO_IMAGE" >/dev/null
+          python3 -m pytest -q -s tests/test_keycloak_passkey_packaged.py::test_packaged_passkeys_keep_remote_custody_and_surviving_authentication_methods
       - name: Prove disposable self-host Keycloak secret closure and token scopes
         shell: bash
         run: |
