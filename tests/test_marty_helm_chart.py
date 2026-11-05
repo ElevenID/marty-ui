@@ -169,6 +169,7 @@ def test_existing_secret_renames_cover_env_and_volumes(tmp_path: Path) -> None:
     catalog = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_text())
     keys = {item["name"]: set(item["fields"]) for item in catalog["secrets"]}
     keys.update({
+        "marty-redis-tls": {"tls.crt", "tls.key", "ca.crt"},
         "marty-operator": {"password"},
         "notification-workload-tls": {"tls.crt", "ca.crt"},
         "notification-tls-kms": {"token", "ca.crt"},
@@ -217,8 +218,40 @@ def test_keycloak_has_real_entrypoint_safe_realm_and_private_health(rendered: li
     assert not any(user.get("credentials") for user in realm["users"])
     client = next(client for client in realm["clients"] if client["clientId"] == "marty-api")
     assert client["secret"] == "${MARTY_API_CLIENT_SECRET}"
+    assert resources(rendered, "ConfigMap")["marty-config"]["data"]["KEYCLOAK_SOCIAL_LOGIN_ENABLED"] == "false"
     for name in ["setup-keycloak.sh", "setup-keycloak-selfhost-production.sh", "load-secrets-env.sh"]:
         assert (CHART / "files/keycloak" / name).read_bytes() == (ROOT / "scripts" / name).read_bytes()
+
+
+def test_production_redis_tls_preserves_public_trust_and_confines_private_key(rendered: list[dict]) -> None:
+    config = resources(rendered, "ConfigMap")["marty-config"]["data"]
+    assert config["ENVIRONMENT"] == "production"
+    assert config["REDIS_URL"] == "rediss://redis:6379/0"
+    redis = resources(rendered, "StatefulSet")["redis"]["spec"]["template"]["spec"]
+    server = redis["containers"][0]
+    assert "command" not in server  # Preserve upstream ownership/user-drop entrypoint.
+    assert server["args"][server["args"].index("--port") + 1] == "0"
+    assert server["args"][server["args"].index("--tls-port") + 1] == "6379"
+    for probe in ("startupProbe", "readinessProbe", "livenessProbe"):
+        assert "--tls" in server[probe]["exec"]["command"]
+        assert "--cacert" in server[probe]["exec"]["command"]
+    assert resources(rendered, "Service")["redis"]["spec"]["publishNotReadyAddresses"] is True
+    for doc, pod in pod_specs(rendered):
+        if doc["metadata"]["name"] in {"redis", "postgres", "keycloak", "ui"} or doc["metadata"]["name"].startswith("marty-keycloak-"):
+            continue
+        trust = next(container for container in pod["initContainers"] if container["name"] == "redis-trust")
+        assert "/etc/ssl/certs/ca-certificates.crt /redis-ca/ca.crt" in trust["command"][-1]
+        ca = next(volume for volume in pod["volumes"] if volume["name"] == "redis-ca")
+        assert ca["secret"]["items"] == [{"key": "ca.crt", "path": "ca.crt"}]
+        for container in pod["containers"] + pod.get("initContainers", []):
+            if container["name"] == "redis-trust" or container["name"].startswith("ready-"):
+                continue
+            env = {item["name"]: item for item in container.get("env", [])}
+            assert env["SSL_CERT_FILE"]["value"] == "/etc/marty/trust/ca-certificates.crt"
+            if "REDIS_URL" in env and "value" in env["REDIS_URL"]:
+                assert env["REDIS_URL"]["value"].startswith("rediss://redis:6379/")
+            assert any(mount["name"] == "redis-trust" and mount["readOnly"] for mount in container["volumeMounts"])
+    assert "redis://redis:" not in json.dumps(rendered)
 
 
 def test_development_requests_leave_room_for_cluster_and_openbao(rendered: list[dict]) -> None:

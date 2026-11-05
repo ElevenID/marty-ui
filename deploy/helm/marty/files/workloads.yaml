@@ -588,7 +588,7 @@ verification:
         name: marty-config
         key: PUBLIC_API_URL
   - name: REDIS_URL
-    value: redis://redis:6379/3
+    value: rediss://redis:6379/3
   - name: DATABASE_URL
     valueFrom:
       secretKeyRef:
@@ -1201,7 +1201,7 @@ revocation-profile:
         name: marty-secrets
         key: DATABASE_SYNC_URL
   - name: REDIS_URL
-    value: redis://redis:6379/4
+    value: rediss://redis:6379/4
   - name: ORG_GRPC_TARGET
     value: https://organization:9002
   - name: ORG_GRPC_CA_CERT
@@ -1262,7 +1262,7 @@ device-registration:
         name: marty-secrets
         key: DATABASE_SYNC_URL
   - name: REDIS_URL
-    value: redis://redis:6379/5
+    value: rediss://redis:6379/5
   - name: ORG_GRPC_TARGET
     value: https://organization:9002
   - name: ORG_GRPC_CA_CERT
@@ -1579,7 +1579,7 @@ signing-keys:
         name: marty-secrets
         key: DEVICE_REGISTRATION_SIGNING_KEYS_KEY
   - name: SIGNING_KEYS_REDIS_URL
-    value: redis://redis:6379/2
+    value: rediss://redis:6379/2
   - name: ISSUER_BASE_URL
     valueFrom:
       configMapKeyRef:

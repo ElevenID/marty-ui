@@ -86,6 +86,20 @@ Do not expose the application until the certificate is Ready. A pending ACME
 order is not successful HTTPS startup. Do not bypass certificate validation to
 make acceptance pass.
 
+The production application configuration also requires verified Redis TLS.
+Use the standard cert-manager development CA and Redis certificate manifest:
+
+```sh
+kubectl --namespace marty-dev apply -f deploy/k3s/redis-certificate.yaml
+kubectl --namespace marty-dev wait --for=condition=Ready \
+  certificate/marty-redis-tls --timeout=120s
+```
+
+Redis receives its own TLS key. Application pods receive only the public CA,
+combined with their existing public trust roots, and use `rediss://` URLs.
+The chart disables Redis's plaintext listener. For another installation, supply
+an equivalent `marty-redis-tls` Secret with `tls.crt`, `tls.key`, and `ca.crt`.
+
 ## Authenticate the runtime and bootstrap OpenBao
 
 Obtain a complete signed installer artifact set for an explicitly selected

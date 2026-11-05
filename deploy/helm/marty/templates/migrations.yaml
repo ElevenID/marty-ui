@@ -7,6 +7,8 @@
     - configMapRef:
         name: marty-config
   env:
+    - name: SSL_CERT_FILE
+      value: /etc/marty/trust/ca-certificates.crt
     - name: DATABASE_URL
       valueFrom:
         secretKeyRef:
@@ -33,12 +35,15 @@
     {{- end }}
   resources:
     {{- toYaml .root.Values.migrations.resources | nindent 4 }}
-  {{- if eq .name "bootstrap-notification" }}
   volumeMounts:
+    - name: redis-trust
+      mountPath: /etc/marty/trust
+      readOnly: true
+    {{- if eq .name "bootstrap-notification" }}
     - name: bootstrap-secrets
       mountPath: /run/secrets
       readOnly: true
-  {{- end }}
+    {{- end }}
 {{- end -}}
 
 {{- if .Values.migrations.enabled }}
@@ -75,6 +80,7 @@ spec:
       # deadlocks when Deployments validate schemas produced by that hook.
       # Kubernetes retries failed init containers within the Job deadline.
       initContainers:
+        {{- include "marty.redisTrustInit" . | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "revocation-profile" "command" (list "/usr/local/bin/marty-revocation-profile")) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "bootstrap-notification" "role" "migrations" "command" (list "/app/run-migrations-with-secrets.sh")) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "organization" "command" (list "/usr/local/bin/marty-organization" "migrate")) | nindent 8 }}
@@ -109,6 +115,7 @@ spec:
       containers:
         {{- include "marty.migrationContainer" (dict "root" . "name" "issuance-native" "command" (list "/usr/local/bin/marty-issuance-service" "migrate")) | nindent 8 }}
       volumes:
+        {{- include "marty.redisTrustVolumes" . | nindent 8 }}
         - name: bootstrap-secrets
           secret:
             secretName: {{ include "marty.secretName" (dict "root" . "name" "marty-secrets") }}

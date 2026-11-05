@@ -126,6 +126,7 @@ metadata:
     app.kubernetes.io/component: redis
 spec:
   clusterIP: None
+  publishNotReadyAddresses: true
   ports:
   - port: 6379
     targetPort: 6379
@@ -161,6 +162,18 @@ spec:
         - redis-server
         - --appendonly
         - 'yes'
+        - --port
+        - '0'
+        - --tls-port
+        - '6379'
+        - --tls-cert-file
+        - /etc/redis/tls/tls.crt
+        - --tls-key-file
+        - /etc/redis/tls/tls.key
+        - --tls-ca-cert-file
+        - /etc/redis/tls/ca.crt
+        - --tls-auth-clients
+        - 'no'
         - --maxmemory
         - {{ .Values.redis.maxmemory | quote }}
         - --maxmemory-policy
@@ -172,10 +185,20 @@ spec:
         volumeMounts:
         - name: redis-data
           mountPath: /data
+        - name: redis-tls
+          mountPath: /etc/redis/tls
+          readOnly: true
         livenessProbe:
           exec:
             command:
             - redis-cli
+            - --tls
+            - --cacert
+            - /etc/redis/tls/ca.crt
+            - --sni
+            - redis
+            - -h
+            - redis
             - ping
           periodSeconds: 10
           timeoutSeconds: 5
@@ -183,6 +206,13 @@ spec:
           exec: &id002
             command:
             - redis-cli
+            - --tls
+            - --cacert
+            - /etc/redis/tls/ca.crt
+            - --sni
+            - redis
+            - -h
+            - redis
             - ping
           periodSeconds: 5
           timeoutSeconds: 5
@@ -192,6 +222,18 @@ spec:
           periodSeconds: 5
           failureThreshold: 60
           timeoutSeconds: 5
+      volumes:
+      - name: redis-tls
+        secret:
+          secretName: {{ include "marty.secretName" (dict "root" . "name" "marty-redis-tls") }}
+          defaultMode: 0444
+          items:
+            - key: tls.crt
+              path: tls.crt
+            - key: tls.key
+              path: tls.key
+            - key: ca.crt
+              path: ca.crt
       {{- include "marty.podSettings" . | nindent 6 }}
   volumeClaimTemplates:
   - metadata:

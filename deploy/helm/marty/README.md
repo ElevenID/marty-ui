@@ -40,6 +40,25 @@ resources.
    and the operator's `organization.adminEmail`. `publicOrigin` can
    specify a non-default HTTPS port. Domain ownership, certificate issuance
    and firewall configuration remain external prerequisites.
+6. A Redis TLS Secret with `tls.crt`, `tls.key` and `ca.crt`, named by
+   `existingSecrets.marty-redis-tls` (default `marty-redis-tls`). The server
+   certificate must include the DNS SAN `redis`. For the K3s development
+   profile, the standard cert-manager resources in
+   `deploy/k3s/redis-certificate.yaml` create a private CA and server certificate:
+
+   ```sh
+   kubectl --namespace marty-dev apply -f deploy/k3s/redis-certificate.yaml
+   kubectl --namespace marty-dev wait --for=condition=Ready \
+     certificate/marty-redis-tls --timeout=120s
+   ```
+
+Redis exposes verified TLS only. Its server private key is mounted only in
+Redis; Marty containers receive only `ca.crt`. A small init container combines
+the signed image's public CA bundle with this CA, and `SSL_CERT_FILE` selects
+the resulting trust bundle for Rust Redis clients and migration commands.
+Public HTTPS trust remains available. No local development environment or TLS
+verification bypass is used. Certificate rotation requires restarting Redis
+and the application pods so they reload their certificates and trust bundle.
 
 Two notification Secrets supplement the older Kubernetes catalog:
 
@@ -68,6 +87,9 @@ filenames. The packaged realm is derived from `config/keycloak/11id-realm.json`:
 known demo-password users are removed before import, the service-account role
 mapping is retained, and the API client secret is resolved from its Kubernetes
 Secret. The existing strict configurator and theme are packaged unchanged.
+Optional social login defaults to disabled. Enable
+`config.KEYCLOAK_SOCIAL_LOGIN_ENABLED: 'true'` only after providing both Google
+client credentials through the existing `marty-secrets` contract.
 
 ## Install
 

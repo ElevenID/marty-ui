@@ -48,6 +48,8 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        {{- include "marty.redisTrustInit" $root | nindent 8 }}
       containers:
         - name: {{ $name }}
           image: {{ include "marty.image" (dict "root" $root "role" "services") | quote }}
@@ -61,6 +63,8 @@ spec:
             - configMapRef:
                 name: marty-config
           env:
+            - name: SSL_CERT_FILE
+              value: /etc/marty/trust/ca-certificates.crt
             - name: SERVICE_NAME
               value: {{ $workload.serviceName | quote }}
             {{- include "marty.env" (dict "root" $root "env" $workload.env) | nindent 12 }}
@@ -70,10 +74,13 @@ spec:
           {{- end }}
           resources:
             {{- toYaml $resources | nindent 12 }}
-          {{- with $workload.volumeMounts }}
           volumeMounts:
+            - name: redis-trust
+              mountPath: /etc/marty/trust
+              readOnly: true
+            {{- with $workload.volumeMounts }}
             {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- end }}
           {{- with $workload.livenessProbe }}
           startupProbe:
             {{- if .httpGet }}
@@ -91,10 +98,11 @@ spec:
           readinessProbe:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-      {{- with $workload.volumes }}
       volumes:
+        {{- include "marty.redisTrustVolumes" $root | nindent 8 }}
+        {{- with $workload.volumes }}
         {{- include "marty.volumes" (dict "root" $root "volumes" .) | nindent 8 }}
-      {{- end }}
+        {{- end }}
 {{- if $workload.ports }}
 ---
 apiVersion: v1

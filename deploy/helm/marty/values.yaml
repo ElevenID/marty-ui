@@ -20,6 +20,7 @@ organization:
 openbao:
   address: https://openbao:8200
 existingSecrets:
+  marty-redis-tls: marty-redis-tls
   marty-operator: marty-operator
   marty-secrets: marty-secrets
   keycloak-kms: keycloak-kms
