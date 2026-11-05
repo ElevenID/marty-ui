@@ -115,12 +115,21 @@ class Controls(unittest.TestCase):
         for i,name in enumerate(names,1000):
             live={'Running':name not in m.STOCK_NAMES,'Pid':0 if name in m.STOCK_NAMES else i,
                   'StartedAt':'stable','Paused':False,'Restarting':False}
-            actual={'Id':cid(i),'Name':name,'Image':'image','Config':{'Env':[]},'HostConfig':{},'Mounts':[],'State':live}
+            actual={'Id':cid(i),'Name':name,'Image':'image','Config':{'Env':[],'Labels':{'com.docker.compose.project':'stock','com.docker.compose.service':name.replace('/marty-canvas-oss-','canvas-')}},'HostConfig':{},'Mounts':[],'State':{**live,'OOMKilled':False}}
             full[cid(i)]=actual
             stock[cid(i)]={'name':name,'image':'image','spec':m.spec(actual),'live':copy.deepcopy(live)}
-            rows[cid(i)]=row(i,'stock','stock-network');rows[cid(i)]['Name']=name
+            rows[cid(i)]=row(i,'stock','stock-network');rows[cid(i)]['Name']=name;rows[cid(i)]['Labels']=copy.deepcopy(actual['Config']['Labels']);rows[cid(i)]['Generation']={key:actual['State'][key] for key in ('Running','Paused','Restarting','OOMKilled','Pid','StartedAt')}
             rows[cid(i)]['Networks']['stock-network']['NetworkID']=cid(998)
         rows[cid(200)]=row(200)
+        monitor=copy.deepcopy(full[cid(1000)]);monitor.update(Id=cid(1100),Name='/stock-canvas-continuity-monitor-1')
+        monitor['Config']['Labels']['com.docker.compose.service']='canvas-continuity-monitor'
+        monitor['State'].update(Running=False,Pid=0)
+        full[cid(1100)]=monitor
+        stock[cid(1100)]={'name':monitor['Name'],'image':monitor['Image'],'spec':m.spec(monitor),'live':copy.deepcopy(monitor['State'])}
+        rows[cid(1100)]=row(1100,'stock','stock-network');rows[cid(1100)]['Name']=monitor['Name']
+        rows[cid(1100)]['Labels']=copy.deepcopy(monitor['Config']['Labels'])
+        rows[cid(1100)]['Networks']['stock-network']['NetworkID']=cid(998)
+        rows[cid(1100)]['Generation']={key:monitor['State'][key] for key in ('Running','Paused','Restarting','OOMKilled','Pid','StartedAt')}
         stopped={}
         for i in range(14):
             id=cid(50+i);role='off-'+str(i)
@@ -133,7 +142,7 @@ class Controls(unittest.TestCase):
         roles=m.RuntimeRoles(roles,stopped=stopped)
         config={'protectedCohort':{'schema':m.SCHEMA,'profile':{'sha256':'a'*64},
                 'stockBefore':{'rows':stock,'targets':{k:v['name'] for k,v in stock.items() if v['name'] in m.STOCK_NAMES}},
-                'stockPause':{},'nativeTransport':{},'stockPaused':{'state':'ONLY_STOCK_CANVAS_WEB_JOBS_EDGE_STOPPED','allOtherRowsUnchanged':True,'specsUnchanged':True}},
+                'stockPause':{},'nativeTransport':{},'stockModelAnchor':[copy.deepcopy(next(r for r in full.values() if r['Name']=='/marty-canvas-oss-web'))],'stockPaused':{'state':'ONLY_STOCK_CANVAS_WEB_JOBS_EDGE_STOPPED','allOtherRowsUnchanged':True,'specsUnchanged':True}},
                 'sourceRepository':str(UI),'currentSourceAuthority':{'ui':'revision'}}
         core=types.SimpleNamespace(load=lambda x:x,git_blob=lambda *args:model)
         with patch.object(m,'runtime_authority',return_value=roles),patch.object(m,'pause_authority'):
@@ -175,6 +184,50 @@ class Controls(unittest.TestCase):
                 with patch.object(m,'runtime_authority',return_value=roles),self.assertRaisesRegex(AssertionError,'SCOPE_MANAGED_COLLISION'):
                     scope.snapshot(g,'collision',{cid(200)})
 
+    def test_declared_existing_monitor_is_protected_but_absent_profiles_remain_absent(self):
+        with tempfile.TemporaryDirectory() as d:
+            scope,roles,rows,_,g=self.fixture(Path(d))
+            self.assertEqual(len(scope.stock),7);self.assertEqual(len(scope.fixed),49)
+            self.assertIn('canvas-continuity-monitor',scope.stock_roles.values())
+            self.assertNotIn('canvas-contract',scope.stock_roles.values());self.assertNotIn('canvas-lifecycle',scope.stock_roles.values())
+            with patch.object(m,'runtime_authority',return_value=roles):observed=scope.snapshot(g,'seven-peers',{cid(200)})
+            self.assertEqual(len(observed),50)
+            for service in ('canvas-contract','undeclared-peer'):
+                added=row(1600,'stock','stock-network');added['Name']='/stock-'+service+'-1'
+                added['Labels']['com.docker.compose.service']=service;added['Networks']['stock-network']['NetworkID']=cid(998)
+                rows[cid(1600)]=added
+                with patch.object(m,'runtime_authority',return_value=roles),self.assertRaisesRegex(AssertionError,'SCOPE_MANAGED_COLLISION'):
+                    scope.snapshot(g,'unexpected-'+service,{cid(200)})
+                del rows[cid(1600)]
+
+    def test_same_optional_service_in_foreign_project_is_not_adopted_from_before(self):
+        with tempfile.TemporaryDirectory() as d:
+            scope,roles,rows,_,g=self.fixture(Path(d))
+            foreign=row(1600,'foreign-project','foreign-network');foreign['Name']='/foreign-project-canvas-continuity-monitor-1'
+            foreign['Labels']['com.docker.compose.service']='canvas-continuity-monitor';foreign['Networks']['foreign-network']['NetworkID']=cid(997)
+            rows[cid(1600)]=foreign
+            scope.config['protectedCohort']['stockBefore']['rows'][cid(1600)]={'name':foreign['Name'],'live':{'Running':False,'Pid':0}}
+            with patch.object(m,'runtime_authority',return_value=roles),patch.object(m,'pause_authority'):
+                rebuilt=m.ProtectedCohort(scope.config,scope.core,{k:{'containerId':v} for k,v in list(roles.items())[:22]})
+                rebuilt.snapshot(g,'foreign-optional',{cid(200)})
+            self.assertNotIn(cid(1600),rebuilt.fixed);self.assertEqual(len(rebuilt.stock),7)
+
+    def test_optional_peer_type_spec_generation_and_anchor_drift_refuse(self):
+        for change in ('type','spec','generation','service'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as d:
+                scope,roles,rows,full,g=self.fixture(Path(d));actual=full[cid(1100)]
+                if change=='type':actual['Mounts']=[{'Type':'volume','Source':'foreign','Destination':'/data','RW':True}]
+                if change=='spec':actual['HostConfig']['ReadonlyRootfs']=False
+                if change=='generation':actual['State']['StartedAt']='foreign-generation'
+                if change=='service':rows[cid(1100)]['Labels']['com.docker.compose.service']='canvas-contract'
+                with patch.object(m,'runtime_authority',return_value=roles),self.assertRaisesRegex(AssertionError,'SCOPE_STOCK_(CHANGED|SERVICE_CHANGED)'):
+                    scope.snapshot(g,'optional-drift',{cid(200)})
+        with tempfile.TemporaryDirectory() as d:
+            scope,roles,_,_,_=self.fixture(Path(d))
+            scope.config['protectedCohort']['stockModelAnchor'][0]['Config']['Env']=['ANCHOR_CHANGED=1']
+            with patch.object(m,'runtime_authority',return_value=roles),patch.object(m,'pause_authority'),self.assertRaisesRegex(AssertionError,'SCOPE_STOCK_ANCHOR_CHANGED'):
+                m.ProtectedCohort(scope.config,scope.core,{k:{'containerId':v} for k,v in list(roles.items())[:22]})
+
     def test_shared_docker_builtin_network_is_not_claimed_as_project_owned(self):
         with tempfile.TemporaryDirectory() as d:
             scope,roles,rows,_,g=self.fixture(Path(d))
@@ -185,7 +238,7 @@ class Controls(unittest.TestCase):
             self.assertIn(cid(300),actual)
 
     def test_every_protected_class_missing_refuses(self):
-        for missing in (1,28,50,1000,200):
+        for missing in (1,28,50,1000,1100,200):
             with self.subTest(missing=missing),tempfile.TemporaryDirectory() as d:
                 scope,roles,rows,_,g=self.fixture(Path(d));del rows[cid(missing)]
                 with patch.object(m,'runtime_authority',return_value=roles),self.assertRaisesRegex(AssertionError,'SCOPE_PROTECTED_ID_MISSING'):
@@ -291,7 +344,7 @@ class Controls(unittest.TestCase):
             for id,actual in full.items():
                 if id not in fixture_scope.stock:continue
                 actual=copy.deepcopy(actual)
-                actual['Config']['Labels']={'com.docker.compose.project':'stock','com.docker.compose.service':actual['Name'].lstrip('/')}
+                actual['Config']['Labels']={'com.docker.compose.project':'stock','com.docker.compose.service':fixture_scope.stock_roles[id]}
                 actual['NetworkSettings']={'Networks':{'stock-network':{'NetworkID':cid(998)}}}
                 scenario.rows[id]=actual
                 stock[id]={'id':id,'name':actual['Name'],'image':actual['Image'],'spec':m.spec(actual),'live':copy.deepcopy(actual['State'])}
@@ -301,7 +354,7 @@ class Controls(unittest.TestCase):
                 actual['Config']['Labels']['com.docker.compose.service']=role;actual['State']['Paused']=False
                 scenario.rows[actual['Id']]=actual;roles[role]=actual['Id'];stopped[actual['Id']]=copy.deepcopy(actual)
             roles=m.RuntimeRoles(roles,stopped=stopped)
-            scope={'schema':m.SCHEMA,'profile':{'sha256':'a'*64},'stockPause':{},'nativeTransport':{},
+            scope={'schema':m.SCHEMA,'profile':{'sha256':'a'*64},'stockPause':{},'nativeTransport':{},'stockModelAnchor':scenario.save('stock-anchor.json',[next(r for r in scenario.rows.values() if r['Name']=='/marty-canvas-oss-web')]),
                 'stockBefore':scenario.save('stock-before.json',{'rows':stock,'targets':{id:r['name'] for id,r in stock.items() if r['name'] in m.STOCK_NAMES}}),
                 'stockPaused':scenario.save('stock-paused.json',{'state':'ONLY_STOCK_CANVAS_WEB_JOBS_EDGE_STOPPED','allOtherRowsUnchanged':True,'specsUnchanged':True})}
             scenario.config.update(protectedCohort=scope,sourceRepository=str(UI),currentSourceAuthority={'ui':'test'})
@@ -347,6 +400,7 @@ class Controls(unittest.TestCase):
             scope_config=copy.deepcopy(source_scope.config['protectedCohort'])
             scope_config['stockBefore']=save('scoped-stock-before.json',scope_config['stockBefore'])
             scope_config['stockPaused']=save('scoped-stock-paused.json',scope_config['stockPaused'])
+            scope_config['stockModelAnchor']=save('scoped-stock-anchor.json',scope_config['stockModelAnchor'])
             roles={role:owner.load(ref)['Id'] for role,ref in c['retainedContainers'].items()}
             roles.update({'ancillary-'+str(i):cid(500+i) for i in range(6)})
             roles.update({role:id for role,id in source_roles.items() if role.startswith('off-')})
@@ -357,7 +411,9 @@ class Controls(unittest.TestCase):
                             for i,id in enumerate(sorted(current))}
             for role,id in roles.items():
                 classification[id]['Labels']={'com.docker.compose.project':'elevenid-beta','com.docker.compose.service':role}
-            for id,stock in source_scope.stock.items():classification[id]['Name']=stock['name']
+            for id,stock in source_scope.stock.items():
+                classification[id]['Name']=stock['name']
+                classification[id]['Labels']={'com.docker.compose.project':source_scope.stock_project,'com.docker.compose.service':source_scope.stock_roles[id]}
             observation={'schema':m.SCHEMA,'profileSha256':'a'*64,'allIds':sorted(current),
                 'protectedIds':sorted(current),'outsideScopeIds':[],'classification':classification,'globalUnchangedClaimed':False}
             typed={'schema':m.SCHEMA,'profileSha256':'a'*64,'observations':[copy.deepcopy(observation),observation],'globalUnchangedClaimed':False}

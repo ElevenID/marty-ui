@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+import yaml
 
 SCHEMA = 'marty.northstar-protected-cohort/v1'
 CID = re.compile(r'^[a-f0-9]{64}$')
@@ -175,33 +176,63 @@ def pause_authority(scope, core):
     _terminal_job(request,job,success=True)
 
 
+def stock_model_peers(config, core):
+    scope=config['protectedCohort']
+    before=core.load(scope['stockBefore'])
+    targets={cid:before['rows'][cid] for cid in before['targets']}
+    require(len(targets)==3 and {row['name'] for row in targets.values()}==STOCK_NAMES, 'SCOPE_STOCK_TARGETS_CHANGED')
+    # Parse the same tracked Compose source used by repository packaging.
+    # Explicit container_name alone omits declared profile/one-shot peers.
+    model=yaml.safe_load(core.git_blob(config['sourceRepository'],config['currentSourceAuthority']['ui'],
+                                       'docker-compose.canvas-oss-acceptance.yml'))
+    services=model['services']
+    require(type(services) is dict and all(type(role) is str and type(service) is dict for role,service in services.items()),
+            'SCOPE_STOCK_MODEL_CHANGED')
+    named={role:'/'+service['container_name'] for role,service in services.items() if 'container_name' in service}
+    names=set(named.values())
+    require(STOCK_NAMES <= names and len(names)==6,'SCOPE_STOCK_MODEL_CHANGED')
+    stock={cid:row for cid,row in before['rows'].items() if row['name'] in names}
+    require(len(stock)==6 and {row['name'] for row in stock.values()}==names,'SCOPE_STOCK_PEERS_MISSING')
+    anchor=core.load(scope['stockModelAnchor'])
+    require(type(anchor) is list and len(anchor)==1,'SCOPE_STOCK_ANCHOR_SCHEMA')
+    anchor=anchor[0];expected=before['rows'].get(anchor['Id'])
+    require(anchor['Id'] in targets and expected is not None and anchor['Name']==expected['name']
+            and anchor['Image']==expected['image'] and spec(anchor)==expected['spec'], 'SCOPE_STOCK_ANCHOR_CHANGED')
+    project=anchor['Config']['Labels'].get('com.docker.compose.project')
+    require(type(project) is str and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,62}',project),
+            'SCOPE_STOCK_PROJECT_REQUIRED')
+    stock_roles={cid:next(role for role,name in named.items() if name==row['name']) for cid,row in stock.items()}
+    require(anchor['Config']['Labels'].get('com.docker.compose.service')==stock_roles[anchor['Id']],
+            'SCOPE_STOCK_ANCHOR_SERVICE_CHANGED')
+    for role,service in services.items():
+        if role in named:continue
+        require(type(service.get('profiles')) is list and service['profiles'],'SCOPE_STOCK_PROFILE_REQUIRED')
+        pattern=re.compile(r'^/'+re.escape(project)+'-'+re.escape(role)+r'-[1-9][0-9]*$')
+        for cid,row in before['rows'].items():
+            if pattern.fullmatch(row['name']):
+                require(cid not in stock and row['live']['Running'] is False and row['live']['Pid']==0,
+                        'SCOPE_STOCK_PROFILE_NOT_STOPPED')
+                stock[cid]=row;stock_roles[cid]=role
+    paused=set(targets)
+    return stock,stock_roles,project,paused
+
+
 class ProtectedCohort:
     def __init__(self, config, core, identities):
         self.config, self.core = config, core
         scope=config['protectedCohort']
-        require(set(scope)=={'schema','profile','stockBefore','stockPaused','stockPause','nativeTransport'}, 'SCOPE_FIELDS_CHANGED')
+        require(set(scope)=={'schema','profile','stockBefore','stockPaused','stockPause','nativeTransport','stockModelAnchor'}, 'SCOPE_FIELDS_CHANGED')
         pause_authority(scope,core)
         self.roles=runtime_authority(config,core,live=False)
         self.stopped=self.roles.stopped
         require(len(self.roles)==42 and len(self.stopped)==14,'SCOPE_OFF_AUTHORITY_COUNT')
         require(all(self.roles.get(role)==row['containerId'] for role,row in identities.items()), 'SCOPE_RETAINED22_CHANGED')
-        before,paused=core.load(scope['stockBefore']),core.load(scope['stockPaused'])
+        paused=core.load(scope['stockPaused'])
         require(paused['state']=='ONLY_STOCK_CANVAS_WEB_JOBS_EDGE_STOPPED'
                 and paused['allOtherRowsUnchanged'] is True and paused['specsUnchanged'] is True, 'SCOPE_STOCK_PAUSE_NOT_VERIFIED')
-        targets={cid:before['rows'][cid] for cid in before['targets']}
-        require(len(targets)==3 and {row['name'] for row in targets.values()}==STOCK_NAMES, 'SCOPE_STOCK_TARGETS_CHANGED')
-        # The tracked stock model declares the shared Postgres/Redis/mail peers.
-        # Include these retained peers instead of treating their attachment as
-        # unrelated activity or weakening protected-network collision checks.
-        model=core.git_blob(config['sourceRepository'],config['currentSourceAuthority']['ui'],
-                            'docker-compose.canvas-oss-acceptance.yml').decode()
-        names={'/'+name for name in re.findall(r'^\s+container_name:\s*(marty-canvas-oss-[a-z-]+)\s*$',model,re.M)}
-        require(STOCK_NAMES <= names and len(names)==6,'SCOPE_STOCK_MODEL_CHANGED')
-        self.stock={cid:row for cid,row in before['rows'].items() if row['name'] in names}
-        require(len(self.stock)==6 and {row['name'] for row in self.stock.values()}==names,'SCOPE_STOCK_PEERS_MISSING')
-        self.paused=set(targets)
+        self.stock,self.stock_roles,self.stock_project,self.paused=stock_model_peers(config,core)
         self.fixed=set(self.roles.values())|set(self.stock)
-        require(len(self.fixed)==48, 'SCOPE_ID_COLLISION')
+        require(len(self.fixed)==len(self.roles)+len(self.stock), 'SCOPE_ID_COLLISION')
         self.initial=None
         self.observations=[]
 
@@ -223,7 +254,8 @@ class ProtectedCohort:
                     and actual['State']['Pid']==(0 if cid in self.paused else expected['live']['Pid'])
                     and actual['State']['StartedAt']==expected['live']['StartedAt']
                     and actual['State']['Paused'] is expected['live']['Paused']
-                    and actual['State']['Restarting'] is expected['live']['Restarting'], 'SCOPE_STOCK_CHANGED')
+                    and actual['State']['Restarting'] is expected['live']['Restarting']
+                    and actual['State']['OOMKilled'] is False, 'SCOPE_STOCK_CHANGED')
         self.classify(rows,required)
         fixed={cid:rows[cid] for cid in self.fixed}
         if self.initial is None: self.initial=fixed
@@ -240,6 +272,9 @@ class ProtectedCohort:
                     and labels.get('com.docker.compose.project')==('elevenid-beta-ui' if role=='ui-prod' else 'elevenid-beta'),
                     'SCOPE_MANAGED_ROLE_LABEL_CHANGED')
         require(all(rows[cid]['Name']==expected['name'] for cid,expected in self.stock.items()),'SCOPE_STOCK_NAME_CHANGED')
+        require(all((rows[cid]['Labels'] or {}).get('com.docker.compose.project')==self.stock_project
+                    and (rows[cid]['Labels'] or {}).get('com.docker.compose.service')==self.stock_roles[cid]
+                    for cid in self.stock),'SCOPE_STOCK_SERVICE_CHANGED')
         protected={cid:rows[cid] for cid in required}
         projects={row['Labels']['com.docker.compose.project'] for row in protected.values()
                   if (row['Labels'] or {}).get('com.docker.compose.project')}
