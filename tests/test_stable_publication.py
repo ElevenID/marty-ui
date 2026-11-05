@@ -123,8 +123,11 @@ def setup(sealed, monkeypatch):
     admission = json.loads((directory / "tag-admission.json").read_bytes())
     tag = {"sha": admission["tag_object_sha"], "object": {"type": "commit", "sha": SOURCE},
            "message": p.h.tag_message(fixture.request(), manifest["files"]["checkpoint/request.json"]["sha256"],
-                                      api.original_artifact, admission["operator_run_id"])}
-    monkeypatch.setattr(p.h, "annotated_tag", lambda *_: copy.deepcopy(tag))
+                api.original_artifact, admission["operator_run_id"], intent_object_sha=admission["intent_object_sha"])}
+    intent = {"sha": admission["intent_object_sha"], "object": {"type": "commit", "sha": SOURCE},
+              "message": p.h.intent_message(fixture.request(), manifest["files"]["checkpoint/request.json"]["sha256"],
+                                            api.original_artifact, admission["operator_run_id"])}
+    monkeypatch.setattr(p.h, "annotated_tag", lambda _, name: copy.deepcopy(intent if name == admission["intent_tag"] else tag))
     monkeypatch.setattr(p.h, "successful_result", lambda *_: copy.deepcopy(admission))
     return fixture, directory, manifest, api, proof, tag
 
@@ -175,6 +178,44 @@ def test_changed_original_authority_is_rejected(setup, mutation):
     elif mutation == "artifact": api.items[0]["expired"] = True
     with pytest.raises(ValueError): authorization(setup)
     assert not api.writes
+
+
+@pytest.mark.parametrize("mutation", ["absent", "object", "source", "operator", "checkpoint"])
+def test_authorization_requires_the_retained_exact_original_operator_intent(setup, monkeypatch, mutation):
+    original = p.h.annotated_tag
+    def changed(github, name):
+        value = original(github, name)
+        if name == "v-release-intent-1.2.3":
+            if mutation == "absent": return None
+            if mutation == "object": value["sha"] = "7" * 40
+            elif mutation == "source": value["object"]["sha"] = "b" * 40
+            elif mutation == "operator": value["message"] = value["message"].replace("Operator-Run: 991", "Operator-Run: 993")
+            elif mutation == "checkpoint": value["message"] += "Foreign-Checkpoint: true\n"
+        return value
+    monkeypatch.setattr(p.h, "annotated_tag", changed)
+    with pytest.raises(ValueError, match="intent"):
+        authorization(setup)
+    assert not setup[3].writes
+
+
+@pytest.mark.parametrize("mutation", ["absent", "object", "source"])
+def test_intent_change_during_upload_stops_before_the_next_mutation(setup, monkeypatch, mutation):
+    pub = publisher(setup); api = setup[3]
+    original = p.h.annotated_tag
+    changed = [False]
+    def read(github, name):
+        value = original(github, name)
+        if changed[0] and name == "v-release-intent-1.2.3":
+            if mutation == "absent": return None
+            if mutation == "object": value["sha"] = "7" * 40
+            if mutation == "source": value["object"]["sha"] = "b" * 40
+        return value
+    monkeypatch.setattr(p.h, "annotated_tag", read)
+    api.upload_hook = lambda _: changed.__setitem__(0, True)
+    with pytest.raises(ValueError, match="intent changed"):
+        pub.publish()
+    assert len(api.content) == 1 and api.releases[0]["draft"] is True
+    assert not any(write[2] == {"draft": False, "make_latest": "true"} for write in api.writes)
 
 
 def test_publish_creates_owned_draft_exact_assets_and_one_final_transition(setup):

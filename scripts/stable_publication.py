@@ -116,11 +116,14 @@ def authorize(github: h.GitHub, directory: Path, artifact: dict, *, proof: Proof
     original_checkpoint = github.artifact(candidate["run_id"], f"stack-release-publication-inputs-{candidate['run_id']}-1",
                                           candidate["source_sha"])
     request_sha = candidate["files"]["checkpoint/request.json"]["sha256"]
+    intent = h.owned_intent(github, request, request_sha, original_checkpoint, admission["operator_run_id"],
+                            expected_sha=admission["intent_object_sha"])
+    h.require(admission["intent_tag"] == h.release_intent_tag(candidate["tag"]), "operator intent coordinate differs")
     tag = h.annotated_tag(github, candidate["tag"])
     h.require(tag is not None and tag["sha"] == admission["tag_object_sha"]
               and tag["object"]["sha"] == candidate["source_sha"]
               and tag.get("message", "").rstrip("\n") == h.tag_message(request, request_sha, original_checkpoint,
-                                                        admission["operator_run_id"]).rstrip("\n"),
+                    admission["operator_run_id"], intent_object_sha=intent["sha"]).rstrip("\n"),
               "qualified tag does not authenticate the original candidate")
     with tempfile.TemporaryDirectory(prefix="marty-publication-handoff-") as temporary:
         observed = h.successful_result(github, admission["operator_run_id"], request, request_sha,
@@ -283,6 +286,11 @@ class Publisher:
         tag = h.annotated_tag(self.github, self.candidate["tag"])
         h.require(tag is not None and tag["sha"] == self.admission["tag_object_sha"]
                   and tag["object"]["sha"] == self.candidate["source_sha"], "qualified tag changed")
+        h.require(self.admission["intent_tag"] == h.release_intent_tag(self.candidate["tag"]),
+                  "retained intent coordinate changed")
+        intent = h.annotated_tag(self.github, self.admission["intent_tag"])
+        h.require(intent is not None and intent["sha"] == self.admission["intent_object_sha"]
+                  and intent["object"]["sha"] == self.candidate["source_sha"], "retained original operator intent changed")
         h.require(c.utc(self.clock()) < self.deadline, "publication authorization expired during revalidation")
 
     def release(self, *, fresh: bool = False, owned: bool = True) -> dict:

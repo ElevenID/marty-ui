@@ -51,15 +51,21 @@ change is part of this contract. The release operator never updates main.
 3. On protected main, authenticate the original waiting publisher, its claim,
    checkpoint ZIP, visible rules, source/review authority, image digests, and all
    cryptographic proofs. Recheck current main immediately before the tag action.
-4. Create and verify the exact annotated object pointing to the original source.
-   Persist the ref-creation intent, then make one REST create-reference request
-   for the absent tag. Require HTTP 201 and the exact annotated-object response.
-   Never use an update endpoint, force operation, lightweight intermediate tag,
-   or overwrite fallback.
-5. Read back the exact ref, object, message, main, context, and visible rules.
+4. Acquire the per-version annotated ownership tag
+   `v-release-intent-<major>.<minor>.<patch>`. Its exact message binds the contract,
+   production tag, original CD/claim/checkpoint, source, admitted main and one
+   original operator run. Require HTTP 201 and exact object/ref readback before
+   a production-tag mutation is eligible. Any existing ownership is a collision,
+   including an apparently identical owner.
+5. Create and verify the production annotated object pointing to the original
+   source and binding the ownership ref/object. Persist its ref-creation intent,
+   then make one REST create-reference request for the absent production tag.
+   Require HTTP 201 and the exact annotated-object response. Never use an update
+   endpoint, force operation, lightweight intermediate tag, or overwrite fallback.
+6. Read back both exact refs, objects and messages, main, context, and visible rules.
    Emit a versioned successful operator result only if every required check
    succeeds within the original deadline.
-6. The original publisher authenticates the successful operator workflow and
+7. The original publisher authenticates the successful operator workflow and
    result artifact, then independently checks the tag, main, review authority,
    original checkpoint, assets, and live run. A tag alone cannot admit a release.
    The separate v2 publisher continues authenticating original CD success and
@@ -91,6 +97,19 @@ match. A lost create response cannot be repaired by adopting the subsequent
 readback. Once an intent is consumed, a caught exception cannot cause another
 mutation.
 
+Confirmed per-version ownership persists across invocations. A later operator
+cannot take over that version even when the production tag is absent. The
+successful result, typed admission and publisher checks bind and re-read the
+same ownership tag and object. Do not delete the owner to make a later dispatch
+eligible.
+
+If the initial ownership request is unconfirmed and no ownership ref exists, a
+later invocation may acquire that still-absent ownership. This is a new ownership
+acquisition, not a replay of a production-tag write: the earlier invocation could
+not have reached production without confirmed ownership creation and readback.
+An ownership ref that does exist always blocks another acquisition. This is the
+enforced boundary; a process-local consumed-intent set alone cannot provide it.
+
 A race or lost response can leave an immutable tag without a qualified release.
 Retain the original receipts and remote state for incident review. Do not delete
 or retarget the tag, renew the claim, rerun the original producer, or reuse the
@@ -118,7 +137,8 @@ pipeline and candidate remain v2; their lifetimes are unchanged.
 The capability experiment retains a genuine native negative protected-main
 request and its original packet evidence. That proves only its exact recorded
 protection or stale-ref refusal. The positive operation separately proves one
-create-only annotated audit tag and all required before/after observations.
+create-only annotated owner `v-release-capability-intent-<run>-1`, its bound audit
+tag, and all required before/after observations.
 Neither operation claims the old atomic main/tag capability. Preserve the audit
 tag and require fresh original live evidence after approved protected integration.
 

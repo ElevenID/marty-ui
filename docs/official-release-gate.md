@@ -177,12 +177,22 @@ authority. It uses its existing scoped ephemeral job token for metadata and
 ref operations. It does not build, sign, publish a release, handle private review
 images, or update main.
 
-The contract is `marty.create-only-annotated-tag/v1`. The operator creates and
-verifies an annotated object targeting the original candidate source, then makes
-one REST create-reference request for the absent tag. It requires HTTP 201 and
-the exact ref/object identity. There is no update, force, lightweight intermediate
-tag, overwrite fallback, or automatic retry. An intent is durably recorded before
-the request and consumed even when the response is lost.
+The contract is `marty.create-only-annotated-tag/v1`. First the operator acquires
+`v-release-intent-<major>.<minor>.<patch>`, an annotated ownership tag binding the
+production version, original CD, claim, checkpoint, source, admitted main and
+one original operator. It requires a confirmed HTTP 201 and exact readback.
+Any existing owner blocks another invocation, even if the production tag remains
+absent or the apparent owner matches.
+
+Only then may it create the production annotated object targeting the original
+source and binding that ownership. It makes one REST create-reference request
+for the absent production tag, requiring HTTP 201 and the exact ref/object
+identity. There is no update, force, lightweight intermediate tag, overwrite
+fallback, or automatic retry. Each intent is durably recorded before its request
+and consumed even when the response is lost. If ownership acquisition was never
+confirmed and its ref remains absent, a new acquisition cannot replay an earlier
+production write: the earlier invocation could not have reached that operation.
+Confirmed ownership remains the durable barrier to any later production attempt.
 
 This is an explicit revision of the earlier atomic main/tag requirement:
 `ref_creation_scope=absent_tag_only` and
@@ -215,7 +225,8 @@ member keeps the name `operator-api-receipt.json`. The successful
 `marty.release-tag-handoff-result/v2` is emitted only after exact annotated-tag
 readback and all unchanged-main/context/rules checks pass.
 
-The original publisher waits for both the exact annotated tag and the actual
+The original publisher waits for the exact annotated ownership and production
+tags and the actual
 successful operator workflow, authenticating its original bound result artifact.
 Matching tag text alone is insufficient. It emits
 `marty.release-tag-admission/v2` with the same explicit reservation contract.
@@ -231,7 +242,7 @@ deadline is rechecked after API/registry reads. Old checkpoint/result/admission
 schemas cannot be reinterpreted as this contract.
 
 The separate v2 publisher authenticates original CD success and the new policy
-digest, exact annotated tag, operator result, review authority, image identities
+digest, both exact annotated tags, operator result, review authority, image identities
 and original asset bytes. Publication policy v3 binds this tag contract; the
 external `publication_contract=v2`, candidate schema v2, fixed 24-hour candidate
 lifetime and at-most-15-minute publisher authorization remain unchanged.
@@ -268,8 +279,9 @@ GitHub [defines the current actor field](https://github.blog/changelog/2023-06-2
 and [documents the bypass inventory's access requirement](https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset).
 
 After rechecking the full context, main and visible rules, the positive phase
-creates only the absent annotated audit ref through the revised REST operation.
-Require the exact response and object/message/ref readbacks, unchanged observed
+creates the absent annotated `v-release-capability-intent-<run>-1` ownership ref,
+then its bound audit ref, through the revised REST operation. Require confirmed
+ownership before the audit mutation, exact responses and object/message/ref readbacks, unchanged observed
 main and rules, and the original deadline. The v5 capability result states the
 reservation contract and observation scopes. It cannot be relabeled as v4 atomic
 capability. Keep the successful audit tag and original receipts. Local collision

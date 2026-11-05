@@ -23,6 +23,7 @@ from scripts import release_tag_handoff as handoff
 SOURCE = "a" * 40
 MAIN = "b" * 40
 TAG_OBJECT = "c" * 40
+INTENT_OBJECT = "8" * 40
 
 
 class BoundedTransportTests(unittest.TestCase):
@@ -95,6 +96,10 @@ class BoundedTransportTests(unittest.TestCase):
                "repository": {"id": handoff.REPOSITORY_ID, "full_name": handoff.REPOSITORY}}
         for key in ("id", "run_attempt"):
             with self.subTest(key=key), mock.patch.object(github, "json", return_value={**run, key: True}):
+                with self.assertRaises(handoff.HandoffError):
+                    github.run(1, handoff.CD_WORKFLOW, SOURCE)
+        for attempt in (2, 1.0):
+            with self.subTest(attempt=attempt), mock.patch.object(github, "json", return_value={**run, "run_attempt": attempt}):
                 with self.assertRaises(handoff.HandoffError):
                     github.run(1, handoff.CD_WORKFLOW, SOURCE)
         artifact = {"id": 2, "name": "synthetic", "expired": False, "size_in_bytes": 20,
@@ -270,6 +275,16 @@ class OperatorReceiptTests(unittest.TestCase):
         self.request_sha = "sha256:" + "d" * 64
         self.checkpoint = {"id": 11, "digest": "sha256:" + "e" * 64}
         self.tag = {"sha": TAG_OBJECT}
+        self.intent = {"sha": INTENT_OBJECT, "tag": "v-release-intent-1.2.3",
+                       "object": {"type": "commit", "sha": SOURCE},
+                       "message": handoff.intent_message(self.request, self.request_sha, self.checkpoint, 789)}
+
+    def read_intent(self, path, **kwargs):
+        if path == "repos/ElevenID/marty-ui/git/ref/tags/v-release-intent-1.2.3":
+            return {"ref": "refs/tags/v-release-intent-1.2.3", "object": {"type": "tag", "sha": INTENT_OBJECT}}
+        if path == "repos/ElevenID/marty-ui/git/tags/" + INTENT_OBJECT:
+            return copy.deepcopy(self.intent)
+        raise AssertionError("Unexpected intent read: " + path)
 
     def result(self) -> dict:
         return {"schema": handoff.TAG_RESULT_SCHEMA, "status": "success", "mode": "create-qualified-tag",
@@ -277,6 +292,8 @@ class OperatorReceiptTests(unittest.TestCase):
                 "ref_creation_scope": handoff.REF_CREATION_SCOPE, "main_check_scope": handoff.MAIN_CHECK_SCOPE,
                 "tag_alone_authorizes_publication": False,
                 "tag_ref_creation": handoff.tag_ref_creation("v1.2.3", TAG_OBJECT),
+                "intent_tag": "v-release-intent-1.2.3", "intent_object_sha": INTENT_OBJECT,
+                "intent_ref_creation": handoff.tag_ref_creation("v-release-intent-1.2.3", INTENT_OBJECT),
                 "repository": handoff.REPOSITORY, "operator_run_id": 789, "operator_run_attempt": 1,
                 "operator_source_sha": MAIN, "source_sha": SOURCE, "candidate_run_id": 123,
                 "candidate_run_attempt": 1, "claim_run_id": "456", "tag": "v1.2.3", "protected_main_commit": MAIN,
@@ -307,7 +324,8 @@ class OperatorReceiptTests(unittest.TestCase):
                          "boolean:candidate_run_attempt", "boolean:checkpoint_artifact_id",
                          "old_schema", "tag_handoff_contract", "ref_creation_scope", "main_check_scope",
                          "tag_alone_authorizes_publication", "zero_boolean", "float_http_status",
-                         "tag_ref_creation", "missing_contract"):
+                         "tag_ref_creation", "missing_contract", "intent_tag", "intent_object_sha",
+                         "intent_ref_creation", "float_intent_status"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 value = self.result()
@@ -321,6 +339,8 @@ class OperatorReceiptTests(unittest.TestCase):
                     value["tag_alone_authorizes_publication"] = 0
                 elif mutation == "float_http_status":
                     value["tag_ref_creation"]["http_status"] = 201.0
+                elif mutation == "float_intent_status":
+                    value["intent_ref_creation"]["http_status"] = 201.0
                 elif mutation is not None and mutation.startswith("boolean:"):
                     value[mutation.split(":", 1)[1]] = True
                 elif mutation is not None:
@@ -337,7 +357,8 @@ class OperatorReceiptTests(unittest.TestCase):
                     kwargs["destination"].write_bytes(original.read_bytes())
                     return 0, b""
 
-                with mock.patch.object(github, "run", return_value=run), mock.patch.object(github, "artifact", return_value=artifact), mock.patch.object(handoff, "command", side_effect=download):
+                with mock.patch.object(github, "run", return_value=run), mock.patch.object(github, "artifact", return_value=artifact), \
+                     mock.patch.object(github, "json", side_effect=self.read_intent), mock.patch.object(handoff, "command", side_effect=download):
                     if mutation is None:
                         admitted = handoff.successful_result(github, 789, self.request, self.request_sha,
                                                              self.checkpoint, self.tag, root)
@@ -350,13 +371,35 @@ class OperatorReceiptTests(unittest.TestCase):
                                                       self.checkpoint, self.tag, root)
 
     def test_annotation_has_noncyclic_request_and_actual_operator_identity(self) -> None:
-        message = handoff.tag_message(self.request, self.request_sha, self.checkpoint, 789)
+        message = handoff.tag_message(self.request, self.request_sha, self.checkpoint, 789,
+                                      intent_object_sha=INTENT_OBJECT)
         self.assertEqual(handoff.operator_from_message(message), 789)
         self.assertIn("Handoff-Contract: " + handoff.TAG_HANDOFF_CONTRACT, message)
+        self.assertIn("Intent-Ref: refs/tags/v-release-intent-1.2.3", message)
+        self.assertIn("Intent-Object: " + INTENT_OBJECT, message)
         self.assertIn("Handoff-Request: " + self.request_sha, message)
         self.assertNotIn("result_sha", message)
         with self.assertRaises(handoff.HandoffError):
             handoff.operator_from_message(message + "Operator-Run: 790\n")
+
+    def test_retained_intent_must_bind_the_same_original_operator_candidate_and_checkpoint(self) -> None:
+        github = handoff.GitHub()
+        for mutation in ("absent", "source", "operator", "checkpoint", "object", "contract"):
+            intent = copy.deepcopy(self.intent)
+            if mutation == "source":
+                intent["object"]["sha"] = MAIN
+            elif mutation in {"operator", "checkpoint", "contract"}:
+                old, new = {"operator": ("Operator-Run: 789", "Operator-Run: 790"),
+                            "checkpoint": (self.request_sha, "sha256:" + "f" * 64),
+                            "contract": (handoff.TAG_HANDOFF_CONTRACT, "foreign")}[mutation]
+                intent["message"] = intent["message"].replace(old, new)
+            elif mutation == "object":
+                intent["sha"] = TAG_OBJECT
+            with self.subTest(mutation=mutation), \
+                 mock.patch.object(handoff, "annotated_tag", return_value=None if mutation == "absent" else intent), \
+                 self.assertRaises(handoff.HandoffError):
+                handoff.owned_intent(github, self.request, self.request_sha, self.checkpoint, 789,
+                                     expected_sha=INTENT_OBJECT)
 
 
 if __name__ == "__main__":

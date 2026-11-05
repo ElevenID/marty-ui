@@ -25,7 +25,7 @@ def sealed():
                  "tag_handoff_contract": candidate.h.TAG_HANDOFF_CONTRACT,
                  "operator_run_id": 991, "operator_run_attempt": 1, "result_artifact_id": 992,
                  "result_artifact_sha256": "sha256:" + "d" * 64, "result_sha256": "sha256:" + "e" * 64,
-                 "tag_object_sha": "f" * 40}
+                 "tag_object_sha": "f" * 40, "intent_tag": "v-release-intent-1.2.3", "intent_object_sha": "8" * 40}
     path = fixture.base / "admission.json"
     path.write_bytes(candidate.h.encoded(admission))
     output = fixture.base / "candidate"
@@ -59,7 +59,7 @@ def test_v2_creation_still_requires_original_active_checkpoint_and_first_attempt
                        environment={**fixture.environment, "GITHUB_RUN_ATTEMPT": "2"}, now=fixtures.NOW)
 
 
-@pytest.mark.parametrize("mutation", ["schema-less", "prior-schema", "foreign-contract", "prior-checkpoint", "prior-policy"])
+@pytest.mark.parametrize("mutation", ["schema-less", "prior-schema", "foreign-contract", "prior-checkpoint", "prior-policy", "foreign-intent"])
 def test_reservation_candidate_rejects_old_or_mixed_contract_evidence(sealed, mutation):
     fixture, output, manifest, path = sealed
     if mutation in {"schema-less", "prior-schema", "foreign-contract"}:
@@ -84,7 +84,7 @@ def test_reservation_candidate_rejects_old_or_mixed_contract_evidence(sealed, mu
         (output / "candidate.json").write_bytes(candidate.h.encoded(manifest))
         with pytest.raises(ValueError):
             candidate.load_candidate(output, now=fixtures.NOW + timedelta(seconds=5))
-    else:
+    elif mutation == "prior-policy":
         policy = copy.deepcopy(candidate.POLICY)
         policy["schema"] = "elevenid.stable-publication-policy/v2"
         policy.pop("tag_handoff_contract")
@@ -93,6 +93,13 @@ def test_reservation_candidate_rejects_old_or_mixed_contract_evidence(sealed, mu
         (foreign / candidate.POLICY_PATH).write_bytes(candidate.h.encoded(policy))
         with pytest.raises(ValueError):
             candidate.policy_digest(foreign)
+    else:
+        value = json.loads(path.read_bytes())
+        value["intent_tag"] = "v-release-intent-1.2.4"
+        path.write_bytes(candidate.h.encoded(value))
+        with pytest.raises(ValueError, match="another release version"):
+            candidate.seal(fixture.output, path, fixture.base / "foreign-owner", environment=fixture.environment,
+                           now=fixtures.NOW + timedelta(seconds=5))
 
 
 @pytest.mark.parametrize("field,value", [("schema", checkpoint.SCHEMA), ("run_attempt", True),
