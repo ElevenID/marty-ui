@@ -300,9 +300,13 @@ would change the signing source. Neither is a supported recovery shortcut.
 
 Complete actual official evidence is frozen before the fixed 60-minute review
 wait. After the record reaches protected main through its normal review gates,
-publication retains all 32 signed files and waits at most 15 minutes for the
+publication retains all 32 publication assets and waits at most 15 minutes for the
 separate `.github/workflows/release-tag-handoff.yml` operator. That workflow uses
-an atomic main-and-tag compare and supplies an authenticated successful receipt.
+a create-only annotated-tag reservation and supplies an authenticated versioned
+receipt after exact before/after main observations. A tag alone cannot authorize
+publication. This deliberately replaces the earlier atomic main-and-tag guarantee;
+see the [reservation contract](release-tag-reservation-contract.md) for approval,
+collision handling and the possibility of an unused tag after a race or failure.
 See [the official gate runbook](official-release-gate.md) for capability
 qualification, exact review-only ancestry, deadlines and failure handling.
 

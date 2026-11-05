@@ -171,6 +171,24 @@ class CheckpointTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE((self.output / "assets" / name).stat().st_mode), 0o600)
         self.assertEqual(value["not_after"], "2026-11-04T01:17:03Z")
         self.assertFalse(value["authority"]["review_required"])
+        self.assertEqual(value["schema"], "elevenid.stable-publication-checkpoint/v2")
+        self.assertEqual(value["tag_handoff_contract"], "marty.create-only-annotated-tag/v1")
+
+    def test_prior_atomic_checkpoint_cannot_be_reinterpreted_as_reservation_authority(self) -> None:
+        original = self.prepare()
+        for mutation in ("prior-schema", "missing-contract", "foreign-contract"):
+            changed = copy.deepcopy(original)
+            if mutation == "prior-schema":
+                changed["schema"] = "elevenid.stable-publication-checkpoint/v1"
+            elif mutation == "missing-contract":
+                changed.pop("tag_handoff_contract")
+            else:
+                changed["tag_handoff_contract"] = "marty.atomic-main-tag/v1"
+            with self.subTest(mutation=mutation):
+                with self.assertRaises(checkpoint.CheckpointError):
+                    checkpoint.validate_request_identity(changed)
+                self.save_request(changed)
+                self.rejected()
 
     def test_review_gate_retains_original_source_and_run_not_later_main(self) -> None:
         self.make_fixture(reviewed=True)

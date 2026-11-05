@@ -27,12 +27,20 @@ REPOSITORY_ID = 1140864197
 REPOSITORY_NODE = "R_kgDORAA0xQ"
 CD_WORKFLOW = ".github/workflows/cd.yml"
 OPERATOR_WORKFLOW = ".github/workflows/release-tag-handoff.yml"
+TAG_HANDOFF_CONTRACT = "marty.create-only-annotated-tag/v1"
+TAG_RESULT_SCHEMA = "marty.release-tag-handoff-result/v2"
+TAG_ADMISSION_SCHEMA = "marty.release-tag-admission/v2"
+REF_CREATION_SCOPE = "absent_tag_only"
+MAIN_CHECK_SCOPE = "before_after_observation"
+REF_CREATION_TRANSPORT = "github-rest-create-ref/v1"
 WAIT_STEP = "Wait for the exact operator tag handoff"
 MAX_JSON = 4 * 1024 * 1024
 MAX_ARCHIVE = 2 * 1024 * 1024 * 1024
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 TAG = re.compile(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
+INTENT_TAG = re.compile(r"v-release-intent-(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
+CAPABILITY_TAG = re.compile(r"v-release-capability-(?:intent-)?[1-9][0-9]{0,15}-1\Z")
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -185,6 +193,37 @@ class GitHub:
         self.mutations: list[dict] = []
         self.crypto: list[dict] = []
         self.observer = observer
+        # Consume before dispatch, including when journaling or the request
+        # fails. A caught exception must never turn an uncertain creation into
+        # another write or adoption attempt in the same operator process.
+        self._consumed_tag_refs: set[str] = set()
+
+    def create_tag_ref(self, tag: str, object_sha: str) -> dict:
+        """Reserve one absent ref at an already verified annotated tag object.
+
+        This is conditional on the TAG being absent, not on main. Main remains
+        independently observed by the caller before and after this operation.
+        It never updates an existing ref and makes no retry or cleanup request.
+        """
+        require(isinstance(tag, str) and any(pattern.fullmatch(tag) is not None
+                for pattern in (TAG, INTENT_TAG, CAPABILITY_TAG))
+                and isinstance(object_sha, str) and SHA.fullmatch(object_sha) is not None
+                and object_sha != "0" * 40,
+                "Tag reservation requires one exact annotated-object coordinate")
+        ref = f"refs/tags/{tag}"
+        require(ref not in self._consumed_tag_refs, "Tag reservation intent was already consumed; readback only")
+        self._consumed_tag_refs.add(ref)
+        status, raw = self.response(f"repos/{REPOSITORY}/git/refs", method="POST",
+                                    payload={"ref": ref, "sha": object_sha})
+        require(type(status) is int and status == 201,
+                "Tag reservation was not confirmed created; readback only")
+        value = decode(raw)
+        require(isinstance(value, dict) and value.get("ref") == ref
+                and isinstance(value.get("object"), dict)
+                and value["object"].get("type") == "tag"
+                and value["object"].get("sha") == object_sha,
+                "Created tag reference differs from the exact annotated object; readback only")
+        return tag_ref_creation(tag, object_sha)
 
     def response(self, path: str, *, method: str = "GET", payload: object | None = None) -> tuple[int, bytes]:
         require(path.startswith(f"repos/{REPOSITORY}/") or path in {f"repos/{REPOSITORY}", "graphql"},
@@ -376,10 +415,18 @@ def exact_context(workflow: str) -> tuple[int, str]:
     return int(run), source
 
 
-def tag_message(request: dict, request_sha: str, artifact: dict, operator_run: int) -> str:
+def release_intent_tag(tag: str) -> str:
+    require(isinstance(tag, str) and TAG.fullmatch(tag) is not None, "Intent requires a stable release coordinate")
+    return "v-release-intent-" + tag[1:]
+
+
+def handoff_bindings(request: dict, request_sha: str, artifact: dict, operator_run: int) -> str:
     require(positive(operator_run) and DIGEST.fullmatch(request_sha) is not None,
             "Invalid tag handoff identity")
-    return (f"Release {request['tag'][1:]}\n\n"
+    require(request.get("tag_handoff_contract") == TAG_HANDOFF_CONTRACT,
+            "Tag request uses a different handoff contract")
+    return (f"Handoff-Contract: {TAG_HANDOFF_CONTRACT}\n"
+            f"Release-Tag: {request['tag']}\n"
             f"Release-Transaction: {request['transaction_id']}\n"
             f"Claim-Run: {request['claim_run_id']}\n"
             f"Source-SHA: {request['source_sha']}\n"
@@ -387,10 +434,34 @@ def tag_message(request: dict, request_sha: str, artifact: dict, operator_run: i
             f"Candidate-Run: {request['run_id']}\n"
             "Candidate-Attempt: 1\n"
             f"Handoff-Request: {request_sha}\n"
+            f"Handoff-Not-After: {request['not_after']}\n"
             f"Handoff-Artifact: {artifact['id']}\n"
             f"Handoff-Artifact-Digest: {artifact['digest']}\n"
             f"Operator-Run: {operator_run}\n"
             "Operator-Attempt: 1\n")
+
+
+def intent_message(request: dict, request_sha: str, artifact: dict, operator_run: int) -> str:
+    return (f"Exclusive original operator intent for {request['tag']}\n\n"
+            + handoff_bindings(request, request_sha, artifact, operator_run))
+
+
+def tag_message(request: dict, request_sha: str, artifact: dict, operator_run: int,
+                *, intent_object_sha: str) -> str:
+    require(isinstance(intent_object_sha, str) and SHA.fullmatch(intent_object_sha) is not None
+            and intent_object_sha != "0" * 40, "Tag requires an exact retained intent object")
+    return (f"Release {request['tag'][1:]}\n\n"
+            + handoff_bindings(request, request_sha, artifact, operator_run)
+            + f"Intent-Ref: refs/tags/{release_intent_tag(request['tag'])}\n"
+            + f"Intent-Object: {intent_object_sha}\n")
+
+
+def tag_ref_creation(tag: str, object_sha: str) -> dict:
+    """Closed receipt shape; only a successful create call may assert it."""
+    return {"transport": REF_CREATION_TRANSPORT, "method": "POST",
+            "endpoint": f"repos/{REPOSITORY}/git/refs", "ref": f"refs/tags/{tag}",
+            "object_type": "tag", "object_sha": object_sha, "http_status": 201,
+            "condition": REF_CREATION_SCOPE, "decision": "confirmed_created"}
 
 
 def operator_from_message(message: str) -> int:
@@ -400,7 +471,8 @@ def operator_from_message(message: str) -> int:
 
 
 def annotated_tag(github: GitHub, tag: str) -> dict | None:
-    require(TAG.fullmatch(tag) is not None, "Stable release tag is required")
+    require(isinstance(tag, str) and (TAG.fullmatch(tag) is not None or INTENT_TAG.fullmatch(tag) is not None),
+            "Stable release or retained intent tag is required")
     ref = github.json(f"repos/{REPOSITORY}/git/ref/tags/{tag}", absent=True)
     if ref is None:
         return None
@@ -416,8 +488,22 @@ def annotated_tag(github: GitHub, tag: str) -> dict | None:
     return value
 
 
+def owned_intent(github: GitHub, request: dict, request_sha: str, checkpoint: dict,
+                 operator_run: int, *, expected_sha: str | None = None) -> dict:
+    """Authenticate retained exclusive ownership; this grants no write authority."""
+    intent = annotated_tag(github, release_intent_tag(request["tag"]))
+    require(intent is not None and (expected_sha is None or intent["sha"] == expected_sha)
+            and intent["object"]["sha"] == request["source_sha"]
+            and intent.get("message", "").rstrip("\n") == intent_message(
+                request, request_sha, checkpoint, operator_run).rstrip("\n"),
+            "Retained intent does not authenticate the original operator and checkpoint")
+    return intent
+
+
 def successful_result(github: GitHub, run_id: int, request: dict, request_sha: str,
                       checkpoint: dict, tag: dict, directory: Path) -> dict | None:
+    require(request.get("tag_handoff_contract") == TAG_HANDOFF_CONTRACT,
+            "Operator admission uses a different tag handoff contract")
     run = github.run(run_id, OPERATOR_WORKFLOW, request["protected_main_commit"])
     require(timestamp(run["created_at"]) >= timestamp(request["created_at"]),
             "Operator invocation predates the immutable handoff")
@@ -438,8 +524,22 @@ def successful_result(github: GitHub, run_id: int, request: dict, request_sha: s
                "candidate_run_attempt", "checkpoint_artifact_id"}
     require(isinstance(value, dict) and all(positive(value.get(key)) for key in numeric),
             "Operator result requires exact positive integer identities")
+    require(value.get("tag_alone_authorizes_publication") is False
+            and all(isinstance(value.get(key), dict)
+                    and type(value[key].get("http_status")) is int and value[key]["http_status"] == 201
+                    for key in ("tag_ref_creation", "intent_ref_creation"))
+            and isinstance(value.get("intent_object_sha"), str)
+            and SHA.fullmatch(value["intent_object_sha"]) is not None and value["intent_object_sha"] != "0" * 40,
+            "Operator result requires a strictly typed reservation receipt")
+    intent = owned_intent(github, request, request_sha, checkpoint, run_id, expected_sha=value["intent_object_sha"])
     expected = {
-        "schema": "marty.release-tag-handoff-result/v1", "status": "success", "mode": "create-qualified-tag",
+        "schema": TAG_RESULT_SCHEMA, "status": "success", "mode": "create-qualified-tag",
+        "tag_handoff_contract": TAG_HANDOFF_CONTRACT,
+        "ref_creation_scope": REF_CREATION_SCOPE, "main_check_scope": MAIN_CHECK_SCOPE,
+        "tag_alone_authorizes_publication": False,
+        "tag_ref_creation": tag_ref_creation(request["tag"], tag["sha"]),
+        "intent_tag": release_intent_tag(request["tag"]), "intent_object_sha": intent["sha"],
+        "intent_ref_creation": tag_ref_creation(release_intent_tag(request["tag"]), intent["sha"]),
         "repository": REPOSITORY, "operator_run_id": run_id, "operator_run_attempt": 1,
         "operator_source_sha": request["protected_main_commit"], "source_sha": request["source_sha"],
         "candidate_run_id": request["run_id"], "candidate_run_attempt": 1,
@@ -462,10 +562,12 @@ def successful_result(github: GitHub, run_id: int, request: dict, request_sha: s
     final_run = github.run(run_id, OPERATOR_WORKFLOW, request["protected_main_commit"])
     require(final_run.get("status") == "completed" and final_run.get("conclusion") == "success",
             "Operator invocation changed while reading its result")
-    return {"operator_run_id": run_id, "operator_run_attempt": 1,
+    return {"schema": TAG_ADMISSION_SCHEMA, "tag_handoff_contract": TAG_HANDOFF_CONTRACT,
+            "operator_run_id": run_id, "operator_run_attempt": 1,
             "result_artifact_id": artifact["id"], "result_artifact_sha256": artifact["digest"],
             "result_sha256": sha256(bounded_file(held / "tag-handoff-result.json", 65536)),
-            "tag_object_sha": tag["sha"]}
+            "tag_object_sha": tag["sha"], "intent_tag": release_intent_tag(request["tag"]),
+            "intent_object_sha": intent["sha"]}
 
 
 def wait_for_operator(checkpoint_directory: Path, artifact_id: int, artifact_digest: str,
@@ -513,8 +615,10 @@ def wait_for_operator(checkpoint_directory: Path, artifact_id: int, artifact_dig
             tag = annotated_tag(github, request["tag"])
             if tag is not None:
                 operator_run = operator_from_message(tag.get("message", ""))
+                intent = owned_intent(github, request, request_sha, artifact, operator_run)
                 require(tag["object"]["sha"] == source
-                        and tag.get("message", "").rstrip("\n") == tag_message(request, request_sha, artifact, operator_run).rstrip("\n"),
+                        and tag.get("message", "").rstrip("\n") == tag_message(
+                            request, request_sha, artifact, operator_run, intent_object_sha=intent["sha"]).rstrip("\n"),
                         "Immutable tag differs from the exact operator handoff")
                 result = successful_result(github, operator_run, request, request_sha, artifact, tag, directory)
                 if result is not None:
@@ -522,6 +626,9 @@ def wait_for_operator(checkpoint_directory: Path, artifact_id: int, artifact_dig
                     # follows successful operator completion and its bound ZIP.
                     require(github.main()["commit"]["sha"] == main, "Protected main changed before publication")
                     require(annotated_tag(github, request["tag"]) == tag, "Tag changed during result admission")
+                    require(owned_intent(github, request, request_sha, artifact, operator_run,
+                                         expected_sha=intent["sha"]) == intent,
+                            "Retained intent changed during result admission")
                     require(now() < timestamp(request["not_after"]), "Operator result arrived after its deadline")
                     require(github.run(run_id, CD_WORKFLOW, source).get("status") == "in_progress",
                             "Original CD attempt stopped before publication")

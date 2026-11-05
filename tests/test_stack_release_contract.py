@@ -1305,13 +1305,73 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
     assert "Require the exact claimed protected-main source" in workflow
     assert "+refs/heads/main:refs/remotes/origin/main" in workflow
     assert "Wait for the exact operator tag handoff" in workflow
-    helper = (_text("scripts/push_promoted_release_tag.py")
-              + _text("scripts/release_tag_handoff.py")
-              + _text("scripts/release_git_atomic.py"))
-    assert '"atomic", "report-status", "side-band-64k"' in helper
-    assert '"old_oid"' in helper and '"new_oid"' in helper
-    assert "marty.native-git-atomic-transaction/v1" in helper
-    assert "marty.release-tag-operator-observations/v2" in helper
+    operator = _text("scripts/push_promoted_release_tag.py")
+    handoff = _text("scripts/release_tag_handoff.py")
+    native = _text("scripts/release_git_atomic.py")
+    helper = operator + handoff + native
+    # Native atomic transport remains available for the real negative probe
+    # and historical replay. The new positive path promises tag absence only.
+    assert '"atomic", "report-status", "side-band-64k"' in native
+    assert '"old_oid"' in native and '"new_oid"' in native
+    assert "marty.native-git-atomic-transaction/v1" in native
+    assert "marty.release-tag-operator-observations/v3" in operator
+    assert 'TAG_HANDOFF_CONTRACT = "marty.create-only-annotated-tag/v1"' in handoff
+    assert 'TAG_RESULT_SCHEMA = "marty.release-tag-handoff-result/v2"' in handoff
+    assert 'TAG_ADMISSION_SCHEMA = "marty.release-tag-admission/v2"' in handoff
+    assert 'REF_CREATION_SCOPE = "absent_tag_only"' in handoff
+    assert 'MAIN_CHECK_SCOPE = "before_after_observation"' in handoff
+    assert '"tag_alone_authorizes_publication": False' in operator
+    assert 'SCHEMA = "elevenid.stable-publication-checkpoint/v2"' in _text("scripts/stable_publication_checkpoint.py")
+    policy = json.loads(_text("release/stable-publication-policy.json"))
+    assert policy["schema"] == "elevenid.stable-publication-policy/v3"
+    assert policy["tag_handoff_contract"] == "marty.create-only-annotated-tag/v1"
+
+    capability = operator.split("def qualify_capability(", 1)[1].split("\ndef verify_crypto(", 1)[0]
+    assert "marty.release-tag-capability/v5" in capability
+    assert '"negative_probe_scope": "stale_or_policy_refusal_only"' in capability
+    assert capability.count("native.exchange(") == 1
+    assert 'f"capability-negative-{run_id}-1"' in capability
+    assert '"confirmed_stale_main_refusal", "confirmed_main_policy_refusal"' in capability
+    assert capability.index("negative = native.exchange(") < capability.index("intent_reservation = github.create_tag_ref(")
+    assert capability.index("intent_reservation = github.create_tag_ref(") < capability.index("positive = github.create_tag_ref(")
+    assert '"positive_ref_creation": positive' in capability
+    assert "positive_transaction" not in capability
+
+    production = operator.split("def create_qualified_tag(", 1)[1].split("\ndef main(", 1)[0]
+    first_write = production.index("intent_object = create_tag_object(")
+    # Exact source, original claim/CD, review, signatures, immutable bytes,
+    # promoted digests, protection and deadline gates precede BOTH tag objects.
+    for gate in (
+        "require_capability_main_protection(inspection)", "request = load_checkpoint(checkpoint)",
+        'request["run_id"] == cd_run', 'request["source_sha"] == source',
+        'request["claim_run_id"] == claim_run', 'request["protected_main_commit"] == main',
+        'required_state="promoted"', "authority = gate_authority(", "require_review_only_history(",
+        'claim.get("conclusion") == "success"', 'required_state="claimed"',
+        'seed["transaction_id"] == transaction["transaction_id"]', "verify_crypto(",
+        "promoted_digests(", 'git/ref/tags/{intent_tag}', 'releases/tags/{request[\'tag\']}',
+        "github.artifact(cd_run, artifact_name, source) == artifact", "waiting_run(github, cd_run, source)",
+        'github.main()["commit"]["sha"] == main', "handoff.remaining(github.deadline)",
+    ):
+        assert production.index(gate) < first_write, gate
+    assert production.count("load_checkpoint(checkpoint)") == 2
+    assert "native.exchange(" not in production
+    assert production.count("github.create_tag_ref(") == 2
+    owner_write = production.index("intent_reservation = github.create_tag_ref(intent_tag,")
+    production_object = production.index("tag_object = create_tag_object(")
+    production_write = production.index('reservation = github.create_tag_ref(request["tag"],')
+    owner_reads = [match.start() for match in re.finditer(re.escape("read_exact_tag(github, intent_tag,"), production)]
+    assert len(owner_reads) == 3
+    assert first_write < owner_write < owner_reads[0] < production_object < owner_reads[1] < production_write < owner_reads[2]
+    assert production_write < production.index('read_exact_tag(github, request["tag"],')
+    assert production_write < production.index("Main changed after tag reservation")
+    assert production_write < production.index("final_run, final_source, final_inspection = inspect_repository(")
+    for field in ('"intent_tag"', '"intent_object_sha"', '"intent_ref_creation"', '"tag_ref_creation"'):
+        assert field in production
+    assert "A retained original operator already owns this release version" in production
+    assert "Intent-Ref: refs/tags/" in handoff and "Intent-Object:" in handoff
+    assert "owned_intent(github, request, request_sha, artifact, operator_run)" in handoff
+    assert "h.owned_intent(" in _text("scripts/stable_publication.py")
+
     assert "updateRefs" not in helper
     assert '"--atomic"' not in helper
     assert "git push" not in workflow
