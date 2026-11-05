@@ -59,6 +59,31 @@ def collect(transport, stem):
     return ids, parse_census(raw, ids)
 
 
+def native_projection(config, core):
+    """Select only transport provenance from the actual fixture input, never its authority flags."""
+    selected=config['protectedCohort']['nativeTransport']
+    require(set(selected)=={'fixtureInput','recorderRepository'},'SCOPE_NATIVE_BINDING_FIELDS')
+    fixture=core.load(selected['fixtureInput']);receipt=core.load(config['fixtureAuthority'])
+    require(fixture['runId']==receipt['runId']==config['runId']
+            and fixture['driverRevision']==receipt['driverSource']
+            and fixture['recorderRevision']==receipt['recorderSource']==config['currentSourceAuthority']['recorder'],
+            'SCOPE_NATIVE_FIXTURE_SOURCE_CHANGED')
+    for name in ('profile','observation'):
+        expected=config['runtimeAuthority'][name]
+        require(fixture[name]['sha256']==expected['sha256']
+                and core.read_ref(fixture[name])==core.read_ref(expected),'SCOPE_NATIVE_RUNTIME_CHANGED')
+    for name in ('dockerTransport','dockerCanary'):
+        core.read_ref(fixture[name])
+    descriptor=core.load(fixture['dockerTransport'])
+    require(descriptor['engineId']==config['engineId'],'SCOPE_NATIVE_ENGINE_CHANGED')
+    repository=selected['recorderRepository'];revision=fixture['recorderRevision']
+    for relative in ('src/externalQualification.js','src/canvasDockerTransport.js'):
+        require((Path(repository)/relative).read_bytes().replace(b'\r\n',b'\n')
+                ==core.git_blob(repository,revision,relative).replace(b'\r\n',b'\n'),'SCOPE_NATIVE_SOURCE_CHANGED')
+    return {'recorder':{'repository':repository,'revision':revision},
+            'dockerTransport':fixture['dockerTransport'],'dockerCanary':fixture['dockerCanary'],'engineId':config['engineId']}
+
+
 def runtime_authority(config, core, *, live):
     scope = config['protectedCohort']
     require(scope['schema'] == SCHEMA and scope['profile'] == config['runtimeAuthority']['profile'], 'SCOPE_PROFILE_CHANGED')
@@ -70,12 +95,26 @@ def runtime_authority(config, core, *, live):
         require((Path(repo)/relative).read_bytes().replace(b'\r\n',b'\n') == core.git_blob(repo, revision, relative).replace(b'\r\n',b'\n'), 'SCOPE_SOURCE_NOT_COMMITTED')
     require(Path(__file__).read_bytes() == (Path(repo)/'scripts/northstar_protected_cohort.py').read_bytes(), 'SCOPE_HELPER_CHANGED')
     node = core.read_executable_ref(config['nodeExecutable'])
-    plan = core.load(config['transportInput'])
-    docker = core.read_executable_ref(plan['executables']['docker'])
-    request = {'profile':scope['profile'],'verifyLive':live,'docker':str(docker)}
+    request = {'profile':scope['profile'],'verifyLive':live,**native_projection(config,core)}
     completed = subprocess.run([str(node),str(bridge)],input=json.dumps(request).encode(),
         stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=600,check=False)
-    require(completed.returncode == 0 and len(completed.stdout) <= 32768, 'SCOPE_RUNTIME_AUTHORITY_FAILED')
+    require(len(completed.stdout) <= 32768, 'SCOPE_RUNTIME_AUTHORITY_OVERSIZE')
+    if completed.returncode != 0:
+        code='SCOPE_RUNTIME_AUTHORITY_FAILED'
+        bridge_class='Error'
+        try:
+            failure=json.loads(completed.stdout)
+            if (failure.get('schema')=='marty.northstar-runtime-scope-failure/v1'
+                    and re.fullmatch(r'[A-Z][A-Z0-9_]{1,79}',failure.get('code',''))):
+                code=failure['code']
+                if failure.get('errorClass') in ('Error','AssertionError','TypeError','RangeError','SyntaxError'):
+                    bridge_class=failure['errorClass']
+        except (ValueError,TypeError,AttributeError):
+            pass
+        error=ValueError(code)
+        error.scopeFailure={'errorClass':bridge_class,'code':code,'exitCode':completed.returncode,
+                            'stdoutBytes':len(completed.stdout)}
+        raise error
     result = json.loads(completed.stdout)
     require(set(result) == {'schema','profileSha256','rows','off'} and result['schema'] == 'marty.northstar-resource-scope/v1'
             and result['profileSha256'] == scope['profile']['sha256'], 'SCOPE_AUTHORITY_SCHEMA')
@@ -140,7 +179,7 @@ class ProtectedCohort:
     def __init__(self, config, core, identities):
         self.config, self.core = config, core
         scope=config['protectedCohort']
-        require(set(scope)=={'schema','profile','stockBefore','stockPaused','stockPause'}, 'SCOPE_FIELDS_CHANGED')
+        require(set(scope)=={'schema','profile','stockBefore','stockPaused','stockPause','nativeTransport'}, 'SCOPE_FIELDS_CHANGED')
         pause_authority(scope,core)
         self.roles=runtime_authority(config,core,live=False)
         self.stopped=self.roles.stopped

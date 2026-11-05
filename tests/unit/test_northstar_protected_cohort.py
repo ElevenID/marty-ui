@@ -1,6 +1,9 @@
 """Hermetic scoped-cohort risks; no Docker, API, Node or browser process."""
 import copy
+import contextlib
+import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
@@ -21,6 +24,61 @@ def row(i,project='elevenid-beta',network='beta-network'):
 
 
 class Controls(unittest.TestCase):
+    def test_native_projection_binds_actual_fixture_without_inheriting_execution_authority(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            def save(name,value):
+                file=root/name;file.write_text(json.dumps(value),encoding='utf-8')
+                return {'path':str(file),'sha256':hashlib.sha256(file.read_bytes()).hexdigest()}
+            def bound(ref):
+                p=Path(ref['path']);assert hashlib.sha256(p.read_bytes()).hexdigest()==ref['sha256'];return p
+            repo=root/'recorder';(repo/'src').mkdir(parents=True)
+            for name in ('externalQualification.js','canvasDockerTransport.js'):(repo/'src'/name).write_bytes(b'pinned owner')
+            profile=save('profile.json',{});observation=save('observation.json',{})
+            descriptor=save('descriptor.json',{'engineId':'reviewed-engine'});canary=save('canary.json',{})
+            receipt=save('fixture-result.json',{'runId':'owned-run','driverSource':'6'*40,'recorderSource':'a'*40})
+            fixture={'runId':'owned-run','driverRevision':'6'*40,'recorderRevision':'a'*40,'executeAuthorized':True,
+                     'profile':profile,'observation':observation,'dockerTransport':descriptor,'dockerCanary':canary}
+            selected={'fixtureInput':save('input.armed.json',fixture),'recorderRepository':str(repo)}
+            config={'runId':'owned-run','fixtureAuthority':receipt,'currentSourceAuthority':{'recorder':'a'*40,'ui':'9'*40},
+                    'engineId':'reviewed-engine','runtimeAuthority':{'profile':profile,'observation':observation},
+                    'protectedCohort':{'nativeTransport':selected},'executeAuthorized':False}
+            core=types.SimpleNamespace(load=lambda r:json.loads(bound(r).read_bytes()),read_ref=bound,git_blob=lambda *args:b'pinned owner')
+            result=m.native_projection(config,core)
+            self.assertEqual(result['dockerTransport'],descriptor);self.assertEqual(result['dockerCanary'],canary)
+            self.assertNotIn('executeAuthorized',result);self.assertFalse(config['executeAuthorized'])
+            for key,value in [('runId','foreign'),('driverRevision','f'*40),('recorderRevision','e'*40)]:
+                bad={**fixture,key:value};selected['fixtureInput']=save('bad-'+key+'.json',bad)
+                with self.subTest(key=key),self.assertRaisesRegex(AssertionError,'SCOPE_NATIVE_FIXTURE_SOURCE_CHANGED'):
+                    m.native_projection(config,core)
+            selected['fixtureInput']=save('good-again.json',fixture)
+            config['engineId']='foreign'
+            with self.assertRaisesRegex(AssertionError,'SCOPE_NATIVE_ENGINE_CHANGED'):m.native_projection(config,core)
+            config['engineId']='reviewed-engine';(repo/'src/canvasDockerTransport.js').write_bytes(b'changed owner')
+            with self.assertRaisesRegex(AssertionError,'SCOPE_NATIVE_SOURCE_CHANGED'):m.native_projection(config,core)
+
+    def test_producer_prepare_failure_retains_fixed_metadata_without_success_report(self):
+        spec=importlib.util.spec_from_file_location('scope_producer_boundary',UI/'scripts/reconcile_northstar_off.py')
+        producer=importlib.util.module_from_spec(spec);spec.loader.exec_module(producer)
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);private=root/'.codex/private';private.mkdir(parents=True)
+            def save(name,value):
+                file=private/name;file.write_text(value if isinstance(value,str) else json.dumps(value),encoding='utf-8')
+                return {'path':str(file),'sha256':hashlib.sha256(file.read_bytes()).hexdigest()}
+            dispatcher=save('dispatcher.py',"def prepare(config, output):\n raise ValueError('SCOPE_NATIVE_TEST_REFUSED')\n")
+            operation=save('operation.json',{'sourceSha256':dispatcher['sha256']})
+            input=save('input.json',{'readOnlyVerificationAuthorized':True,'dispatcher':dispatcher,'operation':operation,'outputDir':str(private/'output')})
+            with patch.object(sys,'argv',['producer','--input',input['path']]),patch.object(producer.Path,'home',return_value=root),contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(producer.main(),1)
+            failure=json.loads((private/'output/failure.json').read_bytes())
+            self.assertEqual(failure['code'],'SCOPE_NATIVE_TEST_REFUSED');self.assertEqual(failure['stage'],'prepare')
+            self.assertFalse((private/'output/result.json').exists())
+            secret=ValueError('secret-cookie-value /private/provider/path')
+            safe=producer.failure_record(secret,'observe-recovered-off')
+            self.assertEqual(safe['code'],'READONLY_RECONCILIATION_FAILED');self.assertNotIn('secret',json.dumps(safe))
+            secret.scopeFailure={'errorClass':'AssertionError','code':'RESOURCE_PRESERVED_MOUNT_CHANGED','exitCode':1,'stdoutBytes':200}
+            self.assertEqual(producer.failure_record(secret,'observe-recovered-off')['scopeFailure'],secret.scopeFailure)
+
     def test_pause_authority_requires_exact_source_command_and_terminal_job(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d)
@@ -75,7 +133,7 @@ class Controls(unittest.TestCase):
         roles=m.RuntimeRoles(roles,stopped=stopped)
         config={'protectedCohort':{'schema':m.SCHEMA,'profile':{'sha256':'a'*64},
                 'stockBefore':{'rows':stock,'targets':{k:v['name'] for k,v in stock.items() if v['name'] in m.STOCK_NAMES}},
-                'stockPause':{},'stockPaused':{'state':'ONLY_STOCK_CANVAS_WEB_JOBS_EDGE_STOPPED','allOtherRowsUnchanged':True,'specsUnchanged':True}},
+                'stockPause':{},'nativeTransport':{},'stockPaused':{'state':'ONLY_STOCK_CANVAS_WEB_JOBS_EDGE_STOPPED','allOtherRowsUnchanged':True,'specsUnchanged':True}},
                 'sourceRepository':str(UI),'currentSourceAuthority':{'ui':'revision'}}
         core=types.SimpleNamespace(load=lambda x:x,git_blob=lambda *args:model)
         with patch.object(m,'runtime_authority',return_value=roles),patch.object(m,'pause_authority'):
@@ -243,7 +301,7 @@ class Controls(unittest.TestCase):
                 actual['Config']['Labels']['com.docker.compose.service']=role;actual['State']['Paused']=False
                 scenario.rows[actual['Id']]=actual;roles[role]=actual['Id'];stopped[actual['Id']]=copy.deepcopy(actual)
             roles=m.RuntimeRoles(roles,stopped=stopped)
-            scope={'schema':m.SCHEMA,'profile':{'sha256':'a'*64},'stockPause':{},
+            scope={'schema':m.SCHEMA,'profile':{'sha256':'a'*64},'stockPause':{},'nativeTransport':{},
                 'stockBefore':scenario.save('stock-before.json',{'rows':stock,'targets':{id:r['name'] for id,r in stock.items() if r['name'] in m.STOCK_NAMES}}),
                 'stockPaused':scenario.save('stock-paused.json',{'state':'ONLY_STOCK_CANVAS_WEB_JOBS_EDGE_STOPPED','allOtherRowsUnchanged':True,'specsUnchanged':True})}
             scenario.config.update(protectedCohort=scope,sourceRepository=str(UI),currentSourceAuthority={'ui':'test'})
