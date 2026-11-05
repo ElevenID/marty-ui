@@ -44,6 +44,14 @@ def private_fixture():
 
 class AclPolicyTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "Non-Windows refusal")
+    def test_exact_byte_reader_has_no_posix_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input"
+            path.write_bytes(b"SYNTHETIC\r\n")
+            with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                windows.read_private_bytes(path)
+
+    @unittest.skipIf(os.name == "nt", "Non-Windows refusal")
     def test_private_initialization_is_not_a_posix_write_fallback(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "input"
@@ -79,6 +87,44 @@ class AclPolicyTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "Actual NTFS handle/ACL integration")
 class WindowsInputTests(unittest.TestCase):
+    def test_byte_reader_preserves_line_endings_binary_empty_and_maximum(self):
+        with private_fixture() as (_, path):
+            for payload in [b"SYNTHETIC\r\nNEXT\rLAST\n", b"\xff\0", b"",
+                            b"x" * windows.MAX_BYTES]:
+                with self.subTest(size=len(payload)):
+                    path.write_bytes(payload)
+                    self.assertEqual(windows.read_private_bytes(path), payload)
+            path.write_bytes(b"SYNTHETIC\r\nNEXT\rLAST\n")
+            self.assertEqual(private_file(path), "SYNTHETIC\nNEXT\nLAST\n")
+            path.write_bytes(b"\xff")
+            with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                private_file(path)
+
+    def test_byte_reader_retains_privacy_bounds_and_handle_sharing_guards(self):
+        with private_fixture() as (root, path):
+            with path.open("r+b"):
+                with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                    windows.read_private_bytes(path)
+            linked = root / "linked-input"
+            os.link(path, linked)
+            try:
+                with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                    windows.read_private_bytes(path)
+            finally:
+                linked.unlink()
+            path.write_bytes(b"x" * (windows.MAX_BYTES + 1))
+            with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                windows.read_private_bytes(path)
+            path.write_bytes(PUBLIC.encode("utf-8"))
+            quoted = str(path).replace("'", "''")
+            powershell("$p='"+quoted+"';$a=Get-Acl -LiteralPath $p;"
+                       "$s=[Security.Principal.SecurityIdentifier]::new('S-1-5-32-545');"
+                       "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new("
+                       "$s,'Read','Allow'));[IO.File]::SetAccessControl($p,$a)")
+            with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                windows.read_private_bytes(path)
+            self.assertEqual(path.read_bytes(), PUBLIC.encode("utf-8"))
+
     def test_empty_private_file_initialization_preserves_utf8_and_refuses_overwrite(self):
         with private_fixture() as (_, path):
             path.write_bytes(b"")

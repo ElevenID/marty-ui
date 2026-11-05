@@ -64,10 +64,24 @@ def _path_identities(path: Path) -> list[tuple[int, int]]:
 
 
 def read_private_file(path: Path) -> str:
+    """Read UTF-8 with the shared owner's universal-newline text contract."""
+    try:
+        return read_private_bytes(path).decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    except (OSError, UnicodeError, ValueError, TypeError):
+        raise ValueError(REFUSAL) from None
+
+
+def read_private_bytes(path: Path) -> bytes:
+    """Read exact bounded bytes for generation comparison, without text decoding.
+
+    The held handle has the same NTFS identity, privacy and sharing proofs as
+    the text reader. This proves one read, not generation immutability after
+    returning, concurrent activation safety or permission to activate it.
+    """
     require(os.name == "nt")
     # Native errors deliberately do not expose filenames, input bytes or SIDs.
     try:
-        return _read_private_file(path)
+        return _private_file_bytes(path)
     except (OSError, UnicodeError, ValueError, TypeError):
         raise ValueError(REFUSAL) from None
 
@@ -83,12 +97,12 @@ def write_empty_private_file(path: Path, value: str) -> None:
         require(isinstance(value, str))
         payload = value.encode("utf-8")
         require(0 < len(payload) <= MAX_BYTES and b"\0" not in payload)
-        _read_private_file(path, payload)
+        _private_file_bytes(path, payload)
     except (OSError, UnicodeError, ValueError, TypeError):
         raise ValueError(WRITE_REFUSAL) from None
 
 
-def _read_private_file(path: Path, write_value: bytes | None = None) -> str:
+def _private_file_bytes(path: Path, write_value: bytes | None = None) -> bytes:
     from ctypes import wintypes as w
 
     path = Path(path)
@@ -249,7 +263,6 @@ def _read_private_file(path: Path, write_value: bytes | None = None) -> str:
                 and _path_identities(path) == before)
         if write_value is not None:
             require(data.raw[:count.value] == write_value)
-        # Match Path.read_text's universal-newline contract at the shared owner.
-        return data.raw[:count.value].decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        return data.raw[:count.value]
     finally:
         close(handle)
