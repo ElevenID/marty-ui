@@ -204,6 +204,22 @@ def rendered_models():
     return before, after
 
 
+@pytest.mark.parametrize("fault", ["missing-file-setting", "missing-mount", "wrong-target", "inline-key"])
+def test_applicant_template_auth_cannot_drift_from_reviewed_binding(rendered_models, fault):
+    approved, current = deepcopy(rendered_models)
+    applicant = current["services"]["applicant"]
+    if fault == "missing-file-setting":
+        applicant["environment"].pop("ISSUANCE_API_KEY_FILE")
+    elif fault == "missing-mount":
+        applicant["secrets"] = [s for s in applicant["secrets"] if s["source"] != "issuance_api_key"]
+    elif fault == "wrong-target":
+        next(s for s in applicant["secrets"] if s["source"] == "issuance_api_key")["target"] = "/run/secrets/other"
+    else:
+        applicant["environment"]["ISSUANCE_API_KEY"] = "PUBLIC_SYNTHETIC_INLINE_KEY"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
 def test_core_hosting_separates_optional_connectors_from_the_frozen_model(rendered_models):
     approved, current = rendered_models
     for section, names in (

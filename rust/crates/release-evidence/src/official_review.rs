@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::official::{
     assess_official_suite, candidate_receipt, digest, LaneReceipt, OfficialReceipt,
 };
+use crate::official_automation::AutomatedAssessment;
 
 pub const MAX_DISPOSITION_BYTES: usize = 256 * 1024;
 
@@ -24,6 +25,8 @@ pub struct ReviewModule {
     pub plan_id: String,
     pub official_result: String,
     pub screenshot_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automated_assessment: Option<AutomatedAssessment>,
 }
 
 #[derive(Deserialize)]

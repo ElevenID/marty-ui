@@ -470,6 +470,11 @@ def assert_models(
         dependencies = expected["services"][consumer]["depends_on"]
         assert provider not in dependencies
         dependencies[provider] = {"condition": "service_healthy", "required": True}
+    # Applicant's native template reads use the same authenticated management
+    # boundary as Gateway and Flow. Keep this one reviewed addition explicit.
+    applicant = expected["services"]["applicant"]
+    applicant["environment"]["ISSUANCE_API_KEY_FILE"] = "/run/secrets/issuance_api_key"
+    applicant["secrets"].append({"source": "issuance_api_key", "target": "/run/secrets/issuance_api_key"})
     assert expected == actual, "Unreviewed self-host model change:\n" + "".join(
         difflib.unified_diff(
             json.dumps(expected, sort_keys=True, indent=2).splitlines(keepends=True),
