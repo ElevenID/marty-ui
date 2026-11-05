@@ -1,3 +1,4 @@
+<#macro emailLayout>
 <!DOCTYPE html>
 <html>
 <head>
@@ -115,12 +116,13 @@
             <h1>ElevenID LLC Trust Services</h1>
         </div>
         <div class="email-body">
-            ${kcSanitize(msg("emailBody"))?no_esc}
+            <#nested>
         </div>
         <div class="email-footer">
             <p>&copy; ${.now?string('yyyy')} ElevenID LLC Trust Services. All rights reserved.</p>
-            <p>This email was sent by <a href="${realmUrl}">${realmName}</a></p>
+            <p>This email was sent by ${realmName}.</p>
         </div>
     </div>
 </body>
 </html>
+</#macro>
