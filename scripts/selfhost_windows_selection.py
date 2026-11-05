@@ -33,6 +33,7 @@ class SelectedInputs:
     secrets_dir: Path
     sequence: int
     check_current: Callable = field(repr=False, compare=False)
+    recover_existing: Callable = field(repr=False, compare=False)
 
 
 def require(value):
@@ -171,7 +172,7 @@ def _session(config_path, *, create=False):
         root = directory(config);parent = root.parent
         stack.enter_context(renewal.hold_private_input(parent/f'.{config["project"]}.renewal.lock', exclusive=True))
         stack.enter_context(renewal.hold_storage_namespace(parent))
-        if create and not root.exists():
+        if create and not renewal.namespace_entry_exists(root):
             with _held_private_input(parent, directory=True):pass
             root.mkdir()
         stack.enter_context(renewal.hold_storage_namespace(root))
@@ -205,8 +206,8 @@ def _inputs(config, stack):
     return values, snapshots
 
 
-def _prove(config, choice, values, stack, *, expected_data=None, authority_file=None):
-    """Reuse existing model, runtime, storage and signed native owners."""
+def _inspect(config, choice, values, stack, *, expected_data=None, require_ready=True):
+    """Local/runtime identity and isolation only; never native admission."""
     prefix = 'renewed' if choice == 'new' else 'current'
     docker = renewal.Docker(config['docker_host'], config['engine_id'])
     commands = {c: docker.compose(config['project'], Path(config[p+'_env']), Path(config['compose_file']))
@@ -222,7 +223,8 @@ def _prove(config, choice, values, stack, *, expected_data=None, authority_file=
     renewal.checked_live_configuration(owned, docker.hashes(commands[choice]), config['tls_init_receipt'])
     mounts = renewal.checked_secret_mounts(owned, config['project'], Path(config[prefix+'_secrets']),
         services, models[choice], path_equal=renewal.windows_mount_path_equal)
-    require(renewal.windows_healthy(renewal.statuses(commands[choice], cwd=Path(config['compose_file']).parent), services, models[choice]))
+    if require_ready:
+        require(renewal.windows_healthy(renewal.statuses(commands[choice], cwd=Path(config['compose_file']).parent), services, models[choice]))
     data_hash = digest(packed(renewal.data_mounts(owned)))
     if expected_data is not None:require(data_hash == expected_data)
     intent_raw = stack.enter_context(renewal.hold_private_input(Path(config['intent'])))
@@ -245,17 +247,31 @@ def _prove(config, choice, values, stack, *, expected_data=None, authority_file=
             if mount.get('RW') and mount.get('Type') == 'bind':
                 path = renewal.windows_source(mount['Source']);require(path is not None)
                 stack.enter_context(renewal.hold_storage_namespace(path))
+    require(mounts > 0)
+    return {'data_sha256': data_hash, 'docker': docker, 'baseline': baseline,
+            'owned': owned, 'services': services, 'model': models[choice], 'command': commands[choice],
+            'cwd': Path(config['compose_file']).parent}
+
+
+def _native_current(config, choice, values, docker, authority_file):
     native = dict(config['native']);native['current'] = native['renewed'] if choice == 'new' else native['current']
     if authority_file is not None:native['token_file'] = authority_file
     preflight_current(native, config['project'], values[choice], docker.prefix)
+
+
+def _prove(config, choice, values, stack, *, expected_data=None, authority_file=None):
+    """Full readiness plus signed native current-custody/lifetime admission."""
+    observed = _inspect(config, choice, values, stack, expected_data=expected_data)
+    docker = observed['docker']
+    _native_current(config, choice, values, docker, authority_file)
     require(renewal.observations(docker.containers(), config['project'], set())
-            == renewal.observations(baseline, config['project'], set()))
-    require(mounts > 0)
-    return data_hash
+            == renewal.observations(observed['baseline'], config['project'], set()))
+    return observed['data_sha256']
 
 
 def adopt(config_path, *, authority_file=None):
     with _session(config_path, create=True) as (config, raw_config, expected, root, raw, stack):
+        require(not renewal.recovery_pending(config))
         require(not raw or set(raw) == {'owner.json'} and decode(raw['owner.json']) == {'schema': SCHEMA, 'binding': expected})
         values, snapshots = _inputs(config, stack)
         result_raw = stack.enter_context(renewal.hold_private_input(Path(config['result'])))
@@ -282,6 +298,7 @@ def adopt(config_path, *, authority_file=None):
 
 def prepare(config_path, *, authority_file=None):
     with _session(config_path) as (config, raw_config, expected, root, raw, stack):
+        require(not renewal.recovery_pending(config))
         intents, records = _parse(raw, expected)
         require(len(intents) == len(records) and len(intents) < 256)
         previous = records[len(records)];values, snapshots = _inputs(config, stack)
@@ -358,7 +375,8 @@ def _reconciliation_choice(config, stack):
 def activation_admission(config, old, new, old_env, new_env):
     """Called under the activator's project lock; records stay held throughout."""
     root = directory(config)
-    if not root.exists():
+    require(not renewal.recovery_pending(config))
+    if not renewal.namespace_entry_exists(root):
         yield;return
     with ExitStack() as stack:
         stack.enter_context(renewal.hold_storage_namespace(root))
@@ -378,6 +396,7 @@ def activation_admission(config, old, new, old_env, new_env):
 def complete(config_path, *, reconcile=False, authority_file=None):
     require(type(reconcile) is bool)
     with _session(config_path) as (config, raw_config, expected, root, raw, stack):
+        require(not renewal.recovery_pending(config))
         intents, records = _parse(raw, expected);sequence = len(intents)
         require(sequence == len(records)+1)
         intent = intents[sequence]
@@ -427,7 +446,9 @@ def selected_inputs(config_path):
     The explicit callback delegates live readiness/custody checks after Bao is
     available. No startup or Docker mutation is performed by this context.
     """
+    completion = []
     with _session(config_path) as (_config, _cfg_raw, expected, _root, raw, stack):
+        require(not renewal.recovery_pending(_config))
         intents, records = _parse(raw, expected);require(len(intents) == len(records))
         sequence = len(records);intent = intents[sequence];record = records[sequence]
         cfg_raw = stack.enter_context(renewal.hold_private_input(Path(intent['config_path'])))
@@ -446,9 +467,22 @@ def selected_inputs(config_path):
                 require(active)
                 with ExitStack() as proof_stack:
                     return _prove(cfg, choice, values, proof_stack, expected_data=record['data_sha256'], authority_file=authority_file)
+        def recover_existing(output_dir, authority_file=None):
+            with lease_lock:
+                require(active and not completion)
+                from selfhost_windows_recovery import start_existing
+                with ExitStack() as proof_stack:
+                    pending = start_existing(cfg, choice, values, record, output_dir, proof_stack,
+                                             authority_file=authority_file)
+                completion.append(pending)
+                return decode(packed(pending['result']))
         try:
             yield SelectedInputs(cfg['project'], cfg['docker_host'], cfg['engine_id'], Path(cfg['compose_file']),
-                cfg['compose_sha256'], Path(selected['env_file']), Path(selected['secrets_dir']), sequence, check_current)
+                cfg['compose_sha256'], Path(selected['env_file']), Path(selected['secrets_dir']), sequence,
+                check_current, recover_existing)
         finally:
             with lease_lock:
                 active = False;values.clear()
+    if completion:
+        from selfhost_windows_recovery import finish_existing
+        finish_existing(cfg, completion[0])

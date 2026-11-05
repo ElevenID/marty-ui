@@ -155,3 +155,27 @@ including in check-only mode. Combined `up` and dependency traversal can replay
 that completed job. A retained managed candidate therefore needs the selected-
 generation recovery integration; passing paths to the legacy wrapper is unsafe.
 Existing standalone shapes without that initializer retain their recovery path.
+
+The selected-input lease now offers `recover_existing(output_dir, authority_file)`
+as a library callback. It holds the same project lock, original receipts and
+complete generations throughout recovery. The output directory must already be
+empty/private and named `windows-recovery-*` beside the generations. Missing,
+paused, invalid or failed completed jobs refuse before mutation. Only existing
+IDs may start; completed migrations and the TLS initializer never start again.
+Bao and its unseal helper start as a foundation group, then the native owner must
+admit the selected credentials before application roles start in dependency order.
+The full final readiness, storage, identity and native proof remains mandatory.
+
+A shared recovery marker blocks renewal, selection changes and new recovery after
+an interrupted/uncertain attempt. No failure path clears it or rolls back daemon
+operations. Preserve the marker, attempt receipts and generations for operator
+reconciliation. The callback returns a provisional result; only a clean exit from
+the entire selected-input context publishes success and clears the exact marker.
+Receipt tampering, a caller exception or a failed held-input exit leaves the marker.
+The marker remains authoritative even if a result file was written before a final
+publication-lock exit failure. Never interpret that result independently. Admission
+uses no-follow namespace checks: dangling marker/selection links and metadata errors
+must not fall back to an installation without an owner.
+No CLI, scheduled task, automatic marker removal or PowerShell managed-mode dispatch
+is installed by this library. Those integrations and interruption reconciliation
+remain required before unattended recovery is qualified.

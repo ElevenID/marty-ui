@@ -66,6 +66,23 @@ def require(value, message='Windows renewal preflight refused'):
         raise ValueError(message)
 
 
+def recovery_guard(config):
+    return Path(config['current_secrets']).parent / ('.'+config['project']+'.recovery-in-progress.json')
+
+
+def namespace_entry_exists(path):
+    """Any entry blocks admission, including a dangling link; never follow it."""
+    try:
+        Path(path).lstat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def recovery_pending(config):
+    return namespace_entry_exists(recovery_guard(config))
+
+
 def windows_healthy(items, services, model):
     init = [x for x in items if x.get('Service') == 'openbao-tls-init']
     return (len(init) == 1 and init[0].get('State') == 'exited'
@@ -725,6 +742,7 @@ def activate(config):
     try:
         with ExitStack() as stack:
             stack.enter_context(hold_private_input(lock, exclusive=True))
+            require(not recovery_pending(config), 'An interrupted recovery requires reconciliation')
             raw_model = stack.enter_context(hold_private_input(source, max_bytes=2 * 1024 * 1024))
             require(hashlib.sha256(raw_model).hexdigest() == config['compose_sha256'])
             before_env = stack.enter_context(hold_private_input(old_env))
