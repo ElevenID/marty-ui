@@ -100,8 +100,15 @@ mounts, including read-only consumers and containers without Compose labels.
 A surviving foreign ID cannot change its creation identity, image, complete mount
 metadata or project/service identity. A closing volume inventory and container
 census must match the proof inputs; candidate drift is never retried. Foreign
-inventory drift allows at most three read-only attempts within a sixty-second
-acceptance budget. No workload mutation is retried by this check.
+inventory drift allows at most three read-only attempts within one fixed
+three-minute acceptance budget. Full Windows/WSL mount witnesses and NTFS identity
+passes can legitimately exceed one minute on shared engines. Opening and closing
+inventories, fresh witnesses, identity checks and late-result rejection remain
+mandatory; no proof is cached across writes. Container inspections use batches of
+at most256 validated hexadecimal IDs, keeping even full-ID Windows commands below
+17KiB. The independent ten-minute activation-phase budget remains unchanged.
+These are acceptance deadlines, not a hard process wall-time guarantee. No
+workload mutation is retried by this check.
 
 Accepted context changes add proof hashes, counts and bounded ID samples to the
 private activation result. Recent proof samples have an aggregate eight-KiB bound;
@@ -202,6 +209,15 @@ The library exposes these bounded operations:
   current runtime before appending selection. `reconcile=True` never replays
   Docker: an empty original intent permits only the unchanged old selection;
   otherwise the terminal phase needs every durable started/completed boundary.
+  A distinct pre-command case permits only the old selection when the full
+  retained intent/model/layer/path closure is valid, every phase receipt is empty,
+  the rollback log is empty, and the new log is exactly the empty-tail diagnostic
+  header. The writer flushes each started receipt before invoking Docker, so this
+  case cannot have reached a workload command. Original container IDs, images and
+  data mounts must still match the intent both before and after fresh native,
+  readiness and data proof. The project lock excludes a concurrent writer and all
+  original records stay held and unchanged. A single nonempty started/completed
+  marker uses the existing terminal-phase rules; no partial layer is replayed.
   Incomplete or uncertain commands remain operator recovery cases even when a
   snapshot looks healthy. Original empty result files stay empty.
 - `status(config_path)` reports journal state, not live readiness. Pending,
