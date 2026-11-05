@@ -254,6 +254,7 @@ def _finish_publication(config,pending,target_name,body,*,allow_existing=False):
             with renewal.hold_private_input(parent/f'.{config["project"]}.renewal.lock',exclusive=True):
                 selection.require(not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(config)))
                 selection.require(not renewal.namespace_entry_exists(renewal.renewal_staging_guard(config)))
+                selection.require(not renewal.namespace_entry_exists(renewal.model_repair_guard(config)))
                 selection.require(set(p.name for p in root.iterdir())==names)
                 for name,sha in pending['receipt_sha256'].items():
                     selection.require(selection.digest(receipts.enter_context(renewal.hold_private_input(root/name)))==sha)
