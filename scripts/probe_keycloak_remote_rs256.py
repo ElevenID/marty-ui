@@ -392,9 +392,12 @@ def verify_jwt(jwt: str, jwks: dict, expected_kid: str,
 
 def probe(keycloak_image: str, openbao_image: str, jar: Path,
           require_browser: bool = False,
-          qualify_ready: Callable[[dict], None] | None = None) -> None:
+          qualify_ready: Callable[[dict], None] | None = None,
+          qualification_theme: Path | None = None) -> None:
     if qualify_ready is not None and not require_browser:
         raise ValueError("Additional qualification requires the packaged browser/KMS fixture")
+    if qualification_theme is not None and (qualify_ready is None or not qualification_theme.is_dir()):
+        raise ValueError("A qualification theme requires the owned live fixture and an existing directory")
     if not require_browser and not jar.is_file():
         raise RuntimeError("Build keycloak/openbao-provider with Maven first")
     suffix = secrets.token_hex(5)
@@ -622,7 +625,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 *(["--add-host", host_gateway_alias(network)]
                   if require_browser and os.name != "nt" else []),
                 *provider_mount,
-                *(["--mount", f"type=bind,src={ROOT / 'config/keycloak/themes/11id'},dst=/opt/keycloak/themes/11id,readonly"]
+                *(["--mount", f"type=bind,src={qualification_theme or ROOT / 'config/keycloak/themes/11id'},dst=/opt/keycloak/themes/11id,readonly"]
                   if qualify_ready is not None else []),
                 "--mount", f"type=bind,src={ca_dir / 'ca.crt'},dst=/run/kms/ca.crt,readonly",
                 "--mount", f"type=bind,src={scoped_token},dst=/run/kms/token,readonly",
@@ -778,7 +781,8 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             if qualify_ready is not None:
                 # In-process test seam; capabilities remain confined to this
                 # disposable PostgreSQL/OpenBao/Keycloak fixture and its lifetime.
-                qualify_ready({"container": kc_name, "network": network, "base": base})
+                qualify_ready({"container": kc_name, "network": network, "base": base,
+                               "openbao_container": bao_name})
                 # Extended native/device checks can outlive the short master
                 # access token. Refresh our admin capability rather than change
                 # the realm's token lifetime or reuse the callback's token.
