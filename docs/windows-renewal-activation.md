@@ -86,9 +86,33 @@ verification. Writable Windows data-source names are also held while their norma
 application writes remain permitted. Data mounts and image identities must remain
 unchanged. Running roles must match retained Compose config hashes; the preserved
 zero-exit historical TLS initializer requires an exact container/image/hash receipt.
-Ancestor names cannot be replaced while held. Unselected container
-identities, state, restarts and mounts must remain unchanged, including a fresh
-all-container check immediately before intent. An ordinary failure
+Ancestor names cannot be replaced while held. Protected candidate container
+identities, state, restarts and mounts must remain unchanged. The complete
+candidate role closure, data mounts and image identities remain fixed; before
+intent, every candidate observation must still match the initial census.
+
+Independent Docker projects may create, remove or restart containers during
+activation. Immediately before intent, before each new or rollback layer, and
+during final verification, the Windows adapter collects the entire container and
+volume inventory, refreshes native kernel mount witnesses and Windows path
+identities, and proves writable candidate storage disjoint from all foreign
+mounts, including read-only consumers and containers without Compose labels.
+A surviving foreign ID cannot change its creation identity, image, complete mount
+metadata or project/service identity. A closing volume inventory and container
+census must match the proof inputs; candidate drift is never retried. Foreign
+inventory drift allows at most three read-only attempts within a sixty-second
+acceptance budget. No workload mutation is retried by this check.
+
+Accepted context changes add proof hashes, counts and bounded ID samples to the
+private activation result. Unknown storage, missing witnesses, overlap, candidate
+drift or exhausted observation budget forbids further writes, including automatic
+rollback. Diagnostic-write failure preserves that classification. Docker has no
+cross-client transaction lock: this qualification cannot prevent another client
+from changing the engine after its closing census. Staging, selection proof and
+recovery checks retain their existing strict census policy; this activation
+change does not qualify unattended recovery or periodic renewal by itself.
+
+An ordinary failure in a freshly qualified context
 recreates the prior generation and verifies it. Failure of rollback, held-input
 exit checks or final receipt writing preserves the intent and requires recovery.
 An activation result is written only after the held-input exit checks pass.
