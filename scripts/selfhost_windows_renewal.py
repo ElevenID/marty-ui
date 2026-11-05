@@ -396,31 +396,26 @@ def recreate(docker, command, changing, services, model, log):
     deadline = time.monotonic() + 600
     tail = b''
     try:
-        for attempt in range(8):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            p = subprocess.run([*command, 'up', '-d', '--no-deps', '--no-build',
-                                '--pull', 'never', *(['--force-recreate'] if attempt == 0 else []),
-                                *sorted(changing)], capture_output=True, timeout=min(240, remaining))
-            tail = (tail + p.stdout + p.stderr)[-60000:]
-            # A nonzero Compose invocation can leave a partially recreated set;
-            # inspect authoritative state before deciding to retry or roll back.
-            while time.monotonic() < deadline:
-                items = statuses(command, cwd=Path.cwd())
-                if windows_healthy(items, services, model):
-                    return
-                present = {x.get('Service') for x in items}
-                if present != services or len(items) != len(services):
-                    break  # bounded up retry for incomplete creation only
-                for item in items:
-                    state = item.get('State', '').lower()
-                    completed = item['Service'] in COMPLETED_SERVICES | {'openbao-tls-init'}
-                    if state in {'dead', 'exited'} and (not completed or item.get('ExitCode') != 0):
-                        raise RuntimeError('Owned role exited during renewal')
-                # Existing starting/running roles need readiness polling, not
-                # another up invocation that reruns completed migrations/jobs.
-                time.sleep(2)
+        p = subprocess.run([*command, 'up', '-d', '--no-deps', '--no-build',
+                            '--pull', 'never', '--force-recreate', *sorted(changing)],
+                           capture_output=True, timeout=240)
+        tail = (p.stdout + p.stderr)[-60000:]
+        # A nonzero invocation may still leave authoritative ready state. A
+        # partial closure instead enters rollback; never re-up successful jobs.
+        while time.monotonic() < deadline:
+            items = statuses(command, cwd=Path.cwd())
+            if windows_healthy(items, services, model):
+                return
+            present = {x.get('Service') for x in items}
+            require(present == services and len(items) == len(services),
+                    'Owned creation incomplete; rollback required')
+            for item in items:
+                state = item.get('State', '').lower()
+                completed = item['Service'] in COMPLETED_SERVICES | {'openbao-tls-init'}
+                if state in {'dead', 'exited'} and (not completed or item.get('ExitCode') != 0):
+                    raise RuntimeError('Owned role exited during renewal')
+            # Readiness polling only: no extra starts of completed jobs.
+            time.sleep(2)
         raise RuntimeError('Windows renewal did not become ready')
     finally:
         write_empty_private_file(log, bounded_diagnostic(tail))

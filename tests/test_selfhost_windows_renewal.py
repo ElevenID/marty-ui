@@ -279,6 +279,23 @@ def test_recreate_polls_starting_roles_without_rerunning_completed_jobs(monkeypa
         assert len(calls) == 1 and '--no-deps' in calls[0] and '--pull' in calls[0]
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='Real NTFS Compose log boundary')
+def test_partial_creation_does_not_restart_a_successful_completed_job(monkeypatch):
+    from test_selfhost_windows_inputs import private_fixture
+    import subprocess
+    with private_fixture() as (root, path):
+        path.write_bytes(b'');m = model(root);ready = states(m);services = {x['Service'] for x in ready}
+        partial = [x for x in ready if x['Service'] != 'gateway'];calls = []
+        assert next(x for x in partial if x['Service'] == 'db-migrate')['ExitCode'] == 0
+        def up(args, **_):
+            calls.append(args);return subprocess.CompletedProcess(args, 1, b'PARTIAL_CREATION', b'')
+        monkeypatch.setattr(renewal.subprocess, 'run', up)
+        monkeypatch.setattr(renewal, 'statuses', lambda *_a, **_k: partial)
+        with pytest.raises(ValueError, match='incomplete'):
+            renewal.recreate(None, ['SYNTHETIC_COMPOSE'], {'gateway', 'db-migrate'}, services, m, path)
+        assert len(calls) == 1
+
+
 @pytest.mark.skipif(os.name != 'nt', reason='Actual held NTFS transaction')
 @pytest.mark.parametrize('fail_new', [False, True, 'rollback', 'unselected'])
 def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreation(monkeypatch, fail_new):
