@@ -67,6 +67,9 @@ if ('CASE' -like 'renew*') {
  }
 }
 switch ('CASE') {
+ 'local-account-check' {$global:task.Principal.UserId=[Environment]::UserName;$global:task.Triggers[0].UserId=[Environment]::UserName}
+ 'sid-account-check' {$global:task.Principal.UserId=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$global:task.Triggers[0].UserId=$global:task.Principal.UserId}
+ 'unknown-account' {$global:task.Principal.UserId='Marty-Unknown-Qualification-Account'}
  'renew-window-missing-logon' {$global:task.Triggers[0].EndBoundary=''}
  'renew-window-missing-timer' {$global:task.Triggers[1].EndBoundary=''}
  'renew-window-wrong-end' {$global:task.Triggers[0].EndBoundary=$registered.AddMinutes(301).ToString("yyyy-MM-dd'T'HH:mm:sszzz")}
@@ -148,7 +151,8 @@ function Set-ScheduledTask {throw 'Update forbidden'}
 
 
 @pytest.mark.parametrize('case', ['check', 'renew-check', 'run', 'renew-run',
-                                'renew-first-check','renew-reordered-check','renew-utc-z-check','renew-window-check'])
+                                'renew-first-check','renew-reordered-check','renew-utc-z-check','renew-window-check',
+                                'local-account-check','sid-account-check'])
 def test_exact_managed_task_check_or_one_bounded_run(tmp_path, case):
     result, child, started = invoke(tmp_path, case)
     assert result.returncode == 0, result.stderr
@@ -167,7 +171,7 @@ def test_exact_managed_task_check_or_one_bounded_run(tmp_path, case):
     assert not report['host_reboot_qualified'] and not report['production_admission']
 
 
-@pytest.mark.parametrize('case', ['wrong-user', 'highest', 'wrong-logon', 'wrong-folder',
+@pytest.mark.parametrize('case', ['wrong-user', 'unknown-account', 'highest', 'wrong-logon', 'wrong-folder',
     'wrong-action', 'wrong-launcher', 'wrong-cwd', 'extra-action', 'extra-trigger',
     'wrong-trigger-user', 'wrong-trigger-type', 'busy', 'disabled', 'parallel',
     'renew-retries', 'renew-dangling-interval', 'renew-duration', 'renew-interval', 'inventory-failure', 'missing', 'preflight-failure',

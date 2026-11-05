@@ -48,7 +48,16 @@ if ($ManagedPython) {
         throw 'Use a new absolute status file in an existing directory.'
     }
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $userIds = @($identity.Name, $identity.User.Value)
+    function Test-ManagedOperator([string]$UserId) {
+        if ([string]::IsNullOrWhiteSpace($UserId)) { return $false }
+        if ($UserId -eq $identity.User.Value) { return $true }
+        try {
+            # Task Scheduler may serialize the same local account without its
+            # machine prefix. Resolve its SID rather than trusting name suffixes.
+            $account = [Security.Principal.NTAccount]::new($UserId)
+            return $account.Translate([Security.Principal.SecurityIdentifier]).Value -eq $identity.User.Value
+        } catch { return $false }
+    }
     $recoveryScript = Join-Path $PSScriptRoot 'recover-marty-after-reboot.ps1'
     $repoRoot = Split-Path -Parent $PSScriptRoot
     $powerShellPath = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell/v1.0/powershell.exe'
@@ -58,7 +67,7 @@ if ($ManagedPython) {
     function Assert-ManagedTask($Task) {
         $expectedTriggers = if ($RenewCredentials) { 2 } else { 1 }
         if ($Task.TaskName -cne $TaskName -or $Task.TaskPath -ne '\' -or
-            $Task.Principal.UserId -notin $userIds -or
+            -not (Test-ManagedOperator $Task.Principal.UserId) -or
             [string]$Task.Principal.LogonType -ne 'Interactive' -or
             [string]$Task.Principal.RunLevel -ne 'Limited' -or
             @($Task.Actions).Count -ne 1 -or @($Task.Triggers).Count -ne $expectedTriggers) {
@@ -70,7 +79,7 @@ if ($ManagedPython) {
         if ($action.Execute -ine $powerShellPath -or $action.Arguments -cne $expectedArguments -or
             $action.WorkingDirectory -ine $repoRoot -or
             $trigger.CimClass.CimClassName -ne 'MSFT_TaskLogonTrigger' -or
-            $trigger.UserId -notin $userIds -or $trigger.Delay -ne 'PT2M' -or -not $trigger.Enabled -or
+            -not (Test-ManagedOperator $trigger.UserId) -or $trigger.Delay -ne 'PT2M' -or -not $trigger.Enabled -or
             -not $Task.Settings.Enabled -or -not $Task.Settings.StartWhenAvailable -or
             [string]$Task.Settings.MultipleInstances -ne 'IgnoreNew') {
             throw 'The managed task action, trigger or execution settings differ from the expected invocation.'
