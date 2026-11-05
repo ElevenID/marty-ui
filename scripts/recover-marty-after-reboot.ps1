@@ -2,6 +2,7 @@
 param(
     [string]$RecoveryConfigurationFile,
     [string]$ManagedPython,
+    [switch]$WaitForEngine,
     [string]$RegistryConfig,
     [string]$ExpectedDockerContext,
     [string]$StackDirectory,
@@ -21,7 +22,7 @@ $ManagedRecoverySettings = $null
 # A scheduled invocation retains only nonsecret paths/project/context settings.
 # Direct parameters remain useful for an isolated rehearsal.
 if ($RecoveryConfigurationFile) {
-    if (@($PSBoundParameters.Keys | Where-Object { $_ -notin @('RecoveryConfigurationFile', 'ManagedPython', 'CheckOnly') }).Count) {
+    if (@($PSBoundParameters.Keys | Where-Object { $_ -notin @('RecoveryConfigurationFile', 'ManagedPython', 'WaitForEngine', 'CheckOnly') }).Count) {
         throw 'Use retained recovery configuration or direct settings, not both.'
     }
     try {
@@ -39,7 +40,7 @@ if ($RecoveryConfigurationFile) {
             }
             $ManagedRecoverySettings = $configuration
         } else {
-        if ($ManagedPython) { throw 'managed interpreter requires managed schema' }
+        if ($ManagedPython -or $WaitForEngine) { throw 'managed interpreter/wait requires managed schema' }
         if (($configuration.PSObject.Properties.Name | Sort-Object) -join ',' -ne 'parameters,schema' -or
             $configuration.schema -ne 'marty.windows-recovery/v1' -or
             $configuration.parameters -isnot [PSCustomObject]) { throw 'invalid schema' }
@@ -66,13 +67,14 @@ if ($RecoveryConfigurationFile) {
         }
     } catch { throw 'Invalid retained recovery configuration; use the documented nonsecret schema.' }
 }
-elseif ($ManagedPython) { throw 'Managed recovery requires its retained configuration.' }
+elseif ($ManagedPython -or $WaitForEngine) { throw 'Managed recovery requires its retained configuration.' }
 
 $env:Path = "C:\Program Files\Docker\Docker\resources\bin;$env:Path"
 
 if ($ManagedRecoverySettings) {
     $ManagedRecoveryArguments = @('--configuration', $RecoveryConfigurationFile)
     if ($CheckOnly) { $ManagedRecoveryArguments += '--check-only' }
+    if ($WaitForEngine) { $ManagedRecoveryArguments += '--wait-for-engine' }
     # The Python owner re-reads strict private JSON, owns the shared project
     # lock and validates the retained engine. No legacy Compose up is reached.
     & $ManagedPython (Join-Path $PSScriptRoot 'selfhost_windows_recovery.py') @ManagedRecoveryArguments

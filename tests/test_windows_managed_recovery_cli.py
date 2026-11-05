@@ -35,9 +35,23 @@ def configured(monkeypatch):
         def lease(path):
             assert path==selector
             yield SimpleNamespace(project='marty-production-synthetic',secrets_dir=generation,
+                                  docker_host='SYNTHETIC_PIPE',engine_id='SYNTHETIC_ENGINE',
                                   check_configuration=check,recover_existing=recover)
         monkeypatch.setattr(recovery.selection,'selected_inputs',lease)
         yield root,config,value,calls
+
+
+@pytest.mark.parametrize('check',[False,True])
+def test_cli_explicit_wait_precedes_all_engine_dependent_callbacks(monkeypatch,capsys,check):
+    with configured(monkeypatch) as (_root,config,_value,calls):
+        def wait(host,engine):
+            assert (host,engine)==('SYNTHETIC_PIPE','SYNTHETIC_ENGINE')
+            calls.append('wait')
+        monkeypatch.setattr(recovery,'wait_for_engine',wait)
+        assert recovery.main(['--configuration',str(config),'--wait-for-engine',
+                              *(['--check-only'] if check else [])])==0
+        assert calls==['wait','check' if check else 'recover']
+        assert json.loads(capsys.readouterr().out)
 
 
 @pytest.mark.parametrize('check',[False,True])

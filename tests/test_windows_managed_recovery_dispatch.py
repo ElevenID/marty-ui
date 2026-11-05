@@ -19,7 +19,7 @@ def recorder(tmp_path_factory):
     legacy.native_docker_recorder.__wrapped__(tmp_path_factory)
 
 
-def invoke(tmp_path,*,check=False,bad=None):
+def invoke(tmp_path,*,check=False,wait=False,bad=None):
     selection=tmp_path/'private selector.json';selection.touch()
     config=tmp_path/'retained managed.json'
     value={'schema':'marty.windows-managed-recovery/v1','selection_file':str(selection)}
@@ -33,6 +33,7 @@ def invoke(tmp_path,*,check=False,bad=None):
     if bad!='no-config':script+=' -RecoveryConfigurationFile '+legacy.quote(config)
     if bad!='no-python':script+=' -ManagedPython '+legacy.quote(legacy.NATIVE_DOCKER)
     if check:script+=' -CheckOnly'
+    if wait:script+=' -WaitForEngine'
     env={**os.environ,'MARTY_TEST_DOCKER_LOG':str(log)}
     p=subprocess.run([legacy.POWERSHELL,'-NoProfile','-NonInteractive','-EncodedCommand',
         base64.b64encode(script.encode('utf-16le')).decode()],capture_output=True,text=True,env=env,timeout=30)
@@ -41,11 +42,13 @@ def invoke(tmp_path,*,check=False,bad=None):
 
 
 @pytest.mark.parametrize('check',[False,True])
-def test_managed_dispatch_reaches_only_retained_owner(tmp_path,check):
-    p,calls,config=invoke(tmp_path,check=check)
+@pytest.mark.parametrize('wait',[False,True])
+def test_managed_dispatch_reaches_only_retained_owner(tmp_path,check,wait):
+    p,calls,config=invoke(tmp_path,check=check,wait=wait)
     assert p.returncode==0,p.stderr
     expected=[str(legacy.ROOT/'scripts/selfhost_windows_recovery.py'),'--configuration',str(config)]
     if check:expected+=['--check-only']
+    if wait:expected+=['--wait-for-engine']
     assert calls==[expected]
 
 

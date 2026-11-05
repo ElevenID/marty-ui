@@ -1,6 +1,6 @@
 """Start existing managed-candidate IDs while its selection lease remains held.
 
-Library only: no task installation, initialization, creation, recreation, restart,
+No task installation, initialization, creation, recreation, restart,
 image pulls or public routing. Failed/uncertain attempts retain their guard and
 receipts for operator reconciliation; they are never automatically replayed.
 """
@@ -358,11 +358,37 @@ def finish_terminal(config,pending):
     _finish_publication(config,pending,'reconciliation.json',selection.packed(pending['decision']),allow_existing=True)
 
 
+def wait_for_engine(host,engine_id,*,timeout=300):
+    """Bounded read-only startup wait; a responding foreign engine refuses now."""
+    selection.require(host in {'npipe:////./pipe/dockerDesktopLinuxEngine','npipe:////./pipe/docker_engine'})
+    selection.require(isinstance(engine_id,str) and 10<=len(engine_id)<=128)
+    selection.require(type(timeout) is int and 1<=timeout<=300)
+    deadline=time.monotonic()+timeout
+    while True:
+        remaining=deadline-time.monotonic();selection.require(remaining>0)
+        # Reuse the owned job and continuously bounded pipe drains. Even a
+        # read-only CLI must not hang on a descendant retaining its pipes.
+        # Only ordinary returned unavailability is retryable; abnormal child
+        # cleanup/timeout refuses immediately without any recovery intent.
+        fields='{"ID":{{json .ID}},"OSType":{{json .OSType}},"DockerRootDir":{{json .DockerRootDir}}}'
+        p=renewal.run_owned_mutation(['docker','--host',host,'info','--format',fields],
+                                    timeout=min(10,remaining))
+        if p.returncode==0:
+            info=selection.decode(p.stdout)
+            selection.require(isinstance(info,dict) and info.get('OSType')=='linux'
+                and info.get('ID')==engine_id and info.get('DockerRootDir')=='/var/lib/docker')
+            selection.require(time.monotonic()<deadline)
+            return
+        remaining=deadline-time.monotonic();selection.require(remaining>0)
+        time.sleep(min(5,remaining))
+
+
 def main(argv=None):
     """Managed dispatch used by the existing Windows recovery wrapper."""
     parser=argparse.ArgumentParser(description='Recover retained existing Windows candidate IDs')
     parser.add_argument('--configuration',required=True)
     parser.add_argument('--check-only',action='store_true')
+    parser.add_argument('--wait-for-engine',action='store_true')
     args=parser.parse_args(argv)
     try:
         selection.require(os.name=='nt')
@@ -372,6 +398,7 @@ def main(argv=None):
                 and config['schema']=='marty.windows-managed-recovery/v1')
             selection.require(isinstance(config['selection_file'],str) and Path(config['selection_file']).is_absolute())
             with selection.selected_inputs(Path(config['selection_file'])) as lease:
+                if args.wait_for_engine:wait_for_engine(lease.docker_host,lease.engine_id)
                 if args.check_only:
                     result=lease.check_configuration()
                 else:
