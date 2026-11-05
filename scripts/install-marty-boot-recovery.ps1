@@ -6,23 +6,31 @@ param(
     [switch]$RenewCredentials,
     [string]$LogicalTlsProject,
     [int]$RenewalIntervalMinutes = 0,
+    [int]$FirstRenewalDelaySeconds = 0,
     [string]$TaskName = 'Marty-Recovery-At-Boot'
 )
 $ErrorActionPreference = 'Stop'
 if ($RenewCredentials) {
     if (-not $ManagedPython -or $LogicalTlsProject -cnotmatch '\Amarty-(selfhost|production)-[a-z0-9][a-z0-9-]{0,59}\z' -or
-        $RenewalIntervalMinutes -lt 15 -or $RenewalIntervalMinutes -gt 240) {
+        $RenewalIntervalMinutes -lt 15 -or $RenewalIntervalMinutes -gt 240 -or
+        ($FirstRenewalDelaySeconds -ne 0 -and ($FirstRenewalDelaySeconds -lt 15 -or
+            $FirstRenewalDelaySeconds -gt 60*$RenewalIntervalMinutes))) {
         throw 'Renewal requires managed settings, enrolled logical TLS namespace and an explicitly qualified interval (15-240 minutes).'
     }
-} elseif ($LogicalTlsProject -or $PSBoundParameters.ContainsKey('RenewalIntervalMinutes')) {
+} elseif ($LogicalTlsProject -or $PSBoundParameters.ContainsKey('RenewalIntervalMinutes') -or
+    $PSBoundParameters.ContainsKey('FirstRenewalDelaySeconds')) {
     throw 'Renewal options require explicit RenewCredentials mode.'
 }
 
 function New-ManagedRecoveryTaskDefinition($Scheduler, [string]$UserId,
     [string]$PowerShellPath, [string]$Arguments, [string]$WorkingDirectory,
-    [int]$RenewalIntervalMinutes = 0) {
+    [int]$RenewalIntervalMinutes = 0, [int]$FirstRenewalDelaySeconds = 0) {
     if ($RenewalIntervalMinutes -ne 0 -and ($RenewalIntervalMinutes -lt 15 -or $RenewalIntervalMinutes -gt 240)) {
         throw 'Renewal interval must be explicitly qualified between 15 and 240 minutes.'
+    }
+    if ($FirstRenewalDelaySeconds -ne 0 -and ($RenewalIntervalMinutes -eq 0 -or
+        $FirstRenewalDelaySeconds -lt 15 -or $FirstRenewalDelaySeconds -gt 60*$RenewalIntervalMinutes)) {
+        throw 'First renewal delay must be 15 seconds through the qualified interval, or zero for its default.'
     }
     $definition = $Scheduler.NewTask(0)
     $definition.RegistrationInfo.Description = 'Recover the retained Marty candidate after operator logon and Docker Desktop startup.'
@@ -33,8 +41,19 @@ function New-ManagedRecoveryTaskDefinition($Scheduler, [string]$UserId,
     $trigger.UserId = $UserId
     $trigger.Delay = 'PT2M'
     if ($RenewalIntervalMinutes) {
-        $trigger.Repetition.Interval = 'PT' + $RenewalIntervalMinutes + 'M'
-        $trigger.Repetition.StopAtDurationEnd = $false
+        # A logon trigger alone cannot start recurrence for a user who is
+        # already signed in when this definition is registered. Keep logon
+        # recovery once, and give recurrence its own UTC time trigger.
+        $nowUtc = [DateTimeOffset]::UtcNow
+        $registeredUtc = $nowUtc.AddTicks(-($nowUtc.Ticks % [TimeSpan]::TicksPerSecond))
+        $format = "yyyy-MM-dd'T'HH:mm:sszzz"
+        $definition.RegistrationInfo.Date = $registeredUtc.ToString($format, [Globalization.CultureInfo]::InvariantCulture)
+        $firstDelay = if ($FirstRenewalDelaySeconds) { $FirstRenewalDelaySeconds } else { 60*$RenewalIntervalMinutes }
+        $timer = $definition.Triggers.Create(1) # TASK_TRIGGER_TIME
+        $timer.Enabled = $true
+        $timer.StartBoundary = $registeredUtc.AddSeconds($firstDelay).ToString($format, [Globalization.CultureInfo]::InvariantCulture)
+        $timer.Repetition.Interval = 'PT' + $RenewalIntervalMinutes + 'M'
+        $timer.Repetition.StopAtDurationEnd = $false
         # No Duration: repeat indefinitely while this interactive user is available.
         $definition.RegistrationInfo.Description = 'Renew the retained online Marty candidate using its guarded native owner.'
     }
@@ -109,7 +128,7 @@ if ($ManagedPython) {
     $scheduler = New-Object -ComObject 'Schedule.Service'
     $scheduler.Connect()
     $folder = $scheduler.GetFolder('\')
-    $definition = New-ManagedRecoveryTaskDefinition $scheduler $identity.Name $powerShellPath $actionArguments $repoRoot $RenewalIntervalMinutes
+    $definition = New-ManagedRecoveryTaskDefinition $scheduler $identity.Name $powerShellPath $actionArguments $repoRoot $RenewalIntervalMinutes $FirstRenewalDelaySeconds
     # TASK_CREATE=2 is atomic create-only, never TASK_UPDATE or CREATE_OR_UPDATE.
     # A collision after the inventory/preflight therefore refuses at registration.
     $folder.RegisterTaskDefinition($TaskName, $definition, 2, $identity.Name, $null, 3) | Out-Null

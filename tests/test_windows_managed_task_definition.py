@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -14,8 +15,8 @@ import test_windows_compose_recovery as legacy
 pytestmark=pytest.mark.skipif(os.name!='nt' or not legacy.POWERSHELL,reason='Unregistered Windows COM definition')
 
 
-@pytest.mark.parametrize('interval',[0,240])
-def test_native_task_definition_xml_without_registering_or_starting_any_task(interval):
+@pytest.mark.parametrize('interval,delay',[(0,0),(240,0),(240,15)])
+def test_native_task_definition_xml_without_registering_or_starting_any_task(interval,delay):
     source=legacy.quote(legacy.ROOT/'scripts/install-marty-boot-recovery.ps1')
     code=r'''
 $ErrorActionPreference='Stop'
@@ -31,11 +32,11 @@ $service=New-Object -ComObject 'Schedule.Service'
 $service.Connect()
 $user=[Security.Principal.WindowsIdentity]::GetCurrent().Name
 $shell=Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell/v1.0/powershell.exe'
-$definition=New-ManagedRecoveryTaskDefinition $service $user $shell '-NoProfile -NonInteractive -File C:/synthetic/recovery.ps1' 'C:/synthetic' INTERVAL
+$definition=New-ManagedRecoveryTaskDefinition $service $user $shell '-NoProfile -NonInteractive -File C:/synthetic/recovery.ps1' 'C:/synthetic' INTERVAL DELAY
 if (INTERVAL -gt 0 -and $definition.Settings.RestartCount -ne 0) { throw 'Renewal retries must be disabled' }
 # No GetFolder, RegisterTaskDefinition, RegisterTask, Run or DeleteTask call.
 $definition.XmlText
-'''.replace('SOURCE',source).replace('INTERVAL',str(interval))
+'''.replace('SOURCE',source).replace('INTERVAL',str(interval)).replace('DELAY',str(delay))
     result=subprocess.run([legacy.POWERSHELL,'-NoProfile','-NonInteractive','-EncodedCommand',
         base64.b64encode(code.encode('utf-16le')).decode()],capture_output=True,text=True,timeout=30)
     assert result.returncode==0,result.stderr
@@ -48,10 +49,17 @@ $definition.XmlText
     assert text('t:Settings/t:ExecutionTimeLimit')==('PT1H' if interval else 'PT20M')
     assert text('t:Settings/t:MultipleInstancesPolicy')=='IgnoreNew'
     if interval:
-        assert text('t:Triggers/t:LogonTrigger/t:Repetition/t:Interval')=='PT240M'
-        assert root.find('t:Triggers/t:LogonTrigger/t:Repetition/t:Duration',ns) is None
-        assert text('t:Triggers/t:LogonTrigger/t:Repetition/t:StopAtDurationEnd')=='false'
+        assert root.find('t:Triggers/t:LogonTrigger/t:Repetition',ns) is None
+        assert text('t:Triggers/t:TimeTrigger/t:Repetition/t:Interval')=='PT240M'
+        assert root.find('t:Triggers/t:TimeTrigger/t:Repetition/t:Duration',ns) is None
+        assert text('t:Triggers/t:TimeTrigger/t:Repetition/t:StopAtDurationEnd')=='false'
+        registered=datetime.fromisoformat(text('t:RegistrationInfo/t:Date'))
+        first=datetime.fromisoformat(text('t:Triggers/t:TimeTrigger/t:StartBoundary'))
+        assert registered.utcoffset()==first.utcoffset()==timedelta(0)
+        assert (first-registered).total_seconds()==(delay or 60*interval)
         count=root.find('t:Settings/t:RestartOnFailure/t:Count',ns)
         assert count is None or count.text=='0' # COM omits the zero default
-    else:assert text('t:Settings/t:RestartOnFailure/t:Count')=='3'
+    else:
+        assert text('t:Settings/t:RestartOnFailure/t:Count')=='3'
+        assert root.find('t:Triggers/t:TimeTrigger',ns) is None
     assert Path(text('t:Actions/t:Exec/t:Command')).is_absolute()

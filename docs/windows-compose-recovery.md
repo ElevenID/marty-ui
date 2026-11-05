@@ -228,11 +228,23 @@ guards refuse reconciliation; preserve that evidence for operator investigation.
 The guard clears last. A complete decision with a late publication failure can
 be reconciled without rewriting its existing bytes.
 
-The renewal task uses an interactive, limited operator logon trigger with a
-two-minute delay and repetition, no immediate failure retries, a one-hour task
-limit and IgnoreNew concurrency. The duration is omitted for
+The renewal task uses an interactive, limited operator principal. One logon
+trigger performs recovery after a two-minute delay. A separate
+[time trigger](https://learn.microsoft.com/en-us/windows/win32/taskschd/timetrigger)
+starts recurrence in the current signed-in session: its default first boundary
+is one qualified interval after definition creation, recorded explicitly in
+UTC. The logon trigger does not repeat, so it cannot create a second recurring
+schedule. There are no immediate failure retries; the task retains a one-hour
+limit and IgnoreNew concurrency. The time trigger's duration is omitted for
 [indefinite repetition](https://learn.microsoft.com/en-us/windows/win32/taskschd/repetitionpattern-duration).
 It requires the signed-in operator session; it is not a SYSTEM boot service.
+For a separately reviewed qualification, `-FirstRenewalDelaySeconds` can select
+an earlier first boundary, from 15 seconds through the qualified interval in
+seconds. Zero selects the default full interval. This only changes the first
+boundary; subsequent ticks retain the qualified interval. The installer records
+its UTC definition date and derives the first boundary from that same timestamp.
+No clock or time-zone settings are changed. Registration can enable the first
+scheduled invocation shortly afterward, so qualify its exact effects beforehand.
 Create-only registration and the same project guards prevent replacement or
 uncertain-operation replay. The installer preflight is check-only and never
 mints. Actual task registration, invocation, repetition/logon timing, separately
@@ -252,7 +264,13 @@ After separate registration, check the exact managed task without elevation:
 
 The verifier requires the current operator's separate root-folder task and the
 exact installed action, interpreter, configuration, working directory, trigger
-and settings. It refuses active or mismatched tasks. Its read-only runtime
+and settings. Renewal verification requires exactly one nonrepeating logon
+trigger and one repeating UTC time trigger, with no expiry or random delay.
+It compares the definition date and first boundary against the expected delay;
+pass the same `-FirstRenewalDelaySeconds` when an earlier first run was installed.
+Older logon-only renewal definitions refuse verification; create-only installation
+does not replace them. Their retirement or replacement requires ownership review.
+The verifier refuses active or mismatched tasks. Its read-only runtime
 preflight uses the existing owned-process job and bounded drains, with an
 independent `-PreflightTimeoutSeconds` budget (default 300; range 1–600).
 Check-only makes no task start request. The historical no-argument legacy
