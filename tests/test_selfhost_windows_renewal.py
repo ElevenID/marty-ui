@@ -141,8 +141,9 @@ def kernel_fixture():
     source = volumes['native']['Mountpoint'] + '/sub'
     item = {'Mounts': [{'Type': 'bind', 'Source': source, 'Destination': '/state'},
                        {'Type': 'volume', 'Name': 'anchor', 'Source': 'anchor', 'Destination': '/anchor'}]}
-    rows = [{'target': '/state', 'root': '/data/docker/volumes/native/_data/sub', 'device': '8:48', 'fstype': 'ext4'},
-            {'target': '/anchor', 'root': '/data/docker/volumes/anchor/_data', 'device': '8:48', 'fstype': 'ext4'}]
+    rows = [{'id': '2', 'parent': '1', 'target': '/state', 'root': '/data/docker/volumes/native/_data/sub', 'device': '8:48', 'fstype': 'ext4'},
+            {'id': '3', 'parent': '1', 'target': '/anchor', 'root': '/data/docker/volumes/anchor/_data', 'device': '8:48', 'fstype': 'ext4'},
+            {'id': '1', 'parent': '0', 'target': '/', 'root': '/', 'device': '0:1', 'fstype': 'overlay'}]
     return volumes, source, item, rows
 
 
@@ -156,11 +157,37 @@ def test_native_bind_kernel_witness_requires_ordinary_volume_device_anchor():
         elif change == 'root': bad[0]['root'] = '/data/docker/volumes/other/_data/sub'
         elif change == 'prefix': bad[0]['root'] = '/untrusted/volumes/native/_data/sub'
         elif change == 'duplicate': bad.append(deepcopy(bad[0]))
-        else: bad.pop()
+        else: bad.pop(1)
         with pytest.raises(ValueError): renewal.volume_witnesses(item, bad, volumes)
     assert renewal.mount_path('/data/with\\040space') == '/data/with space'
     for path in ['/data/../alias', '/data/./alias', '/data\\057alias']:
         with pytest.raises(ValueError): renewal.mount_path(path)
+
+
+def test_hidden_ancestor_overmount_and_missing_or_cyclic_parents_refuse():
+    volumes, _, item, rows = kernel_fixture()
+    item['Mounts'][0]['Destination'] = '/parent/state';rows[0]['target'] = '/parent/state'
+    over = {'id': '4', 'parent': '1', 'target': '/parent', 'root': '/', 'device': '0:2', 'fstype': 'tmpfs'}
+    with pytest.raises(ValueError, match='hidden'):
+        renewal.volume_witnesses(item, rows + [over], volumes)
+    rows[0]['parent'] = '4'
+    assert renewal.volume_witnesses(item, rows + [over], volumes)
+    rows[0]['parent'] = '999'
+    with pytest.raises(ValueError): renewal.volume_witnesses(item, rows + [over], volumes)
+    rows[0]['parent'] = '2'
+    with pytest.raises(ValueError): renewal.volume_witnesses(item, rows + [over], volumes)
+
+
+@pytest.mark.parametrize('mode,pid', [('host', 123), ('container:other', 123), ('', 0)])
+def test_shared_or_missing_pid_witness_refuses_before_helper_execution(monkeypatch, mode, pid):
+    volumes, _, item, _ = kernel_fixture()
+    item.update(Id='1'*64, Config={'Labels': {'com.docker.compose.project': 'foreign'}},
+                HostConfig={'PidMode': mode}, State={'Status': 'running', 'Pid': pid})
+    docker = object.__new__(renewal.Docker);docker.prefix = ['SYNTHETIC_DOCKER']
+    def forbidden(*_a, **_k): raise AssertionError('helper launched before PID namespace refusal')
+    monkeypatch.setattr(renewal.subprocess, 'run', forbidden)
+    with pytest.raises(ValueError, match='private PID namespace'):
+        docker.native_witnesses([item], PROJECT, volumes, 'synthetic@sha256:'+'1'*64)
 
 
 def test_historical_native_bind_inference_requires_exact_project_source_and_zero_exit():

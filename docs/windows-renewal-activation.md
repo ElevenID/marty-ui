@@ -19,9 +19,10 @@ default-root local Docker volumes without driver options have a native volume
 identity, including legacy inspect records whose Source is the volume name. A bind
 of the exact volume root shares that identity. Native bind subpaths require fresh
 kernel mount metadata from a trusted network-disabled helper sharing the existing
-container's PID namespace. It reads only filtered `/proc/1/mountinfo`, with no data
+container's verified private/default PID namespace. It reads only filtered declared
+destinations and their mount ancestors from `/proc/1/mountinfo`, with no data
 volumes mounted and no added capabilities. Exact container/start identity, unique
-destinations, decoded normalized roots, a pinned Docker Desktop VM root prefix,
+destinations, visible parent chains without ancestor overmounts, decoded normalized roots, a pinned Docker Desktop VM root prefix,
 ext4 filesystem type and a device number anchored by an ordinary named-volume
 mount are required. Whole-volume classification is conservative. A same-project
 zero-exit historical job with the exact same Source may reuse that live witness

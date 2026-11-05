@@ -43,8 +43,9 @@ rows=[]
 for line in raw.decode().splitlines():
  fields=line.split();separator=fields.index('-')
  assert separator>=6 and len(fields)>=separator+4
- if fields[4] in targets:
-  rows.append({'target':fields[4],'root':fields[3],'device':fields[2],'fstype':fields[separator+1]})
+ if any(target==fields[4] or target.startswith(fields[4].rstrip('/')+'/') for target in targets):
+  rows.append({'id':fields[0],'parent':fields[1],'target':fields[4],'root':fields[3],
+               'device':fields[2],'fstype':fields[separator+1]})
 print(json.dumps(rows))
 '''
 
@@ -202,14 +203,29 @@ def mount_path(value):
 def volume_witnesses(item, rows, volumes):
     """Accept only kernel roots on a device anchored by an ordinary volume."""
     by_target = {}
+    by_id = {}
     for raw in rows:
         row = dict(raw);row['target'] = mount_path(row['target']);row['root'] = mount_path(row['root'])
-        require(re.fullmatch(r'\d+:\d+', row['device']))
+        require(re.fullmatch(r'\d+:\d+', row['device']) and re.fullmatch(r'[1-9]\d*', row['id'])
+                and re.fullmatch(r'\d+', row['parent']) and row['id'] not in by_id)
         by_target.setdefault(row['target'], []).append(row)
+        by_id[row['id']] = row
     def one(mount):
         found = by_target.get(mount['Destination'], [])
         require(len(found) == 1, 'Mount destination is absent or ambiguous')
-        return found[0]
+        row = found[0];cursor = row;chain = set()
+        while True:
+            require(cursor['id'] not in chain, 'Mount parent cycle')
+            chain.add(cursor['id'])
+            if cursor['target'] == '/':
+                break
+            require(cursor['parent'] in by_id, 'Mount parent evidence absent')
+            cursor = by_id[cursor['parent']]
+        for ancestor in by_id.values():
+            if (row['target'] == ancestor['target']
+                    or row['target'].startswith(ancestor['target'].rstrip('/') + '/')):
+                require(ancestor['id'] in chain, 'Mount is hidden by an ancestor overmount')
+        return row
     devices = set()
     for m in item['Mounts']:
         if m.get('Type') == 'volume':
@@ -343,6 +359,9 @@ class Docker:
                     or not any(native_bind(m, volumes) for m in x['Mounts'])):
                 continue
             require(re.fullmatch(r'[0-9a-f]{64}', x['Id']))
+            require(x.get('HostConfig', {}).get('PidMode') in {'', 'private'}
+                    and type(x['State'].get('Pid')) is int and x['State']['Pid'] > 0,
+                    'Kernel witness requires the target private PID namespace')
             targets = [m['Destination'] for m in x['Mounts']]
             # Match encoded proc paths as well as ordinary paths. The decoder
             # and exact inspect-destination correlation run at the caller.
@@ -356,6 +375,7 @@ class Docker:
             require(p.returncode == 0, 'Kernel mount metadata unavailable')
             after = self.json(['inspect', x['Id']])[0]
             require(all(after.get(k) == x.get(k) for k in ['Id', 'Created', 'Mounts', 'RestartCount'])
+                    and after.get('HostConfig', {}).get('PidMode') == x['HostConfig']['PidMode']
                     and all(after['State'].get(k) == x['State'].get(k)
                             for k in ['Pid', 'StartedAt', 'Status']), 'Metadata container identity changed')
             for source, evidence in volume_witnesses(x, json.loads(p.stdout), volumes).items():
