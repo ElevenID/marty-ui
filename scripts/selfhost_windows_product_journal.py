@@ -10,7 +10,6 @@ from pathlib import Path
 import re
 
 import selfhost_windows_selection as selection
-import selfhost_windows_product as product
 
 SCHEMA = 'marty.windows-product-successor/v1'
 INTENT = 'product.intent.json'
@@ -20,7 +19,9 @@ ARTIFACTS = {'web-composition.json', 'web-composition.json.sigstore.json',
              'web-composition.json.provenance.jsonl', 'web-composition.zip',
              'web-composition.zip.sigstore.json', 'web-composition.zip.provenance.jsonl'}
 PHASES = {'intent.json', 'result.json', 'before.json', 'after.json', 'schema-before.json',
-          'schema-after.json', 'provider-before.json', 'provider-after.json', 'admission.json', 'new.log'}
+          'schema-after.json', 'provider-before.json', 'provider-after.json', 'admission.json', 'new.log',
+          'native-before.started.json', 'native-before.completed.json',
+          'native-after.started.json', 'native-after.completed.json'}
 
 
 def require(value):
@@ -58,13 +59,15 @@ def validate_marker(raw, expected, current_model, journal):
     """A dangling product intent seals its predecessor; it never admits fallback."""
     from selfhost_windows_continuation import INTENT as continuation_intent
     value = selection.decode(raw[INTENT])
+    require(raw[INTENT] == selection.packed(value))
     require(continuation_intent not in raw)
     require(type(value) is dict and set(value) == {
         'schema', 'project', 'engine_id', 'source_dir', 'target_dir', 'source_sha256',
         'selection_sequence', 'generation_sequence', 'selection_sha256', 'selected_sha256',
         'old', 'new', 'attempt_dir', 'config_sha256', 'composition_sha256',
         'image_ids', 'configuration_hashes', 'data_before_sha256', 'data_after_sha256',
-        'observations_before_sha256', 'schema_before_sha256', 'provider_before_sha256', 'candidate_only'})
+        'observations_before_sha256', 'schema_before_sha256', 'provider_before_sha256',
+        'native', 'native_mirror', 'minimum_ttl', 'candidate_only'})
     require(value['schema'] == SCHEMA and value['candidate_only'] is True
             and value['project'] == expected['project'] and value['engine_id'] == expected['engine_id']
             and value['source_dir'] == str(journal) and value['old'] == current_model)
@@ -75,7 +78,9 @@ def validate_marker(raw, expected, current_model, journal):
             and type(value['generation_sequence']) is int and value['generation_sequence'] == generation
             and value['selection_sha256'] == selection.digest(raw[f'{record["sequence"]:06}.selection.json'])
             and value['selected_sha256'] == selection.digest(selection.packed(record['selected']))
-            and value['data_before_sha256'] == record['data_sha256'])
+            and value['data_before_sha256'] == record['data_sha256']
+            and value['native'] == expected['native'] and value['native_mirror'] == record['selected']['native_mirror']
+            and type(value['minimum_ttl']) is int and value['minimum_ttl'] >= 3600)
     require(all(sha(value[key]) for key in ('config_sha256', 'data_before_sha256', 'data_after_sha256',
                 'observations_before_sha256', 'schema_before_sha256', 'provider_before_sha256')))
     require(type(value['composition_sha256']) is dict and set(value['composition_sha256']) == ARTIFACTS
@@ -99,6 +104,7 @@ def hold_transition(marker, hashes, stack):
     """
     from selfhost_windows_inputs import _held_private_input
     from selfhost_windows_renewal import hold_private_input, hold_storage_namespace
+    import selfhost_windows_product as product
     root = Path(marker['attempt_dir'])
     stack.enter_context(hold_storage_namespace(root))
     stack.enter_context(_held_private_input(root, directory=True))
@@ -125,10 +131,10 @@ def hold_transition(marker, hashes, stack):
     require({item.name for item in root.iterdir()} == names | {'inputs', 'activation', 'config.private.json'})
     bodies = {name: stack.enter_context(hold_private_input(root/name, max_bytes=2*1024*1024)) for name in names}
     require(all(selection.digest(body) == hashes[name] for name, body in bodies.items()))
-    require(selection.decode(bodies['intent.json']) == marker)
+    require(bodies['intent.json'] == selection.packed(marker))
     require(selection.digest(bodies['before.json']) == marker['observations_before_sha256'])
-    require(selection.decode(bodies['admission.json']) == {'schema': SCHEMA,
-        'composition_id': manifest['composition_id'], 'subjects_verified': True, 'images_verified': True})
+    require(bodies['admission.json'] == selection.packed({'schema': SCHEMA,
+        'composition_id': manifest['composition_id'], 'subjects_verified': True, 'images_verified': True}))
     before = selection.decode(bodies['before.json']);after = selection.decode(bodies['after.json'])
     edge = product.checked_runtime_change(before, after, *models, manifest, marker['image_ids'],
                                            expected_project=marker['project'])
@@ -161,11 +167,17 @@ def hold_transition(marker, hashes, stack):
                     and all(sha(witness[key]) for key in ('ca_sha256', 'plugin_sha256', 'unseal_sha256', 'ready_sha256', 'bao_sha256')))
     for index, layer in enumerate(layers):
         for event in ('started', 'completed'):
-            require(selection.decode(bodies[f'{index:03}.{event}.json']) == {'index': index, 'roles': layer, 'event': event})
-    require(selection.decode(bodies['result.json']) == {'schema': SCHEMA, 'project': marker['project'],
+            require(bodies[f'{index:03}.{event}.json'] == selection.packed({'index': index, 'roles': layer, 'event': event}))
+    for side in ('before', 'after'):
+        for event in ('started', 'completed'):
+            require(bodies[f'native-{side}.{event}.json'] == selection.packed({'schema': SCHEMA,
+                'operation': 'native-current', 'side': side, 'event': event, 'native': marker['native'],
+                'native_mirror': marker['native_mirror'], 'minimum_ttl': marker['minimum_ttl'],
+                'selected_sha256': marker['selected_sha256']}))
+    require(bodies['result.json'] == selection.packed({'schema': SCHEMA, 'project': marker['project'],
         'result': 'product-transitioned', 'generation_sequence': marker['generation_sequence'],
         'selected_sha256': marker['selected_sha256'], 'data_sha256': marker['data_after_sha256'],
-        'composition_id': manifest['composition_id'], 'credential_rotation': False})
+        'composition_id': manifest['composition_id'], 'credential_rotation': False}))
     return manifest
 
 
@@ -181,13 +193,15 @@ def seed(raw, expected, current_model, marker, hashes, stack):
     require(selection.digest(old_config_raw) == first['config_file_sha256'])
     old_config = selection.decode(old_config_raw)
     require(selection.config_digest(old_config) == first['config_sha256']
-            and immutable_binding(selection.binding(old_config)) == immutable_binding(expected))
+            and immutable_binding(selection.binding(old_config)) == immutable_binding(expected)
+            and marker['minimum_ttl'] == old_config['native']['minimum_ttl'])
     root = Path(marker['attempt_dir'])
     config_path = root/'config.private.json'
     config_raw = stack.enter_context(hold_private_input(config_path))
     config = selection.decode(config_raw)
     require(selection.digest(config_raw) == marker['config_sha256'] and config == successor_configuration(
         effective_config(old_config, current_model), marker['new'], root))
+    require(immutable_binding(selection.binding(config)) == immutable_binding(expected))
     activation = root/'activation'
     from selfhost_windows_inputs import _held_private_input
     stack.enter_context(_held_private_input(activation, directory=True))

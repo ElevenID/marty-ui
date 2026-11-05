@@ -126,7 +126,7 @@ def resolve(config, root, raw, stack, *, pending_model=False, pending_continuati
             require(product.DECISION in raw)
             selected = selection.decode(raw[product.DECISION])
             require(type(selected) is dict and set(selected) == {'schema', 'intent_sha256',
-                    'target_entries_sha256', 'phase_sha256', 'candidate_only'})
+                    'target_entries_sha256', 'phase_sha256', 'candidate_only'} and selected['candidate_only'] is True)
             initial = product.seed(raw, expected, current_model, marker, selected['phase_sha256'], stack)
             require(selected == product.decision(marker, initial, selected['phase_sha256']))
             if ancestry is not None:ancestry.append((root, dict(raw)))

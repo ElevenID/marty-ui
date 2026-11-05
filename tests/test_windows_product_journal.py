@@ -12,6 +12,7 @@ import pytest
 
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]/'scripts'), str(Path(__file__).resolve().parent)]
 import selfhost_windows_product_journal as journal
+import selfhost_windows_product as product
 import selfhost_windows_selection as selection
 import selfhost_windows_continuation as continuation
 from test_selfhost_windows_selection import fixture
@@ -25,19 +26,19 @@ def installed(monkeypatch):
         admitted['composition_id'] = 'a'*64
         # Production admission uses composition.validate_record and verified_package;
         # this fixture is deliberately not a valid signed composition archive.
-        monkeypatch.setattr(journal.product.composition, 'validate_record', lambda value: value)
+        monkeypatch.setattr(product.composition, 'validate_record', lambda value: value)
         hashes = {'old': {}, 'new': {}}
         for side, rows, value in [('old', before, '3'*64), ('new', after, '4'*64)]:
             for item in rows:
-                role = journal.product.renewal._service(item)
-                if role in journal.product.HISTORICAL_ROLES:continue
+                role = product.renewal._service(item)
+                if role in product.HISTORICAL_ROLES:continue
                 hashes[side][role] = value
                 item['Config']['Labels']['com.docker.compose.config-hash'] = value
         model_path = Path(config['compose_file'])
         model_path.write_bytes(selection.packed(old_model))
         config['compose_sha256'] = selection.digest(model_path.read_bytes())
         path.write_bytes(selection.packed(config))
-        edge = journal.product.checked_runtime_change(before, after, old_model, new_model, admitted, ids,
+        edge = product.checked_runtime_change(before, after, old_model, new_model, admitted, ids,
                                                        expected_project=config['project'])
         phase['data'] = edge['before_sha256']
         selection.adopt(path)
@@ -77,16 +78,24 @@ def installed(monkeypatch):
                 'attempt_dir': str(attempt), 'config_sha256': selection.digest((attempt/'config.private.json').read_bytes()),
                 'composition_sha256': {name: selection.digest((attempt/'inputs'/name).read_bytes()) for name in journal.ARTIFACTS},
                 'image_ids': ids, 'configuration_hashes': hashes,
+                'native': expected['native'], 'native_mirror': record['selected']['native_mirror'],
+                'minimum_ttl': config['native']['minimum_ttl'],
                 'data_before_sha256': edge['before_sha256'], 'data_after_sha256': edge['after_sha256'],
                 'observations_before_sha256': selection.digest(phases['before.json']),
                 'schema_before_sha256': selection.digest(phases['schema-before.json']),
                 'provider_before_sha256': selection.digest(phases['provider-before.json']), 'candidate_only': True}
             phases['intent.json'] = selection.packed(marker)
+            for side in ('before', 'after'):
+                for event in ('started', 'completed'):
+                    phases[f'native-{side}.{event}.json'] = selection.packed({'schema': journal.SCHEMA,
+                        'operation': 'native-current', 'side': side, 'event': event, 'native': marker['native'],
+                        'native_mirror': marker['native_mirror'], 'minimum_ttl': marker['minimum_ttl'],
+                        'selected_sha256': marker['selected_sha256']})
             phases['result.json'] = selection.packed({'schema': journal.SCHEMA, 'project': config['project'],
                 'result': 'product-transitioned', 'generation_sequence': generation, 'selected_sha256': marker['selected_sha256'],
                 'data_sha256': edge['after_sha256'], 'composition_id': admitted['composition_id'], 'credential_rotation': False})
-            change = journal.product.checked_model_change(old_model, new_model, admitted)
-            layers = journal.product.renewal.dependency_layers(new_model, set(new_model['services'])-journal.product.renewal.INITIALIZERS,
+            change = product.checked_model_change(old_model, new_model, admitted)
+            layers = product.renewal.dependency_layers(new_model, set(new_model['services'])-product.renewal.INITIALIZERS,
                                                                set(change['mutable_roles']))
             for index, layer in enumerate(layers):
                 for event in ('started', 'completed'):
@@ -138,7 +147,7 @@ def test_pending_product_does_not_admit_predecessor_or_ordinary_continuation(mon
         saved = decision.read_bytes();decision.unlink()
         try:
             with pytest.raises(ValueError):selection.status(data['path'])
-            guard = journal.product.renewal.product_transition_guard(data['config'])
+            guard = product.renewal.product_transition_guard(data['config'])
             guard.write_bytes(selection.packed(data['marker']))
             with pytest.raises(ValueError):
                 with selection.selected_inputs(data['path']):pytest.fail('Pending product admitted ordinary lease')
@@ -198,3 +207,18 @@ def test_matching_phase_hashes_do_not_admit_empty_or_unknown_compatibility_witne
         decision = selection.decode((data['source']/journal.DECISION).read_bytes())
         hashes = {name: selection.digest((data['attempt']/name).read_bytes()) for name in decision['phase_sha256']}
         with ExitStack() as stack, pytest.raises(ValueError):journal.hold_transition(marker, hashes, stack)
+
+
+@pytest.mark.parametrize('fault', ['ttl', 'mirror', 'source', 'selected'])
+def test_rehashed_native_completion_cannot_substitute_different_custody_or_lifetime(monkeypatch, fault):
+    with installed(monkeypatch) as data:
+        path = data['attempt']/'native-after.completed.json'
+        witness = selection.decode(path.read_bytes())
+        if fault == 'ttl':witness['minimum_ttl'] = 1
+        elif fault == 'mirror':witness['native_mirror'] = '/control/other/generation'
+        elif fault == 'source':witness['native']['source_sha'] = 'f'*40
+        else:witness['selected_sha256'] = 'f'*64
+        path.write_bytes(selection.packed(witness))
+        decision = selection.decode((data['source']/journal.DECISION).read_bytes())
+        hashes = {name: selection.digest((data['attempt']/name).read_bytes()) for name in decision['phase_sha256']}
+        with ExitStack() as stack, pytest.raises(ValueError):journal.hold_transition(data['marker'], hashes, stack)
