@@ -1,7 +1,6 @@
-"""Real NTFS product ancestry; signatures/runtime are not simulated as admission.
+"""Real NTFS ancestry and record parsing; synthetic subjects are not admission.
 
-Synthetic payload parsing is substituted to test only retained journal custody.
-No deployment entry point exists in these tests or the product journal module.
+No deployment entry point or fresh signature verification is simulated here.
 """
 from contextlib import contextmanager, ExitStack
 from copy import deepcopy
@@ -13,6 +12,7 @@ import pytest
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]/'scripts'), str(Path(__file__).resolve().parent)]
 import selfhost_windows_product_journal as journal
 import selfhost_windows_product as product
+import selfhost_windows_product_probe as probe
 import selfhost_windows_selection as selection
 import selfhost_windows_continuation as continuation
 from test_selfhost_windows_selection import fixture
@@ -23,10 +23,16 @@ from test_windows_product_transition import runtime_candidate
 def installed(monkeypatch):
     with fixture(monkeypatch) as (root, phase, tx, outcome, path, config):
         before, after, old_model, new_model, admitted, ids = runtime_candidate(root)
-        admitted['composition_id'] = 'a'*64
-        # Production admission uses composition.validate_record and verified_package;
-        # this fixture is deliberately not a valid signed composition archive.
-        monkeypatch.setattr(product.composition, 'validate_record', lambda value: value)
+        # Real metadata parser, deliberately unsigned synthetic payloads. Only
+        # verified_package may authorize a fresh deployment of actual artifacts.
+        admitted.update(producer={'repository': product.composition.ui.REPOSITORY,
+            'workflow': product.composition.ui.WORKFLOW, 'source_sha': '1'*40,
+            'ref': 'refs/heads/main', 'run_id': '1', 'run_attempt': '1'},
+            route_contract={'version': 1, 'sha256': 'sha256:'+'2'*64}, website={}, backend={},
+            qualification={'runtime_tested': False, 'billing_journey_tested': False},
+            files={name: {'sha256': 'sha256:'+'3'*64, 'bytes': 1} for name in product.composition.PAYLOAD_NAMES})
+        admitted['composition_id'] = product.composition.ui.digest(product.composition.ui.canonical(admitted))
+        product.composition.validate_record(admitted)
         hashes = {'old': {}, 'new': {}}
         for side, rows, value in [('old', before, '3'*64), ('new', after, '4'*64)]:
             for item in rows:
@@ -55,8 +61,11 @@ def installed(monkeypatch):
         (attempt/'inputs').mkdir()
         for name in journal.ARTIFACTS:
             (attempt/'inputs'/name).write_bytes(selection.packed(admitted) if name == 'web-composition.json' else b'PUBLIC_SYNTHETIC_SUBJECT')
-        schema = {'schema': 'marty.windows-postgres-schema/v1', 'probe': 'catalog-and-migration-ledger/v1',
-                  'databases': {'synthetic': {'catalog_sha256': 'b'*64, 'migration_sha256': 'c'*64}}}
+        profile = probe.LedgerProfile()
+        schema = {'schema': probe.SCHEMA, 'probe': probe.PROBE, 'profile': probe.PROFILE_ID, 'consistency': probe.CONSISTENCY,
+                  'database_roles': {'application': profile.application, 'keycloak': profile.keycloak, 'applicants': profile.applicants},
+                  'databases': {name: {'catalog_sha256': 'b'*64, 'migration_sha256': 'c'*64 if tables else selection.digest(b'{}')}
+                                for name, tables in profile.tables.items()}}
         provider = {'schema': 'marty.windows-provider-custody/v1', 'cluster_id': '00000000-0000-0000-0000-000000000001',
                     'bao_version': 'OpenBao v2.5.5 synthetic', **{key: 'd'*64 for key in
                     ('ca_sha256', 'plugin_sha256', 'unseal_sha256', 'ready_sha256', 'bao_sha256')}}

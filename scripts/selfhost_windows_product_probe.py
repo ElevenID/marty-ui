@@ -7,10 +7,12 @@ application rows are not copied, backed up or migrated by these probes.
 """
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 import re
 import ssl
 import subprocess
+import time
 import urllib.request
 
 import selfhost_windows_renewal as renewal
@@ -24,6 +26,8 @@ LEDGERS_SQL = """SELECT COALESCE(jsonb_agg(jsonb_build_object('schema',n.nspname
 ORDER BY n.nspname,c.relname),'[]'::jsonb) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
 WHERE c.relkind IN ('r','p') AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
 AND c.relname ~* '(migrat|changelog|schema_version)' AND lower(c.relname) <> 'databasechangeloglock'"""
+LEDGERS_SQL = LEDGERS_SQL.replace("'(migrat|changelog|schema_version)'",
+                                "'(migrat|changelog|schema_version|^alembic_version$|^flyway_schema_history$)'")
 # One statement observes one MVCC catalog snapshot. OIDs deliberately detect
 # drop/recreate events with otherwise identical definitions. Sequence values,
 # statistics, ordinary rows and credentials are excluded.
@@ -35,6 +39,7 @@ SELECT to_json(encode(sha256(convert_to(jsonb_build_object(
 'namespaces',(SELECT jsonb_agg(to_jsonb(n) ORDER BY oid) FROM n),
 'relations',(SELECT jsonb_agg(jsonb_build_object('oid',oid,'name',relname,'namespace',relnamespace,
 'kind',relkind,'owner',relowner,'persistence',relpersistence,'acl',relacl,'options',reloptions,
+'metadata',to_jsonb(c)-ARRAY['relpages','reltuples','relallvisible','relallfrozen','relfrozenxid','relminmxid'],
 'rowsecurity',relrowsecurity,'forcerowsecurity',relforcerowsecurity,'tablespace',reltablespace,
 'view',CASE WHEN relkind IN ('v','m') THEN pg_get_viewdef(oid,true) ELSE NULL END) ORDER BY oid) FROM c),
 'attributes',(SELECT jsonb_agg(to_jsonb(a) ORDER BY attrelid,attnum) FROM pg_attribute a WHERE attrelid IN (SELECT oid FROM c) AND attnum>0),
@@ -55,7 +60,25 @@ ORDER BY oid) FROM pg_trigger WHERE tgrelid IN (SELECT oid FROM c) AND NOT tgisi
 'sequences',(SELECT jsonb_agg(to_jsonb(a) ORDER BY seqrelid) FROM pg_sequence a WHERE seqrelid IN (SELECT oid FROM c)),
 'extensions',(SELECT jsonb_agg(to_jsonb(a) ORDER BY oid) FROM pg_extension a),
 'collations',(SELECT jsonb_agg(to_jsonb(a) ORDER BY oid) FROM pg_collation a WHERE collnamespace IN (SELECT oid FROM n))
+,'inheritance',(SELECT jsonb_agg(to_jsonb(a) ORDER BY inhrelid,inhseqno) FROM pg_inherits a WHERE inhrelid IN (SELECT oid FROM c) OR inhparent IN (SELECT oid FROM c))
+,'partitions',(SELECT jsonb_agg(to_jsonb(a) ORDER BY partrelid) FROM pg_partitioned_table a WHERE partrelid IN (SELECT oid FROM c))
+,'rules',(SELECT jsonb_agg(to_jsonb(a) ORDER BY oid) FROM pg_rewrite a WHERE ev_class IN (SELECT oid FROM c))
+,'default_acl',(SELECT jsonb_agg(to_jsonb(a) ORDER BY oid) FROM pg_default_acl a)
 )::text,'UTF8')),'hex'))"""
+SCHEMA = 'marty.windows-postgres-schema/v2'
+PROBE = 'catalog-and-source-ledger-profile/v2'
+PROFILE_ID = 'marty-selfhost-ledgers/v1'
+CONSISTENCY = 'per-database-repeatable-read;two-equal-observations'
+APPLICATION_LEDGERS = frozenset({
+    ('auth_service', 'rust_schema_versions'), ('compliance_profile_service', 'native_migrations'),
+    ('credential_template_service', 'rust_schema_versions'), ('deployment_profile_service', 'native_migrations'),
+    ('flow_service', 'rust_schema_versions'), ('issuance_service', 'rust_schema_migrations'),
+    ('organization_service', 'rust_schema_versions'), ('revocation_profile_service', 'rust_schema_migrations'),
+    ('trust_profile_service', 'native_migrations'),
+    # Explicit compatibility ledgers owned by the native device/notification
+    # migrations; arbitrary Alembic/Flyway inventories remain unsupported.
+    ('device_registration_service', 'alembic_version'), ('notification_service', 'alembic_version')})
+KEYCLOAK_LEDGERS = frozenset({('public', 'databasechangelog'), ('public', 'migration_model')})
 BINARY_PATHS = {'plugin_sha256': '/plugins/openbao-didcomm-authcrypt',
                 'unseal_sha256': '/usr/local/bin/selfhost-unseal',
                 'ready_sha256': '/usr/local/bin/selfhost-openbao-ready', 'bao_sha256': '/bin/bao'}
@@ -73,7 +96,75 @@ def owned_role(items, project, role):
     return rows[0]
 
 
-def schema_snapshot(docker, items, project):
+@dataclass(frozen=True)
+class LedgerProfile:
+    """Known runtime schemas, not an artifact-supplied migration guess.
+
+    Database names may be mapped from held installation settings. Ledger names
+    come from this reviewed runtime profile; unsupported/missing inventories
+    refuse. Applicants' idempotent schema has explicitly no migration ledger.
+    """
+    application: str = 'marty'
+    keycloak: str = 'keycloak'
+    applicants: str = 'marty_applicants'
+
+    def __post_init__(self):
+        names = (self.application, self.keycloak, self.applicants)
+        require(all(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9_]{0,62}', name) for name in names)
+                and len(set(names)) == 3)
+
+    @property
+    def tables(self):
+        return {self.application: APPLICATION_LEDGERS, self.keycloak: KEYCLOAK_LEDGERS, self.applicants: frozenset()}
+
+
+def _database_script(expected):
+    statements = [r'\set ON_ERROR_STOP on', 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;',
+        "SELECT jsonb_build_object('kind','catalog','sha256',witness,'supported',NOT(EXISTS(SELECT 1 FROM pg_foreign_table) OR EXISTS(SELECT 1 FROM pg_event_trigger))) FROM ("+CATALOG_SQL+") AS c(witness);",
+        "SELECT jsonb_build_object('kind','inventory','tables',witness) FROM ("+LEDGERS_SQL+") AS i(witness);"]
+    for schema, name in sorted(expected):
+        require(NAME.fullmatch(schema) and NAME.fullmatch(name))
+        statements.append("SELECT jsonb_build_object('kind','ledger','schema','"+schema+"','name','"+name+
+            "','sha256',encode(sha256(convert_to(COALESCE(jsonb_agg(to_jsonb(m) ORDER BY to_jsonb(m)::text),'[]'::jsonb)::text,'UTF8')),'hex')) FROM \""+
+            schema+'"."'+name+'" m;')
+    statements.append('COMMIT;')
+    return ('\n'.join(statements)+'\n').encode()
+
+
+def _database_snapshot(docker, base, database, expected):
+    args = ['exec', '--interactive', *base[1:], '--dbname', database, '--file=-']
+    output = _text(docker, args, stdin_bytes=_database_script(expected))
+    records = [json.loads(line) for line in output.splitlines()]
+    require(len(records) == 2+len(expected) and all(type(row) is dict for row in records))
+    catalog, inventory, *ledgers = records
+    require(set(catalog) == {'kind', 'sha256', 'supported'} and catalog['kind'] == 'catalog' and catalog['supported'] is True
+            and isinstance(catalog['sha256'], str) and SHA.fullmatch(catalog['sha256']))
+    require(set(inventory) == {'kind', 'tables'} and inventory['kind'] == 'inventory' and type(inventory['tables']) is list)
+    names = []
+    for row in inventory['tables']:
+        require(type(row) is dict and set(row) == {'schema', 'name'}
+                and all(isinstance(value, str) and NAME.fullmatch(value) for value in row.values()))
+        names.append((row['schema'], row['name']))
+    require(len(names) == len(set(names)) and set(names) == expected, 'Migration ledger inventory differs from reviewed profile')
+    values = {}
+    for row in ledgers:
+        require(set(row) == {'kind', 'schema', 'name', 'sha256'} and row['kind'] == 'ledger'
+                and (row['schema'], row['name']) in expected and isinstance(row['sha256'], str) and SHA.fullmatch(row['sha256']))
+        key = row['schema']+'.'+row['name'];require(key not in values);values[key] = row['sha256']
+    require(len(values) == len(expected))
+    raw = json.dumps(values, sort_keys=True, separators=(',', ':')).encode()
+    return {'catalog_sha256': catalog['sha256'], 'migration_sha256': hashlib.sha256(raw).hexdigest()}
+
+
+def schema_snapshot(docker, items, project, *, profile=LedgerProfile()):
+    """Coherent per-DB transactions, bracketed by equal full observations.
+
+    PostgreSQL has no shared snapshot across databases. The owning transition
+    must hold its project lock/quiesce its own DDL writers; these observations
+    refuse drift but do not prevent an external administrator's future DDL.
+    """
+    require(type(profile) is LedgerProfile)
+    deadline = time.monotonic()+60
     postgres = owned_role(items, project, 'postgres')
     environment = postgres['Config'].get('Env', [])
     require(type(environment) is list and all(isinstance(row, str) for row in environment))
@@ -81,39 +172,27 @@ def schema_snapshot(docker, items, project):
     require(len(users) == 1 and NAME.fullmatch(users[0]))
     base = ['exec', '--user', 'postgres', '--env', PG_OPTIONS, postgres['Id'], 'psql', '--no-psqlrc',
             '--no-password', '--quiet', '--tuples-only', '--no-align', '--username', users[0]]
-    def query(database, sql):
-        require(isinstance(database, str) and NAME.fullmatch(database))
-        return docker.json([*base, '--dbname', database, '--command', sql])
-    databases = query('postgres', DATABASES_SQL)
-    require(type(databases) is list and 1 <= len(databases) <= 32
-            and all(isinstance(name, str) and NAME.fullmatch(name) for name in databases)
-            and len(set(databases)) == len(databases))
-    result = {};observed_ledger = False
-    for database in sorted(databases):
-        catalog = query(database, CATALOG_SQL)
-        require(isinstance(catalog, str) and SHA.fullmatch(catalog))
-        ledgers = query(database, LEDGERS_SQL)
-        require(type(ledgers) is list and len(ledgers) <= 64)
-        values = {}
-        for ledger in ledgers:
-            require(type(ledger) is dict and set(ledger) == {'schema', 'name'}
-                    and all(isinstance(value, str) and NAME.fullmatch(value) for value in ledger.values()))
-            # Names come from the read-only catalog query, never shell text.
-            table = '"'+ledger['schema']+'"."'+ledger['name']+'"'
-            require(table not in values)
-            sql = "SELECT to_json(encode(sha256(convert_to(COALESCE(jsonb_agg(to_jsonb(m) ORDER BY to_jsonb(m)::text),'[]'::jsonb)::text,'UTF8')),'hex')) FROM "+table+' m'
-            value = query(database, sql)
-            require(isinstance(value, str) and SHA.fullmatch(value))
-            values[table] = value
-        observed_ledger |= bool(values)
-        raw = json.dumps(values, sort_keys=True, separators=(',', ':')).encode()
-        result[database] = {'catalog_sha256': catalog, 'migration_sha256': hashlib.sha256(raw).hexdigest()}
-    require(observed_ledger, 'No migration ledger was witnessed')
-    return {'schema': 'marty.windows-postgres-schema/v1', 'probe': 'catalog-and-migration-ledger/v1', 'databases': result}
+    def observe():
+        require(time.monotonic() < deadline)
+        databases = docker.json([*base, '--dbname', 'postgres', '--command', DATABASES_SQL])
+        require(type(databases) is list and all(isinstance(name, str) for name in databases)
+                and len(databases) == len(set(databases)) and set(databases) == set(profile.tables))
+        result = {}
+        for database, expected in sorted(profile.tables.items()):
+            require(time.monotonic() < deadline)
+            result[database] = _database_snapshot(docker, base, database, expected)
+        require(time.monotonic() < deadline)
+        return result
+    first = observe();second = observe()
+    require(first == second, 'Schema changed during compatibility observation')
+    return {'schema': SCHEMA, 'probe': PROBE, 'profile': PROFILE_ID, 'consistency': CONSISTENCY,
+            'database_roles': {'application': profile.application, 'keycloak': profile.keycloak, 'applicants': profile.applicants},
+            'databases': second}
 
 
-def _text(docker, args):
-    result = subprocess.run([*docker.prefix, *args], capture_output=True, timeout=30)
+def _text(docker, args, *, stdin_bytes=None):
+    pipe = {'stdin': subprocess.DEVNULL} if stdin_bytes is None else {'input': stdin_bytes}
+    result = subprocess.run([*docker.prefix, *args], capture_output=True, timeout=30, **pipe)
     require(result.returncode == 0 and len(result.stdout) <= 65536)
     return result.stdout.decode('utf-8').strip()
 

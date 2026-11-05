@@ -150,13 +150,20 @@ def hold_transition(marker, hashes, stack):
         require(bodies[category+'-before.json'] == bodies[category+'-after.json'])
         witness = selection.decode(bodies[category+'-before.json'])
         if category == 'schema':
-            require(type(witness) is dict and set(witness) == {'schema', 'probe', 'databases'}
-                    and witness['schema'] == 'marty.windows-postgres-schema/v1'
-                    and witness['probe'] == 'catalog-and-migration-ledger/v1'
+            import selfhost_windows_product_probe as probe
+            require(type(witness) is dict and set(witness) == {'schema', 'probe', 'profile', 'consistency', 'database_roles', 'databases'}
+                    and witness['schema'] == probe.SCHEMA and witness['probe'] == probe.PROBE
+                    and witness['profile'] == probe.PROFILE_ID and witness['consistency'] == probe.CONSISTENCY
+                    and type(witness['database_roles']) is dict and set(witness['database_roles']) == {'application', 'keycloak', 'applicants'}
                     and type(witness['databases']) is dict and witness['databases']
                     and all(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9_]{0,62}', name)
                             and type(row) is dict and set(row) == {'catalog_sha256', 'migration_sha256'}
                             and all(sha(item) for item in row.values()) for name, row in witness['databases'].items()))
+            profile = probe.LedgerProfile(**witness['database_roles'])
+            require(set(witness['databases']) == set(profile.tables)
+                    and witness['databases'][profile.applicants]['migration_sha256'] == selection.digest(b'{}')
+                    and all(witness['databases'][name]['migration_sha256'] != selection.digest(b'{}')
+                            for name in (profile.application, profile.keycloak)))
         else:
             require(type(witness) is dict and set(witness) == {'schema', 'cluster_id', 'ca_sha256',
                     'plugin_sha256', 'unseal_sha256', 'ready_sha256', 'bao_sha256', 'bao_version'}

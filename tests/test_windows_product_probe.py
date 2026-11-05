@@ -22,40 +22,61 @@ def item(role):
 
 
 class Postgres:
-    def __init__(self, fault=None):self.calls = [];self.fault = fault
+    def __init__(self, fault=None):self.calls = [];self.fault = fault;self.rounds = {}
     def json(self, args):
         self.calls.append(args)
         assert args[:5] == ['exec', '--user', 'postgres', '--env', probe.PG_OPTIONS]
         assert '--no-password' in args and '--no-psqlrc' in args
         assert 'default_transaction_read_only=on' in args[4] and 'search_path=pg_catalog' in args[4]
-        sql = args[-1]
-        if sql == probe.DATABASES_SQL:
-            if self.fault == 'duplicate-database':return ['marty', 'marty']
-            if self.fault == 'database-shape':return [{}]
-            if self.fault == 'database-injection':return ['marty; DELETE FROM x']
-            return ['keycloak', 'marty']
-        if sql == probe.CATALOG_SQL:return 'unexpected private data' if self.fault == 'raw-catalog' else 'b'*64
-        if sql == probe.LEDGERS_SQL:
-            if self.fault == 'no-ledger':return []
-            if args[args.index('--dbname')+1] == 'keycloak':return []
-            return [{'schema': 'public', 'name': 'bad;DELETE'}] if self.fault == 'ledger-injection' else [{'schema': 'public', 'name': '_sqlx_migrations'}]
-        assert sql.startswith('SELECT to_json(encode(sha256(') and 'FROM "public"."_sqlx_migrations" m' in sql
-        return 'unexpected private data' if self.fault == 'raw-ledger' else 'c'*64
+        assert args[-1] == probe.DATABASES_SQL
+        if self.fault == 'duplicate-database':return ['marty', 'marty']
+        if self.fault == 'database-shape':return [{}]
+        if self.fault == 'database-injection':return ['marty; DELETE FROM x']
+        return ['keycloak', 'marty', 'marty_applicants']
+    def text(self, docker, args, *, stdin_bytes):
+        assert docker is self
+        self.calls.append(args)
+        assert args[:4] == ['exec', '--interactive', '--user', 'postgres']
+        assert args[args.index('--env')+1] == probe.PG_OPTIONS and args[-1] == '--file=-'
+        database = args[args.index('--dbname')+1]
+        expected = probe.LedgerProfile().tables[database]
+        script = stdin_bytes.decode()
+        assert script.startswith('\\set ON_ERROR_STOP on\nBEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;')
+        assert script.endswith('COMMIT;\n') and probe.CATALOG_SQL in script and probe.LEDGERS_SQL in script
+        self.rounds[database] = self.rounds.get(database, 0)+1
+        catalog = 'unexpected private data' if self.fault == 'raw-catalog' else 'b'*64
+        if self.fault == 'snapshot-drift' and self.rounds[database] == 2:catalog = 'd'*64
+        inventory = [{'schema': schema, 'name': name} for schema, name in sorted(expected)]
+        if self.fault == 'no-ledger':inventory = []
+        elif self.fault == 'ledger-injection':inventory.append({'schema': 'public', 'name': 'bad;DELETE'})
+        elif self.fault in {'alembic', 'flyway'}:
+            inventory.append({'schema': 'public', 'name': 'alembic_version' if self.fault == 'alembic' else 'flyway_schema_history'})
+        rows = [{'kind': 'catalog', 'sha256': catalog, 'supported': self.fault not in {'foreign-table', 'event-trigger'}},
+                {'kind': 'inventory', 'tables': inventory}]
+        for schema, name in sorted(expected):
+            assert 'FROM "'+schema+'"."'+name+'" m;' in script
+            rows.append({'kind': 'ledger', 'schema': schema, 'name': name,
+                         'sha256': 'unexpected private data' if self.fault == 'raw-ledger' else 'c'*64})
+        return '\n'.join(json.dumps(row) for row in rows)
 
 
-def test_catalog_and_ledger_rows_are_hashed_inside_read_only_server_sessions():
+def test_catalog_and_ledger_rows_are_hashed_in_repeatable_read_observations(monkeypatch):
     docker = Postgres()
+    monkeypatch.setattr(probe, '_text', docker.text)
     result = probe.schema_snapshot(docker, [item('postgres')], PROJECT)
-    assert set(result['databases']) == {'keycloak', 'marty'}
+    assert set(result['databases']) == {'keycloak', 'marty', 'marty_applicants'}
     assert all(probe.SHA.fullmatch(value) for row in result['databases'].values() for value in row.values())
-    assert len(docker.calls) == 6 and 'unexpected private data' not in json.dumps(result)
+    assert len(docker.calls) == 8 and set(docker.rounds.values()) == {2}
+    assert result['consistency'] == probe.CONSISTENCY and 'unexpected private data' not in json.dumps(result)
     assert 'pg_authid' not in probe.CATALOG_SQL and 'pg_statistic' not in probe.CATALOG_SQL
 
 
 @pytest.mark.parametrize('fault', ['duplicate-database', 'database-shape', 'database-injection', 'raw-catalog',
-                                  'no-ledger', 'ledger-injection', 'raw-ledger'])
-def test_invalid_inventory_or_unhashed_values_never_become_schema_witness(fault):
-    with pytest.raises(ValueError):probe.schema_snapshot(Postgres(fault), [item('postgres')], PROJECT)
+                                  'no-ledger', 'ledger-injection', 'raw-ledger', 'alembic', 'flyway', 'snapshot-drift',
+                                  'foreign-table', 'event-trigger'])
+def test_invalid_inventory_or_unhashed_values_never_become_schema_witness(monkeypatch, fault):
+    docker = Postgres(fault);monkeypatch.setattr(probe, '_text', docker.text)
+    with pytest.raises(ValueError):probe.schema_snapshot(docker, [item('postgres')], PROJECT)
 
 
 @pytest.mark.parametrize('fault', ['foreign', 'duplicate', 'bad-id', 'missing-user', 'duplicate-user'])
