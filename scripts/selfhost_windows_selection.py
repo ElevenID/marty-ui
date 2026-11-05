@@ -1,13 +1,14 @@
 """Private append-only generation selection for the Windows candidate owner.
 
-No producer, scheduler, startup mutation or release admission. Reconciliation
-proves the current state; it never replays an interrupted operation.
+Explicit candidate renewal delegates to existing native producers and activation.
+No scheduler or release admission. Reconciliation never replays an interrupted operation.
 """
 import hashlib
 import json
 import math
 import re
 import threading
+import uuid
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -20,6 +21,9 @@ from selfhost_windows_renewal_native import preflight_current
 SCHEMA = 'marty.windows-generation-selection/v1'
 ENTRY = re.compile(r'([0-9]{6})\.(intent|selection)\.json\Z')
 REFUSAL = 'Windows selection requires operator reconciliation; preserve its records'
+STAGE_SCHEMA = 'marty.windows-renewal-staging/v1'
+STAGE_PHASES = ('authority','current','prepare','tls','keycloak','export','materialize')
+MAX_SELECTIONS = 256
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,7 @@ class SelectedInputs:
     check_configuration: Callable = field(repr=False, compare=False)
     check_current: Callable = field(repr=False, compare=False)
     recover_existing: Callable = field(repr=False, compare=False)
+    stage_renewal: Callable = field(repr=False, compare=False)
 
 
 def require(value):
@@ -95,7 +100,7 @@ def directory(config):
 
 def _read(root, stack):
     names = sorted(p.name for p in root.iterdir())
-    require(len(names) <= 513 and all(n == 'owner.json' or ENTRY.fullmatch(n) for n in names))
+    require(len(names) <= 2*MAX_SELECTIONS+1 and all(n == 'owner.json' or ENTRY.fullmatch(n) for n in names))
     raw = {n: stack.enter_context(renewal.hold_private_input(root/n)) for n in names}
     require(sorted(p.name for p in root.iterdir()) == names)
     return raw
@@ -108,7 +113,7 @@ def _parse(raw, expected):
     for name, value in raw.items():
         if name == 'owner.json':continue
         match = ENTRY.fullmatch(name);require(match is not None)
-        number = int(match[1]);require(1 <= number <= 256)
+        number = int(match[1]);require(1 <= number <= MAX_SELECTIONS)
         target = intents if match[2] == 'intent' else selections
         require(number not in target);target[number] = decode(value)
     require(intents and set(intents) == set(range(1, len(intents)+1)))
@@ -298,13 +303,27 @@ def adopt(config_path, *, authority_file=None):
     return record
 
 
-def prepare(config_path, *, authority_file=None):
+def prepare(config_path, *, authority_file=None, staging_sha256=None):
     with _session(config_path) as (config, raw_config, expected, root, raw, stack):
-        require(not renewal.recovery_pending(config))
+        if staging_sha256 is None:require(not renewal.recovery_pending(config))
+        else:
+            require(not renewal.namespace_entry_exists(renewal.recovery_guard(config))
+                and not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(config)))
         intents, records = _parse(raw, expected)
-        require(len(intents) == len(records) and len(intents) < 256)
+        require(len(intents) == len(records) and len(intents) < MAX_SELECTIONS)
         previous = records[len(records)];values, snapshots = _inputs(config, stack)
         require(snapshots['old'] == previous['selected'])
+        if staging_sha256 is not None:
+            stage,result=_staging_admission(config,raw_config,previous,stack,staging_sha256)
+            require(stage['config_path']==str(Path(config_path))
+                and result['secrets_sha256']==snapshots['new']['secrets_sha256']
+                and result['env_sha256']==snapshots['new']['env_sha256']
+                and result['files']==len(values['new'])
+                and result['changed_files']==sum(values['old'][n]!=values['new'][n] for n in values['old']))
+            require(authority_file in (None,stage['authority_file']))
+            authority_file=stage['authority_file']
+            renewal.native_preflight(config['native'],config['project'],values['old'],values['new'],
+                                     renewal.Docker(config['docker_host'],config['engine_id']).prefix)
         require(all(renewal.read_private_bytes(Path(config[k])) == b''
                     for k in ['intent', 'result', 'new_log', 'rollback_log']))
         for step in config['step_receipts']:
@@ -318,6 +337,9 @@ def prepare(config_path, *, authority_file=None):
                   'inputs': snapshots, 'operation': 'activation', 'result_before_sha256': digest(b'')}
         _append(root, raw, f'{sequence:06}.intent.json', intent, stack)
         _parse(raw, expected)
+        intent_sha=digest(raw[f'{sequence:06}.intent.json'])
+    if staging_sha256 is not None:
+        _handoff_staged(config_path,staging_sha256,sequence,intent_sha)
     return sequence
 
 
@@ -436,9 +458,232 @@ def status(config_path):
     with _session(config_path) as (config, _raw_config, expected, _root, raw, _stack):
         intents, records = _parse(raw, expected)
         if len(intents) != len(records):return {'state': 'pending-reconciliation', 'sequence': len(intents)}
+        if renewal.namespace_entry_exists(renewal.renewal_staging_guard(config)):
+            return {'state':'pending-staging','sequence':len(records),'project':config['project']}
         selected = records[len(records)]
         return {'state': 'selected', 'sequence': len(records), 'project': config['project'],
                 'selected': selected['selected'], 'decision': selected['decision']}
+
+
+def _stage_names():
+    return ['intent.json',*[phase+'.'+event+'.json' for phase in STAGE_PHASES
+        for event in ('started','completed')], 'prepare.helper.json','tls.created.json',
+        'tls.helper.json','keycloak.helper.json']
+
+
+def _new_private(path,raw):
+    with path.open('xb'):pass
+    if raw:renewal.write_empty_private_file(path,raw.decode('utf-8'))
+    else:require(renewal.read_private_bytes(path)==b'')
+
+
+def _stage(config,choice,values,record,root,logical_project,stack):
+    # Capacity admission precedes any guard, credential mint or output allocation.
+    require(type(record['sequence']) is int and 1<=record['sequence']<MAX_SELECTIONS)
+    from selfhost_windows_renewal_native import (
+        preflight,
+        produce_generation,
+        reauthenticate,
+    )
+    parent=Path(config['current_secrets']).parent;root=Path(root)
+    require(root.parent==parent and re.fullmatch(r'windows-renewal-[0-9a-f]{32}',root.name))
+    require(not renewal.recovery_pending(config) and not list(root.iterdir()))
+    require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',logical_project))
+    stack.enter_context(renewal.hold_storage_namespace(root))
+    with _held_private_input(root,directory=True):pass
+    observed=_inspect(config,choice,values,stack,expected_data=record['data_sha256'])
+    docker=observed['docker'];cycle_id=root.name.removeprefix('windows-renewal-')
+    prefix='renewed' if choice=='new' else 'current'
+    secrets=parent/('candidate-secrets-renewal-'+cycle_id)
+    require(not renewal.namespace_entry_exists(secrets));secrets.mkdir()
+    stack.enter_context(renewal.hold_storage_namespace(secrets))
+    with _held_private_input(secrets,directory=True):pass
+    activation=root/'activation';activation.mkdir()
+    with _held_private_input(activation,directory=True):pass
+    next_config=decode(packed(config))
+    next_config.update(current_env=config[prefix+'_env'],current_secrets=config[prefix+'_secrets'],
+        renewed_env=str(root/'renewed.env'),renewed_secrets=str(secrets))
+    authority='/control/recovery-session-'+cycle_id+'/token'
+    next_config['native'].update(current=record['selected']['native_mirror'],
+        renewed='/control/windows-renewal-'+cycle_id+'/generation',token_file=authority)
+    for name in ['intent','result','new_log','rollback_log']:
+        path=activation/name;_new_private(path,b'');next_config[name]=str(path)
+    layers=renewal.dependency_layers(observed['model'],observed['services'],
+        renewal.owned_roles(observed['model'],observed['services']))
+    next_config['step_receipts']=[]
+    for index in range(len(layers)):
+        step={}
+        for name in ['new_started','new_completed','rollback_started','rollback_completed']:
+            path=activation/(str(index)+'-'+name);_new_private(path,b'');step[name]=str(path)
+        next_config['step_receipts'].append(step)
+    env=renewal.read_private_bytes(Path(next_config['current_env']));lines=env.splitlines(keepends=True)
+    indices=[i for i,line in enumerate(lines) if line.startswith(b'SELFHOST_SECRET_DIR=')];require(len(indices)==1)
+    index=indices[0];ending=b'\r\n' if lines[index].endswith(b'\r\n') else b'\n'
+    lines[index]=b'SELFHOST_SECRET_DIR='+secrets.as_posix().encode()+ending;renewed_env=b''.join(lines)
+    require(renewal.env_body(env,Path(next_config['current_secrets']))==renewal.env_body(renewed_env,secrets))
+    _new_private(root/'renewed.env',renewed_env)
+    next_path=activation/'config.private.json';next_raw=packed(next_config);_new_private(next_path,next_raw)
+    stage={'schema':STAGE_SCHEMA,'project':config['project'],'engine_id':config['engine_id'],
+        'sequence':record['sequence']+1,'selected_sha256':digest(packed(record['selected'])),
+        'data_sha256':record['data_sha256'],'root':str(root),'config_path':str(next_path),
+        'config_sha256':digest(next_raw),'authority_file':authority,'logical_project':logical_project,
+        'services_image':observed['model']['services']['signing-keys']['image'],'candidate_only':True}
+    names=_stage_names()
+    for name in [*names,'result.json','publication.pending.json']:_new_private(root/name,b'')
+    guard=renewal.renewal_staging_guard(config);_new_private(guard,packed(stage))
+    renewal.write_empty_private_file(root/'intent.json',packed(stage).decode())
+    stack.enter_context(renewal.hold_private_input(guard))
+    stack.enter_context(renewal.hold_private_input(root/'intent.json'))
+    def checkpoint(phase,event,metadata):
+        require(phase in STAGE_PHASES and event in {'started','completed','created','helper'})
+        name=phase+'.'+event+'.json';require(name in names)
+        body={'phase':phase,'event':event,'metadata':metadata}
+        renewal.write_empty_private_file(root/name,packed(body).decode())
+        stack.enter_context(renewal.hold_private_input(root/name))
+    checkpoint('authority','started',{})
+    require(reauthenticate(config['native'],config['project'],docker.prefix,authority.rsplit('/',1)[0])==authority)
+    checkpoint('authority','completed',{})
+    checkpoint('current','started',{})
+    require(_prove(config,choice,values,stack,expected_data=record['data_sha256'],authority_file=authority)==record['data_sha256'])
+    checkpoint('current','completed',{})
+    renewed=produce_generation(next_config,values[choice],logical_project,cycle_id,stage['services_image'],checkpoint)
+    require(set(renewed)==set(values[choice]))
+    checkpoint('materialize','started',{})
+    for name,value in renewed.items():_new_private(secrets/name,value)
+    held=stack.enter_context(renewal.hold_private_generation(secrets,sorted(renewed)));require(held==renewed)
+    preflight(next_config['native'],config['project'],values[choice],held,docker.prefix)
+    require(_prove(config,choice,values,stack,expected_data=record['data_sha256'],authority_file=authority)==record['data_sha256'])
+    require(renewal.observations(docker.containers(),config['project'],set())
+        ==renewal.observations(observed['baseline'],config['project'],set()))
+    checkpoint('materialize','completed',{})
+    receipts={name:renewal.read_private_bytes(root/name) for name in names}
+    require(all(receipts.values()))
+    hashes={name:digest(raw) for name,raw in receipts.items()}
+    result={'schema':STAGE_SCHEMA,'guard_sha256':digest(packed(stage)),
+        'config_sha256':digest(next_raw),'next_config':str(next_path),'authority_file':authority,
+        'files':len(held),'changed_files':sum(values[choice][n]!=held[n] for n in held),
+        'secrets_sha256':fingerprint(held),'env_sha256':digest(renewed_env),'phase_sha256':hashes}
+    require(set(p.name for p in root.iterdir())==set(names)|{'result.json','publication.pending.json','renewed.env','activation'})
+    return {'stage':stage,'result':result}
+
+
+def _finish_stage(config,pending):
+    """Publish only after selected-lease exit; the staging guard stays active."""
+    stage=pending['stage'];result=pending['result'];root=Path(stage['root'])
+    with ExitStack() as held:
+        held.enter_context(renewal.hold_private_input(Path(config['current_secrets']).parent/f'.{config["project"]}.renewal.lock',exclusive=True))
+        held.enter_context(renewal.hold_storage_namespace(root))
+        require(digest(held.enter_context(renewal.hold_private_input(renewal.renewal_staging_guard(config))))==result['guard_sha256'])
+        for name,sha in result['phase_sha256'].items():
+            require(digest(held.enter_context(renewal.hold_private_input(root/name)))==sha)
+        require(digest(held.enter_context(renewal.hold_private_input(Path(stage['config_path']))))==stage['config_sha256'])
+        require(digest(held.enter_context(renewal.hold_private_input(root/'renewed.env')))==result['env_sha256'])
+        model_raw=held.enter_context(renewal.hold_private_input(Path(config['compose_file']),max_bytes=2*1024*1024))
+        require(digest(model_raw)==config['compose_sha256'])
+        generation=held.enter_context(renewal.hold_private_generation(Path(decode(renewal.read_private_bytes(Path(stage['config_path'])))['renewed_secrets']),
+            sorted(decode(model_raw)['secrets'])))
+        require(fingerprint(generation)==result['secrets_sha256'])
+        with _held_private_input(root,directory=True):
+            require(renewal.read_private_bytes(root/'result.json')==b'')
+    # Publication must follow every held-input and lock exit check. A failure
+    # while releasing any proof above leaves the result empty and inadmissible.
+    renewal.write_empty_private_file(root/'result.json',packed(result).decode())
+    publication=packed({'schema':STAGE_SCHEMA,'result_sha256':digest(packed(result))})
+    renewal.write_empty_private_file(root/'publication.pending.json',publication.decode())
+    with ExitStack() as held:
+        held.enter_context(renewal.hold_storage_namespace(root))
+        require(held.enter_context(renewal.hold_private_input(root/'result.json'))==packed(result))
+        require(held.enter_context(renewal.hold_private_input(root/'publication.pending.json'))==publication)
+    # Windows rename refuses an existing destination. Only this final atomic
+    # boundary makes the result admissible; failed writers/exit checks retain
+    # the pending file and staging guard without an admission marker.
+    (root/'publication.pending.json').rename(root/'publication.json')
+
+
+def _staging_admission(config,raw_config,previous,stack,sha):
+    require(type(sha) is str and re.fullmatch(r'[0-9a-f]{64}',sha))
+    guard_raw=stack.enter_context(renewal.hold_private_input(renewal.renewal_staging_guard(config)))
+    require(digest(guard_raw)==sha);stage=decode(guard_raw)
+    require(stage['schema']==STAGE_SCHEMA and stage['candidate_only'] is True
+        and stage['project']==config['project'] and stage['engine_id']==config['engine_id']
+        and stage['sequence']==previous['sequence']+1 and stage['selected_sha256']==digest(packed(previous['selected']))
+        and stage['data_sha256']==previous['data_sha256'])
+    root=Path(stage['root']);require(root.parent==Path(config['current_secrets']).parent
+        and re.fullmatch(r'windows-renewal-[0-9a-f]{32}',root.name))
+    cycle=root.name.removeprefix('windows-renewal-')
+    require(config['renewed_secrets']==str(root.parent/('candidate-secrets-renewal-'+cycle))
+        and config['renewed_env']==str(root/'renewed.env')
+        and config['native']['renewed']=='/control/windows-renewal-'+cycle+'/generation'
+        and stage['authority_file']=='/control/recovery-session-'+cycle+'/token')
+    require(Path(stage['config_path'])==root/'activation/config.private.json'
+        and digest(raw_config)==stage['config_sha256']
+        and config['native']['token_file']==stage['authority_file'])
+    require(stack.enter_context(renewal.hold_private_input(root/'intent.json'))==guard_raw)
+    result=decode(stack.enter_context(renewal.hold_private_input(root/'result.json')))
+    require(stack.enter_context(renewal.hold_private_input(root/'publication.json'))
+        ==packed({'schema':STAGE_SCHEMA,'result_sha256':digest(packed(result))}))
+    require(result['schema']==STAGE_SCHEMA and result['guard_sha256']==sha
+        and result['next_config']==stage['config_path'] and result['config_sha256']==digest(raw_config)
+        and result['authority_file']==stage['authority_file'] and set(result['phase_sha256'])==set(_stage_names()))
+    helpers={}
+    for name,expected in result['phase_sha256'].items():
+        raw=stack.enter_context(renewal.hold_private_input(root/name));require(raw and digest(raw)==expected)
+        if name!='intent.json':
+            phase,event,_=name.split('.')
+            receipt=decode(raw);require(set(receipt)=={'phase','event','metadata'}
+                and receipt['phase']==phase and receipt['event']==event)
+            metadata=receipt['metadata']
+            if event in {'created','helper'}:
+                require(type(metadata) is dict and set(metadata)=={'id','name','image'}
+                    and type(metadata['id']) is str and re.fullmatch(r'[0-9a-f]{64}',metadata['id'])
+                    and metadata['name']==config['project']+'-renew-'+phase+'-'+cycle
+                    and metadata['image']==(stage['services_image'] if phase=='tls' else config['native']['helper_image']))
+                helpers[name]=metadata
+            else:require(metadata=={})
+    require(helpers['tls.created.json']==helpers['tls.helper.json'])
+    require(len({helpers[phase+'.helper.json']['id'] for phase in ('prepare','tls','keycloak')})==3)
+    require(set(p.name for p in root.iterdir())==set(_stage_names())|{'result.json','publication.json','renewed.env','activation'})
+    return stage,result
+
+
+def _handoff_staged(config_path,sha,sequence,intent_sha):
+    """A registered pending intent is durable before staging loses authority."""
+    with _session(config_path) as (config,raw_config,expected,root,raw,stack):
+        guard=renewal.renewal_staging_guard(config)
+        require(digest(stack.enter_context(renewal.hold_private_input(guard)))==sha)
+        intents,records=_parse(raw,expected)
+        require(len(intents)==sequence==len(records)+1
+            and digest(raw[f'{sequence:06}.intent.json'])==intent_sha
+            and intents[sequence]['config_path']==str(Path(config_path))
+            and intents[sequence]['config_file_sha256']==digest(raw_config))
+    # Any late proof failure above leaves the staging guard. After this point,
+    # the pending journal independently blocks new recovery/production attempts.
+    require(digest(renewal.read_private_bytes(root/f'{sequence:06}.intent.json'))==intent_sha)
+    require(digest(renewal.read_private_bytes(guard))==sha)
+    guard.unlink()
+
+
+def renew_once(config_path,logical_project):
+    """One online candidate cycle; never retry a pending/uncertain operation."""
+    with selected_inputs(config_path) as lease:
+        require(lease.sequence<MAX_SELECTIONS)
+        root=lease.secrets_dir.parent/('windows-renewal-'+uuid.uuid4().hex)
+        root.mkdir()
+        staged=lease.stage_renewal(root,logical_project)
+    path=Path(staged['next_config']);authority=staged['authority_file']
+    prepare(path,authority_file=authority,staging_sha256=staged['guard_sha256'])
+    cfg=decode(renewal.read_private_bytes(path))
+    try:
+        result=renewal.activate(cfg)
+    except BaseException:
+        saved=renewal.read_private_bytes(Path(cfg['result']))
+        if saved and decode(saved).get('result')=='rolled_back':complete(path,authority_file=authority)
+        raise
+    require(result['result']=='activated')
+    selected=complete(path,authority_file=authority)
+    return {'schema':STAGE_SCHEMA,'project':cfg['project'],'result':'renewed-and-selected',
+        'sequence':selected['sequence'],'config_path':str(path),'staging_root':str(root),
+        'production_admission':False,'automatic_lifecycle':False}
 
 
 @contextmanager
@@ -448,13 +693,14 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
     The explicit callback delegates live readiness/custody checks after Bao is
     available. No startup or Docker mutation is performed by this context.
     """
-    completion = []
+    completion = [];staging=[]
     with _session(config_path) as (_config, _cfg_raw, expected, _root, raw, stack):
         if terminal_guard_sha256 is None:
             require(not renewal.recovery_pending(_config))
         else:
             require(type(terminal_guard_sha256) is str and re.fullmatch(r'[0-9a-f]{64}', terminal_guard_sha256))
             require(not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(_config)))
+            require(not renewal.namespace_entry_exists(renewal.renewal_staging_guard(_config)))
             guard_raw = stack.enter_context(renewal.hold_private_input(renewal.recovery_guard(_config)))
             require(digest(guard_raw) == terminal_guard_sha256)
         intents, records = _parse(raw, expected);require(len(intents) == len(records))
@@ -489,7 +735,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
                             'native_admission':False,'runtime_readiness':False}
         def recover_existing(output_dir, authority_file=None, *, preparation_sha256=None, fresh_authority=False):
             with lease_lock:
-                require(active and not completion and terminal_guard_sha256 is None)
+                require(active and not completion and not staging and terminal_guard_sha256 is None)
                 from selfhost_windows_recovery import start_existing
                 with ExitStack() as proof_stack:
                     pending = start_existing(cfg, choice, values, record, output_dir, proof_stack,
@@ -497,17 +743,25 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
                                              fresh_authority=fresh_authority)
                 completion.append(pending)
                 return decode(packed(pending['result']))
+        def stage_renewal(output_dir,logical_project):
+            with lease_lock:
+                require(active and not completion and not staging and terminal_guard_sha256 is None)
+                with ExitStack() as proof_stack:
+                    pending=_stage(cfg,choice,values,record,output_dir,logical_project,proof_stack)
+                staging.append(pending)
+                return decode(packed(pending['result']))
         try:
             yield SelectedInputs(cfg['project'], cfg['docker_host'], cfg['engine_id'], Path(cfg['compose_file']),
                 cfg['compose_sha256'], Path(selected['env_file']), Path(selected['secrets_dir']), sequence,
                 digest(packed(selected)),
-                check_configuration, check_current, recover_existing)
+                check_configuration, check_current, recover_existing, stage_renewal)
         finally:
             with lease_lock:
                 active = False;values.clear()
     if completion:
         from selfhost_windows_recovery import finish_existing
         finish_existing(cfg, completion[0])
+    if staging:_finish_stage(cfg,staging[0])
 
 
 @contextmanager

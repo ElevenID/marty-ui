@@ -164,6 +164,54 @@ registered action and task ownership after installation. Existing legacy invocat
 retain their historical behavior. Installing this task does not test logon, engine
 or host reboot, and does not provide pre-logon availability.
 
-The entrypoint does not renew or repair expired generations or resume an uncertain
-earlier attempt. Producer scheduling, actual engine/logon/reboot tests and
-expired-credential recovery remain required for unattended operation.
+Normal recovery does not renew or repair expired generations or resume an
+uncertain earlier attempt. Explicit online renewal uses the same entrypoint:
+
+```powershell
+& "$Tooling/scripts/recover-marty-after-reboot.ps1" `
+  -RecoveryConfigurationFile 'C:/Marty/private/managed-recovery.json' `
+  -ManagedPython 'C:/Python312/python.exe' -WaitForEngine `
+  -RenewCredentials -LogicalTlsProject $EnrolledLogicalTlsProject
+```
+
+The namespace must be the existing enrollment, not a new project name. The CLI
+holds the unchanged managed manifest, finishes any engine-wait lease, then calls
+the existing `renew_once` owner under its own fresh lease. It emits metadata only
+after all held-input exits. Adding `-CheckOnly` verifies configuration without
+minting or activation; its result explicitly reports `renewal_executed=false`.
+It does not qualify the namespace against the issuer or prove runtime readiness.
+
+A separately named online renewal task can reuse the installer:
+
+```powershell
+& "$Tooling/scripts/install-marty-boot-recovery.ps1" `
+  -RecoveryConfigurationFile 'C:/Marty/private/managed-recovery.json' `
+  -ManagedPython 'C:/Python312/python.exe' -TaskName 'Marty-Candidate-Renewal' `
+  -RenewCredentials -LogicalTlsProject $EnrolledLogicalTlsProject `
+  -RenewalIntervalMinutes $QualifiedIntervalMinutes
+```
+
+The interval must be explicitly qualified between 15 and 240 minutes. Select it
+from the actual minimum issued token/certificate lifetimes, admission floor,
+worst-case operation duration and allowed outages; the installer does not infer
+these or qualify unattended availability. Each tick performs a full renewal and
+recreates credential-consuming application roles, so qualify its availability
+impact too. Keep tooling at a reviewed, stable installed checkpoint rather than
+an active development checkout before installing a real task.
+The current append-only selection journal is bounded at 256 operations. Renewal
+refuses before minting when full; it never truncates or resets history. Its
+remaining capacity and a supported history-preserving continuation are additional
+unattended qualification requirements. Do not treat an indefinite trigger as
+proof of indefinite renewal capacity.
+
+The renewal task uses an interactive, limited operator logon trigger with a
+two-minute delay and repetition, no immediate failure retries, a one-hour task
+limit and IgnoreNew concurrency. The duration is omitted for
+[indefinite repetition](https://learn.microsoft.com/en-us/windows/win32/taskschd/repetitionpattern-duration).
+It requires the signed-in operator session; it is not a SYSTEM boot service.
+Create-only registration and the same project guards prevent replacement or
+uncertain-operation replay. The installer preflight is check-only and never
+mints. Actual task registration, invocation, repetition/logon timing, separately
+authorized engine/host reboot, and supported expired-generation recovery still
+require host qualification. An unregistered COM definition test proves XML
+serialization only. No task is installed by the test suite.
