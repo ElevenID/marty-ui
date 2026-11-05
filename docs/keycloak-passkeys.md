@@ -105,6 +105,42 @@ Encourage a second passkey and a verified recovery method; second-factor recover
 codes alone must not be assumed to recover a passwordless account. Password/email
 fallback retains its existing security characteristics.
 
+If a device is lost, sign in using a retained method and verify that method in a
+fresh browser session before removing the lost credential. The removal guard
+checks stored credentials and enabled authenticators; it cannot establish that
+the user still possesses another device or remembers a stored password. Keep
+credential labels clear and confirm the account shown in the native console.
+
+Use the existing **Forgot password** flow when password/email recovery is
+available. Captured-mail browser qualification covers reset and a fresh login as
+the same subject with passkeys enabled and disabled. The custom update-password
+form retains the exact account username and its password-manager autocomplete
+metadata. This does not replace the realm's email verification or MFA policy.
+
+For a user who cannot use any remaining login method, the authorized tenant
+recovery operator must verify the request under the organization's existing
+identity-recovery policy and identify the immutable Keycloak user ID. When the
+stored, verified mailbox remains a trusted recovery channel, use native
+`execute-actions-email` for that exact user with only
+`webauthn-register-passwordless`, a short lifetime (300 seconds), the managed
+client and a registered return URL. This is a privileged control-plane operation;
+the unauthenticated user cannot invoke Marty's enrollment endpoint. Native
+Keycloak confirms the mailbox and owns enrollment. Never expose the action token
+in support replies, logs or application responses. If the mailbox or identity
+cannot be verified, escalate to the tenant's recovery owner; do not delete
+credentials, change the subject, create a duplicate account or infer trust from
+an unverified presentation to unlock the account. After recovery, verify fresh
+application login, subject and authorization before retiring confirmed lost keys.
+
+Management uses the native Account Console and application-initiated actions.
+Keycloak26.8 deprecates direct Account REST credential deletion in favor of
+`delete_credential` AIA. Native AIA uses the required action's configured maximum
+authentication age; credential deletion also checks the applicable authentication
+level. Keep those settings under the realm flow owner's policy. The direct REST
+endpoint used in concurrent-removal tests is not a separate fresh-authentication
+flow and is not the management API offered by Marty. Qualification of aged
+sessions and privileged step-up remains required before rollout.
+
 Inspect the customized browser flow's MFA behavior: the upstream default can skip
 conditional 2FA after passkey login. For a policy that requires enrolled users to
 enter OTP after either a passkey or a password, Keycloak26.8 documents disabling
