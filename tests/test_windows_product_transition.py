@@ -45,8 +45,9 @@ def test_exact_image_update_replaces_local_ui_code_but_preserves_all_other_input
 @pytest.mark.parametrize('role', ['postgres', 'edge'])
 def test_equivalent_docker_hub_spelling_retains_exact_installed_service_and_runtime_pin(tmp_path, role):
     before, admitted = candidate(tmp_path)
-    before['services'][role]['image'] = role+'@sha256:'+'1'*64
-    admitted['images'][role] = 'docker.io/library/'+role+'@sha256:'+'1'*64
+    image_name = 'nginx' if role == 'edge' else role
+    before['services'].setdefault(role, {})['image'] = image_name+'@sha256:'+'1'*64
+    admitted['images'][role] = 'docker.io/library/'+image_name+'@sha256:'+'1'*64
     after = product.product_model(before, admitted)
     assert after['services'][role] == before['services'][role]
     assert role not in product.checked_model_change(before, after, admitted)['mutable_roles']
