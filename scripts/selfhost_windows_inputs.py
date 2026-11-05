@@ -10,6 +10,7 @@ https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfil
 from __future__ import annotations
 
 import ctypes
+from contextlib import contextmanager, ExitStack
 import os
 from pathlib import Path
 import re
@@ -47,7 +48,7 @@ def checked_identity(volume: int, index: int, expected: tuple[int, int]) -> None
     require((volume, index) == expected)
 
 
-def _path_identities(path: Path) -> list[tuple[int, int]]:
+def _path_identities(path: Path, *, directory: bool = False) -> list[tuple[int, int]]:
     require(path.is_absolute() and re.fullmatch(r"[A-Za-z]:", path.drive) is not None)
     require(all(part not in {".", ".."} and ":" not in part
                 and part.rstrip(" .") == part for part in path.parts[1:]))
@@ -58,7 +59,8 @@ def _path_identities(path: Path) -> list[tuple[int, int]]:
     for item in [*reversed(path.parents), path]:
         info = item.lstat()
         require(not info.st_file_attributes & 0x400 and info.st_ino != 0)
-        require(stat.S_ISREG(info.st_mode) if item == path else stat.S_ISDIR(info.st_mode))
+        require(stat.S_ISREG(info.st_mode) if item == path and not directory
+                else stat.S_ISDIR(info.st_mode))
         result.append((info.st_dev, info.st_ino))
     return result
 
@@ -86,6 +88,39 @@ def read_private_bytes(path: Path) -> bytes:
         raise ValueError(REFUSAL) from None
 
 
+@contextmanager
+def hold_private_generation(root: Path, names: list[str]):
+    """Hold every declared input and its private directory for one bounded action.
+
+    Windows denies ordinary writes, deletion and replacement of held inputs.
+    Recheck identity, privacy, directory membership and metadata on exit. This
+    supplies a read boundary only: callers still own native generation checks,
+    Compose scope/mount proof, rollback and activation/recovery qualification.
+    No file is created or rewritten and no ACL is changed.
+    """
+    require(os.name == "nt")
+    try:
+        root = Path(root)
+        require(isinstance(names, list) and 0 < len(names) <= 512
+                and all(isinstance(name, str) and re.fullmatch(
+                    r"[a-z][a-z0-9_]{0,127}", name) is not None for name in names)
+                and len(set(names)) == len(names))
+        with ExitStack() as stack:
+            # Ancestors need identity and no-delete sharing, not private ACLs:
+            # system directories legitimately have broader authority. Permit
+            # normal writes there while preventing namespace replacement.
+            for parent in reversed(root.parents):
+                stack.enter_context(_held_private_input(parent, directory=True, ancestor=True))
+            stack.enter_context(_held_private_input(root, directory=True))
+            require({p.name for p in root.iterdir()} == set(names))
+            data = {name: stack.enter_context(_held_private_input(root / name))
+                    for name in names}
+            yield data
+            require({p.name for p in root.iterdir()} == set(names))
+    except (OSError, UnicodeError, ValueError, TypeError):
+        raise ValueError(REFUSAL) from None
+
+
 def write_empty_private_file(path: Path, value: str) -> None:
     """Initialize an existing empty private file through one verified writer.
 
@@ -103,10 +138,18 @@ def write_empty_private_file(path: Path, value: str) -> None:
 
 
 def _private_file_bytes(path: Path, write_value: bytes | None = None) -> bytes:
+    with _held_private_input(path, write_value) as data:
+        return data
+
+
+@contextmanager
+def _held_private_input(path: Path, write_value: bytes | None = None, *, directory=False,
+                        ancestor=False):
     from ctypes import wintypes as w
 
     path = Path(path)
-    before = _path_identities(path)
+    before = _path_identities(path, directory=directory)
+    require((not directory or write_value is None) and (not ancestor or directory))
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     security = ctypes.WinDLL("advapi32", use_last_error=True)
     pointer = ctypes.c_void_p
@@ -179,16 +222,20 @@ def _private_file_bytes(path: Path, write_value: bytes | None = None) -> bytes:
 
     # OPEN_EXISTING, OPEN_REPARSE_POINT, and no write/delete sharing. Hold this
     # exact handle for ACL proof, bounds checks and the entire read.
-    access = 0x80020080 | (0x40000000 if write_value is not None else 0)
-    handle = create(str(path), access, 1, None, 3, 0x00200000, None)
+    access = 0x80 if ancestor else 0x80020080 | (0x40000000 if write_value is not None else 0)
+    handle = create(str(path), access, 3 if ancestor else 1, None, 3,
+                    0x00200000 | (0x02000000 if directory else 0), None)
     require(handle not in (None, ctypes.c_void_p(-1).value))
     try:
         def file_info():
             result = Info()
             require(bool(info(handle, ctypes.byref(result))))
-            require(not result.attributes & (0x400 | 0x10)
-                    and result.links == 1 and result.size_high == 0
-                    and result.size_low <= MAX_BYTES)
+            require(not result.attributes & 0x400)
+            if directory:
+                require(bool(result.attributes & 0x10))
+            else:
+                require(not result.attributes & 0x10 and result.links == 1
+                        and result.size_high == 0 and result.size_low <= MAX_BYTES)
             return result
 
         def file_identity(legacy):
@@ -234,7 +281,7 @@ def _private_file_bytes(path: Path, write_value: bytes | None = None) -> bytes:
             finally:
                 free(allocated)
 
-        initial_acl = prove_acl()
+        initial_acl = None if ancestor else prove_acl()
         if write_value is not None:
             require(first.size_low == 0 and _path_identities(path) == before)
             buffer = ctypes.create_string_buffer(write_value)
@@ -249,20 +296,32 @@ def _private_file_bytes(path: Path, write_value: bytes | None = None) -> bytes:
                     and prove_acl() == initial_acl)
             first = updated
             require(bool(seek(handle, 0, None, 0)))
-        data = ctypes.create_string_buffer(first.size_low + 1)
+        data = ctypes.create_string_buffer(first.size_low + 1 if not directory else 1)
         count = w.DWORD()
-        require(bool(read(handle, data, first.size_low + 1, ctypes.byref(count), None))
-                and count.value == first.size_low)
+        if not directory:
+            require(bool(read(handle, data, first.size_low + 1, ctypes.byref(count), None))
+                    and count.value == first.size_low)
         last = file_info()
         def stable(value):
+            if ancestor:
+                return (value.attributes, bytes(value.created), value.volume,
+                        value.index_high, value.index_low)
             return (value.attributes, bytes(value.created), bytes(value.written),
                     value.volume, value.size_high, value.size_low, value.links,
                     value.index_high, value.index_low)
         require(stable(first) == stable(last) and file_identity(last) == identity
-                and prove_acl() == initial_acl
-                and _path_identities(path) == before)
+                and (ancestor or prove_acl() == initial_acl)
+                and _path_identities(path, directory=directory) == before)
         if write_value is not None:
             require(data.raw[:count.value] == write_value)
-        return data.raw[:count.value]
+        try:
+            yield data.raw[:count.value]
+        finally:
+            # Recheck even if the bounded caller action raises. Ordinary
+            # write/delete sharing was never granted in the interim.
+            last = file_info()
+            require(stable(first) == stable(last) and file_identity(last) == identity
+                    and (ancestor or prove_acl() == initial_acl)
+                    and _path_identities(path, directory=directory) == before)
     finally:
         close(handle)

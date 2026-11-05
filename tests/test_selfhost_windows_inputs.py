@@ -87,6 +87,71 @@ class AclPolicyTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "Actual NTFS handle/ACL integration")
 class WindowsInputTests(unittest.TestCase):
+    def test_generation_holds_directory_and_files_until_the_action_finishes(self):
+        with private_fixture() as (root, path):
+            path = path.rename(root / "leaf")
+            path.write_bytes(PUBLIC.encode("utf-8"))
+            (root / "optional").write_bytes(b"")
+            with windows.hold_private_generation(root, ["leaf", "optional"]) as data:
+                self.assertEqual(data, {"leaf": PUBLIC.encode("utf-8"), "optional": b""})
+                self.assertEqual(path.read_bytes(), data["leaf"])
+                for operation in [lambda: path.write_bytes(b"replacement"), path.unlink,
+                                  lambda: root.rename(root.with_name(root.name + "-moved"))]:
+                    with self.assertRaises(OSError):
+                        operation()
+            # Closing the context releases both the file and directory handles.
+            path.write_bytes(b"AFTER\r\n")
+            self.assertEqual(windows.read_private_bytes(path), b"AFTER\r\n")
+
+    def test_generation_rejects_partial_names_and_releases_on_caller_failure(self):
+        with private_fixture() as (root, path):
+            path = path.rename(root / "leaf")
+            for names in [[], ["leaf", "leaf"], ["../leaf"], ["leaf:ads"], ["missing"],
+                          ["LEAF"], ["leaf"] * 513]:
+                with self.subTest(names=names[:2]), self.assertRaisesRegex(
+                        ValueError, windows.REFUSAL):
+                    with windows.hold_private_generation(root, names):
+                        self.fail("invalid generation accepted")
+            with self.assertRaisesRegex(RuntimeError, "SYNTHETIC_ACTION_FAILURE"):
+                with windows.hold_private_generation(root, ["leaf"]):
+                    raise RuntimeError("SYNTHETIC_ACTION_FAILURE")
+            path.write_bytes(PUBLIC.encode("utf-8"))
+            with windows.hold_private_generation(root, ["leaf"]) as data:
+                self.assertEqual(data["leaf"], PUBLIC.encode("utf-8"))
+
+    def test_generation_also_holds_ancestor_namespace_without_blocking_other_writes(self):
+        with private_fixture() as (root, path):
+            inner = root / "generation"
+            inner.mkdir()
+            path.rename(inner / "leaf")
+            moved = root.with_name(root.name + "-moved")
+            try:
+                with windows.hold_private_generation(inner, ["leaf"]):
+                    with self.assertRaises(OSError):
+                        root.rename(moved)
+                    # The non-generation ancestor remains usable by other work.
+                    (root / "unrelated").write_bytes(b"SYNTHETIC_UNRELATED")
+            finally:
+                if moved.exists():
+                    moved.rename(root)
+
+    def test_generation_detects_directory_membership_and_acl_changes_on_exit(self):
+        with private_fixture() as (root, path):
+            path = path.rename(root / "leaf")
+            path.write_bytes(PUBLIC.encode("utf-8"))
+            with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                with windows.hold_private_generation(root, ["leaf"]):
+                    (root / "unexpected").write_bytes(b"PUBLIC_SYNTHETIC")
+            (root / "unexpected").unlink()
+            quoted = str(path).replace("'", "''")
+            with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                with windows.hold_private_generation(root, ["leaf"]):
+                    powershell("$p='"+quoted+"';$a=Get-Acl -LiteralPath $p;"
+                               "$s=[Security.Principal.SecurityIdentifier]::new('S-1-5-32-545');"
+                               "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new("
+                               "$s,'Read','Allow'));[IO.File]::SetAccessControl($p,$a)")
+            self.assertEqual(path.read_bytes(), PUBLIC.encode("utf-8"))
+
     def test_byte_reader_preserves_line_endings_binary_empty_and_maximum(self):
         with private_fixture() as (_, path):
             for payload in [b"SYNTHETIC\r\nNEXT\rLAST\n", b"\xff\0", b"",
