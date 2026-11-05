@@ -8,7 +8,7 @@ param(
     [int]$RenewalIntervalMinutes = 0,
     [switch]$CheckOnly,
     [int]$TimeoutSeconds = 3600,
-    [int]$PreflightTimeoutSeconds = 300,
+    [int]$PreflightTimeoutSeconds = 240,
     [string]$StatusFile
 )
 $ErrorActionPreference = 'Stop'
@@ -18,7 +18,7 @@ if ($ManagedPython) {
     # the complete saved invocation before starting exactly this separate task.
     if ($TaskName -eq 'Marty-Recovery-At-Boot' -or $TaskName -notmatch '\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\z' -or
         $TimeoutSeconds -lt 1 -or $TimeoutSeconds -gt 3600 -or
-        $PreflightTimeoutSeconds -lt 1 -or $PreflightTimeoutSeconds -gt 600) {
+        $PreflightTimeoutSeconds -lt 1 -or $PreflightTimeoutSeconds -gt 240) {
         throw 'Use a separate managed task name and a bounded observation timeout.'
     }
     foreach ($file in @($RecoveryConfigurationFile, $ManagedPython)) {
