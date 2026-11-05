@@ -184,7 +184,7 @@ def validate_request_identity(request: object) -> dict:
     else:
         _require(authority["protected_main_commit"] == request["source_sha"]
                  and authority["record_sha256"] is None and authority["request_sha256"] is None,
-                 "All-pass checkpoint cannot advance the original source")
+                 "Automatically qualified checkpoint cannot advance the original source")
     _require(_timestamp(request["not_after"]) - _timestamp(request["created_at"])
              == timedelta(seconds=LIFETIME_SECONDS), "Checkpoint deadline must span exactly 900 seconds")
     return request

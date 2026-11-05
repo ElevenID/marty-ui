@@ -842,18 +842,17 @@ jobs:
       contents: read
       packages: read
       attestations: read
-    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@422088fa79f9bbea8b26fae89af7e9f5d9d62593
+    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@b71078cb18998014765bcfe6850b75714d852794
     with:
       lane: all
       collect_only: true
-      review_recipient: ${{ vars.OFFICIAL_REVIEW_RECIPIENT }}
       candidate_artifact: stack-release-official-candidate-${{ github.run_id }}
       candidate_manifest_sha256: ${{ needs.prepare-official-candidate.outputs.manifest_sha256 }}
       candidate_tag: ${{ needs.resolve-transaction.outputs.tag }}
-      harness_revision: 422088fa79f9bbea8b26fae89af7e9f5d9d62593
+      harness_revision: b71078cb18998014765bcfe6850b75714d852794
 
   official-gate-evidence:
-    timeout-minutes: 90
+    timeout-minutes: 30
     needs: [resolve-transaction, prepare-official-candidate, official-interoperability]
     runs-on: ubuntu-latest
     permissions:
@@ -861,7 +860,7 @@ jobs:
       actions: read
     env:
       SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
-      HARNESS_SHA: 422088fa79f9bbea8b26fae89af7e9f5d9d62593
+      HARNESS_SHA: b71078cb18998014765bcfe6850b75714d852794
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -890,15 +889,15 @@ jobs:
           --manifest candidate/stack-manifest.json
           --source "$SOURCE_SHA" --harness "$HARNESS_SHA"
           --run-id "$GITHUB_RUN_ID" --current-attempt "$GITHUB_RUN_ATTEMPT"
-      - name: Preserve immutable review inputs before requiring approval
+      - name: Preserve the immutable automated assessment inputs
         if: steps.freeze.outputs.frozen_new == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: official-review-input-${{ github.run_id }}
-          path: official-review-input/
+          name: official-evidence-input-${{ github.run_id }}
+          path: official-evidence-input/
           if-no-files-found: error
           retention-days: 90
-      - name: Qualify raw suite results and exact protected-main reviews
+      - name: Qualify raw suite results and deterministic verifier assertions
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -913,8 +912,7 @@ jobs:
           name: stack-release-official-gate-${{ github.run_id }}
           path: |
             official-interoperability.json
-            official-review-input/
-            official-review-authorization/
+            official-evidence-input/
           if-no-files-found: error
           retention-days: 90
 
@@ -2284,7 +2282,7 @@ jobs:
       SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
       TAG: ${{ needs.resolve-transaction.outputs.tag }}
     permissions:
-      actions: read
+      actions: write
       contents: write
       packages: write
       id-token: write
@@ -2677,7 +2675,16 @@ jobs:
             --checkpoint "$RUNNER_TEMP/stable-publication-checkpoint" \
             --artifact-id "$PUBLICATION_ARTIFACT_ID" \
             --artifact-digest "$PUBLICATION_ARTIFACT_DIGEST" \
+            --dispatch-receipt "$RUNNER_TEMP/stable-tag-dispatch.json" \
             --output "$RUNNER_TEMP/stable-tag-handoff.json"
+      - name: Preserve the automatic tag dispatch outcome
+        if: always() && steps.publication_handoff.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-tag-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/stable-tag-dispatch.json
+          if-no-files-found: error
+          retention-days: 90
       - name: Preserve the authenticated operator handoff admission
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

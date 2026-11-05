@@ -11,6 +11,10 @@ on:
         options: [combined, website, compose]
         default: combined
         required: true
+      expected_source_sha:
+        description: Exact source required by an automated release request; empty for standalone use
+        required: false
+        type: string
       stack_release_tag:
         description: Combined mode only; exact stable OpenBao backend from this source (vX.Y.Z)
         required: false
@@ -63,10 +67,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Require the exact protected-main source
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
+          if [ -n "$EXPECTED_SOURCE_SHA" ]; then
+            [[ "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            test "$GITHUB_SHA" = "$EXPECTED_SOURCE_SHA"
+          fi
           test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
           [[ "$MODE" = combined || "$MODE" = website ]]
@@ -304,10 +314,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Require the exact protected-main composition source
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
+          if [ -n "$EXPECTED_SOURCE_SHA" ]; then
+            [[ "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            test "$GITHUB_SHA" = "$EXPECTED_SOURCE_SHA"
+          fi
           test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
       - name: Prepare pinned verification tools and dependencies

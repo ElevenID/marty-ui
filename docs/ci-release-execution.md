@@ -1,5 +1,19 @@
 # CI and release execution
 
+## One request coordinates release execution
+
+`Release pipeline` coordinates full CI, the selected nightly/stable claims and
+producers, automatic stable publication, and optional production web packaging.
+Each child retains its existing source and artifact checks. The coordinator
+passes exact run IDs between stages and fails on a failed, skipped, foreign or
+ambiguous required result. The runtime path has no screenshot review, private
+decryption key, approval PR or timed operator dispatch.
+
+The [automated release requirements](automated-release-requirements.md) define
+the deterministic replacement for known upstream review obligations and the
+local development workflow. Source review and exploratory/visual work remain
+part of development; no incomplete installer checkpoint is relabeled Ready.
+
 ## Source checks precede expensive work
 
 `Release Source Preflight` validates the stack lock, independent product package

@@ -1,0 +1,342 @@
+"""Unattended orchestration controls; all GitHub responses are synthetic."""
+from __future__ import annotations
+
+import copy
+import json
+import re
+import sys
+import tempfile
+import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from scripts import release_pipeline as pipeline
+
+SOURCE = "a" * 40
+PINS = json.dumps({"edge": "docker.io/library/nginx@sha256:" + "b" * 64,
+                   "postgres": "docker.io/library/postgres@sha256:" + "c" * 64,
+                   "redis": "docker.io/library/redis@sha256:" + "d" * 64})
+
+
+class FakeGitHub:
+    """Independent fixed response fixtures, with no real transport available."""
+    def __init__(self) -> None:
+        self.source = SOURCE
+        self.created = datetime.now(timezone.utc).replace(microsecond=0)
+        self.runs: dict[int, dict] = {}
+        self.job_names: dict[int, list[str]] = {}
+        self.posts: list[tuple[str, dict]] = []
+        self.reads: list[str] = []
+        self.next_id = 200
+        self.after_post = None
+        self.lost_response = False
+        self.status = 200
+        self.bad_details = None
+        self.skipped_job = None
+        self.main_sha = SOURCE
+        self.publisher_ids: list[int] = []
+
+    def add(self, run_id: int, workflow: str, *, event="workflow_dispatch", title=None, jobs=None) -> dict:
+        value = {"id": run_id, "path": workflow, "event": event, "head_branch": "main",
+                 "head_sha": SOURCE, "run_attempt": 1, "status": "completed", "conclusion": "success",
+                 "created_at": self.created.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                 "repository": {"id": pipeline.transport.REPOSITORY_ID, "full_name": pipeline.transport.REPOSITORY},
+                 "display_title": title or "synthetic"}
+        self.runs[run_id] = value
+        self.job_names[run_id] = jobs or []
+        return value
+
+    def main(self):
+        self.reads.append("main")
+        return {"commit": {"sha": self.main_sha}}
+
+    def response(self, endpoint: str, *, method: str, payload: dict):
+        assert method == "POST"
+        assert endpoint.startswith("repos/ElevenID/marty-ui/actions/workflows/")
+        assert endpoint.endswith("/dispatches")
+        assert set(payload) == {"ref", "inputs"} and payload["ref"] == "main"
+        self.posts.append((endpoint, copy.deepcopy(payload)))
+        workflow = ".github/workflows/" + endpoint.split("/workflows/", 1)[1].split("/", 1)[0]
+        names = {
+            ".github/workflows/ci.yml": ["CI Gate"],
+            ".github/workflows/prepare-nightly-claim.yml": ["claim"],
+            ".github/workflows/prepare-stack-tag.yml": ["Validate exact main and persist the no-write claim"],
+            ".github/workflows/nightly-release.yml": ["admit", "prepare-native", "prepare-installation", "runtime-happy-path", "sign-release", "publish"],
+            ".github/workflows/cd.yml": ["official-gate-evidence", "qualify-release", "publish-manifest"],
+            ".github/workflows/production-web-release.yml": ["compose" if payload["inputs"].get("mode") == "compose" else "release"],
+        }[workflow]
+        run_id = self.next_id
+        self.next_id += 1
+        self.add(run_id, workflow, jobs=names)
+        if self.after_post:
+            self.after_post(self.runs[run_id])
+        if self.lost_response:
+            raise TimeoutError("synthetic acknowledgement lost after server accepted dispatch")
+        details = {"workflow_run_id": run_id,
+                   "run_url": f"https://api.github.com/repos/ElevenID/marty-ui/actions/runs/{run_id}",
+                   "html_url": f"https://github.com/ElevenID/marty-ui/actions/runs/{run_id}"}
+        return self.status, pipeline.transport.encoded(self.bad_details if self.bad_details is not None else details)
+
+    def json(self, path: str):
+        self.reads.append(path)
+        if "/workflows/publish-stable-candidate.yml/runs?" in path:
+            return {"total_count": len(self.publisher_ids), "workflow_runs": [self.runs[number] for number in self.publisher_ids]}
+        match = re.fullmatch(r"repos/ElevenID/marty-ui/actions/runs/([1-9][0-9]*)", path)
+        assert match is not None, path
+        return copy.deepcopy(self.runs[int(match[1])])
+
+    def pages(self, path: str, key: str):
+        self.reads.append(path)
+        assert key == "jobs"
+        match = re.fullmatch(r"repos/ElevenID/marty-ui/actions/runs/([1-9][0-9]*)/attempts/1/jobs", path)
+        assert match is not None, path
+        run_id = int(match[1])
+        return [{"id": 10000 + index, "name": name, "run_id": run_id, "run_attempt": 1,
+                 "head_sha": SOURCE, "status": "completed", "conclusion": "skipped" if name == self.skipped_job else "success"}
+                for index, name in enumerate(self.job_names[run_id])]
+
+
+class PipelineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.github = FakeGitHub()
+        self.plan = pipeline.configuration("both", PINS, "full", "true")
+        self.github.add(50, ".github/workflows/ci.yml", jobs=["CI Gate"])
+        self.github.add(60, ".github/workflows/cd.yml", jobs=["official-gate-evidence", "qualify-release", "publish-manifest"])
+
+    def driver(self, phase: str, *, name="journal.json") -> pipeline.Pipeline:
+        value = pipeline.Pipeline(phase, 123, SOURCE, self.github.created.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                  "v1.2.3", self.plan, self.root / name, github=self.github)
+        self.addCleanup(lambda: None if value.stream.closed else value.stream.close())
+        return value
+
+    def test_configuration_refuses_floating_or_incomplete_stable_pins_and_unrequested_web(self) -> None:
+        for pins in ("null", "[]", '{"redis":"redis:latest"}',
+                     json.dumps({"redis": json.loads(PINS)["redis"]}),
+                     json.dumps({**json.loads(PINS), "mail": "docker.io/library/redis@sha256:" + "d" * 64}),
+                     json.dumps({**json.loads(PINS), "edge": "docker.io/foreign/nginx@sha256:" + "b" * 64}),
+                     '{"edge":"docker.io/library/nginx@sha256:' + "f" * 64 + '","edge":"foreign"}'):
+            with self.subTest(pins=pins), self.assertRaises(ValueError):
+                pipeline.configuration("stable", pins, "full", "false")
+        with self.assertRaises(ValueError):
+            pipeline.configuration("nightly", "", "full", "true")
+        self.assertEqual(pipeline.configuration("nightly", "", "full", "false")["channel"], "nightly")
+
+    def test_stable_defaults_use_the_source_pins_and_pass_existing_compose_service_validation(self) -> None:
+        from scripts import build_selfhost_image_lock as image_lock
+
+        plan = pipeline.configuration("both", "", "full", "false")
+        self.assertEqual(plan["external_images"], (ROOT / "release/external-images.json").read_text())
+        pins = json.loads(plan["external_images"])
+        self.assertEqual(set(pins), {"edge", "postgres", "redis"})
+        base = ROOT / "docker-compose.selfhost.prod.yml"
+        override = ROOT / "docker-compose.selfhost.bundle.override.yml"
+        services = image_lock._compose_services(base)
+        # Match CD's pre-build shape check; this does not claim image provenance
+        # or runtime success and never resolves or pulls an image.
+        for name in image_lock.KEYCLOAK_SERVICES:
+            services[name]["image"] = image_lock.release_transaction.IMAGE_URIS["keycloak"] + "@sha256:" + "0" * 64
+        image_lock.preflight_external_images({"services": services}, pins, base, override)
+        self.assertEqual(pipeline.configuration("stable", PINS, "full", "false")["external_images"], PINS)
+
+    def test_missing_or_invalid_source_defaults_fail_before_a_release_request(self) -> None:
+        with self.assertRaises((OSError, ValueError)):
+            pipeline.configuration("stable", "", "full", "false", root=self.root)
+        (self.root / "release").mkdir()
+        path = self.root / "release/external-images.json"
+        for raw in (b"{}", b"null", b'{"edge":"nginx:latest"}', b"x" * 8193):
+            with self.subTest(raw=raw[:40]):
+                path.write_bytes(raw)
+                with self.assertRaises(ValueError):
+                    pipeline.configuration("stable", "", "full", "false", root=self.root)
+
+    def test_full_ci_and_each_claim_producer_use_exact_returned_ids_without_manual_inputs(self) -> None:
+        ci = self.driver("qualify", name="ci.json")
+        self.assertEqual(ci.execute(), {"ci_run_id": 200, "stable_tag": "v1.2.3"})
+        self.assertEqual(self.github.posts[-1][1]["inputs"], {"canvas_migrated_base_pilot": False})
+        nightly = self.driver("nightly", name="nightly.json")
+        self.assertEqual(nightly.execute(ci_run_id=200), {"nightly_claim_run_id": 201, "nightly_run_id": 202})
+        self.assertEqual(self.github.posts[-1][1]["inputs"], {"claim_run_id": "201", "publish_cloudflare_addon": False})
+        stable = self.driver("stable", name="stable.json")
+        self.assertEqual(stable.execute(ci_run_id=200), {"stable_claim_run_id": 203, "stable_run_id": 204, "stable_tag": "v1.2.3"})
+        self.assertEqual(self.github.posts[-1][1]["inputs"], {
+            "claim_run_id": "203", "publication_contract": "v2", "selfhost_public_profile": "full",
+            "publish_cloudflare_addon": False, "selfhost_external_images_json": PINS})
+        self.assertEqual([path.split("/workflows/")[1] for path, _ in self.github.posts],
+                         ["ci.yml/dispatches", "prepare-nightly-claim.yml/dispatches", "nightly-release.yml/dispatches",
+                          "prepare-stack-tag.yml/dispatches", "cd.yml/dispatches"])
+
+    def test_failed_ci_or_claim_prevents_the_next_producer(self) -> None:
+        driver = self.driver("nightly")
+        self.github.runs[50]["conclusion"] = "failure"
+        with self.assertRaises(ValueError):
+            driver.execute(ci_run_id=50)
+        self.assertEqual(self.github.posts, [])
+        self.github.runs[50]["conclusion"] = "success"
+        self.github.after_post = lambda run: run.update(conclusion="failure")
+        with self.assertRaises(ValueError):
+            driver.execute(ci_run_id=50)
+        self.assertEqual(len(self.github.posts), 1)
+        self.assertIn("prepare-nightly-claim.yml", self.github.posts[0][0])
+
+    def test_lost_acknowledgement_is_retained_and_never_replayed_or_discovered(self) -> None:
+        driver = self.driver("qualify")
+        self.github.lost_response = True
+        with self.assertRaises(TimeoutError):
+            driver.execute()
+        saved = json.loads((self.root / "journal.json").read_bytes())
+        self.assertEqual(saved["steps"][0]["outcome"], "unknown")
+        self.assertNotIn("run_id", saved["steps"][0])
+        with self.assertRaisesRegex(ValueError, "already consumed"):
+            driver.execute()
+        with self.assertRaises(FileExistsError):
+            self.driver("qualify")
+        self.assertEqual(len(self.github.posts), 1)
+        self.assertFalse(any("/actions/runs/" in path for path in self.github.reads))
+
+    def test_legacy_response_permission_failure_and_foreign_run_fail_closed(self) -> None:
+        for index, change in enumerate(({"status": 204}, {"status": 403}, {"status": 500},
+                                        {"bad_details": {"workflow_run_id": True}},
+                                        {"after_post": lambda run: run.update(head_sha="b" * 40)},
+                                        {"after_post": lambda run: run.update(path=".github/workflows/foreign.yml")},
+                                        {"after_post": lambda run: run.update(run_attempt=2)},
+                                        {"after_post": lambda run: run.update(event="push")})):
+            with self.subTest(change=list(change)):
+                self.github = FakeGitHub()
+                for key, value in change.items():
+                    setattr(self.github, key, value)
+                driver = self.driver("qualify", name=f"invalid-{index}.json")
+                with self.assertRaises(ValueError):
+                    driver.execute()
+                self.assertEqual(len(self.github.posts), 1)
+
+    def publisher(self, number=70, *, event="workflow_run", title="Publish stable candidate 60") -> None:
+        self.github.add(number, pipeline.PUBLISHER, event=event, title=title, jobs=["intake", "publish"])
+        self.github.publisher_ids.append(number)
+
+    def test_automatic_publisher_is_observed_without_any_second_dispatch(self) -> None:
+        self.publisher()
+        driver = self.driver("stable-publish")
+        self.assertEqual(driver.execute(ci_run_id=50, stable_run_id=60), {"publisher_run_id": 70})
+        self.assertEqual(self.github.posts, [])
+        self.assertEqual(driver.record["steps"][0]["candidate_run_id"], 60)
+
+    def test_automatic_publisher_cannot_be_manual_duplicated_or_a_successful_skip(self) -> None:
+        for kind in ("manual", "duplicate", "skipped", "wrong-source", "failed"):
+            with self.subTest(kind=kind):
+                self.github.publisher_ids = []
+                self.publisher()
+                self.github.skipped_job = None
+                if kind == "manual":
+                    self.github.runs[70]["event"] = "workflow_dispatch"
+                elif kind == "duplicate":
+                    self.publisher(71)
+                elif kind == "skipped":
+                    self.github.skipped_job = "publish"
+                elif kind == "wrong-source":
+                    self.github.runs[70]["head_sha"] = "b" * 40
+                else:
+                    self.github.runs[70]["conclusion"] = "failure"
+                driver = self.driver("stable-publish", name=f"publisher-{kind}.json")
+                with self.assertRaises(ValueError):
+                    driver.execute(ci_run_id=50, stable_run_id=60)
+                self.assertEqual(self.github.posts, [])
+
+    def test_main_drift_and_stage_deadline_cannot_select_new_source_or_extend_a_wait(self) -> None:
+        driver = self.driver("qualify")
+        self.github.main_sha = "b" * 40
+        with self.assertRaises(ValueError):
+            driver.execute()
+        self.assertEqual(self.github.posts, [])
+        self.github.main_sha = SOURCE
+        original_deadline = driver.deadline
+        driver.now = lambda: original_deadline
+        with self.assertRaises(ValueError):
+            driver.execute()
+        self.assertEqual(driver.deadline, original_deadline)
+        self.assertEqual(self.github.posts, [])
+
+    def test_web_composition_uses_exact_original_producer_ids_and_attempts(self) -> None:
+        self.publisher()
+        self.github.add(80, pipeline.WEB, title=f"Production web combined from {SOURCE}", jobs=["release"])
+        self.github.add(81, pipeline.WEB, title=f"Production web website from {SOURCE}", jobs=["release"])
+        driver = self.driver("web-compose")
+        self.assertEqual(driver.execute(ci_run_id=50, stable_run_id=60, publisher_run_id=70,
+                                        application_run_id=80, website_run_id=81), {"composition_run_id": 200})
+        self.assertEqual(self.github.posts[0][1]["inputs"], {"mode": "compose", "application_run_id": "80",
+                         "application_run_attempt": "1", "website_run_id": "81", "website_run_attempt": "1",
+                         "expected_source_sha": SOURCE})
+
+    def test_every_web_dispatch_binds_the_child_before_a_main_advance_can_select_new_source(self) -> None:
+        for phase in ("web-application", "web-website", "web-compose"):
+            with self.subTest(phase=phase):
+                self.github = FakeGitHub()
+                self.github.add(50, ".github/workflows/ci.yml", jobs=["CI Gate"])
+                self.github.add(60, ".github/workflows/cd.yml", jobs=["official-gate-evidence", "qualify-release", "publish-manifest"])
+                self.publisher()
+                self.github.add(80, pipeline.WEB, title=f"Production web combined from {SOURCE}", jobs=["release"])
+                self.github.add(81, pipeline.WEB, title=f"Production web website from {SOURCE}", jobs=["release"])
+                # main can advance after current() but before GitHub resolves
+                # ref=main. The child receives S before it starts, and its own
+                # initial source guard can reject S2 before any publication.
+                self.github.after_post = lambda run: run.update(head_sha="b" * 40, conclusion="failure")
+                driver = self.driver(phase, name=f"source-race-{phase}.json")
+                with self.assertRaises(ValueError):
+                    driver.execute(ci_run_id=50, stable_run_id=60, publisher_run_id=70,
+                                   application_run_id=80, website_run_id=81)
+                self.assertEqual(len(self.github.posts), 1)
+                self.assertEqual(self.github.posts[0][1]["inputs"]["expected_source_sha"], SOURCE)
+
+    def test_wrong_web_mode_cannot_be_composed(self) -> None:
+        self.publisher()
+        self.github.add(80, pipeline.WEB, title=f"Production web website from {SOURCE}", jobs=["release"])
+        self.github.add(81, pipeline.WEB, title=f"Production web website from {SOURCE}", jobs=["release"])
+        driver = self.driver("web-compose")
+        with self.assertRaises(ValueError):
+            driver.execute(ci_run_id=50, stable_run_id=60, publisher_run_id=70, application_run_id=80, website_run_id=81)
+        self.assertEqual(self.github.posts, [])
+
+
+class WorkflowContractTests(unittest.TestCase):
+    def load(self, relative: str) -> dict:
+        return yaml.load((ROOT / relative).read_text(), Loader=yaml.BaseLoader)
+
+    def test_only_orchestration_permissions_and_bounded_jobs_are_added(self) -> None:
+        workflow = self.load(pipeline.WORKFLOW)
+        self.assertEqual(set(workflow["on"]), {"workflow_dispatch"})
+        self.assertEqual(workflow["permissions"], {})
+        self.assertEqual(workflow["concurrency"]["cancel-in-progress"], "false")
+        self.assertEqual(set(workflow["jobs"]), {"full-ci", "nightly", "stable", "stable-publish",
+                                                "web-application", "web-website", "web-compose"})
+        for name, job in workflow["jobs"].items():
+            with self.subTest(job=name):
+                self.assertLess(int(job["timeout-minutes"]), 360)
+                self.assertEqual(job["permissions"], {"contents": "read", "actions": "read" if name == "stable-publish" else "write"})
+                uploads = [step for step in job["steps"] if step.get("uses", "").startswith("actions/upload-artifact@")]
+                self.assertEqual(len(uploads), 1)
+                self.assertEqual(uploads[0]["if"], "always()")
+                checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+                self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+                self.assertEqual(checkout["with"]["persist-credentials"], "false")
+
+    def test_declared_child_inputs_and_required_jobs_match_the_actual_workflows(self) -> None:
+        for name, (path, keys, required_jobs) in pipeline.DISPATCH.items():
+            with self.subTest(stage=name):
+                workflow = self.load(path)
+                self.assertTrue(keys <= set(workflow["on"]["workflow_dispatch"]["inputs"]))
+                actual = {job.get("name", key) for key, job in workflow["jobs"].items()}
+                self.assertTrue(required_jobs <= actual, (name, required_jobs - actual))
+        publisher = self.load(pipeline.PUBLISHER)
+        self.assertEqual(publisher["run-name"], "Publish stable candidate ${{ inputs.candidate_run_id || github.event.workflow_run.id }}")
+        self.assertEqual(publisher["on"]["workflow_run"], {"workflows": ["Stack release"], "branches": ["main"], "types": ["completed"]})
+        self.assertEqual(set(publisher["jobs"]), {"intake", "publish"})
+
+
+if __name__ == "__main__":
+    unittest.main()

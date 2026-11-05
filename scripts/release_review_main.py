@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Bind an original release candidate to its exact protected-main disposition.
+"""Bind an automatically qualified release candidate to unchanged protected main.
 
-Callers authenticate current protected main and load its immutable Git objects.
-This module performs no network operations and grants no review disposition.
-The existing Rust gate remains the authority for official results and images.
+The shared Rust gate owns official protocol and browser outcome requirements.
+Production consumers accept only its automated v2 receipt. Historical review
+history utilities remain available for local evidence inspection.
 """
 
 from __future__ import annotations
@@ -78,12 +78,14 @@ def review_path(run_id: int, origin_attempt: int = 1) -> str:
 def gate_authority(
     gate_bytes: bytes, transaction: dict[str, Any], *, run_id: int, current_attempt: int = 1,
 ) -> dict[str, Any]:
-    """Read the unchanged Rust receipt after matching its transaction digest.
+    """Read an automated v2 receipt after matching its transaction digest.
 
-    The caller must also authenticate the original run/artifact and validate
-    the transaction through its existing release-transaction contract.
+    The caller authenticates the original run/artifact and the transaction.
+    Historical raw-pass and manual-review v1 receipts cannot authorize a new
+    release under this policy. The candidate source remains its admitted main.
     """
-    review_path(run_id, current_attempt)
+    _require(_run(run_id) and type(current_attempt) is int and current_attempt == 1,
+             "automated qualification requires the original first attempt")
     _require(isinstance(gate_bytes, bytes) and 0 < len(gate_bytes) <= MAX_GATE_BYTES,
              "official gate receipt exceeds its bound")
     _require(isinstance(transaction, dict) and transaction.get("repository") == REPOSITORY,
@@ -97,47 +99,40 @@ def gate_authority(
              and binding["run_id"] == str(run_id) and binding["evidence_sha256"] == digest,
              "official gate receipt differs from the transaction binding")
     gate = strict_json(gate_bytes)
-    keys = {"schema", "source_sha", "harness_sha", "manifest_sha256", "run_id", "qualification_context", "lanes"}
-    _require(isinstance(gate, dict) and set(gate) in (keys, keys | {"review_disposition"}),
-             "official gate receipt has an unexpected shape")
-    _require(gate["schema"] == "marty.official-release-gate/v1"
+    keys = {"schema", "source_sha", "harness_sha", "manifest_sha256", "run_id", "qualification_context",
+            "lanes", "automated_qualification"}
+    _require(isinstance(gate, dict) and set(gate) == keys,
+             "official gate requires the automated v2 receipt shape")
+    _require(gate["schema"] == "marty.official-release-gate/v2"
              and gate["source_sha"] == source and _source(gate["harness_sha"])
              and _digest(gate["manifest_sha256"]) and _run(gate["run_id"])
              and gate["run_id"] == run_id and gate["qualification_context"] == "PRE_PUBLICATION_CANDIDATE",
-             "official gate receipt belongs to a different candidate")
+             "official gate receipt belongs to a different candidate or qualification policy")
     lanes = gate["lanes"]
     _require(isinstance(lanes, list) and len(lanes) == len(LANES)
              and all(isinstance(row, dict) and set(row) == {"lane", "summary_sha256"}
                      and isinstance(row["lane"], str) and _digest(row["summary_sha256"]) for row in lanes),
              "official gate lane inventory is malformed")
     _require({row["lane"] for row in lanes} == LANES, "official gate must retain all seven unique lanes")
-    result = {"source_sha": source, "run_id": run_id, "origin_attempt": 1,
-              "review_required": False, "protected_main_commit": source,
-              "record_sha256": None, "request_sha256": None, "gate_sha256": digest,
-              "harness_sha": gate["harness_sha"], "manifest_sha256": gate["manifest_sha256"]}
-    if "review_disposition" not in gate:
-        return result
-    review = gate["review_disposition"]
-    review_keys = {"schema", "protected_main_commit", "record_sha256", "request_sha256",
-                   "evidence_run_attempt", "reviewer", "reviewed_cases", "original_official_results_unchanged"}
-    _require(isinstance(review, dict) and set(review) == review_keys,
-             "accepted official review metadata is malformed")
-    reviewer = review["reviewer"]
-    _require(review["schema"] == "marty.accepted-official-review/v1"
-             and _source(review["protected_main_commit"]) and review["protected_main_commit"] != source
-             and _digest(review["record_sha256"]) and _digest(review["request_sha256"])
-             and type(review["evidence_run_attempt"]) is int and review["evidence_run_attempt"] == 1
-             and type(review["reviewed_cases"]) is int and 0 < review["reviewed_cases"] <= 10000
-             and review["original_official_results_unchanged"] is True
-             and isinstance(reviewer, dict) and set(reviewer) == {"kind", "github_login"}
-             and isinstance(reviewer["kind"], str)
-             and reviewer["kind"] in {"human", "delegated_codex"}
-             and isinstance(reviewer["github_login"], str)
-             and re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?", reviewer["github_login"]) is not None,
-             "accepted official review is foreign, incomplete or not the original attempt")
-    result.update(review_required=True, protected_main_commit=review["protected_main_commit"],
-                  record_sha256=review["record_sha256"], request_sha256=review["request_sha256"])
-    return result
+    assessment = gate["automated_qualification"]
+    assessment_keys = {"schema", "policy", "evidence_run_attempt", "request_sha256", "automated_cases",
+                       "original_official_results_unchanged"}
+    _require(isinstance(assessment, dict) and set(assessment) == assessment_keys,
+             "automated official qualification metadata is malformed")
+    _require(assessment["schema"] == "marty.automated-official-qualification/v1"
+             and assessment["policy"] == "marty.official-verifier-outcome/v1"
+             and type(assessment["evidence_run_attempt"]) is int and assessment["evidence_run_attempt"] == 1
+             and _digest(assessment["request_sha256"])
+             and type(assessment["automated_cases"]) is int and 0 <= assessment["automated_cases"] <= 13
+             and assessment["original_official_results_unchanged"] is True,
+             "automated official qualification is foreign, incomplete or not the original attempt")
+    # The full assessment is already authenticated by gate_sha256. The stable
+    # authority projection stays compatible with publication checkpoints, while
+    # explicitly removing any ability for review to advance the source commit.
+    return {"source_sha": source, "run_id": run_id, "origin_attempt": 1,
+            "review_required": False, "protected_main_commit": source,
+            "record_sha256": None, "request_sha256": None, "gate_sha256": digest,
+            "harness_sha": gate["harness_sha"], "manifest_sha256": gate["manifest_sha256"]}
 
 
 class _Git:
@@ -216,7 +211,7 @@ def require_review_only_history(
         _require(git("cat-file", "-t", commit).strip() == b"commit", "release review source must be a commit")
     _require(git.record(source_sha, path) is None, "candidate source already contains its review record")
     if not review_required:
-        _require(main_sha == source_sha, "an all-pass candidate requires unchanged protected main")
+        _require(main_sha == source_sha, "an automatically qualified candidate requires unchanged protected main")
         return
     if main_sha == source_sha:
         _require(record_sha256 is None, "accepted review record is absent from candidate source")
