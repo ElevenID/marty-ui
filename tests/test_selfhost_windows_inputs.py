@@ -43,6 +43,15 @@ def private_fixture():
 
 
 class AclPolicyTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "Non-Windows refusal")
+    def test_private_initialization_is_not_a_posix_write_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input"
+            path.write_bytes(b"")
+            with self.assertRaisesRegex(ValueError, windows.WRITE_REFUSAL):
+                windows.write_empty_private_file(path, PUBLIC)
+            self.assertEqual(path.read_bytes(), b"")
+
     def test_matching_file_index_on_another_volume_does_not_bind_the_handle(self):
         windows.checked_identity(5, (1 << 32) | 7, (5, (1 << 32) | 7))
         for expected in [(6, (1 << 32) | 7), (5, (2 << 32) | 7), (5, (1 << 32) | 8)]:
@@ -70,6 +79,47 @@ class AclPolicyTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "Actual NTFS handle/ACL integration")
 class WindowsInputTests(unittest.TestCase):
+    def test_empty_private_file_initialization_preserves_utf8_and_refuses_overwrite(self):
+        with private_fixture() as (_, path):
+            path.write_bytes(b"")
+            value = "PUBLIC_SYNTHETIC_\u03bb\n"
+            windows.write_empty_private_file(path, value)
+            self.assertEqual(path.read_bytes(), value.encode("utf-8"))
+            self.assertEqual(private_file(path), value)
+            with self.assertRaisesRegex(ValueError, windows.WRITE_REFUSAL):
+                windows.write_empty_private_file(path, PUBLIC)
+            self.assertEqual(path.read_bytes(), value.encode("utf-8"))
+
+    def test_initialization_rejects_public_acl_before_writing_any_bytes(self):
+        with private_fixture() as (_, path):
+            path.write_bytes(b"")
+            quoted = str(path).replace("'", "''")
+            powershell("$p='"+quoted+"';$a=Get-Acl -LiteralPath $p;"
+                       "$s=[Security.Principal.SecurityIdentifier]::new('S-1-5-32-545');"
+                       "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new("
+                       "$s,'Read','Allow'));[IO.File]::SetAccessControl($p,$a)")
+            with self.assertRaisesRegex(ValueError, windows.WRITE_REFUSAL):
+                windows.write_empty_private_file(path, PUBLIC)
+            self.assertEqual(path.read_bytes(), b"")
+
+    def test_initialization_refuses_other_writers_hardlinks_and_invalid_payloads(self):
+        with private_fixture() as (root, path):
+            path.write_bytes(b"")
+            with path.open("r+b"):
+                with self.assertRaisesRegex(ValueError, windows.WRITE_REFUSAL):
+                    windows.write_empty_private_file(path, PUBLIC)
+            self.assertEqual(path.read_bytes(), b"")
+            other = root / "linked-input"
+            os.link(path, other)
+            with self.assertRaisesRegex(ValueError, windows.WRITE_REFUSAL):
+                windows.write_empty_private_file(path, PUBLIC)
+            other.unlink()
+            for value in ["", "\0", "x" * (windows.MAX_BYTES + 1), "\ud800", b"bytes"]:
+                with self.subTest(value_type=type(value).__name__), self.assertRaisesRegex(
+                        ValueError, windows.WRITE_REFUSAL):
+                    windows.write_empty_private_file(path, value)
+                self.assertEqual(path.read_bytes(), b"")
+
     def test_private_ntfs_read_through_shared_owner(self):
         with private_fixture() as (_, path):
             # The real handle reader binds GetFileInformationByHandle's NTFS

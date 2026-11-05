@@ -1,4 +1,4 @@
-"""Read a bounded NTFS operator input through its verified, held file handle.
+"""Read or initialize a bounded NTFS input through its verified, held handle.
 
 This does not stage generations, change ACLs, enable activation, or admit a
 Windows installer. POSIX mode bits cannot establish Windows confidentiality.
@@ -18,6 +18,7 @@ import sys
 
 MAX_BYTES = 64 * 1024
 REFUSAL = "Windows operator input is absent or not private"
+WRITE_REFUSAL = "Windows private input initialization failed; inspect before retrying"
 FULL_CONTROL = 0x1F01FF
 
 
@@ -71,7 +72,23 @@ def read_private_file(path: Path) -> str:
         raise ValueError(REFUSAL) from None
 
 
-def _read_private_file(path: Path) -> str:
+def write_empty_private_file(path: Path, value: str) -> None:
+    """Initialize an existing empty private file through one verified writer.
+
+    Never creates a file or changes its ACL. A failure after writing can leave
+    partial material: preserve it for operator inspection, never retry blindly.
+    """
+    try:
+        require(os.name == "nt")
+        require(isinstance(value, str))
+        payload = value.encode("utf-8")
+        require(0 < len(payload) <= MAX_BYTES and b"\0" not in payload)
+        _read_private_file(path, payload)
+    except (OSError, UnicodeError, ValueError, TypeError):
+        raise ValueError(WRITE_REFUSAL) from None
+
+
+def _read_private_file(path: Path, write_value: bytes | None = None) -> str:
     from ctypes import wintypes as w
 
     path = Path(path)
@@ -110,6 +127,9 @@ def _read_private_file(path: Path) -> str:
                   ctypes.POINTER(w.DWORD), ctypes.POINTER(w.DWORD), ctypes.POINTER(w.DWORD),
                   w.LPWSTR, w.DWORD], w.BOOL)
     read = bind(kernel, "ReadFile", [w.HANDLE, pointer, w.DWORD, ctypes.POINTER(w.DWORD), pointer], w.BOOL)
+    write = bind(kernel, "WriteFile", [w.HANDLE, pointer, w.DWORD, ctypes.POINTER(w.DWORD), pointer], w.BOOL)
+    flush = bind(kernel, "FlushFileBuffers", [w.HANDLE], w.BOOL)
+    seek = bind(kernel, "SetFilePointerEx", [w.HANDLE, ctypes.c_longlong, pointer, w.DWORD], w.BOOL)
     descriptor = bind(security, "GetSecurityInfo", [w.HANDLE, w.DWORD, w.DWORD,
                       pp, pp, pp, pp, pp], w.DWORD)
     acl_info = bind(security, "GetAclInformation", [pointer, pointer, w.DWORD, w.DWORD], w.BOOL)
@@ -145,7 +165,8 @@ def _read_private_file(path: Path) -> str:
 
     # OPEN_EXISTING, OPEN_REPARSE_POINT, and no write/delete sharing. Hold this
     # exact handle for ACL proof, bounds checks and the entire read.
-    handle = create(str(path), 0x80020080, 1, None, 3, 0x00200000, None)
+    access = 0x80020080 | (0x40000000 if write_value is not None else 0)
+    handle = create(str(path), access, 1, None, 3, 0x00200000, None)
     require(handle not in (None, ctypes.c_void_p(-1).value))
     try:
         def file_info():
@@ -200,6 +221,20 @@ def _read_private_file(path: Path) -> str:
                 free(allocated)
 
         initial_acl = prove_acl()
+        if write_value is not None:
+            require(first.size_low == 0 and _path_identities(path) == before)
+            buffer = ctypes.create_string_buffer(write_value)
+            written = w.DWORD()
+            require(bool(write(handle, buffer, len(write_value), ctypes.byref(written), None))
+                    and written.value == len(write_value) and bool(flush(handle)))
+            updated = file_info()
+            require(updated.size_low == len(write_value)
+                    and updated.attributes == first.attributes
+                    and bytes(updated.created) == bytes(first.created)
+                    and file_identity(updated) == identity
+                    and prove_acl() == initial_acl)
+            first = updated
+            require(bool(seek(handle, 0, None, 0)))
         data = ctypes.create_string_buffer(first.size_low + 1)
         count = w.DWORD()
         require(bool(read(handle, data, first.size_low + 1, ctypes.byref(count), None))
@@ -212,6 +247,8 @@ def _read_private_file(path: Path) -> str:
         require(stable(first) == stable(last) and file_identity(last) == identity
                 and prove_acl() == initial_acl
                 and _path_identities(path) == before)
+        if write_value is not None:
+            require(data.raw[:count.value] == write_value)
         # Match Path.read_text's universal-newline contract at the shared owner.
         return data.raw[:count.value].decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
     finally:
