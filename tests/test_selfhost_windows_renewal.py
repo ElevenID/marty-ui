@@ -2,7 +2,7 @@
 from copy import deepcopy
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import sys
 
 import pytest
@@ -98,16 +98,72 @@ def test_candidate_boundary_refuses_ingress_public_ports_and_mutable_images(tmp_
     with pytest.raises(ValueError): renewal.owned_roles(m, roles)
 
 
-def test_candidate_storage_cannot_overlap_foreign_writable_data():
+def test_candidate_storage_cannot_overlap_foreign_consumers_or_aliases(monkeypatch):
+    def identity(path):
+        p = PureWindowsPath(str(path))
+        ancestors = {str(PureWindowsPath(*p.parts[:i])).lower() for i in range(1, len(p.parts) + 1)}
+        return p, str(p).lower(), ancestors
+    monkeypatch.setattr(renewal, 'windows_identity', identity)
     def item(project, source, rw=True):
         return {'Config': {'Labels': {'com.docker.compose.project': project}},
                 'Mounts': [{'Type': 'bind', 'Source': source, 'RW': rw}]}
     selected = item(PROJECT, 'C:/Marty/fresh/database')
-    renewal.disjoint_storage([selected, item('foreign', 'C:/Other/data')], PROJECT)
-    renewal.disjoint_storage([selected, item('foreign', 'C:/Marty', False)], PROJECT)
-    for path in ['c:/marty/fresh/database', 'C:/Marty/fresh', 'C:/Marty/fresh/database/child']:
+    renewal.disjoint_storage([selected, item('foreign', 'C:/Other/data')], PROJECT, {})
+    for path in ['c:/marty/fresh/database', 'C:/Marty/fresh', 'C:/Marty/fresh/database/child',
+                 '/run/desktop/mnt/host/c/Marty/fresh/database', '/host_mnt/c/Marty/fresh',
+                 '/mnt/c/Marty/fresh/database/child']:
         with pytest.raises(ValueError, match='overlaps'):
-            renewal.disjoint_storage([selected, item('foreign', path)], PROJECT)
+            renewal.disjoint_storage([selected, item('foreign', path, False)], PROJECT, {})
+
+
+def test_bind_and_named_volume_root_share_identity_and_unknown_subpaths_refuse():
+    root = '/var/lib/docker/volumes/synthetic/_data'
+    volumes = {'synthetic': {'Name': 'synthetic', 'Driver': 'local', 'Options': None, 'Mountpoint': root}}
+    def item(project, mount):
+        return {'Config': {'Labels': {'com.docker.compose.project': project}}, 'Mounts': [mount]}
+    owned = item(PROJECT, {'Type': 'volume', 'Name': 'synthetic', 'Source': root, 'RW': True})
+    for source in [root, root + '/opaque-subpath', '/unknown/native/path']:
+        foreign = item('foreign', {'Type': 'bind', 'Source': source, 'RW': False})
+        with pytest.raises(ValueError): renewal.disjoint_storage([owned, foreign], PROJECT, volumes)
+    volumes['synthetic']['Options'] = {'type': 'none', 'device': 'C:/alias', 'o': 'bind'}
+    with pytest.raises(ValueError): renewal.disjoint_storage([owned], PROJECT, volumes)
+
+
+@pytest.mark.parametrize('raw', [b'\xff' * 60000, b'\0' * 60000, ('\u03bb' * 60000).encode()],
+                         ids=['invalid-utf8', 'nul-bytes', 'multibyte-utf8'])
+def test_diagnostics_remain_valid_bounded_utf8_after_replacement(raw):
+    value = renewal.bounded_diagnostic(raw)
+    assert len(value.encode('utf-8')) <= 65536 and '\0' not in value
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Actual Windows metadata aliases')
+def test_junction_alias_to_candidate_storage_refuses_even_for_read_only_consumer():
+    from test_selfhost_windows_inputs import private_fixture, powershell
+    with private_fixture() as (root, _):
+        data = root / 'data';data.mkdir();alias = root / 'alias'
+        powershell("New-Item -ItemType Junction -Path '"+str(alias).replace("'", "''")+
+                   "' -Target '"+str(data).replace("'", "''")+"' | Out-Null")
+        def item(project, source, rw):
+            return {'Config': {'Labels': {'com.docker.compose.project': project}},
+                    'Mounts': [{'Type': 'bind', 'Source': str(source), 'RW': rw}]}
+        try:
+            with pytest.raises(ValueError, match='overlaps'):
+                renewal.disjoint_storage([item(PROJECT, data, True), item('foreign', alias, False)], PROJECT, {})
+        finally:
+            alias.rmdir()
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Actual bounded Windows log writer')
+def test_real_recreate_writes_bounded_malformed_diagnostics(monkeypatch):
+    from test_selfhost_windows_inputs import private_fixture
+    import subprocess
+    with private_fixture() as (root, path):
+        path.write_bytes(b'');m = model(root);rows = states(m);services = {x['Service'] for x in rows}
+        monkeypatch.setattr(renewal.subprocess, 'run', lambda *_a, **_k:
+                            subprocess.CompletedProcess([], 0, b'\xff' * 60000, b''))
+        monkeypatch.setattr(renewal, 'statuses', lambda *_a, **_k: rows)
+        renewal.recreate(None, ['OWNED_SYNTHETIC_COMPOSE'], {'gateway'}, services, m, path)
+        assert 0 < len(path.read_bytes()) <= 65536
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='Actual held NTFS transaction')
@@ -143,6 +199,7 @@ def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreat
             compose = renewal.Docker.compose
             def json(self, args):
                 return new_m if str(new_env) in args else old_m
+            def volumes(self): return {}
             def hashes(self, command):
                 return {name: ('2' if str(new_env) in command and spec.get('secrets') else '1') * 64
                         for name, spec in old_m['services'].items()}

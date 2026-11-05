@@ -11,7 +11,7 @@ from contextlib import ExitStack
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 import re
 import subprocess
 import time
@@ -21,7 +21,7 @@ from activate_selfhost_renewed_secrets import (
     require_rootless_migration, statuses,
 )
 from selfhost_windows_inputs import (
-    hold_private_generation, hold_private_input, read_private_bytes,
+    hold_private_generation, hold_private_input, hold_storage_namespace, read_private_bytes,
     write_empty_private_file,
 )
 from selfhost_windows_renewal_native import preflight as native_preflight
@@ -102,19 +102,80 @@ def observations(items, project, changing):
             for x in items if _project(x) != project or _service(x) not in changing}
 
 
-def disjoint_storage(items, project):
-    owned = [m for x in items if _project(x) == project for m in x['Mounts'] if m.get('RW')]
-    foreign = [m for x in items if _project(x) != project for m in x['Mounts'] if m.get('RW')]
-    def path(raw):
-        p = PureWindowsPath(raw)
-        return p if p.drive else PurePosixPath(raw)
-    for a in owned:
-        for b in foreign:
-            if a.get('Type') != b.get('Type'):
+def windows_source(raw):
+    """Only documented local-drive bridge spellings; never guess other paths."""
+    require(isinstance(raw, str))
+    for prefix in ['/run/desktop/mnt/host/', '/host_mnt/', '/mnt/']:
+        if raw.startswith(prefix):
+            match = re.fullmatch(r'([a-zA-Z])/(.*)', raw[len(prefix):])
+            require(match is not None, 'Unresolved Docker bind source')
+            raw = match[1] + ':/' + match[2]
+            break
+    if re.match(r'^[a-zA-Z]:[\\/]', raw) is None:
+        return None
+    require(all(p not in {'.', '..'} and ':' not in p and p.rstrip(' .') == p
+                for p in re.split(r'[\\/]', raw[3:])))
+    return Path(raw)
+
+
+def windows_identity(path):
+    resolved = path.resolve(strict=True)
+    nodes = [resolved, *resolved.parents]
+    identities = []
+    for p in nodes:
+        info = p.lstat()
+        require(not info.st_file_attributes & 0x400 and info.st_ino != 0)
+        identities.append((info.st_dev, info.st_ino))
+    return resolved, identities[0], set(identities)
+
+
+def storage_identity(mount, volumes):
+    kind, raw = mount.get('Type'), mount.get('Source', '')
+    if kind == 'bind':
+        path = windows_source(raw)
+        if path is not None:
+            resolved, identity, ancestors = windows_identity(path)
+            return 'windows', (resolved, identity, ancestors)
+        if raw == '/run/host-services/docker.proxy.sock' and mount.get('Destination') == '/var/run/docker.sock':
+            return 'engine-socket', raw
+        # A bind of the exact local volume root is the same storage object as
+        # a named volume. Subpaths remain opaque: they might be symlinks.
+        matches = [name for name, v in volumes.items() if raw == v.get('Mountpoint')]
+        require(len(matches) == 1, 'Unresolved Docker bind source')
+        name = matches[0]
+    elif kind == 'volume':
+        name = mount.get('Name')
+        require(name in volumes)
+    else:
+        raise ValueError('Unresolved Docker storage type')
+    volume = volumes[name]
+    require(volume.get('Driver') == 'local' and not volume.get('Options')
+            and raw == volume.get('Mountpoint')
+            and re.fullmatch('/var/lib/docker/volumes/' + re.escape(name) + '/_data', raw),
+            'Unresolved Docker volume identity')
+    return 'volume', name
+
+
+def disjoint_storage(items, project, volumes):
+    require(all(not (m.get('Type') == 'bind' and m.get('Source') == '/run/host-services/docker.proxy.sock')
+                for x in items if _project(x) == project for m in x['Mounts']),
+            'Candidate cannot mount the engine control socket')
+    owned = [storage_identity(m, volumes) for x in items if _project(x) == project
+             for m in x['Mounts'] if m.get('RW')]
+    # Read-only consumers also observe data changes made through candidate RW.
+    foreign = [storage_identity(m, volumes) for x in items if _project(x) != project for m in x['Mounts']]
+    for a, x in owned:
+        for b, y in foreign:
+            if a != b:
                 continue
-            x, y = path(a['Source']), path(b['Source'])
-            require(not (x == y or x.is_relative_to(y) or y.is_relative_to(x)),
-                    'Candidate writable storage overlaps another project')
+            overlap = x == y if a != 'windows' else x[1] in y[2] or y[1] in x[2]
+            require(not overlap, 'Candidate writable storage overlaps another project')
+
+
+def data_mounts(items):
+    return {_service(x): {'image': x['Image'], 'mounts': sorted(
+        [m for m in x['Mounts'] if not m['Destination'].startswith('/run/secrets/')],
+        key=lambda m: m['Destination'])} for x in items}
 
 
 def checked_live_configuration(items, hashes, tls_init):
@@ -140,7 +201,8 @@ class Docker:
         require(isinstance(engine_id, str) and 10 <= len(engine_id) <= 128)
         self.prefix = ['docker', '--host', host]
         info = self.json(['info', '--format', '{{json .}}'])
-        require(info['OSType'] == 'linux' and info['ID'] == engine_id)
+        require(info['OSType'] == 'linux' and info['ID'] == engine_id
+                and info['DockerRootDir'] == '/var/lib/docker')
 
     def json(self, args):
         p = subprocess.run([*self.prefix, *args], capture_output=True, timeout=60)
@@ -152,6 +214,13 @@ class Docker:
         require(p.returncode == 0)
         ids = p.stdout.decode('ascii').split()
         return self.json(['inspect', *ids]) if ids else []
+
+    def volumes(self):
+        p = subprocess.run([*self.prefix, 'volume', 'ls', '-q'], capture_output=True, timeout=30)
+        require(p.returncode == 0)
+        names = p.stdout.decode('ascii').split()
+        rows = self.json(['volume', 'inspect', *names]) if names else []
+        return {v['Name']: {k: v.get(k) for k in ['Name', 'Driver', 'Mountpoint', 'Options']} for v in rows}
 
     def compose(self, project, env, source):
         return [*self.prefix, *compose_args(project, env, source)[1:]]
@@ -165,6 +234,12 @@ class Docker:
                     and re.fullmatch(r'[0-9a-f]{64}', row[1]) for row in pairs))
         result = dict(pairs);require(len(result) == len(pairs))
         return result
+
+
+def bounded_diagnostic(raw):
+    text = raw.decode('utf-8', errors='replace').replace('\0', '\\0')
+    tail = text.encode('utf-8')[-60000:].decode('utf-8', errors='ignore')
+    return 'Bounded Compose diagnostic tail; malformed bytes replaced:\n' + tail
 
 
 def recreate(docker, command, changing, services, model, log):
@@ -186,8 +261,7 @@ def recreate(docker, command, changing, services, model, log):
             time.sleep(5)
         raise RuntimeError('Windows renewal did not become ready')
     finally:
-        write_empty_private_file(log, 'Bounded Compose output (last 60000 bytes):\n'
-                                 + tail.decode('utf-8', errors='replace'))
+        write_empty_private_file(log, bounded_diagnostic(tail))
 
 
 def activate(config):
@@ -238,7 +312,16 @@ def activate(config):
             checked_live_configuration(owned, old_hashes, config['tls_init_receipt'])
             require(windows_healthy(statuses(old, cwd=source.parent), services, old_model))
             checked_secret_mounts(owned, project, current, services, old_model)
-            disjoint_storage(baseline, project)
+            disjoint_storage(baseline, project, docker.volumes())
+            for item in owned:
+                if _service(item) not in changing:
+                    continue
+                for mount in item['Mounts']:
+                    if mount.get('RW') and mount.get('Type') == 'bind':
+                        path = windows_source(mount['Source'])
+                        require(path is not None)
+                        stack.enter_context(hold_storage_namespace(path))
+            data_before = data_mounts(owned)
             protected = observations(baseline, project, changing)
             native_preflight(config['native'], project, old_bytes, new_bytes, docker.prefix)
             write_empty_private_file(outputs['intent'], json.dumps({
@@ -246,6 +329,7 @@ def activate(config):
                 'current_env': str(old_env), 'renewed_env': str(new_env),
                 'current_secrets': str(current), 'renewed_secrets': str(renewed),
                 'owned_before': {str(_service(x)): x['Id'] for x in owned},
+                'data_mounts_before': data_before,
                 'changing': sorted(changing), 'candidate_only': True}) + '\n')
             started = True
             def verify(command, root, model):
@@ -254,6 +338,7 @@ def activate(config):
                         'Unselected container observations changed')
                 require(windows_healthy(statuses(command, cwd=source.parent), services, model))
                 owned_now = [x for x in items if _project(x) == project]
+                require(data_mounts(owned_now) == data_before, 'Data mounts or image identity changed')
                 checked_live_configuration(owned_now, new_hashes if root == renewed else old_hashes,
                                             config['tls_init_receipt'])
                 return checked_secret_mounts(owned_now, project, root, services, model)

@@ -16,19 +16,26 @@ from selfhost_windows_inputs import hold_private_input
 
 
 WORKER = r'''
-import base64,hashlib,json,pathlib,subprocess,sys
+import base64,hashlib,json,os,pathlib,subprocess,sys
 d=json.load(sys.stdin)
 binary='/operator/tool'
 assert hashlib.sha256(pathlib.Path(binary).read_bytes()).hexdigest()==d['binary_sha256']
 p=subprocess.run([binary,'--build-identity'],capture_output=True,timeout=20)
 assert p.returncode==0 and p.stdout.decode().strip()==d['source_sha']+':'+d['release_tag']
-roots={'old':d['current'],'new':d['renewed']}
-for role,root in roots.items():
+mirrors={'old':d['current'],'new':d['renewed']}
+roots={}
+os.umask(0o077)
+for role,root in mirrors.items():
  assert sorted(p.name for p in pathlib.Path(root).iterdir())==sorted(d['bytes'][role])
+ snapshot=pathlib.Path('/proof',role);snapshot.mkdir(mode=0o700)
+ roots[role]=str(snapshot)
  for name,value in d['bytes'][role].items():
   expected=base64.b64decode(value,validate=True)
   assert len(expected)<=65536
   assert pathlib.Path(root,name).read_bytes()==expected
+  fd=os.open(snapshot/name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+  with os.fdopen(fd,'wb') as f:
+   assert f.write(expected)==len(expected);f.flush();os.fsync(f.fileno())
 token=pathlib.Path(d['token_file']).read_text().strip()
 def native(op,body,network=False):
  args=[binary,'operator',op]
@@ -78,7 +85,8 @@ def preflight(config, project, old, new, docker_prefix):
                 for role, values in [('old', old), ('new', new)]})
             args = [*docker_prefix, 'run', '--rm', '--pull', 'never', '-i', '--read-only',
                     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-                    '--network', config['network'], '--mount',
+                    '--network', config['network'], '--tmpfs',
+                    '/proof:rw,noexec,nosuid,nodev,size=128m,mode=0700', '--mount',
                     f'type=volume,src={config["control_volume"]},dst=/control,readonly', '--mount',
                     f'type=bind,src={config["binary"]},dst=/operator/tool,readonly', '--mount',
                     f'type=bind,src={config["ca_file"]},dst=/input/ca.crt,readonly',

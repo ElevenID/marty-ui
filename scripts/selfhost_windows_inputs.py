@@ -89,6 +89,26 @@ def read_private_bytes(path: Path) -> bytes:
 
 
 @contextmanager
+def hold_storage_namespace(path: Path):
+    """Hold a data source's names without reading content or blocking writes.
+
+    This is identity/sharing only, not a private-input or immutable-data proof.
+    Reparse ancestors are refused. Files must have one link; directories may
+    keep receiving normal application writes while their names are held.
+    """
+    require(os.name == 'nt')
+    try:
+        path = Path(path)
+        with ExitStack() as stack:
+            for parent in reversed(path.parents):
+                stack.enter_context(_held_private_input(parent, directory=True, ancestor=True))
+            stack.enter_context(_held_private_input(path, directory=path.is_dir(), ancestor=True))
+            yield
+    except (OSError, ValueError, TypeError):
+        raise ValueError(REFUSAL) from None
+
+
+@contextmanager
 def hold_private_input(path: Path, *, max_bytes: int = MAX_BYTES, exclusive: bool = False):
     """Hold one bounded private asset; explicit exclusive mode is a process lock.
 
@@ -174,7 +194,8 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
 
     path = Path(path)
     before = _path_identities(path, directory=directory)
-    require((not directory or write_value is None) and (not ancestor or directory))
+    require(not directory or write_value is None)
+    require(not ancestor or write_value is None)
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     security = ctypes.WinDLL("advapi32", use_last_error=True)
     pointer = ctypes.c_void_p
@@ -247,7 +268,10 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
 
     # OPEN_EXISTING, OPEN_REPARSE_POINT, and no write/delete sharing. Hold this
     # exact handle for ACL proof, bounds checks and the entire read.
-    access = 0x80 if ancestor else 0x80020080 | (
+    # READ_ATTRIBUTES alone does not participate in all Windows sharing checks.
+    # Request real read access even for namespace-only handles, while never
+    # issuing a data read for them. RW sharing still permits application writes.
+    access = 0x80000080 if ancestor else 0x80020080 | (
         0x40000000 if write_value is not None or exclusive else 0)
     handle = create(str(path), access, 3 if ancestor else 1, None, 3,
                     0x00200000 | (0x02000000 if directory else 0), None)
@@ -261,7 +285,7 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
                 require(bool(result.attributes & 0x10))
             else:
                 require(not result.attributes & 0x10 and result.links == 1
-                        and result.size_high == 0 and result.size_low <= max_bytes)
+                        and (ancestor or result.size_high == 0 and result.size_low <= max_bytes))
             return result
 
         def file_identity(legacy):
@@ -322,9 +346,9 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
                     and prove_acl() == initial_acl)
             first = updated
             require(bool(seek(handle, 0, None, 0)))
-        data = ctypes.create_string_buffer(first.size_low + 1 if not directory else 1)
+        data = ctypes.create_string_buffer(first.size_low + 1 if not directory and not ancestor else 1)
         count = w.DWORD()
-        if not directory:
+        if not directory and not ancestor:
             require(bool(read(handle, data, first.size_low + 1, ctypes.byref(count), None))
                     and count.value == first.size_low)
         last = file_info()
