@@ -99,6 +99,7 @@ to an empty string. Their treatment is now explicit rather than accidental.
 | `KEYCLOAK_VERIFY_EMAIL=false`, `KEYCLOAK_RESET_PASSWORD_ENABLED=false` | Typed booleans, default `false`; enabling either requires complete Keycloak SMTP. |
 | `KEYCLOAK_SOCIAL_LOGIN_ENABLED=false` | Typed boolean, default `false`; enabling requires both Google credential files. |
 | `KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED=false` | Typed boolean, default `false`; requested enablement configures the Keycloak organization realm feature and browser-flow execution. This is separate from ElevenID organization creation. |
+| `KEYCLOAK_PASSKEYS_ENABLED`, `KEYCLOAK_PASSKEY_RP_ID` | Optional boolean and lowercase RP hostname. Omission preserves policy; enabling requires the explicit RP ID and qualified Keycloak 26.8.x. Password, Google and Open Badge remain available. See [passkey setup](keycloak-passkeys.md). |
 | `KEYCLOAK_SMTP_SSL=false`, `KEYCLOAK_SMTP_STARTTLS=false` | Explicit SMTP transport booleans; defaults are SSL `false`, STARTTLS `true`. Configured mail requires exactly one secure transport. |
 | `ORGANIZATION_CREATION_ENABLED=false` | Typed boolean, default `false`, shared by backend and UI. |
 | `CANVAS_PORTABLE_INTEGRATION_ENABLED=false` | Opt-in with explicit pilot organizations, tool-signing identity, public RS256 JWKS, credential issuer-profile inventory, real API provider and reviewed worker timeout. |

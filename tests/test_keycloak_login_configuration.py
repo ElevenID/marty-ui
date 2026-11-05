@@ -12,6 +12,23 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 MATCHING = '{"registrationAllowed":true,"verifyEmail":false,"resetPasswordAllowed":false}'
 
+PASSKEY_POLICY = {
+    "RpId": "login.example.test", "RpEntityName": "ElevenID",
+    "SignatureAlgorithms": ["ES256", "RS256"],
+    "UserVerificationRequirement": "required", "ResidentKey": "required",
+    "AttestationConveyancePreference": "none", "AuthenticatorAttachment": "not specified",
+    "Mediation": "conditional",
+}
+
+
+def passkey_readbacks():
+    return [json.dumps({"systemInfo": {"version": "26.8.0"}}),
+            '{"webAuthnPolicyPasswordlessRpId":""}',
+            *[json.dumps({"webAuthnPolicyPasswordless" + key: value})
+              for key, value in PASSKEY_POLICY.items()],
+            '{"enabled":true}', '{"defaultAction":false}',
+            '{"webAuthnPolicyPasswordlessPasskeysEnabled":true}']
+
 
 def run_setup(tmp_path, function, *, readback=MATCHING, readbacks=None, update_exit=0, **settings):
     source = (ROOT / "scripts/setup-keycloak.sh").read_text(encoding="utf-8")
@@ -69,6 +86,93 @@ sys.exit(int(os.environ['TEST_UPDATE_EXIT']))
     )
     calls = [json.loads(line) for line in calls_path.read_text().splitlines()] if calls_path.exists() else []
     return result, calls
+
+
+def test_passkeys_enable_only_after_policy_and_optional_enrollment_are_verified(tmp_path):
+    result, calls = run_setup(
+        tmp_path, "configure_passkey_login", readbacks=passkey_readbacks(),
+        KEYCLOAK_PASSKEYS_ENABLED="true", KEYCLOAK_PASSKEY_RP_ID="login.example.test",
+    )
+    assert result.returncode == 0, result.stderr
+    updates = [call["args"] for call in calls if call["args"][0] == "update"]
+    assert len(updates) == 3
+    assert 'webAuthnPolicyPasswordlessResidentKey=required' in updates[0]
+    assert 'webAuthnPolicyPasswordlessUserVerificationRequirement=required' in updates[0]
+    assert 'webAuthnPolicyPasswordlessSignatureAlgorithms=["ES256","RS256"]' in updates[0]
+    assert updates[1][1] == 'authentication/required-actions/webauthn-register-passwordless'
+    assert 'defaultAction=false' in updates[1]
+    assert 'enabled=true' in updates[1]
+    assert 'webAuthnPolicyPasswordlessPasskeysEnabled=true' in updates[2]
+    assert all('delete' not in call['args'] for call in calls)
+    assert all('browserFlow=' not in ' '.join(call['args']) for call in calls)
+
+
+@pytest.mark.parametrize("index", range(2, 13))
+def test_passkeys_never_claim_success_on_incomplete_or_ignored_readback(tmp_path, index):
+    readbacks = passkey_readbacks()
+    readbacks[index] = '{}'
+    result, _ = run_setup(
+        tmp_path, "configure_passkey_login", readbacks=readbacks,
+        KEYCLOAK_PASSKEYS_ENABLED="true", KEYCLOAK_PASSKEY_RP_ID="login.example.test",
+    )
+    assert result.returncode != 0
+    assert 'configured and verified' not in result.stdout
+
+
+def test_passkey_rollback_only_disables_login_and_retains_policy_and_credentials(tmp_path):
+    result, calls = run_setup(
+        tmp_path, "configure_passkey_login",
+        readbacks=[passkey_readbacks()[0], '{"webAuthnPolicyPasswordlessPasskeysEnabled":false}'],
+        KEYCLOAK_PASSKEYS_ENABLED="false",
+    )
+    assert result.returncode == 0, result.stderr
+    assert [call['args'][0] for call in calls] == ['get', 'update', 'get']
+    assert calls[1]['args'] == ['update', 'realms/11id', '-s',
+                              'webAuthnPolicyPasswordlessPasskeysEnabled=false']
+
+
+def test_passkey_policy_readback_preserves_whitespace_inside_string_values(tmp_path):
+    readbacks = passkey_readbacks()
+    readbacks[8] = '{"webAuthnPolicyPasswordlessAuthenticatorAttachment":"notspecified"}'
+    result, _ = run_setup(tmp_path, "configure_passkey_login", readbacks=readbacks,
+                          KEYCLOAK_PASSKEYS_ENABLED="true", KEYCLOAK_PASSKEY_RP_ID="login.example.test")
+    assert result.returncode != 0
+    assert 'AuthenticatorAttachment' in result.stderr
+
+
+def test_unselected_passkey_configuration_preserves_legacy_realms(tmp_path):
+    result, calls = run_setup(tmp_path, "configure_passkey_login")
+    assert result.returncode == 0
+    assert calls == []
+
+
+@pytest.mark.parametrize("rp", ['', 'https://login.example.test', 'login.example.test:443',
+                                    'LOGIN.example.test', 'login..example.test', 'login.example.test.',
+                                    '-login.example.test', 'a' * 64 + '.test'])
+def test_invalid_passkey_rp_cannot_mutate_realm(tmp_path, rp):
+    result, calls = run_setup(tmp_path, "configure_passkey_login",
+                              KEYCLOAK_PASSKEYS_ENABLED="true", KEYCLOAK_PASSKEY_RP_ID=rp)
+    assert result.returncode != 0
+    assert calls == []
+
+
+def test_passkey_rp_change_is_refused_before_mutation(tmp_path):
+    result, calls = run_setup(
+        tmp_path, "configure_passkey_login",
+        readbacks=[passkey_readbacks()[0], '{"webAuthnPolicyPasswordlessRpId":"old.example.test"}',
+                   '{"webAuthnPolicyPasswordlessRpId":"old.example.test"}'],
+        KEYCLOAK_PASSKEYS_ENABLED="true", KEYCLOAK_PASSKEY_RP_ID="login.example.test",
+    )
+    assert result.returncode != 0
+    assert all(call['args'][0] == 'get' for call in calls)
+
+
+def test_unqualified_keycloak_version_cannot_silently_ignore_passkey_fields(tmp_path):
+    result, calls = run_setup(tmp_path, "configure_passkey_login",
+                              readback='{"systemInfo":{"version":"25.0.0"}}',
+                              KEYCLOAK_PASSKEYS_ENABLED="false")
+    assert result.returncode != 0
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("update_exit", [0, 1])

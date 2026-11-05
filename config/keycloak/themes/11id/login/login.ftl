@@ -25,7 +25,7 @@
                                        value="${(login.username!'')}"
                                        type="text" 
                                        autofocus 
-                                       autocomplete="username"
+                                       autocomplete="${(enableWebAuthnConditionalUI?has_content)?then('username webauthn', 'username')}"
                                        aria-invalid="<#if messagesPerField.existsError('username','password')>true</#if>"
                                 />
                                 <#if messagesPerField.existsError('username','password')>
@@ -126,6 +126,12 @@
                 </#if>
             </div>
         </div>
+        <#-- Inherit the version-matched Keycloak implementation. Import only when
+             supplied by the authenticator so disabled/older realms still render. -->
+        <#if enableWebAuthnConditionalUI?has_content>
+            <#import "passkeys.ftl" as passkeys>
+            <@passkeys.conditionalUIData />
+        </#if>
     <#elseif section = "info">
         <#if realm.password && realm.registrationAllowed && !registrationDisabled??>
             <div id="kc-registration-container">

@@ -52,6 +52,9 @@ KEYCLOAK_VERIFY_EMAIL="${KEYCLOAK_VERIFY_EMAIL:-false}"
 KEYCLOAK_RESET_PASSWORD_ENABLED="${KEYCLOAK_RESET_PASSWORD_ENABLED:-true}"
 KEYCLOAK_SOCIAL_LOGIN_ENABLED="${KEYCLOAK_SOCIAL_LOGIN_ENABLED:-true}"
 KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED="${KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED:-false}"
+# Empty preserves existing policy, including legacy Keycloak installations.
+KEYCLOAK_PASSKEYS_ENABLED="${KEYCLOAK_PASSKEYS_ENABLED:-}"
+KEYCLOAK_PASSKEY_RP_ID="${KEYCLOAK_PASSKEY_RP_ID:-}"
 KEYCLOAK_SMTP_HOST="${KEYCLOAK_SMTP_HOST:-${SMTP_HOST:-}}"
 KEYCLOAK_SMTP_PORT="${KEYCLOAK_SMTP_PORT:-${SMTP_PORT:-1025}}"
 KEYCLOAK_SMTP_FROM="${KEYCLOAK_SMTP_FROM:-${SMTP_FROM:-noreply@marty.demo}}"
@@ -272,6 +275,7 @@ main() {
     
     authenticate_keycloak
     configure_realm_login_settings
+    configure_passkey_login
     configure_browser_flow_alignment
     configure_realm_smtp_settings
     configure_google_idp
@@ -804,6 +808,103 @@ configure_realm_login_settings() {
         log_warning "Realm update failed; readback confirms the requested login settings are already effective"
     fi
     log_success "Realm login settings configured and verified"
+}
+
+# Read a single public JSON field. Never fetch or log the entire realm.
+passkey_field_matches() {
+    local resource="$1" field="$2" expected="$3" current
+    current=$("$KCADM" get "$resource" -r "$REALM" --fields "$field" 2>/dev/null) || return 1
+    # Normalize formatting for these closed scalar/algorithm-array responses,
+    # preserving spaces inside values such as the "not specified" sentinel.
+    current=$(printf '%s' "$current" | sed -E 's/^[[:space:]]*//;s/[[:space:]]*$//;s/"[[:space:]]*:[[:space:]]*/":/g;s/,[[:space:]]*/,/g;s/\[[[:space:]]*/[/g;s/[[:space:]]*\]/]/g;s/\{[[:space:]]*/{/g;s/[[:space:]]*\}/}/g' | tr -d '\n\r')
+    [ "$current" = "{\"${field}\":${expected}}" ]
+}
+
+configure_passkey_login() {
+    local enabled="$KEYCLOAK_PASSKEYS_ENABLED" rp="$KEYCLOAK_PASSKEY_RP_ID" label current
+    [ -n "$enabled" ] || return 0
+    if [[ "$enabled" != true && "$enabled" != false ]]; then
+        log_error "KEYCLOAK_PASSKEYS_ENABLED must be true, false, or empty to preserve policy"
+        return 1
+    fi
+    if [ "$enabled" = true ]; then
+        if [[ -z "$rp" || ${#rp} -gt 253 ]]; then
+            log_error "Passkeys require an explicit stable public RP hostname"
+            return 1
+        fi
+        local -a labels
+        IFS='.' read -r -a labels <<< "$rp"
+        for label in "${labels[@]}"; do
+            if [[ ${#label} -gt 63 || ! "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+                log_error "Passkey RP ID must be a lowercase hostname without a scheme, port or path"
+                return 1
+            fi
+        done
+        if [[ "$rp" == *. ]]; then
+            log_error "Passkey RP ID must not have a trailing dot"
+            return 1
+        fi
+    fi
+    # The integrated forms and policy names below are qualified against 26.8.
+    # Fail closed for explicit management on a different version, rather than
+    # claiming that an ignored representation field successfully enabled login.
+    # kcadm's top-level field filter drops the nested version. Server info is
+    # public admin metadata, not a realm credential representation; keep it local
+    # and extract only the system version without logging the response.
+    current=$("$KCADM" get serverinfo 2>/dev/null) || return 1
+    current=$(printf '%s' "$current" | tr -d '\n\r\t ' | sed -n 's/.*"systemInfo":{[^}]*"version":"\([^"]*\)".*/\1/p')
+    if ! printf '%s' "$current" | grep -Eq '^26\.8\.[0-9]+$'; then
+        log_error "Managed passkey login requires qualified Keycloak 26.8.x"
+        return 1
+    fi
+    if [ "$enabled" = true ]; then
+        # A configured RP ID is a credential boundary, not a replaceable setting.
+        if ! passkey_field_matches "realms/$REALM" webAuthnPolicyPasswordlessRpId '""' \
+            && ! passkey_field_matches "realms/$REALM" webAuthnPolicyPasswordlessRpId "\"$rp\""; then
+            log_error "Existing passkey RP ID differs or cannot be verified; preserve credentials and plan migration"
+            return 1
+        fi
+        kcadm_secret_safe update "realms/$REALM" \
+            -s "webAuthnPolicyPasswordlessRpId=$rp" \
+            -s 'webAuthnPolicyPasswordlessRpEntityName=ElevenID' \
+            -s 'webAuthnPolicyPasswordlessSignatureAlgorithms=["ES256","RS256"]' \
+            -s webAuthnPolicyPasswordlessUserVerificationRequirement=required \
+            -s webAuthnPolicyPasswordlessResidentKey=required \
+            -s webAuthnPolicyPasswordlessAttestationConveyancePreference=none \
+            -s 'webAuthnPolicyPasswordlessAuthenticatorAttachment=not specified' \
+            -s webAuthnPolicyPasswordlessMediation=conditional || return 1
+        local field expected
+        for field in RpId RpEntityName SignatureAlgorithms UserVerificationRequirement ResidentKey AttestationConveyancePreference AuthenticatorAttachment Mediation; do
+            case "$field" in
+                RpId) expected="\"$rp\"" ;;
+                RpEntityName) expected='"ElevenID"' ;;
+                SignatureAlgorithms) expected='["ES256","RS256"]' ;;
+                UserVerificationRequirement|ResidentKey) expected='"required"' ;;
+                AttestationConveyancePreference) expected='"none"' ;;
+                AuthenticatorAttachment) expected='"not specified"' ;;
+                Mediation) expected='"conditional"' ;;
+            esac
+            if ! passkey_field_matches "realms/$REALM" "webAuthnPolicyPasswordless$field" "$expected"; then
+                log_error "Passwordless policy readback failed for $field"
+                return 1
+            fi
+        done
+        kcadm_secret_safe update authentication/required-actions/webauthn-register-passwordless \
+            -r "$REALM" -s enabled=true -s defaultAction=false || return 1
+        if ! passkey_field_matches authentication/required-actions/webauthn-register-passwordless enabled true \
+            || ! passkey_field_matches authentication/required-actions/webauthn-register-passwordless defaultAction false; then
+            log_error "Optional passkey enrollment could not be verified"
+            return 1
+        fi
+    fi
+    # Disable only login on rollback: do not delete credentials, alter provider
+    # links or rewrite the remaining passwordless policy and required actions.
+    kcadm_secret_safe update "realms/$REALM" -s "webAuthnPolicyPasswordlessPasskeysEnabled=$enabled" || return 1
+    if ! passkey_field_matches "realms/$REALM" webAuthnPolicyPasswordlessPasskeysEnabled "$enabled"; then
+        log_error "Passkey login setting did not persist"
+        return 1
+    fi
+    log_success "Passkey login configured and verified; existing login methods retained"
 }
 
 configure_realm_smtp_settings() {
