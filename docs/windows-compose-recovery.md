@@ -215,3 +215,34 @@ mints. Actual task registration, invocation, repetition/logon timing, separately
 authorized engine/host reboot, and supported expired-generation recovery still
 require host qualification. An unregistered COM definition test proves XML
 serialization only. No task is installed by the test suite.
+
+After separate registration, check the exact managed task without elevation:
+
+```powershell
+& "$Tooling/scripts/verify-marty-boot-recovery.ps1" `
+  -RecoveryConfigurationFile 'C:/Marty/private/managed-recovery.json' `
+  -ManagedPython 'C:/Python312/python.exe' -TaskName 'Marty-Candidate-Renewal' `
+  -RenewCredentials -LogicalTlsProject $EnrolledLogicalTlsProject `
+  -RenewalIntervalMinutes $QualifiedIntervalMinutes -CheckOnly
+```
+
+The verifier requires the current operator's separate root-folder task and the
+exact installed action, interpreter, configuration, working directory, trigger
+and settings. It refuses active or mismatched tasks. Its read-only runtime
+preflight uses the existing owned-process job and bounded drains, with an
+independent `-PreflightTimeoutSeconds` budget (default 300; range 1–600).
+Check-only makes no task start request. The historical no-argument legacy
+verifier invocation retains its original administrator requirement and task.
+
+Omit `-CheckOnly` only for a qualified task execution request. The verifier never
+stops, changes, deletes or retries a task. It requires a newer `LastRunTime`,
+Ready state and result zero within a monotonic `-TimeoutSeconds` acceptance
+budget (default 3600; range 1–3600). Task API calls can return after that budget;
+late observations cannot qualify, and a timeout does not stop the task.
+`task_start_requested` and `fresh_task_completion_observed` are separate receipt
+fields. A concurrent trigger with IgnoreNew prevents unique attribution to the
+manual request, so `requested_run_attribution_verified` remains false.
+An optional absolute `-StatusFile` must name a new file in an existing directory;
+the verifier never overwrites a prior receipt. A successful observation does not
+qualify periodic/logon triggers, host reboot, expired-generation recovery or
+production admission. Those receipt flags remain false.
