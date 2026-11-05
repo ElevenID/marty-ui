@@ -666,6 +666,7 @@ def _handoff_staged(config_path,sha,sequence,intent_sha):
 def renew_once(config_path,logical_project):
     """One online candidate cycle; never retry a pending/uncertain operation."""
     with selected_inputs(config_path) as lease:
+        require(lease.sequence<MAX_SELECTIONS)
         root=lease.secrets_dir.parent/('windows-renewal-'+uuid.uuid4().hex)
         root.mkdir()
         staged=lease.stage_renewal(root,logical_project)

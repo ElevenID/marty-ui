@@ -1,6 +1,7 @@
 """Real private NTFS staging guard and registered handoff; native/Docker mocked."""
 import sys
 from contextlib import ExitStack, contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -67,6 +68,19 @@ def test_exhausted_journal_refuses_before_guard_or_credential_production(monkeyp
             selection._stage(cfg,'new',{}, {'sequence':selection.MAX_SELECTIONS},
                 output,'marty-selfhost-synthetic',stack)
         assert not events and not list(output.iterdir())
+        assert not selection.renewal.renewal_staging_guard(cfg).exists()
+
+
+def test_full_journal_timer_tick_allocates_no_attempt_directory(monkeypatch):
+    with staged_candidate(monkeypatch) as (root,path,cfg,_output,events):
+        original=selection.selected_inputs
+        @contextmanager
+        def full(path):
+            with original(path) as lease:yield replace(lease,sequence=selection.MAX_SELECTIONS)
+        monkeypatch.setattr(selection,'selected_inputs',full)
+        before=set(root.iterdir())
+        with pytest.raises(ValueError):selection.renew_once(path,'marty-selfhost-synthetic')
+        assert set(root.iterdir())==before and not events
         assert not selection.renewal.renewal_staging_guard(cfg).exists()
 
 
