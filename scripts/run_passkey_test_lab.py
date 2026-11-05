@@ -234,7 +234,7 @@ def handler(lab):
             self.send_response(status)
             self.send_header("Content-Type", kind)
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Referrer-Policy", "same-origin")
             self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'; form-action 'self'")
             self.end_headers()
             self.wfile.write(content.encode())

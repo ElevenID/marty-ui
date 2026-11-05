@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import threading
 import urllib.parse
+import pytest
 
 from http.server import ThreadingHTTPServer
 
@@ -48,6 +49,33 @@ def test_control_requests_require_current_host_origin_and_csrf_and_stop_after_cl
         assert request("/email", lab.origin, lab.csrf) == 403
         assert calls == ["email"]
         assert "closed" in lab.page()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_real_browser_form_preserves_origin_and_passes_the_local_control_gate(tmp_path):
+    playwright_api = pytest.importorskip("playwright.sync_api")
+    lab = lab_module.Lab(tmp_path, 1)
+    lab.ready = True
+    calls = []
+    lab.email_action = lambda: calls.append("email")
+    lab.page = lambda: (f'<form method="post" action="/email"><input type="hidden" '
+                        f'name="csrf" value="{lab.csrf}"><button>Send</button></form>')
+    server = ThreadingHTTPServer(("127.0.0.1", 0), lab_module.handler(lab))
+    lab.origin = "http://localhost:" + str(server.server_port)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(channel="chrome", headless=True)
+            try:
+                page = browser.new_page()
+                page.goto(lab.origin)
+                page.get_by_role("button", name="Send", exact=True).click()
+                assert "Action completed" in page.locator("body").inner_text()
+                assert calls == ["email"]
+            finally:
+                browser.close()
     finally:
         server.shutdown()
         server.server_close()

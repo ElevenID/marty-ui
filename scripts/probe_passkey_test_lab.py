@@ -38,6 +38,9 @@ def probe(output):
         try:
             context = browser.new_context()
             page = context.new_page()
+            form_origins = []
+            page.on("request", lambda request: form_origins.append(request.headers.get("origin", "missing"))
+                    if request.method == "POST" and request.url.startswith(ready["url"] + "/") else None)
             page.goto(ready["url"])
             assert page.get_by_text("Marty passkey test lab", exact=True).count() == 1
             page.get_by_role("link", name="Open native account console").click()
@@ -83,7 +86,8 @@ def probe(output):
             assert page.get_by_role("link", name="Open captured Keycloak email").count() >= 1
             print("Lab page, seeded native broker, password-free passkey enrollment, account continuity and captured-mail UI passed")
         except Exception as error:
-            raise RuntimeError("Lab browser check failed; current page text: " + page.locator("body").inner_text()[:1800]) from error
+            raise RuntimeError("Lab browser check failed; local form origins=" + repr(form_origins) +
+                               "; current page text: " + page.locator("body").inner_text()[:1800]) from error
         finally:
             browser.close()
 

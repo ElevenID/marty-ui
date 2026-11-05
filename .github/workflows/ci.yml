@@ -543,7 +543,7 @@ jobs:
           google-chrome --version
           docker image inspect "$MARTY_PASSKEY_PACKAGED_IMAGE" >/dev/null
           docker image inspect "$MARTY_PASSKEY_PACKAGED_OPENBAO_IMAGE" >/dev/null
-          python3 -m pytest -q -s tests/test_keycloak_passkey_packaged.py::test_packaged_passkeys_keep_remote_custody_and_surviving_authentication_methods
+          python3 -m pytest -q -s tests/test_keycloak_passkey_packaged.py::test_packaged_passkeys_keep_remote_custody_and_surviving_authentication_methods tests/test_passkey_test_lab.py
       - name: Prove disposable self-host Keycloak secret closure and token scopes
         shell: bash
         run: |
