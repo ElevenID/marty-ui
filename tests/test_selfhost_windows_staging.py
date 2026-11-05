@@ -150,6 +150,25 @@ def test_late_publication_failure_is_never_admissible(monkeypatch,boundary):
         assert not (selection.directory(cfg)/'000002.intent.json').exists()
 
 
+@pytest.mark.parametrize('entry', ['file', 'directory'])
+def test_product_marker_before_publication_preserves_staging_guard_and_empty_result(monkeypatch, entry):
+    with staged_candidate(monkeypatch) as (_root, path, cfg, output, _events):
+        journal = selection.directory(cfg)
+        before = {item.name: item.read_bytes() for item in journal.iterdir()}
+        product_guard = selection.renewal.product_transition_guard(cfg)
+        with pytest.raises(ValueError):
+            with selection.selected_inputs(path) as lease:
+                lease.stage_renewal(output, 'marty-selfhost-synthetic')
+                staging_guard = selection.renewal.renewal_staging_guard(cfg).read_bytes()
+                if entry == 'file':product_guard.write_bytes(b'PUBLIC_PENDING_PRODUCT')
+                else:product_guard.mkdir()
+        assert (output/'result.json').read_bytes() == b''
+        assert not (output/'publication.json').exists()
+        assert selection.renewal.renewal_staging_guard(cfg).read_bytes() == staging_guard
+        assert product_guard.exists()
+        assert before == {item.name: item.read_bytes() for item in journal.iterdir()}
+
+
 def test_finalizer_accepts_a_held_model_larger_than_64k(monkeypatch):
     with staged_candidate(monkeypatch) as (_root,path,cfg,output,_events):
         finish=selection._finish_stage
