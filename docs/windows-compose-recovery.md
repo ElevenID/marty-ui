@@ -229,7 +229,7 @@ The guard clears last. A complete decision with a late publication failure can
 be reconciled without rewriting its existing bytes.
 
 The renewal task uses an interactive, limited operator principal. One logon
-trigger performs recovery after a two-minute delay. A separate
+trigger requests one online renewal after a two-minute delay. A separate
 [time trigger](https://learn.microsoft.com/en-us/windows/win32/taskschd/timetrigger)
 starts recurrence in the current signed-in session: its default first boundary
 is one qualified interval after definition creation, recorded explicitly in
@@ -238,6 +238,10 @@ schedule. There are no immediate failure retries; the task retains a one-hour
 limit and IgnoreNew concurrency. The time trigger's duration is omitted for
 [indefinite repetition](https://learn.microsoft.com/en-us/windows/win32/taskschd/repetitionpattern-duration).
 It requires the signed-in operator session; it is not a SYSTEM boot service.
+Both triggers use the same `-RenewCredentials` action. They do not start stopped
+or unhealthy workloads before staging. The existing retained-ID recovery path
+must restore that foundation first; recovery/logon ordering remains a separate
+host qualification requirement.
 For a separately reviewed qualification, `-FirstRenewalDelaySeconds` can select
 an earlier first boundary, from 15 seconds through the qualified interval in
 seconds. Zero selects the default full interval. This only changes the first

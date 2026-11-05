@@ -43,7 +43,7 @@ function New-ManagedRecoveryTaskDefinition($Scheduler, [string]$UserId,
     if ($RenewalIntervalMinutes) {
         # A logon trigger alone cannot start recurrence for a user who is
         # already signed in when this definition is registered. Keep logon
-        # recovery once, and give recurrence its own UTC time trigger.
+        # renewal request once, and give recurrence its own UTC time trigger.
         $nowUtc = [DateTimeOffset]::UtcNow
         $registeredUtc = $nowUtc.AddTicks(-($nowUtc.Ticks % [TimeSpan]::TicksPerSecond))
         $format = "yyyy-MM-dd'T'HH:mm:sszzz"
