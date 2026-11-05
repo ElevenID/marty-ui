@@ -2,6 +2,7 @@
 import base64
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import hmac
 import email.policy
 from email.parser import BytesParser
 import html
@@ -415,6 +416,155 @@ def test_native_enrollment_and_delete_actions_cancel_without_mutating_credential
             assert request(credentials_url, token=keycloak["token"]) == original
         finally:
             browser.close()
+
+
+def test_explicit_required_otp_remains_required_after_passkey_and_password_login(keycloak):
+    from playwright.sync_api import sync_playwright
+
+    assert configure(keycloak, "true").returncode == 0
+    address = "strict-mfa@example.invalid"
+    password = secrets.token_urlsafe(24)
+    request(keycloak["admin"] + "/users", token=keycloak["token"], body={
+        "username": address, "email": address, "emailVerified": True, "enabled": True,
+        "firstName": "Synthetic", "lastName": "MFA", "requiredActions": ["CONFIGURE_TOTP"],
+        "credentials": [{"type": "password", "value": password, "temporary": False}]})
+    query = urllib.parse.urlencode({"email": address, "exact": "true"})
+    subject = request(keycloak["admin"] + "/users?" + query, token=keycloak["token"])[0]["id"]
+    credentials_url = keycloak["admin"] + "/users/" + subject + "/credentials"
+    issuer = keycloak["base"] + f"/realms/{keycloak['realm']}/protocol/openid-connect"
+    realm = request(keycloak["admin"], token=keycloak["token"])
+    assert realm["otpPolicyAlgorithm"] == "HmacSHA1"
+    period, digits = realm["otpPolicyPeriod"], realm["otpPolicyDigits"]
+    last_counter = -1
+
+    def code(secret, counter):
+        digest = hmac.new(secret.encode(), counter.to_bytes(8, "big"), hashlib.sha1).digest()
+        offset = digest[-1] & 15
+        number = int.from_bytes(digest[offset:offset + 4], "big") & 0x7fffffff
+        return str(number % 10 ** digits).zfill(digits)
+
+    def fresh_code(secret):
+        nonlocal last_counter
+        while int(time.time()) // period <= last_counter:
+            time.sleep(0.2)
+        last_counter = int(time.time()) // period
+        return code(secret, last_counter)
+
+    def begin(page, action=None):
+        verifier = secrets.token_urlsafe(48)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        params = {"client_id": "passkey-test-ui", "response_type": "code", "scope": "openid",
+            "redirect_uri": keycloak["base"] + "/callback", "state": secrets.token_urlsafe(24),
+            "nonce": secrets.token_urlsafe(24), "code_challenge": challenge, "code_challenge_method": "S256"}
+        if action:
+            params["kc_action"] = action
+        page.goto(issuer + "/auth?" + urllib.parse.urlencode(params))
+        return verifier
+
+    def complete(page, verifier):
+        try:
+            page.wait_for_url(keycloak["base"] + "/callback?**", timeout=30000)
+        except Exception as error:
+            raise AssertionError({"path": urllib.parse.urlparse(page.url).path,
+                "fields": page.locator("input").evaluate_all("items => items.map(item => item.id)"),
+                "alerts": page.locator("[role=alert], #kc-error-message .instruction").all_text_contents()}) from error
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query)
+        token = request(issuer + "/token", form={"grant_type": "authorization_code", "client_id": "passkey-test-ui",
+            "code": params["code"][0], "code_verifier": verifier, "redirect_uri": keycloak["base"] + "/callback"})["access_token"]
+        assert request(issuer + "/userinfo", token=token)["sub"] == subject
+
+    clients = request(keycloak["admin"] + "/clients?clientId=passkey-test-ui", token=keycloak["token"])
+    assert len(clients) == 1
+    client_url = keycloak["admin"] + "/clients/" + clients[0]["id"]
+    original_bindings = clients[0].get("authenticationFlowBindingOverrides", {})
+    flow_name = "strict-passkey-mfa"
+    request(keycloak["admin"] + "/authentication/flows/browser/copy", token=keycloak["token"], body={"newName": flow_name})
+    flows = request(keycloak["admin"] + "/authentication/flows", token=keycloak["token"])
+    flow = next(item for item in flows if item["alias"] == flow_name)
+    executions_url = keycloak["admin"] + "/authentication/flows/" + flow_name + "/executions"
+    executions = request(executions_url, token=keycloak["token"])
+    otp_entries = [item for item in executions if item.get("providerId") == "auth-otp-form"]
+    assert len(otp_entries) == 1
+    for entry in executions:
+        requirement = None
+        if entry.get("providerId") == "auth-otp-form":
+            requirement = "REQUIRED"
+        # Keycloak 26.8's documented always-2FA policy disables only the
+        # passkey credential exception. Keep unrelated organization conditions
+        # and the enrolled-user condition intact.
+        elif entry.get("providerId") == "conditional-credential":
+            requirement = "DISABLED"
+        if requirement:
+            request(executions_url, token=keycloak["token"], method="PUT", body={"id": entry["id"], "requirement": requirement})
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(channel="chrome", headless=True)
+        try:
+            context = browser.new_context()
+            page = context.new_page()
+            cdp = context.new_cdp_session(page)
+            cdp.send("WebAuthn.enable")
+            device = cdp.send("WebAuthn.addVirtualAuthenticator", {"options": {
+                "protocol": "ctap2", "transport": "internal", "hasResidentKey": True,
+                "hasUserVerification": True, "isUserVerified": True, "automaticPresenceSimulation": True}})["authenticatorId"]
+            verifier = begin(page, "webauthn-register-passwordless")
+            page.locator("#username").fill(address)
+            page.locator("#password").fill(password)
+            page.locator("#kc-login").click()
+            secret = page.locator("#totpSecret").input_value(timeout=30000)
+            page.locator("#totp").fill(fresh_code(secret))
+            page.locator("#userLabel").fill("Synthetic required OTP")
+            page.locator("#saveTOTPBtn").click()
+            page.locator("#registerWebAuthn").wait_for(timeout=30000)
+            page.wait_for_load_state("load")
+            page.once("dialog", lambda dialog: dialog.accept("MFA passkey"))
+            page.locator("#registerWebAuthn").click(timeout=30000)
+            complete(page, verifier)
+            stored_key = cdp.send("WebAuthn.getCredentials", {"authenticatorId": device})["credentials"][0]
+            request(client_url, token=keycloak["token"], method="PUT", body={
+                "authenticationFlowBindingOverrides": {**original_bindings, "browser": flow["id"]}})
+            cdp.send("WebAuthn.removeVirtualAuthenticator", {"authenticatorId": device})
+            context.close()
+            for primary in ("passkey", "password-enabled", "password-disabled"):
+                if primary == "password-disabled":
+                    assert configure(keycloak, "false").returncode == 0
+                context = browser.new_context()
+                page = context.new_page()
+                if primary == "passkey":
+                    cdp = context.new_cdp_session(page)
+                    cdp.send("WebAuthn.enable")
+                    device = cdp.send("WebAuthn.addVirtualAuthenticator", {"options": {
+                        "protocol": "ctap2", "transport": "internal", "hasResidentKey": True,
+                        "hasUserVerification": True, "isUserVerified": True, "automaticPresenceSimulation": True}})["authenticatorId"]
+                    cdp.send("WebAuthn.addCredential", {"authenticatorId": device, "credential": stored_key})
+                verifier = begin(page)
+                if primary != "passkey":
+                    page.locator("#username").fill(address)
+                    page.locator("#password").fill(password)
+                    page.locator("#kc-login").click()
+                page.locator("#otp").wait_for(timeout=30000)
+                assert urllib.parse.urlparse(page.url).path != "/callback"
+                if primary == "passkey":
+                    after = cdp.send("WebAuthn.getCredentials", {"authenticatorId": device})["credentials"][0]
+                    assert after["signCount"] > stored_key["signCount"]
+                counter = int(time.time()) // period
+                valid = {code(secret, value) for value in range(max(0, counter - 2), counter + 3)}
+                invalid = next(str(value).zfill(digits) for value in range(10) if str(value).zfill(digits) not in valid)
+                page.locator("#otp").fill(invalid)
+                page.locator("#kc-login").click()
+                page.locator("#input-error-otp-code").wait_for(timeout=10000)
+                assert urllib.parse.urlparse(page.url).path != "/callback"
+                page.locator("#otp").fill(fresh_code(secret))
+                page.locator("#kc-login").click()
+                complete(page, verifier)
+                context.close()
+            assert {item["type"] for item in request(credentials_url, token=keycloak["token"])} == {
+                "password", "otp", "webauthn-passwordless"}
+        finally:
+            browser.close()
+            request(client_url, token=keycloak["token"], method="PUT", body={
+                "authenticationFlowBindingOverrides": {**original_bindings, "browser": original_bindings.get("browser", "")}})
+            assert request(client_url, token=keycloak["token"]).get("authenticationFlowBindingOverrides", {}) == original_bindings
+            assert configure(keycloak, "true").returncode == 0
 
 
 def test_real_realm_reconciliation_preserves_providers_and_policy_on_rollback(keycloak):

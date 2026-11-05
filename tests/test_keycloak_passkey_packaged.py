@@ -100,7 +100,18 @@ def qualify_passkeys(context):
         native.test_real_realm_reconciliation_preserves_providers_and_policy_on_rollback(fixture)
         for mode in ("conditional", "modal"):
             native.test_virtual_authenticator_enrollment_and_login_keep_the_same_subject(fixture, mode)
+        native.test_explicit_required_otp_remains_required_after_passkey_and_password_login(fixture)
+        print("Explicit required OTP and wrong-code denial passed for passkey/password with feature on/off", flush=True)
         assert native.request(admin, token=admin_token)["webAuthnPolicyPasswordlessPasskeysEnabled"] is True
+        # Model a human window outliving the parent probe's original sessions
+        # without waiting thirty minutes or increasing any token lifetime.
+        for realm_name, username in (("11id", "probe11"), ("master", "probe")):
+            realm_admin = base + "/admin/realms/" + realm_name
+            users = native.request(realm_admin + "/users?" + urllib.parse.urlencode({
+                "username": username, "exact": "true"}), token=admin_token)
+            assert len(users) == 1
+            native.request(realm_admin + "/users/" + users[0]["id"] + "/logout",
+                           token=admin_token, method="POST")
         print("Packaged PostgreSQL/KMS passkey enrollment, native console and cross-node removal/login checks passed", flush=True)
     finally:
         for name in (replica_name, smtp_name):

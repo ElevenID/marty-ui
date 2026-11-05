@@ -783,13 +783,21 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 # disposable PostgreSQL/OpenBao/Keycloak fixture and its lifetime.
                 qualify_ready({"container": kc_name, "network": network, "base": base,
                                "openbao_container": bao_name})
-                # Extended native/device checks can outlive the short master
-                # access token. Refresh our admin capability rather than change
-                # the realm's token lifetime or reuse the callback's token.
-                token = http_json(base + "/realms/master/protocol/openid-connect/token", {
+                # A human test window can outlive access tokens and idle refresh
+                # sessions. Start fresh probe sessions after the callback, keeping
+                # the original realm lifetimes and subsequent refresh proof.
+                master_tokens = http_json(base + "/realms/master/protocol/openid-connect/token", {
                     "client_id": "admin-cli", "grant_type": "password",
                     "username": "probe", "password": "synthetic-probe-only",
-                })["access_token"]
+                })
+                token = master_tokens["access_token"]
+                realm_tokens = http_json(base + "/realms/11id/protocol/openid-connect/token", {
+                    "client_id": "admin-cli", "grant_type": "password",
+                    "username": "probe11", "password": "synthetic-probe-only",
+                })
+                verify_jwt(token, jwks, f"{prefix}-master-rs256-v1", base + "/realms/master")
+                verify_jwt(realm_tokens["access_token"], jwks_11id,
+                           f"{prefix}-11id-rs256-v1", base + "/realms/11id")
             if require_browser:
                 callback = base + "/probe-callback"
                 for realm in ("master", "11id"):

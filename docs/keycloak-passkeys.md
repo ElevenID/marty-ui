@@ -99,7 +99,12 @@ codes alone must not be assumed to recover a passwordless account. Password/emai
 fallback retains its existing security characteristics.
 
 Inspect the customized browser flow's MFA behavior: the upstream default can skip
-conditional 2FA after passkey login. Privileged step-up must retain its intended
+conditional 2FA after passkey login. For a policy that requires enrolled users to
+enter OTP after either a passkey or a password, Keycloak26.8 documents disabling
+only **Condition - credential** in **Browser - Conditional 2FA**. Retain the
+enrolled-user and organization conditions, and require the intended OTP execution.
+Apply such a policy through the realm's existing flow owner; passkey provisioning
+does not rewrite authentication flows. Privileged step-up must retain its intended
 assurance. The current theme inherits the installed version's `passkeys.ftl` and
 JavaScript instead of maintaining a separate implementation.
 

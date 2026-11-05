@@ -14,7 +14,7 @@ py -3.12 scripts/run_passkey_test_lab.py --keycloak-image marty-passkey-keycloak
 The launcher prints a localhost URL when ready, plus a private output folder.
 Open that page for the generated usernames/passwords, account-console link,
 captured enrollment/recovery mail, Google setup and credential downloads.
-The lab lasts20 minutes by default; `--minutes` accepts1–30. Close lab stops
+The lab lasts 20 minutes by default; `--minutes` accepts 1–30. Close lab stops
 the interactive window early. The launcher then finishes the custody regression
 and removes its disposable containers/network. Keep the terminal process alive
 during testing; do not reuse production accounts, credentials or RP IDs.
