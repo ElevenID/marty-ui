@@ -245,6 +245,10 @@ host qualification requirement.
 For a finite candidate qualification, pass the same `-RenewalWindowMinutes`
 to installer and verifier. Zero (default) retains indefinite renewal; an explicit
 positive window, at most 1440 minutes, must end after the first scheduled run.
+Windows may normalize stored trigger times to a local UTC offset and account
+names to a shorter spelling. Verification requires explicit time offsets and
+compares absolute instants; accounts must resolve to the current operator's exact
+Windows SID. Unzoned timestamps and unresolved or foreign accounts are refused.
 Both logon and time triggers receive that exact UTC end boundary, measured from
 the recorded definition date. This bounds future trigger starts even if the test
 controller exits. It does not stop an in-flight renewal, delete the task, prove

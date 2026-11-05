@@ -103,6 +103,8 @@ switch ('CASE') {
  'renew-duplicate-logon' {$global:task.Triggers[1]=$global:task.Triggers[0]}
  'renew-reordered-check' {$global:task.Triggers=@($global:task.Triggers[1],$global:task.Triggers[0])}
  'renew-utc-z-check' {$global:task.Date=$global:task.Date.Replace('+00:00','Z');$global:task.Triggers[1].StartBoundary=$global:task.Triggers[1].StartBoundary.Replace('+00:00','Z')}
+ 'renew-offset-check' {$global:task.Triggers[1].StartBoundary=$registered.AddSeconds(14400).ToOffset([TimeSpan]::FromHours(-7)).ToString("yyyy-MM-dd'T'HH:mm:sszzz")}
+ 'renew-window-offset-check' {$global:task.Triggers[1].StartBoundary=$registered.AddSeconds(14400).ToOffset([TimeSpan]::FromHours(-7)).ToString("yyyy-MM-dd'T'HH:mm:sszzz");foreach($trigger in $global:task.Triggers){$trigger.EndBoundary=$registered.AddMinutes(300).ToOffset([TimeSpan]::FromHours(-7)).ToString("yyyy-MM-dd'T'HH:mm:sszzz")}}
  'renew-future-registration' {$global:task.Date=$registered.AddDays(1).ToString("yyyy-MM-dd'T'HH:mm:sszzz");$global:task.Triggers[1].StartBoundary=$registered.AddDays(1).AddSeconds(14400).ToString("yyyy-MM-dd'T'HH:mm:sszzz")}
 }
 function Get-ScheduledTask {
@@ -152,7 +154,7 @@ function Set-ScheduledTask {throw 'Update forbidden'}
 
 @pytest.mark.parametrize('case', ['check', 'renew-check', 'run', 'renew-run',
                                 'renew-first-check','renew-reordered-check','renew-utc-z-check','renew-window-check',
-                                'local-account-check','sid-account-check'])
+                                'local-account-check','sid-account-check','renew-offset-check','renew-window-offset-check'])
 def test_exact_managed_task_check_or_one_bounded_run(tmp_path, case):
     result, child, started = invoke(tmp_path, case)
     assert result.returncode == 0, result.stderr

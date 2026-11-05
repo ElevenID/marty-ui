@@ -97,13 +97,16 @@ if ($ManagedPython) {
                 throw 'The renewal repetition or no-replay settings differ from the expected definition.'
             }
             $registration = [DateTimeOffset]::MinValue;$boundary = [DateTimeOffset]::MinValue
-            $utcPattern = '\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?(Z|\+00:00)\z'
-            if ([string]$Task.Date -cnotmatch $utcPattern -or [string]$timer.StartBoundary -cnotmatch $utcPattern -or
+            # The scheduler normalizes trigger boundaries to the local offset
+            # even when UTC was registered. Require an explicit offset and
+            # compare DateTimeOffset instants; never assume an unzoned time.
+            $offsetPattern = '\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?(Z|[+-]\d{2}:\d{2})\z'
+            if ([string]$Task.Date -cnotmatch $offsetPattern -or [string]$timer.StartBoundary -cnotmatch $offsetPattern -or
                 -not [DateTimeOffset]::TryParse([string]$Task.Date, [Globalization.CultureInfo]::InvariantCulture,
                     [Globalization.DateTimeStyles]::None, [ref]$registration) -or
                 -not [DateTimeOffset]::TryParse([string]$timer.StartBoundary, [Globalization.CultureInfo]::InvariantCulture,
                     [Globalization.DateTimeStyles]::None, [ref]$boundary)) {
-                throw 'Renewal registration and first-run boundaries must be explicit UTC timestamps.'
+                throw 'Renewal registration and first-run boundaries must have explicit time offsets.'
             }
             $firstDelay = if ($FirstRenewalDelaySeconds) { $FirstRenewalDelaySeconds } else { 60*$RenewalIntervalMinutes }
             if (($boundary-$registration).TotalSeconds -ne $firstDelay -or $registration -gt [DateTimeOffset]::UtcNow.AddSeconds(60)) {
@@ -112,11 +115,11 @@ if ($ManagedPython) {
             foreach ($renewalTrigger in @($trigger, $timer)) {
                 if ($RenewalWindowMinutes) {
                     $end = [DateTimeOffset]::MinValue
-                    if ([string]$renewalTrigger.EndBoundary -cnotmatch $utcPattern -or
+                    if ([string]$renewalTrigger.EndBoundary -cnotmatch $offsetPattern -or
                         -not [DateTimeOffset]::TryParse([string]$renewalTrigger.EndBoundary, [Globalization.CultureInfo]::InvariantCulture,
                             [Globalization.DateTimeStyles]::None, [ref]$end) -or
                         $end -ne $registration.AddMinutes($RenewalWindowMinutes)) {
-                        throw 'Both renewal triggers must expire at the exact qualified UTC boundary.'
+                        throw 'Both renewal triggers must expire at the exact qualified instant.'
                     }
                 } elseif ($renewalTrigger.EndBoundary) {
                     throw 'An indefinite renewal task must not contain a trigger expiry.'
