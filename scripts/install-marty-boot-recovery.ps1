@@ -79,11 +79,15 @@ function New-ManagedRecoveryTaskDefinition($Scheduler, [string]$UserId,
     $action.WorkingDirectory = $WorkingDirectory
     $definition.Settings.StartWhenAvailable = $true
     $definition.Settings.ExecutionTimeLimit = 'PT20M'
-    $definition.Settings.RestartCount = 3
-    $definition.Settings.RestartInterval = 'PT2M'
     if ($RenewalIntervalMinutes) {
         $definition.Settings.ExecutionTimeLimit = 'PT1H'
-        $definition.Settings.RestartCount = 0 # never immediately replay a failed renewal
+        # Leave the COM defaults untouched: no RestartOnFailure XML at all.
+        # Setting an interval then Count=0 emits an invalid retry block; the
+        # scheduler requires a positive Count whenever that block is present.
+        # A failed renewal must never be immediately replayed.
+    } else {
+        $definition.Settings.RestartCount = 3
+        $definition.Settings.RestartInterval = 'PT2M'
     }
     $definition.Settings.MultipleInstances = 2 # TASK_INSTANCES_IGNORE_NEW
     $definition.Settings.Enabled = $true

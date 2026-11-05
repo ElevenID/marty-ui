@@ -83,7 +83,8 @@ if ($ManagedPython) {
                 -not $timer.Enabled -or [string]$timer.RandomDelay -notin @('', 'PT0S') -or
                 $timer.Repetition.Interval -ne ('PT'+$RenewalIntervalMinutes+'M') -or
                 $timer.Repetition.Duration -or $timer.Repetition.StopAtDurationEnd -or
-                $Task.Settings.ExecutionTimeLimit -ne 'PT1H' -or $Task.Settings.RestartCount -ne 0) {
+                $Task.Settings.ExecutionTimeLimit -ne 'PT1H' -or $Task.Settings.RestartCount -ne 0 -or
+                [string]$Task.Settings.RestartInterval -notin @('', 'PT0S')) {
                 throw 'The renewal repetition or no-replay settings differ from the expected definition.'
             }
             $registration = [DateTimeOffset]::MinValue;$boundary = [DateTimeOffset]::MinValue

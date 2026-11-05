@@ -63,8 +63,9 @@ $definition.XmlText
                 assert datetime.fromisoformat(end.text)==registered+timedelta(minutes=window)
             else:
                 assert end is None
-        count=root.find('t:Settings/t:RestartOnFailure/t:Count',ns)
-        assert count is None or count.text=='0' # COM omits the zero default
+        # Native definition serialization alone permits Count0, but actual
+        # registration rejects it. No-retry must omit this block entirely.
+        assert root.find('t:Settings/t:RestartOnFailure',ns) is None
     else:
         assert text('t:Settings/t:RestartOnFailure/t:Count')=='3'
         assert root.find('t:Triggers/t:TimeTrigger',ns) is None

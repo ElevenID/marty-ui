@@ -61,7 +61,7 @@ if ('CASE' -like 'renew*') {
   CimClass=[pscustomobject]@{CimClassName='MSFT_TaskTimeTrigger'};Enabled=$true;EndBoundary='';RandomDelay=''
   StartBoundary=$registered.AddSeconds($delay).ToString("yyyy-MM-dd'T'HH:mm:sszzz")
   Repetition=[pscustomobject]@{Interval='PT240M';Duration='';StopAtDurationEnd=$false} })
- $global:task.Settings.ExecutionTimeLimit='PT1H';$global:task.Settings.RestartCount=0
+ $global:task.Settings.ExecutionTimeLimit='PT1H';$global:task.Settings.RestartCount=0;$global:task.Settings.RestartInterval=''
  if ('CASE' -like 'renew-window*') {
   foreach($trigger in $global:task.Triggers) {$trigger.EndBoundary=$registered.AddMinutes(300).ToString("yyyy-MM-dd'T'HH:mm:sszzz")}
  }
@@ -86,6 +86,7 @@ switch ('CASE') {
  'disabled' {$global:task.Settings.Enabled=$false}
  'parallel' {$global:task.Settings.MultipleInstances='Parallel'}
  'renew-retries' {$global:task.Settings.RestartCount=3}
+ 'renew-dangling-interval' {$global:task.Settings.RestartInterval='PT2M'}
  'renew-duration' {$global:task.Triggers[1].Repetition.Duration='PT1H'}
  'renew-interval' {$global:task.Triggers[1].Repetition.Interval='PT15M'}
  'renew-logon-repetition' {$global:task.Triggers[0].Repetition.Interval='PT240M'}
@@ -169,7 +170,7 @@ def test_exact_managed_task_check_or_one_bounded_run(tmp_path, case):
 @pytest.mark.parametrize('case', ['wrong-user', 'highest', 'wrong-logon', 'wrong-folder',
     'wrong-action', 'wrong-launcher', 'wrong-cwd', 'extra-action', 'extra-trigger',
     'wrong-trigger-user', 'wrong-trigger-type', 'busy', 'disabled', 'parallel',
-    'renew-retries', 'renew-duration', 'renew-interval', 'inventory-failure', 'missing', 'preflight-failure',
+    'renew-retries', 'renew-dangling-interval', 'renew-duration', 'renew-interval', 'inventory-failure', 'missing', 'preflight-failure',
     'preflight-timeout','renew-logon-repetition','renew-legacy-logon-only','renew-local-boundary',
     'renew-wrong-delay','renew-missing-date','renew-timer-disabled','renew-timer-end',
     'renew-timer-random','renew-duplicate-logon','renew-future-registration',
