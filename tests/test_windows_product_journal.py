@@ -20,7 +20,7 @@ from test_windows_product_transition import runtime_candidate
 
 
 @contextmanager
-def installed(monkeypatch):
+def installed(monkeypatch, *, publish=True):
     with fixture(monkeypatch) as (root, phase, tx, outcome, path, config):
         before, after, old_model, new_model, admitted, ids = runtime_candidate(root)
         # Real metadata parser, deliberately unsigned synthetic payloads. Only
@@ -114,13 +114,16 @@ def installed(monkeypatch):
             selection._append(source, raw, journal.INTENT, marker, stack)
             journal.validate_marker(raw, expected, marker['old'], source)
             initial = journal.seed(raw, expected, marker['old'], marker, phase_hashes, stack)
-            target.mkdir()
-            for name, body in initial.items():(target/name).write_bytes(body)
-            selection._append(source, raw, journal.DECISION, journal.decision(marker, initial, phase_hashes), stack)
+            if publish:
+                target.mkdir()
+                for name, body in initial.items():(target/name).write_bytes(body)
+                selection._append(source, raw, journal.DECISION, journal.decision(marker, initial, phase_hashes), stack)
+            else:
+                selection._new_private(product.renewal.product_transition_guard(config), selection.packed(marker))
         phase['data'] = edge['after_sha256']
         yield {'root': root, 'path': path, 'config': config, 'new_config': new_config, 'source': source,
                'target': target, 'attempt': attempt, 'marker': marker, 'previous': previous, 'initial': initial,
-               'phase': phase, 'tx': tx, 'outcome': outcome}
+               'phase': phase, 'tx': tx, 'outcome': outcome, 'phase_hashes': phase_hashes}
 
 
 def test_product_successor_retains_credential_identity_and_every_predecessor_byte(monkeypatch):
@@ -231,3 +234,66 @@ def test_rehashed_native_completion_cannot_substitute_different_custody_or_lifet
         decision = selection.decode((data['source']/journal.DECISION).read_bytes())
         hashes = {name: selection.digest((data['attempt']/name).read_bytes()) for name in decision['phase_sha256']}
         with ExitStack() as stack, pytest.raises(ValueError):journal.hold_transition(data['marker'], hashes, stack)
+
+
+@pytest.mark.parametrize('partial', ['missing', 'empty', 'complete', 'decision'])
+def test_forward_publication_completes_only_derived_metadata_and_requires_fresh_custody(monkeypatch, partial):
+    with installed(monkeypatch, publish=False) as data:
+        if partial != 'missing':
+            data['target'].mkdir()
+            for name, body in data['initial'].items():
+                (data['target']/name).write_bytes(b'' if partial == 'empty' else body)
+        if partial == 'decision':
+            (data['source']/journal.DECISION).write_bytes(selection.packed(journal.decision(
+                data['marker'], data['initial'], data['phase_hashes'])))
+        original = selection._prove;calls = []
+        def prove(cfg, choice, values, stack, *, expected_data, authority_file):
+            assert cfg == data['new_config'] and authority_file == '/control/product/token'
+            calls.append(expected_data)
+            return original(cfg, choice, values, stack, expected_data=expected_data, authority_file=authority_file)
+        monkeypatch.setattr(selection, '_prove', prove)
+        result = journal.finish(data['path'], data['marker'], data['phase_hashes'], authority_file='/control/product/token')
+        assert result['credential_rotation'] is False and result['generation_sequence'] == 1
+        assert calls == [data['marker']['data_after_sha256']]
+        assert not product.renewal.product_transition_guard(data['config']).exists()
+        assert selection.status(data['path'])['decision'] == 'product-selected-new'
+        assert all((data['source']/name).read_bytes() == body for name, body in data['previous'].items())
+
+
+@pytest.mark.parametrize('fault', ['unknown-target', 'corrupt-target', 'missing-native', 'live-drift', 'authority'])
+def test_forward_publication_refuses_ambiguous_execution_and_preserves_guard(monkeypatch, fault):
+    with installed(monkeypatch, publish=False) as data:
+        if fault in {'unknown-target', 'corrupt-target'}:
+            data['target'].mkdir()
+            (data['target']/('unknown' if fault == 'unknown-target' else 'owner.json')).write_bytes(b'PUBLIC_UNKNOWN')
+        elif fault == 'missing-native':(data['attempt']/'native-after.completed.json').write_bytes(b'')
+        elif fault == 'live-drift':data['phase']['data'] = 'e'*64
+        authority = '/control/../other' if fault == 'authority' else '/control/product/token'
+        with pytest.raises(ValueError):
+            journal.finish(data['path'], data['marker'], data['phase_hashes'], authority_file=authority)
+        assert product.renewal.product_transition_guard(data['config']).exists()
+        assert not (data['source']/journal.DECISION).exists()
+        with pytest.raises(ValueError):selection.status(data['path'])
+
+
+@pytest.mark.parametrize('tamper', ['content', 'child'])
+def test_product_publication_keeps_predecessor_sealed_across_project_lock_exit(monkeypatch, tamper):
+    with installed(monkeypatch, publish=False) as data:
+        original = selection._session;injected = []
+        @contextmanager
+        def session(*args, **kwargs):
+            with original(*args, **kwargs) as value:yield value
+            if kwargs.get('_pending_product_sha256'):
+                injected.append(True)
+                if tamper == 'content':
+                    with pytest.raises(OSError):(data['source']/'owner.json').write_bytes(b'PUBLIC_TAMPER')
+                else:(data['source']/'unknown.json').write_bytes(b'PUBLIC_UNKNOWN')
+        monkeypatch.setattr(selection, '_session', session)
+        if tamper == 'child':
+            with pytest.raises(ValueError):
+                journal.finish(data['path'], data['marker'], data['phase_hashes'], authority_file='/control/product/token')
+            assert product.renewal.product_transition_guard(data['config']).exists()
+        else:
+            journal.finish(data['path'], data['marker'], data['phase_hashes'], authority_file='/control/product/token')
+            assert not product.renewal.product_transition_guard(data['config']).exists()
+        assert injected == [True]

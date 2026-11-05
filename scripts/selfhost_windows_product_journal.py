@@ -6,6 +6,7 @@ The deployment boundary must authenticate the composition and collect real
 custody/schema/runtime receipts before publishing a product selection.
 """
 from copy import deepcopy
+from contextlib import ExitStack
 from pathlib import Path
 import re
 
@@ -238,3 +239,80 @@ def decision(marker, initial, phases):
     return {'schema': SCHEMA, 'intent_sha256': selection.digest(selection.packed(marker)),
             'target_entries_sha256': {name: selection.digest(body) for name, body in initial.items()},
             'phase_sha256': phases, 'candidate_only': True}
+
+
+def finish(config_path, marker, phases, *, authority_file):
+    """Publish a fully executed forward transition, never replay runtime writes.
+
+    The runtime owner must already have sealed its intent and global guard.
+    Missing or empty derived target entries may be completed after interruption;
+    nonempty differences, incomplete execution and live drift remain refused.
+    Fresh native custody is required even when the decision was already written.
+    """
+    import selfhost_windows_renewal as renewal
+    from selfhost_windows_inputs import _held_private_input
+    from selfhost_windows_model import history
+    from selfhost_windows_continuation import hold_ancestry, check_ancestry
+    require(isinstance(authority_file, str) and authority_file.startswith('/control/')
+            and '..' not in Path(authority_file).parts)
+    marker = selection.decode(selection.packed(marker))
+    phases = selection.decode(selection.packed(phases))
+    journal = Path(marker['source_dir']);target = Path(marker['target_dir'])
+    sha = selection.digest(selection.packed(marker));earlier = []
+    with ExitStack() as protected:
+        # Acquire the project lock before opening any derived output namespace.
+        with ExitStack() as receipts:
+            with selection._session(config_path, _pending_product_sha256=sha,
+                _preserve_history=lambda items: hold_ancestry(items, receipts, protected, earlier)) as (cfg, _body, expected, active, raw, stack):
+                require(active == journal)
+                _intents, records = selection._parse(raw, expected)
+                current_model = history(raw, expected, records)[1]
+                require(validate_marker(raw, expected, current_model, active) == marker)
+                initial = seed(raw, expected, current_model, marker, phases, receipts)
+                body = decision(marker, initial, phases)
+                guard = renewal.product_transition_guard(cfg)
+                originals = dict(raw)
+                for name, saved in originals.items():
+                    require(receipts.enter_context(renewal.hold_private_input(journal/name)) == saved)
+                require(receipts.enter_context(renewal.hold_private_input(guard)) == selection.packed(marker))
+                for path in (journal.parent, journal):
+                    protected.enter_context(renewal.hold_storage_namespace(path))
+                if not renewal.namespace_entry_exists(target):target.mkdir()
+                protected.enter_context(renewal.hold_storage_namespace(target))
+                with _held_private_input(target, directory=True):pass
+                require({p.name for p in target.iterdir()} <= set(initial))
+                for name, saved in initial.items():
+                    path = target/name
+                    if not renewal.namespace_entry_exists(path):selection._new_private(path, saved)
+                    elif renewal.read_private_bytes(path) == b'':
+                        renewal.write_empty_private_file(path, saved.decode())
+                    require(receipts.enter_context(renewal.hold_private_input(path)) == saved)
+                protected.enter_context(_held_private_input(target, directory=True))
+                require({p.name for p in target.iterdir()} == set(initial))
+                new_config = selection.decode(receipts.enter_context(renewal.hold_private_input(
+                    Path(marker['attempt_dir'])/'config.private.json')))
+                values, snapshots = selection._inputs(new_config, stack)
+                require(snapshots == selection.decode(initial['000001.intent.json'])['inputs'])
+                choice = records[len(records)]['choice']
+                require(selection._prove(new_config, choice, values, stack,
+                    expected_data=marker['data_after_sha256'], authority_file=authority_file) == marker['data_after_sha256'])
+                if DECISION in raw:require(raw[DECISION] == selection.packed(body))
+                else:selection._append(journal, raw, DECISION, body, stack)
+                require(protected.enter_context(renewal.hold_private_input(journal/DECISION)) == selection.packed(body))
+                protected.enter_context(_held_private_input(journal, directory=True))
+                names = set(raw)
+            require({p.name for p in journal.iterdir()} == names)
+            require({p.name for p in target.iterdir()} == set(initial))
+        require({p.name for p in journal.iterdir()} == names)
+        require({p.name for p in target.iterdir()} == set(initial))
+    require({p.name for p in journal.iterdir()} == names)
+    require({p.name for p in target.iterdir()} == set(initial))
+    require(all(renewal.read_private_bytes(journal/name) == saved for name, saved in originals.items()))
+    require(all(renewal.read_private_bytes(target/name) == saved for name, saved in initial.items()))
+    require(renewal.read_private_bytes(journal/DECISION) == selection.packed(body))
+    require(renewal.read_private_bytes(guard) == selection.packed(marker))
+    check_ancestry(earlier)
+    guard.unlink()
+    return {'schema': SCHEMA, 'project': marker['project'], 'result': 'product-selected',
+            'journal': str(target), 'generation_sequence': marker['generation_sequence'],
+            'credential_rotation': False, 'candidate_only': True}
