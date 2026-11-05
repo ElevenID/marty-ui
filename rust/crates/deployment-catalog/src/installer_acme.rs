@@ -218,7 +218,8 @@ pub fn status(state: &LockedInspection) -> Result<Value> {
     }
     Ok(
         json!({"schema":"elevenid.installer-acme-status/v1","installation_id":state.journal().installation_id(),
-        "configured":!environments.is_empty(),"environments":environments,"read_only":true,
+        "configured":!environments.is_empty(),"environments":environments,
+        "host_preparation":crate::installer_acme_host::preparation_status(state),"read_only":true,
         "activation_performed":false,"installation_ready":false,"automatic_renewal":false,
         "load_characterized":false,"functional_recovery_qualified":false}),
     )

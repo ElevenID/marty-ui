@@ -106,6 +106,77 @@ The setup evidence retains `activation_performed: false` and
 `installation_ready: false`. Partial setup is not treated as absent, and neither
 setup job is recreated automatically after an uncertain outcome.
 
+## Read-only preparation diagnosis
+
+Use the exact retained operator as the installation owner to inspect both host
+preparation and the enrollment ledger:
+
+```sh
+/absolute/installation/marty-deploy acme status \
+  --install-dir /absolute/installation
+```
+
+This command does not use Docker, log in to OpenBao, issue credentials, contact
+the CA, start a service, or change retained evidence. A zero command exit means
+the status report was produced; inspect its fields before judging installation
+health. The existing `configured` field still means that an enrollment ledger
+exists. It can be `false` after successful custody, credential and HTTP-01 jobs
+when the prepared host checkpoint has not passed its final readback.
+
+The additional `host_preparation` object reports that earlier boundary:
+
+| State | Meaning |
+| --- | --- |
+| `not_selected` | The saved hosting selection does not select ACME. |
+| `not_started` | ACME is selected, but none of the fixed host setup records is present. |
+| `incomplete` | Some setup evidence exists, but the complete prepared record is absent. |
+| `refused` | A retained host readback check failed; `check` identifies its fixed boundary. |
+| `prepared` | The immutable historical setup and provenance checks passed. |
+
+`host_preparation.initial_preparation` separately reports the pristine storage
+check needed before first application startup. Its `checked`, `matches` and
+`check` fields distinguish an unexamined initial gate from a pass or refusal.
+Application activity can legitimately change the original storage observations:
+historical preparation can remain `prepared` while this initial check reports
+`application_preparation`. Recurring maintenance uses its existing historical
+provenance and selected-generation authority; status does not choose or change
+that authority.
+
+Refusals from the instrumented ACME host admission boundaries append a fixed
+code, for example `check=prepared_decode` or `check=responder_receipt`. The same
+closed codes appear in status. These are examples of diagnostic boundaries, not
+conclusions about a particular retained installation. Private paths, parser
+details, credential values and backend error bodies are never included in these
+messages.
+
+| Code group | What to inspect privately |
+| --- | --- |
+| `prepared_read`, `prepared_decode`, `intent_read`, `intent_decode` | Exact retained record custody and typed JSON shape. Reading a JSON object in another language does not exercise native deserialization. |
+| `application_preparation`, `application_provenance`, `public_renewal` | Initial storage observations versus immutable setup provenance, and the retained renewal owner. |
+| `evidence_fingerprints`, `prior_receipt`, `responder_receipt` | Bound record bytes, cumulative receipt identity, and the native receipt encoding. |
+| `current_input_receipt`, `historical_input_receipt`, `input_custody` | Current input bindings, retention of earlier inputs, and their current file custody. |
+| `custody_job`, `credentials_job`, `resources`, `runtime_inputs` | Completed job proofs, retained resource identities, and the exact configured roots and listeners. |
+
+Receipt hashes bind the native bytes. This workspace enables
+`serde_json/preserve_order`; recursively sorting a parsed JSON object is not the
+native `ComposeReceipt` encoding. Semantic JSON equality and a different sorted
+hash alone do not establish corruption or a product serialization defect.
+
+Every report retains `runtime_observed: false`, `continuation_authorized: false`,
+`setup_replay_authorized: false`, `activation_performed: false` and
+`installation_ready: false`. It is a local retained-evidence observation, not a
+live Engine, OpenBao, certificate, application or release qualification. Preserve
+the first failure and the original records. A diagnostic code does not permit
+editing evidence, repeating a setup job, extending a trial or bypassing the
+existing continuation and signed-candidate gates.
+
+The 2026-11-04 AWS candidate exercise motivating this change reached successful
+ACME setup jobs and a retained prepared checkpoint, then returned the former
+generic host refusal before an enrollment ledger appeared. The exact native
+predicate remains unresolved. These diagnostics improve the next signed
+candidate investigation; they do not claim that the earlier deployment or its
+blocked demos have been repaired or qualified.
+
 ## Continuing a normal pending order
 
 Run the retained operator as the installation owner under no-new-privileges:
@@ -267,6 +338,38 @@ pre-activation path from running. The opt-in tests require a real
 nonroot process identity to exercise the rootless admission checks. They use
 synthetic native observations and real temporary certificate signatures to test
 the readers; they do not claim that Docker or a public CA was exercised.
+
+Diagnostic regressions also exercise native strict decoding and typed receipt
+roundtrips with the workspace's actual `preserve_order` feature, including a
+prepared record larger than 128 KiB. Small tests check fixed-code sanitization,
+pre-ledger status and unchanged evidence. The existing full prepared-boundary
+fixtures retain their ordinary-user requirement. Run those two opt-in cases
+explicitly as a nonroot user under no-new-privileges; a default test run that
+skips them is not evidence that their admission or mutation cases passed:
+
+```sh
+cargo test --locked -p marty-deployment-catalog --lib \
+  installer_acme_host::diagnostics::tests
+cargo test --locked -p marty-deployment-catalog --lib \
+  status_reports_preledger_host_progress_without_exposing_or_changing_evidence
+/usr/bin/setpriv --no-new-privs cargo test --locked -p marty-deployment-catalog --lib \
+  installer_acme_host::boundary_tests::complete_pending_boundary_reopens_and_rejects_rebound_inputs_proofs_and_native_jobs \
+  -- --ignored --exact --test-threads=1
+/usr/bin/setpriv --no-new-privs cargo test --locked -p marty-deployment-catalog --lib \
+  installer_acme_host::boundary_tests::recurring_setup_retains_provenance_without_reapplying_original_storage_observations \
+  -- --ignored --exact --test-threads=1
+```
+
+Run the commands from the `rust` workspace. They use synthetic temporary state
+and never contact AWS, Docker, OpenBao or a public CA. They do not replace the
+signed artifact and installed-runtime qualification gates.
+
+The normal PR CI contracts lane already invokes
+`scripts/ci/qualify-installer-recovery-fixtures.sh` for both opt-in cases. It uses
+the compiler-recorded default production library executable, enforces ordinary
+UID/GID, no-new-privileges and empty capability sets, and checks that every named
+case passed exactly once. No workflow or release gate needs to be relaxed for
+these diagnostics.
 
 The live qualification still needs the shipped images, actual external HTTP-01
 routing, a production certificate, keyless runtime activation, and the selected
