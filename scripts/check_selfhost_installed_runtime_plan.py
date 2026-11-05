@@ -73,7 +73,7 @@ EXPECTED_DEPENDENCIES = {
 EXPECTED_ROLE_SECRETS = {
     "applicant": {"marty_db_password", "grpc_service_token",
                   "notification_applicant_event_token", "flow_application_event_hmac_key",
-                  "workload_identity_ca_cert"},
+                  "workload_identity_ca_cert", "issuance_api_key"},
     "auth": {"marty_api_client_secret", "marty_db_password", "grpc_service_token",
              "auth_workload_client_cert", "openbao_tls_ca_cert", "auth_tls_kms_token",
              "auth_workload_server_cert", "auth_server_tls_kms_token",
