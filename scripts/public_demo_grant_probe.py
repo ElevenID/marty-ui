@@ -7,6 +7,7 @@ isolated OpenBao/Redis fixtures; no operator token or endpoint is discovered.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -25,20 +26,21 @@ ORIGINS = (
     "flow-demo-holder",
 )
 CASE = "verifier::tests::live_grant_verification_is_one_use_before_kms_signing"
+CUSTODY_CASE = "managed_demo_holder_es256_uses_scoped_remote_custody"
 
 
-def command(*, discovery=False):
+def command(*, discovery=False, custody=False):
     return [
         "cargo",
         "+1.95.0",
         "test",
         "-p",
-        "marty-signing-grant",
-        "--lib",
+        "marty-signing-keys" if custody else "marty-signing-grant",
+        *(["--test", "public_service_sign_live_kms"] if custody else ["--lib"]),
         "--locked",
         "--offline",
         "-j1",
-        CASE,
+        CUSTODY_CASE if custody else CASE,
         "--",
         "--ignored",
         "--exact",
@@ -46,10 +48,10 @@ def command(*, discovery=False):
     ]
 
 
-def discovered(result):
+def discovered(result, *, custody=False):
     return result.returncode == 0 and [
         line for line in result.stdout.splitlines() if line.endswith(": test")
-    ] == [f"{CASE}: test"]
+    ] == [f"{CUSTODY_CASE if custody else CASE}: test"]
 
 
 def require(condition, operation):
@@ -65,6 +67,82 @@ def native_succeeded(result):
             r"^test result: ok\. 1 passed; 0 failed;", result.stdout, re.MULTILINE
         )
     )
+
+
+def qualify_custody(call, root, token, minter, verifier):
+    """Exercise only remote Transit custody; service admission is separate."""
+    name = "demo-holder-disposable-custody"
+    path = f"transit/keys/{name}"
+    body = {"type": "ecdsa-p256"}
+    require(call("POST", path, token, body)[0] in (200, 204), "demo key creation")
+    status, public = call("GET", path, token)
+    data = public.get("data", {})
+    require(
+        status == 200
+        and data.get("type") == "ecdsa-p256"
+        and data.get("exportable") is False
+        and data.get("allow_plaintext_backup") is False
+        and "PUBLIC KEY" in data.get("keys", {}).get("1", {}).get("public_key", ""),
+        "non-exportable asymmetric public metadata",
+    )
+    payload = {
+        "input": base64.b64encode(
+            hashlib.sha256(b"synthetic-demo-holder-proof").digest()
+        ).decode(),
+        "prehashed": True,
+        "hash_algorithm": "sha2-256",
+    }
+    status, signed = call("POST", f"transit/sign/{name}", token, payload)
+    require(status == 200, "remote asymmetric demo signing")
+    signature = signed.get("data", {}).get("signature")
+    require(
+        isinstance(signature, str) and signature.startswith("vault:v1:"),
+        "remote signature",
+    )
+    for input_value, valid in (
+        (payload["input"], True),
+        (base64.b64encode(hashlib.sha256(b"altered").digest()).decode(), False),
+    ):
+        status, checked = call(
+            "POST",
+            f"transit/verify/{name}",
+            root,
+            {**payload, "input": input_value, "signature": signature},
+        )
+        require(
+            status == 200 and checked.get("data", {}).get("valid") is valid,
+            "real asymmetric signature and tamper rejection",
+        )
+    for method, denied_path, request in (
+        ("POST", f"{path}/config", {"exportable": True}),
+        ("POST", f"{path}/config", {"allow_plaintext_backup": True}),
+        ("POST", f"{path}/config", {"deletion_allowed": True}),
+        ("POST", f"{path}/import", {"ciphertext": "forbidden", "type": "ecdsa-p256"}),
+        ("GET", f"transit/export/signing-key/{name}", None),
+        ("GET", f"transit/backup/{name}", None),
+        ("DELETE", path, None),
+        ("POST", "transit/keys/demo-holder-wrong-algorithm", {"type": "ed25519"}),
+        ("POST", "transit/keys/cred-issuer-forbidden", body),
+        ("POST", "transit/sign/cred-issuer-forbidden", payload),
+        ("POST", "transit/sign/oid4vp-verifier-forbidden", payload),
+        ("POST", f"transit/sign/{name}", {"input": payload["input"]}),
+        ("POST", f"transit/sign/{name}", {**payload, "prehashed": False}),
+        ("POST", f"transit/sign/{name}", {**payload, "hash_algorithm": "sha2-512"}),
+        ("POST", "transit/hmac/marty-sign-grant-flow-demo-holder-v1/sha2-256", payload),
+        ("GET", "transit/keys/marty-sign-grant-flow-demo-holder-v1", None),
+        ("POST", f"transit/verify/{name}", {**payload, "signature": signature}),
+        ("POST", "auth/token/create", {"policies": ["root"]}),
+        ("POST", "sys/policies/acl/demo-holder-forbidden", {"policy": ""}),
+    ):
+        require(
+            call(method, denied_path, token, request)[0] == 403,
+            "custody authority isolation",
+        )
+    for other in (minter, verifier):
+        require(
+            call("POST", f"transit/sign/{name}", other, payload)[0] == 403,
+            "grant authority cannot sign holder proofs",
+        )
 
 
 def qualify(call, root, environment, *, runner=subprocess.run):
@@ -98,6 +176,10 @@ def qualify(call, root, environment, *, runner=subprocess.run):
             (INPUTS / "mint-flow-demo-holder.hcl").read_text(),
         ),
         ("sign-grant-verify", policy),
+        (
+            "signing-keys-demo-holder",
+            (INPUTS / "signing-keys-demo-holder.hcl").read_text(),
+        ),
     ):
         require(
             call("POST", f"sys/policies/acl/{name}", root, {"policy": body})[0]
@@ -139,8 +221,9 @@ def qualify(call, root, environment, *, runner=subprocess.run):
 
     minters = {origin: token(f"sign-grant-mint-{origin}") for origin in ORIGINS}
     verifier = token("sign-grant-verify")
+    custody = token("signing-keys-demo-holder")
     require(
-        len(set([root, verifier, *minters.values()])) == len(ORIGINS) + 2,
+        len(set([root, verifier, custody, *minters.values()])) == len(ORIGINS) + 3,
         "all fixture capabilities must be distinct",
     )
     payload = {"input": base64.b64encode(b"public-demo-grant-scope-probe").decode()}
@@ -214,28 +297,32 @@ def qualify(call, root, environment, *, runner=subprocess.run):
         MARTY_TEST_GRANT_MINT_TOKEN=minters["flow-demo-holder"],
         MARTY_TEST_GRANT_VERIFY_TOKEN=verifier,
     )
-    result = runner(
-        command(),
-        cwd=ROOT / "rust",
-        env=native_env,
-        capture_output=True,
-        text=True,
-        timeout=600,
-        check=False,
-    )
-    if not native_succeeded(result):
-        detail = result.stdout + result.stderr
-        for secret in (root, verifier, *minters.values()):
-            detail = detail.replace(secret, "[fixture-capability]")
-        raise RuntimeError(
-            f"Native demo grant/replay qualification failed:\n{detail[-2000:]}"
+    qualify_custody(call, root, custody, minters["flow-demo-holder"], verifier)
+    for custody_case in (False, True):
+        result = runner(
+            command(custody=custody_case),
+            cwd=ROOT / "rust",
+            env=dict(native_env, MARTY_TEST_OPENBAO_TOKEN=custody, BAO_TOKEN=custody),
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
         )
+        if not native_succeeded(result):
+            detail = result.stdout + result.stderr
+            for secret in (root, verifier, custody, *minters.values()):
+                detail = detail.replace(secret, "[fixture-capability]")
+            raise RuntimeError(f"Native demo qualification failed:\n{detail[-2000:]}")
     return {
-        "scope": "ISOLATED_REMOTE_DEMO_GRANT_AND_REPLAY",
+        "scope": "ISOLATED_REMOTE_DEMO_GRANT_REPLAY_AND_CUSTODY",
         "origins": len(ORIGINS),
         "nativePassed": 1,
         "nativeCase": CASE,
         "asymmetricHolderSigningQualified": False,
+        "remoteTransitCustodyQualified": True,
+        "nativeCustodyPassed": 1,
+        "nativeCustodyCase": CUSTODY_CASE,
+        "signingKeysServiceAdmissionQualified": False,
         "walletQualified": False,
         "deployedConfigurationChanged": False,
     }

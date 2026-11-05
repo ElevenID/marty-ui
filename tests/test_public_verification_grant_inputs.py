@@ -108,3 +108,31 @@ def test_unexpected_verifier_authority_is_preserved_before_any_write():
             {"MARTY_TEST_OPENBAO_ROOT_TOKEN": "synthetic-fixture-root"},
         )
     assert calls == [("GET", "sys/policies/acl/sign-grant-verify")]
+
+
+def test_missing_native_custody_case_refuses_before_docker(monkeypatch):
+    monkeypatch.setattr(
+        controller, "pull_pinned_openbao", lambda: pytest.fail("backend reached")
+    )
+    selections = []
+
+    def discovery(command, **kwargs):
+        selections.append(command)
+        stdout = f"{probe.CASE}: test\n" if probe.CASE in command else "0 tests\n"
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    with pytest.raises(RuntimeError, match="discovery before backend"):
+        controller.qualify(public_demo_grant=True, grant_runner=discovery)
+    assert len(selections) == 2
+    assert probe.CUSTODY_CASE in selections[1]
+    assert "public_service_sign_live_kms" in selections[1]
+
+
+def test_custody_case_discovery_is_independent_of_grant_case():
+    assert probe.discovered(
+        subprocess.CompletedProcess([], 0, f"{probe.CUSTODY_CASE}: test\n", ""),
+        custody=True,
+    )
+    assert not probe.discovered(
+        subprocess.CompletedProcess([], 0, f"{probe.CASE}: test\n", ""), custody=True
+    )

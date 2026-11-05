@@ -87,6 +87,17 @@ verification permission on
 minting permission. Keep existing origin authorities and token boundaries.
 The credential holder's asymmetric key is separate from this grant MAC key.
 Qualify these actual permissions and negative origin/purpose cases before use.
+Default `credential-service` and `signing-keys-managed` policies do not cover
+`demo-holder-*`. The optional `signing-keys-demo-holder.hcl` adds P256-only
+creation/public reads and prehashed SHA256 signing for that prefix. Attach it
+only to the Signing Keys custody workload, alongside its existing policies;
+Flow receives only the MAC mint policy. This is a workload prefix boundary;
+Signing Keys must still enforce organization, identity, purpose and grant
+admission. The custody policy permits neither export, import, backup, deletion,
+export configuration, grant minting nor signing other purpose prefixes. Keep
+the existing custody token unchanged until a compatible release and its complete
+service admission path have been qualified. This overlay does not replace or
+issue that token.
 
 The existing disposable probe has a selected local qualification mode:
 
@@ -94,14 +105,18 @@ The existing disposable probe has a selected local qualification mode:
 python scripts/probe_signing_keys_openbao_policy.py --public-demo-grant
 ```
 
-It first discovers the exact native test, then creates its own pinned,
+It first discovers both exact native tests, then creates its own pinned,
 loopback-only TLS OpenBao and marked Redis fixtures. It applies these policy
 inputs only there, checks all eight origins' MAC isolation and the demo token's
 provisioning/signing denials, and runs the native file-backed demo minter and
-one-use verifier race. It verifies removal of both owned container IDs. The
-regular `--grant-verifier` probe also includes this case. This qualifies grant
-authority and replay only; asymmetric holder signing, governance/profile
-readiness and real-wallet presentation still need separate qualification.
+one-use verifier race. It also creates a non-exportable asymmetric demo key
+using a distinct custody token, checks real signatures/tamper rejection and
+privilege denials, and executes the native pinned-version ES256 adapter with
+independent public-JWK verification. It verifies removal of both owned container
+IDs. The regular `--grant-verifier` probe also includes this case. These checks
+qualify remote custody, grant authority and replay. Complete Signing Keys/Flow
+service admission, governance/profile readiness and real-wallet presentation
+still need separate qualification.
 There is no endpoint/operator-secret option for pointing this probe at an
 existing deployment.
 
