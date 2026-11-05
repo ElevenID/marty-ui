@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import selfhost_windows_inputs as windows
@@ -44,6 +45,14 @@ def private_fixture():
 
 class AclPolicyTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "Non-Windows refusal")
+    def test_exact_byte_reader_has_no_posix_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input"
+            path.write_bytes(b"SYNTHETIC\r\n")
+            with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                windows.read_private_bytes(path)
+
+    @unittest.skipIf(os.name == "nt", "Non-Windows refusal")
     def test_private_initialization_is_not_a_posix_write_fallback(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "input"
@@ -79,6 +88,128 @@ class AclPolicyTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "Actual NTFS handle/ACL integration")
 class WindowsInputTests(unittest.TestCase):
+    def test_generation_holds_directory_and_files_until_the_action_finishes(self):
+        with private_fixture() as (root, path):
+            path = path.rename(root / "leaf")
+            path.write_bytes(PUBLIC.encode("utf-8"))
+            (root / "optional").write_bytes(b"")
+            with windows.hold_private_generation(root, ["leaf", "optional"]) as data:
+                self.assertEqual(data, {"leaf": PUBLIC.encode("utf-8"), "optional": b""})
+                self.assertEqual(path.read_bytes(), data["leaf"])
+                for operation in [lambda: path.write_bytes(b"replacement"), path.unlink,
+                                  lambda: root.rename(root.with_name(root.name + "-moved"))]:
+                    with self.assertRaises(OSError):
+                        operation()
+            # Closing the context releases both the file and directory handles.
+            path.write_bytes(b"AFTER\r\n")
+            self.assertEqual(windows.read_private_bytes(path), b"AFTER\r\n")
+
+    def test_generation_rejects_partial_names_and_releases_on_caller_failure(self):
+        with private_fixture() as (root, path):
+            path = path.rename(root / "leaf")
+            for names in [[], ["leaf", "leaf"], ["../leaf"], ["leaf:ads"], ["missing"],
+                          ["LEAF"], ["leaf"] * 513]:
+                with self.subTest(names=names[:2]), self.assertRaisesRegex(
+                        ValueError, windows.REFUSAL):
+                    with windows.hold_private_generation(root, names):
+                        self.fail("invalid generation accepted")
+            with self.assertRaisesRegex(RuntimeError, "SYNTHETIC_ACTION_FAILURE"):
+                with windows.hold_private_generation(root, ["leaf"]):
+                    raise RuntimeError("SYNTHETIC_ACTION_FAILURE")
+            path.write_bytes(PUBLIC.encode("utf-8"))
+            with windows.hold_private_generation(root, ["leaf"]) as data:
+                self.assertEqual(data["leaf"], PUBLIC.encode("utf-8"))
+
+    def test_generation_also_holds_ancestor_namespace_without_blocking_other_writes(self):
+        with private_fixture() as (root, path):
+            inner = root / "generation"
+            inner.mkdir()
+            path.rename(inner / "leaf")
+            moved = root.with_name(root.name + "-moved")
+            try:
+                with windows.hold_private_generation(inner, ["leaf"]):
+                    with self.assertRaises(OSError):
+                        root.rename(moved)
+                    # The non-generation ancestor remains usable by other work.
+                    (root / "unrelated").write_bytes(b"SYNTHETIC_UNRELATED")
+            finally:
+                if moved.exists():
+                    moved.rename(root)
+
+    def test_generation_detects_directory_membership_and_acl_changes_on_exit(self):
+        with private_fixture() as (root, path):
+            path = path.rename(root / "leaf")
+            path.write_bytes(PUBLIC.encode("utf-8"))
+            with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                with windows.hold_private_generation(root, ["leaf"]):
+                    (root / "unexpected").write_bytes(b"PUBLIC_SYNTHETIC")
+            (root / "unexpected").unlink()
+            quoted = str(path).replace("'", "''")
+            with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                with windows.hold_private_generation(root, ["leaf"]):
+                    powershell("$p='"+quoted+"';$a=Get-Acl -LiteralPath $p;"
+                               "$s=[Security.Principal.SecurityIdentifier]::new('S-1-5-32-545');"
+                               "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new("
+                               "$s,'Read','Allow'));[IO.File]::SetAccessControl($p,$a)")
+            self.assertEqual(path.read_bytes(), PUBLIC.encode("utf-8"))
+
+    def test_generation_rechecks_membership_even_when_the_caller_raises(self):
+        with private_fixture() as (root, path):
+            path.rename(root / "leaf")
+            visits = []
+            original = Path.iterdir
+            def observed(directory):
+                if directory == root:
+                    visits.append(directory)
+                return original(directory)
+            with patch.object(Path, "iterdir", observed):
+                with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                    with windows.hold_private_generation(root, ["leaf"]):
+                        (root / "unexpected").write_bytes(b"SYNTHETIC")
+                        raise RuntimeError("SYNTHETIC_ACTION_FAILURE")
+            self.assertEqual(len(visits), 2)
+            # Failure closes all handles while preserving unexpected data.
+            self.assertTrue((root / "unexpected").exists())
+            (root / "leaf").write_bytes(b"AFTER_FAILURE")
+
+    def test_byte_reader_preserves_line_endings_binary_empty_and_maximum(self):
+        with private_fixture() as (_, path):
+            for payload in [b"SYNTHETIC\r\nNEXT\rLAST\n", b"\xff\0", b"",
+                            b"x" * windows.MAX_BYTES]:
+                with self.subTest(size=len(payload)):
+                    path.write_bytes(payload)
+                    self.assertEqual(windows.read_private_bytes(path), payload)
+            path.write_bytes(b"SYNTHETIC\r\nNEXT\rLAST\n")
+            self.assertEqual(private_file(path), "SYNTHETIC\nNEXT\nLAST\n")
+            path.write_bytes(b"\xff")
+            with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                private_file(path)
+
+    def test_byte_reader_retains_privacy_bounds_and_handle_sharing_guards(self):
+        with private_fixture() as (root, path):
+            with path.open("r+b"):
+                with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                    windows.read_private_bytes(path)
+            linked = root / "linked-input"
+            os.link(path, linked)
+            try:
+                with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                    windows.read_private_bytes(path)
+            finally:
+                linked.unlink()
+            path.write_bytes(b"x" * (windows.MAX_BYTES + 1))
+            with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                windows.read_private_bytes(path)
+            path.write_bytes(PUBLIC.encode("utf-8"))
+            quoted = str(path).replace("'", "''")
+            powershell("$p='"+quoted+"';$a=Get-Acl -LiteralPath $p;"
+                       "$s=[Security.Principal.SecurityIdentifier]::new('S-1-5-32-545');"
+                       "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new("
+                       "$s,'Read','Allow'));[IO.File]::SetAccessControl($p,$a)")
+            with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                windows.read_private_bytes(path)
+            self.assertEqual(path.read_bytes(), PUBLIC.encode("utf-8"))
+
     def test_empty_private_file_initialization_preserves_utf8_and_refuses_overwrite(self):
         with private_fixture() as (_, path):
             path.write_bytes(b"")
