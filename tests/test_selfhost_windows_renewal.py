@@ -137,13 +137,15 @@ def test_legacy_volume_name_source_uses_inspected_local_identity():
 
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Windows path flavor')
 def test_secret_mount_comparison_accepts_only_exact_windows_path_spellings():
-    expected = 'C:\\Marty\\private\\generation\\token'
-    for actual in ['c:/marty/private/generation/token', '/run/desktop/mnt/host/c/Marty/private/generation/token',
-                   '/host_mnt/c/Marty/private/generation/token']:
-        assert renewal.windows_mount_path_equal(actual, expected)
-    for actual in ['C:/Marty/private/other/token', 'C:/Marty/private/generation/../other/token',
-                   '/var/lib/docker/volumes/opaque/_data/token', 'relative/token', None]:
-        assert not renewal.windows_mount_path_equal(actual, expected)
+    from test_selfhost_windows_inputs import private_fixture
+    with private_fixture() as (_, path):
+        expected = str(path);suffix = path.as_posix()[3:]
+        for actual in [path.as_posix(), path.as_posix().replace('C:', 'c:'),
+                       '/run/desktop/mnt/host/c/'+suffix, '/host_mnt/c/'+suffix]:
+            assert renewal.windows_mount_path_equal(actual, expected)
+        for actual in [str(path.with_name('other')), 'C:/Marty/private/generation/../other/token',
+                       '/var/lib/docker/volumes/opaque/_data/token', 'relative/token', None]:
+            assert not renewal.windows_mount_path_equal(actual, expected)
 
 
 def kernel_fixture():

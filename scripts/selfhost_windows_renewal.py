@@ -157,8 +157,19 @@ def windows_mount_path_equal(actual, expected):
     """
     try:
         a, b = windows_source(actual), windows_source(expected)
-        return a is not None and b is not None and a == b
-    except (ValueError, TypeError):
+        if a is None or b is None or a != b:
+            return False
+        if str(a) == str(b):
+            return True
+        # NTFS directories can opt into case sensitivity. A differently cased
+        # spelling therefore needs object identity, not just PureWindowsPath's
+        # case-insensitive equality; never follow a reparse alias to get it.
+        for path in [a, *a.parents]:
+            if path.lstat().st_file_attributes & 0x400:
+                return False
+        left, right = a.lstat(), b.lstat()
+        return left.st_ino != 0 and (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+    except (OSError, ValueError, TypeError):
         return False
 
 
