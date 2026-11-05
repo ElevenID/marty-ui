@@ -430,12 +430,23 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             run("docker", "network", "create", network)
             created_network = True
             run("docker", "run", "-d", "--name", pg_name,
+                "--label", "marty.test=keycloak-passkeys",
                 "--network", network, "--network-alias", "postgres",
+                "--memory", "768m", "--cpus", "2",
+                # Override the image's VOLUME. Removing a container alone would
+                # otherwise leave its synthetic database in an anonymous volume.
+                "--tmpfs", "/var/lib/postgresql/data:rw,nosuid,nodev,size=512m",
                 "-e", "POSTGRES_USER=keycloak",
                 "-e", "POSTGRES_PASSWORD=synthetic-probe-only",
                 "-e", "POSTGRES_DB=keycloak",
                 "postgres:15-alpine")
             started_pg = True
+            pg_state = json.loads(run("docker", "inspect", pg_name))[0]
+            if ("/var/lib/postgresql/data" not in pg_state["HostConfig"].get("Tmpfs", {}) or
+                    any(mount["Type"] == "volume" for mount in pg_state["Mounts"]) or
+                    run("docker", "exec", pg_name, "stat", "-f", "-c", "%T",
+                        "/var/lib/postgresql/data") != "tmpfs"):
+                raise RuntimeError("Disposable PostgreSQL storage must be temporary")
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 ready = subprocess.run(["docker", "exec", pg_name, "pg_isready",
@@ -1082,9 +1093,9 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             if started_kc:
                 subprocess.run(["docker", "rm", "-f", kc_name], capture_output=True)
             if started_bao:
-                subprocess.run(["docker", "rm", "-f", bao_name], capture_output=True)
+                subprocess.run(["docker", "rm", "-f", "-v", bao_name], capture_output=True)
             if started_pg:
-                subprocess.run(["docker", "rm", "-f", pg_name], capture_output=True)
+                subprocess.run(["docker", "rm", "-f", "-v", pg_name], capture_output=True)
             if created_network:
                 subprocess.run(["docker", "network", "rm", network], capture_output=True)
 
