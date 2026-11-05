@@ -119,7 +119,8 @@ function Invoke-DockerRead([string[]]$Arguments) {
     finally { $process.Dispose() }
 }
 
-function Assert-ComposeInputs([string[]]$Arguments, [string[]]$RequiredServices = @()) {
+function Assert-ComposeInputs([string[]]$Arguments, [string[]]$RequiredServices = @(),
+                              [switch]$RejectTlsInitializationReplay) {
     # Never print rendered configuration: it can contain interpolated secrets.
     for ($i = 0; $i -lt $Arguments.Count; $i += 2) {
         if ($Arguments[$i] -in @('-f', '--env-file', '--project-directory')) {
@@ -131,12 +132,16 @@ function Assert-ComposeInputs([string[]]$Arguments, [string[]]$RequiredServices 
     }
     $result = Invoke-DockerRead (@('compose') + $Arguments + @('config', '--quiet'))
     if ($result.Code -ne 0) { throw 'Recovery Compose preflight failed; no services were changed.' }
-    if ($RequiredServices.Count) {
+    if ($RequiredServices.Count -or $RejectTlsInitializationReplay) {
         $result = Invoke-DockerRead (@('compose') + $Arguments + @('config', '--services'))
         $services = @($result.Output -split '\r?\n')
-        if ($result.Code -ne 0 -or 'openbao-bootstrap' -in $services -or
-            @($RequiredServices | Where-Object { $_ -notin $services }).Count) {
+        if ($result.Code -ne 0) { throw 'Recovery service inventory failed; no services were changed.' }
+        if ($RequiredServices.Count -and ('openbao-bootstrap' -in $services -or
+            @($RequiredServices | Where-Object { $_ -notin $services }).Count)) {
             throw 'OpenBao recovery requires the persistent unseal service and an inactive bootstrap profile; no services were changed.'
+        }
+        if ($RejectTlsInitializationReplay -and 'openbao-tls-init' -in $services) {
+            throw 'Managed OpenBao recovery requires the selected-generation owner; the completed TLS initializer must not be replayed. No services were changed.'
         }
     }
 }
@@ -220,8 +225,8 @@ try {
             $OpenbaoContainer = "$($WebsiteHost.openbao_project)-openbao-1"
             $OpenbaoUnsealContainer = "$($WebsiteHost.openbao_project)-openbao-unseal-1"
         }
-        Assert-ComposeInputs $ProductionComposeArgs
-        Assert-ComposeInputs $OpenbaoComposeArgs @('openbao', 'openbao-unseal')
+        Assert-ComposeInputs $ProductionComposeArgs -RejectTlsInitializationReplay
+        Assert-ComposeInputs $OpenbaoComposeArgs @('openbao', 'openbao-unseal') -RejectTlsInitializationReplay
         if ($RecoverBeta) {
             Assert-ComposeInputs @('--env-file', $BetaEnv, '-f', $BetaCompose[0], '-f', $BetaCompose[1], '-f', $BetaCompose[2])
         }

@@ -148,3 +148,10 @@ library starts no services and installs no task. PowerShell startup integration,
 producer scheduling, expired-credential recovery and engine/logon/host-reboot
 qualification remain required before unattended operation. Process-interruption
 controls do not claim power-loss durability qualification.
+
+The legacy Windows recovery wrapper refuses a default-active `openbao-tls-init`
+in either its product or OpenBao Compose inventory before any service mutation,
+including in check-only mode. Combined `up` and dependency traversal can replay
+that completed job. A retained managed candidate therefore needs the selected-
+generation recovery integration; passing paths to the legacy wrapper is unsafe.
+Existing standalone shapes without that initializer retain their recovery path.
