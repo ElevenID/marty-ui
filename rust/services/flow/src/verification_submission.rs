@@ -217,7 +217,9 @@ pub async fn prepare_verification_submission(
     let oid4vp_transport =
         evaluation_transport(context, presentation_submission.as_ref(), &raw_vp_token)?;
     if context.contains_key(crate::public_verification_session::PUBLIC_SESSION)
-        && oid4vp_transport.is_none()
+        && oid4vp_transport
+            .as_ref()
+            .is_none_or(|transport| transport.query_kind != QueryKind::Dcql)
     {
         return Err(FlowVerificationSubmissionError::InvalidContext(
             "public_verification_query_binding",

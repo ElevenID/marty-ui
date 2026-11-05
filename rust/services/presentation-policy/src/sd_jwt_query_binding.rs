@@ -36,6 +36,10 @@ pub(crate) fn bind_sd_jwt_query(
             || request.audience.as_deref() != Some(transport.verifier_client_id.as_str())
             || transport.presentation_submission.is_some()
             || format != DetectedCredentialFormat::SdJwt
+            || !evidence.presentation_verified
+            || !evidence.holder_binding_verified
+            || !evidence.challenge_verified
+            || !evidence.audience_verified
         {
             return None;
         }

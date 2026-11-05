@@ -237,6 +237,7 @@ enum Mutation {
     WrongQueryId,
     MultipleTokens,
     ExtraQueryId,
+    Unbound,
 }
 async fn run_actual_case(
     specimen: &str,
@@ -245,7 +246,22 @@ async fn run_actual_case(
     not_revoked: bool,
     mutation: Mutation,
 ) -> crate::PreparedVerificationSubmission {
-    let owner = Arc::new(ActualPolicy::new(claim, trusted, not_revoked));
+    let mut owner = ActualPolicy::new(claim, trusted, not_revoked);
+    if matches!(mutation, Mutation::Unbound) {
+        owner.policy.presentation_proof_required = false;
+        owner.policy.holder_binding.required = false;
+        owner
+            .policy
+            .holder_binding
+            .proof_freshness
+            .insert("challenge_required".into(), false);
+        owner
+            .policy
+            .holder_binding
+            .proof_freshness
+            .insert("audience_binding_required".into(), false);
+    }
+    let owner = Arc::new(owner);
     let (providers, instance, holder, profile, _) =
         setup_with_policy(Arc::new(OpaqueSigner::new()), Some(owner)).await;
     let crate::PreparedVerificationRequest::Ready(ready) = crate::prepare_verification_request(
@@ -259,7 +275,9 @@ async fn run_actual_case(
     .unwrap() else {
         panic!("request expired")
     };
-    let presentation = if matches!(mutation, Mutation::WrongVct | Mutation::WrongFormat) {
+    let presentation = if matches!(mutation, Mutation::Unbound) {
+        specimen.to_owned()
+    } else if matches!(mutation, Mutation::WrongVct | Mutation::WrongFormat) {
         // Model an independent wallet: it can present a valid issuer-signed
         // credential that differs from the requested type. Do not route this
         // through the example producer's extra profile checks.
@@ -311,7 +329,7 @@ async fn run_actual_case(
         crate::public_verification_example::example_submission(&ready.instance, presentation)
             .unwrap();
     match mutation {
-        Mutation::None | Mutation::WrongVct | Mutation::WrongFormat => {}
+        Mutation::None | Mutation::WrongVct | Mutation::WrongFormat | Mutation::Unbound => {}
         Mutation::WrongQueryId | Mutation::ExtraQueryId | Mutation::MultipleTokens => {
             let mut wire: serde_json::Value = serde_json::from_str(&input.vp_token).unwrap();
             let response = wire.as_object_mut().unwrap();
@@ -379,6 +397,7 @@ async fn independent_wallet_type_format_query_and_token_mismatches_cannot_satisf
         Mutation::WrongQueryId,
         Mutation::MultipleTokens,
         Mutation::ExtraQueryId,
+        Mutation::Unbound,
     ] {
         let result =
             run_actual_case(&credential(ISSUER, 7), "age_over_18", true, true, mutation).await;
@@ -397,10 +416,27 @@ async fn independent_wallet_type_format_query_and_token_mismatches_cannot_satisf
 }
 
 #[tokio::test]
-async fn public_submission_cannot_fall_back_when_the_stored_query_transport_is_missing() {
+async fn public_submission_cannot_fall_back_to_missing_or_legacy_query_transport() {
     let (providers, instance, _, _, _) =
         setup_with_policy(Arc::new(OpaqueSigner::new()), None).await;
-    let crate::PreparedVerificationRequest::Ready(mut ready) = crate::prepare_verification_request(
+    let legacy_request = crate::prepare_verification_request(
+        &providers,
+        instance.clone(),
+        "https://demo.example",
+        &crate::VerificationRequestRetrievalOptions {
+            compatibility: crate::RequestObjectCompatibility::Lissi,
+            ..Default::default()
+        },
+        Utc::now(),
+    )
+    .await;
+    assert!(matches!(
+        legacy_request,
+        Err(crate::FlowVerificationRequestError::RequestObject(
+            crate::FlowRequestObjectError::UnsupportedProfile(_)
+        ))
+    ));
+    let crate::PreparedVerificationRequest::Ready(ready) = crate::prepare_verification_request(
         &providers,
         instance,
         "https://demo.example",
@@ -415,38 +451,52 @@ async fn public_submission_cannot_fall_back_when_the_stored_query_transport_is_m
         .as_str()
         .unwrap_or(&ready.instance.id)
         .to_owned();
-    ready
-        .instance
-        .context
-        .as_object_mut()
+    let definition = crate::build_flow_presentation_request(&providers, POLICY_ID, ORG)
+        .await
         .unwrap()
-        .remove("mip_messages");
-    let result = crate::prepare_verification_submission(
-        &providers,
-        ready.instance,
-        crate::VerificationSubmissionInput {
-            vp_token: "unverified-input".into(),
-            presentation_submission: None,
-            state: Some(state),
-            audience_override: None,
-        },
-        &crate::VerificationSubmissionOptions {
-            callback_destinations: Default::default(),
-            callback_secret: None,
-            verifier_sender_id: "did:web:demo.example:verifier".into(),
-            nonce_ttl_seconds: 900,
-            callback_retention_seconds: 3600,
-            callback_max_attempts: 3,
-        },
-        Utc::now(),
-    )
-    .await;
-    assert!(matches!(
-        result,
-        Err(crate::FlowVerificationSubmissionError::InvalidContext(
-            "public_verification_query_binding"
-        ))
-    ));
+        .presentation_definition;
+    for legacy in [false, true] {
+        let mut instance = ready.instance.clone();
+        if legacy {
+            let payload = instance.context["mip_messages"]["presentation_request"]["payload"]
+                .as_object_mut()
+                .unwrap();
+            payload.remove("dcql_query");
+            payload.insert("presentation_definition".into(), definition.clone());
+        } else {
+            instance
+                .context
+                .as_object_mut()
+                .unwrap()
+                .remove("mip_messages");
+        }
+        let result = crate::prepare_verification_submission(
+            &providers,
+            instance,
+            crate::VerificationSubmissionInput {
+                vp_token: "unverified-input".into(),
+                presentation_submission: None,
+                state: Some(state.clone()),
+                audience_override: None,
+            },
+            &crate::VerificationSubmissionOptions {
+                callback_destinations: Default::default(),
+                callback_secret: None,
+                verifier_sender_id: "did:web:demo.example:verifier".into(),
+                nonce_ttl_seconds: 900,
+                callback_retention_seconds: 3600,
+                callback_max_attempts: 3,
+            },
+            Utc::now(),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::FlowVerificationSubmissionError::InvalidContext(
+                "public_verification_query_binding"
+            ))
+        ));
+    }
 }
 
 #[tokio::test]

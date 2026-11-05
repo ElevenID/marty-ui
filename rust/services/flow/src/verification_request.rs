@@ -99,6 +99,14 @@ pub async fn prepare_verification_request(
         .context
         .as_object()
         .ok_or(FlowVerificationRequestError::InvalidContext)?;
+    if context.contains_key(crate::public_verification_session::PUBLIC_SESSION)
+        && options.compatibility != RequestObjectCompatibility::Standard
+    {
+        return Err(FlowRequestObjectError::UnsupportedProfile(
+            "Public verification requires standard OID4VP/DCQL",
+        )
+        .into());
+    }
     if context.get("request_transport").and_then(Value::as_str) == Some("url_query") {
         return Err(FlowVerificationRequestError::UnsignedTransport);
     }
