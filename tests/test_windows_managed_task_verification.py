@@ -20,14 +20,22 @@ def invoke(tmp_path, case):
     verifier = scripts/'verify-marty-boot-recovery.ps1'
     shutil.copyfile(legacy.ROOT/'scripts/verify-marty-boot-recovery.ps1', verifier)
     config = tmp_path/"operator's configuration.json";config.write_text('{}')
-    python = tmp_path/"operator's interpreter.exe";python.touch()
+    python = Path(sys.executable)
     child = tmp_path/'preflight.json';started = tmp_path/'started.json'
     (scripts/'recover-marty-after-reboot.ps1').write_text(
         'param([string]$RecoveryConfigurationFile,[string]$ManagedPython,[switch]$CheckOnly,'
         '[switch]$RenewCredentials,[string]$LogicalTlsProject)\n'
         '@{check=[bool]$CheckOnly;configuration=$RecoveryConfigurationFile;python=$ManagedPython;'
         'renew=[bool]$RenewCredentials;logical=$LogicalTlsProject} | ConvertTo-Json | Set-Content '+legacy.quote(child)+
+        ('\nStart-Sleep -Seconds 4\n' if case == 'preflight-timeout' else '')+
         '\nexit '+('1' if case == 'preflight-failure' else '0')+'\n')
+    # Record the owned transport boundary; its actual Win32 job/descendant
+    # semantics have separate tests. The child here is only our harmless stub.
+    (scripts/'selfhost_windows_renewal.py').write_text(
+        'import subprocess,json\nfrom pathlib import Path\n'
+        'def run_owned_mutation(args,timeout):\n'
+        ' Path('+repr(str(tmp_path/'owned.json'))+').write_text(json.dumps({"args":args,"timeout":timeout}))\n'
+        ' return subprocess.run(args,timeout=timeout,capture_output=True)\n')
     code = r'''
 $ErrorActionPreference='Stop'
 $global:started=$false
@@ -78,6 +86,7 @@ function Get-ScheduledTask {
 function Get-ScheduledTaskInfo {
  param($TaskName,$TaskPath)
  if ($TaskName -ne 'Marty-Candidate-Qualification' -or $TaskPath -ne '\') {throw 'Foreign task info forbidden'}
+ if ($global:started -and 'CASE' -eq 'late-success') {Start-Sleep -Milliseconds 1200}
  $time=[datetime]'2020-01-01T00:00:00Z'
  if ($global:started -and 'CASE' -ne 'never-ran') {$time=$time.AddDays(1)}
  return [pscustomobject]@{LastRunTime=$time;LastTaskResult=$(if ('CASE' -eq 'failed-task') {1} else {0})}
@@ -92,7 +101,7 @@ function Start-ScheduledTask {
 function Stop-ScheduledTask {throw 'Stop forbidden'}
 function Unregister-ScheduledTask {throw 'Delete forbidden'}
 function Set-ScheduledTask {throw 'Update forbidden'}
-& VERIFIER -TaskName 'Marty-Candidate-Qualification' -RecoveryConfigurationFile CONFIG -ManagedPython PYTHON -TimeoutSeconds 1 OPTIONS
+& VERIFIER -TaskName 'Marty-Candidate-Qualification' -RecoveryConfigurationFile CONFIG -ManagedPython PYTHON -TimeoutSeconds 1 -PreflightTimeoutSeconds PREFLIGHT OPTIONS
 '''
     options = '-CheckOnly' if case in {'check', 'renew-check'} else ''
     if case.startswith('renew'):
@@ -100,6 +109,7 @@ function Set-ScheduledTask {throw 'Update forbidden'}
     for key, value in {'CASE': case, 'SCRIPTS': legacy.quote(scripts), 'ROOT': legacy.quote(tmp_path),
                        'CONFIG': legacy.quote(config), 'PYTHON': legacy.quote(python),
                        'STARTED': legacy.quote(started), 'VERIFIER': legacy.quote(verifier),
+                       'PREFLIGHT': '1' if case == 'preflight-timeout' else '3',
                        'OPTIONS': options}.items():code = code.replace(key, value)
     result = subprocess.run([legacy.POWERSHELL, '-NoProfile', '-NonInteractive', '-EncodedCommand',
         base64.b64encode(code.encode('utf-16le')).decode()], capture_output=True, text=True, timeout=15)
@@ -117,7 +127,10 @@ def test_exact_managed_task_check_or_one_bounded_run(tmp_path, case):
     run = case.endswith('run')
     assert started.exists() == run
     assert report['definition_verified'] and report['configuration_verified']
-    assert report['task_started'] == report['task_completed'] == run
+    assert report['task_start_requested'] == report['fresh_task_completion_observed'] == run
+    assert not report['requested_run_attribution_verified']
+    owned = json.loads((tmp_path/'owned.json').read_text())
+    assert owned['timeout'] == 3 and '-CheckOnly' in owned['args']
     assert not report['operator_logon_qualified'] and not report['periodic_trigger_qualified']
     assert not report['host_reboot_qualified'] and not report['production_admission']
 
@@ -125,14 +138,15 @@ def test_exact_managed_task_check_or_one_bounded_run(tmp_path, case):
 @pytest.mark.parametrize('case', ['wrong-user', 'highest', 'wrong-logon', 'wrong-folder',
     'wrong-action', 'wrong-launcher', 'wrong-cwd', 'extra-action', 'extra-trigger',
     'wrong-trigger-user', 'wrong-trigger-type', 'busy', 'disabled', 'parallel',
-    'renew-retries', 'renew-duration', 'renew-interval', 'inventory-failure', 'missing', 'preflight-failure'])
+    'renew-retries', 'renew-duration', 'renew-interval', 'inventory-failure', 'missing', 'preflight-failure',
+    'preflight-timeout'])
 def test_unqualified_task_never_starts(tmp_path, case):
     result, _child, started = invoke(tmp_path, case)
     assert result.returncode != 0 and not started.exists()
 
 
-@pytest.mark.parametrize('case', ['never-ran', 'never-finished', 'failed-task'])
+@pytest.mark.parametrize('case', ['never-ran', 'never-finished', 'failed-task', 'late-success'])
 def test_unknown_or_failed_task_outcome_never_reports_success_or_replays(tmp_path, case):
     result, child, started = invoke(tmp_path, case)
     assert result.returncode != 0 and child.exists() and started.exists()
-    assert '"task_completed":  true' not in result.stdout
+    assert '"fresh_task_completion_observed":  true' not in result.stdout

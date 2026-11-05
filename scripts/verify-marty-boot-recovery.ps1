@@ -8,6 +8,7 @@ param(
     [int]$RenewalIntervalMinutes = 0,
     [switch]$CheckOnly,
     [int]$TimeoutSeconds = 3600,
+    [int]$PreflightTimeoutSeconds = 300,
     [string]$StatusFile
 )
 $ErrorActionPreference = 'Stop'
@@ -16,7 +17,8 @@ if ($ManagedPython) {
     # Managed tasks belong to the interactive Docker Desktop operator. Verify
     # the complete saved invocation before starting exactly this separate task.
     if ($TaskName -eq 'Marty-Recovery-At-Boot' -or $TaskName -notmatch '\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\z' -or
-        $TimeoutSeconds -lt 1 -or $TimeoutSeconds -gt 3600) {
+        $TimeoutSeconds -lt 1 -or $TimeoutSeconds -gt 3600 -or
+        $PreflightTimeoutSeconds -lt 1 -or $PreflightTimeoutSeconds -gt 600) {
         throw 'Use a separate managed task name and a bounded observation timeout.'
     }
     foreach ($file in @($RecoveryConfigurationFile, $ManagedPython)) {
@@ -81,32 +83,44 @@ if ($ManagedPython) {
     $arguments = @('-NoProfile', '-NonInteractive', '-File', $recoveryScript,
         '-RecoveryConfigurationFile', $RecoveryConfigurationFile, '-ManagedPython', $ManagedPython, '-CheckOnly')
     if ($RenewCredentials) { $arguments += @('-RenewCredentials', '-LogicalTlsProject', $LogicalTlsProject) }
-    & $powerShellPath @arguments *> $null
+    # Reuse the existing kill-on-close Win32 job, bounded pipe drains and owned
+    # process cleanup. Never leave an unobserved preflight descendant running.
+    $ownedPreflight = 'import sys;sys.path.insert(0,sys.argv[1]);from selfhost_windows_renewal import run_owned_mutation;r=run_owned_mutation(sys.argv[3:],timeout=int(sys.argv[2]));sys.exit(r.returncode)'
+    & $ManagedPython '-c' $ownedPreflight $PSScriptRoot ([string]$PreflightTimeoutSeconds) $powerShellPath @arguments *> $null
     if ($LASTEXITCODE -ne 0) { throw 'Read-only runtime preflight failed; no task was started.' }
     $result = [ordered]@{ verified_at = (Get-Date).ToUniversalTime().ToString('o'); task_name = $TaskName
-        definition_verified = $true; configuration_verified = $true; task_started = $false
-        task_completed = $false; operator_logon_qualified = $false; periodic_trigger_qualified = $false
+        definition_verified = $true; configuration_verified = $true; task_start_requested = $false
+        fresh_task_completion_observed = $false; requested_run_attribution_verified = $false
+        operator_logon_qualified = $false; periodic_trigger_qualified = $false
         host_reboot_qualified = $false; production_admission = $false }
     if (-not $CheckOnly) {
         $before = Get-ScheduledTaskInfo -TaskName $TaskName -TaskPath '\' -ErrorAction Stop
         $task = Get-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction Stop
         Assert-ManagedTask $task
         if ([string]$task.State -ne 'Ready') { throw 'The task became active; no task was started.' }
+        # This is an acceptance budget, measured monotonically. Local task API
+        # calls can return late; no late observation is accepted as success.
+        $timer = [Diagnostics.Stopwatch]::StartNew()
         Start-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction Stop
-        $result.task_started = $true
-        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        $result.task_start_requested = $true
         do {
             Start-Sleep -Milliseconds 250
             $task = Get-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction Stop
             $info = Get-ScheduledTaskInfo -TaskName $TaskName -TaskPath '\' -ErrorAction Stop
             Assert-ManagedTask $task
+            if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+                throw 'Task observation budget expired; preserve its records and do not replay or stop it.'
+            }
             if ($info.LastRunTime -gt $before.LastRunTime -and [string]$task.State -ne 'Running') { break }
-        } while ((Get-Date) -lt $deadline)
+        } while ($timer.Elapsed.TotalSeconds -lt $TimeoutSeconds)
         if ($info.LastRunTime -le $before.LastRunTime -or [string]$task.State -ne 'Ready') {
             throw 'Task completion is unproven; preserve its records and do not replay or stop it.'
         }
         if ($info.LastTaskResult -ne 0) { throw 'The managed task failed; preserve its recovery records.' }
-        $result.task_completed = $true
+        if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) { throw 'Late task completion cannot qualify.' }
+        # IgnoreNew may race another trigger: a fresh successful execution is
+        # proven, but it cannot be attributed uniquely to this start request.
+        $result.fresh_task_completion_observed = $true
         $result.last_run_time = $info.LastRunTime.ToUniversalTime().ToString('o')
         $result.last_task_result = $info.LastTaskResult
     }
