@@ -54,6 +54,13 @@ def test_dependency_layers_put_migration_before_each_consumer_once(tmp_path):
         ['postgres'], ['db-migrate'], ['gateway']]
 
 
+def test_selected_layers_preserve_order_through_an_unchanged_role(tmp_path):
+    m = model(tmp_path);roles = {x['Service'] for x in states(m)}
+    m['services']['gateway']['depends_on'] = {'signing-keys': {'condition': 'service_healthy'}}
+    m['services']['signing-keys']['depends_on'] = {'postgres': {'condition': 'service_healthy'}}
+    assert renewal.dependency_layers(m, roles, {'gateway', 'postgres'}) == [['postgres'], ['gateway']]
+
+
 @pytest.mark.parametrize('bad', ['cycle', 'external', 'condition', 'required', 'restart', 'restart-cascade', 'unhealthy', 'not-job'])
 def test_dependency_graph_refuses_invalid_normalized_edges_before_mutation(tmp_path, bad):
     m = model(tmp_path);roles = {x['Service'] for x in states(m)}
@@ -90,6 +97,30 @@ def test_layered_recreation_never_replays_completed_job_and_records_each_boundar
         assert calls == [['db-migrate'], ['gateway']]
         assert events == [('started', 0, ['db-migrate']), ('completed', 0, ['db-migrate']),
                           ('started', 1, ['gateway']), ('completed', 1, ['gateway'])]
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Actual NTFS bounded phase diagnostic')
+@pytest.mark.parametrize('late', ['status', 'receipt'])
+def test_late_readiness_or_receipt_cannot_complete_the_phase(monkeypatch, late):
+    import subprocess
+
+    from test_selfhost_windows_inputs import private_fixture
+    with private_fixture() as (root, path):
+        path.write_bytes(b'');m = model(root);rows = states(m);roles = {x['Service'] for x in rows}
+        clock = {'now': 0};events = []
+        monkeypatch.setattr(renewal.time, 'monotonic', lambda: clock['now'])
+        monkeypatch.setattr(renewal, 'run_owned_mutation', lambda *_a, **_k:
+                            subprocess.CompletedProcess([], 0, b'PUBLIC_SYNTHETIC', b''))
+        def status(*_a, **_k):
+            if late == 'status':clock['now'] = 601
+            return rows
+        def progress(event, *_):
+            events.append(event)
+            if late == 'receipt' and event == 'completed':clock['now'] = 601
+        monkeypatch.setattr(renewal, 'statuses', status)
+        with pytest.raises(ValueError, match='deadline'):
+            renewal.recreate(None, ['SYNTHETIC_COMPOSE'], {'gateway'}, roles, m, path, progress=progress)
+        assert events == (['started'] if late == 'status' else ['started', 'completed'])
     for role in renewal.INITIALIZERS:
         with pytest.raises(ValueError):
             renewal.owned_roles(m, roles | {role})

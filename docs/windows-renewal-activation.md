@@ -84,8 +84,13 @@ Before intent, the entire active dependency graph is validated for normalized
 conditions, required closure, health/completion contracts and cycles. Selected
 roles are recreated in dependency layers. Each role appears in one invocation;
 the preserved foundation and completed layers must be ready before advancing.
+Ordering is projected from the full active graph, preserving paths through
+unchanged roles. Dependency restart cascades are refused before intent.
 A transient health failure therefore cannot leave all downstream layers created
-by an earlier bulk invocation. The overall phase deadline remains bounded.
+by an earlier bulk invocation. Readiness/completion is refused after the600-second
+phase deadline, including when a status read or receipt flush crosses it. The
+shared read-only Compose status transport has its separate60-second inspection
+timeout; this is not a hard600-second process wall-clock guarantee.
 
 The caller must preallocate `step_receipts`, one object per computed layer, with
 exact keys `new_started`, `new_completed`, `rollback_started`, `rollback_completed`.

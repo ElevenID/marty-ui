@@ -467,15 +467,13 @@ def dependency_layers(model, services, changing):
             if name in services and condition == 'service_completed_successfully':
                 require(name in COMPLETED_SERVICES | {'openbao-tls-init'})
         dependencies[role] = set(dep) & services
-    pending = set(services)
+    pending = set(services);layers = []
     while pending:
         ready = {n for n in pending if not dependencies[n] & pending}
-        require(ready, 'Active dependency graph is cyclic');pending -= ready
-    pending = set(changing);layers = []
-    while pending:
-        ready = {n for n in pending if not dependencies[n] & pending}
-        require(ready, 'Selected dependency graph is cyclic')
-        layers.append(sorted(ready));pending -= ready
+        require(ready, 'Active dependency graph is cyclic')
+        if ready & changing:
+            layers.append(sorted(ready & changing))
+        pending -= ready
     return layers
 
 
@@ -665,6 +663,7 @@ def recreate(docker, command, changing, services, model, log, progress=None):
             selected = ready | set(layer)
             while time.monotonic() < deadline:
                 items = statuses(command, cwd=Path.cwd())
+                require(time.monotonic() < deadline, 'Windows renewal phase deadline reached')
                 present = {x.get('Service') for x in items}
                 require(present == services and len(items) == len(services),
                         'Owned creation incomplete; rollback required')
@@ -682,7 +681,9 @@ def recreate(docker, command, changing, services, model, log, progress=None):
             else:
                 raise RuntimeError('Windows renewal did not become ready')
             if progress is not None:
+                require(time.monotonic() < deadline, 'Windows renewal phase deadline reached')
                 progress('completed', index, layer)
+                require(time.monotonic() < deadline, 'Windows renewal phase deadline reached')
             ready = selected
     finally:
         try:
