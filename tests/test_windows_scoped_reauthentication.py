@@ -1,6 +1,7 @@
 """Private NTFS transport bounds for fresh scoped authority, no real Docker."""
 import hashlib
 import json
+import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,6 +14,8 @@ sys.path.insert(0,str(Path(__file__).resolve().parent))
 import selfhost_windows_renewal as renewal
 import selfhost_windows_renewal_native as native
 from test_selfhost_windows_inputs import private_fixture
+
+pytestmark=pytest.mark.skipif(os.name!='nt',reason='Actual private NTFS input fixture')
 
 PROJECT='marty-production-synthetic'
 SESSION='/control/recovery-session-'+'a'*32
