@@ -33,7 +33,8 @@ public final class KeycloakPasskeyThemeContract {
         data.put("client", Map.of("baseUrl", "/"));
         data.put("url", Map.of("loginAction", "/realms/test/login-actions/authenticate?client_id=marty-ui&tab_id=synthetic",
             "loginResetCredentialsUrl", "/reset", "registrationUrl", "/register",
-            "loginRestartFlowUrl", "/restart", "resourcesPath", "/resources/11id"));
+            "loginRestartFlowUrl", "/restart", "resourcesPath", "/resources/11id",
+            "resourcesCommonPath", "/resources/common"));
         data.put("login", Map.of("username", "synthetic@example.invalid"));
         data.put("auth", Map.of("selectedCredential", "", "attemptedUsername", "synthetic@example.invalid"));
         data.put("messagesPerField", Map.of("existsError", (TemplateMethodModelEx) values -> false));

@@ -58,6 +58,7 @@ def test_native_passkeys_preserve_password_google_badge_and_recovery(passkey_ren
     assert html.count('id="credential-login"') == 1
     assert 'href="/custom-badge-login"' in html
     assert 'Present Open Badge Credential' in html
+    assert '"rfc4648":"/resources/common/vendor/rfc4648/rfc4648.js"' in html
     if mode == "reauth":
         assert '/broker/google/login?client_id=marty-ui&amp;tab_id=synthetic' in html
     else:

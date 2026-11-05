@@ -166,6 +166,8 @@ def test_virtual_authenticator_enrollment_and_login_keep_the_same_subject(keyclo
         try:
             context = browser.new_context()
             page = context.new_page()
+            page_errors = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
             cdp = context.new_cdp_session(page)
             cdp.send("WebAuthn.enable")
             authenticator = cdp.send("WebAuthn.addVirtualAuthenticator", {"options": {
@@ -186,11 +188,30 @@ def test_virtual_authenticator_enrollment_and_login_keep_the_same_subject(keyclo
             assert any(item["type"] == "password" for item in stored)
             credentials = cdp.send("WebAuthn.getCredentials", {"authenticatorId": authenticator})["credentials"]
             assert len(credentials) == 1 and credentials[0]["isResidentCredential"] is True
-            context.clear_cookies()
+            # Virtual authenticators may immediately fulfill conditional requests.
+            # Select the supported button-only mode to exercise the modal path
+            # deterministically; the configurator/default autofill is tested above.
+            request(keycloak["admin"], token=keycloak["token"], method="PUT",
+                    body={"webAuthnPolicyPasswordlessMediation": "none"})
+            # A completely new browser context rules out SSO/cookie state from
+            # the enrollment callback. Transfer only the virtual device key.
+            context.close()
+            context = browser.new_context()
+            page = context.new_page()
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            cdp = context.new_cdp_session(page)
+            cdp.send("WebAuthn.enable")
+            authenticator = cdp.send("WebAuthn.addVirtualAuthenticator", {"options": {
+                "protocol": "ctap2", "transport": "internal", "hasResidentKey": True,
+                "hasUserVerification": True, "isUserVerified": True, "automaticPresenceSimulation": True}})["authenticatorId"]
+            cdp.send("WebAuthn.addCredential", {"authenticatorId": authenticator, "credential": credentials[0]})
             url, verifier = authorization()
             page.goto(url)
             page.locator("#authenticateWebAuthnButton").click(timeout=30000)
             assert_identity(page, verifier)
+            after = cdp.send("WebAuthn.getCredentials", {"authenticatorId": authenticator})["credentials"]
+            assert after[0]["signCount"] > credentials[0]["signCount"]
             assert len(request(keycloak["admin"] + user_query, token=keycloak["token"])) == 1
+            assert page_errors == []
         finally:
             browser.close()
