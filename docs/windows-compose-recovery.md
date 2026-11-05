@@ -165,7 +165,22 @@ retain their historical behavior. Installing this task does not test logon, engi
 or host reboot, and does not provide pre-logon availability.
 
 Normal recovery does not renew or repair expired generations or resume an
-uncertain earlier attempt. Explicit online renewal uses the same entrypoint:
+uncertain earlier attempt.
+
+For a failed staging attempt whose producer phases all completed and whose
+Windows files are fully materialized, the explicit library operation
+`selfhost_windows_selection.reconcile_materialized(selection_config_path)`
+revalidates the selected generation, immutable next configuration, phase/helper
+receipts, retired producer helpers, storage/readiness and old/new native admission.
+It can finish the materialization checkpoint and staging publication metadata.
+It never invokes the producer, refreshes authority, activates services, changes a
+selection or clears the staging guard. The existing `prepare` and activation
+protocol remains required afterward. Earlier producer failures and partial
+activation refuse. Matching interrupted metadata writes can be completed after
+fresh proofs; corrupt nonempty records are preserved and refused. All held-input
+and namespace exit checks must pass before publication.
+
+Explicit online renewal uses the same entrypoint:
 
 ```powershell
 & "$Tooling/scripts/recover-marty-after-reboot.ps1" `
