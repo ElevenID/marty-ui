@@ -148,6 +148,20 @@ def windows_identity(path):
     return resolved, identities[0], set(identities)
 
 
+def windows_mount_path_equal(actual, expected):
+    """Compare only local-drive spellings of the exact held secret path.
+
+    No reparse/junction resolution is used to broaden a secret binding. Expected
+    roots/files already have held identity/privacy proof; known bridge prefixes,
+    separator and Windows case differences do not select a different path.
+    """
+    try:
+        a, b = windows_source(actual), windows_source(expected)
+        return a is not None and b is not None and a == b
+    except (ValueError, TypeError):
+        return False
+
+
 def storage_identity(mount, volumes):
     kind, raw = mount.get('Type'), mount.get('Source', '')
     if kind == 'bind':
@@ -468,7 +482,8 @@ def activate(config):
             old_hashes, new_hashes = docker.hashes(old), docker.hashes(new)
             checked_live_configuration(owned, old_hashes, config['tls_init_receipt'])
             require(windows_healthy(statuses(old, cwd=source.parent), services, old_model))
-            checked_secret_mounts(owned, project, current, services, old_model)
+            checked_secret_mounts(owned, project, current, services, old_model,
+                                  path_equal=windows_mount_path_equal)
             volumes = docker.volumes()
             witnesses = docker.native_witnesses(baseline, project, volumes, config['native']['helper_image'])
             disjoint_storage(baseline, project, volumes, witnesses)
@@ -502,7 +517,8 @@ def activate(config):
                 require(data_mounts(owned_now) == data_before, 'Data mounts or image identity changed')
                 checked_live_configuration(owned_now, new_hashes if root == renewed else old_hashes,
                                             config['tls_init_receipt'])
-                return checked_secret_mounts(owned_now, project, root, services, model)
+                return checked_secret_mounts(owned_now, project, root, services, model,
+                                              path_equal=windows_mount_path_equal)
             try:
                 recreate(docker, new, changing, services, new_model, outputs['new_log'])
                 mounts = verify(new, renewed, new_model)

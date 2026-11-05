@@ -135,6 +135,17 @@ def test_legacy_volume_name_source_uses_inspected_local_identity():
     assert renewal.storage_identity({'Type': 'volume', 'Source': name}, volumes) == ('volume', name)
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='Actual Windows path flavor')
+def test_secret_mount_comparison_accepts_only_exact_windows_path_spellings():
+    expected = 'C:\\Marty\\private\\generation\\token'
+    for actual in ['c:/marty/private/generation/token', '/run/desktop/mnt/host/c/Marty/private/generation/token',
+                   '/host_mnt/c/Marty/private/generation/token']:
+        assert renewal.windows_mount_path_equal(actual, expected)
+    for actual in ['C:/Marty/private/other/token', 'C:/Marty/private/generation/../other/token',
+                   '/var/lib/docker/volumes/opaque/_data/token', 'relative/token', None]:
+        assert not renewal.windows_mount_path_equal(actual, expected)
+
+
 def kernel_fixture():
     volumes = {name: {'Name': name, 'Driver': 'local', 'Options': None,
                       'Mountpoint': '/var/lib/docker/volumes/'+name+'/_data'} for name in ['native', 'anchor']}

@@ -173,8 +173,9 @@ def secret_mounts(project: str, secret_root: Path, services: set[str],
 
 
 def checked_secret_mounts(inspected: object, project: str, secret_root: Path,
-                          services: set[str], model: dict) -> int:
+                          services: set[str], model: dict, *, path_equal=None) -> int:
     """Validate already-inspected containers; transport remains at the caller."""
+    same_path = path_equal if path_equal is not None else lambda a, b: a == b
     definitions = model.get("secrets")
     declared = model.get("services")
     if not isinstance(definitions, dict) or not isinstance(declared, dict):
@@ -197,7 +198,7 @@ def checked_secret_mounts(inspected: object, project: str, secret_root: Path,
             if (not isinstance(definition, dict) or not isinstance(target, str)
                     or not target.startswith("/run/secrets/")
                     or not target.removeprefix("/run/secrets/")
-                    or definition.get("file") != str(secret_root / source)
+                    or not same_path(definition.get("file"), str(secret_root / source))
                     or target in targets):
                 raise RuntimeError("owned Compose secret binding is invalid")
             targets[target] = str(secret_root / source)
@@ -227,7 +228,7 @@ def checked_secret_mounts(inspected: object, project: str, secret_root: Path,
                 continue
             mount_count += 1
             if (target in seen or target not in expected[service]
-                    or mount.get("Source") != expected[service][target]
+                    or not same_path(mount.get("Source"), expected[service][target])
                     or mount.get("Type") != "bind" or mount.get("RW") is not False):
                 raise RuntimeError("owned project secret mount differs from generation")
             seen.add(target)
