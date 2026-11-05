@@ -1,0 +1,36 @@
+{{- if .Values.ingress.enabled -}}
+{{- $isIp := or (regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" .Values.publicHost) (contains ":" .Values.publicHost) -}}
+{{- $host := .Values.ingress.host | default (ternary "" .Values.publicHost $isIp) -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: marty
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marty.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  tls:
+    - secretName: {{ required "ingress.tlsSecretName must identify an existing TLS Secret" .Values.ingress.tlsSecretName }}
+      {{- if $host }}
+      hosts:
+        - {{ $host | quote }}
+      {{- end }}
+  rules:
+    - {{ if $host }}host: {{ $host | quote }}{{ end }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ui
+                port:
+                  name: http
+{{- end }}

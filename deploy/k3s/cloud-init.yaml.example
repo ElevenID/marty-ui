@@ -55,6 +55,9 @@ runcmd:
   - [systemctl, enable, --now, marty-dev-stop.timer]
   - |
     set -eu
+    # cloud-init can continue after an earlier runcmd item fails. Require the
+    # stop timer in this same block before installing or starting Kubernetes.
+    systemctl is-active --quiet marty-dev-stop.timer
     cd /var/tmp
     curl --fail --silent --show-error --location --retry 3 --max-time 180 \
       'https://github.com/k3s-io/k3s/releases/download/v1.36.6%2Bk3s1/k3s' -o k3s

@@ -1,0 +1,139 @@
+{{- $root := . -}}
+{{- $workloads := .Files.Get "files/workloads.yaml" | fromYaml -}}
+{{- range $name, $workload := $workloads -}}
+{{- if or (ne $name "canvas-sync-worker") $root.Values.canvasWorker.enabled -}}
+{{- $override := index $root.Values.apps.overrides $name | default dict -}}
+{{- $resources := mergeOverwrite (deepCopy $root.Values.apps.resources) ($override.resources | default dict) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "marty.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  {{- if eq $name "applicant" }}
+  replicas: 1
+  strategy:
+    type: Recreate
+  {{- else }}
+  replicas: {{ $root.Values.apps.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  {{- end }}
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      app.kubernetes.io/component: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ $root.Release.Name }}
+        app.kubernetes.io/component: {{ $name }}
+      annotations:
+        {{- include "marty.podAnnotations" $root | nindent 8 }}
+    spec:
+      {{- include "marty.podSettings" $root | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: {{ $name }}
+          image: {{ include "marty.image" (dict "root" $root "role" "services") | quote }}
+          imagePullPolicy: {{ $root.Values.imagePullPolicy }}
+          command: ["/app/services/entrypoint.sh"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          envFrom:
+            - configMapRef:
+                name: marty-config
+          env:
+            - name: SERVICE_NAME
+              value: {{ $workload.serviceName | quote }}
+            {{- include "marty.env" (dict "root" $root "env" $workload.env) | nindent 12 }}
+          {{- with $workload.ports }}
+          ports:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml $resources | nindent 12 }}
+          {{- with $workload.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $workload.livenessProbe }}
+          startupProbe:
+            {{- if .httpGet }}
+            httpGet:
+              {{- toYaml .httpGet | nindent 14 }}
+            {{- else if .exec }}
+            exec:
+              {{- toYaml .exec | nindent 14 }}
+            {{- end }}
+            {{- toYaml $root.Values.apps.startupProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $workload.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $workload.volumes }}
+      volumes:
+        {{- include "marty.volumes" (dict "root" $root "volumes" .) | nindent 8 }}
+      {{- end }}
+{{- if $workload.ports }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "marty.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    app.kubernetes.io/component: {{ $name }}
+  ports:
+    {{- range $index, $port := $workload.ports }}
+    - name: {{ $port.name | default (printf "port-%v" $port.containerPort) }}
+      port: {{ $port.containerPort }}
+      targetPort: {{ $port.containerPort }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: applicant-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marty.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.applicantSize }}

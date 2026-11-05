@@ -1,0 +1,495 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "images",
+    "publicHost",
+    "organization",
+    "openbao",
+    "existingSecrets"
+  ],
+  "properties": {
+    "images": {
+      "type": "object",
+      "required": [
+        "ui",
+        "services",
+        "migrations",
+        "keycloak"
+      ],
+      "properties": {
+        "ui": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+        },
+        "services": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+        },
+        "migrations": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+        },
+        "keycloak": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+        },
+        "openbao_didcomm": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "imagePullPolicy": {
+      "enum": [
+        "Always",
+        "IfNotPresent",
+        "Never"
+      ]
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "publicHost": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9.\\[\\]:-]+$"
+    },
+    "publicOrigin": {
+      "type": "string",
+      "pattern": "^$|^https://[^/?#\\s]+$"
+    },
+    "organization": {
+      "type": "object",
+      "required": [
+        "id",
+        "slug",
+        "adminEmail"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "slug": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "adminEmail": {
+          "type": "string",
+          "minLength": 3,
+          "pattern": "^[^\\s@]+@[^\\s@]+$"
+        },
+        "did": {
+          "type": "string"
+        }
+      }
+    },
+    "openbao": {
+      "type": "object",
+      "required": [
+        "address"
+      ],
+      "properties": {
+        "address": {
+          "type": "string",
+          "pattern": "^https://[^/?#\\s]+$"
+        }
+      }
+    },
+    "existingSecrets": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
+      }
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "apps": {
+      "type": "object",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "properties": {
+            "requests": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "required": [
+        "image"
+      ],
+      "properties": {
+        "image": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+        },
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "properties": {
+            "requests": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "redis": {
+      "type": "object",
+      "required": [
+        "image"
+      ],
+      "properties": {
+        "image": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+        },
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "properties": {
+            "requests": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "keycloak": {
+      "type": "object",
+      "properties": {
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "properties": {
+            "requests": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "properties": {
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "properties": {
+            "requests": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "migrations": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "backoffLimit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ttlSecondsAfterFinished": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "properties": {
+            "requests": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "tlsSecretName": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "tlsSecretName": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "ingressNamespace": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

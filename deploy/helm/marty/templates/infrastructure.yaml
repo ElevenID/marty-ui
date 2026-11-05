@@ -1,0 +1,208 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: postgres
+spec:
+  clusterIP: None
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: postgres
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: postgres
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: &id001
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: postgres
+  template:
+    metadata:
+      labels: *id001
+    spec:
+      containers:
+      - name: postgres
+        image: {{ include "marty.immutableImage" (dict "name" "postgres.image" "reference" .Values.postgres.image) | quote }}
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: postgres
+        - name: POSTGRES_USER
+          value: postgres
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "marty.secretName" (dict "root" . "name" "marty-secrets") }}
+              key: POSTGRES_PASSWORD
+        - name: KEYCLOAK_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "marty.secretName" (dict "root" . "name" "marty-secrets") }}
+              key: KEYCLOAK_DB_PASSWORD
+        - name: MARTY_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "marty.secretName" (dict "root" . "name" "marty-secrets") }}
+              key: MARTY_DB_PASSWORD
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        resources:
+          {{- toYaml .Values.postgres.resources | nindent 10 }}
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        - name: init-scripts
+          mountPath: /docker-entrypoint-initdb.d
+          readOnly: true
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - postgres
+          periodSeconds: 10
+          failureThreshold: 5
+          timeoutSeconds: 5
+        readinessProbe:
+          exec: &id002
+            command:
+            - /bin/sh
+            - -ec
+            - pg_isready -U postgres && pg_isready -U keycloak -d keycloak && pg_isready -U marty -d marty
+          periodSeconds: 5
+          failureThreshold: 3
+          timeoutSeconds: 5
+        imagePullPolicy: {{ .Values.imagePullPolicy }}
+        startupProbe:
+          exec: *id002
+          periodSeconds: 5
+          failureThreshold: 60
+          timeoutSeconds: 5
+      volumes:
+      - name: init-scripts
+        configMap:
+          name: postgres-init-scripts
+          defaultMode: 493
+      {{- include "marty.podSettings" . | nindent 6 }}
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: {{ .Values.persistence.postgresSize }}
+      {{- with .Values.persistence.storageClass }}
+      storageClassName: {{ . | quote }}
+      {{- end }}
+  revisionHistoryLimit: 2
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: redis
+spec:
+  clusterIP: None
+  ports:
+  - port: 6379
+    targetPort: 6379
+    name: redis
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: redis
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: redis
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels: &id001
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels: *id001
+    spec:
+      containers:
+      - name: redis
+        image: {{ include "marty.immutableImage" (dict "name" "redis.image" "reference" .Values.redis.image) | quote }}
+        args:
+        - redis-server
+        - --appendonly
+        - 'yes'
+        - --maxmemory
+        - {{ .Values.redis.maxmemory | quote }}
+        - --maxmemory-policy
+        - allkeys-lru
+        ports:
+        - containerPort: 6379
+        resources:
+          {{- toYaml .Values.redis.resources | nindent 10 }}
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+        livenessProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          exec: &id002
+            command:
+            - redis-cli
+            - ping
+          periodSeconds: 5
+          timeoutSeconds: 5
+        imagePullPolicy: {{ .Values.imagePullPolicy }}
+        startupProbe:
+          exec: *id002
+          periodSeconds: 5
+          failureThreshold: 60
+          timeoutSeconds: 5
+      {{- include "marty.podSettings" . | nindent 6 }}
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: {{ .Values.persistence.redisSize }}
+      {{- with .Values.persistence.storageClass }}
+      storageClassName: {{ . | quote }}
+      {{- end }}
+  revisionHistoryLimit: 2

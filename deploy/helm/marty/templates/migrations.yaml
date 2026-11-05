@@ -1,0 +1,123 @@
+{{- define "marty.migrationContainer" -}}
+- name: {{ .name }}
+  image: {{ include "marty.image" (dict "root" .root "role" (.role | default "services")) | quote }}
+  imagePullPolicy: {{ .root.Values.imagePullPolicy }}
+  command: {{ .command | toJson }}
+  envFrom:
+    - configMapRef:
+        name: marty-config
+  env:
+    - name: DATABASE_URL
+      valueFrom:
+        secretKeyRef:
+          name: {{ include "marty.secretName" (dict "root" .root "name" "marty-secrets") }}
+          key: DATABASE_SYNC_URL
+    - name: MARTY_DB_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: {{ include "marty.secretName" (dict "root" .root "name" "marty-secrets") }}
+          key: MARTY_DB_PASSWORD
+    {{- if eq .name "revocation-profile" }}
+    - name: RP_MIGRATE_ONLY
+      value: "true"
+    {{- end }}
+    {{- if eq .name "bootstrap-notification" }}
+    - name: OPENBAO_SERVICE_TOKEN_FILE
+      value: /run/secrets/openbao_bootstrap_token
+    - name: NOTIFICATION_OPENBAO_TOKEN_FILE
+      value: /run/secrets/notification_openbao_token
+    - name: NOTIFICATION_OPENBAO_CA_CERT_FILE
+      value: /run/secrets/openbao_tls_ca_cert
+    - name: BAO_CACERT
+      value: /run/secrets/openbao_tls_ca_cert
+    {{- end }}
+  resources:
+    {{- toYaml .root.Values.migrations.resources | nindent 4 }}
+  {{- if eq .name "bootstrap-notification" }}
+  volumeMounts:
+    - name: bootstrap-secrets
+      mountPath: /run/secrets
+      readOnly: true
+  {{- end }}
+{{- end -}}
+
+{{- if .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: marty-migrate-{{ .Release.Revision }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marty.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+spec:
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.migrations.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: migrations
+      annotations:
+        {{- include "marty.podAnnotations" . | nindent 8 }}
+    spec:
+      {{- include "marty.podSettings" . | nindent 6 }}
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # A regular Job is intentional: a post-install hook plus helm --wait
+      # deadlocks when Deployments validate schemas produced by that hook.
+      # Kubernetes retries failed init containers within the Job deadline.
+      initContainers:
+        {{- include "marty.migrationContainer" (dict "root" . "name" "revocation-profile" "command" (list "/usr/local/bin/marty-revocation-profile")) | nindent 8 }}
+        {{- include "marty.migrationContainer" (dict "root" . "name" "bootstrap-notification" "role" "migrations" "command" (list "/app/run-migrations-with-secrets.sh")) | nindent 8 }}
+        {{- include "marty.migrationContainer" (dict "root" . "name" "organization" "command" (list "/usr/local/bin/marty-organization" "migrate")) | nindent 8 }}
+        {{- include "marty.migrationContainer" (dict "root" . "name" "credential-template" "command" (list "/usr/local/bin/marty-credential-template" "migrate")) | nindent 8 }}
+        {{- include "marty.migrationContainer" (dict "root" . "name" "flow" "command" (list "/usr/local/bin/marty-flow" "migrate")) | nindent 8 }}
+        {{- include "marty.migrationContainer" (dict "root" . "name" "device-registration" "command" (list "/usr/local/bin/marty-device-registration" "migrate")) | nindent 8 }}
+        {{- include "marty.migrationContainer" (dict "root" . "name" "verification" "command" (list "/usr/local/bin/marty-verification-service" "migrate")) | nindent 8 }}
+        # These services seed the organization and credential catalog during
+        # normal startup. Issuance must see them before seeding a fresh schema.
+        {{- range $peer := list (dict "name" "organization" "url" "http://organization:8002/health") (dict "name" "credential-template" "url" "http://credential-template:8003/ready") }}
+        - name: ready-{{ $peer.name }}
+          image: {{ include "marty.image" (dict "root" $ "role" "services") | quote }}
+          imagePullPolicy: {{ $.Values.imagePullPolicy }}
+          command:
+            - /usr/bin/curl
+            - --fail
+            - --silent
+            - --show-error
+            - --retry
+            - "120"
+            - --retry-all-errors
+            - --retry-delay
+            - "3"
+            - --retry-max-time
+            - "600"
+            - --max-time
+            - "10"
+            - {{ $peer.url | quote }}
+          resources:
+            {{- toYaml $.Values.migrations.resources | nindent 12 }}
+        {{- end }}
+      containers:
+        {{- include "marty.migrationContainer" (dict "root" . "name" "issuance-native" "command" (list "/usr/local/bin/marty-issuance-service" "migrate")) | nindent 8 }}
+      volumes:
+        - name: bootstrap-secrets
+          secret:
+            secretName: {{ include "marty.secretName" (dict "root" . "name" "marty-secrets") }}
+            defaultMode: 0440
+            items:
+              - key: OPENBAO_BOOTSTRAP_TOKEN
+                path: openbao_bootstrap_token
+              - key: NOTIFICATION_OPENBAO_TOKEN
+                path: notification_openbao_token
+              - key: OPENBAO_TLS_CA_CERT
+                path: openbao_tls_ca_cert
+{{- end }}
