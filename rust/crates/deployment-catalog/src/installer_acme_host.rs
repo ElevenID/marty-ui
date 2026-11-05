@@ -50,6 +50,11 @@ const RENEWAL_ENVIRONMENT: &str = "acme-public-renewal-authority.env";
 const RENEWAL_PLAN: &str = "renewal-public-authority-plan.json";
 const STAGING_ROOTS: &str = "staging-acme-roots.pem";
 
+#[path = "installer_acme_host_diagnostics.rs"]
+mod diagnostics;
+pub(crate) use diagnostics::preparation_status;
+use diagnostics::{checked, checkpoint, Check, Checked};
+
 #[path = "installer_acme_initial_rollover.rs"]
 mod initial_rollover;
 pub(crate) use initial_rollover::InitialRolloverPermit;
@@ -869,20 +874,27 @@ pub fn provision(
     prior: ComposeReceipt,
     staging_roots: Option<&[u8]>,
 ) -> Result<AcmeHostOutcome> {
-    let configuration = current_context(context, state)?;
+    let configuration = checkpoint(Check::Context, || current_context(context, state))?;
     let environment = configuration.parameters().environment();
-    let staging_roots_sha256 =
-        state.with_inspection(|view| retained_roots(view, environment, staging_roots))?;
-    let port = state
-        .with_inspection(installer_hosting::resolve)?
-        .http01_host_port()
-        .ok_or(REFUSED)?;
-    let base = augmented_inputs(context, state, bootstrap, port)?;
-    successful(
-        &prior,
-        &bootstrap.project,
-        &context.infrastructure.engine_id,
-    )?;
+    let staging_roots_sha256 = checkpoint(Check::StagingTrust, || {
+        state.with_inspection(|view| retained_roots(view, environment, staging_roots))
+    })?;
+    let port = checkpoint(Check::Http01Port, || {
+        state
+            .with_inspection(installer_hosting::resolve)?
+            .http01_host_port()
+            .ok_or_else(|| REFUSED.into())
+    })?;
+    let base = checkpoint(Check::InitialInputs, || {
+        augmented_inputs(context, state, bootstrap, port)
+    })?;
+    checkpoint(Check::PriorOperation, || {
+        successful(
+            &prior,
+            &bootstrap.project,
+            &context.infrastructure.engine_id,
+        )
+    })?;
     state.with_inspection(|view| {
         for (directory, evidence) in [
             (
@@ -911,17 +923,23 @@ pub fn provision(
     })?;
     let mut before = bootstrap.clone();
     before.prior = Some(prior.clone());
-    let public_renewal_enrolment_sha256 = state.with_inspection(|view| {
-        require_public_renewal(
-            view,
-            &before,
-            context.infrastructure,
-            context.services_image,
-        )
+    let public_renewal_enrolment_sha256 = checkpoint(Check::PublicRenewal, || {
+        state.with_inspection(|view| {
+            require_public_renewal(
+                view,
+                &before,
+                context.infrastructure,
+                context.services_image,
+            )
+        })
     })?;
-    let ingress = initial_ingress(context, state, &before, &configuration)?;
-    let connection = connection(context, state, &before)?;
-    require_server(&connection)?;
+    let ingress = checkpoint(Check::InitialIngress, || {
+        initial_ingress(context, state, &before, &configuration)
+    })?;
+    let connection = checkpoint(Check::OpenbaoConnection, || {
+        connection(context, state, &before)
+    })?;
+    checkpoint(Check::OpenbaoServer, || require_server(&connection))?;
     let intent = Intent {
         schema: "elevenid.installer-acme-host-intent/v1".into(),
         installation_id: state.journal().installation_id(),
@@ -946,7 +964,9 @@ pub fn provision(
         staging_roots_sha256,
     };
     state.write_evidence(&name(environment, "intent"), &encode(&intent)?)?;
-    let projection = prepare_projection(state, context.installation)?;
+    let projection = checkpoint(Check::Projection, || {
+        prepare_projection(state, context.installation)
+    })?;
     state.create_private_directory("acme-custody-transfer")?;
     let custody_plan =
         custody::prepare_for_install(state, &configuration, &ingress, &connection.bao)?;
@@ -984,7 +1004,9 @@ pub fn provision(
         &output,
         REFUSED,
     )?;
-    record_job(state, environment, "custody", CUSTODY, &custody_hash, &job)?;
+    checkpoint(Check::CustodyJob, || {
+        record_job(state, environment, "custody", CUSTODY, &custody_hash, &job)
+    })?;
     let custody = custody::admit_for_install(
         state,
         &configuration,
@@ -1039,14 +1061,16 @@ pub fn provision(
         &output,
         REFUSED,
     )?;
-    record_job(
-        state,
-        environment,
-        "credentials",
-        CREDENTIALS,
-        &credential_hash,
-        &job,
-    )?;
+    checkpoint(Check::CredentialsJob, || {
+        record_job(
+            state,
+            environment,
+            "credentials",
+            CREDENTIALS,
+            &credential_hash,
+            &job,
+        )
+    })?;
     let providers = credentials::admit_for_install(
         state,
         context.installation,
@@ -1071,10 +1095,14 @@ pub fn provision(
         RESPONDER,
     )?;
     let session = ComposeSession::new(context.docker, &intent.runtime, inputs.clone())?;
-    responder_model(session.model(), &inputs, &configuration, port)?;
+    checkpoint(Check::ResponderModel, || {
+        responder_model(session.model(), &inputs, &configuration, port)
+    })?;
     session.pull()?;
     let receipt = session.up_wait(state, RESPONDER_OPERATION, Duration::from_secs(60))?;
-    successful(&receipt, &inputs.project, &intent.runtime.engine_id)?;
+    checkpoint(Check::ResponderOperation, || {
+        successful(&receipt, &inputs.project, &intent.runtime.engine_id)
+    })?;
     inputs.prior = Some(receipt.clone());
     let prepared = Prepared {
         schema: "elevenid.installer-acme-host-prepared/v1".into(),
@@ -1196,234 +1224,342 @@ fn load_retained_setup(
     state: &LockedInspection,
     before_application_start: bool,
 ) -> Result<(Intent, Prepared, BoundAcmeConfiguration)> {
-    let configuration = BoundAcmeConfiguration::from_selection(state)?;
+    inspect_retained_setup(state, before_application_start).map_err(Check::refusal)
+}
+
+/// The diagnostic and execution callers share every check and its ordering.
+/// Only fixed codes cross this boundary; original inner errors stay private.
+fn inspect_retained_setup(
+    state: &LockedInspection,
+    before_application_start: bool,
+) -> Checked<(Intent, Prepared, BoundAcmeConfiguration)> {
+    let configuration = checked(Check::Configuration, || {
+        BoundAcmeConfiguration::from_selection(state)
+    })?;
     let environment = configuration.parameters().environment();
-    let prepared: Prepared = decode(&state.read_evidence(&name(environment, "prepared"))?)?;
-    let intent: Intent = decode(&state.read_evidence(&name(environment, "intent"))?)?;
-    state.require_path_binding(&prepared.inputs.installation)?;
+    let prepared_bytes = checked(Check::PreparedRead, || {
+        state.read_evidence(&name(environment, "prepared"))
+    })?;
+    let prepared: Prepared = checked(Check::PreparedDecode, || decode(&prepared_bytes))?;
+    let intent_bytes = checked(Check::IntentRead, || {
+        state.read_evidence(&name(environment, "intent"))
+    })?;
+    let intent: Intent = checked(Check::IntentDecode, || decode(&intent_bytes))?;
+    checked(Check::InstallationPath, || {
+        state.require_path_binding(&prepared.inputs.installation)
+    })?;
     if before_application_start {
-        crate::installer_acme_preparation::require_supported_scope(state)?;
-        crate::installer_application::require_acme_preparation(
-            state,
-            &prepared.inputs.installation,
-        )?;
+        checked(Check::ApplicationPreparation, || {
+            crate::installer_acme_preparation::require_supported_scope(state)?;
+            crate::installer_application::require_acme_preparation(
+                state,
+                &prepared.inputs.installation,
+            )
+        })?;
     } else {
-        crate::installer_acme_preparation::verify_retained_provenance(
-            state,
-            &prepared.inputs.installation,
-        )?;
+        checked(Check::ApplicationProvenance, || {
+            crate::installer_acme_preparation::verify_retained_provenance(
+                state,
+                &prepared.inputs.installation,
+            )
+        })?;
     }
-    require(
-        require_public_renewal(
-            state,
-            &prepared.inputs,
-            &intent.infrastructure,
-            &intent.services_image,
-        )? == intent.public_renewal_enrolment_sha256,
-    )?;
-    let staging = state.diagnostic_record(STAGING_ROOTS, true)?;
-    require(roots(environment, staging.as_deref())? == intent.staging_roots_sha256)?;
-    require(
-        prepared.schema == "elevenid.installer-acme-host-prepared/v1"
-            && intent.schema == "elevenid.installer-acme-host-intent/v1"
-            && prepared.installation_id == state.journal().installation_id()
-            && intent.installation_id == prepared.installation_id
-            && prepared.environment == environment
-            && intent.configuration == value(&configuration)?
-            && intent.release == *state.journal().identity()
-            && Some(&intent.runtime) == state.journal().runtime()
-            && intent.runtime.profile == RuntimeProfile::Rootless
-            && prepared.initial_setup_complete
-            && !prepared.activation_performed
-            && !prepared.installation_ready
-            && prepared.inputs.project == state.journal().compose_project()
-            && prepared.inputs.services == [RESPONDER]
-            && prepared.inputs.profiles == ["setup"]
-            && prepared.inputs.installation == intent.bootstrap.installation
-            && prepared.inputs.environment.path
+    checked(Check::PublicRenewal, || {
+        require(
+            require_public_renewal(
+                state,
+                &prepared.inputs,
+                &intent.infrastructure,
+                &intent.services_image,
+            )? == intent.public_renewal_enrolment_sha256,
+        )
+    })?;
+    checked(Check::StagingTrust, || {
+        let staging = state.diagnostic_record(STAGING_ROOTS, true)?;
+        require(roots(environment, staging.as_deref())? == intent.staging_roots_sha256)
+    })?;
+    checked(Check::Schemas, || {
+        require(
+            prepared.schema == "elevenid.installer-acme-host-prepared/v1"
+                && intent.schema == "elevenid.installer-acme-host-intent/v1",
+        )
+    })?;
+    checked(Check::InstallationIdentity, || {
+        require(
+            prepared.installation_id == state.journal().installation_id()
+                && intent.installation_id == prepared.installation_id,
+        )
+    })?;
+    checked(Check::ConfigurationBinding, || {
+        require(
+            prepared.environment == environment && intent.configuration == value(&configuration)?,
+        )
+    })?;
+    checked(Check::ReleaseRuntime, || {
+        require(
+            intent.release == *state.journal().identity()
+                && Some(&intent.runtime) == state.journal().runtime()
+                && intent.runtime.profile == RuntimeProfile::Rootless,
+        )
+    })?;
+    checked(Check::PreparationState, || {
+        require(
+            prepared.initial_setup_complete
+                && !prepared.activation_performed
+                && !prepared.installation_ready,
+        )
+    })?;
+    checked(Check::ServiceSelection, || {
+        require(
+            prepared.inputs.project == state.journal().compose_project()
+                && prepared.inputs.services == [RESPONDER]
+                && prepared.inputs.profiles == ["setup"]
+                && prepared.inputs.installation == intent.bootstrap.installation,
+        )
+    })?;
+    checked(Check::EnvironmentPath, || {
+        require(
+            prepared.inputs.environment.path
                 == prepared
                     .inputs
                     .installation
                     .join("evidence")
-                    .join(environment_name(environment, "responder"))
-            && prepared.evidence_sha256 == fingerprints(state, environment)?
-            && prepared
+                    .join(environment_name(environment, "responder")),
+        )
+    })?;
+    checked(Check::EvidenceFingerprints, || {
+        require(prepared.evidence_sha256 == fingerprints(state, environment)?)
+    })?;
+    checked(Check::ApplicationProofDigest, || {
+        require(
+            prepared
                 .evidence_sha256
                 .get(crate::installer_acme_preparation::RECORD)
-                == Some(&intent.application_preparation_sha256)
-            && value(&prepared.inputs.prior)? == value(&Some(&prepared.receipt))?
-            && prepared.projection
+                == Some(&intent.application_preparation_sha256),
+        )
+    })?;
+    checked(Check::PriorReceipt, || {
+        require(value(&prepared.inputs.prior)? == value(&Some(&prepared.receipt))?)
+    })?;
+    checked(Check::Projection, || {
+        require(
+            prepared.projection
                 == ProjectionDirectory::observe(state, &prepared.inputs.installation)?,
-    )?;
-    require(
-        hash_valid(&intent.operator_sha256)
-            && hash_valid(&intent.openbao_ca_pem_sha256)
-            && intent.staging_roots_sha256.is_some() == (environment == AcmeEnvironment::Staging)
-            && intent
-                .staging_roots_sha256
-                .as_deref()
-                .is_none_or(hash_valid),
-    )?;
-    intent.ingress_key.bind(intent.installation_id)?;
-    require(
-        intent.bundle.starts_with(&prepared.inputs.installation)
-            && intent.bundle.canonicalize().map_err(|_| REFUSED)? == intent.bundle
-            && !intent.bootstrap.files.is_empty()
-            && intent
-                .bootstrap
-                .files
-                .iter()
-                .all(|file| file.path.starts_with(&intent.bundle))
-            && intent.bootstrap.project == prepared.inputs.project
-            && intent.bootstrap.environment.path
-                == prepared
-                    .inputs
-                    .installation
-                    .join("evidence")
-                    .join(RENEWAL_ENVIRONMENT)
-            && crate::installer_verify::operator_digest(
+        )
+    })?;
+    checked(Check::AuthorityDigests, || {
+        require(
+            hash_valid(&intent.operator_sha256)
+                && hash_valid(&intent.openbao_ca_pem_sha256)
+                && intent.staging_roots_sha256.is_some()
+                    == (environment == AcmeEnvironment::Staging)
+                && intent
+                    .staging_roots_sha256
+                    .as_deref()
+                    .is_none_or(hash_valid),
+        )
+    })?;
+    checked(Check::IngressKey, || {
+        intent.ingress_key.bind(intent.installation_id)
+    })?;
+    checked(Check::BundleFiles, || {
+        require(
+            intent.bundle.starts_with(&prepared.inputs.installation)
+                && intent.bundle.canonicalize().map_err(|_| REFUSED)? == intent.bundle
+                && !intent.bootstrap.files.is_empty()
+                && intent
+                    .bootstrap
+                    .files
+                    .iter()
+                    .all(|file| file.path.starts_with(&intent.bundle))
+                && intent.bootstrap.project == prepared.inputs.project
+                && intent.bootstrap.environment.path
+                    == prepared
+                        .inputs
+                        .installation
+                        .join("evidence")
+                        .join(RENEWAL_ENVIRONMENT),
+        )
+    })?;
+    checked(Check::OperatorBinding, || {
+        require(
+            crate::installer_verify::operator_digest(
                 &prepared.inputs.installation.join("marty-deploy"),
             )? == intent.operator_sha256,
-    )?;
-    successful(
-        &intent.prior,
-        &prepared.inputs.project,
-        &intent.runtime.engine_id,
-    )?;
-    successful(
-        &prepared.receipt,
-        &prepared.inputs.project,
-        &intent.runtime.engine_id,
-    )?;
-    require(
-        prepared.receipt.operation == RESPONDER_OPERATION
-            && installer_jobs::receipt_digest(&prepared.receipt)?
-                == sha(&state.read_evidence(&format!("compose-{RESPONDER_OPERATION}-result.json"))?),
-    )?;
-    for file in prepared
-        .inputs
-        .files
-        .iter()
-        .chain([&prepared.inputs.environment])
-        .chain(&prepared.inputs.bound_inputs)
-    {
-        require(prepared.receipt.input_files.get(&file.path) == Some(&file.sha256))?;
-    }
-    require(
-        intent
-            .prior
-            .input_files
+        )
+    })?;
+    checked(Check::PriorOperation, || {
+        successful(
+            &intent.prior,
+            &prepared.inputs.project,
+            &intent.runtime.engine_id,
+        )
+    })?;
+    checked(Check::ResponderOperation, || {
+        successful(
+            &prepared.receipt,
+            &prepared.inputs.project,
+            &intent.runtime.engine_id,
+        )
+    })?;
+    checked(Check::ResponderReceipt, || {
+        require(
+            prepared.receipt.operation == RESPONDER_OPERATION
+                && installer_jobs::receipt_digest(&prepared.receipt)?
+                    == sha(&state
+                        .read_evidence(&format!("compose-{RESPONDER_OPERATION}-result.json"))?),
+        )
+    })?;
+    checked(Check::CurrentInputReceipt, || {
+        for file in prepared
+            .inputs
+            .files
             .iter()
-            .all(|(path, hash)| prepared.receipt.input_files.get(path) == Some(hash)),
-    )?;
-    installer_compose::verify_input_files(
-        &prepared.inputs.installation,
-        &prepared.receipt.input_files,
-    )?;
-    require_job(
-        state,
-        &prepared,
-        "custody",
-        CUSTODY,
-        CUSTODY_PLAN,
-        &intent.services_image,
-    )?;
-    require_job(
-        state,
-        &prepared,
-        "credentials",
-        CREDENTIALS,
-        CREDENTIAL_PLAN,
-        &intent.services_image,
-    )?;
-    let port = installer_hosting::resolve(state)?
-        .http01_host_port()
-        .ok_or(REFUSED)?;
-    let base_env = retained_environment(state, &intent.bootstrap)?;
-    require(
-        sha(&base_env) == intent.bootstrap.environment.sha256
-            && state.read_evidence(&environment_name(environment, "responder"))?
-                == derived_environment(
-                    &base_env,
-                    &configuration,
-                    port,
-                    &sha(&state.read_evidence(CUSTODY_PLAN)?),
-                    Some(&sha(&state.read_evidence(CREDENTIAL_PLAN)?)),
-                )?,
-    )?;
-    let mut expected_files = intent.bootstrap.files.clone();
-    let layer = crate::installer_tls_outputs::bundle_text(&intent.bundle, LAYER, 2 * 1024 * 1024)?;
-    include_bound(
-        &mut expected_files,
-        BoundFile {
-            path: intent.bundle.join(LAYER),
-            sha256: sha(layer.as_bytes()),
-        },
-    )?;
-    require(value(&prepared.inputs.files)? == value(&expected_files)?)?;
-    let mut expected_bounds = intent.bootstrap.bound_inputs.clone();
-    for filename in [
-        Some(name(environment, "intent")),
-        Some(crate::installer_acme_preparation::RECORD.into()),
-        (environment == AcmeEnvironment::Staging).then(|| STAGING_ROOTS.into()),
-        Some(CUSTODY_PLAN.into()),
-        Some(CREDENTIAL_PLAN.into()),
-    ]
-    .into_iter()
-    .flatten()
-    {
+            .chain([&prepared.inputs.environment])
+            .chain(&prepared.inputs.bound_inputs)
+        {
+            require(prepared.receipt.input_files.get(&file.path) == Some(&file.sha256))?;
+        }
+        Ok(())
+    })?;
+    checked(Check::HistoricalInputReceipt, || {
+        require(
+            intent
+                .prior
+                .input_files
+                .iter()
+                .all(|(path, hash)| prepared.receipt.input_files.get(path) == Some(hash)),
+        )
+    })?;
+    checked(Check::InputCustody, || {
+        installer_compose::verify_input_files(
+            &prepared.inputs.installation,
+            &prepared.receipt.input_files,
+        )
+    })?;
+    checked(Check::CustodyJob, || {
+        require_job(
+            state,
+            &prepared,
+            "custody",
+            CUSTODY,
+            CUSTODY_PLAN,
+            &intent.services_image,
+        )
+    })?;
+    checked(Check::CredentialsJob, || {
+        require_job(
+            state,
+            &prepared,
+            "credentials",
+            CREDENTIALS,
+            CREDENTIAL_PLAN,
+            &intent.services_image,
+        )
+    })?;
+    let port = checked(Check::Http01Port, || {
+        installer_hosting::resolve(state)?
+            .http01_host_port()
+            .ok_or_else(|| REFUSED.into())
+    })?;
+    checked(Check::EnvironmentDerivation, || {
+        let base_env = retained_environment(state, &intent.bootstrap)?;
+        require(
+            sha(&base_env) == intent.bootstrap.environment.sha256
+                && state.read_evidence(&environment_name(environment, "responder"))?
+                    == derived_environment(
+                        &base_env,
+                        &configuration,
+                        port,
+                        &sha(&state.read_evidence(CUSTODY_PLAN)?),
+                        Some(&sha(&state.read_evidence(CREDENTIAL_PLAN)?)),
+                    )?,
+        )
+    })?;
+    checked(Check::ComposeLayers, || {
+        let mut expected_files = intent.bootstrap.files.clone();
+        let layer =
+            crate::installer_tls_outputs::bundle_text(&intent.bundle, LAYER, 2 * 1024 * 1024)?;
         include_bound(
-            &mut expected_bounds,
+            &mut expected_files,
             BoundFile {
-                path: prepared
-                    .inputs
-                    .installation
-                    .join("evidence")
-                    .join(&filename),
-                sha256: sha(&state.read_evidence(&filename)?),
+                path: intent.bundle.join(LAYER),
+                sha256: sha(layer.as_bytes()),
             },
         )?;
-    }
-    require(value(&prepared.inputs.bound_inputs)? == value(&expected_bounds)?)?;
-    let mut readonly = intent.bootstrap.readonly_bind_roots.clone();
-    readonly.insert(prepared.inputs.installation.join(PROJECTION));
-    let mut writable = intent.bootstrap.writable_bind_roots.clone();
-    for name in ["acme-custody-transfer", "acme-credentials-transfer"] {
-        writable.insert(prepared.inputs.installation.join(name));
-    }
-    let mut loopback = intent.bootstrap.allowed_loopback_ports.clone();
-    require(port != intent.runtime.openbao_port)?;
-    loopback.insert(port);
-    require(
-        prepared.inputs.readonly_bind_roots == readonly
-            && prepared.inputs.writable_bind_roots == writable
-            && prepared.inputs.allowed_loopback_ports == loopback
-            && prepared.inputs.approved_images == intent.bootstrap.approved_images
-            && prepared.inputs.ingress_listener == intent.bootstrap.ingress_listener,
-    )?;
-    #[cfg(feature = "installer-development")]
-    require(
-        value(&prepared.inputs.development_image)? == value(&intent.bootstrap.development_image)?,
-    )?;
-    let resources = prepared.receipt.resources.as_ref().ok_or(REFUSED)?;
-    require(
-        resources
-            .containers
-            .get(RESPONDER)
-            .is_some_and(|identity| !identity.setup && identity.image == intent.services_image)
-            && intent.prior.resources.as_ref().is_some_and(|prior| {
-                prior
-                    .containers
-                    .iter()
-                    .all(|(name, identity)| resources.containers.get(name) == Some(identity))
-                    && prior
-                        .networks
+        require(value(&prepared.inputs.files)? == value(&expected_files)?)
+    })?;
+    checked(Check::BoundInputs, || {
+        let mut expected_bounds = intent.bootstrap.bound_inputs.clone();
+        for filename in [
+            Some(name(environment, "intent")),
+            Some(crate::installer_acme_preparation::RECORD.into()),
+            (environment == AcmeEnvironment::Staging).then(|| STAGING_ROOTS.into()),
+            Some(CUSTODY_PLAN.into()),
+            Some(CREDENTIAL_PLAN.into()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            include_bound(
+                &mut expected_bounds,
+                BoundFile {
+                    path: prepared
+                        .inputs
+                        .installation
+                        .join("evidence")
+                        .join(&filename),
+                    sha256: sha(&state.read_evidence(&filename)?),
+                },
+            )?;
+        }
+        require(value(&prepared.inputs.bound_inputs)? == value(&expected_bounds)?)
+    })?;
+    checked(Check::RuntimeInputs, || {
+        let mut readonly = intent.bootstrap.readonly_bind_roots.clone();
+        readonly.insert(prepared.inputs.installation.join(PROJECTION));
+        let mut writable = intent.bootstrap.writable_bind_roots.clone();
+        for name in ["acme-custody-transfer", "acme-credentials-transfer"] {
+            writable.insert(prepared.inputs.installation.join(name));
+        }
+        let mut loopback = intent.bootstrap.allowed_loopback_ports.clone();
+        require(port != intent.runtime.openbao_port)?;
+        loopback.insert(port);
+        require(
+            prepared.inputs.readonly_bind_roots == readonly
+                && prepared.inputs.writable_bind_roots == writable
+                && prepared.inputs.allowed_loopback_ports == loopback
+                && prepared.inputs.approved_images == intent.bootstrap.approved_images
+                && prepared.inputs.ingress_listener == intent.bootstrap.ingress_listener,
+        )?;
+        #[cfg(feature = "installer-development")]
+        require(
+            value(&prepared.inputs.development_image)?
+                == value(&intent.bootstrap.development_image)?,
+        )?;
+        Ok(())
+    })?;
+    checked(Check::Resources, || {
+        let resources = prepared.receipt.resources.as_ref().ok_or(REFUSED)?;
+        require(
+            resources
+                .containers
+                .get(RESPONDER)
+                .is_some_and(|identity| !identity.setup && identity.image == intent.services_image)
+                && intent.prior.resources.as_ref().is_some_and(|prior| {
+                    prior
+                        .containers
                         .iter()
-                        .all(|(name, id)| resources.networks.get(name) == Some(id))
-                    && prior.volumes.is_subset(&resources.volumes)
-            }),
-    )?;
-    state.require_unchanged()?;
+                        .all(|(name, identity)| resources.containers.get(name) == Some(identity))
+                        && prior
+                            .networks
+                            .iter()
+                            .all(|(name, id)| resources.networks.get(name) == Some(id))
+                        && prior.volumes.is_subset(&resources.volumes)
+                }),
+        )
+    })?;
+    checked(Check::Unchanged, || state.require_unchanged())?;
     Ok((intent, prepared, configuration))
 }
 
@@ -1506,36 +1642,50 @@ pub fn resume(
     state: &mut InstallerState,
     staging_roots: Option<&[u8]>,
 ) -> Result<AcmeHostOutcome> {
-    let configuration = current_context(context, state)?;
+    let configuration = checkpoint(Check::Context, || current_context(context, state))?;
     let (intent, prepared, saved_configuration) = state.with_inspection(load_prepared)?;
-    require(
-        saved_configuration == configuration
-            && intent.bundle == context.bundle
-            && intent.services_image == context.services_image
-            && intent.operator_sha256 == context.operator_sha256
-            && value(&intent.infrastructure)? == value(context.infrastructure)?
-            && roots(configuration.parameters().environment(), staging_roots)?
-                == intent.staging_roots_sha256,
-    )?;
+    checkpoint(Check::ContinuationBinding, || {
+        require(
+            saved_configuration == configuration
+                && intent.bundle == context.bundle
+                && intent.services_image == context.services_image
+                && intent.operator_sha256 == context.operator_sha256
+                && value(&intent.infrastructure)? == value(context.infrastructure)?
+                && roots(configuration.parameters().environment(), staging_roots)?
+                    == intent.staging_roots_sha256,
+        )
+    })?;
     let session = ComposeSession::new(context.docker, &intent.runtime, prepared.inputs.clone())?;
     let port = state
         .with_inspection(installer_hosting::resolve)?
         .http01_host_port()
         .ok_or(REFUSED)?;
-    responder_model(session.model(), &prepared.inputs, &configuration, port)?;
-    require(session.configuration_sha256() == prepared.receipt.configuration_sha256)?;
-    let observed = session.observe_resources()?;
-    require(Some(&observed) == prepared.receipt.resources.as_ref())?;
+    checkpoint(Check::ResponderModel, || {
+        responder_model(session.model(), &prepared.inputs, &configuration, port)
+    })?;
+    checkpoint(Check::RuntimeModel, || {
+        require(session.configuration_sha256() == prepared.receipt.configuration_sha256)
+    })?;
+    let observed = checkpoint(Check::LiveResources, || {
+        let observed = session.observe_resources()?;
+        require(Some(&observed) == prepared.receipt.resources.as_ref())?;
+        Ok(observed)
+    })?;
     state.with_maintenance(|maintenance| {
         recovery::recover_runtime(context, maintenance, &prepared.inputs)
     })?;
-    running(&observed, &session.status()?)?;
-    let connection = connection(context, state, &prepared.inputs)?;
-    require(
-        connection.ca_sha256 == intent.openbao_ca_pem_sha256
-            && connection.cluster == intent.server_cluster_id,
-    )?;
-    require_server(&connection)?;
+    checkpoint(Check::RuntimeHealth, || {
+        running(&observed, &session.status()?)
+    })?;
+    let connection = checkpoint(Check::OpenbaoConnection, || {
+        let connection = connection(context, state, &prepared.inputs)?;
+        require(
+            connection.ca_sha256 == intent.openbao_ca_pem_sha256
+                && connection.cluster == intent.server_cluster_id,
+        )?;
+        Ok(connection)
+    })?;
+    checkpoint(Check::OpenbaoServer, || require_server(&connection))?;
     let providers = state.with_inspection(|view| {
         credentials::restore(
             view,
@@ -1570,18 +1720,22 @@ fn drive(
     providers: CredentialProviders,
     staging_roots: Option<&[u8]>,
 ) -> Result<AcmeHostOutcome> {
-    require(
-        roots(configuration.parameters().environment(), staging_roots)?
-            == intent.staging_roots_sha256,
-    )?;
-    let runtime = runtime()?;
+    checkpoint(Check::StagingTrust, || {
+        require(
+            roots(configuration.parameters().environment(), staging_roots)?
+                == intent.staging_roots_sha256,
+        )
+    })?;
+    let runtime = checkpoint(Check::RuntimeContext, runtime)?;
     let (account, ingress) = runtime.block_on(async {
         Ok::<_, String>((
             providers.account_credentials().verified_key().await?,
             providers.csr().retained_key().await?,
         ))
     })?;
-    require(ingress == intent.ingress_key.bind(intent.installation_id)?)?;
+    checkpoint(Check::IngressKey, || {
+        require(ingress == intent.ingress_key.bind(intent.installation_id)?)
+    })?;
     let csr = match state
         .with_inspection(|view| installer_acme::retained_csr(view, configuration, &ingress))?
     {
@@ -1590,7 +1744,11 @@ fn drive(
     };
     drop(runtime);
     state.with_inspection(|view| {
-        require(prepared.projection == ProjectionDirectory::observe(view, context.installation)?)?;
+        checkpoint(Check::Projection, || {
+            require(
+                prepared.projection == ProjectionDirectory::observe(view, context.installation)?,
+            )
+        })?;
         load_prepared(view).map(|_| ())
     })?;
     let inputs = EnrolmentInputs {
