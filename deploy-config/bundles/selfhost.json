@@ -185,6 +185,7 @@
     "scripts/record_selfhost_bundle_preparation.py",
     "scripts/release_transaction.py",
     "scripts/selfhost_windows_product.py",
+    "scripts/selfhost_windows_product_deploy.py",
     "scripts/selfhost_windows_product_journal.py",
     "scripts/selfhost_windows_product_probe.py",
     "scripts/stable_installer_assets.py",

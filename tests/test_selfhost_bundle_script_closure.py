@@ -56,7 +56,7 @@ import importlib,json,pathlib,sys
 scripts=pathlib.Path(sys.argv[1]).resolve()
 sys.path.insert(0,str(scripts))
 for name in ['selfhost_windows_selection','selfhost_windows_product_journal',
-             'selfhost_windows_product','selfhost_windows_product_probe']:
+             'selfhost_windows_product','selfhost_windows_product_probe','selfhost_windows_product_deploy']:
  module=importlib.import_module(name)
  assert pathlib.Path(module.__file__).resolve().parent==scripts
 for module in list(sys.modules.values()):
