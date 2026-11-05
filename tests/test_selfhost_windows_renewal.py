@@ -44,6 +44,50 @@ def test_managed_bao_closure_keeps_initializers_absent_and_recreates_only_secret
     m = model(tmp_path);rows = states(m);roles = {x['Service'] for x in rows}
     assert renewal.owned_roles(m, roles) == {'gateway'}
     assert renewal.windows_healthy(rows, roles, m)
+
+
+def test_dependency_layers_put_migration_before_each_consumer_once(tmp_path):
+    m = model(tmp_path);roles = {x['Service'] for x in states(m)}
+    m['services']['db-migrate']['depends_on'] = {'postgres': {'condition': 'service_healthy'}}
+    m['services']['gateway']['depends_on'] = {'db-migrate': {'condition': 'service_completed_successfully'}}
+    assert renewal.dependency_layers(m, roles, {'gateway', 'db-migrate', 'postgres'}) == [
+        ['postgres'], ['db-migrate'], ['gateway']]
+
+
+@pytest.mark.parametrize('bad', ['cycle', 'external', 'condition', 'required', 'restart', 'unhealthy', 'not-job'])
+def test_dependency_graph_refuses_invalid_normalized_edges_before_mutation(tmp_path, bad):
+    m = model(tmp_path);roles = {x['Service'] for x in states(m)}
+    dependency = {'condition': 'service_healthy'}
+    m['services']['gateway']['depends_on'] = {'postgres': dependency}
+    if bad == 'cycle':m['services']['postgres']['depends_on'] = {'gateway': {'condition': 'service_started'}}
+    elif bad == 'external':m['services']['gateway']['depends_on'] = {'not-active': dependency}
+    elif bad == 'condition':dependency['condition'] = 'guessed-ready'
+    elif bad == 'required':dependency['required'] = 'false'
+    elif bad == 'restart':dependency['restart'] = 1
+    elif bad == 'unhealthy':m['services']['postgres']['healthcheck']['disable'] = True
+    else:dependency['condition'] = 'service_completed_successfully'
+    with pytest.raises(ValueError):renewal.dependency_layers(m, roles, {'gateway'})
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Actual NTFS phase diagnostic')
+def test_layered_recreation_never_replays_completed_job_and_records_each_boundary(monkeypatch):
+    import subprocess
+
+    from test_selfhost_windows_inputs import private_fixture
+    with private_fixture() as (root, path):
+        path.write_bytes(b'');m = model(root);rows = states(m);roles = {x['Service'] for x in rows}
+        m['services']['gateway']['depends_on'] = {'db-migrate': {'condition': 'service_completed_successfully'}}
+        calls = [];events = []
+        def up(args, **_):
+            calls.append(args[args.index('--force-recreate') + 1:])
+            return subprocess.CompletedProcess(args, 0, b'PUBLIC_SYNTHETIC_LAYER', b'')
+        monkeypatch.setattr(renewal, 'run_owned_mutation', up)
+        monkeypatch.setattr(renewal, 'statuses', lambda *_a, **_k: rows)
+        renewal.recreate(None, ['SYNTHETIC_COMPOSE'], {'gateway', 'db-migrate'}, roles, m, path,
+                         progress=lambda event, index, layer: events.append((event, index, layer)))
+        assert calls == [['db-migrate'], ['gateway']]
+        assert events == [('started', 0, ['db-migrate']), ('completed', 0, ['db-migrate']),
+                          ('started', 1, ['gateway']), ('completed', 1, ['gateway'])]
     for role in renewal.INITIALIZERS:
         with pytest.raises(ValueError):
             renewal.owned_roles(m, roles | {role})
@@ -383,6 +427,9 @@ def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreat
                                                 'config_hash': '1' * 64}}
         for name in ['intent', 'result', 'new_log', 'rollback_log']:
             p = output / name;p.write_bytes(b'');cfg[name] = str(p)
+        cfg['step_receipts'] = [{}]
+        for name in ['new_started', 'new_completed', 'rollback_started', 'rollback_completed']:
+            p = output / name;p.write_bytes(b'');cfg['step_receipts'][0][name] = str(p)
         (root / f'.{PROJECT}.renewal.lock').write_bytes(b'')
         phase = {'root': old_root};calls = []
         class FakeDocker:
@@ -417,15 +464,18 @@ def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreat
             for path in [source, old_env, new_env, old_root / 'smtp_password', new_root / 'smtp_password']:
                 with pytest.raises(OSError): path.write_bytes(b'CONCURRENT_REPLACEMENT')
             calls.append('native')
-        def recreate(_, command, changing, services, m, log):
+        def recreate(_, command, changing, services, m, log, progress=None):
             assert changing == {'gateway'} and not changing & renewal.BAO_ROLES
             phase['root'] = new_root if str(new_env) in command else old_root
             calls.append('new' if phase['root'] == new_root else 'old')
+            assert progress is not None
+            progress('started', 0, sorted(changing))
             renewal.write_empty_private_file(log, 'SYNTHETIC_COMPOSE_LOG\n')
             if fail_new == 'uncertain': raise renewal.UncertainComposeMutation('SYNTHETIC_TIMEOUT')
             elif fail_new == 'unselected': phase['unselected_changed'] = True
             elif fail_new and (phase['root'] == new_root or fail_new == 'rollback'):
                 raise RuntimeError('SYNTHETIC_PARTIAL_FAILURE')
+            progress('completed', 0, sorted(changing))
         monkeypatch.setattr(renewal, 'Docker', FakeDocker)
         monkeypatch.setattr(renewal, 'native_preflight', native)
         monkeypatch.setattr(renewal, 'recreate', recreate)

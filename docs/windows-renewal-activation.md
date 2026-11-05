@@ -79,3 +79,18 @@ nonzero exits, large output, gate-assignment failure, timeouts and surviving
 grandchildren. Dependency-layer and real Docker containment qualification remain
 blockers to exposing a CLI or unattended lifecycle. Job termination does not prove
 Docker daemon operation quiescence. See [Microsoft Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).
+
+Before intent, the entire active dependency graph is validated for normalized
+conditions, required closure, health/completion contracts and cycles. Selected
+roles are recreated in dependency layers. Each role appears in one invocation;
+the preserved foundation and completed layers must be ready before advancing.
+A transient health failure therefore cannot leave all downstream layers created
+by an earlier bulk invocation. The overall phase deadline remains bounded.
+
+The caller must preallocate `step_receipts`, one object per computed layer, with
+exact keys `new_started`, `new_completed`, `rollback_started`, `rollback_completed`.
+Each value names a distinct existing empty private file beside the four main
+outputs. The durable intent retains the layer plan and receipt paths. A started
+receipt is flushed before each mutating invocation, and a completed receipt only
+after readiness. Rollback uses the same validated ordering with the old env.
+Never replay an interrupted layer from these records without reconciliation.

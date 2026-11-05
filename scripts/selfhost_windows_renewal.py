@@ -445,6 +445,39 @@ class UncertainComposeMutation(RuntimeError):
         self.owned_processes_zero = False
 
 
+def dependency_layers(model, services, changing):
+    """Validate the active graph before intent; each selected role occurs once."""
+    require(isinstance(services, set) and changing and changing <= services)
+    declared = model['services'];dependencies = {}
+    for role in services:
+        dep = declared[role].get('depends_on', {})
+        require(isinstance(dep, dict), 'Normalized dependency map required')
+        for name, spec in dep.items():
+            require(isinstance(name, str) and isinstance(spec, dict)
+                    and type(spec.get('required', True)) is bool
+                    and type(spec.get('restart', False)) is bool)
+            condition = spec.get('condition', 'service_started')
+            require(condition in {'service_started', 'service_healthy', 'service_completed_successfully'})
+            require(name in services or spec.get('required', True) is False,
+                    'Required dependency is outside the active closure')
+            if name in services and condition == 'service_healthy':
+                check = declared[name].get('healthcheck')
+                require(isinstance(check, dict) and check.get('disable') is not True)
+            if name in services and condition == 'service_completed_successfully':
+                require(name in COMPLETED_SERVICES | {'openbao-tls-init'})
+        dependencies[role] = set(dep) & services
+    pending = set(services)
+    while pending:
+        ready = {n for n in pending if not dependencies[n] & pending}
+        require(ready, 'Active dependency graph is cyclic');pending -= ready
+    pending = set(changing);layers = []
+    while pending:
+        ready = {n for n in pending if not dependencies[n] & pending}
+        require(ready, 'Selected dependency graph is cyclic')
+        layers.append(sorted(ready));pending -= ready
+    return layers
+
+
 def run_owned_mutation(arguments, timeout=240):
     """Contain only this gated CLI tree; daemon work remains outside the job.
 
@@ -609,38 +642,47 @@ def run_owned_mutation(arguments, timeout=240):
             raise error from None
 
 
-def recreate(docker, command, changing, services, model, log):
+def recreate(docker, command, changing, services, model, log, progress=None):
     deadline = time.monotonic() + 600
     tail = b''
     uncertain = False
+    ready = services - changing
     try:
-        try:
-            p = run_owned_mutation([*command, 'up', '-d', '--no-deps', '--no-build',
-                                    '--pull', 'never', '--force-recreate', *sorted(changing)])
-        except (subprocess.TimeoutExpired, UncertainComposeMutation) as error:
-            uncertain = True
-            tail = ((error.stdout or b'') + (error.stderr or b''))[-60000:]
-            raise UncertainComposeMutation('Compose timeout requires operator recovery') from None
-        tail = (p.stdout + p.stderr)[-60000:]
-        # A nonzero invocation may still leave authoritative ready state. A
-        # partial closure instead enters rollback; never re-up successful jobs.
-        while time.monotonic() < deadline:
-            items = statuses(command, cwd=Path.cwd())
-            if windows_healthy(items, services, model):
-                return
-            present = {x.get('Service') for x in items}
-            require(present == services and len(items) == len(services),
-                    'Owned creation incomplete; rollback required')
-            for item in items:
-                state = item.get('State', '').lower()
-                completed = item['Service'] in COMPLETED_SERVICES | {'openbao-tls-init'}
-                require(state in {'running', 'restarting', 'exited', 'dead'},
-                        'Owned role was not started; rollback required')
-                if state in {'dead', 'exited'} and (not completed or item.get('ExitCode') != 0):
-                    raise RuntimeError('Owned role exited during renewal')
-            # Readiness polling only: no extra starts of completed jobs.
-            time.sleep(2)
-        raise RuntimeError('Windows renewal did not become ready')
+        for index, layer in enumerate(dependency_layers(model, services, changing)):
+            require(time.monotonic() < deadline, 'Windows renewal phase deadline reached')
+            if progress is not None:
+                progress('started', index, layer)
+            try:
+                p = run_owned_mutation([*command, 'up', '-d', '--no-deps', '--no-build',
+                                        '--pull', 'never', '--force-recreate', *layer],
+                                       timeout=min(240, deadline - time.monotonic()))
+            except (subprocess.TimeoutExpired, UncertainComposeMutation) as error:
+                uncertain = True
+                tail = (tail + (error.stdout or b'') + (error.stderr or b''))[-60000:]
+                raise UncertainComposeMutation('Compose timeout requires operator recovery') from None
+            tail = (tail + p.stdout + p.stderr)[-60000:]
+            selected = ready | set(layer)
+            while time.monotonic() < deadline:
+                items = statuses(command, cwd=Path.cwd())
+                present = {x.get('Service') for x in items}
+                require(present == services and len(items) == len(services),
+                        'Owned creation incomplete; rollback required')
+                checked = [x for x in items if x['Service'] in selected]
+                if windows_healthy(checked, selected, model):
+                    break
+                for item in checked:
+                    state = item.get('State', '').lower()
+                    completed = item['Service'] in COMPLETED_SERVICES | {'openbao-tls-init'}
+                    require(state in {'running', 'restarting', 'exited', 'dead'},
+                            'Owned role was not started; rollback required')
+                    if state in {'dead', 'exited'} and (not completed or item.get('ExitCode') != 0):
+                        raise RuntimeError('Owned role exited during renewal')
+                time.sleep(2)
+            else:
+                raise RuntimeError('Windows renewal did not become ready')
+            if progress is not None:
+                progress('completed', index, layer)
+            ready = selected
     finally:
         try:
             write_empty_private_file(log, bounded_diagnostic(tail))
@@ -694,6 +736,17 @@ def activate(config):
             require(len(owned) == len(services))
             changing = owned_roles(old_model, services)
             require(owned_roles(new_model, services) == changing)
+            layers = dependency_layers(old_model, services, changing)
+            require(dependency_layers(new_model, services, changing) == layers)
+            steps = config['step_receipts']
+            step_keys = {'new_started', 'new_completed', 'rollback_started', 'rollback_completed'}
+            require(isinstance(steps, list) and len(steps) == len(layers)
+                    and all(isinstance(s, dict) and set(s) == step_keys for s in steps))
+            step_paths = [Path(p) for s in steps for p in s.values()]
+            all_paths = [*outputs.values(), *step_paths]
+            require(len(set(all_paths)) == len(all_paths)
+                    and all(p.parent == outputs['intent'].parent for p in step_paths))
+            require(all(read_private_bytes(p) == b'' for p in step_paths))
             old_hashes, new_hashes = docker.hashes(old), docker.hashes(new)
             checked_live_configuration(owned, old_hashes, config['tls_init_receipt'])
             require(windows_healthy(statuses(old, cwd=source.parent), services, old_model))
@@ -721,7 +774,8 @@ def activate(config):
                 'current_secrets': str(current), 'renewed_secrets': str(renewed),
                 'owned_before': {str(_service(x)): x['Id'] for x in owned},
                 'data_mounts_before': data_before,
-                'changing': sorted(changing), 'candidate_only': True}) + '\n')
+                'changing': sorted(changing), 'layers': layers, 'step_receipts': steps,
+                'candidate_only': True}) + '\n')
             started = True
             def verify(command, root, model):
                 items = docker.containers()
@@ -735,7 +789,13 @@ def activate(config):
                 return checked_secret_mounts(owned_now, project, root, services, model,
                                               path_equal=windows_mount_path_equal)
             try:
-                recreate(docker, new, changing, services, new_model, outputs['new_log'])
+                def progress(phase):
+                    def record(event, index, layer):
+                        require(layer == layers[index] and event in {'started', 'completed'})
+                        write_empty_private_file(Path(steps[index][phase + '_' + event]),
+                                                 json.dumps({'roles': layer, 'event': event, 'time': time.time()}) + '\n')
+                    return record
+                recreate(docker, new, changing, services, new_model, outputs['new_log'], progress=progress('new'))
                 mounts = verify(new, renewed, new_model)
                 result = {'result': 'activated', 'secret_mounts': mounts}
             except UncertainComposeMutation:
@@ -743,7 +803,7 @@ def activate(config):
                 # Never race an uncertain operation with an automatic rollback.
                 raise
             except Exception:
-                recreate(docker, old, changing, services, old_model, outputs['rollback_log'])
+                recreate(docker, old, changing, services, old_model, outputs['rollback_log'], progress=progress('rollback'))
                 mounts = verify(old, current, old_model)
                 result = {'result': 'rolled_back', 'secret_mounts': mounts}
             result.update(schema=SCHEMA, project=project, services=len(services),
