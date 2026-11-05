@@ -49,7 +49,7 @@ $global:task=[pscustomobject]@{
  Principal=[pscustomobject]@{UserId=$user;LogonType='Interactive';RunLevel='Limited'}
  Actions=@([pscustomobject]@{Execute=$shell;Arguments=$expected;WorkingDirectory=ROOT})
  Triggers=@([pscustomobject]@{CimClass=[pscustomobject]@{CimClassName='MSFT_TaskLogonTrigger'};
- UserId=$user;Delay='PT2M';Enabled=$true;Repetition=[pscustomobject]@{Interval='';Duration='';StopAtDurationEnd=$false}})
+ UserId=$user;Delay='PT2M';Enabled=$true;EndBoundary='';Repetition=[pscustomobject]@{Interval='';Duration='';StopAtDurationEnd=$false}})
  Settings=[pscustomobject]@{Enabled=$true;StartWhenAvailable=$true;MultipleInstances='IgnoreNew';
  ExecutionTimeLimit='PT20M';RestartCount=3;RestartInterval='PT2M'} }
 if ('CASE' -like 'renew*') {
@@ -62,8 +62,15 @@ if ('CASE' -like 'renew*') {
   StartBoundary=$registered.AddSeconds($delay).ToString("yyyy-MM-dd'T'HH:mm:sszzz")
   Repetition=[pscustomobject]@{Interval='PT240M';Duration='';StopAtDurationEnd=$false} })
  $global:task.Settings.ExecutionTimeLimit='PT1H';$global:task.Settings.RestartCount=0
+ if ('CASE' -like 'renew-window*') {
+  foreach($trigger in $global:task.Triggers) {$trigger.EndBoundary=$registered.AddMinutes(300).ToString("yyyy-MM-dd'T'HH:mm:sszzz")}
+ }
 }
 switch ('CASE') {
+ 'renew-window-missing-logon' {$global:task.Triggers[0].EndBoundary=''}
+ 'renew-window-missing-timer' {$global:task.Triggers[1].EndBoundary=''}
+ 'renew-window-wrong-end' {$global:task.Triggers[0].EndBoundary=$registered.AddMinutes(301).ToString("yyyy-MM-dd'T'HH:mm:sszzz")}
+ 'renew-window-local-end' {$global:task.Triggers[1].EndBoundary='2026-11-05T10:00:00'}
  'wrong-user' {$global:task.Principal.UserId='SYSTEM'}
  'highest' {$global:task.Principal.RunLevel='Highest'}
  'wrong-logon' {$global:task.Principal.LogonType='ServiceAccount'}
@@ -128,6 +135,7 @@ function Set-ScheduledTask {throw 'Update forbidden'}
         if case=='renew-first-check':options+=' -FirstRenewalDelaySeconds 15'
         elif case=='renew-invalid-first-delay':options+=' -FirstRenewalDelaySeconds 14'
         elif case=='renew-wrong-delay-config':options+=' -FirstRenewalDelaySeconds 120'
+        if case.startswith('renew-window'):options+=' -RenewalWindowMinutes 300'
     for key, value in {'CASE': case, 'SCRIPTS': legacy.quote(scripts), 'ROOT': legacy.quote(tmp_path),
                        'CONFIG': legacy.quote(config), 'PYTHON': legacy.quote(python),
                        'STARTED': legacy.quote(started), 'VERIFIER': legacy.quote(verifier),
@@ -139,7 +147,7 @@ function Set-ScheduledTask {throw 'Update forbidden'}
 
 
 @pytest.mark.parametrize('case', ['check', 'renew-check', 'run', 'renew-run',
-                                'renew-first-check','renew-reordered-check','renew-utc-z-check'])
+                                'renew-first-check','renew-reordered-check','renew-utc-z-check','renew-window-check'])
 def test_exact_managed_task_check_or_one_bounded_run(tmp_path, case):
     result, child, started = invoke(tmp_path, case)
     assert result.returncode == 0, result.stderr
@@ -165,7 +173,8 @@ def test_exact_managed_task_check_or_one_bounded_run(tmp_path, case):
     'preflight-timeout','renew-logon-repetition','renew-legacy-logon-only','renew-local-boundary',
     'renew-wrong-delay','renew-missing-date','renew-timer-disabled','renew-timer-end',
     'renew-timer-random','renew-duplicate-logon','renew-future-registration',
-    'renew-invalid-first-delay','renew-wrong-delay-config'])
+    'renew-invalid-first-delay','renew-wrong-delay-config','renew-window-missing-logon',
+    'renew-window-missing-timer','renew-window-wrong-end','renew-window-local-end'])
 def test_unqualified_task_never_starts(tmp_path, case):
     result, _child, started = invoke(tmp_path, case)
     assert result.returncode != 0 and not started.exists()

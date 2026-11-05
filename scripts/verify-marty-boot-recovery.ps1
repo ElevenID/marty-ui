@@ -7,6 +7,7 @@ param(
     [string]$LogicalTlsProject,
     [int]$RenewalIntervalMinutes = 0,
     [int]$FirstRenewalDelaySeconds = 0,
+    [int]$RenewalWindowMinutes = 0,
     [switch]$CheckOnly,
     [int]$TimeoutSeconds = 3600,
     [int]$PreflightTimeoutSeconds = 300,
@@ -32,11 +33,13 @@ if ($ManagedPython) {
         if ($LogicalTlsProject -cnotmatch '\Amarty-(selfhost|production)-[a-z0-9][a-z0-9-]{0,59}\z' -or
             $RenewalIntervalMinutes -lt 15 -or $RenewalIntervalMinutes -gt 240 -or
             ($FirstRenewalDelaySeconds -ne 0 -and ($FirstRenewalDelaySeconds -lt 15 -or
-                $FirstRenewalDelaySeconds -gt 60*$RenewalIntervalMinutes))) {
+                $FirstRenewalDelaySeconds -gt 60*$RenewalIntervalMinutes)) -or
+            $RenewalWindowMinutes -lt 0 -or $RenewalWindowMinutes -gt 1440 -or
+            ($RenewalWindowMinutes -gt 0 -and 60*$RenewalWindowMinutes -le $(if ($FirstRenewalDelaySeconds) {$FirstRenewalDelaySeconds} else {60*$RenewalIntervalMinutes}))) {
             throw 'Use the exact enrolled namespace and installed renewal interval.'
         }
     } elseif ($LogicalTlsProject -or $PSBoundParameters.ContainsKey('RenewalIntervalMinutes') -or
-        $PSBoundParameters.ContainsKey('FirstRenewalDelaySeconds')) {
+        $PSBoundParameters.ContainsKey('FirstRenewalDelaySeconds') -or $PSBoundParameters.ContainsKey('RenewalWindowMinutes')) {
         throw 'Renewal settings require RenewCredentials.'
     }
     if ($StatusFile -and (-not [IO.Path]::IsPathRooted($StatusFile) -or
@@ -76,8 +79,8 @@ if ($ManagedPython) {
             $timers = @($Task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskTimeTrigger' })
             if ($timers.Count -ne 1) { throw 'Expected exactly one independent renewal time trigger.' }
             $timer = $timers[0]
-            if ($trigger.Repetition.Interval -or $trigger.Repetition.Duration -or $trigger.EndBoundary -or
-                -not $timer.Enabled -or $timer.EndBoundary -or [string]$timer.RandomDelay -notin @('', 'PT0S') -or
+            if ($trigger.Repetition.Interval -or $trigger.Repetition.Duration -or
+                -not $timer.Enabled -or [string]$timer.RandomDelay -notin @('', 'PT0S') -or
                 $timer.Repetition.Interval -ne ('PT'+$RenewalIntervalMinutes+'M') -or
                 $timer.Repetition.Duration -or $timer.Repetition.StopAtDurationEnd -or
                 $Task.Settings.ExecutionTimeLimit -ne 'PT1H' -or $Task.Settings.RestartCount -ne 0) {
@@ -95,6 +98,19 @@ if ($ManagedPython) {
             $firstDelay = if ($FirstRenewalDelaySeconds) { $FirstRenewalDelaySeconds } else { 60*$RenewalIntervalMinutes }
             if (($boundary-$registration).TotalSeconds -ne $firstDelay -or $registration -gt [DateTimeOffset]::UtcNow.AddSeconds(60)) {
                 throw 'The first renewal boundary differs from the expected delay or registration clock.'
+            }
+            foreach ($renewalTrigger in @($trigger, $timer)) {
+                if ($RenewalWindowMinutes) {
+                    $end = [DateTimeOffset]::MinValue
+                    if ([string]$renewalTrigger.EndBoundary -cnotmatch $utcPattern -or
+                        -not [DateTimeOffset]::TryParse([string]$renewalTrigger.EndBoundary, [Globalization.CultureInfo]::InvariantCulture,
+                            [Globalization.DateTimeStyles]::None, [ref]$end) -or
+                        $end -ne $registration.AddMinutes($RenewalWindowMinutes)) {
+                        throw 'Both renewal triggers must expire at the exact qualified UTC boundary.'
+                    }
+                } elseif ($renewalTrigger.EndBoundary) {
+                    throw 'An indefinite renewal task must not contain a trigger expiry.'
+                }
             }
         } elseif ($trigger.Repetition.Interval -or $Task.Settings.ExecutionTimeLimit -ne 'PT20M' -or
             $Task.Settings.RestartCount -ne 3 -or $Task.Settings.RestartInterval -ne 'PT2M') {
