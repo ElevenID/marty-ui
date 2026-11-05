@@ -739,6 +739,8 @@ def activate(config):
             old_bytes = stack.enter_context(hold_private_generation(current, names))
             new_bytes = stack.enter_context(hold_private_generation(renewed, names))
             checked_models(old_model, new_model, current, renewed, names)
+            from selfhost_windows_selection import activation_admission
+            stack.enter_context(activation_admission(config, old_bytes, new_bytes, before_env, after_env))
             baseline = docker.containers()
             owned = [x for x in baseline if _project(x) == project]
             services = {_service(x) for x in owned}

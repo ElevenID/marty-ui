@@ -113,3 +113,38 @@ stdin pipe. Private payloads are absent from command arguments. Command argument
 private input, encoded gate request and output tails each have separate bounds;
 every owned command inherits a private pipe or DEVNULL rather than the gate stdin.
 Durable selection/reconciliation and recovery integration remain separate work.
+
+`selfhost_windows_selection.py` adds a candidate selection journal beside its
+generations, at `.<project>.generation-selection`. It uses the same existing
+exclusive project lock, private NTFS proofs and immutable model/engine/operator
+binding. Records are append-only, sequence/parent-linked and bounded; secret
+values are never stored in them. Original transaction configs, intents and results
+remain unchanged.
+
+The library exposes these bounded operations:
+
+- `adopt(config_path)` proves an existing successful activation, then selects its
+  renewed inputs. Interrupted initial metadata adoption can resume after proof.
+- `prepare(next_config_path)` proves the selected current inputs and writes the
+  pending intent before activation. An initialized owner makes unregistered or
+  changed activation requests fail before mutation.
+- `complete(config_path)` verifies the durable activation/rollback result and
+  current runtime before appending selection. `reconcile=True` never replays
+  Docker: an empty original intent permits only the unchanged old selection;
+  otherwise the terminal phase needs every durable started/completed boundary.
+  Incomplete or uncertain commands remain operator recovery cases even when a
+  snapshot looks healthy. Original empty result files stay empty.
+- `status(config_path)` reports journal state, not live readiness. Pending,
+  malformed, partial or extra records never silently fall back to older inputs.
+- `selected_inputs(config_path)` holds the project lock, selected metadata,
+  model/env and complete generations for a recovery consumer. Its immutable lease
+  exposes paths and a current-proof callback, no secret bytes; the callback refuses
+  use after the context closes.
+
+Read-only proofs may use a fresh scoped authority token file without rewriting
+historical configs. Native authority/lifetime decisions remain mandatory. Existing
+Linux generation owners and Windows Compose/native validators are reused; this
+library starts no services and installs no task. PowerShell startup integration,
+producer scheduling, expired-credential recovery and engine/logon/host-reboot
+qualification remain required before unattended operation. Process-interruption
+controls do not claim power-loss durability qualification.
