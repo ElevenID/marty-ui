@@ -45,6 +45,49 @@ MANDATORY_JOBS = frozenset({
     "preflight-selfhost-prepared-consumer", "prepare-installer-inputs",
 })
 LANES = frozenset({"oid4vci-issuer", "oid4vp-final", "oid4vp-url-query", "oid4vp-mdoc", "haip", "w3c-v2", "eudi"})
+REFUSAL_STAGES = frozenset({
+    "initialization", "repository_inspection", "mode_validation", "capability_protection",
+    "capability_ancestor", "capability_tag_absence", "capability_tag_object",
+    "capability_negative", "capability_negative_readback", "capability_before_positive",
+    "capability_positive", "capability_positive_readback", "capability_final_inspection",
+    "qualified_tag", "observation_finalization",
+})
+CAPABILITY_REFUSALS = frozenset({"capability_rulesets_unavailable", "capability_current_credential_not_protected"})
+
+
+class OperatorRefusal(handoff.HandoffError):
+    """A fixed internal reason code, never an API response or exception message."""
+
+    def __init__(self, reason: str) -> None:
+        handoff.require(reason in CAPABILITY_REFUSALS, "Invalid internal operator reason")
+        super().__init__(reason)
+        self.reason = reason
+
+
+class RefusalDiagnostics:
+    def __init__(self) -> None:
+        self.stage = "initialization"
+
+    def enter(self, stage: str) -> None:
+        handoff.require(stage in REFUSAL_STAGES, "Invalid internal operator stage")
+        self.stage = stage
+
+
+def refusal_reason(error: BaseException) -> str:
+    # Do not serialize str(error), arguments, API values, URLs, or subprocess output.
+    if isinstance(error, OperatorRefusal) and error.reason in CAPABILITY_REFUSALS:
+        return error.reason
+    if isinstance(error, handoff.HandoffError):
+        return "handoff_validation_refused"
+    if isinstance(error, atomic.AtomicGitError):
+        return "atomic_git_validation_refused"
+    if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+        return "transport_timeout"
+    if isinstance(error, subprocess.SubprocessError):
+        return "subprocess_failed"
+    if isinstance(error, OSError):
+        return "local_io_failed"
+    return "invalid_operator_state"
 
 
 def utc_now() -> str:
@@ -251,29 +294,45 @@ def read_exact_tag(github: handoff.GitHub, tag: str, object_sha: str, source: st
     return value
 
 
-def require_capability_main_protection(inspection: dict) -> list[int]:
-    # Keep the policy-negative experiment tied to an active, unbypassable
-    # main merge queue. Do not infer a pull-request ruleset from GH013: that
-    # requirement can be supplied separately by classic branch protection.
+def require_capability_main_protection(inspection: dict) -> list[dict]:
+    # Bind the experiment to the CURRENT credential's explicit bypass capability.
+    # GitHub hides bypass_actors without ruleset write access. Missing is unknown,
+    # not an empty global actor inventory; retain the raw snapshot unchanged.
+    # Do not infer a pull-request ruleset from GH013: classic protection can own it.
     rulesets = inspection.get("rulesets")
-    handoff.require(isinstance(rulesets, list), "Capability ruleset snapshot is unavailable")
-    protecting = [value["id"] for value in rulesets if isinstance(value, dict)
-                  and handoff.positive(value.get("id"))
-                  and value.get("target") == "branch" and value.get("enforcement") == "active"
-                  and value.get("source_type") == "Repository" and value.get("source") == REPOSITORY
-                  and value.get("conditions") == {
-                      "ref_name": {"include": ["refs/heads/main"], "exclude": []}}
-                  and value.get("bypass_actors") == [] and value.get("current_user_can_bypass") == "never"
-                  and isinstance(value.get("rules"), list)
-                  and any(isinstance(rule, dict) and rule.get("type") == "merge_queue"
-                          for rule in value["rules"])]
-    handoff.require(protecting, "Capability requires an active exact-main merge queue with no bypass")
-    return sorted(protecting)
+    if not isinstance(rulesets, list):
+        raise OperatorRefusal("capability_rulesets_unavailable")
+    protecting = []
+    for value in rulesets:
+        if not (isinstance(value, dict) and handoff.positive(value.get("id"))
+                and value.get("target") == "branch" and value.get("enforcement") == "active"
+                and value.get("source_type") == "Repository" and value.get("source") == REPOSITORY
+                and value.get("conditions") == {"ref_name": {"include": ["refs/heads/main"], "exclude": []}}
+                and value.get("current_user_can_bypass") == "never"
+                and isinstance(value.get("rules"), list)
+                and any(isinstance(rule, dict) and rule.get("type") == "merge_queue" for rule in value["rules"])):
+            continue
+        visibility = "not_disclosed"
+        if "bypass_actors" in value:
+            # An explicit null, malformed value, or nonempty inventory is not
+            # the documented omission and remains non-qualifying.
+            if type(value["bypass_actors"]) is not list or value["bypass_actors"]:
+                continue
+            visibility = "observed_empty"
+        protecting.append({"ruleset_id": value["id"], "current_user_can_bypass": "never",
+                           "bypass_actor_inventory_visibility": visibility})
+    if not protecting:
+        raise OperatorRefusal("capability_current_credential_not_protected")
+    return sorted(protecting, key=lambda value: value["ruleset_id"])
 
 
 def qualify_capability(github: handoff.GitHub, native: atomic.NativeGit,
-                       run_id: int, main: str, inspection: dict) -> dict:
-    protection_ids = require_capability_main_protection(inspection)
+                       run_id: int, main: str, inspection: dict, *,
+                       diagnostics: RefusalDiagnostics | None = None) -> dict:
+    diagnostics = diagnostics or RefusalDiagnostics()
+    diagnostics.enter("capability_protection")
+    protection = require_capability_main_protection(inspection)
+    diagnostics.enter("capability_ancestor")
     parents = handoff.git("show", "-s", "--format=%P", main, deadline=github.deadline).split()
     handoff.require(len(parents) == 1 and handoff.SHA.fullmatch(parents[0]) is not None,
                     "Capability needs a real distinct first-parent ancestor")
@@ -283,37 +342,47 @@ def qualify_capability(github: handoff.GitHub, native: atomic.NativeGit,
                                     ".github/workflows", deadline=github.deadline),
                     "Capability ancestor must have identical workflow files; use the separate version-only change")
     tag = f"v-release-capability-{run_id}-1"
+    diagnostics.enter("capability_tag_absence")
     handoff.require(github.json(f"repos/{REPOSITORY}/git/ref/tags/{tag}", absent=True) is None,
                     "Capability audit ref already exists")
     message = ("Non-release atomic-ref capability qualification\n\n"
                f"Operator-Run: {run_id}\nOperator-Attempt: 1\n"
                f"Operator-Source: {main}\nAncestor-Source: {ancestor}\n"
                f"Rulesets-SHA256: {inspection['rulesets_sha256']}\n")
+    diagnostics.enter("capability_tag_object")
     obj = create_tag_object(github, tag, ancestor, message)
     handoff.require(github.main()["commit"]["sha"] == main, "Main changed before capability comparison")
     # Model an admitted A -> A no-op that has become stale at current C.
     # The transport binds discovery to C without proposing an A -> C update.
+    diagnostics.enter("capability_negative")
     negative = native.exchange(atomic.transaction_spec(ancestor, main, tag, obj["sha"],
                                                         f"capability-negative-{run_id}-1"))
     handoff.require(negative["decision"] in {"confirmed_stale_main_refusal", "confirmed_main_policy_refusal"},
                     "Negative capability evidence was not admitted")
+    diagnostics.enter("capability_negative_readback")
     handoff.require(github.main()["commit"]["sha"] == main
                     and github.json(f"repos/{REPOSITORY}/git/ref/tags/{tag}", absent=True) is None,
                     "Negative atomic capability transaction unexpectedly changed a ref")
+    diagnostics.enter("capability_before_positive")
     handoff.require(inspect_repository(github) == (run_id, main, inspection),
                     "Operator context or repository rules changed before the positive capability transaction")
+    diagnostics.enter("capability_positive")
     positive = native.exchange(atomic.transaction_spec(main, main, tag, obj["sha"],
                                                         f"capability-positive-{run_id}-1"))
     handoff.require(positive["decision"] == "confirmed_success", "Positive capability transaction did not succeed")
+    diagnostics.enter("capability_positive_readback")
     read_exact_tag(github, tag, obj["sha"], ancestor, message)
     handoff.require(github.main()["commit"]["sha"] == main, "Main changed during capability qualification")
+    diagnostics.enter("capability_final_inspection")
     final_run, final_source, final_inspection = inspect_repository(github)
     handoff.require((final_run, final_source, final_inspection) == (run_id, main, inspection),
                     "Operator context or repository rules changed during capability qualification")
-    return {"schema": "marty.release-tag-capability/v3", "status": "success", "repository": REPOSITORY,
+    return {"schema": "marty.release-tag-capability/v4", "status": "success", "repository": REPOSITORY,
             "operator_run_id": run_id, "operator_run_attempt": 1, "operator_source_sha": main,
             "ancestor_source_sha": ancestor, "audit_tag": tag, "tag_object_sha": obj["sha"],
-            "main_protection_ruleset_ids": protection_ids,
+            "main_protection_ruleset_ids": [value["ruleset_id"] for value in protection],
+            "main_protection_scope": "current_workflow_credential",
+            "main_protection_observations": protection,
             "transport": atomic.TRANSPORT,
             "negative_transaction": transaction_summary(negative), "positive_transaction": transaction_summary(positive),
             "main_before_sha": main, "main_after_sha": main, "completed_at": utc_now(), **inspection}
@@ -483,6 +552,7 @@ def main() -> int:
     native = None
     journal = None
     exit_code = 1
+    diagnostics = RefusalDiagnostics()
 
     def observations() -> dict:
         run = os.environ.get("GITHUB_RUN_ID", "")
@@ -506,7 +576,9 @@ def main() -> int:
         native = atomic.NativeGit(runner=handoff.command, deadline=lambda: github.deadline, persist=persist)
         github.observer = persist
         persist()
+        diagnostics.enter("repository_inspection")
         operator_run, source, inspection = inspect_repository(github)
+        diagnostics.enter("mode_validation")
         if args.mode in {"inspect", "qualify-capability"}:
             handoff.require(not args.promotion_run_id and not args.claim_run_id and args.gh is None and args.cosign is None,
                             "Capability inspection does not accept candidate or executable overrides")
@@ -515,13 +587,14 @@ def main() -> int:
                           "operator_run_id": operator_run, "operator_run_attempt": 1, "operator_source_sha": source,
                           "read_only": True, "completed_at": utc_now(), **inspection}
             else:
-                result = qualify_capability(github, native, operator_run, source, inspection)
+                result = qualify_capability(github, native, operator_run, source, inspection, diagnostics=diagnostics)
         else:
             handoff.require(re.fullmatch(r"[1-9][0-9]*", args.promotion_run_id) is not None
                             and re.fullmatch(r"[1-9][0-9]*", args.claim_run_id) is not None
                             and handoff.positive(int(args.promotion_run_id)) and handoff.positive(int(args.claim_run_id))
                             and args.gh is not None and args.cosign is not None,
                             "Qualified tag creation requires exact run IDs and admitted verifier binaries")
+            diagnostics.enter("qualified_tag")
             result = create_qualified_tag(github, native, operator_run, source, int(args.promotion_run_id), args.claim_run_id,
                                           args.gh.resolve(strict=True), args.cosign.resolve(strict=True), inspection)
         exit_code = 0
@@ -529,8 +602,11 @@ def main() -> int:
         # Errors are classifications only. Never echo command output, credentials
         # or redirected archive URLs. An unknown mutation outcome stays unknown.
         result["error_type"] = type(error).__name__
+        result["refusal_stage"] = diagnostics.stage
+        result["refusal_reason"] = refusal_reason(error)
         result["completed_at"] = utc_now()
-        print("Release tag operator refused; inspect its bound receipt. No automatic mutation retry or cleanup.")
+        print(f"Release tag operator refused at {diagnostics.stage} ({result['refusal_reason']}); "
+              "inspect its bound receipt. No automatic mutation retry or cleanup.")
     finally:
         if journal is not None:
             try:
@@ -539,6 +615,7 @@ def main() -> int:
                 exit_code = 1
                 result = {"schema": "marty.release-tag-operator-refusal/v1", "status": "refused", "mode": args.mode,
                           "repository": REPOSITORY, "error_type": "ObservationError", "completed_at": utc_now(),
+                          "refusal_stage": "observation_finalization", "refusal_reason": "observation_write_failed",
                           "automatic_retry_or_cleanup_performed": False}
                 print("Release tag operator could not preserve its complete audit; no automatic retry is allowed.")
             finally:
