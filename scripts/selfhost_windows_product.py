@@ -126,6 +126,11 @@ def checked_runtime_change(before, after, old_model, new_model, admitted, image_
     the four exact read-only UI fixtures. Initializer identities cannot change.
     An image config ID is not a registry signature or a reversible schema proof.
     """
+    return _checked_runtime_change(before, after, old_model, new_model, admitted, image_ids,
+                                   expected_project=expected_project, allow_pending=False)
+
+
+def _checked_runtime_change(before, after, old_model, new_model, admitted, image_ids, *, expected_project, allow_pending):
     change = checked_model_change(old_model, new_model, admitted)
     require(isinstance(before, list) and isinstance(after, list))
     def indexed(items):
@@ -157,22 +162,27 @@ def checked_runtime_change(before, after, old_model, new_model, admitted, image_
                     for value in image_ids.values()), 'Qualified image ID closure differs')
     fixture_removed = bool(old_model['services']['ui'].get('volumes')) and (
         old_model['services']['ui'].get('volumes') != new_model['services']['ui'].get('volumes'))
+    if fixture_removed:
+        fixtures = [mount for mount in old['ui']['Mounts'] if mount['Destination'] in UI_FIXTURE_TARGETS]
+        require({mount['Destination'] for mount in fixtures} == UI_FIXTURE_TARGETS
+                and all(mount.get('Type') == 'bind' and mount.get('RW') is False for mount in fixtures),
+                'Runtime UI fixture mounts differ')
     for role in sorted(roles):
         prior = old[role];current = new[role]
         if role in HISTORICAL_ROLES:
             require(renewal.context_snapshot([current]) == renewal.context_snapshot([prior])
                     and current['Config'] == prior['Config'], 'Historical initializer changed')
             continue
-        require(prior['Config'].get('Image') == old_model['services'][role]['image']
-                and current['Config'].get('Image') == new_model['services'][role]['image'],
+        require(prior['Config'].get('Image') == old_model['services'][role]['image'],
+                'Original runtime image reference differs from retained model')
+        if allow_pending and current['Config'] == prior['Config'] and (
+                renewal.context_snapshot([current]) == renewal.context_snapshot([prior])):
+            continue
+        require(current['Config'].get('Image') == new_model['services'][role]['image'],
                 'Runtime image reference differs from retained model')
         require(current['Image'] == image_ids[role], 'Runtime image differs from qualified image')
         mounts = deepcopy(prior['Mounts'])
         if role == 'ui' and fixture_removed:
-            fixtures = [mount for mount in mounts if mount['Destination'] in UI_FIXTURE_TARGETS]
-            require({mount['Destination'] for mount in fixtures} == UI_FIXTURE_TARGETS
-                    and all(mount.get('Type') == 'bind' and mount.get('RW') is False for mount in fixtures),
-                    'Runtime UI fixture mounts differ')
             mounts = [mount for mount in mounts if mount['Destination'] not in UI_FIXTURE_TARGETS]
         require(sorted(mounts, key=lambda mount: mount['Destination']) ==
                 sorted(current['Mounts'], key=lambda mount: mount['Destination']),
@@ -184,6 +194,56 @@ def checked_runtime_change(before, after, old_model, new_model, admitted, image_
     return {'before_sha256': hashlib.sha256(canonical(renewal.data_mounts(before))+b'\n').hexdigest(),
             'after_sha256': hashlib.sha256(canonical(renewal.data_mounts(after))+b'\n').hexdigest(),
             'roles': sorted(roles), 'ui_fixture_mounts_removed': fixture_removed}
+
+
+class ProductContext(renewal.ForeignContext):
+    """Full foreign-storage qualification during one bounded product transition.
+
+    This grants no execution/admission authority. The future transition owner
+    must hold authenticated composition/image/model inputs and durable intent.
+    This initial shape requires every noninitializer declared role to be active;
+    it cannot start or adopt inactive optional tunnel/connector declarations.
+    Only intact old-role observations or qualified new-role image/mount shapes
+    are admitted between layers. Uncertain context inherits the existing ban
+    on further writes, including rollback. Foreign proof/retries are unchanged.
+    """
+
+    def __init__(self, docker, project, baseline, volumes, helper_image, *, old_model,
+                 new_model, admitted, image_ids, configuration_hashes):
+        self.old_model = deepcopy(old_model)
+        self.new_model = deepcopy(new_model)
+        self.admitted = deepcopy(admitted)
+        self.image_ids = deepcopy(image_ids)
+        self.configuration_hashes = deepcopy(configuration_hashes)
+        roles = set(old_model['services'])-renewal.INITIALIZERS-HISTORICAL_ROLES
+        require(isinstance(configuration_hashes, dict) and set(configuration_hashes) == {'old', 'new'}
+                and all(isinstance(rows, dict) and set(rows) == roles and all(
+                    isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) for value in rows.values())
+                    for rows in configuration_hashes.values()), 'Qualified configuration hash closure differs')
+        change = checked_model_change(self.old_model, self.new_model, self.admitted)
+        super().__init__(docker, project, set(change['mutable_roles']), baseline, volumes, helper_image)
+        self._candidate(baseline, before_intent=True)
+
+    def _candidate(self, items, *, before_intent):
+        owned = [item for item in items if renewal._project(item) == self.project]
+        _checked_runtime_change(self.owned, owned, self.old_model, self.new_model,
+                                self.admitted, self.image_ids, expected_project=self.project, allow_pending=True)
+        prior = {renewal._service(item): item for item in self.owned}
+        for item in owned:
+            role = renewal._service(item)
+            if role in HISTORICAL_ROLES:continue
+            unchanged = item['Config'] == prior[role]['Config'] and (
+                renewal.context_snapshot([item]) == renewal.context_snapshot([prior[role]]))
+            side = 'old' if unchanged else 'new'
+            require(item['Config']['Labels'].get('com.docker.compose.config-hash') ==
+                    self.configuration_hashes[side][role], 'Product runtime configuration hash differs')
+        snapshot = renewal.context_snapshot(owned)
+        require({key: value for key, value in snapshot.items() if value['service'] not in self.changing}
+                == self.protected, 'Protected product observations changed')
+        if before_intent:
+            require(snapshot == {key: value for key, value in self.initial.items()
+                                 if value['project'] == self.project}, 'Product changed before intent')
+        return snapshot
 
 
 def migration_sources(checkout, source_sha):

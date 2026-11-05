@@ -211,3 +211,62 @@ def test_every_schema_and_persistent_configuration_job_has_explicit_phase_class(
     assert set(result['migration_roles']) == product.MIGRATION_ROLES
     assert set(result['configuration_roles']) == product.CONFIGURATION_ROLES
     assert not set(result['application_roles']) & (product.MIGRATION_ROLES | product.CONFIGURATION_ROLES | product.PROVIDER_ROLES)
+
+
+def product_context(tmp_path):
+    before, after, old, new, admitted, ids = runtime_candidate(tmp_path)
+    hashes = {'old': {}, 'new': {}}
+    for side, items, value in [('old', before, '3'*64), ('new', after, '4'*64)]:
+        for item in items:
+            role = product.renewal._service(item)
+            if role in product.HISTORICAL_ROLES:continue
+            hashes[side][role] = value
+            item['Config']['Labels']['com.docker.compose.config-hash'] = value
+    context = product.ProductContext(None, 'marty-production-synthetic', before, {}, 'synthetic-helper',
+        old_model=old, new_model=new, admitted=admitted, image_ids=ids, configuration_hashes=hashes)
+    return context, before, after
+
+
+def test_product_context_accepts_only_old_or_qualified_new_role_at_each_layer(tmp_path):
+    context, before, after = product_context(tmp_path)
+    current = deepcopy(before)
+    for index in range(len(current)):
+        current[index] = deepcopy(after[index])
+        context._candidate(current, before_intent=False)
+    with pytest.raises(ValueError):context._candidate(after, before_intent=True)
+
+
+@pytest.mark.parametrize('fault', ['image', 'storage', 'credential', 'old-role-restart', 'initializer', 'missing'])
+def test_product_context_rejects_unknown_partial_states_without_churn_retry(tmp_path, fault):
+    context, before, after = product_context(tmp_path)
+    current = deepcopy(before)
+    gateway = next(item for item in current if product.renewal._service(item) == 'gateway')
+    if fault == 'image':gateway['Image'] = 'sha256:'+'9'*64
+    elif fault == 'storage':gateway['Mounts'][0]['Name'] = 'unqualified'
+    elif fault == 'credential':gateway['Mounts'][1]['Source'] = 'C:/wrong/token'
+    elif fault == 'old-role-restart':gateway['RestartCount'] += 1
+    elif fault == 'initializer':
+        historical = next(item for item in current if product.renewal._service(item) == 'openbao-tls-init')
+        historical['Id'] = 'e'*64
+    else:current.pop()
+    with pytest.raises(ValueError):context._candidate(current, before_intent=False)
+
+
+def test_product_context_uses_full_existing_foreign_proof_and_unsafe_classification(tmp_path, monkeypatch):
+    context, before, after = product_context(tmp_path)
+    calls = []
+    def proof(self, *, before_intent):
+        calls.append((self, before_intent))
+        self._candidate(after, before_intent=before_intent)
+        return after
+    monkeypatch.setattr(product.renewal.ForeignContext, '_check', proof)
+    assert context.check() == after
+    assert calls == [(context, False)]
+    with pytest.raises(product.renewal.UnsafeRenewalContext):context.check(before_intent=True)
+
+
+def test_qualified_image_and_mounts_cannot_hide_wrong_compose_configuration(tmp_path):
+    context, before, after = product_context(tmp_path)
+    gateway = next(item for item in after if product.renewal._service(item) == 'gateway')
+    gateway['Config']['Labels']['com.docker.compose.config-hash'] = '5'*64
+    with pytest.raises(ValueError):context._candidate(after, before_intent=False)
