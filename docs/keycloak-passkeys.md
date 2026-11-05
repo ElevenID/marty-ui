@@ -96,8 +96,9 @@ they do not establish Marty organization or Badge authorization end to end.
 The combined proof also covers cookie rotation, CIBA and KMS-loss/custody checks.
 The CI image lane runs this
 composite proof against its freshly built images. This is synthetic-account and
-virtual-device evidence; actual Google/Open Badge application journeys and
-physical/cross-device behavior remain rollout gates.
+virtual-device evidence. The separate real-service application/Badge proof is
+described below; completed Google login, external wallet/device behavior and
+deployed qualification remain rollout gates.
 
 Google's provider prompt defaults to `select_account` when it is unset or empty;
 the configurator preserves an explicit provider prompt. This keeps Marty's fresh
@@ -161,7 +162,9 @@ assurance. The current theme inherits the installed version's `passkeys.ftl` and
 JavaScript instead of maintaining a separate implementation.
 
 For a repeatable application regression, run
-`scripts/probe_keycloak_passkey_application.py --help`. This opt-in CLI starts
+`scripts/probe_keycloak_passkey_application.py --help` with Python3.12 or later,
+pytest, cryptography, Playwright and an installed Chrome channel. Docker with
+Compose and the qualified cached images must be available. This opt-in CLI starts
 17 real Marty services on the disposable packaged Keycloak/PostgreSQL/Redis/KMS
 network. It generates test credentials and accounts, applies native migrations,
 and checks password login, Origin rejection, native enrollment for the original
@@ -170,6 +173,28 @@ application identity and authorization. Add `--administrator` to exercise the
 seeded administrator. Workload certificates use independent non-exportable
 Transit keys and exact SPIFFE role identities; sensitive RPCs use workload mTLS.
 This remains a local development stack with a Chrome virtual authenticator.
+
+Add `--badge` for the complete native Open Badge regression. The fixture first
+checks administrator passkey login, establishes the applicant's real OIDC
+identity, and issues a Badge containing that applicant's actual member ID. Its
+synthetic wallet exchanges the real offer, obtains a single-use nonce, signs an
+OID4VCI proof, and receives a genuine credential from the native issuer. A real
+administrator admits only the owned managed issuer, VC-JWT format and catalog
+Badge template through governed APIs. The wallet independently verifies the
+presentation-request signature against the published issuer DID method before
+submitting the credential through Flow's native verification and Auth callback.
+The profile action requests native enrollment mail through a private SMTP capture
+with no relay. The test registers a passkey for the original Keycloak subject
+without existing browser SSO, checks the unchanged Badge session and retained
+password, then performs a fresh passkey application login.
+
+Badge lookup currently includes Keycloak's `default-roles-11id` umbrella marker;
+OIDC returns the application's business roles. This fixture permits only that
+known marker difference between methods and compares every application identity,
+organization/membership field and effective role. The Badge session itself must
+remain unchanged during enrollment. Both Badge and fresh passkey applicants must
+receive403 when attempting a trust-administration edit. This preserves existing
+login mapping while checking effective authorization.
 
 Supply explicit cached Keycloak, OpenBao, application and Nginx images, a built
 application UI directory, and a new private output directory outside the checkout.
@@ -188,8 +213,10 @@ in `finally`; only the test front door binds a dynamic loopback port.
 The output directory contains synthetic secrets and private failure diagnostics;
 keep it private. `qualification-complete.json` is written only after the
 application journey, parent KMS/custody checks and cleanup finish. Earlier result
-files do not establish completion. This runner does not claim completed Google
-or Open Badge login, physical devices or deployed qualification.
+files do not establish completion. The final marker identifies whether the Badge
+journey was selected. This runner does not claim completed Google login, physical
+devices or deployed qualification. Its test wallet and issuer trust setup apply
+only to the disposable lab; existing deployment trust configuration is not changed.
 
 Before rollout, qualify actual password, Google and Open Badge login, enrollment
 against the same account subject, cancellation, credential removal, recovery and

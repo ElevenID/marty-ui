@@ -10,6 +10,7 @@ import secrets
 import subprocess
 import time
 import urllib.parse
+import urllib.request
 
 from config import NGINX_IMAGE, UI_DIST
 
@@ -383,11 +384,14 @@ class LoginLab(base.ApplicationLab):
         nginx_image = NGINX_IMAGE
         config = scratch / "nginx.conf"
         config.write_text(
-            """events {}\nhttp { proxy_buffer_size 128k; proxy_buffers 4 256k; resolver 127.0.0.11 valid=5s; server { listen 8080; server_name localhost; root /usr/share/nginx/html;
+            """events {}\nhttp { include /etc/nginx/mime.types; proxy_buffer_size 128k; proxy_buffers 4 256k; resolver 127.0.0.11 valid=5s; server { listen 8080; server_name localhost; root /usr/share/nginx/html;
  location /v1/ { set $target http://gateway:8000; proxy_pass $target$request_uri; proxy_set_header Host $http_host; }
+ location /orgs/ { set $target http://gateway:8000; proxy_pass $target$request_uri; proxy_set_header Host $http_host; }
  location /oid4vp/ { set $target http://gateway:8000; proxy_pass $target$request_uri; proxy_set_header Host $http_host; }
  location /realms/ { set $target http://KEYCLOAK:8080; proxy_pass $target$request_uri; proxy_set_header Host $http_host; }
  location /resources/ { set $target http://KEYCLOAK:8080; proxy_pass $target$request_uri; proxy_set_header Host $http_host; }
+ location = /console { try_files /console/index.html =404; }
+ location ^~ /console/ { try_files $uri $uri/ /console/index.html; }
  location / { try_files $uri $uri/ /index.html; } } }\n""".replace(
                 "KEYCLOAK", self.context["container"]
             ),
@@ -412,6 +416,30 @@ class LoginLab(base.ApplicationLab):
         )
         port = native.docker("port", front, "8080/tcp").rsplit(":", 1)[1]
         origin = "http://localhost:" + port
+        for route, filename in (
+            ("/", "index.html"),
+            ("/console/applicant/profile", "console/index.html"),
+        ):
+            expected = re.search(
+                r'<script[^>]+type="module"[^>]+src="([^"]+)"',
+                (UI_DIST / filename).read_text(encoding="utf-8"),
+            )
+            assert expected and expected[1].startswith("/assets/")
+            with urllib.request.urlopen(origin + route, timeout=10) as response:
+                actual = re.search(
+                    r'<script[^>]+type="module"[^>]+src="([^"]+)"',
+                    response.read().decode("utf-8"),
+                )
+                assert actual and actual[1] == expected[1], (
+                    "Test front door selected the wrong UI entry"
+                )
+            with urllib.request.urlopen(origin + expected[1], timeout=10) as response:
+                assert response.headers.get_content_type() in (
+                    "application/javascript",
+                    "text/javascript",
+                ), (
+                    "Test front door must serve JavaScript modules with their native MIME type"
+                )
         admin = self.context["base"] + "/admin/realms/11id"
 
         def token():
@@ -567,7 +595,9 @@ class LoginLab(base.ApplicationLab):
                         }
                     },
                 )["authenticatorId"]
-                target = origin + "/console/profile"
+                target = origin + getattr(
+                    self, "profile_path", "/console/applicant/profile"
+                )
                 page.goto(
                     origin
                     + "/v1/auth/login?"
@@ -581,6 +611,9 @@ class LoginLab(base.ApplicationLab):
                     deadline = time.monotonic() + 35
                     while time.monotonic() < deadline:
                         if page.url.startswith(target):
+                            page.get_by_test_id("profile-passkey-enrollment").wait_for(
+                                state="visible", timeout=30000
+                            )
                             return
                         if page.locator("#kc-oauth-grant").is_visible():
                             page.locator("#kc-oauth-grant").locator(
@@ -699,26 +732,30 @@ class LoginLab(base.ApplicationLab):
                 self.note(
                     "Real Marty application password/enrollment/fresh-passkey login and authorization continuity PASSED"
                 )
-            except Exception:
-                page.screenshot(
-                    path=str(base.OUT / "application-browser-failure.png"),
-                    full_page=True,
-                )
-                diagnostic = {
-                    "path": urllib.parse.urlparse(page.url).path,
-                    "title": page.title(),
-                    "headings": page.locator("h1,h2").all_text_contents(),
-                    "buttons": page.locator("button,input[type=submit]").evaluate_all(
-                        "(elements)=>elements.map(e=>({id:e.id,name:e.name,text:e.innerText||e.value}))"
-                    ),
-                }
-                (base.OUT / "application-browser-failure.json").write_text(
-                    json.dumps(diagnostic, indent=2), encoding="utf-8"
-                )
+            except Exception as error:
+                self.save_browser_failure(page, "application", error)
                 raise
             finally:
                 browser.close()
 
-
-def qualify(context):
-    LoginLab(context).bootstrap()
+    def save_browser_failure(self, page, name, error, browser_errors=()):
+        """Keep the original failure even if a navigation races the snapshot."""
+        diagnostic = {
+            "path": urllib.parse.urlparse(page.url).path,
+            "failure": type(error).__name__ + ": " + str(error)[:1000],
+            "browser_errors": list(browser_errors)[-30:],
+        }
+        try:
+            page.screenshot(
+                path=str(base.OUT / (name + "-browser-failure.png")), full_page=True
+            )
+            diagnostic.update(
+                title=page.title(),
+                headings=page.locator("h1,h2").all_text_contents(),
+                buttons=page.locator("button,input[type=submit]").all_text_contents(),
+            )
+        except Exception as snapshot_error:
+            diagnostic["snapshot_error"] = type(snapshot_error).__name__
+        (base.OUT / (name + "-browser-failure.json")).write_text(
+            json.dumps(diagnostic, indent=2), encoding="utf-8"
+        )

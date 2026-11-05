@@ -47,6 +47,11 @@ def main():
         help="Exercise the seeded administrator instead of an applicant",
     )
     parser.add_argument(
+        "--badge",
+        action="store_true",
+        help="Also issue a real test Badge, verify its login and enroll through captured native email",
+    )
+    parser.add_argument(
         "--output-dir",
         required=True,
         type=Path,
@@ -102,6 +107,8 @@ def main():
     workload = load("passkey_application_workloads", "workloads.py")
 
     class QualifiedApplication(workload.WorkloadMixin, login.LoginLab):
+        profile_path = "/console/applicant/profile"
+
         def setup_client(self, admin, token, origin):
             applicant = super().setup_client(admin, token, origin)
             if not args.administrator:
@@ -143,8 +150,14 @@ def main():
             expected = "administrator" if args.administrator else "applicant"
             assert self.application_baseline_user["user_type"] == expected
 
+    application_class = (
+        load("passkey_application_badge", "badge.py").BadgeLab
+        if args.badge
+        else QualifiedApplication
+    )
+
     def qualify(context):
-        QualifiedApplication(context).bootstrap()
+        application_class(context).bootstrap()
 
     kms.probe(
         keycloak, bao, Path("unused"), require_browser=True, qualify_ready=qualify
@@ -160,9 +173,12 @@ def main():
                 "openbao_image": bao,
                 "scope": "disposable development stack with Chrome virtual authenticator",
                 "application_passkey_journey": True,
-                "account_type": "administrator" if args.administrator else "applicant",
+                "account_type": "administrator_and_badge_applicant"
+                if args.badge
+                else ("administrator" if args.administrator else "applicant"),
                 "parent_custody_checks": True,
-                "physical_device_or_google_or_badge_login": False,
+                "badge_login_and_native_email_enrollment": args.badge,
+                "physical_device_or_google_login": False,
             },
             indent=2,
         ),

@@ -707,6 +707,8 @@
       }
     ],
     "approved_imports": [
+      {"path": "scripts/passkey_application_lab/badge.py", "statement": "from cryptography.hazmat.primitives import hashes", "reason": "Disposable acceptance wallet signs its synthetic OID4VCI proof and independently verifies the public OID4VP request signature; real issuer signing and runtime TLS keys remain in owned non-exportable Transit keys."},
+      {"path": "scripts/passkey_application_lab/badge.py", "statement": "from cryptography.hazmat.primitives.asymmetric import ec, utils", "reason": "Disposable acceptance wallet owns an ephemeral synthetic holder proof key and validates a public issuer request key; this fixture is neither a runtime crypto owner nor an exporter of issuer or TLS private keys."},
       {"path": "scripts/passkey_application_lab/login.py", "statement": "from cryptography import x509", "reason": "Disposable application acceptance fixture validates public certificates, CSR signatures and SANs from its owned OpenBao PKI; private signing and TLS keys remain non-exportable in Transit."},
       {"path": "scripts/passkey_application_lab/login.py", "statement": "from cryptography.hazmat.primitives import serialization", "reason": "Disposable application acceptance fixture compares public certificate/CSR key encodings; it neither generates nor exports product signing or TLS private keys."},
       {"path": "scripts/passkey_application_lab/workloads.py", "statement": "from cryptography import x509", "reason": "Disposable application acceptance fixture validates public workload certificates, CSR signatures and exact SPIFFE identities from its owned OpenBao PKI; runtime cryptography stays in native services and Transit."},
