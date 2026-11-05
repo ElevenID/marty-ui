@@ -57,6 +57,7 @@ struct Policies {
 impl PresentationPolicyProvider for Policies {
     async fn get_policy(&self, id: &str) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            configuration_digest: String::new(),
             id: id.into(),
             organization_id: "org-1".into(),
             status: "active".into(),

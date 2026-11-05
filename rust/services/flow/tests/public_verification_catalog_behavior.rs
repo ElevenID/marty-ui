@@ -38,6 +38,7 @@ fn selection(catalog: &PublicVerificationCatalog) -> PublicVerificationSelection
         choice_id: "over-18".into(),
         consent: true,
         example_id: None,
+        request_digest: None,
     }
 }
 

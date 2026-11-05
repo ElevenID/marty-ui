@@ -148,6 +148,14 @@ async fn admission_requires_an_owner_digest_and_exact_evaluation_echo_over_grpc(
         provider.configuration_digest("policy-1").await.unwrap(),
         admitted
     );
+    assert_eq!(
+        provider
+            .get_policy("policy-1")
+            .await
+            .unwrap()
+            .configuration_digest,
+        admitted
+    );
     let mut request = PresentationEvaluationRequest {
         policy_id: "policy-1".into(),
         organization_id: "org-1".into(),

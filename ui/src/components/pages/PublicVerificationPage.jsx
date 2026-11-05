@@ -45,6 +45,8 @@ export default function PublicVerificationPage() {
   const [exampleId, setExampleId] = useState('');
   const [mode, setMode] = useState('example');
   const [consent, setConsent] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [previewError, setPreviewError] = useState(false);
   const [session, setSession] = useState(null);
   const [recovery, setRecovery] = useState(recover);
   const [busy, setBusy] = useState(false);
@@ -82,6 +84,18 @@ export default function PublicVerificationPage() {
     return () => { active = false; controller.abort(); generation.current += 1; };
   }, []);
 
+  const previewReady = preview && preview.catalog_revision === catalog?.revision && preview.scenario_id === scenarioId && preview.choice_id === choiceId;
+  useEffect(() => {
+    if (!catalog || !scenarioId || !choiceId) return undefined;
+    let active = true;
+    const controller = new AbortController();
+    setPreviewError(false);
+    api.preview({ catalog_revision: catalog.revision, scenario_id: scenarioId, choice_id: choiceId }, { signal: controller.signal })
+      .then(value => { if (active) setPreview(value); })
+      .catch(() => { if (active) { setPreview(null); setPreviewError(true); } });
+    return () => { active = false; controller.abort(); };
+  }, [catalog, scenarioId, choiceId]);
+
   useEffect(() => {
     if (!pending(session) || !recovery?.id) return undefined;
     const version = generation.current;
@@ -114,9 +128,9 @@ export default function PublicVerificationPage() {
     let saved = resume ? recoveryRef.current : null;
     try {
       if (!saved) {
-        if (!consent || !choice || (mode === 'example' && !example)) return;
+        if (!consent || !choice || !previewReady || (mode === 'example' && !example)) return;
         saved = { key: createVerificationCapability(), savedAt: Date.now(), selection: {
-          catalog_revision: catalog.revision, scenario_id: scenarioId, choice_id: choiceId, consent: true,
+          catalog_revision: catalog.revision, scenario_id: scenarioId, choice_id: choiceId, consent: true, request_digest: preview.request_digest,
           ...(mode === 'example' ? { example_id: exampleId } : {}),
         } };
         save(saved); // Save before a request whose response might be lost.
@@ -171,20 +185,28 @@ export default function PublicVerificationPage() {
           <Typography variant="h6">{mode === 'example' ? (example?.label ?? 'No example configured') : 'Use your own wallet'}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1 }}>{mode === 'example' ? (example?.description ?? 'Choose another scenario or use a compatible wallet.') : 'Your wallet needs a matching credential from an issuer accepted by this demonstration.'}</Typography>
         </Box>}
-        {recovery ? <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 3 }}>
+        {recovery && <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 3 }}>
           {(!displayed || pending(displayed)) && !['input_rejected', 'retry_exhausted'].includes(session?.example_status) && <Button disabled={busy} variant="contained" onClick={() => run(true)}>{busy ? 'Checking...' : 'Resume verification'}</Button>}
           {pending(displayed) && <Button disabled={busy} onClick={cancel}>Cancel</Button>}
           <Button disabled={busy} onClick={reset}>Start a new verification</Button>
-        </Stack> : <>
-          <FormControlLabel sx={{ mt: 3, alignItems: 'flex-start' }} control={<Checkbox checked={consent} onChange={event => setConsent(event.target.checked)} />} label={catalog.notice} />
-          <Button size="large" variant="contained" fullWidth disabled={busy || !consent || !choice || (mode === 'example' && !example)} onClick={() => run()} sx={{ mt: 2 }}>{busy ? 'Verifying...' : mode === 'example' ? 'Verify example' : 'Create wallet request'}</Button>
-        </>}
+        </Stack>}
       </Paper>
       <Stack spacing={2}>
         <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
           <Typography component="h2" variant="h6" fontWeight={700}>What the verifier requires</Typography>
           <Typography sx={{ mt: 1 }}>{session ? (currentScenario?.label ?? 'Original scenario') : scenario?.label} &middot; {session ? (currentChoice?.label ?? 'Original request') : choice?.label}</Typography>
+          {!session && !previewReady && <Alert severity={previewError ? 'warning' : 'info'} sx={{ mt: 2 }}>{previewError ? 'The exact request could not be loaded. Refresh before giving consent.' : 'Loading the exact requested information...'}</Alert>}
+          {previewReady && (!session || (session.catalog_revision === preview.catalog_revision && session.scenario_id === preview.scenario_id && session.choice_id === preview.choice_id)) && <Box component="ul" sx={{ pl: 2.5, mb: 0 }}>{preview.claims.map(claim => <Box component="li" key={claim.name} sx={{ mb: 2 }}>
+            <Typography fontWeight={600}>{claim.display_name} ({claim.name})</Typography>
+            <Typography variant="body2">{claim.required ? 'Required' : 'Optional'}{claim.purpose ? `: ${claim.purpose}` : ''}</Typography>
+            {claim.constraints.map((rule, index) => <Typography variant="body2" key={index}>{rule.kind.replaceAll('_', ' ')}{rule.value !== null ? `: ${JSON.stringify(rule.value)}` : ''}</Typography>)}
+            <Typography variant="body2" color="text.secondary">{claim.intent_to_retain === null ? 'Retention intent is not specified by this policy.' : claim.intent_to_retain ? 'The request declares an intent to retain this information.' : 'The request declares no intent to retain this information.'}</Typography>
+          </Box>)}</Box>}
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Signature, issuer trust, validity and session binding are checked by the verifier. Changing an eligibility requirement does not turn these checks off.</Typography>
+          {!recovery && <>
+          <FormControlLabel sx={{ mt: 3, alignItems: 'flex-start' }} control={<Checkbox disabled={!previewReady} checked={consent} onChange={event => setConsent(event.target.checked)} />} label={catalog.notice} />
+          <Button size="large" variant="contained" fullWidth disabled={busy || !consent || !choice || !previewReady || (mode === 'example' && !example)} onClick={() => run()} sx={{ mt: 2 }}>{busy ? 'Verifying...' : mode === 'example' ? 'Verify example' : 'Create wallet request'}</Button>
+          </>}
         </Paper>
         <Accordion disableGutters>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography>Customize the request</Typography></AccordionSummary>

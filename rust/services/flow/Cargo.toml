@@ -58,6 +58,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+marty-presentation-policy = { path = "../presentation-policy" }
 p256 = { workspace = true, features = ["ecdsa"] }
 http.workspace = true
 tower.workspace = true

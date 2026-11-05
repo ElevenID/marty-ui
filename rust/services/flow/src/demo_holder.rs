@@ -330,3 +330,7 @@ impl DemoHolder {
 #[cfg(test)]
 #[path = "demo_holder_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "demo_policy_tests.rs"]
+mod policy_tests;

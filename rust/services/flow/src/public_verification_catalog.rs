@@ -108,6 +108,8 @@ pub struct PublicVerificationSelection {
     pub consent: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub example_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_digest: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -209,6 +211,17 @@ impl PublicVerificationCatalog {
                 Some(&choice.policy_configuration_digest),
             )
             .await?;
+        if invocation
+            .selection
+            .request_digest
+            .as_deref()
+            .is_some_and(|expected| {
+                prepared.instance.context[crate::defined_verification::REQUEST_DIGEST].as_str()
+                    != Some(expected)
+            })
+        {
+            return Err(PublicVerificationCatalogError::ConfigurationChanged.into());
+        }
         invocation.session_key.bind(
             &mut prepared.instance,
             &self.config.application_origin,

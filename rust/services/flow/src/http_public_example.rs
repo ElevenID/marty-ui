@@ -43,6 +43,7 @@ pub(super) async fn example(
         choice_id: view.choice_id.clone(),
         consent: true,
         example_id: Some(example_id.into()),
+        request_digest: None,
     };
     options.catalog.select(&selection).map_err(catalog_error)?;
     let specimen = options

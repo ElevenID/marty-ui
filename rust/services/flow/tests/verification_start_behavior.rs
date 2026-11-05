@@ -161,6 +161,7 @@ mod public_session {
             choice_id: "over-18".into(),
             consent: true,
             example_id: None,
+            request_digest: None,
         }
     }
 
@@ -257,6 +258,73 @@ mod public_session {
             now(),
         )
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn launch_requires_the_same_query_that_the_visitor_previewed() {
+        let (catalog, definition, registry) = setup('a');
+        let mut selected = selection(&catalog);
+        let baseline = prepare(
+            &catalog,
+            &definition,
+            &registry,
+            &selected,
+            &key(1),
+            "website-operator",
+        )
+        .await
+        .unwrap();
+        selected.request_digest = Some("0".repeat(64));
+        assert!(matches!(
+            prepare(
+                &catalog,
+                &definition,
+                &registry,
+                &selected,
+                &key(2),
+                "website-operator"
+            )
+            .await,
+            Err(marty_flow::PublicVerificationStartError::Catalog(
+                marty_flow::PublicVerificationCatalogError::ConfigurationChanged
+            ))
+        ));
+        selected.request_digest = Some(
+            baseline.instance.context["_marty_verification_request_digest"]
+                .as_str()
+                .unwrap()
+                .into(),
+        );
+        let visitor_key = key(2);
+        let accepted = prepare(
+            &catalog,
+            &definition,
+            &registry,
+            &selected,
+            &visitor_key,
+            "website-operator",
+        )
+        .await
+        .unwrap();
+        visitor_key
+            .require_same_selection(
+                &accepted.instance,
+                "org-1",
+                "https://site.example",
+                &selected,
+                now(),
+            )
+            .unwrap();
+        selected.request_digest = None;
+        assert!(visitor_key
+            .require_same_selection(
+                &accepted.instance,
+                "org-1",
+                "https://site.example",
+                &selected,
+                now()
+            )
+            .is_err());
     }
 
     #[tokio::test]
@@ -865,6 +933,7 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            configuration_digest: String::new(),
             id: policy_id.into(),
             organization_id: self.organization_id.into(),
             status: "active".into(),

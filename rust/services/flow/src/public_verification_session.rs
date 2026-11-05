@@ -41,6 +41,8 @@ struct SessionSnapshot {
     choice_id: String,
     #[serde(default)]
     example_id: Option<String>,
+    #[serde(default)]
+    request_digest: Option<String>,
     access_expires_at: DateTime<Utc>,
 }
 
@@ -144,6 +146,7 @@ impl PublicVerificationSessionKey {
             scenario_id: selection.scenario_id.clone(),
             choice_id: selection.choice_id.clone(),
             example_id: selection.example_id.clone(),
+            request_digest: selection.request_digest.clone(),
             access_expires_at: expiry
                 .checked_add_signed(Duration::seconds(RESULT_ACCESS_SECONDS))
                 .ok_or(PublicVerificationSessionError::InvalidState)?,
@@ -204,6 +207,7 @@ impl PublicVerificationSessionKey {
             || snapshot.scenario_id != selection.scenario_id
             || snapshot.choice_id != selection.choice_id
             || snapshot.example_id != selection.example_id
+            || snapshot.request_digest != selection.request_digest
         {
             return Err(PublicVerificationSessionError::SelectionConflict);
         }

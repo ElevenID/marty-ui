@@ -52,6 +52,30 @@ function publicCatalog(value) {
   return { revision: value.revision, notice: value.notice, scenarios, examples: projectedExamples };
 }
 
+function publicPreview(value, selection) {
+  if (!value || value.catalog_revision !== selection.catalog_revision || value.scenario_id !== selection.scenario_id
+    || value.choice_id !== selection.choice_id || !/^[0-9a-f]{64}$/.test(value.request_digest)
+    || !Array.isArray(value.claims) || value.claims.length < 1 || value.claims.length > 16) throw invalidResponse();
+  const names = new Set();
+  const scalar = value => typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)) || text(value, 160);
+  const kinds = new Set(['presence', 'equals', 'not_equals', 'greater_than', 'less_than', 'greater_or_equal', 'less_or_equal', 'in_set', 'not_in_set', 'regex', 'age_over']);
+  const claims = value.claims.map(claim => {
+    if (!claim || !text(claim.name, 128) || names.has(claim.name) || !text(claim.display_name, 160) || typeof claim.required !== 'boolean'
+      || (claim.purpose != null && !text(claim.purpose, 400)) || (claim.intent_to_retain != null && typeof claim.intent_to_retain !== 'boolean')
+      || !Array.isArray(claim.constraints) || claim.constraints.length > 4) throw invalidResponse();
+    names.add(claim.name);
+    const constraints = claim.constraints.map(item => {
+      if (!item || !kinds.has(item.kind) || (item.value != null && !scalar(item.value)
+        && !(Array.isArray(item.value) && item.value.length <= 8 && item.value.every(scalar)))) throw invalidResponse();
+      return { kind: item.kind, value: item.value ?? null };
+    });
+    return { name: claim.name, display_name: claim.display_name, required: claim.required,
+      purpose: claim.purpose ?? null, intent_to_retain: claim.intent_to_retain ?? null, constraints };
+  });
+  return { catalog_revision: value.catalog_revision, scenario_id: value.scenario_id, choice_id: value.choice_id,
+    request_digest: value.request_digest, claims };
+}
+
 function publicSession(value) {
   if (!value || !uuid.test(value.session_id) || !validSlug(value.scenario_id) || !validSlug(value.choice_id)
     || !revision.test(value.catalog_revision) || !statuses.has(value.status)
@@ -110,11 +134,18 @@ export function createVerificationCapability() {
 
 export const publicVerificationApi = {
   async catalog(options) { return publicCatalog(await client.get(`${prefix}/catalog`, publicOptions(options))); },
+  async preview(selection, options) {
+    const body = { catalog_revision: selection.catalog_revision, scenario_id: selection.scenario_id, choice_id: selection.choice_id };
+    if (!revision.test(body.catalog_revision) || !validSlug(body.scenario_id) || !validSlug(body.choice_id)) throw new Error('Invalid preview selection');
+    return publicPreview(await client.post(`${prefix}/preview`, body, publicOptions(options)), body);
+  },
   async launch(selection, key, options) {
     // The capability remains in a header across retries, never in a URL/body.
     const body = { catalog_revision: selection.catalog_revision, scenario_id: selection.scenario_id,
       choice_id: selection.choice_id, consent: selection.consent === true,
-      ...(selection.example_id !== undefined ? { example_id: selection.example_id } : {}) };
+      ...(selection.example_id !== undefined ? { example_id: selection.example_id } : {}),
+      ...(selection.request_digest !== undefined ? { request_digest: selection.request_digest } : {}) };
+    if (body.request_digest !== undefined && !/^[0-9a-f]{64}$/.test(body.request_digest)) throw new Error('Invalid request preview');
     if (body.example_id !== undefined && !validSlug(body.example_id)) throw new Error('Invalid example selection');
     const session = publicSession(await client.post(`${prefix}/sessions`, body, capabilityOptions(key, options)));
     if (session.catalog_revision !== body.catalog_revision || session.scenario_id !== body.scenario_id

@@ -8,6 +8,12 @@ const id = '54cfd66e-b7ed-8926-9f8b-18e63fa83797';
 const catalog = { revision, notice: 'I agree to present these fictional age claims.', scenarios: [{ id: 'age', label: 'Age requirement', choices: [{ id: 'over-18', label: '18 or older' }, { id: 'over-21', label: '21 or older' }] }], examples: [{ id: 'fictional-adult', scenario_id: 'age', label: 'Fictional adult, age 20', description: 'A fixed fictional age credential.' }] };
 const session = () => { const now = Date.now(); return ({ session_id: id, scenario_id: 'age', choice_id: 'over-18', example_id: 'fictional-adult', catalog_revision: revision, status: 'awaiting_wallet', expires_at: new Date(now + 600_000).toISOString(), access_expires_at: new Date(now + 1_200_000).toISOString() }); };
 function response(body: unknown) { return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }); }
+function installFetch(fetch: ReturnType<typeof vi.fn>) {
+  vi.stubGlobal('fetch', (url: string, options: RequestInit = {}) => {
+    if (String(url).endsWith('/preview')) { const selected = JSON.parse(String(options.body)); return Promise.resolve(response({ ...selected, request_digest: 'a'.repeat(64), claims: [{ name: selected.choice_id === 'over-21' ? 'age_over_21' : 'age_over_18', display_name: 'Age threshold', required: true, purpose: 'Demonstrate an age requirement', intent_to_retain: null, constraints: [{ kind: 'equals', value: true }] }] })); }
+    return fetch(url, options);
+  });
+}
 beforeEach(() => sessionStorage.clear());
 afterEach(() => { vi.unstubAllGlobals(); sessionStorage.clear(); });
 
@@ -21,7 +27,7 @@ describe('public verification experience', () => {
       expect(options.credentials).toBe('omit');
       return response(current);
     });
-    vi.stubGlobal('fetch', fetch);
+    installFetch(fetch);
     const user = userEvent.setup(); render(<PublicVerificationPage />);
     const run = await screen.findByRole('button', { name: 'Verify example' });
     expect(run).toBeDisabled(); expect(fetch).toHaveBeenCalledOnce();
@@ -49,7 +55,7 @@ describe('public verification experience', () => {
       if (String(url).endsWith('/example')) return response({ ...current, example_status: 'input_rejected' });
       return response(current);
     });
-    vi.stubGlobal('fetch', fetch); const user = userEvent.setup();
+    installFetch(fetch); const user = userEvent.setup();
     const first = render(<PublicVerificationPage />);
     await screen.findByRole('button', { name: 'Verify example' });
     await user.click(screen.getByRole('checkbox')); await user.click(screen.getByRole('button', { name: 'Verify example' }));
@@ -71,7 +77,7 @@ describe('public verification experience', () => {
     const current = session();
     sessionStorage.setItem('marty.public-verification.v1', JSON.stringify({ key: 'A'.repeat(43), id, savedAt: Date.now(), accessExpiresAt: Date.now() + 1_200_000, selection: { catalog_revision: revision, scenario_id: 'age', choice_id: 'over-18', example_id: 'fictional-adult', consent: true } }));
     let resolveRead!: (response: Response) => void;
-    vi.stubGlobal('fetch', vi.fn((url: string) => String(url).endsWith('/catalog') ? Promise.resolve(response(catalog)) : new Promise<Response>(resolve => { resolveRead = resolve; })));
+    installFetch(vi.fn((url: string) => String(url).endsWith('/catalog') ? Promise.resolve(response(catalog)) : new Promise<Response>(resolve => { resolveRead = resolve; })));
     const user = userEvent.setup(); render(<PublicVerificationPage />);
     await screen.findByRole('button', { name: 'Resume verification' });
     await waitFor(() => expect(resolveRead).toBeTypeOf('function'));
@@ -82,6 +88,15 @@ describe('public verification experience', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Verify example' })).toBeDisabled());
     expect(screen.queryByText('Verified', { exact: true })).not.toBeInTheDocument();
     expect(screen.getByRole('checkbox')).not.toBeChecked();
+  });
+
+  it('does not accept consent or launch when the canonical preview is unavailable', async () => {
+    const fetch = vi.fn(async (url: string) => response(String(url).endsWith('/catalog') ? catalog : {}));
+    vi.stubGlobal('fetch', fetch); render(<PublicVerificationPage />);
+    await screen.findByText(/exact request could not be loaded/);
+    expect(screen.getByRole('checkbox')).toBeDisabled();
+    expect(screen.getByRole('button',{name:'Verify example'})).toBeDisabled();
+    expect(fetch.mock.calls.some(([url])=>String(url).endsWith('/sessions'))).toBe(false);
   });
 
 });

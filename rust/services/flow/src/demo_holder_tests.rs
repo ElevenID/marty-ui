@@ -17,28 +17,29 @@ use std::sync::{
     Arc,
 };
 
-const ORG: &str = "marty-demo";
-const HOLDER: &str = "did:web:demo.example:holder";
-const ISSUER: &str = "did:web:demo.example:issuer";
-const VCT: &str = "urn:marty:demo:age:1";
+pub(super) const ORG: &str = "00000000-0000-0000-0000-000000000001";
+pub(super) const POLICY_ID: &str = "00000000-0000-0000-0000-000000000018";
+pub(super) const HOLDER: &str = "did:web:demo.example:holder";
+pub(super) const ISSUER: &str = "did:web:demo.example:issuer";
+pub(super) const VCT: &str = "urn:marty:demo:age:1";
 
 fn key(value: u8) -> SigningKey {
     SigningKey::from_bytes((&[value; 32]).into()).unwrap()
 }
 
-fn jwk(value: u8) -> Value {
+pub(super) fn jwk(value: u8) -> Value {
     let point = key(value).verifying_key().to_sec1_point(false);
     json!({"kty":"EC", "crv":"P-256", "x":URL_SAFE_NO_PAD.encode(point.x().unwrap()), "y":URL_SAFE_NO_PAD.encode(point.y().unwrap())})
 }
 
-struct OpaqueSigner {
+pub(super) struct OpaqueSigner {
     calls: AtomicUsize,
     corrupt: bool,
     reuse_issuer: bool,
 }
 
 impl OpaqueSigner {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             calls: AtomicUsize::new(0),
             corrupt: false,
@@ -127,7 +128,7 @@ impl CredentialSigner for IssuerFixture {
     }
 }
 
-fn credential(issuer: &'static str, holder_key: u8) -> String {
+pub(super) fn credential(issuer: &'static str, holder_key: u8) -> String {
     credential_with_lifetime(issuer, holder_key, 300)
 }
 
@@ -174,6 +175,7 @@ impl crate::PresentationPolicyProvider for Policy {
         id: &str,
     ) -> Result<crate::PresentationPolicyReference, FlowProviderError> {
         Ok(crate::PresentationPolicyReference {
+            configuration_digest: String::new(),
             id: id.into(),
             organization_id: ORG.into(),
             status: "active".into(),
@@ -227,16 +229,29 @@ async fn setup(
     DemoCredentialProfile,
     Arc<AtomicBool>,
 ) {
+    setup_with_policy(signer, None).await
+}
+
+pub(super) async fn setup_with_policy(
+    signer: Arc<OpaqueSigner>,
+    policy: Option<Arc<dyn crate::PresentationPolicyProvider>>,
+) -> (
+    FlowProviderRegistry,
+    FlowInstanceRecord,
+    DemoHolder,
+    DemoCredentialProfile,
+    Arc<AtomicBool>,
+) {
     let changed = Arc::new(AtomicBool::new(false));
     let providers = FlowProviderRegistry {
         signing_identity: Some(signer.clone()),
-        presentation_policy: Some(Arc::new(Policy(changed.clone()))),
+        presentation_policy: policy.or_else(|| Some(Arc::new(Policy(changed.clone())))),
         credential_template: Some(Arc::new(Templates)),
         ..Default::default()
     };
     let now = Utc::now();
     let mut definition = crate::create_definition_record(crate::parse_request(json!({
-        "organization_id":ORG,"name":"Synthetic age example","flow_type":"oid4vp_presentation","presentation_policy_id":"demo-policy"
+        "organization_id":ORG,"name":"Synthetic age example","flow_type":"oid4vp_presentation","presentation_policy_id":POLICY_ID
     })).unwrap(), now).unwrap();
     definition.status = crate::DefinitionStatus::Active;
     let binding = crate::VerificationDefinitionBinding {
@@ -248,6 +263,13 @@ async fn setup(
     // same capability binder rather than hand-writing a stored snapshot.
     let key =
         crate::PublicVerificationSessionKey::parse(&URL_SAFE_NO_PAD.encode([13; 32])).unwrap();
+    let digest = providers
+        .presentation_policy
+        .as_ref()
+        .unwrap()
+        .configuration_digest(POLICY_ID)
+        .await
+        .unwrap();
     let mut instance = crate::defined_verification::prepare_admitted_defined_verification_start(
         &providers,
         &Default::default(),
@@ -262,7 +284,7 @@ async fn setup(
             now,
         },
         key.instance_id(ORG, "https://demo.example"),
-        Some(&format!("sha256:{}", "a".repeat(64))),
+        Some(&digest),
     )
     .await
     .unwrap()
@@ -276,6 +298,7 @@ async fn setup(
             choice_id: "over-18".into(),
             consent: true,
             example_id: None,
+            request_digest: None,
         },
     )
     .unwrap();
@@ -605,57 +628,6 @@ async fn example_submission_preserves_the_emitted_core_dcql_and_session_binding(
     assert!(example_submission(&tampered, "not-a-presentation".into()).is_err());
 }
 
-struct EvaluatingPolicy;
-#[async_trait]
-impl crate::PresentationPolicyProvider for EvaluatingPolicy {
-    async fn configuration_digest(&self, id: &str) -> Result<String, FlowProviderError> {
-        Policy(Arc::new(AtomicBool::new(false)))
-            .configuration_digest(id)
-            .await
-    }
-    async fn get_policy(
-        &self,
-        id: &str,
-    ) -> Result<crate::PresentationPolicyReference, FlowProviderError> {
-        Policy(Arc::new(AtomicBool::new(false)))
-            .get_policy(id)
-            .await
-    }
-    async fn evaluate(
-        &self,
-        request: &crate::PresentationEvaluationRequest,
-    ) -> Result<crate::PresentationEvaluationResult, FlowProviderError> {
-        assert_eq!(
-            request.context[crate::defined_verification::EXPECTED_POLICY_DIGEST],
-            json!(format!("sha256:{}", "a".repeat(64)))
-        );
-        let transport = request
-            .oid4vp_transport
-            .as_ref()
-            .expect("canonical emitted OID4VP query is required");
-        assert_eq!(transport.query_kind, marty_oid4vp_contract::QueryKind::Dcql);
-        let disclosed = verify_sd_jwt(
-            &request.presentation,
-            &jwk(3).to_string(),
-            Some(request.audience.clone()),
-            Some(request.nonce.clone()),
-        )
-        .unwrap();
-        assert_eq!(disclosed["credentialSubject"]["age_over_18"], true);
-        assert!(disclosed["credentialSubject"].get("nickname").is_none());
-        Ok(crate::PresentationEvaluationResult {
-            result: "passed".into(),
-            decision: "allow".into(),
-            decision_reason: None,
-            verified_claims: Default::default(),
-            credential_results: vec![json!({"signature_valid":true})],
-            authentication_diagnostic: None,
-            error_codes: vec![],
-            warnings: vec![],
-        })
-    }
-}
-
 #[tokio::test]
 #[ignore = "requires fresh task-owned loopback marty_public_verification_test PostgreSQL"]
 async fn public_example_http_uses_capability_cas_and_canonical_nonce_finalization() {
@@ -678,16 +650,24 @@ async fn public_example_http_uses_capability_cas_and_canonical_nonce_finalizatio
     crate::migrate_flow_schema(&pool).await.unwrap();
     let repository = crate::PostgresFlowRepository::new(pool.clone());
     let signer = Arc::new(OpaqueSigner::new());
-    let (mut providers, mut instance, _, profile, _) = setup(signer.clone()).await;
-    providers.presentation_policy = Some(Arc::new(EvaluatingPolicy));
-    let mut definition = crate::create_definition_record(crate::parse_request(json!({"organization_id":ORG,"name":"Synthetic age example","flow_type":"oid4vp_presentation","presentation_policy_id":"demo-policy"})).unwrap(), Utc::now()).unwrap();
+    let owner = Arc::new(super::policy_tests::ActualPolicy::new(
+        "age_over_18",
+        true,
+        true,
+    ));
+    let digest = crate::PresentationPolicyProvider::configuration_digest(owner.as_ref(), POLICY_ID)
+        .await
+        .unwrap();
+    let (providers, mut instance, _, profile, _) =
+        setup_with_policy(signer.clone(), Some(owner)).await;
+    let mut definition = crate::create_definition_record(crate::parse_request(json!({"organization_id":ORG,"name":"Synthetic age example","flow_type":"oid4vp_presentation","presentation_policy_id":POLICY_ID})).unwrap(), Utc::now()).unwrap();
     definition.id = instance.flow_definition_id.clone();
     definition.status = crate::DefinitionStatus::Active;
     repository.save_definition(&definition).await.unwrap();
     let config = json!({"principal_id":"demo-operator","issuer_did":"did:web:demo.example:verifier","demo_holder_did":HOLDER,
         "limits":{"starts_per_minute":10,"starts_per_day":100,"maximum_active":10},"catalog":{
         "organization_id":ORG,"application_origin":"https://demo.example","notice":"Present a fictional age claim.",
-        "scenarios":[{"id":"age","label":"Age","choices":[{"id":"over-18","label":"18 or older", "definition":{"organization_id":ORG,"definition_id":definition.id,"version":definition.version},"presentation_policy_id":"demo-policy","policy_configuration_digest":format!("sha256:{}","a".repeat(64))}]}],
+        "scenarios":[{"id":"age","label":"Age","choices":[{"id":"over-18","label":"18 or older", "definition":{"organization_id":ORG,"definition_id":definition.id,"version":definition.version},"presentation_policy_id":POLICY_ID,"policy_configuration_digest":digest}]}],
         "examples":[{"id":"fictional-adult","scenario_id":"age","label":"Fictional adult","description":"A signed fictional age credential.","profile":profile,"credential":credential(ISSUER,7)}]}});
     let runtime = crate::PublicVerificationOptions::from_json(&config.to_string(), false).unwrap();
     let key_string = URL_SAFE_NO_PAD.encode([13; 32]);
@@ -703,6 +683,17 @@ async fn public_example_http_uses_capability_cas_and_canonical_nonce_finalizatio
         .map(|v| chrono::DateTime::from_timestamp_micros(v.timestamp_micros()).unwrap());
     let catalog =
         crate::PublicVerificationCatalog::from_json(&config["catalog"].to_string(), false).unwrap();
+    let preview = catalog
+        .request_preview(
+            &providers,
+            &crate::PublicVerificationPreviewSelection {
+                catalog_revision: catalog.public_view().revision.into(),
+                scenario_id: "age".into(),
+                choice_id: "over-18".into(),
+            },
+        )
+        .await
+        .unwrap();
     key.bind(
         &mut instance,
         "https://demo.example",
@@ -711,6 +702,7 @@ async fn public_example_http_uses_capability_cas_and_canonical_nonce_finalizatio
             scenario_id: "age".into(),
             choice_id: "over-18".into(),
             example_id: Some("fictional-adult".into()),
+            request_digest: Some(preview.request_digest.clone()),
             consent: true,
         },
     )
@@ -730,6 +722,15 @@ async fn public_example_http_uses_capability_cas_and_canonical_nonce_finalizatio
         },
         application_approval: Default::default(),
     });
+    let preview_response = router.clone().oneshot(Request::builder().method("POST").uri("/v1/flows/public/verification/preview").header("origin","https://demo.example").header("content-type","application/json").body(Body::from(json!({"catalog_revision":catalog.public_view().revision,"scenario_id":"age","choice_id":"over-18"}).to_string())).unwrap()).await.unwrap();
+    assert_eq!(preview_response.status(), StatusCode::OK);
+    assert_eq!(preview_response.headers()["cache-control"], "no-store");
+    let public_preview: Value =
+        serde_json::from_slice(&to_bytes(preview_response.into_body(), 16384).await.unwrap())
+            .unwrap();
+    assert_eq!(public_preview["claims"][0]["name"], "age_over_18");
+    assert_eq!(public_preview["request_digest"], preview.request_digest);
+    assert!(!public_preview.to_string().contains(ISSUER));
     let endpoint = format!(
         "/v1/flows/public/verification/sessions/{}/example",
         instance.id

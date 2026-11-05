@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 
 pub const ROUTES: &[(HttpMethod, &str)] = &[
     (HttpMethod::Get, "/v1/flows/public/verification/catalog"),
+    (HttpMethod::Post, "/v1/flows/public/verification/preview"),
     (HttpMethod::Post, "/v1/flows/public/verification/sessions"),
     (
         HttpMethod::Get,
@@ -30,7 +31,9 @@ pub const ROUTES: &[(HttpMethod, &str)] = &[
 pub fn is_public_path(path: &str) -> bool {
     if matches!(
         path,
-        "/v1/flows/public/verification/catalog" | "/v1/flows/public/verification/sessions"
+        "/v1/flows/public/verification/catalog"
+            | "/v1/flows/public/verification/preview"
+            | "/v1/flows/public/verification/sessions"
     ) {
         return true;
     }

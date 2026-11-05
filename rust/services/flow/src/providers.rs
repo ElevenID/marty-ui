@@ -104,6 +104,8 @@ fn default_wallet_scheme() -> String {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PresentationPolicyReference {
+    #[serde(default)]
+    pub configuration_digest: String,
     pub id: String,
     pub organization_id: String,
     pub status: String,

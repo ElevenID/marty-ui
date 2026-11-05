@@ -542,6 +542,7 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         let response = self.fetch_policy(policy_id).await?;
         Ok(PresentationPolicyReference {
+            configuration_digest: response.configuration_digest,
             id: response.id,
             organization_id: response.organization_id,
             status: response.status,

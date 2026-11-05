@@ -175,6 +175,7 @@ fn valid_holder_did(did: &str) -> bool {
 pub(crate) fn flow_public_verification_routes() -> Router<FlowHttpState> {
     Router::new()
         .route("/v1/flows/public/verification/catalog", get(catalog))
+        .route("/v1/flows/public/verification/preview", post(preview))
         .route("/v1/flows/public/verification/sessions", post(launch))
         .route(
             "/v1/flows/public/verification/sessions/{session_id}",
@@ -290,6 +291,32 @@ async fn catalog(
     let options = configured(&state)?;
     origin(options, &headers, false)?;
     Ok(Json(options.catalog.public_view()).into_response())
+}
+
+async fn preview(
+    State(state): State<FlowHttpState>,
+    headers: HeaderMap,
+    Json(selection): Json<crate::PublicVerificationPreviewSelection>,
+) -> Result<Response, FlowHttpError> {
+    let options = configured(&state)?;
+    origin(options, &headers, true)?;
+    let preview = options
+        .catalog
+        .request_preview(&state.providers, &selection)
+        .await
+        .map_err(|error| match error {
+            crate::PublicVerificationPreviewError::Catalog(error) => catalog_error(error),
+            crate::PublicVerificationPreviewError::Definition(error) => error.into(),
+            crate::PublicVerificationPreviewError::Presentation(error) => {
+                crate::FlowVerificationStartError::Presentation(error).into()
+            }
+            crate::PublicVerificationPreviewError::Unsupported => FlowHttpError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "verification_preview_unavailable",
+                "The request preview is unavailable",
+            ),
+        })?;
+    Ok(Json(preview).into_response())
 }
 
 async fn launch(
