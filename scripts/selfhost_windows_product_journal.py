@@ -333,6 +333,38 @@ def finish(config_path, marker, phases, *, authority_file):
         require(final.enter_context(renewal.hold_private_input(Path(config_path))) == _body)
         _values, final_snapshots = selection._inputs(new_config, final)
         require(final_snapshots == snapshots)
+    # No deferred namespace/stack exits may remain after the last comparison.
+    # These are bounded individual reads followed by comparison AFTER closing
+    # each read handle, and exact directory inventories on both sides.
+    root = Path(marker['attempt_dir'])
+    activation_paths = [Path(new_config[key]) for key in ('intent', 'result', 'new_log', 'rollback_log')]
+    activation_paths += [Path(path) for step in new_config['step_receipts'] for path in step.values()]
+    inventories = {root: set(phases)|{'inputs', 'activation', 'config.private.json'},
+                   root/'inputs': ARTIFACTS, root/'activation': {path.name for path in activation_paths},
+                   journal: names, target: set(initial)}
+    retained = [(root/name, digest, 2*1024*1024) for name, digest in phases.items()]
+    retained += [(root/'inputs'/name, digest, 256*1024*1024 if name == 'web-composition.zip' else 4*1024*1024)
+                 for name, digest in marker['composition_sha256'].items()]
+    retained += [(Path(model['compose_file']), model['compose_sha256'], 2*1024*1024)
+                 for model in (marker['old'], marker['new'])]
+    first = anchor(raw, expected)[0]
+    retained += [(Path(first['config_path']), first['config_file_sha256'], 65536),
+                 (Path(config_path), selection.digest(_body), 65536),
+                 (root/'config.private.json', marker['config_sha256'], 65536),
+                 (guard, sha, 65536)]
+    retained += [(path, selection.digest(b''), 65536) for path in activation_paths]
+    retained += [(journal/name, selection.digest(saved), 65536) for name, saved in raw.items()]
+    retained += [(target/name, selection.digest(saved), 65536) for name, saved in initial.items()]
+    for choice in ('old', 'new'):
+        snapshot = snapshots[choice];secret_root = Path(snapshot['secrets_dir'])
+        inventories[secret_root] = set(values[choice])
+        retained.append((Path(snapshot['env_file']), snapshot['env_sha256'], 65536))
+        retained += [(secret_root/name, selection.digest(saved), 65536) for name, saved in values[choice].items()]
+    require(all({p.name for p in path.iterdir()} == entries for path, entries in inventories.items()))
+    for path, digest, maximum in retained:
+        with renewal.hold_private_input(path, max_bytes=maximum) as saved:pass
+        require(selection.digest(saved) == digest)
+    require(all({p.name for p in path.iterdir()} == entries for path, entries in inventories.items()))
     check_ancestry(earlier)
     guard.unlink()
     return {'schema': SCHEMA, 'project': marker['project'], 'result': 'product-selected',

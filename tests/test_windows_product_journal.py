@@ -311,15 +311,17 @@ def test_product_publication_keeps_predecessor_sealed_across_project_lock_exit(m
 
 
 @pytest.mark.parametrize('tamper', ['phase', 'model', 'config', 'credentials', 'attempt-child', 'input-child', 'activation-child'])
-def test_final_transition_evidence_is_checked_after_outer_publication_exits(monkeypatch, tamper):
+@pytest.mark.parametrize('exit_number', [1, 2])
+def test_final_transition_evidence_is_checked_after_outer_publication_exits(monkeypatch, tamper, exit_number):
     with installed(monkeypatch, publish=False) as data:
-        original = product.renewal.hold_storage_namespace;injected = []
+        original = product.renewal.hold_storage_namespace;injected = [];exits = []
         @contextmanager
         def namespace(path, *args, **kwargs):
             with original(path, *args, **kwargs) as value:yield value
             # The attempt namespace preceded all transition file handles;
             # these files have now been released, while guard still exists.
-            if path == data['attempt'] and (data['source']/journal.DECISION).exists() and not injected:
+            if path == data['attempt'] and (data['source']/journal.DECISION).exists():exits.append(True)
+            if path == data['attempt'] and len(exits) == exit_number and not injected:
                 injected.append(True)
                 paths = {'phase': data['attempt']/'native-after.completed.json',
                          'model': Path(data['new_config']['compose_file']),
