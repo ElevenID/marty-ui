@@ -92,3 +92,78 @@ storage. Record the ordered invocation, image identities, mount markers and
 container identities before/after recovery. Application login, registration,
 consoles, KMS-backed operations and credential flows need separate runtime tests.
 Marketing/pricing page availability does not qualify billing or real payments.
+
+## Retained managed OpenBao candidate
+
+For a candidate already adopted by the
+[Windows generation owner](windows-renewal-activation.md), use the managed
+schema instead of the legacy Compose configuration above:
+
+```json
+{
+  "schema": "marty.windows-managed-recovery/v1",
+  "selection_file": "C:/Marty/private/renewal/config.private.json"
+}
+```
+
+`selection_file` is the existing generation-owner configuration used for
+adoption, not a replacement Compose model or a new deployment. Store both files
+in private, operator-owned directories. Supply the trusted Python interpreter
+explicitly; the JSON cannot select an executable. For example:
+
+```powershell
+& "$Tooling/scripts/recover-marty-after-reboot.ps1" `
+  -RecoveryConfigurationFile 'C:/Marty/private/managed-recovery.json' `
+  -ManagedPython 'C:/Python312/python.exe' -CheckOnly
+```
+
+Managed `-CheckOnly` holds the selected generation and validates configuration,
+storage, the retained Linux engine and existing-ID dependency plan. It does not
+authenticate, mint a token, start containers or prove current credential lifetime
+or application readiness. Its output explicitly reports those limits. This mode
+does not use the legacy transcript or Compose `up` path.
+
+After applicable restart authorization, omit `-CheckOnly` to recover existing
+IDs through the selected owner. Once Bao and its unseal helper are ready, the
+verified native operator authenticates the existing renewal AppRole. A fresh
+private session directory and token file are reserved before login; the token is
+saved and flushed before its scoped authority is checked. Only the session path
+and nonsecret result metadata return to Windows. Existing enrollment, generations,
+roles and policies remain unchanged. A fresh session does not renew leaf
+credentials: native minimum-lifetime, certificate and custody checks still gate
+application startup. Failure retains the recovery marker and attempt evidence;
+never retry by removing those records.
+
+`-WaitForEngine` optionally waits up to five minutes for the retained Docker pipe.
+Only read-only `info` calls repeat while it is unavailable. They use the existing
+owned Windows job and continuously bounded pipe drains. An abnormal CLI timeout,
+surviving descendant or cleanup failure refuses rather than retrying; cleanup has
+the owned runner's separate bounded deadline. A responding engine
+with a different ID, operating system or data root refuses immediately. The wait
+starts no engine, switches no context and writes no recovery intent. All selected
+inputs remain held, and normal admission still runs after the wait.
+
+For an authorized candidate logon-task installation, reuse the existing installer
+with a separate explicit task name:
+
+```powershell
+& "$Tooling/scripts/install-marty-boot-recovery.ps1" `
+  -RecoveryConfigurationFile 'C:/Marty/private/managed-recovery.json' `
+  -ManagedPython 'C:/Python312/python.exe' -TaskName 'Marty-Candidate-Recovery'
+```
+
+The installer runs the exact managed check-only preflight before registration.
+It refuses the historical task name and any existing matching name, including in
+other task folders. Registration uses the native
+[Task Scheduler `TASK_CREATE` flag](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskfolder-registertaskdefinition),
+so a name collision after preflight also refuses instead of updating a task.
+The action retains the explicit interpreter, absolute Windows system PowerShell
+path and `-WaitForEngine`. The existing interactive,
+limited-privilege operator-logon trigger and two-minute delay apply. Inspect the
+registered action and task ownership after installation. Existing legacy invocations
+retain their historical behavior. Installing this task does not test logon, engine
+or host reboot, and does not provide pre-logon availability.
+
+The entrypoint does not renew or repair expired generations or resume an uncertain
+earlier attempt. Producer scheduling, actual engine/logon/reboot tests and
+expired-credential recovery remain required for unattended operation.

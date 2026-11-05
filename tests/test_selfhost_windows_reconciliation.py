@@ -13,14 +13,34 @@ from test_selfhost_windows_recovery import candidate
 
 
 @contextmanager
-def terminal(monkeypatch, *, empty=True):
+def terminal(monkeypatch, *, empty=True, fresh_authority=False):
     with candidate(monkeypatch) as (root,path,cfg,output,events,items,observed,tx):
-        with selection.selected_inputs(path) as lease:lease.recover_existing(output)
+        with selection.selected_inputs(path) as lease:lease.recover_existing(output,fresh_authority=fresh_authority)
         if empty:(output/'result.json').write_bytes(b'')
         original = (output/'result.json').read_bytes()
         guard = selection.renewal.recovery_guard(cfg)
         guard.write_bytes((output/'intent.json').read_bytes())
         yield root,path,cfg,output,events,items,observed,guard,original
+
+
+def test_terminal_uses_recorded_fresh_session_without_logging_in_again(monkeypatch):
+    import selfhost_windows_renewal_native as native
+    sessions=[]
+    def refresh(_cfg,_project,_prefix,session):
+        sessions.append(session+'/token');return sessions[-1]
+    monkeypatch.setattr(native,'reauthenticate',refresh)
+    with terminal(monkeypatch,fresh_authority=True) as (_root,path,_cfg,output,events,_items,_obs,guard,original):
+        assert len(sessions)==1
+        actual=selection._native_current
+        def check(*args,**kwargs):
+            assert args[-1]==sessions[0]
+            return actual(*args,**kwargs)
+        monkeypatch.setattr(selection,'_native_current',check)
+        before=list(events)
+        decision=selection.reconcile_existing(path)
+        assert decision['workload_commands_issued'] is False
+        assert events==before and len(sessions)==1 and not guard.exists()
+        assert (output/'result.json').read_bytes()==original
 
 
 @pytest.mark.parametrize('empty',[False,True])

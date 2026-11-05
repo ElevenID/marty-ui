@@ -176,9 +176,11 @@ The marker remains authoritative even if a result file was written before a fina
 publication-lock exit failure. Never interpret that result independently. Admission
 uses no-follow namespace checks: dangling marker/selection links and metadata errors
 must not fall back to an installation without an owner.
-No CLI, scheduled task, automatic marker removal or PowerShell managed-mode dispatch
-is installed by this library. Those integrations and interruption reconciliation
-remain required before unattended recovery is qualified.
+The existing PowerShell wrapper can dispatch the managed CLI with an explicitly
+supplied trusted interpreter; see [managed configuration](windows-compose-recovery.md#retained-managed-openbao-candidate).
+It installs no scheduled task and never automatically removes an uncertain marker.
+Producer scheduling and broader interruption recovery remain required before
+unattended recovery is qualified.
 
 An explicitly coordinated planned stop may retain a separate
 `.<project>.recovery-preparation.json` marker. It blocks every new admission just

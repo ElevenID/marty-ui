@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$RecoveryConfigurationFile,
+    [string]$ManagedPython,
+    [switch]$WaitForEngine,
     [string]$RegistryConfig,
     [string]$ExpectedDockerContext,
     [string]$StackDirectory,
@@ -15,16 +17,30 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$ManagedRecoverySettings = $null
 
 # A scheduled invocation retains only nonsecret paths/project/context settings.
 # Direct parameters remain useful for an isolated rehearsal.
 if ($RecoveryConfigurationFile) {
-    if (@($PSBoundParameters.Keys | Where-Object { $_ -notin @('RecoveryConfigurationFile', 'CheckOnly') }).Count) {
+    if (@($PSBoundParameters.Keys | Where-Object { $_ -notin @('RecoveryConfigurationFile', 'ManagedPython', 'WaitForEngine', 'CheckOnly') }).Count) {
         throw 'Use retained recovery configuration or direct settings, not both.'
     }
     try {
         if (-not [IO.Path]::IsPathRooted($RecoveryConfigurationFile)) { throw 'absolute path required' }
         $configuration = Get-Content -LiteralPath $RecoveryConfigurationFile -Raw | ConvertFrom-Json
+        if ($configuration.schema -eq 'marty.windows-managed-recovery/v1') {
+            if (($configuration.PSObject.Properties.Name | Sort-Object) -join ',' -ne 'schema,selection_file') {
+                throw 'invalid managed schema'
+            }
+            foreach ($value in @($ManagedPython, $configuration.selection_file)) {
+                if ($value -isnot [string] -or -not [IO.Path]::IsPathRooted($value) -or
+                    -not (Test-Path -LiteralPath $value -PathType Leaf) -or $value.Contains('"')) {
+                    throw 'invalid managed path'
+                }
+            }
+            $ManagedRecoverySettings = $configuration
+        } else {
+        if ($ManagedPython -or $WaitForEngine) { throw 'managed interpreter/wait requires managed schema' }
         if (($configuration.PSObject.Properties.Name | Sort-Object) -join ',' -ne 'parameters,schema' -or
             $configuration.schema -ne 'marty.windows-recovery/v1' -or
             $configuration.parameters -isnot [PSCustomObject]) { throw 'invalid schema' }
@@ -48,10 +64,22 @@ if ($RecoveryConfigurationFile) {
         if (-not $configuration.parameters.StackDirectory -or -not $configuration.parameters.ExpectedDockerContext) {
             throw 'stack and context required'
         }
+        }
     } catch { throw 'Invalid retained recovery configuration; use the documented nonsecret schema.' }
 }
+elseif ($ManagedPython -or $WaitForEngine) { throw 'Managed recovery requires its retained configuration.' }
 
 $env:Path = "C:\Program Files\Docker\Docker\resources\bin;$env:Path"
+
+if ($ManagedRecoverySettings) {
+    $ManagedRecoveryArguments = @('--configuration', $RecoveryConfigurationFile)
+    if ($CheckOnly) { $ManagedRecoveryArguments += '--check-only' }
+    if ($WaitForEngine) { $ManagedRecoveryArguments += '--wait-for-engine' }
+    # The Python owner re-reads strict private JSON, owns the shared project
+    # lock and validates the retained engine. No legacy Compose up is reached.
+    & $ManagedPython (Join-Path $PSScriptRoot 'selfhost_windows_recovery.py') @ManagedRecoveryArguments
+    exit $LASTEXITCODE
+}
 
 if (-not $StackDirectory) { $StackDirectory = Split-Path -Parent $PSScriptRoot }
 $RepoRoot = (Resolve-Path -LiteralPath $StackDirectory).Path

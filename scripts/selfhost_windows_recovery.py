@@ -1,12 +1,15 @@
 """Start existing managed-candidate IDs while its selection lease remains held.
 
-Library only: no task installation, initialization, creation, recreation, restart,
+No task installation, initialization, creation, recreation, restart,
 image pulls or public routing. Failed/uncertain attempts retain their guard and
 receipts for operator reconciliation; they are never automatically replayed.
 """
+import argparse
 import os
 import re
+import sys
 import time
+import uuid
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -119,9 +122,11 @@ def _ready(observed, selected, deadline):
 
 
 def start_existing(config, choice, values, record, output_dir, stack, *, authority_file=None,
-                   preparation_sha256=None):
+                   preparation_sha256=None, fresh_authority=False):
     """Return a provisional result; publication follows ALL selection exit checks."""
     selection.require(os.name == 'nt')
+    selection.require(type(fresh_authority) is bool and not (fresh_authority and authority_file is not None))
+    session_dir='/control/recovery-session-'+uuid.uuid4().hex if fresh_authority else None
     guard = renewal.recovery_guard(config)
     selection.require(not renewal.namespace_entry_exists(guard))
     has_preparation = renewal.namespace_entry_exists(renewal.recovery_preparation_guard(config))
@@ -157,6 +162,9 @@ def start_existing(config, choice, values, record, output_dir, stack, *, authori
               'preparation': preparation,
               'candidate_only': True}
     raw_intent = selection.packed(intent)
+    if session_dir is not None:
+        intent['authority_session']=session_dir
+        raw_intent=selection.packed(intent)
     # This exclusive marker is shared with renewal/selection admission. Never
     # clear it in a failure path or infer daemon quiescence from a killed CLI.
     with guard.open('xb'):pass
@@ -193,6 +201,9 @@ def start_existing(config, choice, values, record, output_dir, stack, *, authori
             if index == 0:
                 # Bao may have been stopped. Its retained TLS/Raft/unseal IDs
                 # can start first; no application start precedes native admission.
+                if session_dir is not None:
+                    from selfhost_windows_renewal_native import reauthenticate
+                    authority_file=reauthenticate(config['native'],project,docker.prefix,session_dir)
                 selection._native_current(config, choice, values, docker, authority_file)
                 selection.require(time.monotonic() < deadline)
             _unchanged(observed, docker.containers(), started)
@@ -270,8 +281,13 @@ def finish_existing(config,pending):
 def verify_terminal(lease, guard_raw, *, authority_file=None):
     """Prove completed boundaries and current state; issue no workload command."""
     intent = selection.decode(guard_raw)
-    selection.require(set(intent) == {'schema','project','engine_id','sequence','selected','data_sha256',
-                                      'output_dir','ids','layers','preparation','candidate_only'})
+    required={'schema','project','engine_id','sequence','selected','data_sha256',
+              'output_dir','ids','layers','preparation','candidate_only'}
+    selection.require(set(intent) in (required,required|{'authority_session'}))
+    if 'authority_session' in intent:
+        selection.require(isinstance(intent['authority_session'],str)
+                          and re.fullmatch(r'/control/recovery-session-[0-9a-f]{32}',intent['authority_session']))
+        if authority_file is None:authority_file=intent['authority_session']+'/token'
     selection.require(intent['schema'] == SCHEMA and intent['candidate_only'] is True
         and intent['project'] == lease.project and intent['engine_id'] == lease.engine_id
         and type(intent['sequence']) is int and intent['sequence'] == lease.sequence
@@ -340,3 +356,66 @@ def verify_terminal(lease, guard_raw, *, authority_file=None):
 def finish_terminal(config,pending):
     """Keep original results; clear the marker only after fresh proof exit checks."""
     _finish_publication(config,pending,'reconciliation.json',selection.packed(pending['decision']),allow_existing=True)
+
+
+def wait_for_engine(host,engine_id,*,timeout=300):
+    """Bounded read-only startup wait; a responding foreign engine refuses now."""
+    selection.require(host in {'npipe:////./pipe/dockerDesktopLinuxEngine','npipe:////./pipe/docker_engine'})
+    selection.require(isinstance(engine_id,str) and 10<=len(engine_id)<=128)
+    selection.require(type(timeout) is int and 1<=timeout<=300)
+    deadline=time.monotonic()+timeout
+    while True:
+        remaining=deadline-time.monotonic();selection.require(remaining>0)
+        # Reuse the owned job and continuously bounded pipe drains. Even a
+        # read-only CLI must not hang on a descendant retaining its pipes.
+        # Only ordinary returned unavailability is retryable; abnormal child
+        # cleanup/timeout refuses immediately without any recovery intent.
+        fields='{"ID":{{json .ID}},"OSType":{{json .OSType}},"DockerRootDir":{{json .DockerRootDir}}}'
+        p=renewal.run_owned_mutation(['docker','--host',host,'info','--format',fields],
+                                    timeout=min(10,remaining))
+        if p.returncode==0:
+            info=selection.decode(p.stdout)
+            selection.require(isinstance(info,dict) and info.get('OSType')=='linux'
+                and info.get('ID')==engine_id and info.get('DockerRootDir')=='/var/lib/docker')
+            selection.require(time.monotonic()<deadline)
+            return
+        remaining=deadline-time.monotonic();selection.require(remaining>0)
+        time.sleep(min(5,remaining))
+
+
+def main(argv=None):
+    """Managed dispatch used by the existing Windows recovery wrapper."""
+    parser=argparse.ArgumentParser(description='Recover retained existing Windows candidate IDs')
+    parser.add_argument('--configuration',required=True)
+    parser.add_argument('--check-only',action='store_true')
+    parser.add_argument('--wait-for-engine',action='store_true')
+    args=parser.parse_args(argv)
+    try:
+        selection.require(os.name=='nt')
+        with renewal.hold_private_input(Path(args.configuration)) as raw:
+            config=selection.decode(raw)
+            selection.require(set(config)=={'schema','selection_file'}
+                and config['schema']=='marty.windows-managed-recovery/v1')
+            selection.require(isinstance(config['selection_file'],str) and Path(config['selection_file']).is_absolute())
+            with selection.selected_inputs(Path(config['selection_file'])) as lease:
+                if args.wait_for_engine:wait_for_engine(lease.docker_host,lease.engine_id)
+                if args.check_only:
+                    result=lease.check_configuration()
+                else:
+                    output=lease.secrets_dir.parent/('windows-recovery-'+uuid.uuid4().hex)
+                    output.mkdir()
+                    result=lease.recover_existing(output,fresh_authority=True)
+            if not args.check_only:
+                result=selection.decode(renewal.read_private_bytes(output/'result.json'))
+                result['attempt_dir']=str(output)
+                selection.require(not renewal.recovery_pending({'project':lease.project,'current_secrets':str(lease.secrets_dir)}))
+        sys.stdout.write(selection.packed(result).decode())
+        return 0
+    except BaseException:
+        sys.stderr.write('Managed Windows recovery refused; preserve its configuration, markers and receipts.\n')
+        return 1
+
+
+if __name__=='__main__':
+    sys.modules.setdefault('selfhost_windows_recovery',sys.modules[__name__])
+    raise SystemExit(main())

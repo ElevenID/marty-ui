@@ -394,3 +394,50 @@ def test_ordinary_completion_locks_records_and_result_across_exit_checks(monkeyp
         monkeypatch.setattr(selection.renewal,'hold_private_input',held)
         with selection.selected_inputs(path) as lease:lease.recover_existing(output)
         assert denied and not selection.renewal.recovery_pending(cfg)
+
+
+def test_configuration_check_has_no_native_or_readiness_claim(monkeypatch):
+    with candidate(monkeypatch) as (_root,path,_cfg,_output,events,_items,_observed,_tx):
+        with selection.selected_inputs(path) as lease:
+            report=lease.check_configuration()
+            assert report=={'services':8,'configuration_verified':True,'native_admission':False,'runtime_readiness':False}
+        assert not events
+        with pytest.raises(ValueError):lease.check_configuration()
+
+
+def test_fresh_scoped_authority_follows_foundation_and_precedes_application(monkeypatch):
+    import selfhost_windows_renewal_native as native
+    with candidate(monkeypatch) as (_root,path,_cfg,output,events,_items,_observed,_tx):
+        uri=[];actual=selection._native_current
+        def refresh(_cfg,_project,_prefix,session):
+            events.append('reauth');uri.append(session+'/token');return uri[-1]
+        def check(*a,**kw):
+            assert a[-1]==uri[-1];return actual(*a,**kw)
+        monkeypatch.setattr(native,'reauthenticate',refresh)
+        monkeypatch.setattr(selection,'_native_current',check)
+        with selection.selected_inputs(path) as lease:lease.recover_existing(output,fresh_authority=True)
+        assert set(events[0])=={'openbao','openbao-unseal'}
+        assert events[1:3]==['reauth','native']
+        intent=selection.decode((output/'intent.json').read_bytes())
+        assert uri==[intent['authority_session']+'/token']
+
+
+def test_failed_scoped_authority_does_not_start_application(monkeypatch):
+    import selfhost_windows_renewal_native as native
+    with candidate(monkeypatch) as (_root,path,cfg,output,events,items,_observed,_tx):
+        def refresh(*_a):raise ValueError('PUBLIC_REAUTH_REFUSAL')
+        monkeypatch.setattr(native,'reauthenticate',refresh)
+        with pytest.raises(ValueError):
+            with selection.selected_inputs(path) as lease:lease.recover_existing(output,fresh_authority=True)
+        assert len(events)==1 and set(events[0])=={'openbao','openbao-unseal'}
+        assert all(x['State']['Status']=='exited' for x in items if selection.renewal._service(x) not in {'openbao','openbao-unseal'})
+        assert selection.renewal.recovery_pending(cfg) and (output/'result.json').read_bytes()==b''
+
+
+@pytest.mark.parametrize('fresh,authority',[(1,None),('yes',None),(True,'/control/old/token')])
+def test_invalid_or_ambiguous_authority_mode_refuses_before_intent(monkeypatch,fresh,authority):
+    with candidate(monkeypatch) as (_root,path,cfg,output,events,_items,_observed,_tx):
+        with pytest.raises(ValueError):
+            with selection.selected_inputs(path) as lease:
+                lease.recover_existing(output,authority_file=authority,fresh_authority=fresh)
+        assert not events and not selection.renewal.recovery_pending(cfg) and not list(output.iterdir())
