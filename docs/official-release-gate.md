@@ -284,7 +284,7 @@ then its bound audit ref, through the revised REST operation. Require confirmed
 ownership before the audit mutation, exact responses and object/message/ref readbacks, unchanged observed
 main and rules, and the original deadline. The v5 capability result states the
 reservation contract and observation scopes. It cannot be relabeled as v4 atomic
-capability. Keep the successful audit tag and original receipts. Local collision
+capability. Keep both the ownership and audit tags and their original receipts. Local collision
 and failure-injection tests do not justify an extra live mutation or retry.
 
 ### Historical atomic evidence stays historical

@@ -139,8 +139,8 @@ request and its original packet evidence. That proves only its exact recorded
 protection or stale-ref refusal. The positive operation separately proves one
 create-only annotated owner `v-release-capability-intent-<run>-1`, its bound audit
 tag, and all required before/after observations.
-Neither operation claims the old atomic main/tag capability. Preserve the audit
-tag and require fresh original live evidence after approved protected integration.
+Neither operation claims the old atomic main/tag capability. Preserve both tags
+and require fresh original live evidence after approved protected integration.
 
 Local tests must retain the original GH013 refusal and exercise collisions,
 malformed responses, lost responses, main changes before and after creation,

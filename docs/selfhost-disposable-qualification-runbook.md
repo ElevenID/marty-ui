@@ -39,8 +39,9 @@ and activation requirements in the
 
 Qualify the scoped operator's real API capability before consuming a claim.
 Default inspect mode is read-only. The dedicated non-semver audit-tag probe must
-retain the actual negative protected-main refusal and prove a successful
-create-only audit tag with exact before/after main and policy observations.
+retain the actual negative protected-main refusal and prove successful
+create-only ownership and bound audit tags with exact before/after main and
+policy observations. Preserve both tags and their original receipts.
 The v5 capability cannot be relabeled as the earlier atomic guarantee. A tag
 alone never authorizes publication. Do not use local Git push, an overwrite,
 a new stored token or relaxed protections as substitutes. A failed or uncertain
