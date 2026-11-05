@@ -4,9 +4,10 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import puppeteer from 'puppeteer';
-import { createServer } from 'vite';
+import { build, preview } from 'vite';
 
 const executable = await puppeteer.executablePath();
 assert(existsSync(executable), 'Cached Chromium is required before fixtures start');
@@ -31,6 +32,9 @@ const apiResponses = [];
 const failures = [];
 const consoleErrors = [];
 const artifactDir = path.join(root, '../rust/target/public-verification-browser');
+// A new output directory preserves earlier qualification artifacts and avoids
+// emptying any existing build or operator directory.
+const bundleDir = path.join(artifactDir, `bundle-${randomUUID()}`);
 let closed = false;
 async function cleanup() {
   if (closed) return;
@@ -45,9 +49,12 @@ const deadline = setTimeout(async () => {
   process.exit(1);
 }, 150_000);
 try {
-  server = await createServer({ root, mode: 'verification-browser', logLevel: 'silent',
-    server: { host: '127.0.0.1', port: 0, open: false, hmr: false }, clearScreen: false });
-  await server.listen();
+  stage = 'production-build';
+  await build({ root, mode: 'production', logLevel: 'silent', clearScreen: false,
+    build: { outDir: bundleDir, emptyOutDir: false } });
+  stage = 'production-preview';
+  server = await preview({ root, mode: 'production', logLevel: 'silent',
+    build: { outDir: bundleDir }, preview: { host: '127.0.0.1', port: 0, open: false } });
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
   console.log(`MARTY_BROWSER_READY ${JSON.stringify({ origin })}`);
   const input = createInterface({ input: process.stdin });
@@ -76,6 +83,9 @@ try {
   await page.setRequestInterception(true);
   page.on('request', request => {
     const url = new URL(request.url());
+    if (url.origin === origin && /\/(?:@vite|@id|src)\//.test(url.pathname)) {
+      failures.push('Production journey requested development source');
+    }
     if ([origin, gateway.origin].includes(url.origin) || ['data:', 'blob:'].includes(url.protocol)) request.continue().catch(() => {});
     else request.abort().catch(() => {});
   });
@@ -140,7 +150,7 @@ try {
   assert(chromium.exitCode !== null || chromium.signalCode !== null, 'Owned Chromium must exit');
   console.log(`MARTY_BROWSER_RESULT ${JSON.stringify({ verified: true, reloadDidNotRelaunch: true, customizedDenialVerified: true,
     walletRequestCancelled: true, browserVersion, chromiumPid: chromium.pid, chromiumExited: true, viteClosed: !server.httpServer.listening,
-    apiResponses })}`);
+    productionBundle: true, apiResponses })}`);
 } catch (error) {
   console.error(`Browser qualification failed at ${stage}: ${error.message}`);
   if (page) {

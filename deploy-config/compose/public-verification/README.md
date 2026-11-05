@@ -149,23 +149,26 @@ and its cached Puppeteer Chromium before any backend is created:
 python scripts/probe_signing_keys_openbao_policy.py --public-demo-browser
 ```
 
-It serves the actual application source and shared Rust/WASM API client through
-an owned loopback Vite server and fresh headless browser profile. Requests use
+It compiles the application with the production Vite configuration and shared
+Rust/WASM API client, then serves the bundle through an owned loopback preview
+server and fresh headless browser profile. Each run preserves earlier output
+by using a new bundle directory under `rust/target/public-verification-browser`.
+Development-source requests fail qualification. Requests use
 real cross-origin HTTP to the fixture Gateway; no verification response is
 intercepted or fabricated. The browser verifies consent gating, age18 success,
 reload recovery without a second launch, the optional21+ selector with fresh
 consent and canonical denial, then a390px wallet QR/request/cancellation view.
 The native fixture also checks persisted nonce counts after browser work.
 Only public URLs cross into the browser worker; KMS/database credentials stay
-outside its environment. Vite proxying is pinned to the owned Gateway and HMR
-is disabled. Browser/Vite shutdown and backend removal are checked. The ordinary
+outside its environment. The compiled API URL is pinned to the owned Gateway.
+Browser/preview shutdown and backend removal are checked. The ordinary
 grant mode does not require a browser; the two modes are mutually exclusive.
 Screenshots are written under `rust/target/public-verification-browser` for
 local review and should be preserved with qualification evidence before parking
-the checkout. This mode uses application source through Vite, explicit local
+the checkout. This mode uses production JavaScript compilation/execution, explicit local
 membership/template/trust/status fixtures and the actual in-process policy
 evaluator. It does not establish production HTTPS/DNS, authentication-service
-readiness, a published bundle or external-wallet interoperability.
+readiness, release packaging/installation or external-wallet interoperability.
 There is no endpoint/operator-secret option for pointing this probe at an
 existing deployment.
 

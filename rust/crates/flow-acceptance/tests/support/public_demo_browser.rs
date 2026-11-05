@@ -101,6 +101,7 @@ impl BrowserWorker {
             "customizedDenialVerified",
             "chromiumExited",
             "viteClosed",
+            "productionBundle",
         ] {
             assert_eq!(result[field], true, "{field}");
         }
@@ -111,6 +112,7 @@ impl BrowserWorker {
             "walletRequestCancelled":result["walletRequestCancelled"],"chromiumPid":result["chromiumPid"],
             "customizedDenialVerified":result["customizedDenialVerified"],
             "browserVersion":result["browserVersion"],
+            "productionBundle":result["productionBundle"],
             "chromiumExited":result["chromiumExited"],"viteClosed":result["viteClosed"]})
         );
         result
