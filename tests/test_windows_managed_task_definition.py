@@ -14,7 +14,8 @@ import test_windows_compose_recovery as legacy
 pytestmark=pytest.mark.skipif(os.name!='nt' or not legacy.POWERSHELL,reason='Unregistered Windows COM definition')
 
 
-def test_native_task_definition_xml_without_registering_or_starting_any_task():
+@pytest.mark.parametrize('interval',[0,240])
+def test_native_task_definition_xml_without_registering_or_starting_any_task(interval):
     source=legacy.quote(legacy.ROOT/'scripts/install-marty-boot-recovery.ps1')
     code=r'''
 $ErrorActionPreference='Stop'
@@ -30,10 +31,11 @@ $service=New-Object -ComObject 'Schedule.Service'
 $service.Connect()
 $user=[Security.Principal.WindowsIdentity]::GetCurrent().Name
 $shell=Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell/v1.0/powershell.exe'
-$definition=New-ManagedRecoveryTaskDefinition $service $user $shell '-NoProfile -NonInteractive -File C:/synthetic/recovery.ps1' 'C:/synthetic'
+$definition=New-ManagedRecoveryTaskDefinition $service $user $shell '-NoProfile -NonInteractive -File C:/synthetic/recovery.ps1' 'C:/synthetic' INTERVAL
+if (INTERVAL -gt 0 -and $definition.Settings.RestartCount -ne 0) { throw 'Renewal retries must be disabled' }
 # No GetFolder, RegisterTaskDefinition, RegisterTask, Run or DeleteTask call.
 $definition.XmlText
-'''.replace('SOURCE',source)
+'''.replace('SOURCE',source).replace('INTERVAL',str(interval))
     result=subprocess.run([legacy.POWERSHELL,'-NoProfile','-NonInteractive','-EncodedCommand',
         base64.b64encode(code.encode('utf-16le')).decode()],capture_output=True,text=True,timeout=30)
     assert result.returncode==0,result.stderr
@@ -43,7 +45,13 @@ $definition.XmlText
     assert text('t:Principals/t:Principal/t:LogonType')=='InteractiveToken'
     assert text('t:Principals/t:Principal/t:RunLevel')=='LeastPrivilege'
     assert text('t:Triggers/t:LogonTrigger/t:Delay')=='PT2M'
-    assert text('t:Settings/t:ExecutionTimeLimit')=='PT20M'
+    assert text('t:Settings/t:ExecutionTimeLimit')==('PT1H' if interval else 'PT20M')
     assert text('t:Settings/t:MultipleInstancesPolicy')=='IgnoreNew'
-    assert text('t:Settings/t:RestartOnFailure/t:Count')=='3'
+    if interval:
+        assert text('t:Triggers/t:LogonTrigger/t:Repetition/t:Interval')=='PT240M'
+        assert root.find('t:Triggers/t:LogonTrigger/t:Repetition/t:Duration',ns) is None
+        assert text('t:Triggers/t:LogonTrigger/t:Repetition/t:StopAtDurationEnd')=='false'
+        count=root.find('t:Settings/t:RestartOnFailure/t:Count',ns)
+        assert count is None or count.text=='0' # COM omits the zero default
+    else:assert text('t:Settings/t:RestartOnFailure/t:Count')=='3'
     assert Path(text('t:Actions/t:Exec/t:Command')).is_absolute()

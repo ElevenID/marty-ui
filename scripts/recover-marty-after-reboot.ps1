@@ -3,6 +3,8 @@ param(
     [string]$RecoveryConfigurationFile,
     [string]$ManagedPython,
     [switch]$WaitForEngine,
+    [switch]$RenewCredentials,
+    [string]$LogicalTlsProject,
     [string]$RegistryConfig,
     [string]$ExpectedDockerContext,
     [string]$StackDirectory,
@@ -22,7 +24,7 @@ $ManagedRecoverySettings = $null
 # A scheduled invocation retains only nonsecret paths/project/context settings.
 # Direct parameters remain useful for an isolated rehearsal.
 if ($RecoveryConfigurationFile) {
-    if (@($PSBoundParameters.Keys | Where-Object { $_ -notin @('RecoveryConfigurationFile', 'ManagedPython', 'WaitForEngine', 'CheckOnly') }).Count) {
+    if (@($PSBoundParameters.Keys | Where-Object { $_ -notin @('RecoveryConfigurationFile', 'ManagedPython', 'WaitForEngine', 'CheckOnly', 'RenewCredentials', 'LogicalTlsProject') }).Count) {
         throw 'Use retained recovery configuration or direct settings, not both.'
     }
     try {
@@ -39,8 +41,12 @@ if ($RecoveryConfigurationFile) {
                 }
             }
             $ManagedRecoverySettings = $configuration
+            if ([bool]$RenewCredentials -ne [bool]$LogicalTlsProject -or
+                ($RenewCredentials -and $LogicalTlsProject -cnotmatch '\Amarty-(selfhost|production)-[a-z0-9][a-z0-9-]{0,59}\z')) {
+                throw 'managed renewal requires its enrolled logical TLS namespace'
+            }
         } else {
-        if ($ManagedPython -or $WaitForEngine) { throw 'managed interpreter/wait requires managed schema' }
+        if ($ManagedPython -or $WaitForEngine -or $RenewCredentials -or $LogicalTlsProject) { throw 'managed options require managed schema' }
         if (($configuration.PSObject.Properties.Name | Sort-Object) -join ',' -ne 'parameters,schema' -or
             $configuration.schema -ne 'marty.windows-recovery/v1' -or
             $configuration.parameters -isnot [PSCustomObject]) { throw 'invalid schema' }
@@ -67,7 +73,7 @@ if ($RecoveryConfigurationFile) {
         }
     } catch { throw 'Invalid retained recovery configuration; use the documented nonsecret schema.' }
 }
-elseif ($ManagedPython -or $WaitForEngine) { throw 'Managed recovery requires its retained configuration.' }
+elseif ($ManagedPython -or $WaitForEngine -or $RenewCredentials -or $LogicalTlsProject) { throw 'Managed recovery requires its retained configuration.' }
 
 $env:Path = "C:\Program Files\Docker\Docker\resources\bin;$env:Path"
 
@@ -75,6 +81,7 @@ if ($ManagedRecoverySettings) {
     $ManagedRecoveryArguments = @('--configuration', $RecoveryConfigurationFile)
     if ($CheckOnly) { $ManagedRecoveryArguments += '--check-only' }
     if ($WaitForEngine) { $ManagedRecoveryArguments += '--wait-for-engine' }
+    if ($RenewCredentials) { $ManagedRecoveryArguments += @('--renew-once', '--logical-project', $LogicalTlsProject) }
     # The Python owner re-reads strict private JSON, owns the shared project
     # lock and validates the retained engine. No legacy Compose up is reached.
     & $ManagedPython (Join-Path $PSScriptRoot 'selfhost_windows_recovery.py') @ManagedRecoveryArguments

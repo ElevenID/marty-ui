@@ -95,3 +95,41 @@ def test_cli_withholds_exception_details_and_does_not_report_success(monkeypatch
         assert recovery.main(['--configuration',str(config)])==1
         captured=capsys.readouterr()
         assert not captured.out and 'PRIVATE_SENTINEL' not in captured.err and not calls
+
+
+@pytest.mark.parametrize('wait',[False,True])
+@pytest.mark.parametrize('check',[False,True])
+def test_renewal_dispatch_releases_wait_lease_and_check_never_mints(monkeypatch,capsys,wait,check):
+    with configured(monkeypatch) as (_root,config,value,calls):
+        original=recovery.selection.selected_inputs;active=[]
+        @contextmanager
+        def lease(path):
+            with original(path) as selected:
+                active.append(True)
+                try:yield selected
+                finally:active.pop()
+        def renew(path,logical):
+            assert not active and str(path)==value['selection_file'] and logical=='marty-selfhost-synthetic'
+            calls.append('renew');return {'result':'renewed-and-selected','sequence':2}
+        monkeypatch.setattr(recovery.selection,'selected_inputs',lease)
+        monkeypatch.setattr(recovery.selection,'renew_once',renew)
+        monkeypatch.setattr(recovery,'wait_for_engine',lambda *_a:calls.append('wait'))
+        args=['--configuration',str(config),'--renew-once','--logical-project','marty-selfhost-synthetic']
+        if wait:args+=['--wait-for-engine']
+        if check:args+=['--check-only']
+        assert recovery.main(args)==0
+        assert calls==(['wait'] if wait else [])+(['check'] if check else ['renew'])
+        result=json.loads(capsys.readouterr().out)
+        if check:assert result['renewal_requested'] is True and result['renewal_executed'] is False
+        else:assert result['result']=='renewed-and-selected'
+
+
+@pytest.mark.parametrize('extra',[
+    ['--renew-once'],['--logical-project','marty-selfhost-synthetic'],
+    ['--renew-once','--logical-project','PRIVATE_SENTINEL'],
+    ['--renew-once','--logical-project','marty-selfhost-bad\n']])
+def test_invalid_renewal_mode_refuses_before_private_inputs(monkeypatch,capsys,extra):
+    def forbidden(*_a,**_kw):pytest.fail('Private configuration read before mode validation')
+    monkeypatch.setattr(recovery.renewal,'hold_private_input',forbidden)
+    assert recovery.main(['--configuration','PRIVATE_SENTINEL',*extra])==1
+    out=capsys.readouterr();assert not out.out and 'PRIVATE_SENTINEL' not in out.err

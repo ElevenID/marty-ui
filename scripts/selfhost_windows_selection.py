@@ -23,6 +23,7 @@ ENTRY = re.compile(r'([0-9]{6})\.(intent|selection)\.json\Z')
 REFUSAL = 'Windows selection requires operator reconciliation; preserve its records'
 STAGE_SCHEMA = 'marty.windows-renewal-staging/v1'
 STAGE_PHASES = ('authority','current','prepare','tls','keycloak','export','materialize')
+MAX_SELECTIONS = 256
 
 
 @dataclass(frozen=True)
@@ -99,7 +100,7 @@ def directory(config):
 
 def _read(root, stack):
     names = sorted(p.name for p in root.iterdir())
-    require(len(names) <= 513 and all(n == 'owner.json' or ENTRY.fullmatch(n) for n in names))
+    require(len(names) <= 2*MAX_SELECTIONS+1 and all(n == 'owner.json' or ENTRY.fullmatch(n) for n in names))
     raw = {n: stack.enter_context(renewal.hold_private_input(root/n)) for n in names}
     require(sorted(p.name for p in root.iterdir()) == names)
     return raw
@@ -112,7 +113,7 @@ def _parse(raw, expected):
     for name, value in raw.items():
         if name == 'owner.json':continue
         match = ENTRY.fullmatch(name);require(match is not None)
-        number = int(match[1]);require(1 <= number <= 256)
+        number = int(match[1]);require(1 <= number <= MAX_SELECTIONS)
         target = intents if match[2] == 'intent' else selections
         require(number not in target);target[number] = decode(value)
     require(intents and set(intents) == set(range(1, len(intents)+1)))
@@ -309,7 +310,7 @@ def prepare(config_path, *, authority_file=None, staging_sha256=None):
             require(not renewal.namespace_entry_exists(renewal.recovery_guard(config))
                 and not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(config)))
         intents, records = _parse(raw, expected)
-        require(len(intents) == len(records) and len(intents) < 256)
+        require(len(intents) == len(records) and len(intents) < MAX_SELECTIONS)
         previous = records[len(records)];values, snapshots = _inputs(config, stack)
         require(snapshots['old'] == previous['selected'])
         if staging_sha256 is not None:
@@ -477,6 +478,8 @@ def _new_private(path,raw):
 
 
 def _stage(config,choice,values,record,root,logical_project,stack):
+    # Capacity admission precedes any guard, credential mint or output allocation.
+    require(type(record['sequence']) is int and 1<=record['sequence']<MAX_SELECTIONS)
     from selfhost_windows_renewal_native import (
         preflight,
         produce_generation,

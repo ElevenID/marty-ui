@@ -22,8 +22,8 @@ def invoke(tmp_path,case):
     python=tmp_path/"operator's python.exe";python.touch()
     child=tmp_path/'child.json';record=tmp_path/'task.json'
     (tmp_path/'recover-marty-after-reboot.ps1').write_text(
-        'param([string]$RecoveryConfigurationFile,[string]$ManagedPython,[switch]$CheckOnly)\n'
-        '@{configuration=$RecoveryConfigurationFile; python=$ManagedPython; check=[bool]$CheckOnly} '
+        'param([string]$RecoveryConfigurationFile,[string]$ManagedPython,[switch]$CheckOnly,[switch]$RenewCredentials,[string]$LogicalTlsProject)\n'
+        '@{configuration=$RecoveryConfigurationFile; python=$ManagedPython; check=[bool]$CheckOnly; renew=[bool]$RenewCredentials; logical=$LogicalTlsProject} '
         '| ConvertTo-Json | Set-Content '+legacy.quote(child)+
         '\nexit '+('1' if case=='preflight-failure' else '0')+'\n')
     code=r'''
@@ -34,7 +34,7 @@ function Get-ScheduledTask {
  if ('CASE' -eq 'existing-task') { return [pscustomobject]@{TaskName='Marty-Candidate-Recovery';TaskPath='\OtherOwner\'} }
 }
 function Register-ScheduledTask { throw 'Native task cmdlet forbidden in managed recorder' }
-$global:trigger=[pscustomobject]@{UserId='';Delay=''}
+$global:trigger=[pscustomobject]@{UserId='';Delay='';Repetition=[pscustomobject]@{Interval='';StopAtDurationEnd=$true}}
 $global:action=[pscustomobject]@{Path='';Arguments='';WorkingDirectory=''}
 $global:definition=[pscustomobject]@{
  RegistrationInfo=[pscustomobject]@{Description=''}
@@ -54,6 +54,7 @@ $global:folder | Add-Member ScriptMethod RegisterTaskDefinition {
  $global:record.registration_logon=$logonType;$global:record.no_password=($null -eq $password)
  $global:record.action=$global:action.Arguments;$global:record.launcher=$global:action.Path
  $global:record.delay=$global:trigger.Delay;$global:record.settings=$definition.Settings
+ $global:record.repetition=$global:trigger.Repetition
  if ('CASE' -eq 'late-collision') {
   $global:record | ConvertTo-Json | Set-Content COLLISION
   throw 'Synthetic registration-time collision; existing task preserved'
@@ -80,6 +81,11 @@ function New-Object { param($ComObject)
         task="-TaskName 'OtherOwnerTask'"
         code=code.replace(' -ManagedPython PYTHON','')
     if case=='missing-python':python.unlink()
+    if case.startswith('renew'):
+        task+=" -RenewCredentials -LogicalTlsProject 'marty-selfhost-synthetic' -RenewalIntervalMinutes 240"
+        if case=='renew-bad-interval':task=task.replace('240','0')
+        elif case=='renew-bad-project':task=task.replace('marty-selfhost-synthetic','PRIVATE_SENTINEL')
+        elif case=='renew-no-python':code=code.replace(' -ManagedPython PYTHON','')
     for key,value in {'CASE':case,'COLLISION':legacy.quote(tmp_path/'collision.json'),
         'RECORD':legacy.quote(record),'INSTALLER':legacy.quote(installer),
         'CONFIG':legacy.quote(config),'PYTHON':legacy.quote(python),'TASK':task}.items():
@@ -93,7 +99,7 @@ def test_managed_install_retains_explicit_interpreter_and_separate_logon_task(tm
     result,config,python,child,record=invoke(tmp_path,'success')
     assert result.returncode==0,result.stderr
     assert json.loads(child.read_text(encoding='utf-8-sig'))=={
-        'configuration':str(config),'python':str(python),'check':True}
+        'configuration':str(config),'python':str(python),'check':True,'renew':False,'logical':''}
     task=json.loads(record.read_text(encoding='utf-8-sig'))
     assert task['name']=='Marty-Candidate-Recovery' and task['flags']==2
     assert task['trigger_type']==9 and task['action_type']==0
@@ -106,8 +112,22 @@ def test_managed_install_retains_explicit_interpreter_and_separate_logon_task(tm
     assert '-WaitForEngine' in task['action'] and '-CheckOnly' not in task['action']
 
 
+def test_renewal_install_is_separate_create_only_and_preflight_never_mints(tmp_path):
+    result,config,python,child,record=invoke(tmp_path,'renew')
+    assert result.returncode==0,result.stderr
+    checked=json.loads(child.read_text(encoding='utf-8-sig'))
+    assert checked['check'] and checked['renew'] and checked['logical']=='marty-selfhost-synthetic'
+    task=json.loads(record.read_text(encoding='utf-8-sig'))
+    assert task['flags']==2 and task['name']=='Marty-Candidate-Recovery'
+    assert task['repetition']=={'Interval':'PT240M','StopAtDurationEnd':False}
+    assert task['settings']['RestartCount']==0 and task['settings']['ExecutionTimeLimit']=='PT1H'
+    assert '-RenewCredentials -LogicalTlsProject "marty-selfhost-synthetic"' in task['action']
+    assert '-CheckOnly' not in task['action']
+
+
 @pytest.mark.parametrize('case',['missing-name','historical-name','unsafe-name','missing-python',
-                               'existing-task','inventory-failure','preflight-failure','late-collision','legacy-custom'])
+                               'existing-task','inventory-failure','preflight-failure','late-collision','legacy-custom',
+                               'renew-bad-interval','renew-bad-project','renew-no-python'])
 def test_managed_install_never_registers_on_bad_identity_inventory_or_preflight(tmp_path,case):
     result,_config,_python,child,record=invoke(tmp_path,case)
     assert result.returncode!=0 and not record.exists()

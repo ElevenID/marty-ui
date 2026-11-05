@@ -1,6 +1,6 @@
 """Real private NTFS staging guard and registered handoff; native/Docker mocked."""
 import sys
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import pytest
@@ -59,6 +59,15 @@ def test_stage_result_waits_for_exit_and_guard_transfers_to_pending_selection(mo
         assert not selection.renewal.renewal_staging_guard(cfg).exists()
         assert selection.status(path)['state']=='pending-reconciliation'
         assert (output/'intent.json').exists() and (output/'result.json').exists()
+
+
+def test_exhausted_journal_refuses_before_guard_or_credential_production(monkeypatch):
+    with staged_candidate(monkeypatch) as (_root,_path,cfg,output,events):
+        with ExitStack() as stack,pytest.raises(ValueError):
+            selection._stage(cfg,'new',{}, {'sequence':selection.MAX_SELECTIONS},
+                output,'marty-selfhost-synthetic',stack)
+        assert not events and not list(output.iterdir())
+        assert not selection.renewal.renewal_staging_guard(cfg).exists()
 
 
 @pytest.mark.parametrize('fault',['authority','prepare','tls','keycloak','export','missing-boundary'])

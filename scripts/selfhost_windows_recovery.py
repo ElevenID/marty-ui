@@ -386,32 +386,51 @@ def wait_for_engine(host,engine_id,*,timeout=300):
 
 def main(argv=None):
     """Managed dispatch used by the existing Windows recovery wrapper."""
-    parser=argparse.ArgumentParser(description='Recover retained existing Windows candidate IDs')
+    class PrivateParser(argparse.ArgumentParser):
+        def error(self,_message):
+            raise ValueError('Invalid managed command arguments')
+    parser=PrivateParser(description='Recover or renew the retained Windows candidate')
     parser.add_argument('--configuration',required=True)
     parser.add_argument('--check-only',action='store_true')
     parser.add_argument('--wait-for-engine',action='store_true')
-    args=parser.parse_args(argv)
+    parser.add_argument('--renew-once',action='store_true')
+    parser.add_argument('--logical-project')
     try:
+        args=parser.parse_args(argv)
         selection.require(os.name=='nt')
+        selection.require(bool(args.logical_project)==args.renew_once)
+        if args.renew_once:
+            selection.require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',args.logical_project))
         with renewal.hold_private_input(Path(args.configuration)) as raw:
             config=selection.decode(raw)
             selection.require(set(config)=={'schema','selection_file'}
                 and config['schema']=='marty.windows-managed-recovery/v1')
             selection.require(isinstance(config['selection_file'],str) and Path(config['selection_file']).is_absolute())
-            with selection.selected_inputs(Path(config['selection_file'])) as lease:
-                if args.wait_for_engine:wait_for_engine(lease.docker_host,lease.engine_id)
-                if args.check_only:
-                    result=lease.check_configuration()
-                else:
-                    output=lease.secrets_dir.parent/('windows-recovery-'+uuid.uuid4().hex)
-                    output.mkdir()
-                    result=lease.recover_existing(output,fresh_authority=True)
-            if not args.check_only:
+            if args.renew_once and not args.check_only:
+                if args.wait_for_engine:
+                    with selection.selected_inputs(Path(config['selection_file'])) as lease:
+                        wait_for_engine(lease.docker_host,lease.engine_id)
+                # renew_once acquires its own fresh lease. Never call it under
+                # the waiting/configuration lease and deadlock the project lock.
+                result=selection.renew_once(Path(config['selection_file']),args.logical_project)
+            else:
+                with selection.selected_inputs(Path(config['selection_file'])) as lease:
+                    if args.wait_for_engine:wait_for_engine(lease.docker_host,lease.engine_id)
+                    if args.check_only:
+                        result=lease.check_configuration()
+                        if args.renew_once:result=dict(result,renewal_requested=True,renewal_executed=False)
+                    else:
+                        output=lease.secrets_dir.parent/('windows-recovery-'+uuid.uuid4().hex)
+                        output.mkdir()
+                        result=lease.recover_existing(output,fresh_authority=True)
+            if not args.check_only and not args.renew_once:
                 result=selection.decode(renewal.read_private_bytes(output/'result.json'))
                 result['attempt_dir']=str(output)
                 selection.require(not renewal.recovery_pending({'project':lease.project,'current_secrets':str(lease.secrets_dir)}))
         sys.stdout.write(selection.packed(result).decode())
         return 0
+    except SystemExit as error:
+        return 0 if error.code==0 else 1 # intentional --help only
     except BaseException:
         sys.stderr.write('Managed Windows recovery refused; preserve its configuration, markers and receipts.\n')
         return 1
