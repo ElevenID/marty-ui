@@ -4519,6 +4519,7 @@ dependencies = [
  "marty-gateway",
  "marty-issuance-service",
  "marty-oid4vci",
+ "marty-presentation-policy",
  "marty-release-evidence",
  "marty-signing-grant",
  "marty-signing-keys",

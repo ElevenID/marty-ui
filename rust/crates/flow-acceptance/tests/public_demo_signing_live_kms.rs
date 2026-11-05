@@ -17,6 +17,8 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 use uuid::Uuid;
 
+#[path = "support/public_demo_canonical.rs"]
+mod canonical_example;
 #[path = "../../../services/signing-keys/tests/support/disposable_backends.rs"]
 mod disposable_backends;
 
@@ -80,7 +82,7 @@ async fn flow_demo_holder_http_admission_uses_remote_custody_and_one_use_grants(
     let redis_url = disposable_backends::disposable_redis_url().await;
     let _ = disposable_backends::disposable_openbao_envelope().await;
     let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").unwrap();
-    let org = format!("demo-admission-{}", Uuid::new_v4().simple());
+    let org = Uuid::new_v4().to_string();
     let did = "did:web:demo.example:orgs:marty-demo-holder";
     let registry = RegistryStore::connect(&redis_url)
         .await
@@ -246,7 +248,7 @@ async fn flow_demo_holder_http_admission_uses_remote_custody_and_one_use_grants(
         matches!(status, 400 | 404 | 409 | 422),
         "foreign profile status={status}"
     );
-    next.organization_id = org;
+    next.organization_id = org.clone();
     next.operation_id = Uuid::new_v4().to_string();
     let format_header = grant(&minter, &next).await;
     let mut wrong_format = body(&next);
@@ -266,8 +268,16 @@ async fn flow_demo_holder_http_admission_uses_remote_custody_and_one_use_grants(
     let no_demo =
         HttpSigningProvider::new(&format!("http://{address}/internal"), INTERNAL, ISSUER_SIGN)
             .unwrap()
-            .with_grant_minter(wallet_minter);
+            .with_grant_minter(wallet_minter.clone());
     assert!(no_demo.sign(&next).await.is_err(), "no authority fallback");
+    canonical_example::run(
+        &format!("http://{address}"),
+        &org,
+        provider.with_grant_minter(wallet_minter),
+        &identity,
+        &endpoint,
+    )
+    .await;
     server.abort();
     let _ = server.await;
 }

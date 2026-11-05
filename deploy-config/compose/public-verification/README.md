@@ -106,13 +106,16 @@ python scripts/probe_signing_keys_openbao_policy.py --public-demo-grant
 ```
 
 It first discovers all three exact native tests, then creates its own pinned,
-loopback-only TLS OpenBao and marked Redis fixtures. It applies these policy
+loopback-only TLS OpenBao, marked Redis and a fresh PostgreSQL fixture. The
+database name and nonce guard are fixed by the controller; an inherited test
+database URL cannot select another database. PostgreSQL data lives in tmpfs.
+It applies these policy
 inputs only there, checks all eight origins' MAC isolation and the demo token's
 provisioning/signing denials, and runs the native file-backed demo minter and
 one-use verifier race. It also creates a non-exportable asymmetric demo key
 using a distinct custody token, checks real signatures/tamper rejection and
 privilege denials, and executes the native pinned-version ES256 adapter with
-independent public-JWK verification. It verifies removal of both owned container
+independent public-JWK verification. It verifies removal of the owned container
 IDs. A cross-service acceptance case creates the synthetic holder through the
 actual Signing Keys identity API and uses Flow's production HTTP client with
 its file-backed minter. It checks public-JWK signatures, tenant/DID/key/purpose/
@@ -120,10 +123,19 @@ payload binding, actual concurrent replay admission, format/profile rejection
 and absence of a wallet-minter fallback. The service fixture uses a distinct
 token containing the existing Signing Keys policies plus the opt-in custody
 policy; the prefix-only token remains separate for privilege-denial tests.
+That case also provisions distinct remote issuer/verifier keys, issues the
+fictional specimen with the issuer's real grant, and exercises public catalog,
+preview, consent-bound launch, example and result recovery routes against real
+Flow PostgreSQL persistence. Core verification and the actual policy evaluator
+produce age18 success and age21 denial; a tampered specimen remains an input
+rejection without nonce consumption. Results omit claims and credential data.
+Membership, template metadata and trust/status transports are explicit local
+fixtures, and the real policy evaluator is called through an in-process adapter.
 The regular `--grant-verifier` probe also includes these cases. Their scope is
-remote custody, Flow signing transport and Signing Keys admission. The complete
-canonical example journey, governed runtime readiness and real-wallet
-presentation still need separate qualification.
+the isolated canonical Flow example journey, remote custody and service signing
+admission. Public Gateway/browser integration, governed deployed readiness,
+retention/renewal operations and real-wallet interoperability need their own
+qualification. All three owned fixture container IDs are removed and verified.
 There is no endpoint/operator-secret option for pointing this probe at an
 existing deployment.
 

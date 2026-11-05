@@ -173,3 +173,65 @@ def test_admission_case_discovery_is_exact():
         subprocess.CompletedProcess([], 0, f"{probe.CUSTODY_CASE}: test\n", ""),
         admission=True,
     )
+
+
+def test_owned_postgres_never_uses_an_inherited_database_and_cleans_failed_consumer(
+    monkeypatch,
+):
+    calls = []
+    removed = []
+
+    def docker(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "run":
+            return "a" * 64
+        if args[0] == "port":
+            return "127.0.0.1:54321"
+        return ""
+
+    monkeypatch.setattr(controller, "require_docker", docker)
+    monkeypatch.setattr(
+        controller,
+        "docker",
+        lambda *args: subprocess.CompletedProcess([], 0, "ready", ""),
+    )
+    monkeypatch.setattr(
+        controller,
+        "remove_owned_demo_grant_backend",
+        lambda name, identity: removed.append((name, identity)),
+    )
+    with pytest.raises(RuntimeError, match="consumer failed"):
+        with controller.public_demo_postgres(
+            {"FLOW_PUBLIC_VERIFICATION_TEST_URL": "postgres://shared/production"}
+        ) as (environment, receipt):
+            assert (
+                "@127.0.0.1:54321/marty_public_verification_test"
+                in environment["FLOW_PUBLIC_VERIFICATION_TEST_URL"]
+            )
+            assert len(environment["MARTY_TEST_POSTGRES_DISPOSABLE_NONCE"]) == 32
+            assert receipt["postgresRemoved"] is False
+            raise RuntimeError("consumer failed")
+    assert removed[0][1] == "a" * 64
+    assert receipt["postgresRemoved"] is True
+    assert "/var/lib/postgresql/data:rw,mode=700" in calls[0]
+    assert "127.0.0.1::5432" in calls[0]
+
+
+def test_owned_postgres_readiness_failure_still_removes_the_exact_fixture(monkeypatch):
+    removed = []
+    monkeypatch.setattr(controller, "require_docker", lambda *args, **kwargs: "b" * 64)
+    monkeypatch.setattr(
+        controller,
+        "docker",
+        lambda *args: subprocess.CompletedProcess([], 1, "", "not ready"),
+    )
+    monkeypatch.setattr(controller.time, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        controller,
+        "remove_owned_demo_grant_backend",
+        lambda name, identity: removed.append(identity),
+    )
+    with pytest.raises(RuntimeError, match="PostgreSQL not ready"):
+        with controller.public_demo_postgres({}):
+            pytest.fail("unready database yielded")
+    assert removed == ["b" * 64]

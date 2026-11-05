@@ -237,6 +237,36 @@ def run_managed_mdoc_case(*, endpoint: str, ca_file: Path, root_token: str,
         remove_owned_mdoc_backend(redis_name, redis_id)
 
 
+@contextmanager
+def public_demo_postgres(environment):
+    """Fresh marked loopback database; never accept a caller's database URL."""
+    name = f"public-demo-postgres-{uuid.uuid4().hex[:12]}"
+    password = uuid.uuid4().hex
+    nonce = uuid.uuid4().hex
+    container_id = require_docker("run", "--rm", "-d", "--name", name,
+        "--label", "marty.disposable=kms-signing-policy",
+        "--label", "codex.purpose=public-demo-grant-fixture",
+        "--memory", "256m", "--memory-swap", "256m", "--tmpfs", "/var/lib/postgresql/data:rw,mode=700",
+        "-e", f"POSTGRES_PASSWORD={password}", "-e", "POSTGRES_DB=marty_public_verification_test",
+        "-p", "127.0.0.1::5432", POSTGRES_IMAGE)
+    receipt = {"postgresContainerId":container_id,"postgresRemoved":False}
+    try:
+        for _ in range(80):
+            ready = docker("exec", container_id, "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "marty_public_verification_test")
+            if ready.returncode == 0: break
+            time.sleep(.25)
+        else: raise RuntimeError("Disposable public demo PostgreSQL not ready")
+        require_docker("exec", container_id, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "postgres",
+            "-d", "marty_public_verification_test", "-c",
+            f"CREATE TABLE public.marty_disposable_guard(nonce text NOT NULL); INSERT INTO public.marty_disposable_guard VALUES ('{nonce}')")
+        port = int(require_docker("port", container_id, "5432/tcp").splitlines()[0].rsplit(":", 1)[1])
+        yield dict(environment, FLOW_PUBLIC_VERIFICATION_TEST_URL=f"postgres://postgres:{password}@127.0.0.1:{port}/marty_public_verification_test",
+            MARTY_TEST_POSTGRES_DISPOSABLE_NONCE=nonce), receipt
+    finally:
+        remove_owned_demo_grant_backend(name, container_id)
+        receipt["postgresRemoved"] = True
+
+
 def run_public_demo_grant_case(*, endpoint, ca_file, root_token, call, redis_name,
                                runner=subprocess.run):
     result = None
@@ -262,7 +292,9 @@ def run_public_demo_grant_case(*, endpoint, ca_file, root_token, call, redis_nam
             BAO_ADDR=endpoint.removesuffix("/v1"), BAO_CACERT=str(ca_file),
             MARTY_TEST_OPENBAO_ROOT_TOKEN=root_token, MARTY_TEST_OPENBAO_DISPOSABLE_NONCE=bao_nonce,
             MARTY_TEST_REDIS_URL=f"redis://127.0.0.1:{port}/13", MARTY_TEST_REDIS_DISPOSABLE_NONCE=nonce)
-        result = public_demo_grant_probe.qualify(call, root_token, environment, runner=runner)
+        with public_demo_postgres(environment) as (environment, receipt):
+            result = public_demo_grant_probe.qualify(call, root_token, environment, runner=runner)
+        result.update(receipt)
         result["redisContainerId"] = redis_id
         return result
     finally:
@@ -727,7 +759,8 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                     grant_mint_tokens["gateway-service"], "[mint]",
                 )
                 raise RuntimeError(f"Rust live grant verifier failed:\n{detail[-2000:]}")
-            public_demo_grant_probe.qualify(call, root_token, environment)
+            with public_demo_postgres(environment) as (demo_environment, _receipt):
+                public_demo_grant_probe.qualify(call, root_token, demo_environment)
             result = subprocess.run(
                 ["cargo", "+1.95.0", "test", "-p", "marty-signing-keys",
                  "--test", "service_certificate_live_kms", "--locked", "--offline",

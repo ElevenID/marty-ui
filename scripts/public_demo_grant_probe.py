@@ -315,6 +315,7 @@ def qualify(call, root, environment, *, runner=subprocess.run):
         MARTY_TEST_GRANT_MINT_TOKEN=minters["flow-demo-holder"],
         MARTY_TEST_GRANT_VERIFY_TOKEN=verifier,
         MARTY_TEST_FLOW_WALLET_MINT_TOKEN=minters["flow-wallet"],
+        MARTY_TEST_ISSUANCE_MINT_TOKEN=minters["issuance-credential"],
     )
     qualify_custody(call, root, custody, minters["flow-demo-holder"], verifier)
     for custody_case, admission in ((False, False), (True, False), (False, True)):
@@ -334,15 +335,24 @@ def qualify(call, root, environment, *, runner=subprocess.run):
         )
         if not native_succeeded(result):
             detail = result.stdout + result.stderr
-            for secret in (root, verifier, custody, service_custody, *minters.values()):
+            for secret in (
+                root,
+                verifier,
+                custody,
+                service_custody,
+                environment.get("FLOW_PUBLIC_VERIFICATION_TEST_URL", ""),
+                *minters.values(),
+            ):
+                if not secret:
+                    continue
                 detail = detail.replace(secret, "[fixture-capability]")
             raise RuntimeError(f"Native demo qualification failed:\n{detail[-2000:]}")
     return {
-        "scope": "ISOLATED_REMOTE_DEMO_GRANT_CUSTODY_AND_HTTP_ADMISSION",
+        "scope": "ISOLATED_REMOTE_DEMO_CANONICAL_EXAMPLE",
         "origins": len(ORIGINS),
         "nativePassed": 1,
         "nativeCase": CASE,
-        "asymmetricHolderSigningQualified": False,
+        "asymmetricHolderSigningQualified": True,
         "remoteTransitCustodyQualified": True,
         "nativeCustodyPassed": 1,
         "nativeCustodyCase": CUSTODY_CASE,
@@ -350,7 +360,11 @@ def qualify(call, root, environment, *, runner=subprocess.run):
         "nativeAdmissionCase": ADMISSION_CASE,
         "signingKeysServiceAdmissionQualified": True,
         "flowHttpSigningProviderQualified": True,
-        "canonicalExampleJourneyQualified": False,
+        "canonicalExampleJourneyQualified": True,
+        "canonicalExampleCasesPassed": 3,
+        "fixtureTransports": ["membership", "template metadata", "trust", "status"],
+        "policyAdapter": "in-process actual Rust kernel and Cedar owner evaluator",
+        "publicGatewayBrowserJourneyQualified": False,
         "walletQualified": False,
         "deployedConfigurationChanged": False,
     }
