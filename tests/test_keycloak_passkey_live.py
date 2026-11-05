@@ -129,17 +129,20 @@ def test_real_realm_reconciliation_preserves_providers_and_policy_on_rollback(ke
             assert disabled[key] == value
 
 
-def test_virtual_authenticator_enrollment_and_login_keep_the_same_subject(keycloak):
+@pytest.mark.parametrize("mode", ["conditional", "modal"])
+def test_virtual_authenticator_enrollment_and_login_keep_the_same_subject(keycloak, mode):
     from playwright.sync_api import sync_playwright
 
     result = configure(keycloak, "true")
     assert result.returncode == 0, result.stderr
     password = secrets.token_urlsafe(24)
+    username = "passkey-user-" + mode
+    email = username + "@example.invalid"
     request(keycloak["admin"] + "/users", token=keycloak["token"], body={
-        "username": "passkey-user", "email": "passkey-user@example.invalid", "emailVerified": True,
+        "username": username, "email": email, "emailVerified": True,
         "enabled": True, "firstName": "Synthetic", "lastName": "User",
         "credentials": [{"type": "password", "value": password, "temporary": False}]})
-    user_query = "/users?email=passkey-user%40example.invalid&exact=true"
+    user_query = "/users?" + urllib.parse.urlencode({"email": email, "exact": "true"})
     users = request(keycloak["admin"] + user_query, token=keycloak["token"])
     subject = users[0]["id"]
     issuer = keycloak["base"] + "/realms/passkey-test/protocol/openid-connect"
@@ -177,7 +180,7 @@ def test_virtual_authenticator_enrollment_and_login_keep_the_same_subject(keyclo
             page.goto(url)
             assert page.locator("#social-google").count() == 1
             assert page.locator("#credential-login").count() == 1
-            page.locator("#username").fill("passkey-user@example.invalid")
+            page.locator("#username").fill(email)
             page.locator("#password").fill(password)
             page.locator("#kc-login").click()
             page.once("dialog", lambda dialog: dialog.accept("Synthetic passkey"))
@@ -189,12 +192,11 @@ def test_virtual_authenticator_enrollment_and_login_keep_the_same_subject(keyclo
             credentials = cdp.send("WebAuthn.getCredentials", {"authenticatorId": authenticator})["credentials"]
             assert len(credentials) == 1 and credentials[0]["isResidentCredential"] is True
             # Virtual authenticators may immediately fulfill conditional requests.
-            # Select the supported button-only mode to exercise the modal path
-            # deterministically; the configurator/default autofill is tested above.
-            request(keycloak["admin"], token=keycloak["token"], method="PUT",
-                    body={"webAuthnPolicyPasswordlessMediation": "none"})
+            # Hold simulated presence until the explicit modal button is clicked,
+            # keeping the actual configured conditional policy unchanged.
             # A completely new browser context rules out SSO/cookie state from
             # the enrollment callback. Transfer only the virtual device key.
+            cdp.send("WebAuthn.removeVirtualAuthenticator", {"authenticatorId": authenticator})
             context.close()
             context = browser.new_context()
             page = context.new_page()
@@ -203,12 +205,20 @@ def test_virtual_authenticator_enrollment_and_login_keep_the_same_subject(keyclo
             cdp.send("WebAuthn.enable")
             authenticator = cdp.send("WebAuthn.addVirtualAuthenticator", {"options": {
                 "protocol": "ctap2", "transport": "internal", "hasResidentKey": True,
-                "hasUserVerification": True, "isUserVerified": True, "automaticPresenceSimulation": True}})["authenticatorId"]
+                "hasUserVerification": True, "isUserVerified": True,
+                "automaticPresenceSimulation": mode == "conditional"}})["authenticatorId"]
             cdp.send("WebAuthn.addCredential", {"authenticatorId": authenticator, "credential": credentials[0]})
             url, verifier = authorization()
             page.goto(url)
-            page.locator("#authenticateWebAuthnButton").click(timeout=30000)
-            assert_identity(page, verifier)
+            if mode == "modal":
+                assert page.locator("#authenticateWebAuthnButton").count() == 1, (
+                    page.locator("body").inner_text(), page_errors)
+                page.locator("#authenticateWebAuthnButton").click(timeout=30000, no_wait_after=True)
+                cdp.send("WebAuthn.setAutomaticPresenceSimulation", {"authenticatorId": authenticator, "enabled": True})
+            try:
+                assert_identity(page, verifier)
+            except Exception as error:
+                raise AssertionError((page.locator("body").inner_text(), page_errors)) from error
             after = cdp.send("WebAuthn.getCredentials", {"authenticatorId": authenticator})["credentials"]
             assert after[0]["signCount"] > credentials[0]["signCount"]
             assert len(request(keycloak["admin"] + user_query, token=keycloak["token"])) == 1
