@@ -7,6 +7,8 @@ use marty_oid4vci::jose::verify_compact_jwt_with_public_jwk;
 use p256::PublicKey;
 use serde_json::{Map, Value};
 
+use crate::legacy_json_compat::json_truthy;
+
 use crate::token_exchange::{
     ClientAuthenticationRequest, Oid4vciClientAuthenticator, TokenExchangeError,
 };
@@ -351,17 +353,6 @@ fn numeric_date(
             .map(Some)
             .ok_or(TokenExchangeError::InvalidClient),
         _ => Err(TokenExchangeError::InvalidClient),
-    }
-}
-
-fn json_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
     }
 }
 

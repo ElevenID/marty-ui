@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$RecoveryConfigurationFile,
+    [string]$RegistryConfig,
     [string]$ExpectedDockerContext,
     [string]$StackDirectory,
     [string[]]$ProductionComposeFile = @(),
@@ -28,7 +29,7 @@ if ($RecoveryConfigurationFile) {
             $configuration.schema -ne 'marty.windows-recovery/v1' -or
             $configuration.parameters -isnot [PSCustomObject]) { throw 'invalid schema' }
         $strings = @('StackDirectory', 'ProductionEnvFile', 'ProductionProject', 'OpenbaoComposeFile',
-                     'OpenbaoEnvFile', 'OpenbaoProject', 'ExpectedDockerContext')
+                     'OpenbaoEnvFile', 'OpenbaoProject', 'ExpectedDockerContext', 'RegistryConfig')
         foreach ($property in $configuration.parameters.PSObject.Properties) {
             $name = $property.Name
             $value = $property.Value
@@ -210,6 +211,9 @@ try {
                 $ProductionComposeArgs += @('-f', [string]$composeFile)
             }
             if ($WebsiteHost.ca_file) { $WebsiteArguments += @('--ca-file', [string]$WebsiteHost.ca_file) }
+            if (-not [string]::IsNullOrWhiteSpace($RegistryConfig)) {
+                $WebsiteArguments += @('--registry-config', $RegistryConfig)
+            }
             $ProductionComposeArgs += @('-f', (Join-Path $RepoRoot '.marty-website/compose.website.json'))
             $OpenbaoComposeArgs = @('--project-directory', $RepoRoot, '--project-name', [string]$WebsiteHost.openbao_project,
                                     '--env-file', [string]$WebsiteHost.openbao_env_file, '-f', [string]$WebsiteHost.openbao_compose_file)

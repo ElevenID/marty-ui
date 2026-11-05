@@ -42,6 +42,11 @@ GITHUB_RULE_REFUSAL = (
     b"0053\1" b"004eng refs/tags/v-release-capability-41792570662-1 atomic transaction failed\n"
     b"0009\1" b"00000000"
 )
+# Corrected A -> A request's response from run 41894878943, artifact
+# 13355352570. Authenticated ZIP SHA-256:
+# 9bc1ca672f57127b5bfde8c47475d7d5f54a9c7c3af31553014b2280c2f1a67f.
+# This also remains a failed historical run: it never sent a positive request.
+GITHUB_STALE_NOOP_POLICY_REFUSAL = GITHUB_RULE_REFUSAL.replace(b"41792570662", b"41894878943")
 
 
 def spec(negative: bool = False) -> dict:
@@ -448,6 +453,30 @@ class ProtocolRefusalTests(unittest.TestCase):
         parsed = atomic.parse_report(report(before, ("ng", "ng"), reason + b"error: permission denied\n"), before)
         with self.assertRaises(atomic.AtomicGitError): atomic.admit_report(before, parsed)
 
+    def test_only_the_exact_main_policy_refusal_has_a_distinct_negative_classification(self) -> None:
+        before = spec(True)
+        parsed = atomic.parse_report(report(before, ("ng", "ng"), atomic.GITHUB_MAIN_POLICY_REFUSAL.encode()), before)
+        parsed["refs"][0]["reason"] = "push declined due to repository rule violations"
+        self.assertEqual(atomic.admit_report(before, parsed), "confirmed_main_policy_refusal")
+        invalid = []
+        for index in (0, 1):
+            for key, value in (("status", "ok"), ("reason", "generic policy refusal"), ("ref", "refs/heads/other")):
+                changed = copy.deepcopy(parsed)
+                changed["refs"][index][key] = value
+                invalid.append(changed)
+        for diagnostic in ("GH013", parsed["diagnostic"] + "Bypassed rules\n",
+                           parsed["diagnostic"].replace("merge queue", "review"),
+                           parsed["diagnostic"].replace("refs/heads/main", "refs/heads/other"),
+                           parsed["diagnostic"].replace("ElevenID/marty-ui", "another/repository")):
+            invalid.append({**parsed, "diagnostic": diagnostic})
+        for changed in invalid:
+            with self.subTest(report=changed), self.assertRaises(atomic.AtomicGitError):
+                atomic.admit_report(before, changed)
+        for request in (spec(), atomic.transaction_spec(R, R, "v1.2.3", A, "release-tag-123-1")):
+            for outcomes in (("ng", "ng"), ("ok", "ok")):
+                with self.subTest(request=request, outcomes=outcomes), self.assertRaises(atomic.AtomicGitError):
+                    atomic.admit_report(request, atomic.parse_report(
+                        report(request, outcomes, atomic.GITHUB_MAIN_POLICY_REFUSAL.encode()), request))
     def test_reported_protection_bypass_cannot_count_as_positive_proof(self) -> None:
         parsed = atomic.parse_report(report(spec(), diagnostic=b"Bypassed rule violations for refs/heads/main\n"), spec())
         with self.assertRaises(atomic.AtomicGitError): atomic.admit_report(spec(), parsed)
@@ -554,25 +583,26 @@ class ExecutionCustodyTests(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
-    def test_actual_github_rule_refusal_is_preserved_but_cannot_authorize_positive_or_replay(self) -> None:
-        current = "296917da3baf572e5fbc425e6f3e86392bdba698"
-        ancestor = "4882496b125a3df4d639c94f471880b66c51a9d4"
-        tag_object = "53c73031586843e81ad65c9b3e1f2e8e27d88e8f"
-        audit_tag = "v-release-capability-41792570662-1"
+    def test_actual_corrected_github_negative_is_policy_evidence_but_positive_refusal_still_poisons(self) -> None:
+        current = "f1266b3d87476ea8332b1b45a21e77939246d84a"
+        ancestor = "c9ee1a764f15d6a4625110d886792a6f247be5f1"
+        tag_object = "80cd1f8f38123f0e67db1ec7e5d7206b80444a4e"
+        audit_tag = "v-release-capability-41894878943-1"
         request = atomic.transaction_spec(ancestor, current, audit_tag, tag_object,
-                                          "capability-negative-41792570662-1")
-        self.assertEqual(len(GITHUB_RULE_REFUSAL), 465)
-        self.assertEqual(hashlib.sha256(GITHUB_RULE_REFUSAL).hexdigest(),
-                         "a1e03714848c99445adfe85976ac18ccf37ed7a24ded7bb7764e68ca3ac6ae59")
+                                          "capability-negative-41894878943-1")
+        raw = GITHUB_STALE_NOOP_POLICY_REFUSAL
+        self.assertEqual(len(raw), 465)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+                         "58e146df0ead6e0cbaf62d0642bbbc8d2bca8e009ea3a67016b057092ff7a7fb")
         calls = []
         saved = []
         def http(method, body):
             calls.append(method)
-            return http_result(advertisement(main=current) if method == "GET" else GITHUB_RULE_REFUSAL, method)
+            return http_result(advertisement(main=current) if method == "GET" else raw, method)
         native = atomic.NativeGit(runner=mock.Mock(), deadline=lambda: datetime.now(timezone.utc) + timedelta(seconds=10),
                                   persist=lambda: saved.append(copy.deepcopy(native.transactions)), http=http)
-        with self.assertRaisesRegex(atomic.AtomicGitError, "Negative transaction was not wholly refused"):
-            native.exchange(request)
+        result = native.exchange(request)
+        self.assertEqual(result["decision"], "confirmed_main_policy_refusal")
         value = saved[-1][-1]
         parsed = value["mutation"]["report"]
         self.assertEqual(parsed["keepalive_packets"], 1)
@@ -581,17 +611,39 @@ class ExecutionCustodyTests(unittest.TestCase):
         self.assertEqual(parsed["refs"], [
             {"ref": "refs/heads/main", "status": "ng", "reason": "push declined due to repository rule violations"},
             {"ref": "refs/tags/" + audit_tag, "status": "ng", "reason": "atomic transaction failed"}])
-        self.assertEqual(parsed["body_sha256"], atomic.digest(GITHUB_RULE_REFUSAL))
-        self.assertEqual(base64.b64decode(value["mutation"]["https"]["body_base64"]), GITHUB_RULE_REFUSAL)
-        self.assertEqual(value["decision"], "unadmitted")
-        self.assertEqual(value["mutation"]["outcome"], "unknown")
-        self.assertTrue(native.poisoned)
+        self.assertEqual(parsed["body_sha256"], atomic.digest(raw))
+        self.assertEqual(base64.b64decode(value["mutation"]["https"]["body_base64"]), raw)
+        self.assertEqual(value["mutation"]["outcome"], "confirmed_main_policy_refusal")
+        self.assertFalse(native.poisoned)
         positive = atomic.transaction_spec(current, current, audit_tag, tag_object,
-                                           "capability-positive-41792570662-1")
+                                           "capability-positive-41894878943-1")
+        with self.assertRaises(atomic.AtomicGitError):
+            native.exchange(positive)
+        self.assertTrue(native.poisoned)
+        self.assertEqual(saved[-1][-1]["decision"], "unadmitted")
+        self.assertEqual(saved[-1][-1]["mutation"]["outcome"], "unknown")
         for retry in (request, positive):
             with self.assertRaises(atomic.AtomicGitError):
                 native.exchange(retry)
-        self.assertEqual(calls, ["GET", "POST"])
+        self.assertEqual(calls, ["GET", "POST", "GET", "POST"])
+
+    def test_historical_main_update_request_is_never_reclassified_as_a_noop_probe(self) -> None:
+        request = atomic.transaction_spec("4882496b125a3df4d639c94f471880b66c51a9d4",
+                                          "296917da3baf572e5fbc425e6f3e86392bdba698",
+                                          "v-release-capability-41792570662-1",
+                                          "53c73031586843e81ad65c9b3e1f2e8e27d88e8f",
+                                          "capability-negative-41792570662-1")
+        self.assertEqual(hashlib.sha256(GITHUB_RULE_REFUSAL).hexdigest(),
+                         "a1e03714848c99445adfe85976ac18ccf37ed7a24ded7bb7764e68ca3ac6ae59")
+        self.assertEqual(atomic.parse_report(GITHUB_RULE_REFUSAL, request)["keepalive_packets"], 1)
+        request["commands"][0]["new_oid"] = request["observed_main_oid"]
+        http = mock.Mock()
+        native = atomic.NativeGit(runner=mock.Mock(), deadline=lambda: datetime.now(timezone.utc) + timedelta(seconds=10),
+                                  persist=mock.Mock(), http=http)
+        with self.assertRaises(atomic.AtomicGitError):
+            native.exchange(request)
+        http.assert_not_called()
+        self.assertEqual(native.transactions, [])
 
     def test_a_main_movement_cannot_start_discovery_or_write_an_intent(self) -> None:
         request = spec(True)

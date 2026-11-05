@@ -64,9 +64,11 @@ def edge_capability(assets: Path, bundle_root: str) -> None:
 
 
 def authenticate_payloads(directory: Path, *, gh: Path, cosign: Path,
-                          runner: proof.verifier.Run = proof.verifier.command) -> tuple[dict, dict, dict, dict, str]:
-    website = proof.verify_website(directory / "website", gh=gh, cosign=cosign, runner=runner)
-    application, compatibility = proof.verify_application(directory / "application", gh=gh, cosign=cosign, runner=runner)
+                          runner: proof.verifier.Run = proof.verifier.command,
+                          registry_config: Path | None = None) -> tuple[dict, dict, dict, dict, str]:
+    website = proof.verify_website(directory / "website", gh=gh, cosign=cosign, runner=runner, registry_config=registry_config)
+    application, compatibility = proof.verify_application(directory / "application", gh=gh, cosign=cosign,
+                                                         runner=runner, registry_config=registry_config)
     ui.require(website["image_metadata"]["route_contract"] == compatibility["marker"]["route_contract"],
                "website and application routing contracts differ; qualify a compatible application first")
     ui.require(website["production_pages"] == application.get("production_pages", "public"),
@@ -132,7 +134,8 @@ def validate_record(record: dict) -> dict:
 
 
 def package(*, website_assets: Path, application_assets: Path, backend_assets: Path, producer: dict,
-            output: Path, gh: Path, cosign: Path, runner: proof.verifier.Run = proof.verifier.command) -> dict:
+            output: Path, gh: Path, cosign: Path, runner: proof.verifier.Run = proof.verifier.command,
+            registry_config: Path | None = None) -> dict:
     ui.require(not output.exists(), "web composition output already exists")
     proof.validate_producer(producer)
     with tempfile.TemporaryDirectory(prefix="marty-web-composition-") as temporary:
@@ -141,7 +144,8 @@ def package(*, website_assets: Path, application_assets: Path, backend_assets: P
                                       (application_assets, APPLICATION_FILES, "application"),
                                       (backend_assets, BACKEND_FILES, "backend")):
             copy_inputs(source, names, held / prefix)
-        result = describe(held, producer, *authenticate_payloads(held, gh=gh, cosign=cosign, runner=runner))
+        result = describe(held, producer, *authenticate_payloads(held, gh=gh, cosign=cosign,
+                                                               runner=runner, registry_config=registry_config))
         validate_record(result)
         encoded = ui.canonical(result)
         output.mkdir(mode=0o700, parents=True)
@@ -195,7 +199,8 @@ def extract(archive_path: Path, manifest: dict, destination: Path) -> None:
 
 @contextmanager
 def verified_package(assets: Path, *, gh: Path, cosign: Path,
-                     runner: proof.verifier.Run = proof.verifier.command):
+                     runner: proof.verifier.Run = proof.verifier.command,
+                     registry_config: Path | None = None):
     names = ("web-composition.json", "web-composition.zip", "web-composition.json.sigstore.json",
              "web-composition.json.provenance.jsonl", "web-composition.zip.sigstore.json", "web-composition.zip.provenance.jsonl")
     with tempfile.TemporaryDirectory(prefix="marty-verified-web-") as temporary:
@@ -210,7 +215,8 @@ def verified_package(assets: Path, *, gh: Path, cosign: Path,
             proof.verify_subject(held / name, producer=manifest["producer"], gh=gh, cosign=cosign, runner=runner)
         payload = held / "payload"
         extract(held / "web-composition.zip", manifest, payload)
-        expected = describe(payload, manifest["producer"], *authenticate_payloads(payload, gh=gh, cosign=cosign, runner=runner))
+        expected = describe(payload, manifest["producer"], *authenticate_payloads(
+            payload, gh=gh, cosign=cosign, runner=runner, registry_config=registry_config))
         ui.require(manifest == expected, "composition differs from its authenticated inputs")
         yield manifest, payload
 
@@ -220,6 +226,7 @@ def main() -> None:
     for name in ("website-assets", "application-assets", "backend-assets", "output-dir", "gh", "cosign"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--producer-repository", choices=tuple(web.REPOSITORIES), required=True)
+    parser.add_argument("--registry-config", type=Path, help="explicit private Docker config.json for private OCI reads")
     for name in ("producer-source-sha", "run-id", "run-attempt"):
         parser.add_argument("--" + name, required=True)
     args = parser.parse_args()
@@ -228,7 +235,7 @@ def main() -> None:
                 "source_sha": args.producer_source_sha, "ref": web.REF, "run_id": args.run_id, "run_attempt": args.run_attempt}
     package(website_assets=args.website_assets.absolute(), application_assets=args.application_assets.absolute(),
             backend_assets=args.backend_assets.absolute(), producer=producer, output=args.output_dir.absolute(),
-            gh=args.gh.absolute(), cosign=args.cosign.absolute())
+            gh=args.gh.absolute(), cosign=args.cosign.absolute(), registry_config=args.registry_config)
 
 
 if __name__ == "__main__":

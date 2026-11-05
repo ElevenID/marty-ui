@@ -2,7 +2,7 @@ import { useSurfaceNavigate } from '../../application/routing/useSurfaceNavigate
 import { Box, Typography, Button, Paper, Grid, Card, CardContent, Chip } from '@mui/material';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 
-import { DISABLE_PUBLIC_GET_STARTED_BUTTONS, SHOW_PUBLIC_GET_STARTED_BUTTONS } from '@ui-public-config';
+import { DISABLE_PUBLIC_PRICING_BUTTONS, SHOW_PUBLIC_PRICING_BUTTONS } from '@ui-public-config';
 import FutureFeatureButton from '../FutureFeatureButton';
 import { SEOHead, softwareApplicationSchema } from '../seo';
 
@@ -50,10 +50,10 @@ function EudiWalletVerificationPage() {
       </Paper>
 
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 6 }}>
-        {SHOW_PUBLIC_GET_STARTED_BUTTONS && (
+        {SHOW_PUBLIC_PRICING_BUTTONS && (
           <FutureFeatureButton
             variant="contained"
-            disabled={DISABLE_PUBLIC_GET_STARTED_BUTTONS}
+            disabled={DISABLE_PUBLIC_PRICING_BUTTONS}
             onClick={() => navigate('/pricing')}
             disabledSx={{
               bgcolor: 'rgba(25, 118, 210, 0.14)',

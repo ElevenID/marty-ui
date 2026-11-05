@@ -221,20 +221,63 @@ against the real repository protections. Its capability mode uses a unique,
 non-semver `v-release-capability-<operator-run-id>-1` audit tag and a genuine
 ancestor with identical workflow files. The stale-main negative transaction
 asserts the ancestor as both old and new main, modelling a formerly admitted
-no-op after main advanced. Its separate `observed_main_oid` binds discovery and
-the diagnostic to current main; the request never proposes an ancestor-to-current
-branch update. It must return two refused refs plus the exact
-main/current/expected diagnostic through sideband. Both refs must remain
-unchanged on independent readback. A generic atomic-failure status is
-insufficient. The paired current-main transaction must report both refs
-successful and create the exact annotated audit tag without moving main.
-The v2 capability result summarizes those native observations; all raw bounded
-wire evidence remains in the observations artifact. Recheck the same rules
-afterward. The parser counts and ignores only the observed standalone progress
+no-op after main advanced. Its separate `observed_main_oid` binds discovery to
+current main; the request never proposes an ancestor-to-current
+branch update. Before writing, the operator requires an active repository-owned
+merge-queue ruleset applying exactly to main, with no additional conditions,
+excluded refs, and GitHub's explicit `current_user_can_bypass: "never"` for the
+workflow credential making the request. This proves the credential's own
+authority; it does not assert that no other actor has bypass rights. GitHub
+[defines that field for the requesting actor](https://github.blog/changelog/2023-06-27-repository-rules-public-beta-updates/)
+and [withholds `bypass_actors` without ruleset write access](https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset).
+An omitted inventory stays absent in the raw snapshot and is recorded as
+`not_disclosed`, never converted to an empty list. An explicit empty list is
+recorded as `observed_empty`. Explicit null, malformed or nonempty inventories
+remain non-qualifying, as do missing or non-`never` current-credential capability.
+No additional credential, permission or ruleset change is introduced.
+
+The negative transaction must
+return either the exact main/current/expected stale-lock diagnostic with both
+refs atomically refused, or GitHub's exact main-policy GH013 diagnostic for
+the merge queue and pull request, with main refused for rule violations and
+the run-bound tag refused by the atomic transaction. The latter is recorded as
+`confirmed_main_policy_refusal`; it is not proof of Git's stale-lock layer.
+Both refs must remain unchanged on independent readback, and the complete
+operator context and visible ruleset snapshot, including the requesting
+credential's capability and inventory visibility, must still match before the
+positive transaction. This is not an assertion that an undisclosed global
+inventory remained unchanged. Concurrent changes to main remain subject to the
+original native atomic comparison and independent readbacks. A generic atomic
+failure, other GH013 diagnostic, or policy
+refusal on a positive or production transaction is insufficient.
+
+The paired current-main transaction must report both refs successful and
+create the exact annotated audit tag without moving main. The v4 capability
+result retains the distinct negative evidence and protecting ruleset IDs, and
+explicitly scopes its protection observations to `current_workflow_credential`.
+Each observation records the exact `never` capability and `not_disclosed` or
+`observed_empty` inventory visibility. The unchanged raw API snapshot and all
+bounded wire evidence remain available. Recheck the same visible rules afterward.
+The parser counts and ignores only the observed standalone progress
 NUL packet; raw packets remain intact. NULs within text or status and unsupported
 control bytes are refused.
-Decoded rule refusals are preserved before admission and cannot authorize the
-positive transaction. Local bare-Git tests establish protocol behavior, and do
+Decoded refusals are preserved before admission. No negative result alone is
+successful qualification, and historical failed runs remain failed. In run
+41894878943 the corrected stale no-op was rejected by GitHub policy before
+the stale-lock layer; the positive transaction was never sent. A fresh paired
+qualification is required after this correction. Run 41925744279 stopped before
+any recorded REST mutation or Git transaction, with only a `HandoffError` in its
+old refusal receipt. The v3 preflight incorrectly required a globally visible
+empty inventory: actual workflow-token inspection 41791774863 omitted that field
+while explicitly reporting `never`. Its unchanged public packet is retained as
+`tests/fixtures/release-tag-inspection-41791774863.json` (artifact 13303856131;
+original ZIP SHA-256 `09a5d46952b0ab6fcda60279765cd58bc0f5e1389510cbec3705af321915067e`).
+That packet reproduces the preflight refusal locally; it is read-only inspection
+evidence, not live capability success. New refusals report fixed internal
+`refusal_stage` and `refusal_reason` codes without exception messages, credentials,
+API payloads or redirected URLs. Original failure evidence remains unchanged.
+
+Local bare-Git tests establish protocol behavior, and do
 not replace this actual GitHub qualification under the existing protections. Permission,
 type, transport or generic errors are not successful capability proof. Keep
 the immutable audit receipt and tag; do not weaken protections or obtain a

@@ -3,7 +3,7 @@
 // transaction is required to prove a browser handoff occurred.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,7 +15,10 @@ import { renderWebsiteNginx } from './render-website-nginx.mjs';
 const uiRoot = fileURLToPath(new URL('../', import.meta.url));
 const dist = path.resolve(process.argv[2] || path.join(uiRoot, 'dist-website'));
 const metadata = JSON.parse(readFileSync(path.join(dist, 'marty-website-release.json'), 'utf8'));
+const nginxPath = (value) => JSON.stringify(value.replaceAll('\\', '/'));
 const temporary = mkdtempSync(path.join(tmpdir(), 'marty-website-smoke-'));
+// The portable Windows build nests its default temporary paths under temp/.
+mkdirSync(path.join(temporary, 'temp'));
 const socket = http.createServer();
 await new Promise((resolve) => socket.listen(0, '127.0.0.1', resolve));
 const nginxPort = socket.address().port;
@@ -24,16 +27,16 @@ writeFileSync(path.join(temporary, 'routes.conf'), renderWebsiteNginx(metadata.r
 writeFileSync(path.join(temporary, 'headers.conf'), readFileSync(path.join(uiRoot, 'nginx.website.headers.conf')));
 const serverConfig = readFileSync(path.join(uiRoot, 'nginx.website.conf'), 'utf8')
   .replace('listen 80;', `listen 127.0.0.1:${nginxPort};`)
-  .replace('/usr/share/nginx/html', dist)
-  .replace('/etc/nginx/marty-website-routes.conf', path.join(temporary, 'routes.conf'))
-  .replaceAll('/etc/nginx/marty-website-headers.conf', path.join(temporary, 'headers.conf'));
+  .replace('/usr/share/nginx/html', nginxPath(dist))
+  .replace('/etc/nginx/marty-website-routes.conf', nginxPath(path.join(temporary, 'routes.conf')))
+  .replaceAll('/etc/nginx/marty-website-headers.conf', nginxPath(path.join(temporary, 'headers.conf')));
 // The production image supplies mime.types; list the exercised content types
 // here so the smoke can use an uninstalled, locally compiled Nginx binary.
-writeFileSync(path.join(temporary, 'nginx.conf'), `${process.getuid?.() === 0 ? 'user root;' : ''} error_log stderr; pid ${temporary}/nginx.pid;
+writeFileSync(path.join(temporary, 'nginx.conf'), `${process.getuid?.() === 0 ? 'user root;' : ''} error_log stderr; pid ${nginxPath(path.join(temporary, 'nginx.pid'))};
 events {} http { access_log off; types { text/html html; application/javascript js; text/css css;
 application/json json; application/xml xml; text/plain txt; image/png png; image/svg+xml svg; image/x-icon ico; }
 ${serverConfig} }`);
-const nginx = spawn(process.env.NGINX_BIN || 'nginx', ['-p', `${temporary}/`, '-e', 'stderr', '-c', 'nginx.conf', '-g', 'daemon off; master_process off;'], { stdio: ['ignore', 'ignore', 'pipe'] });
+const nginx = spawn(process.env.NGINX_BIN || 'nginx', ['-p', `${temporary.replaceAll('\\', '/')}/`, '-e', 'stderr', '-c', 'nginx.conf', '-g', 'daemon off; master_process off;'], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
 let nginxError = '';
 nginx.stderr.on('data', (data) => { nginxError += data; });
 nginx.on('error', (error) => { nginxError += error.message; });
@@ -54,7 +57,7 @@ try {
     assert.equal(response.status, 200, pathname);
     assert.equal(response.headers.get('x-marty-website-revision'), metadata.revision, pathname);
   }
-  for (const pathname of ['/resources/', '/login', '/login/error', '/docs', '/unknown', '/missing.js', '/demos/missing.js', `/_website/${metadata.revision}/missing.js`]) {
+  for (const pathname of ['/pricing', '/pricing/', '/pricing/checkout', '/resources/', '/login', '/login/error', '/docs', '/unknown', '/missing.js', '/demos/missing.js', `/_website/${metadata.revision}/missing.js`]) {
     assert.equal((await fetch(`${websiteOrigin}${pathname}`, { redirect: 'manual' })).status, 404, pathname);
   }
   assert.equal((await fetch(`${websiteOrigin}/_website/runtime-config.js`)).headers.get('cache-control'), 'no-store');
@@ -120,17 +123,17 @@ try {
   await Promise.all([page.waitForNavigation(), page.click('a[href^="/login?"]')]);
   await page.waitForSelector('[data-application-handoff]');
   assert.equal(new URL(page.url()).searchParams.get('next'), '/console');
-  if (metadata.production_pages === 'full') {
-    await visit('/pricing');
-    await Promise.all([page.waitForNavigation(), clickButton('Start Hosted Pilot')]);
-    await page.waitForSelector('[data-application-handoff]');
-    assert.equal(new URL(page.url()).pathname, '/pricing/checkout');
-    assert.equal(new URL(page.url()).searchParams.get('plan'), 'pilot');
-    await visit('/pricing');
-    await Promise.all([page.waitForNavigation(), clickButton('Start Free')]);
-    await page.waitForSelector('[data-application-handoff]');
-    assert.equal(new URL(page.url()).pathname, '/login');
-    assert.equal(new URL(page.url()).searchParams.get('next'), '/console/org/setup');
+  for (const route of ['/', '/product', '/eudi-wallet-verification', '/iso-18013-5-mdoc-verification', '/verifiable-credential-api']) {
+    await visit(route);
+    const exposed = await page.evaluate(() => ({
+      links: [...document.querySelectorAll('a[href]')].filter((element) => {
+        const url = new URL(element.href, location.href);
+        return url.origin === location.origin && /^\/pricing(?:\/|$)/.test(url.pathname);
+      }).length,
+      actions: [...document.querySelectorAll('button')].filter((element) => !element.disabled
+        && /^(?:View Pricing|Review Commercial Scope|Start Hosted Pilot)$/.test(element.textContent.trim())).length,
+    }));
+    assert.deepEqual(exposed, { links: 0, actions: 0 }, `Pricing must remain withheld on ${route}`);
   }
   assert.deepEqual(backendRequests, [], 'website must not initialize backend requests');
   assert.deepEqual(errors, [], 'website must not produce uncaught browser errors');

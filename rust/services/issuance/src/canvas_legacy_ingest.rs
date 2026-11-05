@@ -14,6 +14,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::legacy_json_compat::{json_truthy as python_json_truthy, untrimmed_json_text as text};
+
 use crate::{
     canvas_award_candidate::python_canonical_json,
     canvas_award_candidate_approval::{
@@ -1440,17 +1442,6 @@ fn feature_enabled(binding: &Map<String, Value>, flag: &str) -> bool {
     flags.get(flag).is_some_and(python_json_truthy)
 }
 
-fn python_json_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    }
-}
-
 fn projected_evidence_heads(current: &[Value], revision: &Value) -> Vec<Value> {
     let revision_key = revision.get("logical_key").and_then(Value::as_str);
     current
@@ -1884,14 +1875,6 @@ fn python_application_status(status: &str) -> String {
 
 fn nonempty_owned(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.is_empty())
-}
-
-fn text(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(value)) => value.clone(),
-        Some(Value::Null) | None => String::new(),
-        Some(value) => value.to_string().trim_matches('"').to_owned(),
-    }
 }
 
 #[cfg(test)]

@@ -233,7 +233,6 @@ export const PUBLIC_NAV = [
   { id: 'developers', label: 'Developers', path: '/developers' },
   { id: 'standards', label: 'Standards', path: '/standards' },
   { id: 'resources', label: 'Resources', path: '/resources' },
-  { id: 'pricing', label: 'Pricing', path: '/pricing' },
 ];
 
 /**

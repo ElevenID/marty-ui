@@ -15,7 +15,7 @@ export function productionBuildContract({ pages = 'public', selfhost = false, su
     throw new Error('Full production pages require the exact private commerce source');
   }
   const entry = path.resolve(extensionPath);
-  if (!entry.endsWith('/src/extension.jsx') || !existsSync(entry)) {
+  if (!entry.replace(/\\/g, '/').endsWith('/src/extension.jsx') || !existsSync(entry)) {
     throw new Error('Full production commerce entrypoint is missing');
   }
   const metadataPath = path.resolve(path.dirname(entry), '..', 'commerce-source.json');
@@ -35,7 +35,7 @@ export function productionBuildContractPlugin(entry) {
     name: 'production-commerce-build-contract',
     generateBundle(_options, bundle) {
       const present = Object.values(bundle).some((output) => output.type === 'chunk'
-        && Object.keys(output.modules).some((id) => id.split('?', 1)[0] === entry));
+        && Object.keys(output.modules).some((id) => id.replace(/\\/g, '/').split('?', 1)[0] === entry.replace(/\\/g, '/')));
       if (!present) throw new Error('Full production output omitted its commerce extension');
     },
   };

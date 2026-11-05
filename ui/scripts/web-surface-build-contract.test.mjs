@@ -43,8 +43,7 @@ test('website output rejects application services, contexts, consoles and privat
     const plugin = webSurfaceBuildContractPlugin({ surface: 'website', commerceEntry: '/repo/commerce-extension/src/website.jsx' });
     assert.throws(() => plugin.generateBundle({}, chunk(id)), /forbidden/, id);
   }
-  for (const id of ['/repo/ui/src/apps/website/WebsiteApp.jsx', '/repo/ui/src/components/LandingPageContent.jsx',
-    '/repo/commerce-extension/src/components/PricingPage.jsx']) {
+  for (const id of ['/repo/ui/src/apps/website/WebsiteApp.jsx', '/repo/ui/src/components/LandingPageContent.jsx']) {
     assert.equal(Boolean(forbiddenWebSurfaceModule('website', id, '/repo/commerce-extension/src/website.jsx')), false, id);
   }
 });
@@ -53,7 +52,7 @@ test('application rejects private marketing modules in the final host bundle', (
   for (const suffix of ['website.jsx', 'components/PricingPage.jsx', 'data/pricingPageContent.js', 'seo/SEOHead.jsx']) {
     assert.equal(forbiddenWebSurfaceModule('application', `/private/src/${suffix}`, '/private/src/application.jsx'), true);
   }
-  assert.equal(forbiddenWebSurfaceModule('application', '/private/src/data/pricingPlans.js', '/private/src/application.jsx'), false);
+  assert.equal(forbiddenWebSurfaceModule('application', '/private/src/data/pricingPlans.js', '/private/src/application.jsx'), true);
 });
 
 test('revision identifies all source inputs and cannot be supplied independently', () => {
@@ -88,6 +87,21 @@ test('surface metadata preserves exact source inputs and the common route contra
     } else {
       assert.equal(emitted[0].fileName, 'marty-web-routes.json');
       assert.deepEqual(Object.keys(metadata).sort(), ['route_contract', 'schema', 'source_sha', 'surface']);
+    }
+  }
+});
+
+
+test('every delivered surface rejects private pricing in static and lazy chunks', () => {
+  for (const surface of ['combined', 'website', 'application']) {
+    const entry = `/private/src/${surface === 'combined' ? 'extension' : surface}.jsx`;
+    for (const name of ['components/PricingPage.jsx', 'data/pricingPageContent.js', 'data/pricingContent.js', 'data/pricingPlans.js']) {
+      assert.equal(Boolean(forbiddenWebSurfaceModule(surface, `/private/src/${name}`, entry)), true);
+      const plugin = webSurfaceBuildContractPlugin({ surface, commerceEntry: entry });
+      assert.throws(() => plugin.generateBundle({}, {
+        'entry.js': { type: 'chunk', modules: {}, dynamicImports: ['hidden.js'] },
+        'hidden.js': { type: 'chunk', modules: { [`/private/src/${name}`]: {} } },
+      }), /forbidden/);
     }
   }
 });

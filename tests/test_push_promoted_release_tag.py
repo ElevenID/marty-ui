@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import io
 import json
 import sys
@@ -141,7 +142,12 @@ class AtomicContractTests(unittest.TestCase):
         github.json.return_value = None
         native = mock.Mock()
         native.exchange.side_effect = self.native_receipt
-        inspection = {"rulesets_sha256": "sha256:" + "f" * 64, "rulesets": []}
+        inspection = {"rulesets_sha256": "sha256:" + "f" * 64, "rulesets": [{
+            "id": 1, "target": "branch", "enforcement": "active", "bypass_actors": [],
+            "source_type": "Repository", "source": "ElevenID/marty-ui",
+            "current_user_can_bypass": "never", "rules": [{"type": "merge_queue"}],
+            "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
+        }]}
         final = {**inspection, "rulesets": [{"id": 1}]} if changed_rules else inspection
         return github, native, inspection, final
 
@@ -160,7 +166,11 @@ class AtomicContractTests(unittest.TestCase):
         self.assertNotIn("observed_main_oid", requests[1])
         self.assertEqual(create.call_args.args[2], SOURCE)
         self.assertEqual(read.call_args.args[3], SOURCE)
-        self.assertEqual(result["schema"], "marty.release-tag-capability/v2")
+        self.assertEqual(result["schema"], "marty.release-tag-capability/v4")
+        self.assertEqual(result["main_protection_ruleset_ids"], [1])
+        self.assertEqual(result["main_protection_scope"], "current_workflow_credential")
+        self.assertEqual(result["main_protection_observations"], [{"ruleset_id": 1,
+                         "current_user_can_bypass": "never", "bypass_actor_inventory_visibility": "observed_empty"}])
         self.assertEqual(result["transport"], operator.atomic.TRANSPORT)
         self.assertIn("negative_transaction", result)
         self.assertNotIn("negative_response", result)
@@ -171,10 +181,157 @@ class AtomicContractTests(unittest.TestCase):
         with mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ""]), \
              mock.patch.object(operator, "create_tag_object", return_value={"sha": OBJECT}), \
              mock.patch.object(operator, "read_exact_tag"), \
-             mock.patch.object(operator, "inspect_repository", return_value=(123, MAIN, final)), \
+             mock.patch.object(operator, "inspect_repository", side_effect=[(123, MAIN, inspection),
+                                                                           (123, MAIN, final)]), \
              self.assertRaises(handoff.HandoffError):
             operator.qualify_capability(github, native, 123, MAIN, inspection)
         self.assertEqual(native.exchange.call_count, 2)
+
+    def test_policy_negative_requires_successful_positive_and_preserves_distinct_evidence(self) -> None:
+        for positive in ("confirmed_success", "confirmed_main_policy_refusal", "unadmitted"):
+            github, native, inspection, _ = self.capability_fixture()
+            def receipt(request):
+                result = self.native_receipt(request)
+                decision = "confirmed_main_policy_refusal" if "negative" in request["operation_id"] else positive
+                result["decision"] = result["mutation"]["outcome"] = decision
+                return result
+            native.exchange.side_effect = receipt
+            with self.subTest(positive=positive), \
+                 mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ""]), \
+                 mock.patch.object(operator, "create_tag_object", return_value={"sha": OBJECT}), \
+                 mock.patch.object(operator, "read_exact_tag") as read, \
+                 mock.patch.object(operator, "inspect_repository", return_value=(123, MAIN, inspection)) as inspect:
+                if positive == "confirmed_success":
+                    result = operator.qualify_capability(github, native, 123, MAIN, inspection)
+                    self.assertEqual(result["negative_transaction"]["decision"], "confirmed_main_policy_refusal")
+                    self.assertEqual(result["positive_transaction"]["decision"], "confirmed_success")
+                    self.assertEqual(inspect.call_count, 2)
+                    read.assert_called_once()
+                else:
+                    with self.assertRaises(handoff.HandoffError):
+                        operator.qualify_capability(github, native, 123, MAIN, inspection)
+                    read.assert_not_called()
+                self.assertEqual(native.exchange.call_count, 2)
+
+    def test_rule_drift_after_negative_prevents_positive_dispatch(self) -> None:
+        github, native, inspection, final = self.capability_fixture(changed_rules=True)
+        with mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ""]), \
+             mock.patch.object(operator, "create_tag_object", return_value={"sha": OBJECT}), \
+             mock.patch.object(operator, "read_exact_tag") as read, \
+             mock.patch.object(operator, "inspect_repository", return_value=(123, MAIN, final)), \
+             self.assertRaises(handoff.HandoffError):
+            operator.qualify_capability(github, native, 123, MAIN, inspection)
+        self.assertEqual(native.exchange.call_count, 1)
+        read.assert_not_called()
+
+    def test_effective_current_credential_main_queue_is_required_before_any_write(self) -> None:
+        cases = [
+            ("id", True), ("target", "tag"), ("enforcement", "evaluate"),
+            ("source_type", "Organization"), ("source", "another/repository"),
+            ("bypass_actors", [{"actor_id": 1, "bypass_mode": "always"}]),
+            ("bypass_actors", None), ("bypass_actors", {}), ("bypass_actors", ""),
+            ("bypass_actors", False), ("bypass_actors", ()), ("current_user_can_bypass", "always"),
+            ("current_user_can_bypass", "pull_requests_only"), ("current_user_can_bypass", None),
+            ("current_user_can_bypass", ""), ("current_user_can_bypass", True),
+            ("rules", [{"type": "pull_request"}]),
+            ("rules", None), ("conditions", None),
+            ("conditions", {"ref_name": {"include": ["refs/heads/other"], "exclude": []}}),
+            ("conditions", {"ref_name": {"include": ["~ALL"], "exclude": []}}),
+            ("conditions", {"ref_name": {"include": ["refs/heads/main"], "exclude": ["refs/heads/main"]}}),
+            ("conditions", {"ref_name": {"include": ["refs/heads/main"], "exclude": []},
+                            "repository_name": {"include": ["another"], "exclude": []}}),
+        ]
+        for field, value in cases:
+            github, native, inspection, _ = self.capability_fixture()
+            inspection["rulesets"][0][field] = value
+            with self.subTest(field=field, value=value), \
+                 mock.patch.object(operator, "create_tag_object") as create, self.assertRaises(handoff.HandoffError):
+                operator.qualify_capability(github, native, 123, MAIN, inspection)
+            create.assert_not_called()
+            native.exchange.assert_not_called()
+
+    @staticmethod
+    def actual_runner_inspection() -> dict:
+        # Unchanged public read-only result from run 41791774863 attempt 1,
+        # artifact 13303856131. Its ZIP digest is retained in the gate runbook.
+        # This authentic visibility fixture is not a successful capability run.
+        raw = (ROOT / "tests/fixtures/release-tag-inspection-41791774863.json").read_bytes()
+        if hashlib.sha256(raw).hexdigest() != "e6c95215e27066bb7ada10df8263764546fd22bbb2a3a8893071851f19cf9e57":
+            raise AssertionError("Original runner inspection fixture changed")
+        packet = json.loads(raw)
+        # The saved inspect-mode envelope contains its own run/schema fields.
+        # inspect_repository returns only these original snapshot fields.
+        return {key: packet[key] for key in ("repository_id", "repository_node_id", "rulesets", "rulesets_sha256")}
+
+    def test_actual_runner_omission_preserves_unknown_inventory_and_still_requires_the_pair(self) -> None:
+        inspection = self.actual_runner_inspection()
+        original = copy.deepcopy(inspection)
+        for positive in ("confirmed_success", "confirmed_main_policy_refusal", "unadmitted"):
+            github, native, _, _ = self.capability_fixture()
+            def receipt(request):
+                result = self.native_receipt(request)
+                decision = "confirmed_main_policy_refusal" if "negative" in request["operation_id"] else positive
+                result["decision"] = result["mutation"]["outcome"] = decision
+                return result
+            native.exchange.side_effect = receipt
+            with self.subTest(positive=positive), \
+                 mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ""]), \
+                 mock.patch.object(operator, "create_tag_object", return_value={"sha": OBJECT}), \
+                 mock.patch.object(operator, "read_exact_tag") as read, \
+                 mock.patch.object(operator, "inspect_repository", return_value=(123, MAIN, inspection)):
+                if positive == "confirmed_success":
+                    result = operator.qualify_capability(github, native, 123, MAIN, inspection)
+                    self.assertEqual(result["schema"], "marty.release-tag-capability/v4")
+                    self.assertEqual(result["main_protection_scope"], "current_workflow_credential")
+                    self.assertEqual(result["main_protection_observations"], [{"ruleset_id": 20775473,
+                        "current_user_can_bypass": "never", "bypass_actor_inventory_visibility": "not_disclosed"}])
+                    self.assertEqual(result["rulesets"], original["rulesets"])
+                    self.assertEqual(result["rulesets_sha256"], original["rulesets_sha256"])
+                    self.assertTrue(all("bypass_actors" not in rule for rule in result["rulesets"]))
+                    read.assert_called_once()
+                else:
+                    with self.assertRaises(handoff.HandoffError):
+                        operator.qualify_capability(github, native, 123, MAIN, inspection)
+                    read.assert_not_called()
+            self.assertEqual(native.exchange.call_count, 2)
+            requests = [call.args[0] for call in native.exchange.call_args_list]
+            self.assertEqual(requests[0]["commands"][0]["old_oid"], SOURCE)
+            self.assertEqual(requests[0]["commands"][0]["new_oid"], SOURCE)
+            self.assertEqual(requests[1]["commands"][0]["old_oid"], MAIN)
+            self.assertEqual(requests[1]["commands"][0]["new_oid"], MAIN)
+            self.assertEqual(inspection, original)
+
+    def test_omitted_current_actor_capability_never_infers_authority_from_inventory(self) -> None:
+        for inventory in ("not_disclosed", "observed_empty"):
+            inspection = self.actual_runner_inspection()
+            for rule in inspection["rulesets"]:
+                rule.pop("current_user_can_bypass")
+                if inventory == "observed_empty":
+                    rule["bypass_actors"] = []
+            github, native, _, _ = self.capability_fixture()
+            with self.subTest(inventory=inventory), \
+                 mock.patch.object(operator, "create_tag_object") as create, \
+                 self.assertRaises(operator.OperatorRefusal) as refusal:
+                operator.qualify_capability(github, native, 123, MAIN, inspection)
+            self.assertEqual(refusal.exception.reason, "capability_current_credential_not_protected")
+            create.assert_not_called()
+            native.exchange.assert_not_called()
+
+    def test_visible_actor_capability_or_inventory_visibility_drift_prevents_positive(self) -> None:
+        for field, value in (("current_user_can_bypass", "always"), ("bypass_actors", [])):
+            inspection = self.actual_runner_inspection()
+            changed = copy.deepcopy(inspection)
+            changed["rulesets"][0][field] = value
+            github, native, _, _ = self.capability_fixture()
+            with self.subTest(field=field), \
+                 mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ""]), \
+                 mock.patch.object(operator, "create_tag_object", return_value={"sha": OBJECT}), \
+                 mock.patch.object(operator, "inspect_repository", return_value=(123, MAIN, changed)), \
+                 mock.patch.object(operator, "read_exact_tag") as read, \
+                 self.assertRaises(handoff.HandoffError):
+                operator.qualify_capability(github, native, 123, MAIN, inspection)
+            self.assertEqual(native.exchange.call_count, 1)
+            read.assert_not_called()
 
     def test_unattributed_negative_prevents_positive_dispatch(self) -> None:
         github, native, inspection, _ = self.capability_fixture()
@@ -253,7 +410,7 @@ class AtomicContractTests(unittest.TestCase):
             self.assertEqual(audit["git_transactions"], [])
 
     def test_unknown_entry_outcome_preserves_intent_and_only_fixed_error_output(self) -> None:
-        def lose_result(github, *args):
+        def lose_result(github, *args, **kwargs):
             github.mutations.append({"outcome": "unknown", "request": {"synthetic": True}})
             github.observer()
             raise TimeoutError("synthetic private transport detail")
@@ -271,6 +428,41 @@ class AtomicContractTests(unittest.TestCase):
             audit = json.loads(output.with_name("operator-api-receipt.json").read_bytes())
             self.assertEqual(audit["rest_api_mutations"][0]["outcome"], "unknown")
             self.assertIs(audit["automatic_retry_or_cleanup_performed"], False)
+
+    def test_refusal_diagnostics_expose_only_static_stage_and_reason(self) -> None:
+        secret = "private-token-and-redirect-https://example.invalid/?signed=secret"
+        for failure, expected_stage, expected_reason in (
+            ("inspection", "repository_inspection", "handoff_validation_refused"),
+            ("protection", "capability_protection", "capability_current_credential_not_protected"),
+            ("negative", "capability_negative", "atomic_git_validation_refused"),
+        ):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary) / "tag-handoff-result.json"
+                stdout = io.StringIO()
+                inspection = self.actual_runner_inspection()
+                if failure == "protection":
+                    inspection["rulesets"][0].pop("current_user_can_bypass")
+                with mock.patch.object(operator.sys, "argv", ["operator", "--mode", "qualify-capability",
+                                                               "--output", str(output)]), \
+                     mock.patch.object(operator.sys, "stdout", stdout), \
+                     mock.patch.object(operator, "inspect_repository", return_value=(123, MAIN, inspection)) as inspect, \
+                     mock.patch.object(handoff, "git", side_effect=[SOURCE, "", ""]), \
+                     mock.patch.object(operator, "create_tag_object", return_value={"sha": OBJECT}), \
+                     mock.patch.object(handoff.GitHub, "json", return_value=None), \
+                     mock.patch.object(handoff.GitHub, "main", return_value={"commit": {"sha": MAIN}}), \
+                     mock.patch.object(operator.atomic.NativeGit, "exchange",
+                                       side_effect=operator.atomic.AtomicGitError(secret)) as exchange:
+                    if failure == "inspection":
+                        inspect.side_effect = handoff.HandoffError(secret)
+                    self.assertEqual(operator.main(), 1)
+                result = json.loads(output.read_bytes())
+                self.assertEqual(result["status"], "refused")
+                self.assertEqual(result["refusal_stage"], expected_stage)
+                self.assertEqual(result["refusal_reason"], expected_reason)
+                self.assertNotIn(secret, stdout.getvalue() + output.read_text()
+                                 + output.with_name("operator-api-receipt.json").read_text())
+                self.assertEqual(exchange.call_count, 1 if failure == "negative" else 0)
+                self.assertIs(result["automatic_retry_or_cleanup_performed"], False)
 
 
 class CryptoDelegationTests(unittest.TestCase):

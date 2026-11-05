@@ -16,7 +16,8 @@ SUBJECTS = {"website-release.json", "production-web-release.json", "application-
 
 
 def retain(directory: Path, *, names: list[str], producer: dict, release_provenance: Path,
-           gh: Path, cosign: Path, image: dict | None = None, image_provenance: Path | None = None) -> None:
+           gh: Path, cosign: Path, image: dict | None = None, image_provenance: Path | None = None,
+           registry_config: Path | None = None) -> None:
     proof.validate_producer(producer)
     ui.require(names and len(names) == len(set(names)) and set(names).issubset(SUBJECTS), "unexpected producer subjects")
     proof.verifier.local_file(release_provenance, maximum=proof.PROOF_LIMIT)
@@ -36,7 +37,7 @@ def retain(directory: Path, *, names: list[str], producer: dict, release_provena
         with target.open("xb") as stream:
             stream.write(image_provenance.read_bytes())
         target.chmod(0o600)
-        proof.verify_image(image, target, producer=producer, gh=gh, cosign=cosign)
+        proof.verify_image(image, target, producer=producer, gh=gh, cosign=cosign, registry_config=registry_config)
     else:
         ui.require(image_provenance is None, "unexpected image proof")
 
@@ -55,6 +56,7 @@ def main() -> None:
     parser.add_argument("--image-digest")
     parser.add_argument("--gh", type=Path, required=True)
     parser.add_argument("--cosign", type=Path, required=True)
+    parser.add_argument("--registry-config", type=Path, help="explicit private Docker config.json for private OCI reads")
     args = parser.parse_args()
     producer = {"repository": args.repository, "source_sha": args.source_sha, "ref": web.REF,
                 "workflow": ui.WORKFLOW if args.repository == ui.REPOSITORY else ui.COMMERCE_WORKFLOW,
@@ -63,7 +65,7 @@ def main() -> None:
     retain(args.assets.absolute(), names=args.subject, producer=producer,
            release_provenance=args.release_provenance.absolute(),
            image=image, image_provenance=args.image_provenance.absolute() if args.image_provenance else None,
-           gh=args.gh.absolute(), cosign=args.cosign.absolute())
+           gh=args.gh.absolute(), cosign=args.cosign.absolute(), registry_config=args.registry_config)
 
 
 if __name__ == "__main__":

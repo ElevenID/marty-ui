@@ -80,6 +80,71 @@ fn inputs(installation: &Path) -> ComposeInputs {
 }
 
 #[test]
+fn status_reports_preledger_host_progress_without_exposing_or_changing_evidence() {
+    let mut fixture = fixture(false);
+    let journal = files::read(fixture.installation.join("installation.json")).unwrap();
+    for (step, expected, code) in [
+        (0, "not_started", None),
+        (1, "incomplete", Some("prepared_record_missing")),
+        (2, "refused", Some("prepared_decode")),
+    ] {
+        if step == 1 {
+            fixture
+                .state
+                .write_evidence(
+                    &name(AcmeEnvironment::Production, "intent"),
+                    b"{\"private_fixture\":\"PRIVATE_TEST_TOKEN\"}",
+                )
+                .unwrap();
+        } else if step == 2 {
+            fixture
+                .state
+                .write_evidence(
+                    &name(AcmeEnvironment::Production, "prepared"),
+                    b"{\"private_fixture\":\"PRIVATE_TEST_TOKEN\"}",
+                )
+                .unwrap();
+        }
+        let evidence = fixture.installation.join("evidence");
+        let snapshot = || -> BTreeMap<PathBuf, Vec<u8>> {
+            files::read_dir(&evidence)
+                .unwrap()
+                .map(|entry| {
+                    let path = entry.unwrap().path();
+                    (path.clone(), files::read(path).unwrap())
+                })
+                .collect()
+        };
+        let before = snapshot();
+        let status = fixture
+            .state
+            .with_inspection(installer_acme::status)
+            .unwrap();
+        assert_eq!(status["configured"], false);
+        assert_eq!(status["environments"], json!([]));
+        assert_eq!(status["host_preparation"]["state"], expected);
+        assert_eq!(status["host_preparation"]["check"], json!(code));
+        assert_eq!(
+            status["host_preparation"]["initial_preparation"]["checked"],
+            false
+        );
+        assert_eq!(status["host_preparation"]["runtime_observed"], false);
+        assert_eq!(status["host_preparation"]["continuation_authorized"], false);
+        assert_eq!(status["host_preparation"]["setup_replay_authorized"], false);
+        assert_eq!(status["installation_ready"], false);
+        assert!(!status.to_string().contains("PRIVATE_TEST_TOKEN"));
+        assert!(!status
+            .to_string()
+            .contains(fixture.installation.to_str().unwrap()));
+        assert_eq!(snapshot(), before);
+        assert_eq!(
+            files::read(fixture.installation.join("installation.json")).unwrap(),
+            journal
+        );
+    }
+}
+
+#[test]
 fn derived_environments_preserve_bootstrap_and_bind_both_plan_hashes_without_shell_expansion() {
     for alias in [false, true] {
         let fixture = fixture(alias);

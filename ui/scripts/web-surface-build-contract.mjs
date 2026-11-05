@@ -14,7 +14,11 @@ export function websiteBuildRevision({ sourceSha = 'development', commerceSha, p
 
 export function forbiddenWebSurfaceModule(surface, moduleId, commerceEntry) {
   const id = moduleId.replace(/\\/g, '/').split('?', 1)[0];
-  const privateRoot = commerceEntry?.replace(/\\/g, '/').replace(/\/(?:website|application)\.jsx$/, '/');
+  const privateRoot = commerceEntry?.replace(/\\/g, '/').replace(/\/(?:website|application|extension)\.jsx$/, '/');
+  // Keep private commercial terms out of every delivered browser surface.
+  // Authentication in a client route cannot protect downloadable static data.
+  if (privateRoot && id.startsWith(privateRoot)
+    && /^(?:components\/PricingPage\.jsx|data\/(?:pricingContent|pricingPageContent|pricingPlans)\.js)$/.test(id.slice(privateRoot.length))) return true;
   if (surface === 'application') return isProductionMarketingModule(id)
     || Boolean(privateRoot && id.startsWith(privateRoot) && /^(?:website\.jsx|components\/PricingPage\.jsx|data\/pricingPageContent\.js|seo\/SEOHead\.jsx)$/.test(id.slice(privateRoot.length)));
   if (surface !== 'website') return false;

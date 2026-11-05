@@ -131,6 +131,56 @@ def test_three_slots_retain_active_previous_assets_and_never_change_product(host
     assert [event[1] for event in host.events if event[0] == "stage"] == list(deploy.SLOTS) + ["website-a"]
 
 
+def test_registry_access_reaches_packaging_and_every_retained_lifecycle_without_persistence(host_candidate, monkeypatch):
+    host, kwargs, _, _, verifiers = host_candidate
+    registry = kwargs["output"].parent / "operator-only-registry-config.json"
+    kwargs["registry_config"] = registry
+    verifiers["registry_config"] = registry
+    image = composition.proof.verify_image
+    subject = composition.proof.verify_subject
+    seen = []
+    phase = "apply"
+    def authenticated_image(*args, **options):
+        assert options["registry_config"] == registry
+        seen.append(phase)
+        return image(*args, **options)
+    def anonymous_subject(*args, **options):
+        assert "registry_config" not in options
+        return subject(*args, **options)
+    monkeypatch.setattr(composition.proof, "verify_image", authenticated_image)
+    monkeypatch.setattr(composition.proof, "verify_subject", anonymous_subject)
+    deploy.apply(host, kwargs["output"], **verifiers)
+    phase = "package"
+    assets, _ = another_release(kwargs, "c" * 40)
+    phase = "apply"
+    deploy.apply(host, assets, **verifiers)
+    phase = "start"
+    deploy.start_current(host, **verifiers)
+    phase = "check"
+    deploy.check_current(host, **verifiers)
+    phase = "adopt"
+    deploy.apply(host, assets, adopt_current_product=True, **verifiers)
+    phase = "rollback"
+    previous = deploy.rollback(host, **verifiers)
+    phase = "package"
+    candidate, _ = another_release(kwargs, "d" * 40)
+    def broken(*_args, **_options):
+        raise ValueError("edge unavailable")
+    monkeypatch.setattr(host, "activate", broken)
+    phase = "apply"
+    with pytest.raises(ValueError, match="rollback needs recovery"):
+        deploy.apply(host, candidate, **verifiers)
+    monkeypatch.setattr(host, "activate", Host.activate.__get__(host))
+    phase = "recover"
+    assert deploy.recover(host, **verifiers) == previous
+    assert {name: seen.count(name) for name in set(seen)} == {
+        "package": 4, "apply": 6, "start": 2, "check": 1, "adopt": 4, "rollback": 1, "recover": 1}
+    for directory in (host.directory, kwargs["output"], assets, candidate):
+        for path in directory.rglob("*"):
+            if path.is_file():
+                assert str(registry).encode() not in path.read_bytes()
+
+
 def test_exact_active_release_is_idempotent_and_conflicting_revision_rejected(host_candidate):
     host, kwargs, _, _, verifiers = host_candidate
     first = deploy.apply(host, kwargs["output"], **verifiers)

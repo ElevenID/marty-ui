@@ -48,9 +48,18 @@ def fetch(producer_artifact, tmp_path):
     def download(args):
         downloads.append(args)
         return raw
+    prefix = f"repos/{producer['repository']}/actions"
+    class Reader:
+        def attempt(self):
+            return api([f"{prefix}/runs/{producer['run_id']}/attempts/{producer['run_attempt']}"])
+        def artifacts(self):
+            return api([f"{prefix}/runs/{producer['run_id']}/artifacts?name=web-website-124-2&per_page=100"])
+        def archive(self, artifact_id, *, maximum):
+            assert maximum == listed["artifacts"][0]["size_in_bytes"]
+            return download([f"{prefix}/artifacts/{artifact_id}/zip"])
     result = intake.fetch("website", repository=producer["repository"], run_id=producer["run_id"],
                           attempt=producer["run_attempt"], destination=tmp_path / "intake", gh=kwargs["gh"],
-                          cosign=kwargs["cosign"], runner=api, downloader=download)
+                          cosign=kwargs["cosign"], reader=Reader())
     return result, api_calls, downloads
 
 
@@ -122,3 +131,33 @@ def test_backend_download_uses_fixed_public_subjects_without_credentials(tmp_pat
     assert {Path(r.full_url).name for r in requests} == set(composition.BACKEND_FILES)
     assert all(r.full_url.startswith("https://github.com/ElevenID/marty-ui/releases/download/v1.2.3/") for r in requests)
     assert all(not r.has_header("Authorization") for r in requests)
+
+
+@pytest.mark.parametrize("kind", ["website", "application"])
+@pytest.mark.parametrize("selected", [None, "GITHUB_TOKEN"])
+def test_actions_cli_preserves_existing_gh_token_default_and_explicit_override(tmp_path, monkeypatch, kind, selected):
+    args = ["web_release_intake.py", kind, "--repository", ui.REPOSITORY,
+            "--run-id", "21", "--run-attempt", "2", "--assets", str(tmp_path / "assets"),
+            "--gh", str(tmp_path / "gh"), "--cosign", str(tmp_path / "cosign")]
+    if selected:
+        args.extend(["--github-token-env", selected])
+    calls = []
+    monkeypatch.setattr("sys.argv", args)
+    monkeypatch.setattr(intake, "fetch", lambda kind, **kwargs: calls.append((kind, kwargs)))
+    intake.main()
+    assert len(calls) == 1 and calls[0][0] == kind
+    assert calls[0][1]["github_token_env"] == (selected or "GH_TOKEN")
+    assert calls[0][1]["registry_config"] is None
+
+
+def test_backend_cli_never_selects_actions_credentials_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "synthetic-token-that-backend-must-not-read")
+    monkeypatch.setattr("sys.argv", ["web_release_intake.py", "backend", "--tag", "v1.2.3",
+                        "--source-sha", "a" * 40, "--assets", str(tmp_path / "assets"),
+                        "--gh", str(tmp_path / "gh")])
+    calls = []
+    monkeypatch.setattr(intake, "backend", lambda tag, **kwargs: calls.append("download"))
+    monkeypatch.setattr(intake.stable, "verify_published", lambda *args, **kwargs: calls.append("verify"))
+    monkeypatch.setattr(intake.auth, "GitHubReader", lambda **kwargs: pytest.fail("backend selected API credentials"))
+    intake.main()
+    assert calls == ["download", "verify"]
