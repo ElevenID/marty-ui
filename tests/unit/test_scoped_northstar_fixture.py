@@ -24,7 +24,7 @@ def original():
             "com.docker.compose.project.working_dir": "/owned", "com.docker.compose.version": "2.40.0"}),
         HostConfig=dict(Init=None, Binds=None, Mounts=[dict(Type="bind", Source="/owned/fixture.json",
             Target=m.TARGET, ReadOnly=True, BindOptions={"CreateMountpoint": False})],
-            ReadonlyRootfs=True, CapDrop=["ALL"], SecurityOpt=["no-new-privileges:true"]),
+            Memory=0, MemorySwap=0, ReadonlyRootfs=True, CapDrop=["ALL"], SecurityOpt=["no-new-privileges:true"]),
         Mounts=[dict(Type="bind", Source="/owned/fixture.json", Destination=m.TARGET,
             RW=False, Mode="ro", Propagation="rprivate")],
         NetworkSettings={"Networks": {"elevenid-beta-network": dict(NetworkID="1" * 64,
@@ -53,7 +53,7 @@ class Scenario:
         old_model = original_model(); old_model["secrets"]["northstar_run"]["file"] = str(self.old_fixture)
         server = UI / "demo-apps/northstar-admissions/src/server.mjs"
         new_model = copy.deepcopy(old_model); new_model["secrets"]["northstar_run"]["file"] = str(self.new_fixture)
-        new_model["services"][m.ROLE].update(init=True, volumes=[dict(type="bind", source=str(server),
+        new_model["services"][m.ROLE].update(init=True, deploy={"resources": {"limits": {"memory": str(m.REPAIRED_MEMORY_BYTES)}}}, volumes=[dict(type="bind", source=str(server),
             target=m.SERVER_TARGET, read_only=True, bind={"create_host_path": False})])
         provenance = {k: v for k, v in self.old["Config"]["Labels"].items() if k in (
             "com.docker.compose.config-hash", "com.docker.compose.project.config_files",
@@ -148,7 +148,7 @@ class Scenario:
         source = reps.daemon_source(model["secrets"]["northstar_run"]["file"])
         row["Mounts"][0]["Source"] = source; row["HostConfig"]["Mounts"][0]["Source"] = source
         if service.get("init") is True:
-            row["HostConfig"]["Init"] = True; source = reps.daemon_source(service["volumes"][0]["source"])
+            row["HostConfig"]["Init"] = True; row["HostConfig"].update(Memory=m.REPAIRED_MEMORY_BYTES, MemorySwap=m.REPAIRED_SWAP_BYTES); source = reps.daemon_source(service["volumes"][0]["source"])
             row["Mounts"].append(dict(Type="bind", Source=source, Destination=m.SERVER_TARGET, RW=False, Mode="", Propagation="rprivate"))
             row["HostConfig"]["Mounts"].append(dict(Type="bind", Source=source, Target=m.SERVER_TARGET, ReadOnly=True, BindOptions={}))
         row["State"].update(Running=False, Status="created", Pid=0, ExitCode=0,
@@ -386,7 +386,7 @@ class Controls(unittest.TestCase):
             mutations = [lambda r:r["Mounts"][1].update(Source="/foreign/server.mjs"),
                 lambda r:r["Mounts"][1].update(RW=True), lambda r:r["Mounts"].append(copy.deepcopy(r["Mounts"][1])),
                 lambda r:r["HostConfig"]["Mounts"][1].update(BindOptions={"Unreviewed": True}),
-                lambda r:r["HostConfig"].update(Init=False), lambda r:r["Config"]["Env"].append("OTHER=changed"),
+                lambda r:r["HostConfig"].update(Init=False), lambda r:r["HostConfig"].update(Memory=128*1024*1024), lambda r:r["Config"]["Env"].append("OTHER=changed"),
                 lambda r:r["Config"]["Labels"].update({"com.docker.compose.replace":"wrong"}),
                 lambda r:r.update(Image="sha256:"+"0"*64),
                 lambda r:next(iter(r["NetworkSettings"]["Networks"].values())).update(NetworkID="wrong")]
@@ -436,7 +436,8 @@ class CreatedRepresentationControls(unittest.TestCase):
                 lambda v:v["HostConfig"].update(Dns=["192.0.2.1"]),
                 lambda v:v["HostConfig"].update(DnsOptions=["ndots:1"]),
                 lambda v:v["HostConfig"].update(DnsSearch=["example.test"]),
-                lambda v:v["HostConfig"].update(OomKillDisable=True)):
+                lambda v:v["HostConfig"].update(OomKillDisable=True),
+                lambda v:v["HostConfig"].update(Memory=128*1024*1024)):
                 altered = copy.deepcopy(baseline);change(altered)
                 with self.assertRaises(ValueError):self.verify(s, altered)
 
@@ -444,7 +445,7 @@ class CreatedRepresentationControls(unittest.TestCase):
         before=original();actual=copy.deepcopy(before);actual["Id"]="c"*64
         actual["Config"]["Hostname"]="c"*12
         actual["Config"]["Labels"]["com.docker.compose.replace"]=before["Id"]
-        actual["HostConfig"]["Init"]=True
+        actual["HostConfig"]["Init"]=True;actual["HostConfig"].update(Memory=m.REPAIRED_MEMORY_BYTES,MemorySwap=m.REPAIRED_SWAP_BYTES)
         actual["State"].update(Status="created",ExitCode=0,StartedAt="0001-01-01T00:00:00Z",FinishedAt="0001-01-01T00:00:00Z")
         fixture=Path("C:/owned/fixture.json");before["Mounts"][0]["Source"]=reps.daemon_source(str(fixture));before["HostConfig"]["Mounts"][0]["Source"]=reps.daemon_source(str(fixture));actual["Mounts"][0]["Source"]=reps.daemon_source(str(fixture));actual["HostConfig"]["Mounts"][0]["Source"]=reps.daemon_source(str(fixture))
         server=Path("C:/owned/server.mjs");source=str(server)
@@ -498,5 +499,43 @@ class OwnedNetworkTransitionTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     m.owned_network_transition(before, after, known_cids={"b" * 64},
                         container_name="elevenid-beta-northstar-admissions-1")
+
+class ResourceSuccessorControls(unittest.TestCase):
+    @staticmethod
+    def fixture():
+        retained = ["ui-prod"] + ["retained-" + str(i) for i in range(21)]
+        roles = retained + ["docs", "nginx-proxy", "openbao", "postgres", "redis", "keycloak"]
+        fixed = {"openbao", "postgres", "redis"}
+        rows = [{"role": role, "oldCid": f"{i+1:064x}",
+            "newCid": f"{i+1 if role in fixed else i+101:064x}"} for i, role in enumerate(roles)]
+        before = {row["role"]:{"Id":row["oldCid"]} for row in rows if row["role"] in retained}
+        after = {row["role"]:{"Id":row["newCid"]} for row in rows if row["role"] in retained}
+        baseline = [row["oldCid"] for row in rows] + ["a"*64,"b"*64]
+        final = [row["newCid"] for row in rows] + ["a"*64,"b"*64]
+        transition = {"kind":"resource-recreation", "replacements":rows,
+            "uiGlobalIds":[row["oldCid"] if row["role"]=="keycloak" else row["newCid"] for row in rows]+["a"*64,"b"*64]}
+        previous = {"retainedContainers":before,"runtimeAuthority":{"profile":"before"}}
+        config = {"retainedContainers":after,"globalCohortPreimage":final,"runtimeAuthority":{"profile":"after"}}
+        core = types.SimpleNamespace(load=lambda value:value)
+        return config, previous, baseline, core, transition
+
+    def test_resource_recreation_is_exact_named_mapping_with_unchanged_unrelated_ids(self):
+        c,p,b,core,t=self.fixture()
+        self.assertEqual(m.retained_role_successor_cohort(c,p,b,core,lambda *_:t),c["globalCohortPreimage"])
+
+    def test_resource_recreation_refuses_foreign_missing_duplicate_or_composed_cohort(self):
+        for kind in ("foreign", "missing", "duplicate", "intermediate", "role", "fixed", "retained", "reused", "composition"):
+            c,p,b,core,t=self.fixture()
+            if kind=="foreign":c["globalCohortPreimage"][-1]="c"*64
+            if kind=="missing":c["globalCohortPreimage"].pop()
+            if kind=="duplicate":c["globalCohortPreimage"].append(c["globalCohortPreimage"][0])
+            if kind=="intermediate":t["uiGlobalIds"][-1]="c"*64
+            if kind=="role":t["replacements"][-1]["role"]="foreign"
+            if kind=="fixed":t["replacements"][-3]["newCid"]="c"*64
+            if kind=="retained":c["retainedContainers"]["retained-0"]["Id"]="c"*64
+            if kind=="reused":t["replacements"][0]["newCid"]=t["replacements"][1]["oldCid"]
+            if kind=="composition":t["role"]="issuance-native"
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                m.retained_role_successor_cohort(c,p,b,core,lambda *_:t)
 
 if __name__ == "__main__": unittest.main()

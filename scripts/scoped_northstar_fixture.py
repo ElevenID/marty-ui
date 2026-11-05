@@ -16,6 +16,8 @@ SOURCE = "27a273d8a9f82778a2b19f9981f56d073b2793f6"
 IMAGE = "sha256:366911734ad16cac52553148dd10c1f59bc2e90613ef7fc5c97485a701f0ff2e"
 TARGET = "/run/secrets/northstar_run"
 SERVER_TARGET = "/app/src/server.mjs"
+REPAIRED_MEMORY_BYTES = 256 * 1024 * 1024
+REPAIRED_SWAP_BYTES = 2 * REPAIRED_MEMORY_BYTES
 CODE_SOURCE = "ad286f6122abdc88e79b1d0f02669206dcafea14"
 SERVER_SHA256 = "50bf1bc507bd772f8711e95a21100c993722c33dab7d05bc29fd6363274ec754"
 
@@ -58,10 +60,49 @@ def asset_contract(config, core):
     return server
 
 
+def resource_recreation_successor_cohort(config, previous, baseline, core, transition):
+    """Only the maintained resource receipt validator can supply this typed map."""
+    require(set(transition) == {"kind", "replacements", "uiGlobalIds"}, "RESOURCE_SUCCESSOR_FIELDS_CHANGED")
+    before = {role: core.load(ref)["Id"] for role, ref in previous["retainedContainers"].items()}
+    after = {role: core.load(ref)["Id"] for role, ref in config["retainedContainers"].items()}
+    require(len(before) == len(after) == 22 and set(before) == set(after) and ROLE not in before,
+            "RESOURCE_SUCCESSOR_RETAINED_ROLES_CHANGED")
+    roles = (set(before) - {"ui-prod"}) | {"docs", "nginx-proxy", "openbao", "postgres", "redis", "keycloak", "ui-prod"}
+    rows = transition["replacements"]
+    require(isinstance(rows, list) and len(rows) == len(roles) == 28
+            and all(isinstance(row, dict) and set(row) == {"role", "oldCid", "newCid"} for row in rows)
+            and {row["role"] for row in rows} == roles, "RESOURCE_SUCCESSOR_ROLE_MAP_CHANGED")
+    mappings = {row["role"]: row for row in rows}
+    old = [row["oldCid"] for row in rows]
+    new = [row["newCid"] for row in rows]
+    require(len(set(old)) == len(set(new)) == 28
+            and all(isinstance(cid, str) and re.fullmatch(r"[a-f0-9]{64}", cid) for cid in (*old, *new))
+            and all(row["newCid"] == row["oldCid"] or row["newCid"] not in old for row in rows),
+            "RESOURCE_SUCCESSOR_ID_MAP_CHANGED")
+    require(all(mappings[role]["oldCid"] == before[role] and mappings[role]["newCid"] == after[role]
+                for role in before), "RESOURCE_SUCCESSOR_RETAINED_ROLE_CHANGED")
+    fixed = {"openbao", "postgres", "redis"}
+    require(all((row["oldCid"] == row["newCid"]) == (row["role"] in fixed) for row in rows),
+            "RESOURCE_SUCCESSOR_UNAUTHORIZED_RECREATION")
+    require(len(baseline) == len(set(baseline)) and set(old).issubset(baseline),
+            "RESOURCE_SUCCESSOR_NOT_PREIMAGE")
+    ui_ids = transition["uiGlobalIds"]
+    intermediate = (set(baseline) - set(old)) | {row["oldCid"] if row["role"] == "keycloak" else row["newCid"] for row in rows}
+    require(isinstance(ui_ids, list) and len(ui_ids) == len(set(ui_ids)) == len(baseline)
+            and set(ui_ids) == intermediate, "RESOURCE_SUCCESSOR_INTERMEDIATE_COHORT_CHANGED")
+    actual = core.load(config["globalCohortPreimage"])
+    require(isinstance(actual, list) and len(actual) == len(set(actual)) == len(baseline)
+            and set(actual) == (set(baseline) - set(old)) | set(new),
+            "RESOURCE_SUCCESSOR_COHORT_CHANGED")
+    return actual
+
+
 def retained_role_successor_cohort(config, previous, baseline, core, runtime_successor):
     """A reviewed caller delegates profile validation to the shared native validator."""
     require(callable(runtime_successor), "RECOVERED_OFF_COHORT_SUCCESSOR_REQUIRED")
     transition = runtime_successor(previous["runtimeAuthority"], config["runtimeAuthority"])
+    if transition.get("kind") == "resource-recreation":
+        return resource_recreation_successor_cohort(config, previous, baseline, core, transition)
     require(set(transition) == {"role", "oldCid", "newCid"}
             and transition["role"] == "issuance-native", "RECOVERED_OFF_SUCCESSOR_SCOPE_CHANGED")
     old, new = transition["oldCid"], transition["newCid"]
@@ -212,6 +253,7 @@ def model_delta(before, after, fixture, server):
     expected["services"][ROLE]["init"] = True
     expected["services"][ROLE]["volumes"] = [{"type": "bind", "source": str(server),
         "target": SERVER_TARGET, "read_only": True, "bind": {"create_host_path": False}}]
+    expected["services"][ROLE]["deploy"] = {"resources": {"limits": {"memory": str(REPAIRED_MEMORY_BYTES)}}}
     require(after == expected, "DELTA_OUTSIDE_REPAIRED_ASSET_AND_FIXTURE")
 
 
@@ -482,6 +524,13 @@ def candidate_guard(original, actual, *, fixture, provenance, running, host_moun
         b["Env"] = a["Env"]
     require(a == b, "CONFIG_CHANGED")
     ah, bh = deepcopy(original["HostConfig"]), deepcopy(actual["HostConfig"])
+    if server is not None:
+        require(ah.get("Memory") in (0, None) and ah.get("MemorySwap") in (0, None)
+                and bh.get("Memory") == REPAIRED_MEMORY_BYTES
+                and bh.get("MemorySwap") == REPAIRED_SWAP_BYTES,
+                "REPAIRED_MEMORY_BOUND_CHANGED")
+        bh["Memory"] = ah.get("Memory")
+        bh["MemorySwap"] = ah.get("MemorySwap")
     for field in ("Binds", "Mounts"):
         ah.pop(field, None);bh.pop(field, None)
     if server is not None:
