@@ -59,6 +59,11 @@ the resulting trust bundle for Rust Redis clients and migration commands.
 Public HTTPS trust remains available. No local development environment or TLS
 verification bypass is used. Certificate rotation requires restarting Redis
 and the application pods so they reload their certificates and trust bundle.
+The existing migration bootstrap and signing-keys runtime both use Redis
+database 2 for their managed signer registry.
+Flow also receives the existing signer's public CA in its trust bundle and
+calls the signer's HTTPS listener directly at `https://signing-keys:8018/internal`.
+This keeps its startup health check independent of gateway readiness.
 
 Two notification Secrets supplement the older Kubernetes catalog:
 

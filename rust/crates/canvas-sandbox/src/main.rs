@@ -721,6 +721,7 @@ async fn display(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> 
 
 #[tokio::main]
 async fn main() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let state = Arc::new(AppState::new(Config::from_env()));
     println!("[canvas-sandbox] issuer={}", state.config.public_base);
     println!("[canvas-sandbox] kid={}", state.kid);

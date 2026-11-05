@@ -162,6 +162,7 @@ fn disposable_database_url() -> io::Result<String> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     let context = AcceptanceContext::from_environment(&env::vars().collect())?;
     let command = match env::args().skip(1).collect::<Vec<_>>().as_slice() {
         [] => Command::IssueCredential,

@@ -1,12 +1,12 @@
-{{/* Preserve public trust roots while adding the private Redis issuer CA. */}}
+{{/* Preserve public roots and add only the private peer CAs each workload needs. */}}
 {{- define "marty.redisTrustInit" -}}
 - name: redis-trust
-  image: {{ include "marty.image" (dict "root" . "role" "services") | quote }}
-  imagePullPolicy: {{ .Values.imagePullPolicy }}
+  image: {{ include "marty.image" (dict "root" .root "role" "services") | quote }}
+  imagePullPolicy: {{ .root.Values.imagePullPolicy }}
   command:
     - /bin/sh
     - -ec
-    - cat /etc/ssl/certs/ca-certificates.crt /redis-ca/ca.crt > /trust/ca-certificates.crt
+    - cat /etc/ssl/certs/ca-certificates.crt /redis-ca/ca.crt{{ if .withSigningCa }} /signing-ca/ca.crt{{ end }} > /trust/ca-certificates.crt
   securityContext:
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: true
@@ -25,12 +25,17 @@
       readOnly: true
     - name: redis-trust
       mountPath: /trust
+    {{- if .withSigningCa }}
+    - name: signing-ca
+      mountPath: /signing-ca
+      readOnly: true
+    {{- end }}
 {{- end -}}
 
 {{- define "marty.redisTrustVolumes" -}}
 - name: redis-ca
   secret:
-    secretName: {{ include "marty.secretName" (dict "root" . "name" "marty-redis-tls") }}
+    secretName: {{ include "marty.secretName" (dict "root" .root "name" "marty-redis-tls") }}
     defaultMode: 0444
     items:
       - key: ca.crt
@@ -39,4 +44,13 @@
   emptyDir:
     medium: Memory
     sizeLimit: 2Mi
+{{- if .withSigningCa }}
+- name: signing-ca
+  secret:
+    secretName: {{ include "marty.secretName" (dict "root" .root "name" "signing-keys-integration-secret-ca") }}
+    defaultMode: 0444
+    items:
+      - key: ca.crt
+        path: ca.crt
+{{- end }}
 {{- end -}}

@@ -892,6 +892,11 @@ presentation-policy:
     value: /var/run/secrets/marty/workload/ca.crt
   - name: PRESENTATION_POLICY_SERVICE_PORT
     value: '8009'
+  - name: ISSUANCE_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: marty-secrets
+        key: ISSUANCE_API_KEY
   - name: SIGNING_KEYS_SERVICE_URL
     value: http://signing-keys:8017
   - name: SIGNING_KEYS_INTERNAL_API_KEY
@@ -1071,6 +1076,8 @@ flow:
       secretKeyRef:
         name: marty-secrets
         key: FLOW_APPLICATION_EVENT_HMAC_KEY
+  - name: SIGNING_KEYS_INTERNAL_URL
+    value: https://signing-keys:8018/internal
   - name: SIGNING_KEYS_INTERNAL_API_KEY
     valueFrom:
       secretKeyRef:

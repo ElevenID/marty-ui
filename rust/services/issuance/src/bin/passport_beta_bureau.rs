@@ -525,6 +525,7 @@ fn router(state: AppState) -> Router {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(

@@ -21,7 +21,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    marty_service_runtime::install_tls_crypto_provider();
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(

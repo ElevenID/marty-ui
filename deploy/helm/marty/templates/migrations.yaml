@@ -24,6 +24,10 @@
       value: "true"
     {{- end }}
     {{- if eq .name "bootstrap-notification" }}
+    # marty-migration-bootstrap persists the managed signer registry in Redis.
+    # It must use the same database as signing-keys, not the shared cache /0.
+    - name: REDIS_URL
+      value: rediss://redis:6379/2
     - name: OPENBAO_SERVICE_TOKEN_FILE
       value: /run/secrets/openbao_bootstrap_token
     - name: NOTIFICATION_OPENBAO_TOKEN_FILE
@@ -80,7 +84,7 @@ spec:
       # deadlocks when Deployments validate schemas produced by that hook.
       # Kubernetes retries failed init containers within the Job deadline.
       initContainers:
-        {{- include "marty.redisTrustInit" . | nindent 8 }}
+        {{- include "marty.redisTrustInit" (dict "root" .) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "revocation-profile" "command" (list "/usr/local/bin/marty-revocation-profile")) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "bootstrap-notification" "role" "migrations" "command" (list "/app/run-migrations-with-secrets.sh")) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "organization" "command" (list "/usr/local/bin/marty-organization" "migrate")) | nindent 8 }}
@@ -115,7 +119,7 @@ spec:
       containers:
         {{- include "marty.migrationContainer" (dict "root" . "name" "issuance-native" "command" (list "/usr/local/bin/marty-issuance-service" "migrate")) | nindent 8 }}
       volumes:
-        {{- include "marty.redisTrustVolumes" . | nindent 8 }}
+        {{- include "marty.redisTrustVolumes" (dict "root" .) | nindent 8 }}
         - name: bootstrap-secrets
           secret:
             secretName: {{ include "marty.secretName" (dict "root" . "name" "marty-secrets") }}

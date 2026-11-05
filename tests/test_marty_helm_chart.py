@@ -197,6 +197,8 @@ def test_ordered_bounded_migrations_wait_for_seeded_catalog(rendered: list[dict]
     assert names.index("revocation-profile") < names.index("bootstrap-notification")
     assert names.index("organization") < names.index("credential-template")
     assert names.index("credential-template") < names.index("ready-credential-template")
+    bootstrap = next(container for container in pod["initContainers"] if container["name"] == "bootstrap-notification")
+    assert next(env["value"] for env in bootstrap["env"] if env["name"] == "REDIS_URL") == "rediss://redis:6379/2"
     for container in pod["initContainers"]:
         if container["name"].startswith("ready-"):
             assert "--retry-max-time" in container["command"]
@@ -252,6 +254,24 @@ def test_production_redis_tls_preserves_public_trust_and_confines_private_key(re
                 assert env["REDIS_URL"]["value"].startswith("rediss://redis:6379/")
             assert any(mount["name"] == "redis-trust" and mount["readOnly"] for mount in container["volumeMounts"])
     assert "redis://redis:" not in json.dumps(rendered)
+
+
+def test_flow_signer_transport_and_presentation_policy_credentials(rendered: list[dict]) -> None:
+    deployments = resources(rendered, "Deployment")
+    flow = deployments["flow"]["spec"]["template"]["spec"]
+    env = {item["name"]: item for item in flow["containers"][0]["env"]}
+    assert env["SIGNING_KEYS_INTERNAL_URL"]["value"] == "https://signing-keys:8018/internal"
+    trust = next(container for container in flow["initContainers"] if container["name"] == "redis-trust")
+    assert "/signing-ca/ca.crt" in trust["command"][-1]
+    ca = next(volume for volume in flow["volumes"] if volume["name"] == "signing-ca")
+    assert ca["secret"]["secretName"] == "signing-keys-integration-secret-ca"
+    assert ca["secret"]["items"] == [{"key": "ca.crt", "path": "ca.crt"}]
+    for name, deployment in deployments.items():
+        if name != "flow":
+            assert all(volume["name"] != "signing-ca" for volume in deployment["spec"]["template"]["spec"].get("volumes", []))
+    policy = deployments["presentation-policy"]["spec"]["template"]["spec"]["containers"][0]
+    env = {item["name"]: item for item in policy["env"]}
+    assert env["ISSUANCE_API_KEY"]["valueFrom"]["secretKeyRef"] == {"name": "marty-secrets", "key": "ISSUANCE_API_KEY"}
 
 
 def test_development_requests_leave_room_for_cluster_and_openbao(rendered: list[dict]) -> None:

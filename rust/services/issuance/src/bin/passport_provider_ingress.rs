@@ -127,6 +127,7 @@ fn private_url_from(value: &str, service: &str, path: &str) -> Result<Url, &'sta
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     let config = Config::from_env()?;
     let pool = PgPoolOptions::new()
         .max_connections(5)
