@@ -21,7 +21,9 @@ def sealed():
     fixture = fixtures.CheckpointTests()
     fixture.setUp()
     fixture.prepare()
-    admission = {"operator_run_id": 991, "operator_run_attempt": 1, "result_artifact_id": 992,
+    admission = {"schema": candidate.h.TAG_ADMISSION_SCHEMA,
+                 "tag_handoff_contract": candidate.h.TAG_HANDOFF_CONTRACT,
+                 "operator_run_id": 991, "operator_run_attempt": 1, "result_artifact_id": 992,
                  "result_artifact_sha256": "sha256:" + "d" * 64, "result_sha256": "sha256:" + "e" * 64,
                  "tag_object_sha": "f" * 40}
     path = fixture.base / "admission.json"
@@ -55,6 +57,42 @@ def test_v2_creation_still_requires_original_active_checkpoint_and_first_attempt
     with pytest.raises(ValueError, match="first-attempt"):
         candidate.seal(fixture.output, path, fixture.base / "rerun",
                        environment={**fixture.environment, "GITHUB_RUN_ATTEMPT": "2"}, now=fixtures.NOW)
+
+
+@pytest.mark.parametrize("mutation", ["schema-less", "prior-schema", "foreign-contract", "prior-checkpoint", "prior-policy"])
+def test_reservation_candidate_rejects_old_or_mixed_contract_evidence(sealed, mutation):
+    fixture, output, manifest, path = sealed
+    if mutation in {"schema-less", "prior-schema", "foreign-contract"}:
+        value = json.loads(path.read_bytes())
+        if mutation == "schema-less":
+            value.pop("schema"); value.pop("tag_handoff_contract")
+        elif mutation == "prior-schema":
+            value["schema"] = "marty.release-tag-admission/v1"
+        else:
+            value["tag_handoff_contract"] = "marty.atomic-main-tag/v1"
+        with pytest.raises(ValueError):
+            candidate.validate_admission(value)
+    elif mutation == "prior-checkpoint":
+        request_path = output / "checkpoint/request.json"
+        value = json.loads(request_path.read_bytes())
+        value["schema"] = "elevenid.stable-publication-checkpoint/v1"
+        request_path.write_bytes(candidate.h.encoded(value))
+        # Rehashing unsigned containers cannot promote old atomic evidence.
+        manifest["files"]["checkpoint/request.json"] = {
+            "size": request_path.stat().st_size, "sha256": candidate.h.file_digest(request_path)}
+        manifest["candidate_id"] = candidate.candidate_identity(manifest)
+        (output / "candidate.json").write_bytes(candidate.h.encoded(manifest))
+        with pytest.raises(ValueError):
+            candidate.load_candidate(output, now=fixtures.NOW + timedelta(seconds=5))
+    else:
+        policy = copy.deepcopy(candidate.POLICY)
+        policy["schema"] = "elevenid.stable-publication-policy/v2"
+        policy.pop("tag_handoff_contract")
+        foreign = fixture.base / "foreign-policy"
+        (foreign / "release").mkdir(parents=True)
+        (foreign / candidate.POLICY_PATH).write_bytes(candidate.h.encoded(policy))
+        with pytest.raises(ValueError):
+            candidate.policy_digest(foreign)
 
 
 @pytest.mark.parametrize("field,value", [("schema", checkpoint.SCHEMA), ("run_attempt", True),

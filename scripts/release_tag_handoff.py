@@ -27,6 +27,12 @@ REPOSITORY_ID = 1140864197
 REPOSITORY_NODE = "R_kgDORAA0xQ"
 CD_WORKFLOW = ".github/workflows/cd.yml"
 OPERATOR_WORKFLOW = ".github/workflows/release-tag-handoff.yml"
+TAG_HANDOFF_CONTRACT = "marty.create-only-annotated-tag/v1"
+TAG_RESULT_SCHEMA = "marty.release-tag-handoff-result/v2"
+TAG_ADMISSION_SCHEMA = "marty.release-tag-admission/v2"
+REF_CREATION_SCOPE = "absent_tag_only"
+MAIN_CHECK_SCOPE = "before_after_observation"
+REF_CREATION_TRANSPORT = "github-rest-create-ref/v1"
 WAIT_STEP = "Wait for the exact operator tag handoff"
 MAX_JSON = 4 * 1024 * 1024
 MAX_ARCHIVE = 2 * 1024 * 1024 * 1024
@@ -185,6 +191,37 @@ class GitHub:
         self.mutations: list[dict] = []
         self.crypto: list[dict] = []
         self.observer = observer
+        # Consume before dispatch, including when journaling or the request
+        # fails. A caught exception must never turn an uncertain creation into
+        # another write or adoption attempt in the same operator process.
+        self._consumed_tag_refs: set[str] = set()
+
+    def create_tag_ref(self, tag: str, object_sha: str) -> dict:
+        """Reserve one absent ref at an already verified annotated tag object.
+
+        This is conditional on the TAG being absent, not on main. Main remains
+        independently observed by the caller before and after this operation.
+        It never updates an existing ref and makes no retry or cleanup request.
+        """
+        require(isinstance(tag, str) and (TAG.fullmatch(tag) is not None
+                or re.fullmatch(r"v-release-capability-[1-9][0-9]{0,15}-1", tag) is not None)
+                and isinstance(object_sha, str) and SHA.fullmatch(object_sha) is not None
+                and object_sha != "0" * 40,
+                "Tag reservation requires one exact annotated-object coordinate")
+        ref = f"refs/tags/{tag}"
+        require(ref not in self._consumed_tag_refs, "Tag reservation intent was already consumed; readback only")
+        self._consumed_tag_refs.add(ref)
+        status, raw = self.response(f"repos/{REPOSITORY}/git/refs", method="POST",
+                                    payload={"ref": ref, "sha": object_sha})
+        require(type(status) is int and status == 201,
+                "Tag reservation was not confirmed created; readback only")
+        value = decode(raw)
+        require(isinstance(value, dict) and value.get("ref") == ref
+                and isinstance(value.get("object"), dict)
+                and value["object"].get("type") == "tag"
+                and value["object"].get("sha") == object_sha,
+                "Created tag reference differs from the exact annotated object; readback only")
+        return tag_ref_creation(tag, object_sha)
 
     def response(self, path: str, *, method: str = "GET", payload: object | None = None) -> tuple[int, bytes]:
         require(path.startswith(f"repos/{REPOSITORY}/") or path in {f"repos/{REPOSITORY}", "graphql"},
@@ -379,7 +416,10 @@ def exact_context(workflow: str) -> tuple[int, str]:
 def tag_message(request: dict, request_sha: str, artifact: dict, operator_run: int) -> str:
     require(positive(operator_run) and DIGEST.fullmatch(request_sha) is not None,
             "Invalid tag handoff identity")
+    require(request.get("tag_handoff_contract") == TAG_HANDOFF_CONTRACT,
+            "Tag request uses a different handoff contract")
     return (f"Release {request['tag'][1:]}\n\n"
+            f"Handoff-Contract: {TAG_HANDOFF_CONTRACT}\n"
             f"Release-Transaction: {request['transaction_id']}\n"
             f"Claim-Run: {request['claim_run_id']}\n"
             f"Source-SHA: {request['source_sha']}\n"
@@ -391,6 +431,14 @@ def tag_message(request: dict, request_sha: str, artifact: dict, operator_run: i
             f"Handoff-Artifact-Digest: {artifact['digest']}\n"
             f"Operator-Run: {operator_run}\n"
             "Operator-Attempt: 1\n")
+
+
+def tag_ref_creation(tag: str, object_sha: str) -> dict:
+    """Closed receipt shape; only a successful create call may assert it."""
+    return {"transport": REF_CREATION_TRANSPORT, "method": "POST",
+            "endpoint": f"repos/{REPOSITORY}/git/refs", "ref": f"refs/tags/{tag}",
+            "object_type": "tag", "object_sha": object_sha, "http_status": 201,
+            "condition": REF_CREATION_SCOPE, "decision": "confirmed_created"}
 
 
 def operator_from_message(message: str) -> int:
@@ -418,6 +466,8 @@ def annotated_tag(github: GitHub, tag: str) -> dict | None:
 
 def successful_result(github: GitHub, run_id: int, request: dict, request_sha: str,
                       checkpoint: dict, tag: dict, directory: Path) -> dict | None:
+    require(request.get("tag_handoff_contract") == TAG_HANDOFF_CONTRACT,
+            "Operator admission uses a different tag handoff contract")
     run = github.run(run_id, OPERATOR_WORKFLOW, request["protected_main_commit"])
     require(timestamp(run["created_at"]) >= timestamp(request["created_at"]),
             "Operator invocation predates the immutable handoff")
@@ -438,8 +488,17 @@ def successful_result(github: GitHub, run_id: int, request: dict, request_sha: s
                "candidate_run_attempt", "checkpoint_artifact_id"}
     require(isinstance(value, dict) and all(positive(value.get(key)) for key in numeric),
             "Operator result requires exact positive integer identities")
+    require(value.get("tag_alone_authorizes_publication") is False
+            and isinstance(value.get("tag_ref_creation"), dict)
+            and type(value["tag_ref_creation"].get("http_status")) is int
+            and value["tag_ref_creation"]["http_status"] == 201,
+            "Operator result requires a strictly typed reservation receipt")
     expected = {
-        "schema": "marty.release-tag-handoff-result/v1", "status": "success", "mode": "create-qualified-tag",
+        "schema": TAG_RESULT_SCHEMA, "status": "success", "mode": "create-qualified-tag",
+        "tag_handoff_contract": TAG_HANDOFF_CONTRACT,
+        "ref_creation_scope": REF_CREATION_SCOPE, "main_check_scope": MAIN_CHECK_SCOPE,
+        "tag_alone_authorizes_publication": False,
+        "tag_ref_creation": tag_ref_creation(request["tag"], tag["sha"]),
         "repository": REPOSITORY, "operator_run_id": run_id, "operator_run_attempt": 1,
         "operator_source_sha": request["protected_main_commit"], "source_sha": request["source_sha"],
         "candidate_run_id": request["run_id"], "candidate_run_attempt": 1,
@@ -462,7 +521,8 @@ def successful_result(github: GitHub, run_id: int, request: dict, request_sha: s
     final_run = github.run(run_id, OPERATOR_WORKFLOW, request["protected_main_commit"])
     require(final_run.get("status") == "completed" and final_run.get("conclusion") == "success",
             "Operator invocation changed while reading its result")
-    return {"operator_run_id": run_id, "operator_run_attempt": 1,
+    return {"schema": TAG_ADMISSION_SCHEMA, "tag_handoff_contract": TAG_HANDOFF_CONTRACT,
+            "operator_run_id": run_id, "operator_run_attempt": 1,
             "result_artifact_id": artifact["id"], "result_artifact_sha256": artifact["digest"],
             "result_sha256": sha256(bounded_file(held / "tag-handoff-result.json", 65536)),
             "tag_object_sha": tag["sha"]}

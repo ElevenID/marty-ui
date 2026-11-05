@@ -20,15 +20,16 @@ SCHEMA = "elevenid.stable-publication-candidate/v2"
 PUBLISHER_WORKFLOW = ".github/workflows/publish-stable-candidate.yml"
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = "release/stable-publication-policy.json"
-POLICY = {"schema": "elevenid.stable-publication-policy/v2", "repository": h.REPOSITORY,
+POLICY = {"schema": "elevenid.stable-publication-policy/v3", "repository": h.REPOSITORY,
           "producer_workflow": h.CD_WORKFLOW, "publisher_workflow": PUBLISHER_WORKFLOW,
-          "candidate_lifetime_seconds": 86400, "authorization_lifetime_seconds": 900}
+          "candidate_lifetime_seconds": 86400, "authorization_lifetime_seconds": 900,
+          "tag_handoff_contract": h.TAG_HANDOFF_CONTRACT}
 FIELDS = {"schema", "repository", "producer_workflow", "source_sha", "run_id", "run_attempt", "tag",
           "created_at", "not_after", "policy_sha256", "files", "candidate_id"}
 LIMITS = {"checkpoint/" + name: size for name, size in cp.MAX_FILE_BYTES.items()}
 LIMITS.update({"tag-admission.json": 65536, "candidate.json": 65536})
 FILES = {"checkpoint/" + name for name in cp.CHECKPOINT_FILES} | {"tag-admission.json"}
-ADMISSION_FIELDS = {"operator_run_id", "operator_run_attempt", "result_artifact_id",
+ADMISSION_FIELDS = {"schema", "tag_handoff_contract", "operator_run_id", "operator_run_attempt", "result_artifact_id",
                     "result_artifact_sha256", "result_sha256", "tag_object_sha"}
 
 
@@ -74,6 +75,8 @@ def validate_manifest(value: object, *, now: datetime | None = None) -> dict:
 
 def validate_admission(value: object) -> dict:
     h.require(type(value) is dict and set(value) == ADMISSION_FIELDS, "tag admission fields differ")
+    h.require(value["schema"] == h.TAG_ADMISSION_SCHEMA and value["tag_handoff_contract"] == h.TAG_HANDOFF_CONTRACT,
+              "tag admission contract differs")
     h.require(all(h.positive(value[key]) for key in ("operator_run_id", "operator_run_attempt", "result_artifact_id"))
               and value["operator_run_attempt"] == 1
               and all(isinstance(value[key], str) and h.DIGEST.fullmatch(value[key]) for key in

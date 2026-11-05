@@ -24,20 +24,28 @@ Missing capture evidence remains a failure. Every pending image needs the actual
 review described in [the official release gate](official-release-gate.md).
 
 After qualification, the same attempt prepares the mandatory installer inputs,
-promotes the exact five image digests, signs and verifies all 32 release assets,
+promotes the exact five image digests, signs the 13 subjects, verifies all 32 publication assets,
 and retains `stack-release-publication-inputs-<run-id>-1`. It then waits at most
 15 minutes for `.github/workflows/release-tag-handoff.yml` on protected main.
 Use that workflow's closed qualified-tag mode with the original CD and claim
 run IDs. It validates the immutable files, provenance, registry identities,
-exact review-only ancestry and live publisher state before an atomic main/tag
-compare. The publisher requires both the exact annotated tag and that actual
-operator run's successful bound receipt before publishing the original bytes.
+exact review-only ancestry and live publisher state before one create-only
+annotated-tag reservation. Main is checked before and after the operation;
+the reservation does not claim an atomic comparison with main. The publisher
+requires both the exact tag and that actual operator run's successful versioned
+receipt before admitting the original bytes. See the explicit guarantee change
+and activation requirements in the
+[reservation contract](release-tag-reservation-contract.md).
 
 Qualify the scoped operator's real API capability before consuming a claim.
 Default inspect mode is read-only. The dedicated non-semver audit-tag probe must
-prove stale-main rejection and successful current-main comparison without moving
-main. Do not use local Git push, an unconditional tag write, a new stored token
-or relaxed protections as substitutes.
+retain the actual negative protected-main refusal and prove a successful
+create-only audit tag with exact before/after main and policy observations.
+The v5 capability cannot be relabeled as the earlier atomic guarantee. A tag
+alone never authorizes publication. Do not use local Git push, an overwrite,
+a new stored token or relaxed protections as substitutes. A failed or uncertain
+reservation may consume a version; preserve it without retry, adoption or
+cleanup.
 
 The publisher rejects later attempts and historical resume inputs before builds.
 Do not retry a failed gate or dispatch a new publisher at a review commit using
