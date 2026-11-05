@@ -5,15 +5,14 @@ source/tag identity are rechecked while the NTFS asset remains held. This does
 not replace signature/provenance verification or admit a release for production.
 """
 from __future__ import annotations
+
 import base64
 import hashlib
 import json
-from pathlib import Path, PurePosixPath
 import re
-import subprocess
+from pathlib import Path, PurePosixPath
 
 from selfhost_windows_inputs import hold_private_input
-
 
 WORKER = r'''
 import base64,hashlib,json,os,pathlib,subprocess,sys
@@ -45,23 +44,38 @@ def native(op,body,network=False):
  r=json.loads(p.stdout);assert isinstance(r,dict) and set(r)=={'value'}
  return r['value']
 assert native('authority-check',{'token':token,'rotation':False},True) is None
-assert native('generation',{'operation':'verify','current':roots['old'],'candidate':roots['new'],
-                           'ca_overlap':False,'ca_retire':False})==[d['count'],d['changed']]
+if d['transition']:
+ assert native('generation',{'operation':'verify','current':roots['old'],'candidate':roots['new'],
+                            'ca_overlap':False,'ca_retire':False})==[d['count'],d['changed']]
+else:
+ assert d['changed']==0 and mirrors['old']==mirrors['new'] and d['bytes']['old']==d['bytes']['new']
 body={'token':token,'old':roots['old'],'new':roots['new'],'minimum_ttl':d['minimum_ttl'],
       'require_orphan_new':True,'require_orphan_old':False,'replacement':None,'retiring':False}
 for op in ['activation-tokens','activation-certificates']:assert native(op,body,True) is None
-print(json.dumps({'authority':True,'generation':True,'tokens':True,'certificates':True}))
+print(json.dumps({'authority':True,'generation':d['transition'],'tokens':True,'certificates':True}))
 '''
 
 
 def preflight(config, project, old, new, docker_prefix):
+    """Verify a changing generation; all transition checks remain mandatory."""
+    return _preflight(config, project, old, new, docker_prefix, transition=True)
+
+
+def preflight_current(config, project, current, docker_prefix):
+    """Read-only current custody/lifetime proof, never a transition admission."""
+    config = dict(config)
+    config['renewed'] = config['current']
+    return _preflight(config, project, current, current, docker_prefix, transition=False)
+
+
+def _preflight(config, project, old, new, docker_prefix, *, transition):
     def require(value):
         if not value:
             raise ValueError('Windows native renewal preflight refused')
     require(set(old) == set(new) and 0 < len(old) <= 512)
     require(all(re.fullmatch(r'[a-z][a-z0-9_]{0,127}', name) for name in old))
     changed = sum(old[name] != new[name] for name in old)
-    require(changed > 0)
+    require(changed > 0 if transition else changed == 0)
     require(re.fullmatch(r'[0-9a-f]{64}', config['binary_sha256']))
     require(re.fullmatch(r'[0-9a-f]{40}', config['source_sha']))
     require(re.fullmatch(r'v\d+\.\d+\.\d+(?:-nightly\.20\d{6}\.[1-9]\d*)?', config['release_tag']))
@@ -70,17 +84,18 @@ def preflight(config, project, old, new, docker_prefix):
     require(config['network'] == project + '_default')
     require(config['bao_addr'] == 'https://openbao:8200')
     require(type(config['minimum_ttl']) is int and 60 <= config['minimum_ttl'] <= 28800)
+    require(transition or config['minimum_ttl'] >= 3600)
     for key in ['current', 'renewed', 'token_file']:
         p = PurePosixPath(config[key])
         require(p.is_relative_to('/control') and len(p.parts) >= 3
                 and '..' not in p.parts and str(p) == config[key])
-    require(config['current'] != config['renewed'])
+    require(config['current'] != config['renewed'] if transition else config['current'] == config['renewed'])
     with hold_private_input(Path(config['binary']), max_bytes=256 * 1024 * 1024) as binary:
         require(hashlib.sha256(binary).hexdigest() == config['binary_sha256'])
         with hold_private_input(Path(config['ca_file'])):
             request = {key: config[key] for key in ['binary_sha256', 'source_sha', 'release_tag',
                                                   'bao_addr', 'current', 'renewed', 'token_file', 'minimum_ttl']}
-            request.update(count=len(old), changed=changed, bytes={
+            request.update(count=len(old), changed=changed, transition=transition, bytes={
                 role: {name: base64.b64encode(raw).decode('ascii') for name, raw in values.items()}
                 for role, values in [('old', old), ('new', new)]})
             args = [*docker_prefix, 'run', '--rm', '--pull', 'never', '-i', '--read-only',
@@ -91,7 +106,11 @@ def preflight(config, project, old, new, docker_prefix):
                     f'type=bind,src={config["binary"]},dst=/operator/tool,readonly', '--mount',
                     f'type=bind,src={config["ca_file"]},dst=/input/ca.crt,readonly',
                     '--entrypoint', 'python', config['helper_image'], '-c', WORKER]
-            p = subprocess.run(args, input=json.dumps(request).encode(), capture_output=True, timeout=420)
+            # Lazy import keeps the shared transport in its existing owner and
+            # avoids a module-import cycle. Payload travels over the gated pipe,
+            # never through command-line arguments or diagnostic output.
+            from selfhost_windows_renewal import run_owned_mutation
+            p = run_owned_mutation(args, stdin_bytes=json.dumps(request).encode(), timeout=240)
             require(p.returncode == 0)
-            require(json.loads(p.stdout) == {'authority': True, 'generation': True,
+            require(json.loads(p.stdout) == {'authority': True, 'generation': transition,
                                             'tokens': True, 'certificates': True})

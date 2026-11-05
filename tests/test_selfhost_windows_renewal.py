@@ -571,6 +571,29 @@ def test_owned_cli_job_returns_nonzero_and_drains_bounded_output(monkeypatch):
     assert_owned_process_resources_closed(processes)
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='Actual Win32 gated private input transport')
+@pytest.mark.parametrize('payload', [None, b'', b'PUBLIC_SYNTHETIC\0\xff' * 65536], ids=['devnull', 'empty-pipe', 'large-binary-pipe'])
+def test_owned_cli_private_input_uses_pipe_and_closes_resources(monkeypatch, payload):
+    import hashlib
+    import sys
+    processes = retained_owned_processes(monkeypatch)
+    child = 'import sys,hashlib;d=sys.stdin.buffer.read();print(len(d),hashlib.sha256(d).hexdigest())'
+    result = renewal.run_owned_mutation([sys.executable, '-I', '-S', '-c', child],
+                                        stdin_bytes=payload, timeout=10)
+    expected = payload or b''
+    assert result.returncode == 0
+    assert result.stdout.decode().split() == [str(len(expected)), hashlib.sha256(expected).hexdigest()]
+    assert_owned_process_resources_closed(processes)
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows input bound before process creation')
+def test_owned_cli_oversized_private_input_refuses_before_launch(monkeypatch):
+    def forbidden(*_a, **_k):pytest.fail('Input bound checked after process launch')
+    monkeypatch.setattr(renewal.subprocess, 'Popen', forbidden)
+    with pytest.raises(ValueError, match='input too large'):
+        renewal.run_owned_mutation(['PUBLIC_SYNTHETIC'], stdin_bytes=b'X'*(8*1024*1024+1))
+
+
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Win32 owned descendant containment')
 @pytest.mark.parametrize('parent_exits', [False, True])
 def test_owned_cli_job_terminates_descendant_and_keeps_outcome_uncertain(tmp_path, parent_exits, monkeypatch):

@@ -99,3 +99,17 @@ outputs. The durable intent retains the layer plan and receipt paths. A started
 receipt is flushed before each mutating invocation, and a completed receipt only
 after readiness. Rollback uses the same validated ordering with the old env.
 Never replay an interrupted layer from these records without reconciliation.
+
+The generation-selection owner can call `preflight_current` for a read-only
+current-custody and minimum-one-hour lifetime check. It verifies both native
+mirrors against held bytes, materializes private snapshots and delegates scoped
+authority, orphan-token and certificate/key/chain/lifetime decisions to the signed
+native operator. This separate entry point does not verify a changing-generation
+transition. `preflight` still requires distinct mirrors and changed renewable
+inputs, including the native generation verifier.
+
+Native requests now use the existing owned Win32 job runner's bounded binary
+stdin pipe. Private payloads are absent from command arguments. Command arguments,
+private input, encoded gate request and output tails each have separate bounds;
+every owned command inherits a private pipe or DEVNULL rather than the gate stdin.
+Durable selection/reconciliation and recovery integration remain separate work.
