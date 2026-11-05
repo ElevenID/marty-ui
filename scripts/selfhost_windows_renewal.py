@@ -455,7 +455,8 @@ def dependency_layers(model, services, changing):
         for name, spec in dep.items():
             require(isinstance(name, str) and isinstance(spec, dict)
                     and type(spec.get('required', True)) is bool
-                    and type(spec.get('restart', False)) is bool)
+                    and spec.get('restart', False) is False,
+                    'Dependency restart cascades are not qualified')
             condition = spec.get('condition', 'service_started')
             require(condition in {'service_started', 'service_healthy', 'service_completed_successfully'})
             require(name in services or spec.get('required', True) is False,

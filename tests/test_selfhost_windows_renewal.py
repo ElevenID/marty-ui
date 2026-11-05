@@ -54,7 +54,7 @@ def test_dependency_layers_put_migration_before_each_consumer_once(tmp_path):
         ['postgres'], ['db-migrate'], ['gateway']]
 
 
-@pytest.mark.parametrize('bad', ['cycle', 'external', 'condition', 'required', 'restart', 'unhealthy', 'not-job'])
+@pytest.mark.parametrize('bad', ['cycle', 'external', 'condition', 'required', 'restart', 'restart-cascade', 'unhealthy', 'not-job'])
 def test_dependency_graph_refuses_invalid_normalized_edges_before_mutation(tmp_path, bad):
     m = model(tmp_path);roles = {x['Service'] for x in states(m)}
     dependency = {'condition': 'service_healthy'}
@@ -64,6 +64,8 @@ def test_dependency_graph_refuses_invalid_normalized_edges_before_mutation(tmp_p
     elif bad == 'condition':dependency['condition'] = 'guessed-ready'
     elif bad == 'required':dependency['required'] = 'false'
     elif bad == 'restart':dependency['restart'] = 1
+    elif bad == 'restart-cascade':m['services']['openbao']['depends_on'] = {
+        'gateway': {'condition': 'service_started', 'restart': True}}
     elif bad == 'unhealthy':m['services']['postgres']['healthcheck']['disable'] = True
     else:dependency['condition'] = 'service_completed_successfully'
     with pytest.raises(ValueError):renewal.dependency_layers(m, roles, {'gateway'})
