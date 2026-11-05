@@ -213,13 +213,20 @@ class Docker:
         p = subprocess.run([*self.prefix, 'ps', '-aq'], capture_output=True, timeout=30)
         require(p.returncode == 0)
         ids = p.stdout.decode('ascii').split()
-        return self.json(['inspect', *ids]) if ids else []
+        rows = []
+        for start in range(0, len(ids), 64):
+            rows.extend(self.json(['inspect', *ids[start:start + 64]]))
+        return rows
 
     def volumes(self):
         p = subprocess.run([*self.prefix, 'volume', 'ls', '-q'], capture_output=True, timeout=30)
         require(p.returncode == 0)
         names = p.stdout.decode('ascii').split()
-        rows = self.json(['volume', 'inspect', *names]) if names else []
+        # Anonymous volume inventories can exceed CreateProcessW's 32767-char
+        # command line. Docker names are bounded; batches of64 stay below it.
+        rows = []
+        for start in range(0, len(names), 64):
+            rows.extend(self.json(['volume', 'inspect', *names[start:start + 64]]))
         return {v['Name']: {k: v.get(k) for k in ['Name', 'Driver', 'Mountpoint', 'Options']} for v in rows}
 
     def compose(self, project, env, source):

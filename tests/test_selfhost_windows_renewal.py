@@ -129,6 +129,24 @@ def test_bind_and_named_volume_root_share_identity_and_unknown_subpaths_refuse()
     with pytest.raises(ValueError): renewal.disjoint_storage([owned], PROJECT, volumes)
 
 
+def test_large_docker_inventories_are_batched_below_windows_command_limit(monkeypatch):
+    import subprocess
+    names = [f'{i:064x}' for i in range(1200)]
+    docker = object.__new__(renewal.Docker);docker.prefix = ['SYNTHETIC_DOCKER']
+    monkeypatch.setattr(renewal.subprocess, 'run', lambda *_a, **_k:
+                        subprocess.CompletedProcess([], 0, ('\n'.join(names)+'\n').encode(), b''))
+    batches = []
+    def inspect(args):
+        values = args[2:] if args[:2] == ['volume', 'inspect'] else args[1:]
+        assert 0 < len(values) <= 64
+        batches.append(values)
+        return [{'Name': name, 'Id': name} for name in values]
+    monkeypatch.setattr(docker, 'json', inspect)
+    assert len(docker.volumes()) == 1200
+    assert len(docker.containers()) == 1200
+    assert len(batches) == 38
+
+
 @pytest.mark.parametrize('raw', [b'\xff' * 60000, b'\0' * 60000, ('\u03bb' * 60000).encode()],
                          ids=['invalid-utf8', 'nul-bytes', 'multibyte-utf8'])
 def test_diagnostics_remain_valid_bounded_utf8_after_replacement(raw):
