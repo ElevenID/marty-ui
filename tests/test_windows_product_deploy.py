@@ -187,11 +187,13 @@ def test_refused_or_uncertain_forward_execution_never_rolls_back_or_replays(monk
             assert not (Path(marker['attempt_dir'])/'result.json').read_bytes()
 
 
-@pytest.mark.parametrize('fault', [None, 'platform', 'reference', 'new-volume', 'database-format'])
+@pytest.mark.parametrize('fault', [None, 'docker-hub-alias', 'platform', 'reference', 'new-volume', 'database-format'])
 def test_cached_metadata_cannot_admit_unqualified_platform_storage_or_database_format(tmp_path, fault):
     from test_windows_product_transition import runtime_candidate
     owned, _after, old, new, _admitted, _ids = runtime_candidate(tmp_path)
     new['services']['postgres']['image'] = old['services']['postgres']['image']
+    if fault == 'docker-hub-alias':
+        old['services']['postgres']['image'] = new['services']['postgres']['image'] = 'docker.io/library/postgres@sha256:'+'1'*64
     if fault == 'database-format':new['services']['postgres']['image'] = 'example.invalid/pg@sha256:'+'5'*64
     class Docker:
         def json(self, args):
@@ -199,9 +201,9 @@ def test_cached_metadata_cannot_admit_unqualified_platform_storage_or_database_f
             reference = args[-1]
             return [{'Id': 'sha256:'+'1'*64, 'Os': 'linux',
                 'Architecture': 'arm64' if fault == 'platform' else 'amd64',
-                'RepoDigests': [] if fault == 'reference' else [reference],
+                'RepoDigests': [] if fault == 'reference' else [reference.removeprefix('docker.io/library/')],
                 'Config': {'Volumes': {'/unexpected': {}} if fault == 'new-volume' else {}}}]
-    if fault is None:
+    if fault in {None, 'docker-hub-alias'}:
         ids = deploy.qualified_images(Docker(), old, new, owned)
         assert set(ids) == {product.renewal._service(item) for item in owned}-product.HISTORICAL_ROLES
     else:

@@ -42,6 +42,22 @@ def test_exact_image_update_replaces_local_ui_code_but_preserves_all_other_input
     assert 'openbao' in change['mutable_roles'] and 'ui' in change['mutable_roles']
 
 
+@pytest.mark.parametrize('role', ['postgres', 'edge'])
+def test_equivalent_docker_hub_spelling_retains_exact_installed_service_and_runtime_pin(tmp_path, role):
+    before, admitted = candidate(tmp_path)
+    before['services'][role]['image'] = role+'@sha256:'+'1'*64
+    admitted['images'][role] = 'docker.io/library/'+role+'@sha256:'+'1'*64
+    after = product.product_model(before, admitted)
+    assert after['services'][role] == before['services'][role]
+    assert role not in product.checked_model_change(before, after, admitted)['mutable_roles']
+
+
+@pytest.mark.parametrize('other', ['postgres@sha256:'+'2'*64, 'docker.io/other/postgres@sha256:'+'1'*64,
+                                  'docker.io.example.invalid/library/postgres@sha256:'+'1'*64])
+def test_repository_normalization_never_equates_other_digests_namespaces_or_registries(other):
+    assert product.image_identity('postgres@sha256:'+'1'*64) != product.image_identity(other)
+
+
 @pytest.mark.parametrize('fault', ['missing', 'extra', 'tag', 'provider-tag', 'app-digest', 'platform', 'audience'])
 def test_unbound_or_incomplete_product_inputs_are_refused(tmp_path, fault):
     before, admitted = candidate(tmp_path)

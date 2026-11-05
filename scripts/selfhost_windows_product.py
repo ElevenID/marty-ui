@@ -44,6 +44,17 @@ def digest(value):
     return hashlib.sha256(canonical(value)).hexdigest()
 
 
+def image_identity(reference):
+    """Docker repository spelling plus the exact immutable digest.
+
+    Reuse the release lock's default-registry normalization. This never equates
+    different digests, repositories, image configs or database versions.
+    """
+    require(isinstance(reference, str) and IMAGE.fullmatch(reference))
+    from build_selfhost_image_lock import _repository
+    return _repository(reference)+'@'+reference.split('@', 1)[1]
+
+
 def fixture_target(mount):
     """Recognize only the exact read-only local UI code mounts being replaced."""
     if isinstance(mount, dict):
@@ -88,7 +99,9 @@ def product_model(before, admitted):
     after = deepcopy(before)
     for role, service in after['services'].items():
         require(isinstance(service, dict) and not service.get('build'))
-        service['image'] = admitted['openbao_didcomm_image'] if role in PROVIDER_ROLES else images[role]
+        desired = admitted['openbao_didcomm_image'] if role in PROVIDER_ROLES else images[role]
+        previous = service['image']
+        service['image'] = previous if image_identity(previous) == image_identity(desired) else desired
     ui = after['services']['ui']
     require(ui.get('entrypoint') is None and ui.get('command') is None,
             'Packaged UI requires its authenticated image startup configuration')

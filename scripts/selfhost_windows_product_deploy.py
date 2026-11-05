@@ -36,7 +36,8 @@ def qualified_images(docker, before, after, owned):
             image = rows[0]
             require(image.get('Os') == 'linux' and image.get('Architecture') == 'amd64'
                     and isinstance(image.get('Id'), str) and re.fullmatch(r'sha256:[0-9a-f]{64}', image['Id'])
-                    and reference in image.get('RepoDigests', []))
+                    and type(image.get('RepoDigests')) is list
+                    and any(product.image_identity(item) == product.image_identity(reference) for item in image['RepoDigests']))
             cache[reference] = image
         image = cache[reference]
         targets = image.get('Config', {}).get('Volumes') or {}
