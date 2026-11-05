@@ -26,13 +26,21 @@ LANES = ("oid4vci-issuer", "oid4vp-final", "oid4vp-url-query", "oid4vp-mdoc",
 
 def gate_bytes(review_main: str | None = None) -> bytes:
     value = {
-        "schema": "marty.official-release-gate/v1", "source_sha": SOURCE,
+        "schema": "marty.official-release-gate/v2", "source_sha": SOURCE,
         "harness_sha": "d" * 40, "manifest_sha256": "sha256:" + "e" * 64,
         "run_id": RUN_ID, "qualification_context": "PRE_PUBLICATION_CANDIDATE",
         "lanes": [{"lane": lane, "summary_sha256": "sha256:" + "f" * 64}
                   for lane in LANES],
+        "automated_qualification": {
+            "schema": "marty.automated-official-qualification/v1",
+            "policy": "marty.official-verifier-outcome/v1", "evidence_run_attempt": 1,
+            "request_sha256": "sha256:" + "2" * 64, "automated_cases": 1,
+            "original_official_results_unchanged": True,
+        },
     }
     if review_main is not None:
+        value["schema"] = "marty.official-release-gate/v1"
+        value.pop("automated_qualification")
         value["review_disposition"] = {
             "schema": "marty.accepted-official-review/v1",
             "protected_main_commit": review_main,
@@ -139,14 +147,12 @@ def test_fresh_claim_rechecks_main_tag_release_and_all_images() -> None:
     assert [(call[1]) for call in calls if call[0] == "registry"] == list(IMAGES)
 
 
-def test_only_the_exact_accepted_review_main_may_differ_from_source() -> None:
+def test_automatic_qualification_cannot_advance_main_even_with_a_legacy_review() -> None:
     with pytest.raises(PrePromotionError, match="changed after official qualification"):
         run_check(transaction(), main="b" * 40)
     reviewed = "b" * 40
-    existing, calls = run_check(transaction(review_main=reviewed), main=reviewed,
-                                review_main=reviewed)
-    assert existing == {role: False for role in REQUIRED_IMAGE_ROLES}
-    assert ("history", SOURCE, reviewed, str(RUN_ID), "1", "True") in calls
+    with pytest.raises(PrePromotionError, match="Official gate differs"):
+        run_check(transaction(review_main=reviewed), main=reviewed, review_main=reviewed)
 
 
 @pytest.mark.parametrize("change,match", [
@@ -228,10 +234,8 @@ def test_changed_gate_or_later_attempt_cannot_use_qualified_transaction() -> Non
 
 
 def test_unrelated_or_reverted_main_history_cannot_promote() -> None:
-    reviewed = "b" * 40
     with pytest.raises(PrePromotionError, match="permitted review history"):
-        run_check(transaction(review_main=reviewed), main=reviewed,
-                  review_main=reviewed, history_invalid=True)
+        run_check(transaction(), history_invalid=True)
 
 
 def test_authorization_is_rechecked_after_coordinate_reads() -> None:

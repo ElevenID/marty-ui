@@ -69,61 +69,54 @@ evidence fail closed. OIDF permits only explicitly declared optional skips;
 every selected module must finish. Local/native runtime overlays cannot qualify
 the release image even when their functional checks pass.
 
-The reusable product call explicitly collects raw evidence; its successful job
-means collection completed, not that every official result was `PASSED`.
-Standalone and scheduled suite calls still enforce their original raw exits.
-The independent candidate gate rejects genuine protocol/process failures and
-incomplete plans. Complete `REVIEW` cases can instead produce an immutable
-`official-review-input-<run-id>` artifact before the qualification step waits
-for at most 60 minutes for the exact protected-main disposition. It contains
-only the exact candidate manifest,
-sanitized summaries, origin attempt and canonical `review-request.json`.
-Raw exports, API readbacks and screenshot pixels must remain private.
-The shared harness encrypts the actual images and unchanged exports to the
-public `OFFICIAL_REVIEW_RECIPIENT` repository variable before upload. Only the
-ciphertext and public-safe delivery receipt are stored as
-`official-review-private-<lane>-<run-id>-<origin-attempt>`. The decryption identity
-stays with the operator's secure local credentials; product signing keys remain
-in remote KMS custody. Follow the integration harness's `conformance/README.md`
-to open the exact packet against its frozen public summary. The viewer verifies
-all bytes and image bindings before writing images/HTML; it does not write raw
-plaintext exports or approve cases. Every actual image still needs review; a
-hash alone is not an accepted disposition.
+## Automated qualification of upstream review cases
 
-After reviewing every pending case, submit a normal reviewed change at
-`release/official-reviews/<run-id>-<origin-attempt>.json`. That record uses
-`marty.official-review-disposition/v1`, the exact SHA-256 of `review-request.json`
-(with the `sha256:` prefix), the same numeric run ID/origin attempt, a reviewer
-with kind `human` or `delegated_codex` and `github_login`, an overall `verdict`,
-and a `cases` array. Every case copies its exact `lane` and `module` object from
-`pending`, adding its own `verdict`. All verdicts must be `accepted`; omitted,
-duplicated, rejected, changed-image or foreign cases fail. A pending template,
-an arbitrary local file, or an artifact-supplied approval is not authorization.
-Do not identify delegated Codex review as human review.
+The reusable product call collects raw evidence; its successful job means
+collection completed. The independent Rust gate makes the release decision.
+It rejects genuine protocol/process failures, warnings hidden beneath an
+upstream `REVIEW`, incomplete plans and unsupported review obligations.
 
-The workflow resolves protected `main` through the authenticated GitHub API and
-reads the record only at that immutable commit. It does not trust a candidate
-branch, alternate host/ref or a self-reported approval flag. The resulting gate
-receipt binds the accepted main commit, record/request digests and reviewed
-case count. Original stock `REVIEW` results and exports stay unchanged. This is
-review disposition for the selected interoperability evidence, not paid OIDF
-certification or demo editorial/publication approval.
+For the pinned OIDF release-v5.3.3 verifier, a successful HTTP response proves
+receipt of a presentation, but not completed verification. Its known positive
+modules therefore request evidence of a successful verifier page. Marty checks
+that requirement automatically: the exact correlated flow must report
+`completed` / `passed` / `allow`, the real console must load the same flow's
+successful API response, and its result summary must display the matching
+instance, allow decision and visible verified outcome without an error.
 
-The release stays on its original run and attempt 1 while the record passes
-normal protected-branch review and merge. Only an authenticated absence at an
-immutable protected-main commit is a waiting state. Authentication, transport,
-malformed evidence, rejection, unrelated source drift and the fixed 60-minute
-deadline fail closed. The validator builds once and the seven-lane packet is
-frozen once; waiting does not recollect protocols or rewrite evidence.
+The policy is limited to the explicitly enumerated positive modules and lane
+variants in the accepted harness. Every upstream review event must have the
+known successful-verification reason. Unknown or negative-review reasons,
+warnings, failures, duplicate/missing cases, reused flow identities and stale
+API/UI/image bindings fail. Extending the policy requires a code change with
+new assertions and negative tests; there is no per-run approval override.
 
-The candidate source and review commit are separate identities. Every commit
-between them may change only `release/official-reviews/<run-id>-1.json`. The
-record must be absent at the candidate source and an ordinary non-executable
-file at the accepted main commit. Unrelated changes later reverted, another
-review file, a symlink, incomplete history or a non-descendant are refused.
-The exact accepted main commit is checked again before every public promotion
-and release write. A subsequent main commit stops this candidate; it never
-silently refreshes the accepted authorization.
+The gate freezes the exact candidate manifest, sanitized summaries, origin
+attempt and canonical `assessment.json` in
+`official-evidence-input-<run-id>`. It validates the entire seven-lane packet
+once and emits `marty.official-release-gate/v2` with an explicit
+`marty.automated-official-qualification/v1` result. The receipt binds source,
+harness, manifest, run, original attempt, all summary hashes, assessment hash
+and the count of machine-assessed cases. A legacy v1 manual disposition cannot
+qualify a new production release.
+
+Original OIDF results and exports remain unchanged: a machine-qualified Marty
+release may still contain an upstream `REVIEW`. It is not reported as an
+upstream `PASSED`, OIDF certification, visual design approval or demo editorial
+approval. Standalone official-suite jobs continue to report raw upstream exits.
+
+CI uploads bounded public facts and hashes. Raw protocol exports, API readbacks
+and screenshot pixels remain transient private diagnostics on the disposable
+runner. The candidate path does not require `age`, a recipient variable, a
+decryption identity, a review PR or a timed human response. The existing local
+viewer and explicit standalone encrypted diagnostic delivery remain available
+for development and certification preparation.
+
+The workflow resolves protected `main` through the authenticated GitHub API
+before and after automatic qualification. It must still equal the candidate
+source; the pipeline never advances main to record a per-run approval. The
+same source is checked before publication operations. An observed unrelated
+main advance stops the candidate instead of silently rebinding it.
 
 A failed or expired run must not be retried to manufacture another producer
 attempt. The workflow rejects later attempts and the historical `resume_run_id`
@@ -131,9 +124,9 @@ and `resume_artifact` inputs before building. Retain the original evidence and
 claimed coordinates. Any recovery needs a separately reviewed source and a fresh
 unused claim; do not reuse the failed version or relabel existing signatures.
 
-The digest of the allowlisted receipt becomes required
+The digest of the automated receipt becomes required
 `official_interoperability` transaction evidence. The frozen public summaries
-and authenticated disposition inputs are retained alongside that receipt.
+and complete machine assessment are retained alongside that receipt.
 
 Publication copies the exact tested manifest bytes and checks their independent
 producer digest. It does not regenerate a potentially different manifest.
@@ -169,10 +162,17 @@ installer admission.
 
 ### Create-only reservation contract
 
-The operator dispatches `.github/workflows/release-tag-handoff.yml` on protected
-`main`. Its default inspect mode is read-only. The qualified-tag mode validates
+The publisher automatically dispatches `.github/workflows/release-tag-handoff.yml`
+once from its existing tag-wait step, using its ephemeral job token with
+`actions: write`. It persists the dispatch intent before the request and
+authenticates the exact run ID returned by GitHub's versioned API. A missing or
+ambiguous response stops the attempt without a second dispatch or adoption of
+another run. The original 15-minute checkpoint deadline is unchanged.
+
+The separate workflow runs on protected `main`. Its default inspect mode is
+read-only. The qualified-tag mode validates
 the live original publisher's waiting step, successful prerequisite jobs,
-authenticated artifacts, all original cryptographic proofs and unchanged review
+authenticated artifacts, all original cryptographic proofs and unchanged source
 authority. It uses its existing scoped ephemeral job token for metadata and
 ref operations. It does not build, sign, publish a release, handle private review
 images, or update main.
@@ -196,8 +196,8 @@ Confirmed ownership remains the durable barrier to any later production attempt.
 
 This is an explicit revision of the earlier atomic main/tag requirement:
 `ref_creation_scope=absent_tag_only` and
-`main_check_scope=before_after_observation`. All existing main, review-only
-history, visible rules, original run, candidate, cryptographic and deadline
+`main_check_scope=before_after_observation`. All existing main, automatic gate
+authority, visible rules, original run, candidate, cryptographic and deadline
 checks remain. They are observations around separate operations; they do not
 prove main's value at the tag-write instant or detect a main/policy change that
 is restored between reads. The supported Marty consumers treat the tag as a
@@ -312,8 +312,9 @@ the annotated target. Neither is an admitted fallback. The actual native failure
 does not justify accepting `ng` as success, expanding credentials, weakening
 protections, or changing historical evidence.
 
-Arrange access to the existing private review identity and enough time for normal
-review/merge before claiming a version. The fixed 60-minute review and 15-minute
-tag bounds do not extend because a queue is slow. Private full-production UI
-packaging follows authenticated stable publication separately; production pages
-do not establish completed billing-runtime behavior.
+Release qualification and tag dispatch require no private review identity or
+per-run review/merge. The fixed 15-minute tag bound does not extend because a
+queue is slow. Private full-production UI packaging follows authenticated stable
+publication separately; production pages do not establish completed billing-runtime
+behavior. See [automated release requirements](automated-release-requirements.md)
+for the unattended pipeline boundary and local development workflow.
