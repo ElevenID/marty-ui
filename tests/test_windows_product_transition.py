@@ -113,7 +113,10 @@ def runtime_candidate(tmp_path):
     before = []
     for index, role in enumerate(sorted(set(old_model['services'])-product.renewal.INITIALIZERS), 1):
         before.append({'Id': f'{index:064x}', 'Image': 'sha256:'+'1'*64,
-            'Config': {'Labels': {'com.docker.compose.project': 'marty-production-synthetic',
+            'State': {'Status': 'exited' if role == 'openbao-tls-init' else 'running',
+                      'StartedAt': 'synthetic-time', 'ExitCode': 0, 'Pid': index}, 'RestartCount': 0,
+            'Config': {'Image': old_model['services'][role]['image'],
+                       'Labels': {'com.docker.compose.project': 'marty-production-synthetic',
                                  'com.docker.compose.service': role}},
             'Mounts': [{'Type': 'volume', 'Name': role+'-data', 'Source': '/data/'+role,
                         'Destination': '/data', 'RW': True},
@@ -130,6 +133,7 @@ def runtime_candidate(tmp_path):
         role = product.renewal._service(item)
         if role in product.HISTORICAL_ROLES:continue
         item['Image'] = image_ids[role]
+        item['Config']['Image'] = new_model['services'][role]['image']
         item['Id'] = 'f'+item['Id'][1:]
         if role == 'ui':item['Mounts'] = [m for m in item['Mounts'] if m['Destination'] not in product.UI_FIXTURE_TARGETS]
     return before, after, old_model, new_model, admitted, image_ids
@@ -138,7 +142,7 @@ def runtime_candidate(tmp_path):
 def test_runtime_edge_preserves_data_and_credentials_with_historical_initializer(tmp_path):
     import selfhost_windows_selection as selection
     args = runtime_candidate(tmp_path)
-    result = product.checked_runtime_change(*args)
+    result = product.checked_runtime_change(*args, expected_project='marty-production-synthetic')
     assert result['before_sha256'] == selection.digest(selection.packed(product.renewal.data_mounts(args[0])))
     assert result['after_sha256'] == selection.digest(selection.packed(product.renewal.data_mounts(args[1])))
     assert result['before_sha256'] != result['after_sha256'] and result['ui_fixture_mounts_removed']
@@ -146,13 +150,18 @@ def test_runtime_edge_preserves_data_and_credentials_with_historical_initializer
 
 @pytest.mark.parametrize('fault', ['storage', 'credential', 'image', 'initializer', 'missing-role',
                                   'extra-role', 'duplicate-role', 'project', 'duplicate-mount',
-                                  'rw-fixture', 'missing-fixture', 'extra-image-id', 'missing-image-id'])
+                                  'rw-fixture', 'missing-fixture', 'extra-image-id', 'missing-image-id',
+                                  'all-projects', 'image-reference', 'old-image-reference'])
 def test_runtime_edge_refuses_unqualified_or_unpreserved_state(tmp_path, fault):
     before, after, old, new, admitted, ids = runtime_candidate(tmp_path)
     gateway = next(item for item in after if product.renewal._service(item) == 'gateway')
     if fault == 'storage':gateway['Mounts'][0]['Name'] = 'other-data'
     elif fault == 'credential':gateway['Mounts'][1]['Source'] = 'C:/other/token'
     elif fault == 'image':gateway['Image'] = 'sha256:'+'3'*64
+    elif fault == 'image-reference':gateway['Config']['Image'] = 'unqualified:latest'
+    elif fault == 'old-image-reference':before[0]['Config']['Image'] = 'unqualified:latest'
+    elif fault == 'all-projects':
+        for item in [*before, *after]:item['Config']['Labels']['com.docker.compose.project'] = 'marty-production-other'
     elif fault == 'initializer':next(item for item in after if product.renewal._service(item) == 'openbao-tls-init')['Id'] = 'a'*64
     elif fault == 'missing-role':after.pop()
     elif fault == 'extra-role':
@@ -166,7 +175,24 @@ def test_runtime_edge_refuses_unqualified_or_unpreserved_state(tmp_path, fault):
         else:ui['Mounts'].pop()
     elif fault == 'extra-image-id':ids['unknown'] = 'sha256:'+'2'*64
     else:ids.pop('gateway')
-    with pytest.raises(ValueError):product.checked_runtime_change(before, after, old, new, admitted, ids)
+    with pytest.raises(ValueError):
+        product.checked_runtime_change(before, after, old, new, admitted, ids, expected_project='marty-production-synthetic')
+
+
+def test_historical_mount_order_and_unchanged_health_observation_are_not_identity(tmp_path):
+    before, after, old, _new, admitted, ids = runtime_candidate(tmp_path)
+    admitted['images']['gateway'] = old['services']['gateway']['image']
+    new = product.product_model(old, admitted)
+    gateway = next(item for item in after if product.renewal._service(item) == 'gateway')
+    original = next(item for item in before if product.renewal._service(item) == 'gateway')
+    gateway.clear();gateway.update(deepcopy(original))
+    gateway['State']['Health'] = {'Log': [{'End': 'new-synthetic-observation'}]}
+    ids['gateway'] = gateway['Image']
+    historical = next(item for item in after if product.renewal._service(item) == 'openbao-tls-init')
+    historical['Mounts'].reverse()
+    result = product.checked_runtime_change(before, after, old, new, admitted, ids,
+                                            expected_project='marty-production-synthetic')
+    assert result['ui_fixture_mounts_removed']
 
 
 @pytest.mark.parametrize('field', ['entrypoint', 'command'])
@@ -174,3 +200,14 @@ def test_local_ui_startup_override_is_not_carried_into_packaged_ui(tmp_path, fie
     before, admitted = candidate(tmp_path)
     before['services']['ui'][field] = ['unqualified-startup']
     with pytest.raises(ValueError):product.product_model(before, admitted)
+
+
+def test_every_schema_and_persistent_configuration_job_has_explicit_phase_class(tmp_path):
+    before, admitted = candidate(tmp_path)
+    for role in product.MIGRATION_ROLES | product.CONFIGURATION_ROLES:
+        before['services'][role] = {'image': 'example.invalid/'+role+'@sha256:'+'1'*64}
+        admitted['images'][role] = 'example.invalid/'+role+'@sha256:'+'2'*64
+    result = product.checked_model_change(before, product.product_model(before, admitted), admitted)
+    assert set(result['migration_roles']) == product.MIGRATION_ROLES
+    assert set(result['configuration_roles']) == product.CONFIGURATION_ROLES
+    assert not set(result['application_roles']) & (product.MIGRATION_ROLES | product.CONFIGURATION_ROLES | product.PROVIDER_ROLES)

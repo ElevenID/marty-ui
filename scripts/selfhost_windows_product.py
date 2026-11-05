@@ -18,7 +18,8 @@ import selfhost_windows_renewal as renewal
 SCHEMA = 'marty.windows-product-transition/v1'
 PROVIDER_ROLES = renewal.BAO_ROLES | {'openbao-bootstrap'}
 HISTORICAL_ROLES = frozenset({'openbao-tls-init'})
-MIGRATION_ROLES = frozenset({'db-migrate'})
+MIGRATION_ROLES = frozenset({'db-migrate', 'issuance-migrations', 'revocation-profile-migrate'})
+CONFIGURATION_ROLES = frozenset({'keycloak-configurator'})
 UI_FIXTURE_TARGETS = frozenset({'/opt/marty-ui-static', '/etc/nginx/conf.d/default.conf',
                               '/scripts/load-secrets-env.sh', '/docker-entrypoint.d/40-ui-selfhost.sh'})
 UI_SHORT_FIXTURES = {'/etc/nginx/conf.d/default.conf': './ui/nginx.spa.conf',
@@ -110,12 +111,13 @@ def checked_model_change(before, after, admitted):
     return {'declared_roles': sorted(declared), 'mutable_roles': sorted(mutable),
             'provider_roles': sorted(mutable & PROVIDER_ROLES),
             'migration_roles': sorted(mutable & MIGRATION_ROLES),
-            'application_roles': sorted(mutable-PROVIDER_ROLES-MIGRATION_ROLES),
+            'configuration_roles': sorted(mutable & CONFIGURATION_ROLES),
+            'application_roles': sorted(mutable-PROVIDER_ROLES-MIGRATION_ROLES-CONFIGURATION_ROLES),
             'historical_roles': sorted(declared & HISTORICAL_ROLES),
             'initializers_never_run': sorted(renewal.INITIALIZERS)}
 
 
-def checked_runtime_change(before, after, old_model, new_model, admitted, image_ids):
+def checked_runtime_change(before, after, old_model, new_model, admitted, image_ids, *, expected_project):
     """Prove the narrow runtime data edge, without granting journal authority.
 
     The caller must separately authenticate/pin image metadata, hold model and
@@ -146,8 +148,9 @@ def checked_runtime_change(before, after, old_model, new_model, admitted, image_
     roles = set(old_model['services'])-renewal.INITIALIZERS
     require(set(old) == set(new) == roles, 'Runtime product role closure differs')
     projects = {renewal._project(item) for item in [*before, *after]}
-    require(len(projects) == 1 and all(isinstance(name, str) and
-            re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}', name) for name in projects),
+    require(isinstance(expected_project, str) and
+            re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}', expected_project)
+            and projects == {expected_project},
             'Runtime product project differs')
     require(isinstance(image_ids, dict) and set(image_ids) == roles-HISTORICAL_ROLES
             and all(isinstance(value, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', value)
@@ -157,8 +160,12 @@ def checked_runtime_change(before, after, old_model, new_model, admitted, image_
     for role in sorted(roles):
         prior = old[role];current = new[role]
         if role in HISTORICAL_ROLES:
-            require(current == prior, 'Historical initializer changed')
+            require(renewal.context_snapshot([current]) == renewal.context_snapshot([prior])
+                    and current['Config'] == prior['Config'], 'Historical initializer changed')
             continue
+        require(prior['Config'].get('Image') == old_model['services'][role]['image']
+                and current['Config'].get('Image') == new_model['services'][role]['image'],
+                'Runtime image reference differs from retained model')
         require(current['Image'] == image_ids[role], 'Runtime image differs from qualified image')
         mounts = deepcopy(prior['Mounts'])
         if role == 'ui' and fixture_removed:
@@ -171,7 +178,8 @@ def checked_runtime_change(before, after, old_model, new_model, admitted, image_
                 sorted(current['Mounts'], key=lambda mount: mount['Destination']),
                 'Product transition changed retained storage or credentials')
         if role not in change['mutable_roles']:
-            require(current == prior, 'Unchanged runtime role changed')
+            require(renewal.context_snapshot([current]) == renewal.context_snapshot([prior])
+                    and current['Config'] == prior['Config'], 'Unchanged runtime role changed')
     # Match the existing generation owner's newline-terminated data fingerprint.
     return {'before_sha256': hashlib.sha256(canonical(renewal.data_mounts(before))+b'\n').hexdigest(),
             'after_sha256': hashlib.sha256(canonical(renewal.data_mounts(after))+b'\n').hexdigest(),
