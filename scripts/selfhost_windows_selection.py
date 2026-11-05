@@ -40,6 +40,19 @@ def require(value):
         raise ValueError(REFUSAL)
 
 
+def decode(raw):
+    def pairs(items):
+        value = {}
+        for key, item in items:
+            require(key not in value);value[key] = item
+        return value
+    def finite(value):
+        number = float(value);require(math.isfinite(number));return number
+    def constant(_value):
+        raise ValueError(REFUSAL)
+    return json.loads(raw, object_pairs_hook=pairs, parse_float=finite, parse_constant=constant)
+
+
 def packed(value):
     return (json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)+'\n').encode()
 
@@ -87,14 +100,14 @@ def _read(root, stack):
 
 def _parse(raw, expected):
     require('owner.json' in raw)
-    require(json.loads(raw['owner.json']) == {'schema': SCHEMA, 'binding': expected})
+    require(decode(raw['owner.json']) == {'schema': SCHEMA, 'binding': expected})
     intents = {};selections = {};previous = None;prior_record = None
     for name, value in raw.items():
         if name == 'owner.json':continue
         match = ENTRY.fullmatch(name);require(match is not None)
         number = int(match[1]);require(1 <= number <= 256)
         target = intents if match[2] == 'intent' else selections
-        require(number not in target);target[number] = json.loads(value)
+        require(number not in target);target[number] = decode(value)
     require(intents and set(intents) == set(range(1, len(intents)+1)))
     require(set(selections) == set(range(1, len(selections)+1)))
     require(len(intents)-len(selections) in {0, 1})
@@ -132,7 +145,7 @@ def _parse(raw, expected):
             require(isinstance(record['choice'], str) and record['choice'] in {'old', 'new'} and record['selected'] == intent['inputs'][record['choice']])
             require(isinstance(record['decision'], str) and record['decision'] in {'adopted', 'activated', 'rolled_back', 'reconciled-old', 'reconciled-new'})
             require((record['decision'] in {'adopted', 'activated', 'reconciled-new'}) == (record['choice'] == 'new'))
-            require(number != 1 or record['decision'] == 'adopted')
+            require((number == 1) == (record['decision'] == 'adopted'))
             require(record['result_sha256'] is not None or record['decision'].startswith('reconciled-'))
             if prior_record is not None:require(record['data_sha256'] == prior_record['data_sha256'])
             previous = digest(raw[f'{number:06}.selection.json'])
@@ -154,7 +167,7 @@ def _append(root, raw, name, value, stack):
 def _session(config_path, *, create=False):
     with ExitStack() as stack:
         raw_config = stack.enter_context(renewal.hold_private_input(Path(config_path)))
-        config = json.loads(raw_config);expected = binding(config)
+        config = decode(raw_config);expected = binding(config)
         root = directory(config);parent = root.parent
         stack.enter_context(renewal.hold_private_input(parent/f'.{config["project"]}.renewal.lock', exclusive=True))
         stack.enter_context(renewal.hold_storage_namespace(parent))
@@ -164,17 +177,19 @@ def _session(config_path, *, create=False):
         stack.enter_context(renewal.hold_storage_namespace(root))
         with _held_private_input(root, directory=True):pass
         raw = _read(root, stack)
-        yield config, raw_config, expected, root, raw, stack
-        require(sorted(p.name for p in root.iterdir()) == sorted(raw))
-        # New entries are complete before taking the immutable directory proof.
-        stack.enter_context(_held_private_input(root, directory=True))
-        require(sorted(p.name for p in root.iterdir()) == sorted(raw))
+        try:
+            yield config, raw_config, expected, root, raw, stack
+        finally:
+            require(sorted(p.name for p in root.iterdir()) == sorted(raw))
+            # New entries are complete before the immutable directory proof.
+            stack.enter_context(_held_private_input(root, directory=True))
+            require(sorted(p.name for p in root.iterdir()) == sorted(raw))
 
 
 def _inputs(config, stack):
     raw_model = stack.enter_context(renewal.hold_private_input(Path(config['compose_file']), max_bytes=2*1024*1024))
     require(digest(raw_model) == config['compose_sha256'])
-    names = sorted(json.loads(raw_model)['secrets']);require(names)
+    names = sorted(decode(raw_model)['secrets']);require(names)
     values = {};snapshots = {};envs = {}
     for choice, prefix, mirror in [('old', 'current', 'current'), ('new', 'renewed', 'renewed')]:
         env = stack.enter_context(renewal.hold_private_input(Path(config[prefix+'_env'])))
@@ -212,7 +227,7 @@ def _prove(config, choice, values, stack, *, expected_data=None, authority_file=
     if expected_data is not None:require(data_hash == expected_data)
     intent_raw = stack.enter_context(renewal.hold_private_input(Path(config['intent'])))
     if intent_raw:
-        intent = json.loads(intent_raw)
+        intent = decode(intent_raw)
         require(intent['schema'] == renewal.SCHEMA and intent['project'] == config['project']
                 and intent['compose_sha256'] == config['compose_sha256'])
         require(all(intent[k] == config[k] for k in ['current_env', 'renewed_env', 'current_secrets', 'renewed_secrets']))
@@ -241,12 +256,12 @@ def _prove(config, choice, values, stack, *, expected_data=None, authority_file=
 
 def adopt(config_path, *, authority_file=None):
     with _session(config_path, create=True) as (config, raw_config, expected, root, raw, stack):
-        require(not raw or set(raw) == {'owner.json'} and json.loads(raw['owner.json']) == {'schema': SCHEMA, 'binding': expected})
+        require(not raw or set(raw) == {'owner.json'} and decode(raw['owner.json']) == {'schema': SCHEMA, 'binding': expected})
         values, snapshots = _inputs(config, stack)
         result_raw = stack.enter_context(renewal.hold_private_input(Path(config['result'])))
         transition_raw = stack.enter_context(renewal.hold_private_input(Path(config['intent'])))
         require(transition_raw)
-        result = json.loads(result_raw)
+        result = decode(result_raw)
         require(result['schema'] == renewal.SCHEMA and result['project'] == config['project']
                 and result['result'] == 'activated' and result['candidate_only'] is True
                 and result['production_admission'] is False and result['automatic_lifecycle'] is False)
@@ -271,8 +286,11 @@ def prepare(config_path, *, authority_file=None):
         require(len(intents) == len(records) and len(intents) < 256)
         previous = records[len(records)];values, snapshots = _inputs(config, stack)
         require(snapshots['old'] == previous['selected'])
-        require(renewal.read_private_bytes(Path(config['intent'])) == b''
-                and renewal.read_private_bytes(Path(config['result'])) == b'')
+        require(all(renewal.read_private_bytes(Path(config[k])) == b''
+                    for k in ['intent', 'result', 'new_log', 'rollback_log']))
+        for step in config['step_receipts']:
+            require(set(step) == {'new_started', 'new_completed', 'rollback_started', 'rollback_completed'})
+            require(all(renewal.read_private_bytes(Path(p)) == b'' for p in step.values()))
         _prove(config, 'old', values, stack, expected_data=previous['data_sha256'], authority_file=authority_file)
         sequence = len(intents)+1
         intent = {'schema': SCHEMA, 'sequence': sequence,
@@ -292,8 +310,15 @@ def _reconciliation_choice(config, stack):
     their operator, even if a transient snapshot looks healthy.
     """
     raw = stack.enter_context(renewal.hold_private_input(Path(config['intent'])))
-    if not raw:return 'old'
-    intent = json.loads(raw)
+    if not raw:
+        for name in ['new_log', 'rollback_log']:
+            require(stack.enter_context(renewal.hold_private_input(Path(config[name]))) == b'')
+        for step in config['step_receipts']:
+            require(set(step) == {'new_started', 'new_completed', 'rollback_started', 'rollback_completed'})
+            for value in step.values():
+                require(stack.enter_context(renewal.hold_private_input(Path(value))) == b'')
+        return 'old'
+    intent = decode(raw)
     require(intent['schema'] == renewal.SCHEMA and intent['project'] == config['project']
             and intent['compose_sha256'] == config['compose_sha256'])
     require(all(intent[k] == config[k] for k in ['current_env', 'renewed_env', 'current_secrets', 'renewed_secrets']))
@@ -319,7 +344,7 @@ def _reconciliation_choice(config, stack):
                 value = stack.enter_context(renewal.hold_private_input(Path(step[phase+'_'+event])))
                 values[event] = bool(value)
                 if value:
-                    record = json.loads(value)
+                    record = decode(value)
                     require(set(record) == {'roles', 'event', 'time'} and record['roles'] == layer and record['event'] == event)
                     require(type(record['time']) in {int, float} and math.isfinite(record['time']) and record['time'] > 0)
             require(not values['completed'] or values['started'])
@@ -364,7 +389,7 @@ def complete(config_path, *, reconcile=False, authority_file=None):
         expected_data = previous['data_sha256'] if previous is not None else None
         if sequence == 1:require(result_raw and digest(result_raw) == intent['result_before_sha256'])
         if result_raw:
-            result = json.loads(result_raw)
+            result = decode(result_raw)
             require(result['schema'] == renewal.SCHEMA and result['project'] == config['project']
                     and result['candidate_only'] is True and result['result'] in {'activated', 'rolled_back'}
                     and result['production_admission'] is False and result['automatic_lifecycle'] is False)
@@ -406,7 +431,7 @@ def selected_inputs(config_path):
         intents, records = _parse(raw, expected);require(len(intents) == len(records))
         sequence = len(records);intent = intents[sequence];record = records[sequence]
         cfg_raw = stack.enter_context(renewal.hold_private_input(Path(intent['config_path'])))
-        cfg = json.loads(cfg_raw)
+        cfg = decode(cfg_raw)
         require(digest(cfg_raw) == intent['config_file_sha256'] and config_digest(cfg) == intent['config_sha256']
                 and binding(cfg) == expected)
         values, snapshots = _inputs(cfg, stack);require(snapshots == intent['inputs'])
@@ -419,7 +444,8 @@ def selected_inputs(config_path):
         def check_current(authority_file=None):
             with lease_lock:
                 require(active)
-                return _prove(cfg, choice, values, stack, expected_data=record['data_sha256'], authority_file=authority_file)
+                with ExitStack() as proof_stack:
+                    return _prove(cfg, choice, values, proof_stack, expected_data=record['data_sha256'], authority_file=authority_file)
         try:
             yield SelectedInputs(cfg['project'], cfg['docker_host'], cfg['engine_id'], Path(cfg['compose_file']),
                 cfg['compose_sha256'], Path(selected['env_file']), Path(selected['secrets_dir']), sequence, check_current)

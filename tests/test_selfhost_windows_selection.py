@@ -17,11 +17,9 @@ import selfhost_windows_selection as selection
 from test_selfhost_windows_inputs import private_fixture
 from test_selfhost_windows_renewal import PROJECT, model
 
-pytestmark = pytest.mark.skipif(os.name != 'nt', reason='Actual private NTFS selection journal')
-
-
 @contextmanager
 def fixture(monkeypatch):
+    if os.name != 'nt':pytest.skip('Actual private NTFS selection journal')
     with private_fixture() as (root, _):
         model_file = root/'compose.json'
         first = root/'generation0';first.mkdir()
@@ -243,3 +241,56 @@ def test_completed_pending_intent_after_writer_refusal_cannot_be_prepared_again(
         assert selection.status(path)['state'] == 'pending-reconciliation'
         with pytest.raises(ValueError):selection.prepare(next_path)
         assert selection.complete(next_path, reconcile=True)['decision'] == 'reconciled-old'
+
+
+def test_session_rechecks_membership_even_when_caller_raises(monkeypatch):
+    with fixture(monkeypatch) as (_root, _phase, _tx, _outcome, path, cfg):
+        selection.adopt(path)
+        with pytest.raises(ValueError):
+            with selection._session(path):
+                (selection.directory(cfg)/'PUBLIC_UNEXPECTED').write_bytes(b'PUBLIC_EVIDENCE')
+                raise RuntimeError('PUBLIC_SYNTHETIC_CALLER_FAILURE')
+        assert (selection.directory(cfg)/'PUBLIC_UNEXPECTED').read_bytes() == b'PUBLIC_EVIDENCE'
+
+
+@pytest.mark.parametrize('marker', ['new_started', 'rollback_completed', 'new_log', 'rollback_log'])
+def test_empty_activation_intent_with_command_evidence_never_selects_old(monkeypatch, marker):
+    with fixture(monkeypatch) as (_root, _phase, tx, _outcome, path, _cfg):
+        selection.adopt(path);next_path, cfg = tx(2);selection.prepare(next_path)
+        target = cfg[marker] if marker in {'new_log', 'rollback_log'} else cfg['step_receipts'][0][marker]
+        Path(target).write_bytes(b'PUBLIC_INCONSISTENT_COMMAND_EVIDENCE')
+        with pytest.raises(ValueError):selection.complete(next_path, reconcile=True)
+        assert selection.status(path)['state'] == 'pending-reconciliation'
+
+
+@pytest.mark.parametrize('raw', [b'{"x":1,"x":2}', b'{"x":NaN}', b'{"x":Infinity}', b'{"x":-Infinity}', b'{"x":1e999}'])
+def test_strict_decoder_refuses_duplicate_or_nonfinite_values(raw):
+    with pytest.raises(ValueError):selection.decode(raw)
+
+
+def test_repeated_proof_callbacks_close_transient_holds_before_return(monkeypatch):
+    with fixture(monkeypatch) as (_root, _phase, _tx, _outcome, path, _cfg):
+        selection.adopt(path);events = []
+        @contextmanager
+        def transient():
+            events.append('open')
+            try:yield
+            finally:events.append('close')
+        def prove(_cfg, _choice, _values, proof_stack, **_kwargs):
+            proof_stack.enter_context(transient());return 'd'*64
+        monkeypatch.setattr(selection, '_prove', prove)
+        with selection.selected_inputs(path) as current:
+            for _ in range(3):
+                assert current.check_current() == 'd'*64
+                assert events[-2:] == ['open', 'close']
+        assert events == ['open', 'close']*3
+
+
+def test_adopted_decision_is_invalid_after_initial_sequence(monkeypatch):
+    with fixture(monkeypatch) as (_root, phase, tx, outcome, path, cfg):
+        selection.adopt(path);next_path, pending = tx(2);selection.prepare(next_path)
+        phase['active'] = Path(pending['renewed_secrets']);outcome(pending, 'activated')
+        selection.complete(next_path)
+        target = selection.directory(cfg)/'000002.selection.json'
+        record = json.loads(target.read_bytes());record['decision'] = 'adopted';target.write_bytes(selection.packed(record))
+        with pytest.raises(ValueError):selection.status(path)
