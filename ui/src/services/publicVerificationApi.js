@@ -27,6 +27,8 @@ function text(value, maximum) {
 function publicCatalog(value) {
   if (!value || !revision.test(value.revision) || !text(value.notice, 2048)
     || !Array.isArray(value.scenarios) || value.scenarios.length < 1 || value.scenarios.length > 8) throw invalidResponse();
+  if (!value.retention_policy || value.retention_policy.result_access_seconds !== 600 || value.retention_policy.receipt_days !== 30) throw invalidResponse();
+  const retention_policy = { result_access_seconds: value.retention_policy.result_access_seconds, receipt_days: value.retention_policy.receipt_days };
   const scenarioIds = new Set();
   const scenarios = value.scenarios.map(scenario => {
     if (!scenario || !validSlug(scenario.id) || scenarioIds.has(scenario.id) || !text(scenario.label, 120)
@@ -49,7 +51,7 @@ function publicCatalog(value) {
     exampleIds.add(example.id);
     return { id: example.id, scenario_id: example.scenario_id, label: example.label, description: example.description };
   });
-  return { revision: value.revision, notice: value.notice, scenarios, examples: projectedExamples };
+  return { revision: value.revision, notice: value.notice, retention_policy, scenarios, examples: projectedExamples };
 }
 
 function publicPreview(value, selection) {

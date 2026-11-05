@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::{FlowInstanceRecord, PublicVerificationSelection};
 
 pub(crate) const PUBLIC_SESSION: &str = "_marty_public_verification_session";
-const RESULT_ACCESS_SECONDS: i64 = 600;
+pub(crate) const RESULT_ACCESS_SECONDS: i64 = 600;
 
 /// A browser generates 32 random bytes using Web Crypto and retains the
 /// canonical base64url string across retries. Never put it in a URL or log it.

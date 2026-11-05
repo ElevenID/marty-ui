@@ -334,3 +334,7 @@ mod tests;
 #[cfg(test)]
 #[path = "demo_policy_tests.rs"]
 mod policy_tests;
+
+#[cfg(test)]
+#[path = "public_retention_tests.rs"]
+mod retention_tests;

@@ -16,9 +16,9 @@ function recover() {
     const value = JSON.parse(sessionStorage.getItem(storageKey));
     if (!value || !/^[A-Za-z0-9_-]{43}$/.test(value.key) || !value.selection || value.selection.consent !== true
       || !Number.isFinite(value.savedAt) || value.savedAt > Date.now()
-      || (value.id ? (!Number.isFinite(value.accessExpiresAt) || value.accessExpiresAt <= Date.now()) : Date.now() - value.savedAt > 30 * 60_000)) return null;
+      || (value.id ? (!Number.isFinite(value.accessExpiresAt) || value.accessExpiresAt <= Date.now()) : Date.now() - value.savedAt > 30 * 60_000)) { remember(null); return null; }
     return value;
-  } catch { return null; }
+  } catch { remember(null); return null; }
 }
 function failure(error) {
   const status = error?.status ?? error?.response?.status;
@@ -95,6 +95,18 @@ export default function PublicVerificationPage() {
       .catch(() => { if (active) { setPreview(null); setPreviewError(true); } });
     return () => { active = false; controller.abort(); };
   }, [catalog, scenarioId, choiceId]);
+
+  useEffect(() => {
+    if (!recovery?.id || !Number.isFinite(recovery.accessExpiresAt)) return undefined;
+    const key = recovery.key;
+    const timer = setTimeout(() => {
+      if (recoveryRef.current?.key !== key) return;
+      generation.current += 1; recoveryRef.current = null; remember(null);
+      setRecovery(null); setSession(null); setConsent(false);
+      setError('Result access has ended. Start a new verification.');
+    }, Math.max(0, Math.min(2_147_483_647, recovery.accessExpiresAt - Date.now())));
+    return () => clearTimeout(timer);
+  }, [recovery]);
 
   useEffect(() => {
     if (!pending(session) || !recovery?.id) return undefined;
@@ -204,6 +216,7 @@ export default function PublicVerificationPage() {
           </Box>)}</Box>}
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Signature, issuer trust, validity and session binding are checked by the verifier. Changing an eligibility requirement does not turn these checks off.</Typography>
           {!recovery && <>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>Session details are scheduled for deletion after the verification deadline plus {catalog.retention_policy.result_access_seconds / 60} minutes of result access. A minimal launch receipt is retained for {catalog.retention_policy.receipt_days} days for abuse prevention.</Typography>
           <FormControlLabel sx={{ mt: 3, alignItems: 'flex-start' }} control={<Checkbox disabled={!previewReady} checked={consent} onChange={event => setConsent(event.target.checked)} />} label={catalog.notice} />
           <Button size="large" variant="contained" fullWidth disabled={busy || !consent || !choice || !previewReady || (mode === 'example' && !example)} onClick={() => run()} sx={{ mt: 2 }}>{busy ? 'Verifying...' : mode === 'example' ? 'Verify example' : 'Create wallet request'}</Button>
           </>}

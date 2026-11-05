@@ -116,6 +116,7 @@ pub struct PublicVerificationSelection {
 pub struct PublicVerificationCatalogView<'a> {
     pub revision: &'a str,
     pub notice: &'a str,
+    pub retention_policy: crate::PublicVerificationRetentionPolicy,
     pub scenarios: Vec<PublicVerificationScenarioView<'a>>,
     pub examples: Vec<crate::PublicVerificationExampleView<'a>>,
 }
@@ -275,8 +276,8 @@ impl PublicVerificationCatalog {
         }
         crate::public_verification_example::validate_examples(&config.examples, &scenarios)?;
         let revision = marty_oid4vp_contract::digest_domain_json(
-            "marty.public-verification/catalog/v1",
-            &config,
+            "marty.public-verification/catalog/v2",
+            &serde_json::json!({"catalog": &config, "retention_policy":crate::PublicVerificationRetentionPolicy::default()}),
         )
         .map_err(|_| InvalidConfiguration)?;
         Ok(Self { config, revision })
@@ -287,6 +288,7 @@ impl PublicVerificationCatalog {
         PublicVerificationCatalogView {
             revision: &self.revision,
             notice: &self.config.notice,
+            retention_policy: crate::PublicVerificationRetentionPolicy::default(),
             examples: self
                 .config
                 .examples

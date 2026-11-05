@@ -242,6 +242,20 @@ pub(super) async fn setup_with_policy(
     DemoCredentialProfile,
     Arc<AtomicBool>,
 ) {
+    setup_with_key(signer, policy, 13).await
+}
+
+pub(super) async fn setup_with_key(
+    signer: Arc<OpaqueSigner>,
+    policy: Option<Arc<dyn crate::PresentationPolicyProvider>>,
+    seed: u8,
+) -> (
+    FlowProviderRegistry,
+    FlowInstanceRecord,
+    DemoHolder,
+    DemoCredentialProfile,
+    Arc<AtomicBool>,
+) {
     let changed = Arc::new(AtomicBool::new(false));
     let providers = FlowProviderRegistry {
         signing_identity: Some(signer.clone()),
@@ -249,7 +263,7 @@ pub(super) async fn setup_with_policy(
         credential_template: Some(Arc::new(Templates)),
         ..Default::default()
     };
-    let now = Utc::now();
+    let now = chrono::DateTime::from_timestamp_micros(Utc::now().timestamp_micros()).unwrap();
     let mut definition = crate::create_definition_record(crate::parse_request(json!({
         "organization_id":ORG,"name":"Synthetic age example","flow_type":"oid4vp_presentation","presentation_policy_id":POLICY_ID
     })).unwrap(), now).unwrap();
@@ -262,7 +276,7 @@ pub(super) async fn setup_with_policy(
     // The real public admission adapter installs this private binding. Use the
     // same capability binder rather than hand-writing a stored snapshot.
     let key =
-        crate::PublicVerificationSessionKey::parse(&URL_SAFE_NO_PAD.encode([13; 32])).unwrap();
+        crate::PublicVerificationSessionKey::parse(&URL_SAFE_NO_PAD.encode([seed; 32])).unwrap();
     let digest = providers
         .presentation_policy
         .as_ref()
@@ -707,8 +721,10 @@ async fn public_example_http_uses_capability_cas_and_canonical_nonce_finalizatio
         },
     )
     .unwrap();
+    let launch_limits: crate::PublicVerificationLimits =
+        serde_json::from_value(config["limits"].clone()).unwrap();
     repository
-        .save_started_instance(&instance, None)
+        .save_public_verification_start(&instance, launch_limits)
         .await
         .unwrap();
     let router = crate::flow_read_router(crate::FlowHttpState {

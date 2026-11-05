@@ -1,3 +1,6 @@
+#[path = "postgres_public_retention.rs"]
+mod public_retention;
+
 use chrono::{DateTime, Duration, Utc};
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_messaging::Message;
@@ -551,7 +554,8 @@ impl PostgresFlowRepository {
                 .await
                 .map_err(storage)?;
             let exists: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM flow_service.flow_instances WHERE id=$1)",
+                "SELECT EXISTS(SELECT 1 FROM flow_service.flow_instances WHERE id=$1) OR \
+                 EXISTS(SELECT 1 FROM flow_service.public_verification_receipts WHERE instance_id=$1)",
             )
             .bind(&instance.id)
             .fetch_one(&mut *transaction)
@@ -561,13 +565,18 @@ impl PostgresFlowRepository {
                 transaction.rollback().await.map_err(storage)?;
                 return Ok(false);
             }
-            let (minute, day, active): (i64, i64, i64) = sqlx::query_as(
+            let (minute, day): (i64, i64) = sqlx::query_as(
                 "SELECT COUNT(*) FILTER (WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '1 minute'), \
-                 COUNT(*) FILTER (WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '1 day'), \
-                 COUNT(*) FILTER (WHERE status NOT IN ('completed','failed','cancelled','expired') AND expires_at > CURRENT_TIMESTAMP) \
-                 FROM flow_service.flow_instances WHERE organization_id=$1 AND \
-                 context->'_marty_public_verification_session' IS NOT NULL AND \
-                 (created_at > CURRENT_TIMESTAMP - INTERVAL '1 day' OR expires_at > CURRENT_TIMESTAMP)"
+                 COUNT(*) FILTER (WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '1 day') \
+                 FROM flow_service.public_verification_receipts WHERE organization_id=$1 \
+                 AND created_at > CURRENT_TIMESTAMP - INTERVAL '1 day'"
+            ).bind(&instance.organization_id).fetch_one(&mut *transaction).await.map_err(storage)?;
+            let active: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM flow_service.flow_instances AS instance \
+                 JOIN flow_service.public_verification_receipts AS receipt ON receipt.instance_id=instance.id \
+                 AND receipt.organization_id=instance.organization_id WHERE receipt.organization_id=$1 \
+                 AND instance.status NOT IN ('completed','failed','cancelled','expired') \
+                 AND instance.expires_at > CURRENT_TIMESTAMP"
             ).bind(&instance.organization_id).fetch_one(&mut *transaction).await.map_err(storage)?;
             if minute >= i64::from(limits.starts_per_minute())
                 || day >= i64::from(limits.starts_per_day())
@@ -610,6 +619,22 @@ impl PostgresFlowRepository {
         if inserted.rows_affected() != 1 {
             transaction.rollback().await.map_err(storage)?;
             return Ok(false);
+        }
+        if public_limits.is_some() {
+            let payload_delete_after = instance
+                .expires_at
+                .and_then(|expiry| {
+                    expiry.checked_add_signed(Duration::seconds(
+                        crate::public_verification_session::RESULT_ACCESS_SECONDS,
+                    ))
+                })
+                .ok_or_else(|| record("public_verification_retention_deadline"))?;
+            sqlx::query("INSERT INTO flow_service.public_verification_receipts \
+                (instance_id,organization_id,created_at,payload_delete_after,receipt_delete_after) \
+                VALUES ($1,$2,CURRENT_TIMESTAMP,$3,CURRENT_TIMESTAMP + $4::integer * INTERVAL '24 hours')")
+                .bind(&instance.id).bind(&instance.organization_id).bind(payload_delete_after)
+                .bind(i32::try_from(crate::PUBLIC_VERIFICATION_RECEIPT_DAYS).map_err(number_storage)?)
+                .execute(&mut *transaction).await.map_err(storage)?;
         }
         if let Some(artifact) = artifact {
             let inserted = sqlx::query(

@@ -903,7 +903,7 @@ mod public_session {
         );
         // Age both admissions past the minute window. Daily capacity must
         // still reject a new key even with no active session remaining.
-        sqlx::query("UPDATE flow_service.flow_instances SET created_at=CURRENT_TIMESTAMP - INTERVAL '2 minutes' WHERE organization_id='org-1' AND context->'_marty_public_verification_session' IS NOT NULL")
+        sqlx::query("UPDATE flow_service.public_verification_receipts SET created_at=CURRENT_TIMESTAMP - INTERVAL '2 minutes', receipt_delete_after=CURRENT_TIMESTAMP - INTERVAL '2 minutes' + INTERVAL '30 days' WHERE organization_id='org-1' ")
             .execute(&pool).await.unwrap();
         assert_eq!(
             call(

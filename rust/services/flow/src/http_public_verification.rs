@@ -352,6 +352,13 @@ async fn launch(
         let view = current_view(&state, options, &key, &instance, now).await?;
         return Ok(Json(view).into_response());
     }
+    if state
+        .repository
+        .public_verification_receipt_exists(&instance_id)
+        .await?
+    {
+        return Err(unavailable());
+    }
     let definition = state
         .repository
         .definition(&choice.definition.definition_id)

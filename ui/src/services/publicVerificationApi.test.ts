@@ -63,7 +63,7 @@ describe('public verification transport', () => {
     const value = await publicVerificationApi.session(id, key);
     expect(value.verified).toBe(true);
     expect(JSON.stringify(value)).not.toContain('private');
-    respond({ revision, notice: 'Review the request', organization_id: 'private-org', scenarios: [{ id: 'age', label: 'Age', choices: [{ id: 'over-18', label: '18 or older', presentation_policy_id: 'private-policy' }] }] });
+    respond({ revision, retention_policy: { result_access_seconds: 600, receipt_days: 30 }, notice: 'Review the request', organization_id: 'private-org', scenarios: [{ id: 'age', label: 'Age', choices: [{ id: 'over-18', label: '18 or older', presentation_policy_id: 'private-policy' }] }] });
     expect(JSON.stringify(await publicVerificationApi.catalog())).not.toContain('private');
   });
 
@@ -85,7 +85,7 @@ describe('public verification transport', () => {
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({});
     respond({ ...session, wallet_uri: undefined, example_id: 'different-specimen' });
     await expect(publicVerificationApi.launch({ ...selection, example_id: 'fictional-adult' }, key)).rejects.toThrow();
-    respond({ revision, notice: 'Fictional examples only', scenarios: [{ id: 'age', label: 'Age', choices: [{ id: 'over-18', label: '18 or older' }] }], examples: [{ id: 'adult', scenario_id: 'age', label: 'Fictional adult', description: 'Fixed signed age claims', credential: 'private.signed.bytes', profile: { issuer_did: 'private-issuer' } }] });
+    respond({ revision, retention_policy: { result_access_seconds: 600, receipt_days: 30 }, notice: 'Fictional examples only', scenarios: [{ id: 'age', label: 'Age', choices: [{ id: 'over-18', label: '18 or older' }] }], examples: [{ id: 'adult', scenario_id: 'age', label: 'Fictional adult', description: 'Fixed signed age claims', credential: 'private.signed.bytes', profile: { issuer_did: 'private-issuer' } }] });
     expect(JSON.stringify(await publicVerificationApi.catalog())).not.toContain('private');
   });
 
@@ -103,6 +103,15 @@ describe('public verification transport', () => {
     for (const changed of [{ ...preview, choice_id: 'over-21' }, { ...preview, request_digest: 'invalid' }, { ...preview, claims: [{ ...preview.claims[0], constraints: [{ kind: 'custom', value: 'unsafe' }] }] }]) {
       respond(changed); await expect(publicVerificationApi.preview(selection)).rejects.toThrow();
     }
+  });
+
+  it('requires an explicit supported operational retention policy', async () => {
+    const catalog={revision,notice:'Review fictional claims',scenarios:[{id:'age',label:'Age',choices:[{id:'over-18',label:'18 or older'}]}]};
+    respond(catalog);await expect(publicVerificationApi.catalog()).rejects.toThrow();
+    respond({...catalog,retention_policy:{result_access_seconds:600,receipt_days:30}});
+    expect((await publicVerificationApi.catalog()).retention_policy.receipt_days).toBe(30);
+    respond({...catalog,retention_policy:{result_access_seconds:600,receipt_days:365}});
+    await expect(publicVerificationApi.catalog()).rejects.toThrow();
   });
 
 });

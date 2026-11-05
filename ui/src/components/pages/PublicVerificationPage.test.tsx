@@ -5,7 +5,7 @@ import PublicVerificationPage from './PublicVerificationPage';
 
 const revision = `sha256:${'a'.repeat(64)}`;
 const id = '54cfd66e-b7ed-8926-9f8b-18e63fa83797';
-const catalog = { revision, notice: 'I agree to present these fictional age claims.', scenarios: [{ id: 'age', label: 'Age requirement', choices: [{ id: 'over-18', label: '18 or older' }, { id: 'over-21', label: '21 or older' }] }], examples: [{ id: 'fictional-adult', scenario_id: 'age', label: 'Fictional adult, age 20', description: 'A fixed fictional age credential.' }] };
+const catalog = { revision, retention_policy: { result_access_seconds: 600, receipt_days: 30 }, notice: 'I agree to present these fictional age claims.', scenarios: [{ id: 'age', label: 'Age requirement', choices: [{ id: 'over-18', label: '18 or older' }, { id: 'over-21', label: '21 or older' }] }], examples: [{ id: 'fictional-adult', scenario_id: 'age', label: 'Fictional adult, age 20', description: 'A fixed fictional age credential.' }] };
 const session = () => { const now = Date.now(); return ({ session_id: id, scenario_id: 'age', choice_id: 'over-18', example_id: 'fictional-adult', catalog_revision: revision, status: 'awaiting_wallet', expires_at: new Date(now + 600_000).toISOString(), access_expires_at: new Date(now + 1_200_000).toISOString() }); };
 function response(body: unknown) { return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }); }
 function installFetch(fetch: ReturnType<typeof vi.fn>) {
@@ -97,6 +97,14 @@ describe('public verification experience', () => {
     expect(screen.getByRole('checkbox')).toBeDisabled();
     expect(screen.getByRole('button',{name:'Verify example'})).toBeDisabled();
     expect(fetch.mock.calls.some(([url])=>String(url).endsWith('/sessions'))).toBe(false);
+  });
+
+  it('removes an expired recovery capability before offering a fresh demonstration', async () => {
+    sessionStorage.setItem('marty.public-verification.v1',JSON.stringify({key:'A'.repeat(43),id,savedAt:Date.now()-1_300_000,accessExpiresAt:Date.now()-1,selection:{catalog_revision:revision,scenario_id:'age',choice_id:'over-18',consent:true}}));
+    const fetch=vi.fn(async()=>response(catalog));installFetch(fetch);
+    render(<PublicVerificationPage />);await screen.findByRole('button',{name:'Verify example'});
+    expect(sessionStorage.getItem('marty.public-verification.v1')).toBeNull();
+    expect(screen.queryByRole('button',{name:'Resume verification'})).not.toBeInTheDocument();
   });
 
 });
