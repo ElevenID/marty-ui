@@ -197,7 +197,7 @@ export default function PublicVerificationPage() {
           <Typography variant="h6">{mode === 'example' ? (example?.label ?? 'No example configured') : 'Use your own wallet'}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1 }}>{mode === 'example' ? (example?.description ?? 'Choose another scenario or use a compatible wallet.') : 'Your wallet needs a matching credential from an issuer accepted by this demonstration.'}</Typography>
         </Box>}
-        {recovery && <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 3 }}>
+        {recovery && <Stack direction="row" sx={{ mt: 3, gap: 1, flexWrap: 'wrap' }}>
           {(!displayed || pending(displayed)) && !['input_rejected', 'retry_exhausted'].includes(session?.example_status) && <Button disabled={busy} variant="contained" onClick={() => run(true)}>{busy ? 'Checking...' : 'Resume verification'}</Button>}
           {pending(displayed) && <Button disabled={busy} onClick={cancel}>Cancel</Button>}
           <Button disabled={busy} onClick={reset}>Start a new verification</Button>

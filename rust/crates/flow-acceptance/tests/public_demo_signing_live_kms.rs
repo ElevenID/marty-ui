@@ -21,6 +21,8 @@ use uuid::Uuid;
 mod canonical_example;
 #[path = "../../../services/signing-keys/tests/support/disposable_backends.rs"]
 mod disposable_backends;
+#[path = "support/public_demo_browser.rs"]
+mod public_browser;
 #[path = "support/public_demo_gateway.rs"]
 mod public_gateway;
 

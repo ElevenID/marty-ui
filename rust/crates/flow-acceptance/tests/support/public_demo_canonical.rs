@@ -116,6 +116,30 @@ struct Owner {
     policy: pp::PresentationPolicy,
     verifier: pp::VerifiedFactsOrchestrator,
 }
+struct Owners(Vec<Owner>);
+impl Owners {
+    fn get(&self, id: &str) -> &Owner {
+        self.0
+            .iter()
+            .find(|owner| owner.policy.id.to_string() == id)
+            .expect("configured fixture policy")
+    }
+}
+#[async_trait]
+impl PresentationPolicyProvider for Owners {
+    async fn configuration_digest(&self, id: &str) -> Result<String, FlowProviderError> {
+        self.get(id).configuration_digest(id).await
+    }
+    async fn get_policy(&self, id: &str) -> Result<PresentationPolicyReference, FlowProviderError> {
+        self.get(id).get_policy(id).await
+    }
+    async fn evaluate(
+        &self,
+        input: &PresentationEvaluationRequest,
+    ) -> Result<PresentationEvaluationResult, FlowProviderError> {
+        self.get(&input.policy_id).evaluate(input).await
+    }
+}
 #[async_trait]
 impl PresentationPolicyProvider for Owner {
     async fn configuration_digest(&self, id: &str) -> Result<String, FlowProviderError> {
@@ -219,6 +243,7 @@ impl marty_oid4vci::signer::CredentialSigner for PublicIssuer {
 
 async fn public_call(
     app: &Router,
+    origin: &str,
     method: &str,
     path: &str,
     key: &str,
@@ -230,7 +255,7 @@ async fn public_call(
             Request::builder()
                 .method(method)
                 .uri(path)
-                .header("origin", ORIGIN)
+                .header("origin", origin)
                 .header("x-verification-session", key)
                 .header("cookie", "sessionId=forged-browser-session")
                 .header("authorization", "Bearer forged-browser-authority")
@@ -367,11 +392,36 @@ pub async fn run(
     else {
         panic!("SD-JWT required")
     };
-    for (index, claim, verified) in [
+    let browser_enabled = std::env::var("MARTY_TEST_PUBLIC_DEMO_BROWSER").as_deref() == Ok("1");
+    let mut browser_listener = if browser_enabled {
+        Some(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap())
+    } else {
+        None
+    };
+    let mut browser_worker = if let Some(listener) = &browser_listener {
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        Some(
+            tokio::task::spawn_blocking(move || super::public_browser::BrowserWorker::start(&url))
+                .await
+                .unwrap(),
+        )
+    } else {
+        None
+    };
+    let mut cases = vec![
         (0, "age_over_18", Some(true)),
         (1, "age_over_21", Some(false)),
         (2, "age_over_18", None),
-    ] {
+    ];
+    if browser_enabled {
+        cases.push((3, "age_over_18", Some(true)));
+    }
+    for (index, claim, verified) in cases {
+        let origin = if index == 3 {
+            browser_worker.as_ref().unwrap().origin.as_str()
+        } else {
+            ORIGIN
+        };
         let mut specimen = compact.clone();
         if verified.is_none() {
             let offset = specimen.split('~').next().unwrap().rfind('.').unwrap() + 1;
@@ -380,7 +430,7 @@ pub async fn run(
             specimen = String::from_utf8(bytes).unwrap();
         }
         let policy_id = Uuid::new_v4().to_string();
-        let policy = policy(org, &policy_id, claim);
+        let policy = build_policy(org, &policy_id, claim);
         let digest = pp::policy_configuration_digest(&policy).unwrap();
         let owner = Owner {
             policy,
@@ -403,12 +453,45 @@ pub async fn run(
         .unwrap();
         definition.status = DefinitionStatus::Active;
         repository.save_definition(&definition).await.unwrap();
+        let mut choices = json!([{"id":"threshold","label":"18 or older","definition":{"organization_id":org,"definition_id":definition.id,"version":definition.version},
+            "presentation_policy_id":policy_id,"policy_configuration_digest":digest}]);
+        let mut owners = vec![owner];
+        if index == 3 {
+            let alternate_id = Uuid::new_v4().to_string();
+            let alternate = build_policy(org, &alternate_id, "age_over_21");
+            let digest = pp::policy_configuration_digest(&alternate).unwrap();
+            let mut alternate_definition = create_definition_record(
+                parse_request(json!({"organization_id":org,"name":"Synthetic21+ example",
+                "flow_type":"oid4vp_presentation","presentation_policy_id":alternate_id}))
+                .unwrap(),
+                Utc::now(),
+            )
+            .unwrap();
+            alternate_definition.status = DefinitionStatus::Active;
+            repository
+                .save_definition(&alternate_definition)
+                .await
+                .unwrap();
+            choices.as_array_mut().unwrap().push(json!({"id":"over-21","label":"21 or older","definition":{"organization_id":org,"definition_id":alternate_definition.id,"version":alternate_definition.version},
+                "presentation_policy_id":alternate_id,"policy_configuration_digest":digest}));
+            owners.push(Owner {
+                policy: alternate,
+                verifier: pp::VerifiedFactsOrchestrator::new(
+                    Arc::new(pp::RustCredentialKernel),
+                    Arc::new(Trust {
+                        org: Uuid::parse_str(org).unwrap(),
+                        key: json!(issuer.public_jwk),
+                    }),
+                    Arc::new(Status),
+                )
+                .unwrap(),
+            });
+        }
         let runtime=PublicVerificationOptions::from_json(&json!({"principal_id":"demo-operator","issuer_did":VERIFIER,"demo_holder_did":HOLDER,
-            "limits":{"starts_per_minute":10,"starts_per_day":100,"maximum_active":10},"catalog":{"organization_id":org,"application_origin":ORIGIN,
-            "notice":"Present a fictional age claim.","scenarios":[{"id":"age","label":"Age","choices":[{"id":"threshold","label":"Age threshold",
-                "definition":{"organization_id":org,"definition_id":definition.id,"version":definition.version},"presentation_policy_id":policy_id,"policy_configuration_digest":digest}]}],
+            "limits":{"starts_per_minute":10,"starts_per_day":100,"maximum_active":10},"catalog":{"organization_id":org,"application_origin":origin,
+            "notice":"Present a fictional age claim.","scenarios":[{"id":"age","label":"Age","choices":choices}],
             "examples":[{"id":"fictional-adult","scenario_id":"age","label":"Fictional adult","description":"Signed fictional age20.",
-                "profile":{"credential_template_id":"demo-age","issuer_did":ISSUER,"vct":VCT},"credential":specimen}]}}).to_string(),false).unwrap();
+                "profile":{"credential_template_id":"demo-age","issuer_did":ISSUER,"vct":VCT},"credential":specimen}]}}).to_string(),index==3).unwrap();
         let app = flow_read_router(FlowHttpState {
             service_authenticator: None,
             repository: repository.clone(),
@@ -416,7 +499,7 @@ pub async fn run(
                 reference_catalog: Some(Arc::new(NoExternalReferences)),
                 tenant_membership: Some(Arc::new(Operator { org: org.into() })),
                 signing_identity: Some(Arc::new(signing.clone())),
-                presentation_policy: Some(Arc::new(owner)),
+                presentation_policy: Some(Arc::new(Owners(owners))),
                 credential_template: Some(Arc::new(Templates { org: org.into() })),
                 ..Default::default()
             }),
@@ -427,7 +510,34 @@ pub async fn run(
             },
             application_approval: Default::default(),
         });
-        let gateway = super::public_gateway::wrap(app, ORIGIN).await;
+        let gateway = super::public_gateway::wrap(
+            app,
+            origin,
+            if index == 3 {
+                browser_listener.take()
+            } else {
+                None
+            },
+        )
+        .await;
+        if index == 3 {
+            let worker = browser_worker.take().unwrap();
+            let result = tokio::task::spawn_blocking(move || worker.run())
+                .await
+                .unwrap();
+            assert_eq!(result["verified"], true);
+            let consumed: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM flow_service.flow_nonce_consumptions")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                consumed, 4,
+                "browser adds canonical allow and deny completions"
+            );
+            assert!(gateway.observed.load(std::sync::atomic::Ordering::SeqCst) >= 8);
+            continue;
+        }
         let app = &gateway.router;
         let base = "/v1/flows/public/verification";
         let preflight = app
@@ -436,7 +546,7 @@ pub async fn run(
                 Request::builder()
                     .method("OPTIONS")
                     .uri(format!("{base}/sessions"))
-                    .header("origin", ORIGIN)
+                    .header("origin", origin)
                     .header("access-control-request-method", "POST")
                     .header(
                         "access-control-request-headers",
@@ -448,13 +558,13 @@ pub async fn run(
             .await
             .unwrap();
         assert_eq!(preflight.status().as_u16(), 200);
-        assert_eq!(preflight.headers()["access-control-allow-origin"], ORIGIN);
+        assert_eq!(preflight.headers()["access-control-allow-origin"], origin);
         assert_eq!(preflight.headers()["access-control-allow-headers"], "*");
         assert_eq!(preflight.headers()["cache-control"], "no-store");
         for (path, method, origin) in [
-            (format!("{base}/catalog"), "POST", ORIGIN),
-            (format!("{base}/sessions"), "DELETE", ORIGIN),
-            ("/v1/flows/definitions".into(), "POST", ORIGIN),
+            (format!("{base}/catalog"), "POST", origin),
+            (format!("{base}/sessions"), "DELETE", origin),
+            ("/v1/flows/definitions".into(), "POST", origin),
             (
                 format!("{base}/sessions"),
                 "POST",
@@ -485,7 +595,7 @@ pub async fn run(
                 Request::builder()
                     .method("OPTIONS")
                     .uri(format!("{base}/sessions"))
-                    .header("origin", ORIGIN)
+                    .header("origin", origin)
                     .header("access-control-request-method", "POST")
                     .header("access-control-request-method", "GET")
                     .body(Body::empty())
@@ -501,11 +611,12 @@ pub async fn run(
         );
         let key = URL_SAFE_NO_PAD.encode([31 + index; 32]);
         let (status, catalog) =
-            public_call(app, "GET", &format!("{base}/catalog"), &key, None).await;
+            public_call(app, origin, "GET", &format!("{base}/catalog"), &key, None).await;
         assert_eq!(status, 200);
         let preview_selection = json!({"catalog_revision":catalog["revision"],"scenario_id":"age","choice_id":"threshold"});
         let (status, preview) = public_call(
             app,
+            origin,
             "POST",
             &format!("{base}/preview"),
             &key,
@@ -522,6 +633,7 @@ pub async fn run(
         injected["organization_id"] = json!("forged-tenant");
         let (status, _) = public_call(
             app,
+            origin,
             "POST",
             &format!("{base}/sessions"),
             &key,
@@ -531,6 +643,7 @@ pub async fn run(
         assert_eq!(status, 422);
         let (status, _) = public_call(
             app,
+            origin,
             "POST",
             &format!("{base}/sessions"),
             &key,
@@ -543,9 +656,9 @@ pub async fn run(
                 .clone()
                 .oneshot(
                     Request::post(format!("{base}/sessions"))
-                        .header("origin", ORIGIN)
+                        .header("origin", origin)
                         .header("x-verification-session", &key)
-                        .header(duplicate, if duplicate == "origin" { ORIGIN } else { &key })
+                        .header(duplicate, if duplicate == "origin" { origin } else { &key })
                         .header("content-type", "application/json")
                         .body(Body::from(selection.to_string()))
                         .unwrap(),
@@ -589,6 +702,7 @@ pub async fn run(
         }
         let (status, session) = public_call(
             app,
+            origin,
             "POST",
             &format!("{base}/sessions"),
             &key,
@@ -598,7 +712,8 @@ pub async fn run(
         assert_eq!(status, 201, "{session}");
         let id = session["session_id"].as_str().unwrap();
         let path = format!("{base}/sessions/{id}/example");
-        let (status, result) = public_call(app, "POST", &path, &key, Some(&json!({}))).await;
+        let (status, result) =
+            public_call(app, origin, "POST", &path, &key, Some(&json!({}))).await;
         assert_eq!(status, 200, "{result}");
         if let Some(verified) = verified {
             assert_eq!(result["verified"], verified, "{result}");
@@ -611,8 +726,15 @@ pub async fn run(
             assert!(result.get("verified").is_none(), "{result}");
             assert_eq!(result["example_status"], "input_rejected", "{result}");
         }
-        let (_, recovered) =
-            public_call(app, "GET", &format!("{base}/sessions/{id}"), &key, None).await;
+        let (_, recovered) = public_call(
+            app,
+            origin,
+            "GET",
+            &format!("{base}/sessions/{id}"),
+            &key,
+            None,
+        )
+        .await;
         assert_eq!(recovered, result);
         let text = result.to_string();
         for private in [ISSUER, HOLDER, claim, "do-not-disclose", compact.as_str()] {
@@ -632,7 +754,7 @@ pub async fn run(
     }
     pool.close().await;
 }
-fn policy(org: &str, id: &str, claim: &str) -> pp::PresentationPolicy {
+fn build_policy(org: &str, id: &str, claim: &str) -> pp::PresentationPolicy {
     let now = Utc::now();
     pp::PresentationPolicy {
         id: Uuid::parse_str(id).unwrap(),

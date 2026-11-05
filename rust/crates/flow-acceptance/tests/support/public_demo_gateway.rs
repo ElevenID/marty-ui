@@ -83,14 +83,22 @@ pub struct PublicGateway {
     pub router: Router,
     pub observed: Arc<AtomicUsize>,
     server: tokio::task::JoinHandle<()>,
+    public_server: Option<tokio::task::JoinHandle<()>>,
 }
 impl Drop for PublicGateway {
     fn drop(&mut self) {
         self.server.abort();
+        if let Some(server) = &self.public_server {
+            server.abort();
+        }
     }
 }
 
-pub async fn wrap(flow: Router, origin: &str) -> PublicGateway {
+pub async fn wrap(
+    flow: Router,
+    origin: &str,
+    public_listener: Option<tokio::net::TcpListener>,
+) -> PublicGateway {
     let observed = Arc::new(AtomicUsize::new(0));
     let counter = observed.clone();
     let flow = flow.layer(middleware::from_fn(move |request: Request, next: Next| {
@@ -168,9 +176,15 @@ pub async fn wrap(flow: Router, origin: &str) -> PublicGateway {
     .unwrap()
     .with_service_token(Some(WORKLOAD.into()))
     .unwrap();
+    let router = gateway_router(Arc::new(state));
+    let public_server = public_listener.map(|listener| {
+        let app = router.clone();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() })
+    });
     PublicGateway {
-        router: gateway_router(Arc::new(state)),
+        router,
         observed,
         server,
+        public_server,
     }
 }

@@ -253,9 +253,11 @@ def public_demo_postgres(environment):
     try:
         for _ in range(80):
             ready = docker("exec", container_id, "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "marty_public_verification_test")
-            if ready.returncode == 0: break
+            if ready.returncode == 0:
+                break
             time.sleep(.25)
-        else: raise RuntimeError("Disposable public demo PostgreSQL not ready")
+        else:
+            raise RuntimeError("Disposable public demo PostgreSQL not ready")
         require_docker("exec", container_id, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "postgres",
             "-d", "marty_public_verification_test", "-c",
             f"CREATE TABLE public.marty_disposable_guard(nonce text NOT NULL); INSERT INTO public.marty_disposable_guard VALUES ('{nonce}')")
@@ -268,7 +270,7 @@ def public_demo_postgres(environment):
 
 
 def run_public_demo_grant_case(*, endpoint, ca_file, root_token, call, redis_name,
-                               runner=subprocess.run):
+                               runner=subprocess.run, browser=False):
     result = None
     redis_id = require_docker("run", "--rm", "-d", "--name", redis_name,
         "--label", "marty.disposable=kms-signing-policy",
@@ -280,15 +282,17 @@ def run_public_demo_grant_case(*, endpoint, ca_file, root_token, call, redis_nam
         port = int(require_docker("port", redis_id, "6379/tcp").splitlines()[0].rsplit(":", 1)[1])
         for _ in range(40):
             ready = docker("exec", redis_id, "redis-cli", "ping")
-            if ready.returncode == 0 and ready.stdout.strip() == "PONG": break
+            if ready.returncode == 0 and ready.stdout.strip() == "PONG":
+                break
             time.sleep(.25)
-        else: raise RuntimeError("Disposable demo-grant Redis not ready")
+        else:
+            raise RuntimeError("Disposable demo-grant Redis not ready")
         nonce = uuid.uuid4().hex
         require_docker("exec", redis_id, "redis-cli", "-n", "13", "SET", "marty:tests:disposable-guard", nonce)
         bao_nonce = uuid.uuid4().hex
         ensure(call("POST", "secret/data/marty-test-disposable-guard", root_token,
                     {"data": {"nonce": bao_nonce}})[0] in (200, 204), "demo fixture guard")
-        environment = dict(os.environ, MARTY_TEST_OPENBAO_URL=endpoint.removesuffix("/v1"),
+        environment = dict(os.environ, MARTY_TEST_PUBLIC_DEMO_BROWSER="1" if browser else "0", MARTY_TEST_OPENBAO_URL=endpoint.removesuffix("/v1"),
             BAO_ADDR=endpoint.removesuffix("/v1"), BAO_CACERT=str(ca_file),
             MARTY_TEST_OPENBAO_ROOT_TOKEN=root_token, MARTY_TEST_OPENBAO_DISPOSABLE_NONCE=bao_nonce,
             MARTY_TEST_REDIS_URL=f"redis://127.0.0.1:{port}/13", MARTY_TEST_REDIS_DISPOSABLE_NONCE=nonce)
@@ -305,7 +309,8 @@ def run_public_demo_grant_case(*, endpoint, ca_file, root_token, call, redis_nam
 
 def remove_owned_demo_grant_backend(name, container_id):
     ensure(re.fullmatch(r"[0-9a-f]{64}", container_id) is not None, "demo fixture container ID")
-    if not require_docker("ps", "-aq", "--filter", f"id={container_id}"): return
+    if not require_docker("ps", "-aq", "--filter", f"id={container_id}"):
+        return
     actual = json.loads(require_docker("inspect", container_id))[0]
     ensure(actual["Id"] == container_id and actual["Name"] == f"/{name}"
            and actual["Config"]["Labels"].get("codex.purpose") == "public-demo-grant-fixture"
@@ -317,8 +322,15 @@ def remove_owned_demo_grant_backend(name, container_id):
 
 def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
             managed_mdoc: bool = False, mdoc_runner=subprocess.run,
-            public_demo_grant: bool = False, grant_runner=subprocess.run) -> dict | None:
-    ensure(sum((rust_adapter, grant_verifier, managed_mdoc, public_demo_grant)) <= 1, "select one Rust adapter mode")
+            public_demo_grant: bool = False, grant_runner=subprocess.run,
+            public_demo_browser: bool = False) -> dict | None:
+    ensure(sum((rust_adapter, grant_verifier, managed_mdoc, public_demo_grant, public_demo_browser)) <= 1, "select one Rust adapter mode")
+    public_demo_grant = public_demo_grant or public_demo_browser
+    if public_demo_browser:
+        browser_check=grant_runner(["node",str(ROOT / "ui/scripts/public-verification-browser.mjs"),"--check"],
+            cwd=ROOT,capture_output=True,text=True,timeout=60,check=False)
+        ensure(browser_check.returncode==0 and json.loads(browser_check.stdout).get("browserAvailable") is True,
+               "browser dependencies before backend creation")
     if public_demo_grant:
         for custody, admission in ((False, False), (True, False), (False, True)):
             discovery = grant_runner(public_demo_grant_probe.command(discovery=True, custody=custody, admission=admission), cwd=ROOT / "rust",
@@ -453,7 +465,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
 
         if public_demo_grant:
             public_demo_result = run_public_demo_grant_case(endpoint=endpoint, ca_file=ca_file,
-                root_token=root_token, call=call, redis_name=redis_name, runner=grant_runner)
+                root_token=root_token, call=call, redis_name=redis_name, runner=grant_runner, browser=public_demo_browser)
             public_demo_result.update(openbaoContainerId=primary_id, openbaoImage=IMAGE)
             return public_demo_result
 
@@ -759,7 +771,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                     grant_mint_tokens["gateway-service"], "[mint]",
                 )
                 raise RuntimeError(f"Rust live grant verifier failed:\n{detail[-2000:]}")
-            with public_demo_postgres(environment) as (demo_environment, _receipt):
+            with public_demo_postgres(dict(environment,MARTY_TEST_PUBLIC_DEMO_BROWSER="0")) as (demo_environment, _receipt):
                 public_demo_grant_probe.qualify(call, root_token, demo_environment)
             result = subprocess.run(
                 ["cargo", "+1.95.0", "test", "-p", "marty-signing-keys",
@@ -1407,8 +1419,9 @@ if __name__ == "__main__":
     parser.add_argument("--rust-adapter", action="store_true")
     parser.add_argument("--grant-verifier", action="store_true")
     parser.add_argument("--public-demo-grant", action="store_true", help="Only isolated demo-holder MAC, policy and native one-use grant qualification; no deployment")
+    parser.add_argument("--public-demo-browser", action="store_true", help="Owned loopback application/Chromium plus canonical remote example fixture; no deployment")
     parser.add_argument("--managed-mdoc", action="store_true", help="Run only the isolated real managed MDOC certificate-chain case; no CRL/wallet qualification")
     args = parser.parse_args()
-    result = qualify(rust_adapter=args.rust_adapter, grant_verifier=args.grant_verifier, managed_mdoc=args.managed_mdoc, public_demo_grant=args.public_demo_grant)
+    result = qualify(rust_adapter=args.rust_adapter, grant_verifier=args.grant_verifier, managed_mdoc=args.managed_mdoc, public_demo_grant=args.public_demo_grant, public_demo_browser=args.public_demo_browser)
     if result is not None:
         print(json.dumps(result, sort_keys=True))

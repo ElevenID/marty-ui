@@ -235,3 +235,19 @@ def test_owned_postgres_readiness_failure_still_removes_the_exact_fixture(monkey
         with controller.public_demo_postgres({}):
             pytest.fail("unready database yielded")
     assert removed == ["b" * 64]
+
+
+def test_missing_browser_dependency_and_mixed_mode_refuse_before_docker(monkeypatch):
+    monkeypatch.setattr(
+        controller, "pull_pinned_openbao", lambda: pytest.fail("backend reached")
+    )
+
+    def missing(*args, **kwargs):
+        return subprocess.CompletedProcess([], 1, "", "browser unavailable")
+
+    with pytest.raises(RuntimeError, match="browser dependencies before backend"):
+        controller.qualify(public_demo_browser=True, grant_runner=missing)
+    with pytest.raises(RuntimeError, match="select one"):
+        controller.qualify(
+            public_demo_browser=True, public_demo_grant=True, grant_runner=missing
+        )

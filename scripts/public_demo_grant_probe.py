@@ -318,6 +318,7 @@ def qualify(call, root, environment, *, runner=subprocess.run):
         MARTY_TEST_ISSUANCE_MINT_TOKEN=minters["issuance-credential"],
     )
     qualify_custody(call, root, custody, minters["flow-demo-holder"], verifier)
+    browser_receipt = None
     for custody_case, admission in ((False, False), (True, False), (False, True)):
         signing_token = service_custody if admission else custody
         result = runner(
@@ -347,6 +348,14 @@ def qualify(call, root, environment, *, runner=subprocess.run):
                     continue
                 detail = detail.replace(secret, "[fixture-capability]")
             raise RuntimeError(f"Native demo qualification failed:\n{detail[-2000:]}")
+        if admission and environment.get("MARTY_TEST_PUBLIC_DEMO_BROWSER") == "1":
+            receipts = [
+                line.removeprefix("PUBLIC_DEMO_BROWSER_QUALIFIED ")
+                for line in result.stdout.splitlines()
+                if line.startswith("PUBLIC_DEMO_BROWSER_QUALIFIED ")
+            ]
+            require(len(receipts) == 1, "actual browser completion receipt")
+            browser_receipt = json.loads(receipts[0])
     return {
         "scope": "ISOLATED_REMOTE_DEMO_CANONICAL_EXAMPLE",
         "origins": len(ORIGINS),
@@ -364,7 +373,8 @@ def qualify(call, root, environment, *, runner=subprocess.run):
         "canonicalExampleCasesPassed": 3,
         "fixtureTransports": ["membership", "template metadata", "trust", "status"],
         "policyAdapter": "in-process actual Rust kernel and Cedar owner evaluator",
-        "publicGatewayBrowserJourneyQualified": False,
+        "publicGatewayBrowserJourneyQualified": browser_receipt is not None,
+        "browser": browser_receipt,
         "publicGatewayJourneyQualified": True,
         "walletQualified": False,
         "deployedConfigurationChanged": False,
