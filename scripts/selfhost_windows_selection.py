@@ -467,13 +467,13 @@ def selected_inputs(config_path):
                 require(active)
                 with ExitStack() as proof_stack:
                     return _prove(cfg, choice, values, proof_stack, expected_data=record['data_sha256'], authority_file=authority_file)
-        def recover_existing(output_dir, authority_file=None):
+        def recover_existing(output_dir, authority_file=None, *, preparation_sha256=None):
             with lease_lock:
                 require(active and not completion)
                 from selfhost_windows_recovery import start_existing
                 with ExitStack() as proof_stack:
                     pending = start_existing(cfg, choice, values, record, output_dir, proof_stack,
-                                             authority_file=authority_file)
+                                             authority_file=authority_file, preparation_sha256=preparation_sha256)
                 completion.append(pending)
                 return decode(packed(pending['result']))
         try:

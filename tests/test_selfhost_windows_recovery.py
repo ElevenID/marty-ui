@@ -176,10 +176,12 @@ def dangling_directory(path, target):
     path.lstat()
 
 
-def test_dangling_recovery_marker_blocks_all_mutating_admission(monkeypatch):
+@pytest.mark.parametrize('preparation', [False, True])
+def test_dangling_recovery_marker_blocks_all_mutating_admission(monkeypatch, preparation):
     with fixture(monkeypatch) as (root, _phase, tx, _outcome, path, cfg):
         selection.adopt(path)
-        guard = selection.renewal.recovery_guard(cfg)
+        guard = (selection.renewal.recovery_preparation_guard(cfg) if preparation
+                 else selection.renewal.recovery_guard(cfg))
         dangling_directory(guard, root/'absent-target')
         try:
             assert selection.renewal.recovery_pending(cfg)
@@ -245,3 +247,108 @@ def test_late_operations_cannot_publish_recovery(monkeypatch, late):
         with pytest.raises(ValueError):
             with selection.selected_inputs(path) as lease:lease.recover_existing(output)
         assert selection.renewal.recovery_pending(cfg) and (output/'result.json').read_bytes() == b''
+
+
+def prepare_stop(root, cfg, output, observed, *, bad=None):
+    completion = root/'windows-stop-handoff'/'completed.json'
+    completion.parent.mkdir()
+    by_role = {selection.renewal._service(x): x for x in observed['owned']}
+    targets = {r:x['Id'] for r,x in by_role.items() if r not in recovery.COMPLETED}
+    preserved = {r:x['Id'] for r,x in by_role.items() if r in recovery.COMPLETED}
+    value = {'schema':recovery.PREPARATION_SCHEMA,'project':cfg['project'],'engine_id':cfg['engine_id'],
+        'sequence':1,'compose_sha256':cfg['compose_sha256'],'data_sha256':'d'*64,'output_dir':str(output),
+        'targets':targets,'preserved':preserved,'protected_sha256':selection.digest(selection.packed(
+            selection.renewal.observations(observed['baseline'],cfg['project'],set(targets)))),
+        'completion_file':str(completion)}
+    if bad == 'foreign-id':value['targets']['gateway'] = 'f'*64
+    elif bad == 'wrong-selection':value['sequence'] = 2
+    elif bad == 'protected':value['protected_sha256'] = '0'*64
+    elif bad == 'not-stopped':by_role['gateway']['State']['Status'] = 'running'
+    raw = selection.packed(value);sha = selection.digest(raw)
+    marker = selection.renewal.recovery_preparation_guard(cfg)
+    marker.write_bytes(raw)
+    done = {'schema':recovery.STOP_COMPLETION_SCHEMA,'preparation_sha256':sha,
+            'stop_cli_returned':True,'stopped_ids':targets,'preserved_ids':preserved}
+    if bad == 'unknown-stop':done['stop_cli_returned'] = False
+    elif bad == 'integer-stop':done['stop_cli_returned'] = 1
+    elif bad == 'wrong-parent':done['preparation_sha256'] = '0'*64
+    completion.write_bytes(b'' if bad == 'empty-completion' else selection.packed(done))
+    return sha, marker
+
+
+def test_completed_stop_handoff_has_overlapping_markers_before_any_start(monkeypatch):
+    with candidate(monkeypatch) as (root,path,cfg,output,_events,_items,observed,_tx):
+        actual_write = selection.renewal.write_empty_private_file
+        actual_start = selection.renewal.run_owned_mutation
+        handoff = []
+        def write(p,value):
+            actual_write(p,value)
+            if Path(p) == selection.renewal.recovery_guard(cfg):
+                assert selection.renewal.recovery_preparation_guard(cfg).exists()
+                handoff.append('overlap')
+        def start(*a,**kw):
+            assert selection.renewal.recovery_guard(cfg).exists()
+            assert not selection.renewal.recovery_preparation_guard(cfg).exists()
+            handoff.append('start')
+            return actual_start(*a,**kw)
+        monkeypatch.setattr(selection.renewal,'write_empty_private_file',write)
+        monkeypatch.setattr(selection.renewal,'run_owned_mutation',start)
+        with selection.selected_inputs(path) as lease:
+            sha,marker = prepare_stop(root,cfg,output,observed)
+            lease.recover_existing(output,preparation_sha256=sha)
+            assert not marker.exists() and selection.renewal.recovery_guard(cfg).exists()
+        assert handoff[0] == 'overlap' and 'start' in handoff
+        assert not selection.renewal.recovery_pending(cfg)
+        intent = selection.decode((output/'intent.json').read_bytes())
+        assert intent['preparation']['marker_sha256'] == sha
+        assert selection.digest((output/'preparation.json').read_bytes()) == sha
+        assert selection.digest((output/'stop-completed.json').read_bytes()) == intent['preparation']['completion_sha256']
+
+
+@pytest.mark.parametrize('boundary',['before-core-flush','after-core-flush','after-preparation-remove'])
+def test_process_interruption_never_loses_all_handoff_markers(monkeypatch,boundary):
+    with candidate(monkeypatch) as (root,path,cfg,output,events,_items,observed,_tx):
+        actual_write = selection.renewal.write_empty_private_file
+        actual_check = recovery._unchanged
+        def write(p,value):
+            is_guard = Path(p) == selection.renewal.recovery_guard(cfg)
+            if is_guard and boundary == 'before-core-flush':raise KeyboardInterrupt()
+            actual_write(p,value)
+            if is_guard and boundary == 'after-core-flush':raise KeyboardInterrupt()
+        def check(*a,**kw):
+            if boundary == 'after-preparation-remove':raise KeyboardInterrupt()
+            return actual_check(*a,**kw)
+        monkeypatch.setattr(selection.renewal,'write_empty_private_file',write)
+        monkeypatch.setattr(recovery,'_unchanged',check)
+        with pytest.raises(KeyboardInterrupt):
+            with selection.selected_inputs(path) as lease:
+                sha,_ = prepare_stop(root,cfg,output,observed)
+                lease.recover_existing(output,preparation_sha256=sha)
+        assert selection.renewal.recovery_pending(cfg) and not events
+        assert (output/'result.json').read_bytes() == b''
+        if boundary != 'after-preparation-remove':assert selection.renewal.recovery_preparation_guard(cfg).exists()
+        with pytest.raises(ValueError):
+            with selection.selected_inputs(path):pytest.fail('Interrupted handoff bypassed')
+
+
+@pytest.mark.parametrize('bad',['foreign-id','wrong-selection','protected','not-stopped','unknown-stop',
+                              'integer-stop','wrong-parent','empty-completion','no-capability'])
+def test_invalid_or_unknown_stop_cannot_handoff_preparation(monkeypatch,bad):
+    with candidate(monkeypatch) as (root,path,cfg,output,events,_items,observed,_tx):
+        with selection.selected_inputs(path) as lease:
+            sha,marker = prepare_stop(root,cfg,output,observed,bad=bad)
+            with pytest.raises(ValueError):
+                lease.recover_existing(output,preparation_sha256=None if bad=='no-capability' else sha)
+            assert marker.exists() and not selection.renewal.recovery_guard(cfg).exists()
+        assert not events and not list(output.iterdir())
+
+
+def test_preparation_marker_alone_blocks_new_admissions(monkeypatch):
+    with candidate(monkeypatch) as (root,path,cfg,output,_events,_items,observed,tx):
+        prepare_stop(root,cfg,output,observed)
+        with pytest.raises(ValueError):
+            with selection.selected_inputs(path):pytest.fail('Preparation ignored')
+        next_path,_ = tx(2)
+        with pytest.raises(ValueError):selection.prepare(next_path)
+        with pytest.raises(ValueError):selection.complete(path)
+        with pytest.raises(ValueError):selection.renewal.activate(cfg)

@@ -179,3 +179,18 @@ must not fall back to an installation without an owner.
 No CLI, scheduled task, automatic marker removal or PowerShell managed-mode dispatch
 is installed by this library. Those integrations and interruption reconciliation
 remain required before unattended recovery is qualified.
+
+An explicitly coordinated planned stop may retain a separate
+`.<project>.recovery-preparation.json` marker. It blocks every new admission just
+like the recovery marker, including dangling entries. Only the already-held lease
+can call `recover_existing(..., preparation_sha256=...)` to hand it off. The
+private completion receipt must bind the exact preparation hash, returned stop
+CLI, all stopped IDs and retained completed-job IDs. Model/engine/selection/data
+identity, actual stopped state and protected observations are rechecked. Unknown,
+incomplete, mismatched or changed stop records never authorize startup.
+
+The owner flushes the normal recovery intent and marker before unlinking the
+preparation marker. Both exist during transfer; interruption leaves at least one
+authoritative marker. The original preparation and completion evidence remains
+linked by hashes in the recovery intent. This supports controlled planned-stop
+handoff; it does not automatically reconcile an uncertain stop or interrupted start.
