@@ -163,6 +163,18 @@ def owned_service_closure(declared: set[str], running: set[str]) -> bool:
 
 def secret_mounts(project: str, secret_root: Path, services: set[str],
                   model: dict) -> int:
+    ids = subprocess.run(["docker", "ps", "-aq", "--filter",
+                          f"label=com.docker.compose.project={project}"],
+                         capture_output=True, text=True, timeout=30, check=True).stdout.split()
+    if len(ids) != len(services):
+        raise RuntimeError("owned project container count changed")
+    inspected = run_json(["docker", "inspect", *ids], cwd=secret_root)
+    return checked_secret_mounts(inspected, project, secret_root, services, model)
+
+
+def checked_secret_mounts(inspected: object, project: str, secret_root: Path,
+                          services: set[str], model: dict) -> int:
+    """Validate already-inspected containers; transport remains at the caller."""
     definitions = model.get("secrets")
     declared = model.get("services")
     if not isinstance(definitions, dict) or not isinstance(declared, dict):
@@ -191,13 +203,7 @@ def secret_mounts(project: str, secret_root: Path, services: set[str],
             targets[target] = str(secret_root / source)
             names.add(source)
         expected[service] = targets
-    ids = subprocess.run(["docker", "ps", "-aq", "--filter",
-                          f"label=com.docker.compose.project={project}"],
-                         capture_output=True, text=True, timeout=30, check=True).stdout.split()
-    if len(ids) != len(services):
-        raise RuntimeError("owned project container count changed")
-    inspected = run_json(["docker", "inspect", *ids], cwd=secret_root)
-    if (not isinstance(inspected, list) or len(inspected) != len(ids)
+    if (not isinstance(inspected, list) or len(inspected) != len(services)
             or not all(isinstance(item, dict) and isinstance(item.get("Mounts"), list)
                        for item in inspected)):
         raise RuntimeError("owned project mounts are invalid")

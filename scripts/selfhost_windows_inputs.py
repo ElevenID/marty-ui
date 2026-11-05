@@ -89,6 +89,29 @@ def read_private_bytes(path: Path) -> bytes:
 
 
 @contextmanager
+def hold_private_input(path: Path, *, max_bytes: int = MAX_BYTES, exclusive: bool = False):
+    """Hold one bounded private asset; explicit exclusive mode is a process lock.
+
+    Larger bounds are for retained Compose assets, never a change to the secret
+    reader's 64KiB limit. Exclusive mode obtains write access without writing;
+    another coordinator cannot acquire it even when its lock file is empty.
+    """
+    require(os.name == "nt")
+    try:
+        path = Path(path)
+        require(type(max_bytes) is int and 0 < max_bytes <= 256 * 1024 * 1024
+                and type(exclusive) is bool)
+        with ExitStack() as stack:
+            for parent in reversed(path.parents):
+                stack.enter_context(_held_private_input(parent, directory=True, ancestor=True))
+            data = stack.enter_context(_held_private_input(
+                path, max_bytes=max_bytes, exclusive=exclusive))
+            yield data
+    except (OSError, UnicodeError, ValueError, TypeError):
+        raise ValueError(REFUSAL) from None
+
+
+@contextmanager
 def hold_private_generation(root: Path, names: list[str]):
     """Hold every declared input and its private directory for one bounded action.
 
@@ -146,7 +169,7 @@ def _private_file_bytes(path: Path, write_value: bytes | None = None) -> bytes:
 
 @contextmanager
 def _held_private_input(path: Path, write_value: bytes | None = None, *, directory=False,
-                        ancestor=False):
+                        ancestor=False, max_bytes=MAX_BYTES, exclusive=False):
     from ctypes import wintypes as w
 
     path = Path(path)
@@ -224,7 +247,8 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
 
     # OPEN_EXISTING, OPEN_REPARSE_POINT, and no write/delete sharing. Hold this
     # exact handle for ACL proof, bounds checks and the entire read.
-    access = 0x80 if ancestor else 0x80020080 | (0x40000000 if write_value is not None else 0)
+    access = 0x80 if ancestor else 0x80020080 | (
+        0x40000000 if write_value is not None or exclusive else 0)
     handle = create(str(path), access, 3 if ancestor else 1, None, 3,
                     0x00200000 | (0x02000000 if directory else 0), None)
     require(handle not in (None, ctypes.c_void_p(-1).value))
@@ -237,7 +261,7 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
                 require(bool(result.attributes & 0x10))
             else:
                 require(not result.attributes & 0x10 and result.links == 1
-                        and result.size_high == 0 and result.size_low <= MAX_BYTES)
+                        and result.size_high == 0 and result.size_low <= max_bytes)
             return result
 
         def file_identity(legacy):
