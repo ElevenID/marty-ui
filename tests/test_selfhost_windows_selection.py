@@ -17,6 +17,7 @@ import selfhost_windows_selection as selection
 from test_selfhost_windows_inputs import private_fixture
 from test_selfhost_windows_renewal import PROJECT, model
 
+
 @contextmanager
 def fixture(monkeypatch):
     if os.name != 'nt':pytest.skip('Actual private NTFS selection journal')
