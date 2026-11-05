@@ -49,7 +49,7 @@ if ($ManagedPython) {
     $recoveryScript = Join-Path $PSScriptRoot 'recover-marty-after-reboot.ps1'
     $repoRoot = Split-Path -Parent $PSScriptRoot
     $powerShellPath = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell/v1.0/powershell.exe'
-    $expectedArguments = "-NoProfile -NonInteractive -File `"$recoveryScript`" -RecoveryConfigurationFile `"$RecoveryConfigurationFile`" -ManagedPython `"$ManagedPython`" -WaitForEngine"
+    $expectedArguments = "-NoProfile -NonInteractive -WindowStyle Hidden -File `"$recoveryScript`" -RecoveryConfigurationFile `"$RecoveryConfigurationFile`" -ManagedPython `"$ManagedPython`" -WaitForEngine"
     if ($RenewCredentials) { $expectedArguments += " -RenewCredentials -LogicalTlsProject `"$LogicalTlsProject`"" }
 
     function Assert-ManagedTask($Task) {

@@ -268,7 +268,8 @@ After separate registration, check the exact managed task without elevation:
 
 The verifier requires the current operator's separate root-folder task and the
 exact installed action, interpreter, configuration, working directory, trigger
-and settings. Renewal verification requires exactly one nonrepeating logon
+and settings. Managed actions use the system PowerShell path with an explicitly
+hidden window; the default legacy action is unchanged. Renewal verification requires exactly one nonrepeating logon
 trigger and one repeating UTC time trigger, with no expiry or random delay.
 It compares the definition date and first boundary against the expected delay;
 pass the same `-FirstRenewalDelaySeconds` when an earlier first run was installed.

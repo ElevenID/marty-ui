@@ -42,7 +42,7 @@ $global:started=$false
 $user=[Security.Principal.WindowsIdentity]::GetCurrent().Name
 $shell=Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell/v1.0/powershell.exe'
 $recovery=Join-Path SCRIPTS 'recover-marty-after-reboot.ps1'
-$expected='-NoProfile -NonInteractive -File "'+$recovery+'" -RecoveryConfigurationFile "'+CONFIG+'" -ManagedPython "'+PYTHON+'" -WaitForEngine'
+$expected='-NoProfile -NonInteractive -WindowStyle Hidden -File "'+$recovery+'" -RecoveryConfigurationFile "'+CONFIG+'" -ManagedPython "'+PYTHON+'" -WaitForEngine'
 if ('CASE' -like 'renew*') { $expected+=' -RenewCredentials -LogicalTlsProject "marty-selfhost-synthetic"' }
 $global:task=[pscustomobject]@{
  TaskName='Marty-Candidate-Qualification';TaskPath='\';State='Ready';Date=''

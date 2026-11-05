@@ -121,8 +121,11 @@ if ($RenewCredentials) { $preflightArguments += @('-RenewCredentials', '-Logical
 if ($LASTEXITCODE -ne 0) { throw 'Recovery preflight failed; the scheduled task was not changed.' }
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-$actionArguments = "-NoProfile -NonInteractive -File `"$recoveryScript`" -RecoveryConfigurationFile `"$RecoveryConfigurationFile`""
-if ($ManagedPython) { $actionArguments += " -ManagedPython `"$ManagedPython`" -WaitForEngine" }
+$actionPrefix = if ($ManagedPython) { '-NoProfile -NonInteractive -WindowStyle Hidden' } else { '-NoProfile -NonInteractive' }
+$actionArguments = "$actionPrefix -File `"$recoveryScript`" -RecoveryConfigurationFile `"$RecoveryConfigurationFile`""
+if ($ManagedPython) {
+    $actionArguments += " -ManagedPython `"$ManagedPython`" -WaitForEngine"
+}
 if ($RenewCredentials) { $actionArguments += " -RenewCredentials -LogicalTlsProject `"$LogicalTlsProject`"" }
 if ($ManagedPython) {
     $scheduler = New-Object -ComObject 'Schedule.Service'

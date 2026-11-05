@@ -119,6 +119,7 @@ def test_managed_install_retains_explicit_interpreter_and_separate_logon_task(tm
     assert '-ManagedPython "'+str(python)+'"' in task['action']
     assert '-RecoveryConfigurationFile "'+str(config)+'"' in task['action']
     assert '-WaitForEngine' in task['action'] and '-CheckOnly' not in task['action']
+    assert '-WindowStyle Hidden -File ' in task['action']
 
 
 @pytest.mark.parametrize('case',['renew','renew-first'])
