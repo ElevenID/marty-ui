@@ -66,6 +66,11 @@ impl SigningOrigin {
     }
 
     fn authorizes_route_shape(self, claims: &GrantClaims) -> bool {
+        // The synthetic holder has one producer even when another origin owns
+        // a generic service-sign route. Check this on both mint and verify.
+        if claims.key_purpose == "demo_holder_binding" && self != Self::FlowDemoHolder {
+            return false;
+        }
         match self {
             Self::GatewayService => claims
                 .route
@@ -430,6 +435,14 @@ mod tests {
             .collect();
         assert_eq!(keys.len(), origins.len());
         assert!(keys.iter().all(|key| key.starts_with("marty-sign-grant-")));
+    }
+
+    #[test]
+    fn gateway_service_cannot_mint_the_dedicated_demo_holder_purpose() {
+        let mut claims = sample_claims();
+        claims.key_purpose = "demo_holder_binding".into();
+        claims.key_reference = Some("demo-holder-tenant-key".into());
+        assert!(!claims.origin.authorizes_route_shape(&claims));
     }
 
     #[test]

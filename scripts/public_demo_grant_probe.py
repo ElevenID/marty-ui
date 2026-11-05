@@ -27,20 +27,34 @@ ORIGINS = (
 )
 CASE = "verifier::tests::live_grant_verification_is_one_use_before_kms_signing"
 CUSTODY_CASE = "managed_demo_holder_es256_uses_scoped_remote_custody"
+ADMISSION_CASE = (
+    "flow_demo_holder_http_admission_uses_remote_custody_and_one_use_grants"
+)
 
 
-def command(*, discovery=False, custody=False):
+def command(*, discovery=False, custody=False, admission=False):
+    require(not (custody and admission), "select one native lane")
     return [
         "cargo",
         "+1.95.0",
         "test",
         "-p",
-        "marty-signing-keys" if custody else "marty-signing-grant",
-        *(["--test", "public_service_sign_live_kms"] if custody else ["--lib"]),
+        "marty-flow-acceptance"
+        if admission
+        else "marty-signing-keys"
+        if custody
+        else "marty-signing-grant",
+        *(
+            ["--test", "public_demo_signing_live_kms"]
+            if admission
+            else ["--test", "public_service_sign_live_kms"]
+            if custody
+            else ["--lib"]
+        ),
         "--locked",
         "--offline",
         "-j1",
-        CUSTODY_CASE if custody else CASE,
+        ADMISSION_CASE if admission else CUSTODY_CASE if custody else CASE,
         "--",
         "--ignored",
         "--exact",
@@ -48,10 +62,10 @@ def command(*, discovery=False, custody=False):
     ]
 
 
-def discovered(result, *, custody=False):
+def discovered(result, *, custody=False, admission=False):
     return result.returncode == 0 and [
         line for line in result.stdout.splitlines() if line.endswith(": test")
-    ] == [f"{CUSTODY_CASE if custody else CASE}: test"]
+    ] == [f"{ADMISSION_CASE if admission else CUSTODY_CASE if custody else CASE}: test"]
 
 
 def require(condition, operation):
@@ -193,13 +207,13 @@ def qualify(call, root, environment, *, runner=subprocess.run):
             "exact policy readback",
         )
 
-    def token(policy_name):
+    def token(*policy_names):
         status, result = call(
             "POST",
             "auth/token/create",
             root,
             {
-                "policies": [policy_name],
+                "policies": list(policy_names),
                 "no_default_policy": True,
                 "ttl": "10m",
                 "explicit_max_ttl": "10m",
@@ -213,7 +227,7 @@ def qualify(call, root, environment, *, runner=subprocess.run):
         status, lookup = call("POST", "auth/token/lookup", root, {"token": value})
         require(
             status == 200
-            and lookup["data"]["policies"] == [policy_name]
+            and sorted(lookup["data"]["policies"]) == sorted(policy_names)
             and not lookup["data"].get("entity_id"),
             "no inherited token authority",
         )
@@ -222,8 +236,12 @@ def qualify(call, root, environment, *, runner=subprocess.run):
     minters = {origin: token(f"sign-grant-mint-{origin}") for origin in ORIGINS}
     verifier = token("sign-grant-verify")
     custody = token("signing-keys-demo-holder")
+    service_custody = token(
+        "credential-service", "signing-keys-managed", "signing-keys-demo-holder"
+    )
     require(
-        len(set([root, verifier, custody, *minters.values()])) == len(ORIGINS) + 3,
+        len(set([root, verifier, custody, service_custody, *minters.values()]))
+        == len(ORIGINS) + 4,
         "all fixture capabilities must be distinct",
     )
     payload = {"input": base64.b64encode(b"public-demo-grant-scope-probe").decode()}
@@ -296,13 +314,19 @@ def qualify(call, root, environment, *, runner=subprocess.run):
         MARTY_TEST_GRANT_ORIGIN="flow_demo_holder",
         MARTY_TEST_GRANT_MINT_TOKEN=minters["flow-demo-holder"],
         MARTY_TEST_GRANT_VERIFY_TOKEN=verifier,
+        MARTY_TEST_FLOW_WALLET_MINT_TOKEN=minters["flow-wallet"],
     )
     qualify_custody(call, root, custody, minters["flow-demo-holder"], verifier)
-    for custody_case in (False, True):
+    for custody_case, admission in ((False, False), (True, False), (False, True)):
+        signing_token = service_custody if admission else custody
         result = runner(
-            command(custody=custody_case),
+            command(custody=custody_case, admission=admission),
             cwd=ROOT / "rust",
-            env=dict(native_env, MARTY_TEST_OPENBAO_TOKEN=custody, BAO_TOKEN=custody),
+            env=dict(
+                native_env,
+                MARTY_TEST_OPENBAO_TOKEN=signing_token,
+                BAO_TOKEN=signing_token,
+            ),
             capture_output=True,
             text=True,
             timeout=600,
@@ -310,11 +334,11 @@ def qualify(call, root, environment, *, runner=subprocess.run):
         )
         if not native_succeeded(result):
             detail = result.stdout + result.stderr
-            for secret in (root, verifier, custody, *minters.values()):
+            for secret in (root, verifier, custody, service_custody, *minters.values()):
                 detail = detail.replace(secret, "[fixture-capability]")
             raise RuntimeError(f"Native demo qualification failed:\n{detail[-2000:]}")
     return {
-        "scope": "ISOLATED_REMOTE_DEMO_GRANT_REPLAY_AND_CUSTODY",
+        "scope": "ISOLATED_REMOTE_DEMO_GRANT_CUSTODY_AND_HTTP_ADMISSION",
         "origins": len(ORIGINS),
         "nativePassed": 1,
         "nativeCase": CASE,
@@ -322,7 +346,11 @@ def qualify(call, root, environment, *, runner=subprocess.run):
         "remoteTransitCustodyQualified": True,
         "nativeCustodyPassed": 1,
         "nativeCustodyCase": CUSTODY_CASE,
-        "signingKeysServiceAdmissionQualified": False,
+        "nativeAdmissionPassed": 1,
+        "nativeAdmissionCase": ADMISSION_CASE,
+        "signingKeysServiceAdmissionQualified": True,
+        "flowHttpSigningProviderQualified": True,
+        "canonicalExampleJourneyQualified": False,
         "walletQualified": False,
         "deployedConfigurationChanged": False,
     }

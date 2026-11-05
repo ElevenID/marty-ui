@@ -353,15 +353,17 @@ mod managed_reference_tests {
             invalid[field] = json!(value);
             assert!(normalize(invalid).is_err(), "{field}={value}");
         }
-        assert_eq!(
-            custody_format(&CustodyFormatRequest {
-                key_purpose: "demo_holder_binding".into(),
-                credential_format: "SD_JWT_VC".into()
-            })
-            .unwrap()
-            .wire_format,
-            "dc+sd-jwt"
-        );
+        for format in ["SD_JWT_VC", "dc+sd-jwt"] {
+            assert_eq!(
+                custody_format(&CustodyFormatRequest {
+                    key_purpose: "demo_holder_binding".into(),
+                    credential_format: format.into()
+                })
+                .unwrap()
+                .wire_format,
+                "dc+sd-jwt"
+            );
+        }
         assert!(custody_format(&CustodyFormatRequest {
             key_purpose: "demo_holder_binding".into(),
             credential_format: "VC_JWT".into()
@@ -883,7 +885,12 @@ pub fn find_profiles(
 pub fn custody_format(
     request: &CustodyFormatRequest,
 ) -> Result<CustodyFormatResponse, ProfileError> {
-    if request.key_purpose == "demo_holder_binding" && request.credential_format != "SD_JWT_VC" {
+    if request.key_purpose == "demo_holder_binding"
+        && !matches!(
+            request.credential_format.as_str(),
+            "SD_JWT_VC" | "dc+sd-jwt"
+        )
+    {
         return Err(ProfileError::Invalid(
             "Demo holder keys require the SD_JWT_VC family.".into(),
         ));

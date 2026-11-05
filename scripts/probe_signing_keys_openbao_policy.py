@@ -288,11 +288,11 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
             public_demo_grant: bool = False, grant_runner=subprocess.run) -> dict | None:
     ensure(sum((rust_adapter, grant_verifier, managed_mdoc, public_demo_grant)) <= 1, "select one Rust adapter mode")
     if public_demo_grant:
-        for custody in (False, True):
-            discovery = grant_runner(public_demo_grant_probe.command(discovery=True, custody=custody), cwd=ROOT / "rust",
+        for custody, admission in ((False, False), (True, False), (False, True)):
+            discovery = grant_runner(public_demo_grant_probe.command(discovery=True, custody=custody, admission=admission), cwd=ROOT / "rust",
                 env=dict(os.environ, CARGO_BUILD_JOBS="1", CARGO_NET_OFFLINE="true"),
                 capture_output=True, text=True, timeout=600, check=False)
-            ensure(public_demo_grant_probe.discovered(discovery, custody=custody), "exact native demo grant test discovery before backend creation")
+            ensure(public_demo_grant_probe.discovered(discovery, custody=custody, admission=admission), "exact native demo grant test discovery before backend creation")
     if managed_mdoc:
         discovery = mdoc_runner(mdoc_test_command(discovery=True), cwd=ROOT / "rust",
             env=dict(os.environ, CARGO_BUILD_JOBS="1", CARGO_NET_OFFLINE="true"),

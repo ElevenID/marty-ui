@@ -136,3 +136,40 @@ def test_custody_case_discovery_is_independent_of_grant_case():
     assert not probe.discovered(
         subprocess.CompletedProcess([], 0, f"{probe.CASE}: test\n", ""), custody=True
     )
+
+
+def test_missing_native_admission_case_refuses_before_docker(monkeypatch):
+    monkeypatch.setattr(
+        controller, "pull_pinned_openbao", lambda: pytest.fail("backend reached")
+    )
+    selections = []
+
+    def discovery(command, **kwargs):
+        selections.append(command)
+        case = (
+            probe.CASE
+            if probe.CASE in command
+            else probe.CUSTODY_CASE
+            if probe.CUSTODY_CASE in command
+            else None
+        )
+        return subprocess.CompletedProcess(
+            command, 0, f"{case}: test\n" if case else "0 tests\n", ""
+        )
+
+    with pytest.raises(RuntimeError, match="discovery before backend"):
+        controller.qualify(public_demo_grant=True, grant_runner=discovery)
+    assert len(selections) == 3
+    assert probe.ADMISSION_CASE in selections[2]
+    assert "marty-flow-acceptance" in selections[2]
+
+
+def test_admission_case_discovery_is_exact():
+    assert probe.discovered(
+        subprocess.CompletedProcess([], 0, f"{probe.ADMISSION_CASE}: test\n", ""),
+        admission=True,
+    )
+    assert not probe.discovered(
+        subprocess.CompletedProcess([], 0, f"{probe.CUSTODY_CASE}: test\n", ""),
+        admission=True,
+    )

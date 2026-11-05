@@ -105,7 +105,7 @@ The existing disposable probe has a selected local qualification mode:
 python scripts/probe_signing_keys_openbao_policy.py --public-demo-grant
 ```
 
-It first discovers both exact native tests, then creates its own pinned,
+It first discovers all three exact native tests, then creates its own pinned,
 loopback-only TLS OpenBao and marked Redis fixtures. It applies these policy
 inputs only there, checks all eight origins' MAC isolation and the demo token's
 provisioning/signing denials, and runs the native file-backed demo minter and
@@ -113,10 +113,17 @@ one-use verifier race. It also creates a non-exportable asymmetric demo key
 using a distinct custody token, checks real signatures/tamper rejection and
 privilege denials, and executes the native pinned-version ES256 adapter with
 independent public-JWK verification. It verifies removal of both owned container
-IDs. The regular `--grant-verifier` probe also includes this case. These checks
-qualify remote custody, grant authority and replay. Complete Signing Keys/Flow
-service admission, governance/profile readiness and real-wallet presentation
-still need separate qualification.
+IDs. A cross-service acceptance case creates the synthetic holder through the
+actual Signing Keys identity API and uses Flow's production HTTP client with
+its file-backed minter. It checks public-JWK signatures, tenant/DID/key/purpose/
+payload binding, actual concurrent replay admission, format/profile rejection
+and absence of a wallet-minter fallback. The service fixture uses a distinct
+token containing the existing Signing Keys policies plus the opt-in custody
+policy; the prefix-only token remains separate for privilege-denial tests.
+The regular `--grant-verifier` probe also includes these cases. Their scope is
+remote custody, Flow signing transport and Signing Keys admission. The complete
+canonical example journey, governed runtime readiness and real-wallet
+presentation still need separate qualification.
 There is no endpoint/operator-secret option for pointing this probe at an
 existing deployment.
 

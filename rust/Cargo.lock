@@ -4521,6 +4521,7 @@ dependencies = [
  "marty-oid4vci",
  "marty-release-evidence",
  "marty-signing-grant",
+ "marty-signing-keys",
  "marty-verification",
  "mmf-platform",
  "mmf-security",
