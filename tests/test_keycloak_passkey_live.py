@@ -765,13 +765,21 @@ def test_native_assertion_rejects_tampering_replay_and_deleted_credentials(keycl
                     elif case == "unknown":
                         fields["credentialId"] = encode(secrets.token_bytes(32))
                     submitted.append(case)
+                    # Model one user selection. Automatic virtual presence would
+                    # otherwise select again on every native error-page reload,
+                    # producing a navigation loop while observing the rejection.
+                    cdp.send("WebAuthn.setAutomaticPresenceSimulation", {
+                        "authenticatorId": device, "enabled": False})
                     route.continue_(post_data=urllib.parse.urlencode(fields))
                 page.route("**/login-actions/authenticate?**", tamper)
                 verifier = begin(page)
                 try:
                     page.locator("#kc-error-message, .elevenid-login-error, #input-error").first.wait_for(timeout=15000)
                 except Exception as error:
-                    raise AssertionError(f"No native rejection for {case}; callback observed={bool(callbacks)}") from error
+                    errors = re.findall(r'error="([a-z_]+)"', docker("logs", keycloak["container"]))[-8:]
+                    raise AssertionError({"case": case, "callback": bool(callbacks), "submitted": len(submitted),
+                        "path": urllib.parse.urlparse(page.url).path, "event_errors": errors,
+                        "body": page.locator("body").inner_text()[:700]}) from error
                 assert submitted and not callbacks, case
                 after = cdp.send("WebAuthn.getCredentials", {"authenticatorId": device})["credentials"][0]
                 assert after["signCount"] > credential["signCount"], case
