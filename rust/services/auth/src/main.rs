@@ -12,8 +12,9 @@ use marty_auth::{
     CredentialLoginHttpApplication, CredentialLoginStartConfig, CredentialLoginStateStore,
     ExchangedTokenValidator, HttpCanvasExperienceSessionProvider, JitProvisioningConfig,
     JitUserProvisioner, KeycloakAdminAdapter, MmfApplicantProfileProvisioner,
-    MmfApplicantProvisioningStore, MmfAuthOutboxPublisher, PkceStateRepository,
-    PostgresAuthRepository, RustCredentialLoginPageRenderer, SessionRepository, UserProvisioner,
+    MmfApplicantProvisioningStore, MmfAuthOutboxPublisher, PasskeyEmailEnrollment,
+    PkceStateRepository, PostgresAuthRepository, RustCredentialLoginPageRenderer,
+    SessionRepository, UserProvisioner,
 };
 use mmf_messaging::{run_outbox_dispatcher, MessageTransport};
 use tokio::{net::TcpListener, sync::watch};
@@ -195,8 +196,12 @@ fn assemble_applications(
     let user_provisioner: Arc<dyn UserProvisioner> = provisioner.clone();
     let credential_provisioner: Arc<dyn CredentialIdentityProvisioner> = provisioner;
     let event_publisher = Arc::new(MmfAuthOutboxPublisher::new(connections.outbox.clone()));
+    let accounts = keycloak_accounts(config, connections)?;
     let application = Arc::new(AuthApplication::new(
         AuthApplicationPorts {
+            passkey_email: accounts
+                .as_ref()
+                .map(|adapter| adapter.clone() as Arc<dyn PasskeyEmailEnrollment>),
             sessions: sessions.clone(),
             pkce_states,
             oidc: connections.oidc.clone(),
@@ -206,6 +211,7 @@ fn assemble_applications(
         },
         AuthApplicationConfig {
             passkeys_enabled: config.passkeys_enabled,
+            passkey_client_id: config.oidc.client_id.clone(),
             session_ttl_seconds: config.session_ttl_seconds,
             post_logout_redirect_uri: config.post_logout_redirect_uri.clone(),
         },
@@ -234,11 +240,10 @@ fn assemble_applications(
             claim_lease_seconds: config.credential_login_claim_lease_seconds,
         },
     )?);
-    let accounts = keycloak_accounts(config, connections)?;
     let credential_callback = Arc::new(CredentialCallbackApplication::new(
         credential_state.clone(),
         sessions.clone(),
-        accounts,
+        accounts.map(|adapter| adapter as Arc<dyn CredentialAccountResolver>),
         Some(credential_provisioner),
         CredentialCallbackConfig {
             default_organization_id: config.default_organization_id.clone(),
@@ -280,7 +285,7 @@ fn assemble_applications(
 fn keycloak_accounts(
     config: &AuthServiceConfig,
     connections: &AuthConnections,
-) -> Result<Option<Arc<dyn CredentialAccountResolver>>, Box<dyn Error + Send + Sync>> {
+) -> Result<Option<Arc<KeycloakAdminAdapter>>, Box<dyn Error + Send + Sync>> {
     let Some(admin_config) = config.keycloak_admin.clone() else {
         return Ok(None);
     };

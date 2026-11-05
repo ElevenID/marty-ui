@@ -190,6 +190,9 @@ export async function startPasskeyEnrollment(redirectUri = '/console/profile') {
     body: JSON.stringify({ redirect_uri: redirectUri }),
   });
   const result = await response.json().catch(() => ({}));
+  if (response.ok && result.email_sent === true) {
+    return { email_sent: true };
+  }
   if (!response.ok || typeof result.authorization_url !== 'string') {
     throw new Error(result.detail || 'Passkey enrollment could not be started. Please sign in again and retry.');
   }

@@ -1,10 +1,14 @@
 """Opt-in disposable Keycloak check; never reads existing deployment credentials."""
 import base64
 import hashlib
+import email.policy
+from email.parser import BytesParser
+import html
 import json
 import os
 from pathlib import Path
 import secrets
+import re
 import subprocess
 import time
 import urllib.error
@@ -17,6 +21,41 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = os.environ.get("MARTY_PASSKEY_TEST_IMAGE")
 pytestmark = pytest.mark.skipif(not IMAGE, reason="Set MARTY_PASSKEY_TEST_IMAGE to a qualified local Keycloak image")
+
+# No relay and no external recipient: only records synthetic messages inside the
+# owned fixture network. Nothing is published on the host or persisted in a volume.
+SMTP_CAPTURE = r'''
+import base64, json, socketserver
+class SMTP(socketserver.StreamRequestHandler):
+    def reply(self, value):
+        self.wfile.write(value.encode("ascii") + b"\r\n")
+        self.wfile.flush()
+    def handle(self):
+        self.reply("220 synthetic fixture")
+        while True:
+            line = self.rfile.readline(65537)
+            if not line: return
+            command = line.split(b" ", 1)[0].strip().upper()
+            if command in (b"EHLO", b"HELO"):
+                self.reply("250-synthetic fixture\r\n250 8BITMIME")
+            elif command == b"DATA":
+                self.reply("354 Send message")
+                data = bytearray()
+                while True:
+                    line = self.rfile.readline(65537)
+                    if line in (b".\r\n", b".\n", b""): break
+                    data.extend(line[1:] if line.startswith(b"..") else line)
+                    if len(data) > 1048576: return
+                with open("/tmp/messages.jsonl", "a") as output:
+                    output.write(json.dumps(base64.b64encode(data).decode("ascii")) + "\n")
+                self.reply("250 Recorded locally")
+            elif command == b"QUIT":
+                self.reply("221 Bye")
+                return
+            else:
+                self.reply("250 OK")
+socketserver.TCPServer(("0.0.0.0", 1025), SMTP).serve_forever()
+'''
 
 
 def docker(*args, **kwargs):
@@ -47,8 +86,16 @@ def keycloak():
     password = secrets.token_urlsafe(32)
     env = dict(os.environ, KC_BOOTSTRAP_ADMIN_PASSWORD=password, KEYCLOAK_ADMIN_PASSWORD=password)
     container = None
+    smtp = None
+    network = None
     try:
+        network = docker("network", "create", "--label", "marty.test=keycloak-passkeys", name)
+        smtp = docker("run", "-d", "--name", name + "-smtp", "--memory", "64m",
+            "--network", network, "--network-alias", "smtp", "--read-only",
+            "--label", "marty.test=keycloak-passkeys", "--tmpfs", "/tmp:rw,nosuid,nodev,size=16m",
+            "python:3.12.10-slim-bookworm", "python", "-u", "-c", SMTP_CAPTURE)
         container = docker("run", "-d", "--name", name, "--memory", "768m", "--cpus", "2",
+            "--network", network,
             "--label", "marty.test=keycloak-passkeys", "-p", "127.0.0.1::8080",
             "--mount", f"type=bind,source={ROOT / 'config/keycloak/themes/11id'},target=/opt/keycloak/themes/11id,readonly",
             "--tmpfs", "/opt/keycloak/data:rw,nosuid,nodev,size=128m",
@@ -70,8 +117,10 @@ def keycloak():
             "grant_type": "password", "client_id": "admin-cli", "username": "passkey-test-admin", "password": password})["access_token"]
         admin = base + "/admin/realms/passkey-test"
         request(base + "/admin/realms", token=token, body={"realm": "passkey-test", "enabled": True,
-            "loginTheme": "11id", "sslRequired": "none", "registrationAllowed": True,
-            "resetPasswordAllowed": True, "registrationEmailAsUsername": True})
+            "loginTheme": "11id", "emailTheme": "11id", "sslRequired": "none", "registrationAllowed": True,
+            "resetPasswordAllowed": True, "registrationEmailAsUsername": True,
+            "smtpServer": {"host": "smtp", "port": "1025", "from": "noreply@example.invalid",
+                           "auth": "false", "ssl": "false", "starttls": "false"}})
         request(admin + "/clients", token=token, body={"clientId": "passkey-test-ui", "enabled": True,
             "publicClient": True, "standardFlowEnabled": True, "redirectUris": [base + "/callback"],
             "attributes": {"pkce.code.challenge.method": "S256"}})
@@ -81,11 +130,17 @@ def keycloak():
             return request(base + "/realms/master/protocol/openid-connect/token", form={
                 "grant_type": "password", "client_id": "admin-cli", "username": "passkey-test-admin", "password": password})["access_token"]
 
-        yield {"name": name, "container": container, "base": base, "admin": admin, "token": admin_token, "env": env}
+        yield {"name": name, "container": container, "smtp": smtp, "base": base,
+               "admin": admin, "token": admin_token, "env": env}
     finally:
         if container:
             docker("rm", "-f", container)
             assert not docker("ps", "-a", "--filter", "id=" + container, "--format", "{{.ID}}")
+        if smtp:
+            docker("rm", "-f", smtp)
+            assert not docker("ps", "-a", "--filter", "id=" + smtp, "--format", "{{.ID}}")
+        if network:
+            docker("network", "rm", network)
 
 
 def configure(fixture, enabled, rp="localhost"):
@@ -99,6 +154,71 @@ def configure(fixture, enabled, rp="localhost"):
     result.stdout = result.stdout.decode("utf-8")
     result.stderr = result.stderr.decode("utf-8")
     return result
+
+
+def test_native_email_action_enrolls_a_verified_existing_account_without_password(keycloak):
+    from playwright.sync_api import sync_playwright
+
+    result = configure(keycloak, "true")
+    assert result.returncode == 0, result.stderr
+    email_address = "badge-only-user@example.invalid"
+    request(keycloak["admin"] + "/users", token=keycloak["token"], body={
+        "username": email_address, "email": email_address, "emailVerified": True,
+        "enabled": True, "firstName": "Synthetic", "lastName": "Badge User"})
+    query = "/users?" + urllib.parse.urlencode({"email": email_address, "exact": "true"})
+    subject = request(keycloak["admin"] + query, token=keycloak["token"])[0]["id"]
+    credentials_url = keycloak["admin"] + "/users/" + subject + "/credentials"
+    assert request(credentials_url, token=keycloak["token"]) == []
+    action_query = urllib.parse.urlencode({"client_id": "passkey-test-ui", "lifespan": 300,
+                                          "redirect_uri": keycloak["base"] + "/callback"})
+    request(keycloak["admin"] + "/users/" + subject + "/execute-actions-email?" + action_query,
+            token=keycloak["token"], method="PUT", body=["webauthn-register-passwordless"])
+    messages = docker("exec", keycloak["smtp"], "cat", "/tmp/messages.jsonl").splitlines()
+    mail = BytesParser(policy=email.policy.default).parsebytes(base64.b64decode(json.loads(messages[-1])))
+    assert email_address in mail["To"]
+    body = mail.get_body(preferencelist=("html", "plain")).get_content()
+    links = [html.unescape(value) for value in re.findall(r'https?://[^\s"<>]+', body)]
+    action_link = next(value for value in links if "/login-actions/action-token?" in value)
+    parsed = urllib.parse.urlparse(action_link)
+    parameters = urllib.parse.parse_qs(parsed.query)
+    prefix, signature = parameters["key"][0].rsplit(".", 1)
+    parameters["key"] = [prefix + "." + ("A" if signature[0] != "A" else "B") + signature[1:]]
+    invalid_link = urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(parameters, doseq=True)))
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(channel="chrome", headless=True)
+        try:
+            invalid = browser.new_context()
+            page = invalid.new_page()
+            page.goto(invalid_link)
+            assert page.locator("#registerWebAuthn").count() == 0
+            assert request(credentials_url, token=keycloak["token"]) == []
+            invalid.close()
+            context = browser.new_context()
+            page = context.new_page()
+            cdp = context.new_cdp_session(page)
+            cdp.send("WebAuthn.enable")
+            cdp.send("WebAuthn.addVirtualAuthenticator", {"options": {
+                "protocol": "ctap2", "transport": "internal", "hasResidentKey": True,
+                "hasUserVerification": True, "isUserVerified": True, "automaticPresenceSimulation": True}})
+            page.goto(action_link)
+            assert page.locator("#password").count() == 0
+            confirm = page.locator("a[href*='/login-actions/action-token']")
+            if confirm.count():
+                confirm.click()
+            page.once("dialog", lambda dialog: dialog.accept("Synthetic badge account passkey"))
+            page.locator("#registerWebAuthn").click(timeout=30000)
+            page.wait_for_function("""base => location.pathname === '/callback' ||
+                [...document.querySelectorAll('a')].some(link => link.href.startsWith(base + '/callback'))""",
+                arg=keycloak["base"], timeout=30000)
+            if urllib.parse.urlparse(page.url).path != "/callback":
+                page.locator('a[href^="' + keycloak["base"] + '/callback"]').click()
+            assert urllib.parse.urlparse(page.url).path == "/callback"
+            stored = request(credentials_url, token=keycloak["token"])
+            assert len(stored) == 1 and stored[0]["type"] == "webauthn-passwordless"
+            assert request(keycloak["admin"] + query, token=keycloak["token"])[0]["id"] == subject
+        finally:
+            browser.close()
 
 
 def test_real_realm_reconciliation_preserves_providers_and_policy_on_rollback(keycloak):

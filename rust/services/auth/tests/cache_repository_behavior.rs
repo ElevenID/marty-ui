@@ -52,7 +52,8 @@ fn session(user_id: &str) -> Session {
 #[tokio::test]
 async fn sessions_round_trip_and_user_index_operations_preserve_behavior() {
     let repository = repository(Arc::new(MemoryCache::default()));
-    let first = session("user-1");
+    let mut first = session("user-1");
+    first.keycloak_subject = Some("keycloak-account-distinct-from-user-1".to_owned());
     let second = session("user-1");
     SessionRepository::save(&repository, &first)
         .await
@@ -89,6 +90,18 @@ async fn sessions_round_trip_and_user_index_operations_preserve_behavior() {
         .await
         .expect("empty user sessions")
         .is_empty());
+}
+
+#[test]
+fn legacy_sessions_without_account_binding_remain_readable() {
+    let mut encoded = serde_json::to_value(session("legacy-user")).expect("serialize session");
+    encoded
+        .as_object_mut()
+        .expect("session object")
+        .remove("keycloak_subject");
+    let decoded: Session = serde_json::from_value(encoded).expect("read legacy session");
+    assert_eq!(decoded.keycloak_subject, None);
+    assert_eq!(decoded.user.user_id, "legacy-user");
 }
 
 #[tokio::test]

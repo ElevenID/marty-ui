@@ -63,6 +63,16 @@ vi.mock('../../contexts/ConsoleContext', () => ({
 describe('ProfilePage', () => {
   beforeEach(() => { passkeyMock.available = false; passkeyMock.start.mockReset(); });
 
+  it('shows email confirmation and prevents duplicate requests on the badge enrollment path', async () => {
+    passkeyMock.available = true;
+    passkeyMock.start.mockResolvedValue({ email_sent: true });
+    render(<ProfilePage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Create a passkey' }));
+    await waitFor(() => expect(screen.getByText(/Check your account email/)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Enrollment email sent' })).toBeDisabled();
+    expect(passkeyMock.start).toHaveBeenCalledTimes(1);
+  });
+
   it('offers optional enrollment only when the authenticated server session supports it', async () => {
     passkeyMock.available = true;
     passkeyMock.start.mockRejectedValue(new Error('Please sign in again'));

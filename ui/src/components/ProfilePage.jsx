@@ -59,12 +59,17 @@ function ProfilePage() {
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [enrollingPasskey, setEnrollingPasskey] = useState(false);
   const [passkeyError, setPasskeyError] = useState(null);
+  const [passkeyEmailSent, setPasskeyEmailSent] = useState(false);
 
   const handleCreatePasskey = async () => {
     setEnrollingPasskey(true);
     setPasskeyError(null);
     try {
-      await startPasskeyEnrollment(window.location.pathname);
+      const result = await startPasskeyEnrollment(window.location.pathname);
+      if (result?.email_sent) {
+        setPasskeyEmailSent(true);
+        setEnrollingPasskey(false);
+      }
     } catch (error) {
       setPasskeyError(error.message);
       setEnrollingPasskey(false);
@@ -370,8 +375,11 @@ function ProfilePage() {
                     Your other sign-in options stay available. You will confirm your account before enrollment.
                   </Typography>
                   {passkeyError && <Alert severity="error" sx={{ mb: 2 }}>{passkeyError}</Alert>}
-                  <Button variant="outlined" onClick={handleCreatePasskey} disabled={enrollingPasskey}>
-                    {enrollingPasskey ? 'Opening passkey setup…' : 'Create a passkey'}
+                  {passkeyEmailSent && <Alert severity="success" sx={{ mb: 2 }}>
+                    Check your account email for a link to finish creating your passkey. The link expires in 5 minutes.
+                  </Alert>}
+                  <Button variant="outlined" onClick={handleCreatePasskey} disabled={enrollingPasskey || passkeyEmailSent}>
+                    {passkeyEmailSent ? 'Enrollment email sent' : enrollingPasskey ? 'Opening passkey setup…' : 'Create a passkey'}
                   </Button>
                 </Box>
               )}

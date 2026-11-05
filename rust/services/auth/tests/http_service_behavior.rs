@@ -14,15 +14,16 @@ use marty_auth::{
     CanvasHttpApplication, CredentialCallbackContext, CredentialCallbackHeaders,
     CredentialCallbackResult, CredentialHttpError, CredentialLoginCompletion,
     CredentialLoginHttpService, CredentialLoginPoll, CredentialLoginStartResult,
-    CredentialVerifiedPayload, HandleCallbackCommand, HandleCallbackResult, PortError, Session,
-    SessionCookieConfig, SessionRepository, SessionSpec, UiOriginPolicy, UserType,
-    AUTH_CORE_HTTP_ROUTES, AUTH_CREDENTIAL_HTTP_ROUTES,
+    CredentialVerifiedPayload, HandleCallbackCommand, HandleCallbackResult, InitiateLoginResult,
+    PasskeyEnrollmentStart, PortError, Session, SessionCookieConfig, SessionRepository,
+    SessionSpec, UiOriginPolicy, UserType, AUTH_CORE_HTTP_ROUTES, AUTH_CREDENTIAL_HTTP_ROUTES,
 };
 use serde_json::Value;
 use tower::ServiceExt as _;
 
 #[derive(Default)]
 struct AppStub {
+    email_enrollment: Mutex<bool>,
     enrollments: Mutex<Vec<(String, String, String)>>,
     initiated: Mutex<Vec<(bool, String, String)>>,
     session: Mutex<Option<Session>>,
@@ -39,12 +40,19 @@ impl AuthHttpApplication for AppStub {
         session_id: &str,
         redirect_uri: String,
         oidc_redirect_uri: String,
-    ) -> Result<String, PortError> {
+    ) -> Result<PasskeyEnrollmentStart, PortError> {
         self.enrollments
             .lock()
             .unwrap()
             .push((session_id.into(), redirect_uri, oidc_redirect_uri));
-        Ok("https://identity.example/authorize?kc_action=webauthn-register-passwordless".into())
+        if *self.email_enrollment.lock().unwrap() {
+            return Ok(PasskeyEnrollmentStart::EmailSent);
+        }
+        Ok(PasskeyEnrollmentStart::Authorization(InitiateLoginResult {
+            authorization_url:
+                "https://identity.example/authorize?kc_action=webauthn-register-passwordless".into(),
+            state: "synthetic-state".into(),
+        }))
     }
     async fn initiate(
         &self,
@@ -359,6 +367,31 @@ async fn passkey_enrollment_requires_same_origin_and_authenticated_session() {
             "/console/profile".into(),
             "https://elevenidllc.com/v1/auth/callback".into()
         )]
+    );
+}
+
+#[tokio::test]
+async fn enrollment_email_response_exposes_no_action_link_or_new_session() {
+    let (router, app, _) = harness();
+    *app.email_enrollment.lock().unwrap() = true;
+    let response = request(
+        &router,
+        Method::POST,
+        "/v1/auth/passkeys/enroll",
+        &[
+            ("content-type", "application/json"),
+            ("origin", "https://elevenidllc.com"),
+            ("cookie", "sessionId=session-1"),
+        ],
+        "{}",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!response.headers().contains_key(header::SET_COOKIE));
+    let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&bytes).unwrap(),
+        serde_json::json!({"email_sent":true})
     );
 }
 

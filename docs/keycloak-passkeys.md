@@ -33,7 +33,8 @@ separate migration/enrollment design. Never delete credentials as rollback.
 ## Account lifecycle and qualification
 
 With managed passkeys enabled, the authenticated profile offers **Create a
-passkey** when the session has a trusted Keycloak identity and ID token. The
+passkey** when the session has a trusted Keycloak account binding. For OIDC
+sessions with a trusted ID token, the
 application uses a same-origin, cookie-authenticated JSON POST to
 `/v1/auth/passkeys/enroll`, then follows Keycloak's passwordless registration
 required action through the existing PKCE callback. Keycloak receives an ID-token
@@ -42,13 +43,23 @@ original subject and still-valid application session before returning to the
 profile; it retains that session's roles and organization context. AIA
 cancellation returns without claiming enrollment succeeded.
 
-Sessions without the Keycloak identity/token binding cannot use this entry point
-yet. In particular, Open Badge deployments with token exchange disabled need
-additional enrollment integration and qualification before this feature is
-complete. This limitation is remaining implementation work; it does not change
-Open Badge login or require existing users to create a local password. Credential
-management and prevention of removing the last usable method also remain rollout
-gates until implemented and verified.
+Open Badge credential-login sessions use Keycloak's native enrollment email,
+including when token exchange is disabled. Account resolution retains the trusted
+Keycloak subject separately from application IDs and validated OIDC claims. A
+request requires a verified sign-in within the previous five minutes; the service
+rechecks that the same Keycloak account is enabled and its verified email still
+matches. Only the passwordless registration action is sent, with a five-minute
+signed link and a registered client return URI. The application returns an email
+confirmation and never exposes the action token. Keycloak confirms the mailbox
+and owns registration; no local password is required and no application session
+or role context is replaced.
+
+This path requires the existing managed Keycloak admin adapter and working realm
+SMTP. After an upgrade, sign in through Open Badge again to retain the explicit
+account binding. Unbound sessions cannot select an account by supplying an email
+or application user ID. Existing login methods remain usable. Credential
+management, last-method safeguards and complete provider/packaged-image journeys
+remain rollout gates until implemented and verified.
 
 Users should enroll only from a trusted authenticated account, with appropriate
 fresh authentication. Keep email verification and existing linking policies.
@@ -69,4 +80,6 @@ do not establish a working deployed journey. Existing runtime deployment holds
 apply; no enablement on a held deployment is authorized by these instructions.
 
 References: [Keycloak 26.8 passkeys](https://github.com/keycloak/keycloak/blob/26.8.0/docs/documentation/server_admin/topics/authentication/passkeys.adoc),
-[WebAuthn policy and enrollment](https://github.com/keycloak/keycloak/blob/26.8.0/docs/documentation/server_admin/topics/authentication/webauthn.adoc).
+[WebAuthn policy and enrollment](https://github.com/keycloak/keycloak/blob/26.8.0/docs/documentation/server_admin/topics/authentication/webauthn.adoc),
+[native enrollment email API](https://github.com/keycloak/keycloak/blob/26.8.0/services/src/main/java/org/keycloak/services/resources/admin/UserResource.java),
+[signed action handling](https://github.com/keycloak/keycloak/blob/26.8.0/services/src/main/java/org/keycloak/authentication/actiontoken/execactions/ExecuteActionsActionTokenHandler.java).

@@ -68,6 +68,64 @@ pub struct InitiateLoginResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PasskeyEnrollmentStart {
+    Authorization(InitiateLoginResult),
+    EmailSent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasskeyEnrollmentEmail {
+    pub subject: String,
+    pub expected_email: String,
+    pub client_id: String,
+    pub redirect_uri: String,
+}
+
+#[async_trait]
+pub trait PasskeyEmailEnrollment: Send + Sync {
+    async fn send_enrollment_email(
+        &self,
+        request: &PasskeyEnrollmentEmail,
+    ) -> Result<(), PortError>;
+}
+
+/// Never treat an application/provisioned user ID as a Keycloak subject. Reject
+/// contradictory bindings rather than silently switching the account source.
+fn keycloak_subject(session: &Session) -> Option<&str> {
+    let resolved = session
+        .keycloak_subject
+        .as_deref()
+        .filter(|sub| !sub.is_empty());
+    let oidc = session
+        .oidc_claims
+        .as_ref()
+        .and_then(|claims| claims["sub"].as_str())
+        .filter(|sub| !sub.is_empty());
+    match (resolved, oidc) {
+        (Some(left), Some(right)) if left != right => None,
+        (Some(subject), _) | (_, Some(subject)) => Some(subject),
+        _ => None,
+    }
+}
+
+fn has_oidc_enrollment_hint(session: &Session) -> bool {
+    // Credential-account resolution does not establish browser SSO, even if
+    // token exchange was available. Use the same native email path for badges.
+    session.keycloak_subject.is_none()
+        && session
+            .id_token
+            .as_ref()
+            .is_some_and(|token| !token.is_empty())
+        && session
+            .oidc_claims
+            .as_ref()
+            .and_then(|claims| claims["sub"].as_str())
+            .is_some_and(|subject| {
+                !subject.is_empty() && keycloak_subject(session) == Some(subject)
+            })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HandleCallbackCommand {
     pub code: String,
     pub state: String,
@@ -215,6 +273,8 @@ pub trait AuthAuditSink: Send + Sync {
 #[derive(Clone)]
 pub struct AuthApplication {
     passkeys_enabled: bool,
+    passkey_email: Option<Arc<dyn PasskeyEmailEnrollment>>,
+    passkey_client_id: String,
     sessions: Arc<dyn SessionRepository>,
     pkce_states: Arc<dyn PkceStateRepository>,
     oidc: Arc<dyn OidcProvider>,
@@ -227,6 +287,7 @@ pub struct AuthApplication {
 
 #[derive(Clone)]
 pub struct AuthApplicationPorts {
+    pub passkey_email: Option<Arc<dyn PasskeyEmailEnrollment>>,
     pub sessions: Arc<dyn SessionRepository>,
     pub pkce_states: Arc<dyn PkceStateRepository>,
     pub oidc: Arc<dyn OidcProvider>,
@@ -238,6 +299,7 @@ pub struct AuthApplicationPorts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthApplicationConfig {
     pub passkeys_enabled: bool,
+    pub passkey_client_id: String,
     pub session_ttl_seconds: i64,
     pub post_logout_redirect_uri: String,
 }
@@ -247,6 +309,8 @@ impl AuthApplication {
     pub fn new(ports: AuthApplicationPorts, config: AuthApplicationConfig) -> Self {
         Self {
             passkeys_enabled: config.passkeys_enabled,
+            passkey_email: ports.passkey_email,
+            passkey_client_id: config.passkey_client_id,
             sessions: ports.sessions,
             pkce_states: ports.pkce_states,
             oidc: ports.oidc,
@@ -283,15 +347,11 @@ impl AuthApplication {
                 .impersonation
                 .as_ref()
                 .is_none_or(|context| !context.active)
-            && session
-                .id_token
-                .as_ref()
-                .is_some_and(|token| !token.is_empty())
-            && session
-                .oidc_claims
-                .as_ref()
-                .and_then(|claims| claims["sub"].as_str())
-                .is_some_and(|sub| !sub.is_empty())
+            && keycloak_subject(session).is_some()
+            && (has_oidc_enrollment_hint(session)
+                || (session.keycloak_subject.is_some()
+                    && self.passkey_email.is_some()
+                    && !session.user.email.is_empty()))
     }
 
     pub async fn initiate_passkey_enrollment(
@@ -299,13 +359,54 @@ impl AuthApplication {
         session_id: &str,
         command: InitiateLoginCommand,
         now: DateTime<Utc>,
-    ) -> Result<InitiateLoginResult, AuthApplicationError> {
+    ) -> Result<PasskeyEnrollmentStart, AuthApplicationError> {
         let session = self
             .validate_session(session_id, now)
             .await?
             .filter(|session| self.passkey_enrollment_available(session))
             .ok_or(AuthApplicationError::PasskeyEnrollmentUnavailable)?;
-        self.initiate(command, false, Some(&session), now).await
+        if has_oidc_enrollment_hint(&session) {
+            return self
+                .initiate(command, false, Some(&session), now)
+                .await
+                .map(PasskeyEnrollmentStart::Authorization);
+        }
+        // Badge sessions do not imply a browser SSO session or invent an OIDC
+        // authentication time. Require a recent server-created verified session
+        // and let Keycloak confirm the same account through its signed email.
+        if !(0..=300).contains(&now.signed_duration_since(session.created_at).num_seconds()) {
+            return Err(AuthApplicationError::PasskeyEnrollmentUnavailable);
+        }
+        let callback = command
+            .oidc_redirect_uri
+            .as_deref()
+            .and_then(|uri| url::Url::parse(uri).ok())
+            .filter(|url| {
+                matches!(url.scheme(), "https" | "http")
+                    && url.username().is_empty()
+                    && url.password().is_none()
+            })
+            .ok_or(AuthApplicationError::PasskeyEnrollmentUnavailable)?;
+        let redirect = callback
+            .join(command.redirect_uri.as_deref().unwrap_or("/"))
+            .map_err(|_| AuthApplicationError::PasskeyEnrollmentUnavailable)?;
+        if redirect.origin() != callback.origin() || self.passkey_client_id.is_empty() {
+            return Err(AuthApplicationError::PasskeyEnrollmentUnavailable);
+        }
+        self.passkey_email
+            .as_ref()
+            .ok_or(AuthApplicationError::PasskeyEnrollmentUnavailable)?
+            .send_enrollment_email(&PasskeyEnrollmentEmail {
+                subject: keycloak_subject(&session)
+                    .ok_or(AuthApplicationError::PasskeyEnrollmentUnavailable)?
+                    .into(),
+                expected_email: session.user.email.clone(),
+                client_id: self.passkey_client_id.clone(),
+                redirect_uri: redirect.into(),
+            })
+            .await
+            .map_err(|error| port("send passkey enrollment email", error))?;
+        Ok(PasskeyEnrollmentStart::EmailSent)
     }
 
     async fn initiate(
@@ -326,12 +427,7 @@ impl AuthApplication {
             nonce: Some(nonce.clone()),
             passkey_enrollment: enrollment.map(|session| PasskeyEnrollmentBinding {
                 session_id: session.session_id.clone(),
-                subject: session
-                    .oidc_claims
-                    .as_ref()
-                    .and_then(|claims| claims["sub"].as_str())
-                    .unwrap_or_default()
-                    .to_owned(),
+                subject: keycloak_subject(session).unwrap_or_default().to_owned(),
             }),
             created_at: now,
             expires_at: now + Duration::minutes(10),
@@ -414,11 +510,7 @@ impl AuthApplication {
                 .filter(|session| {
                     session.is_valid_at(now)
                         && self.passkey_enrollment_available(session)
-                        && session
-                            .oidc_claims
-                            .as_ref()
-                            .and_then(|claims| claims["sub"].as_str())
-                            == Some(binding.subject.as_str())
+                        && keycloak_subject(session) == Some(binding.subject.as_str())
                 })
                 .ok_or(AuthApplicationError::PasskeyEnrollmentMismatch)?;
             return Ok(HandleCallbackResult {

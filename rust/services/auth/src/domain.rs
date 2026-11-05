@@ -141,6 +141,9 @@ pub struct Session {
     pub id_token: Option<String>,
     pub refresh_token: Option<String>,
     pub oidc_claims: Option<Value>,
+    /// Trusted account resolution, independent of application IDs or OIDC claims.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keycloak_subject: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -170,6 +173,7 @@ impl Session {
             id_token: spec.id_token,
             refresh_token: spec.refresh_token,
             oidc_claims: spec.oidc_claims,
+            keycloak_subject: None,
         }
     }
 

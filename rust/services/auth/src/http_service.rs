@@ -21,8 +21,9 @@ use crate::{
     CredentialCallbackError, CredentialCallbackHeaders, CredentialCallbackResult,
     CredentialHttpError, CredentialLoginCompletion, CredentialLoginErrorPage,
     CredentialLoginHttpService, CredentialStateError, CredentialVerifiedPayload,
-    HandleCallbackCommand, HandleCallbackResult, InitiateLoginCommand, PortError, Session,
-    SessionRepository, UiOriginPolicy, CREDENTIAL_LOGIN_CSS, CREDENTIAL_LOGIN_JAVASCRIPT,
+    HandleCallbackCommand, HandleCallbackResult, InitiateLoginCommand, PasskeyEnrollmentStart,
+    PortError, Session, SessionRepository, UiOriginPolicy, CREDENTIAL_LOGIN_CSS,
+    CREDENTIAL_LOGIN_JAVASCRIPT,
 };
 
 pub const AUTH_CORE_HTTP_ROUTES: &[(&str, &str)] = &[
@@ -94,7 +95,7 @@ pub trait AuthHttpApplication: Send + Sync {
         _session_id: &str,
         _redirect_uri: String,
         _oidc_redirect_uri: String,
-    ) -> Result<String, PortError> {
+    ) -> Result<PasskeyEnrollmentStart, PortError> {
         Err(PortError::new(
             "passkey_enrollment_unavailable",
             "Passkey enrollment is unavailable",
@@ -125,7 +126,7 @@ impl AuthHttpApplication for AuthApplication {
         session_id: &str,
         redirect_uri: String,
         oidc_redirect_uri: String,
-    ) -> Result<String, PortError> {
+    ) -> Result<PasskeyEnrollmentStart, PortError> {
         self.initiate_passkey_enrollment(
             session_id,
             InitiateLoginCommand {
@@ -135,7 +136,6 @@ impl AuthHttpApplication for AuthApplication {
             Utc::now(),
         )
         .await
-        .map(|result| result.authorization_url)
         .map_err(application_error)
     }
     async fn initiate(
@@ -320,7 +320,14 @@ async fn start_passkey_enrollment(
         .enroll_passkey(session_id, redirect, oidc_callback_url(ui_base))
         .await
     {
-        Ok(location) => Json(json!({"authorization_url": location})).into_response(),
+        Ok(PasskeyEnrollmentStart::Authorization(start)) => {
+            Json(json!({"authorization_url": start.authorization_url})).into_response()
+        }
+        Ok(PasskeyEnrollmentStart::EmailSent) => Json(json!({"email_sent": true})).into_response(),
+        Err(error) if error.code == "auth_passkey_enrollment_unavailable" => detail(
+            StatusCode::UNAUTHORIZED,
+            "Sign in again before requesting passkey enrollment",
+        ),
         Err(_) => detail(
             StatusCode::SERVICE_UNAVAILABLE,
             "Passkey enrollment could not be started",

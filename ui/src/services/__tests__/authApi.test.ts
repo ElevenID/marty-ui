@@ -40,6 +40,12 @@ describe('authApi', () => {
     await expect(startPasskeyEnrollment()).rejects.toThrow('Sign in again')
     expect(redirectBrowser).not.toHaveBeenCalled()
   })
+
+  it('reports a native enrollment email without navigating or exposing its link', async () => {
+    server.use(http.post('/v1/auth/passkeys/enroll', () => HttpResponse.json({ email_sent: true })))
+    await expect(startPasskeyEnrollment()).resolves.toEqual({ email_sent: true })
+    expect(redirectBrowser).not.toHaveBeenCalled()
+  })
   beforeEach(() => {
     vi.clearAllMocks()
   })
