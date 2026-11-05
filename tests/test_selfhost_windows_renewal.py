@@ -777,6 +777,34 @@ def test_volume_metadata_changes_force_requalification_and_cannot_overlap():
     assert docker.witness_calls == 1 and context.proofs == []
 
 
+def test_many_context_proofs_keep_total_result_evidence_bounded():
+    import hashlib
+    _docker, context = foreign_context()
+    proof = {'sha256': '1'*64, 'foreign_containers': 1000, 'native_witnesses': 100,
+             'drift': {name: {'count': 1000, 'ids': [str(i)*64 for i in range(4)], 'sha256': '2'*64}
+                       for name in ['added', 'removed', 'updated']}}
+    expected = ''
+    for _ in range(200):
+        expected = hashlib.sha256(expected.encode()+json.dumps(proof, sort_keys=True).encode()).hexdigest()
+        context._record_proof(proof)
+    assert context.proof_count == 200 and context.proof_sha256 == expected
+    assert len(context.proofs) < 10
+    assert len(json.dumps(context.proofs, sort_keys=True).encode()) <= 8192
+
+
+def test_late_aggregate_hash_does_not_publish_context_evidence(monkeypatch):
+    _docker, context = foreign_context()
+    clock = {'now': 0}
+    monkeypatch.setattr(renewal.time, 'monotonic', lambda: clock['now'])
+    original = renewal.hashlib.sha256
+    def late(raw):
+        clock['now'] = 61
+        return original(raw)
+    monkeypatch.setattr(renewal.hashlib, 'sha256', late)
+    with pytest.raises(ValueError):context._record_proof({'sha256': '1'*64}, deadline=60)
+    assert context.proofs == [] and context.proof_count == 0 and context.proof_sha256 is None
+
+
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Win32 owned job containment')
 def retained_owned_processes(monkeypatch):
     actual = renewal.subprocess.Popen;processes = []

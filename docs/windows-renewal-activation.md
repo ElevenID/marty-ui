@@ -104,7 +104,9 @@ inventory drift allows at most three read-only attempts within a sixty-second
 acceptance budget. No workload mutation is retried by this check.
 
 Accepted context changes add proof hashes, counts and bounded ID samples to the
-private activation result. Unknown storage, missing witnesses, overlap, candidate
+private activation result. Recent proof samples have an aggregate eight-KiB bound;
+the total count and hash chain cover all accepted changes without exhausting the
+existing result size limit. Unknown storage, missing witnesses, overlap, candidate
 drift or exhausted observation budget forbids further writes, including automatic
 rollback. Diagnostic-write failure preserves that classification. Docker has no
 cross-client transaction lock: this qualification cannot prevent another client

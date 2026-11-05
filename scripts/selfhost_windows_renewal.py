@@ -523,6 +523,22 @@ class ForeignContext:
         self.foreign = {k: v for k, v in self.initial.items() if v['project'] != project}
         self.volumes = volumes
         self.proofs = []
+        self.proof_count = 0
+        self.proof_sha256 = None
+
+    def _record_proof(self, proof, *, deadline=None):
+        raw = json.dumps(proof, sort_keys=True).encode()
+        chain = hashlib.sha256((self.proof_sha256 or '').encode() + raw).hexdigest()
+        # Context evidence must not exhaust the existing 64KiB result limit
+        # after physical activation. Keep a byte-bounded recent sample and an
+        # aggregate chain/count covering every accepted context change.
+        recent = [*self.proofs, proof]
+        while len(json.dumps(recent, sort_keys=True).encode()) > 8192:
+            recent.pop(0)
+        require(deadline is None or time.monotonic() < deadline, 'Storage qualification deadline reached')
+        self.proofs = recent
+        self.proof_count += 1
+        self.proof_sha256 = chain
 
     def _candidate(self, items, *, before_intent):
         owned = [x for x in items if _project(x) == self.project]
@@ -599,8 +615,8 @@ class ForeignContext:
                             'sha256': hashlib.sha256(json.dumps(ids).encode()).hexdigest()}
                      for name, ids in changes.items()}
             require(time.monotonic() < deadline, 'Storage qualification deadline reached')
-            self.proofs.append({'sha256': digest, 'foreign_containers': len(foreign),
-                                'native_witnesses': len(witnesses), 'drift': drift})
+            self._record_proof({'sha256': digest, 'foreign_containers': len(foreign),
+                                'native_witnesses': len(witnesses), 'drift': drift}, deadline=deadline)
             self.foreign, self.volumes = foreign, volumes
             return after
         raise UnsafeRenewalContext('Foreign container inventory did not stabilize')
@@ -985,7 +1001,9 @@ def activate(config):
             result.update(schema=SCHEMA, project=project, services=len(services),
                           recreated_roles=sorted(changing), candidate_only=True,
                           production_admission=False, automatic_lifecycle=False,
-                          foreign_context_proofs=context.proofs)
+                          foreign_context_proofs=context.proofs,
+                          foreign_context_proof_count=context.proof_count,
+                          foreign_context_proof_sha256=context.proof_sha256)
         # Never publish success before all held-input exit checks have passed.
         write_empty_private_file(outputs['result'], json.dumps(result) + '\n')
     except Exception:
