@@ -936,6 +936,7 @@ services:
       APPLICANT_DATA_FILE: /app/data/applicant_store.json
       APPLICATION_TEMPLATE_MIGRATION_MAP: ${APPLICATION_TEMPLATE_MIGRATION_MAP:-}
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       NOTIFICATION_SERVICE_URL: http://notification:8007
       NOTIFICATION_EVENT_PRODUCER_ID: applicant
       NOTIFICATION_APPLICANT_EVENT_TOKEN_FILE: /run/secrets/notification_applicant_event_token
@@ -948,6 +949,7 @@ services:
       - notification_applicant_event_token
       - flow_application_event_hmac_key
       - workload_identity_ca_cert
+      - issuance_api_key
     volumes:
       - type: bind
         source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/applicant
