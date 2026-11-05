@@ -115,8 +115,10 @@ def hold_private_generation(root: Path, names: list[str]):
             require({p.name for p in root.iterdir()} == set(names))
             data = {name: stack.enter_context(_held_private_input(root / name))
                     for name in names}
-            yield data
-            require({p.name for p in root.iterdir()} == set(names))
+            try:
+                yield data
+            finally:
+                require({p.name for p in root.iterdir()} == set(names))
     except (OSError, UnicodeError, ValueError, TypeError):
         raise ValueError(REFUSAL) from None
 

@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import selfhost_windows_inputs as windows
@@ -151,6 +152,25 @@ class WindowsInputTests(unittest.TestCase):
                                "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new("
                                "$s,'Read','Allow'));[IO.File]::SetAccessControl($p,$a)")
             self.assertEqual(path.read_bytes(), PUBLIC.encode("utf-8"))
+
+    def test_generation_rechecks_membership_even_when_the_caller_raises(self):
+        with private_fixture() as (root, path):
+            path.rename(root / "leaf")
+            visits = []
+            original = Path.iterdir
+            def observed(directory):
+                if directory == root:
+                    visits.append(directory)
+                return original(directory)
+            with patch.object(Path, "iterdir", observed):
+                with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                    with windows.hold_private_generation(root, ["leaf"]):
+                        (root / "unexpected").write_bytes(b"SYNTHETIC")
+                        raise RuntimeError("SYNTHETIC_ACTION_FAILURE")
+            self.assertEqual(len(visits), 2)
+            # Failure closes all handles while preserving unexpected data.
+            self.assertTrue((root / "unexpected").exists())
+            (root / "leaf").write_bytes(b"AFTER_FAILURE")
 
     def test_byte_reader_preserves_line_endings_binary_empty_and_maximum(self):
         with private_fixture() as (_, path):
