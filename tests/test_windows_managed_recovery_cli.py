@@ -1,5 +1,6 @@
 """Strict private managed configuration and qualified-owner CLI routing."""
 import json
+import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -11,6 +12,8 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 import selfhost_windows_recovery as recovery
 from test_selfhost_windows_inputs import private_fixture
+
+pytestmark=pytest.mark.skipif(os.name!='nt',reason='Actual private NTFS configuration fixture')
 
 
 @contextmanager
