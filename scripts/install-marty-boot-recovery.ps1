@@ -6,23 +6,40 @@ param(
     [switch]$RenewCredentials,
     [string]$LogicalTlsProject,
     [int]$RenewalIntervalMinutes = 0,
+    [int]$FirstRenewalDelaySeconds = 0,
+    [int]$RenewalWindowMinutes = 0,
     [string]$TaskName = 'Marty-Recovery-At-Boot'
 )
 $ErrorActionPreference = 'Stop'
 if ($RenewCredentials) {
     if (-not $ManagedPython -or $LogicalTlsProject -cnotmatch '\Amarty-(selfhost|production)-[a-z0-9][a-z0-9-]{0,59}\z' -or
-        $RenewalIntervalMinutes -lt 15 -or $RenewalIntervalMinutes -gt 240) {
+        $RenewalIntervalMinutes -lt 15 -or $RenewalIntervalMinutes -gt 240 -or
+        ($FirstRenewalDelaySeconds -ne 0 -and ($FirstRenewalDelaySeconds -lt 15 -or
+            $FirstRenewalDelaySeconds -gt 60*$RenewalIntervalMinutes)) -or
+        $RenewalWindowMinutes -lt 0 -or $RenewalWindowMinutes -gt 1440 -or
+        ($RenewalWindowMinutes -gt 0 -and 60*$RenewalWindowMinutes -le $(if ($FirstRenewalDelaySeconds) {$FirstRenewalDelaySeconds} else {60*$RenewalIntervalMinutes}))) {
         throw 'Renewal requires managed settings, enrolled logical TLS namespace and an explicitly qualified interval (15-240 minutes).'
     }
-} elseif ($LogicalTlsProject -or $PSBoundParameters.ContainsKey('RenewalIntervalMinutes')) {
+} elseif ($LogicalTlsProject -or $PSBoundParameters.ContainsKey('RenewalIntervalMinutes') -or
+    $PSBoundParameters.ContainsKey('FirstRenewalDelaySeconds') -or $PSBoundParameters.ContainsKey('RenewalWindowMinutes')) {
     throw 'Renewal options require explicit RenewCredentials mode.'
 }
 
 function New-ManagedRecoveryTaskDefinition($Scheduler, [string]$UserId,
     [string]$PowerShellPath, [string]$Arguments, [string]$WorkingDirectory,
-    [int]$RenewalIntervalMinutes = 0) {
+    [int]$RenewalIntervalMinutes = 0, [int]$FirstRenewalDelaySeconds = 0,
+    [int]$RenewalWindowMinutes = 0) {
     if ($RenewalIntervalMinutes -ne 0 -and ($RenewalIntervalMinutes -lt 15 -or $RenewalIntervalMinutes -gt 240)) {
         throw 'Renewal interval must be explicitly qualified between 15 and 240 minutes.'
+    }
+    if ($FirstRenewalDelaySeconds -ne 0 -and ($RenewalIntervalMinutes -eq 0 -or
+        $FirstRenewalDelaySeconds -lt 15 -or $FirstRenewalDelaySeconds -gt 60*$RenewalIntervalMinutes)) {
+        throw 'First renewal delay must be 15 seconds through the qualified interval, or zero for its default.'
+    }
+    $firstDelay = if ($FirstRenewalDelaySeconds) { $FirstRenewalDelaySeconds } else { 60*$RenewalIntervalMinutes }
+    if ($RenewalWindowMinutes -lt 0 -or $RenewalWindowMinutes -gt 1440 -or
+        ($RenewalWindowMinutes -gt 0 -and ($RenewalIntervalMinutes -eq 0 -or 60*$RenewalWindowMinutes -le $firstDelay))) {
+        throw 'A finite renewal window must end after the first run and within 24 hours.'
     }
     $definition = $Scheduler.NewTask(0)
     $definition.RegistrationInfo.Description = 'Recover the retained Marty candidate after operator logon and Docker Desktop startup.'
@@ -33,8 +50,26 @@ function New-ManagedRecoveryTaskDefinition($Scheduler, [string]$UserId,
     $trigger.UserId = $UserId
     $trigger.Delay = 'PT2M'
     if ($RenewalIntervalMinutes) {
-        $trigger.Repetition.Interval = 'PT' + $RenewalIntervalMinutes + 'M'
-        $trigger.Repetition.StopAtDurationEnd = $false
+        # A logon trigger alone cannot start recurrence for a user who is
+        # already signed in when this definition is registered. Keep logon
+        # renewal request once, and give recurrence its own UTC time trigger.
+        $nowUtc = [DateTimeOffset]::UtcNow
+        $registeredUtc = $nowUtc.AddTicks(-($nowUtc.Ticks % [TimeSpan]::TicksPerSecond))
+        $format = "yyyy-MM-dd'T'HH:mm:sszzz"
+        $definition.RegistrationInfo.Date = $registeredUtc.ToString($format, [Globalization.CultureInfo]::InvariantCulture)
+        $firstDelay = if ($FirstRenewalDelaySeconds) { $FirstRenewalDelaySeconds } else { 60*$RenewalIntervalMinutes }
+        $timer = $definition.Triggers.Create(1) # TASK_TRIGGER_TIME
+        $timer.Enabled = $true
+        $timer.StartBoundary = $registeredUtc.AddSeconds($firstDelay).ToString($format, [Globalization.CultureInfo]::InvariantCulture)
+        $timer.Repetition.Interval = 'PT' + $RenewalIntervalMinutes + 'M'
+        $timer.Repetition.StopAtDurationEnd = $false
+        if ($RenewalWindowMinutes) {
+            # Bound future starts in the scheduler itself, even if the trial
+            # controller dies. Never terminate an in-flight guarded renewal.
+            $end = $registeredUtc.AddMinutes($RenewalWindowMinutes).ToString($format, [Globalization.CultureInfo]::InvariantCulture)
+            $trigger.EndBoundary = $end
+            $timer.EndBoundary = $end
+        }
         # No Duration: repeat indefinitely while this interactive user is available.
         $definition.RegistrationInfo.Description = 'Renew the retained online Marty candidate using its guarded native owner.'
     }
@@ -44,11 +79,15 @@ function New-ManagedRecoveryTaskDefinition($Scheduler, [string]$UserId,
     $action.WorkingDirectory = $WorkingDirectory
     $definition.Settings.StartWhenAvailable = $true
     $definition.Settings.ExecutionTimeLimit = 'PT20M'
-    $definition.Settings.RestartCount = 3
-    $definition.Settings.RestartInterval = 'PT2M'
     if ($RenewalIntervalMinutes) {
         $definition.Settings.ExecutionTimeLimit = 'PT1H'
-        $definition.Settings.RestartCount = 0 # never immediately replay a failed renewal
+        # Leave the COM defaults untouched: no RestartOnFailure XML at all.
+        # Setting an interval then Count=0 emits an invalid retry block; the
+        # scheduler requires a positive Count whenever that block is present.
+        # A failed renewal must never be immediately replayed.
+    } else {
+        $definition.Settings.RestartCount = 3
+        $definition.Settings.RestartInterval = 'PT2M'
     }
     $definition.Settings.MultipleInstances = 2 # TASK_INSTANCES_IGNORE_NEW
     $definition.Settings.Enabled = $true
@@ -102,14 +141,17 @@ if ($RenewCredentials) { $preflightArguments += @('-RenewCredentials', '-Logical
 if ($LASTEXITCODE -ne 0) { throw 'Recovery preflight failed; the scheduled task was not changed.' }
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-$actionArguments = "-NoProfile -NonInteractive -File `"$recoveryScript`" -RecoveryConfigurationFile `"$RecoveryConfigurationFile`""
-if ($ManagedPython) { $actionArguments += " -ManagedPython `"$ManagedPython`" -WaitForEngine" }
+$actionPrefix = if ($ManagedPython) { '-NoProfile -NonInteractive -WindowStyle Hidden' } else { '-NoProfile -NonInteractive' }
+$actionArguments = "$actionPrefix -File `"$recoveryScript`" -RecoveryConfigurationFile `"$RecoveryConfigurationFile`""
+if ($ManagedPython) {
+    $actionArguments += " -ManagedPython `"$ManagedPython`" -WaitForEngine"
+}
 if ($RenewCredentials) { $actionArguments += " -RenewCredentials -LogicalTlsProject `"$LogicalTlsProject`"" }
 if ($ManagedPython) {
     $scheduler = New-Object -ComObject 'Schedule.Service'
     $scheduler.Connect()
     $folder = $scheduler.GetFolder('\')
-    $definition = New-ManagedRecoveryTaskDefinition $scheduler $identity.Name $powerShellPath $actionArguments $repoRoot $RenewalIntervalMinutes
+    $definition = New-ManagedRecoveryTaskDefinition $scheduler $identity.Name $powerShellPath $actionArguments $repoRoot $RenewalIntervalMinutes $FirstRenewalDelaySeconds $RenewalWindowMinutes
     # TASK_CREATE=2 is atomic create-only, never TASK_UPDATE or CREATE_OR_UPDATE.
     # A collision after the inventory/preflight therefore refuses at registration.
     $folder.RegisterTaskDefinition($TaskName, $definition, 2, $identity.Name, $null, 3) | Out-Null

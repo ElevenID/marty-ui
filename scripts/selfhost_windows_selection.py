@@ -37,11 +37,14 @@ class SelectedInputs:
     secrets_dir: Path
     sequence: int
     selected_sha256: str
+    journal_path: Path
+    generation_sequence: int
     check_configuration: Callable = field(repr=False, compare=False)
     check_current: Callable = field(repr=False, compare=False)
     recover_existing: Callable = field(repr=False, compare=False)
     stage_renewal: Callable = field(repr=False, compare=False)
     repair_model: Callable = field(repr=False, compare=False)
+    continue_journal: Callable = field(repr=False, compare=False)
 
 
 def require(value):
@@ -101,22 +104,25 @@ def directory(config):
 
 
 def _read(root, stack):
+    from selfhost_windows_continuation import FILES
     from selfhost_windows_model import ENTRY as model_entry, LIMIT as model_limit
     names = sorted(p.name for p in root.iterdir())
-    require(len(names) <= 2*(MAX_SELECTIONS+model_limit)+1
-            and all(n == 'owner.json' or ENTRY.fullmatch(n) or model_entry.fullmatch(n) for n in names))
+    require(len(names) <= 2*(MAX_SELECTIONS+model_limit)+1+len(FILES)
+            and all(n == 'owner.json' or n in FILES or ENTRY.fullmatch(n) or model_entry.fullmatch(n) for n in names))
     raw = {n: stack.enter_context(renewal.hold_private_input(root/n)) for n in names}
     require(sorted(p.name for p in root.iterdir()) == names)
     return raw
 
 
 def _parse(raw, expected, *, allow_pending_model=False):
+    from selfhost_windows_continuation import FILES, checkpoint
     from selfhost_windows_model import ENTRY as model_entry, history
     require('owner.json' in raw)
     require(decode(raw['owner.json']) == {'schema': SCHEMA, 'binding': expected})
+    carry = checkpoint(raw)
     intents = {};selections = {};previous = None;prior_record = None
     for name, value in raw.items():
-        if name == 'owner.json' or model_entry.fullmatch(name):continue
+        if name == 'owner.json' or name in FILES or model_entry.fullmatch(name):continue
         match = ENTRY.fullmatch(name);require(match is not None)
         number = int(match[1]);require(1 <= number <= MAX_SELECTIONS)
         target = intents if match[2] == 'intent' else selections
@@ -129,8 +135,8 @@ def _parse(raw, expected, *, allow_pending_model=False):
         require(isinstance(intent, dict) and set(intent) == {'schema', 'sequence', 'parent', 'config_path', 'config_file_sha256',
                                'config_sha256', 'inputs', 'operation', 'result_before_sha256'})
         require(intent['schema'] == SCHEMA and intent['sequence'] == number and intent['parent'] == previous)
-        require(type(intent['sequence']) is int and intent['operation'] in {'adopt', 'activation'})
-        require(intent['operation'] == ('adopt' if number == 1 else 'activation'))
+        require(type(intent['sequence']) is int)
+        require(intent['operation'] == (('continuation' if carry else 'adopt') if number == 1 else 'activation'))
         require(isinstance(intent['inputs'], dict) and set(intent['inputs']) == {'old', 'new'})
         for snapshot in intent['inputs'].values():
             require(isinstance(snapshot, dict) and set(snapshot) == {'env_file', 'env_sha256', 'secrets_dir', 'secrets_sha256', 'native_mirror'})
@@ -156,10 +162,13 @@ def _parse(raw, expected, *, allow_pending_model=False):
                     and re.fullmatch(r'[0-9a-f]{64}', record['result_sha256']))
             require(record['intent_sha256'] == digest(raw[f'{number:06}.intent.json']))
             require(isinstance(record['choice'], str) and record['choice'] in {'old', 'new'} and record['selected'] == intent['inputs'][record['choice']])
-            require(isinstance(record['decision'], str) and record['decision'] in {'adopted', 'activated', 'rolled_back', 'reconciled-old', 'reconciled-new'})
-            require((record['decision'] in {'adopted', 'activated', 'reconciled-new'}) == (record['choice'] == 'new'))
-            require((number == 1) == (record['decision'] == 'adopted'))
-            require(record['result_sha256'] is not None or record['decision'].startswith('reconciled-'))
+            if number == 1 and carry:
+                require(record['decision'] == 'continued-'+record['choice'])
+            else:
+                require(isinstance(record['decision'], str) and record['decision'] in {'adopted', 'activated', 'rolled_back', 'reconciled-old', 'reconciled-new'})
+                require((record['decision'] in {'adopted', 'activated', 'reconciled-new'}) == (record['choice'] == 'new'))
+                require((number == 1) == (record['decision'] == 'adopted'))
+            require(record['result_sha256'] is not None or record['decision'].startswith('reconciled-') or number == 1 and carry)
             if prior_record is not None:require(record['data_sha256'] == prior_record['data_sha256'])
             previous = digest(raw[f'{number:06}.selection.json'])
             prior_record = record
@@ -178,8 +187,8 @@ def _append(root, raw, name, value, stack):
 
 
 @contextmanager
-def _session(config_path, *, create=False, _pending_model_sha256=None):
-    from selfhost_windows_model import ENTRY as model_entry, hold_history, model_binding, owner_binding
+def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_continuation_sha256=None, _preserve_history=None, _discover_continuation=False):
+    from selfhost_windows_continuation import resolve
     with ExitStack() as stack:
         raw_config = stack.enter_context(renewal.hold_private_input(Path(config_path)))
         config = decode(raw_config);expected = binding(config)
@@ -192,19 +201,39 @@ def _session(config_path, *, create=False, _pending_model_sha256=None):
         stack.enter_context(renewal.hold_storage_namespace(root))
         with _held_private_input(root, directory=True):pass
         raw = _read(root, stack)
-        expected = owner_binding(raw, config)
-        if any(model_entry.fullmatch(name) for name in raw):
-            if _pending_model_sha256 is not None:
-                require(type(_pending_model_sha256) is str and re.fullmatch(r'[0-9a-f]{64}', _pending_model_sha256))
-                require(digest(stack.enter_context(renewal.hold_private_input(renewal.model_repair_guard(config)))) == _pending_model_sha256)
-            _intents, records = _parse(raw, expected, allow_pending_model=_pending_model_sha256 is not None)
-            _current, accepted = hold_history(raw, expected, records, stack, allow_pending=_pending_model_sha256 is not None)
-            require(model_binding(config) in accepted)
-        else:
-            require(binding(config) == expected and _pending_model_sha256 is None)
+        if _discover_continuation:
+            require(not create and _pending_model_sha256 is None and _pending_continuation_sha256 is None)
+            guard=renewal.continuation_guard(config)
+            if renewal.namespace_entry_exists(guard):
+                _pending_continuation_sha256=digest(stack.enter_context(renewal.hold_private_input(guard)))
+        for cap, guard in [(_pending_model_sha256, renewal.model_repair_guard(config)),
+                           (_pending_continuation_sha256, renewal.continuation_guard(config))]:
+            if cap is not None:
+                require(type(cap) is str and re.fullmatch(r'[0-9a-f]{64}', cap))
+                require(digest(stack.enter_context(renewal.hold_private_input(guard))) == cap)
+        ancestry=[]
+        expected, root, raw, _accepted = resolve(config, root, raw, stack,
+            pending_model=_pending_model_sha256 is not None,
+            pending_continuation_sha256=_pending_continuation_sha256, ancestry=ancestry,
+            discover_pending=_discover_continuation)
+        if _discover_continuation:
+            from selfhost_windows_continuation import INTENT, DECISION, validate_marker
+            require(INTENT in raw and (DECISION not in raw or _pending_continuation_sha256 is not None))
+            marker=validate_marker(raw,expected,root)
+            require(raw[INTENT]==packed(marker))
+            require(not any(renewal.namespace_entry_exists(getter(config)) for getter in
+                (renewal.recovery_guard,renewal.recovery_preparation_guard,
+                 renewal.renewal_staging_guard,renewal.model_repair_guard)))
+            if not renewal.namespace_entry_exists(guard):_new_private(guard,raw[INTENT])
+            require(stack.enter_context(renewal.hold_private_input(guard))==raw[INTENT])
+        if _preserve_history is not None:_preserve_history(ancestry)
         try:
             yield config, raw_config, expected, root, raw, stack
         finally:
+            for prior_root, prior_raw in ancestry:
+                require({p.name for p in prior_root.iterdir()} == set(prior_raw))
+                stack.enter_context(_held_private_input(prior_root, directory=True))
+                require({p.name for p in prior_root.iterdir()} == set(prior_raw))
             require(sorted(p.name for p in root.iterdir()) == sorted(raw))
             # New entries are complete before the immutable directory proof.
             stack.enter_context(_held_private_input(root, directory=True))
@@ -273,6 +302,8 @@ def _inspect(config, choice, values, stack, *, expected_data=None, require_ready
                 stack.enter_context(renewal.hold_storage_namespace(path))
     require(mounts > 0)
     return {'data_sha256': data_hash, 'docker': docker, 'baseline': baseline,
+            'context': renewal.ForeignContext(docker, config['project'], set(), baseline, volumes,
+                                              config['native']['helper_image']),
             'owned': owned, 'services': services, 'model': models[choice], 'command': commands[choice],
             'cwd': Path(config['compose_file']).parent}
 
@@ -288,8 +319,7 @@ def _prove(config, choice, values, stack, *, expected_data=None, authority_file=
     observed = _inspect(config, choice, values, stack, expected_data=expected_data)
     docker = observed['docker']
     _native_current(config, choice, values, docker, authority_file)
-    require(renewal.observations(docker.containers(), config['project'], set())
-            == renewal.observations(observed['baseline'], config['project'], set()))
+    observed['context'].check(before_intent=True)
     return observed['data_sha256']
 
 
@@ -326,7 +356,9 @@ def prepare(config_path, *, authority_file=None, staging_sha256=None):
         if staging_sha256 is None:require(not renewal.recovery_pending(config))
         else:
             require(not renewal.namespace_entry_exists(renewal.recovery_guard(config))
-                and not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(config)))
+                and not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(config))
+                and not renewal.namespace_entry_exists(renewal.model_repair_guard(config))
+                and not renewal.namespace_entry_exists(renewal.continuation_guard(config)))
         intents, records = _parse(raw, expected)
         require(len(intents) == len(records) and len(intents) < MAX_SELECTIONS)
         previous = records[len(records)];values, snapshots = _inputs(config, stack)
@@ -425,6 +457,10 @@ def activation_admission(config, old, new, old_env, new_env):
         stack.enter_context(renewal.hold_storage_namespace(root))
         stack.enter_context(_held_private_input(root, directory=True))
         raw = _read(root, stack)
+        from selfhost_windows_continuation import resolve
+        ancestry=[]
+        _resolved, root, raw, _models = resolve(config, root, raw, stack, ancestry=ancestry)
+        stack.enter_context(_held_private_input(root, directory=True))
         from selfhost_windows_model import hold_history, model_binding, owner_binding
         expected = owner_binding(raw, config)
         intents, records = _parse(raw, expected);require(len(intents) == len(records)+1)
@@ -437,7 +473,10 @@ def activation_admission(config, old, new, old_env, new_env):
                 'secrets_dir': str(Path(config[prefix+'_secrets'])), 'secrets_sha256': fingerprint(data),
                 'native_mirror': config['native'][mirror]})
         try:yield
-        finally:require(sorted(p.name for p in root.iterdir()) == sorted(raw))
+        finally:
+            require(sorted(p.name for p in root.iterdir()) == sorted(raw))
+            for prior_root, prior_raw in ancestry:
+                require({p.name for p in prior_root.iterdir()} == set(prior_raw))
 
 
 def complete(config_path, *, reconcile=False, authority_file=None):
@@ -484,8 +523,13 @@ def status(config_path):
         if renewal.namespace_entry_exists(renewal.renewal_staging_guard(config)):
             return {'state':'pending-staging','sequence':len(records),'project':config['project']}
         selected = records[len(records)]
-        return {'state': 'selected', 'sequence': len(records), 'project': config['project'],
-                'selected': selected['selected'], 'decision': selected['decision']}
+        result = {'state': 'selected', 'sequence': len(records), 'project': config['project'],
+                  'selected': selected['selected'], 'decision': selected['decision']}
+        if _root != directory(config):
+            from selfhost_windows_continuation import checkpoint
+            result.update(journal=str(_root), generation_sequence=checkpoint(raw)['sequence_offset']+len(records))
+        if renewal.namespace_entry_exists(renewal.continuation_guard(config)):result['state']='pending-continuation'
+        return result
 
 
 def _stage_names():
@@ -498,6 +542,24 @@ def _new_private(path,raw):
     with path.open('xb'):pass
     if raw:renewal.write_empty_private_file(path,raw.decode('utf-8'))
     else:require(renewal.read_private_bytes(path)==b'')
+
+
+def _stage_configuration(config,choice,record,root,layers):
+    """The same immutable configuration for initial staging and reconciliation."""
+    prefix='renewed' if choice=='new' else 'current'
+    cycle=root.name.removeprefix('windows-renewal-')
+    result=decode(packed(config));result.pop('_historical_compose_sha256',None)
+    result.update(current_env=config[prefix+'_env'],current_secrets=config[prefix+'_secrets'],
+        renewed_env=str(root/'renewed.env'),
+        renewed_secrets=str(root.parent/('candidate-secrets-renewal-'+cycle)))
+    result['native'].update(current=record['selected']['native_mirror'],
+        renewed='/control/windows-renewal-'+cycle+'/generation',
+        token_file='/control/recovery-session-'+cycle+'/token')
+    for name in ['intent','result','new_log','rollback_log']:result[name]=str(root/'activation'/name)
+    result['step_receipts']=[{name:str(root/'activation'/(str(index)+'-'+name))
+        for name in ['new_started','new_completed','rollback_started','rollback_completed']}
+        for index in range(len(layers))]
+    return result
 
 
 def _stage(config,choice,values,record,root,logical_project,stack):
@@ -515,31 +577,22 @@ def _stage(config,choice,values,record,root,logical_project,stack):
     stack.enter_context(renewal.hold_storage_namespace(root))
     with _held_private_input(root,directory=True):pass
     observed=_inspect(config,choice,values,stack,expected_data=record['data_sha256'])
+    observed['context'].check(before_intent=True)
     docker=observed['docker'];cycle_id=root.name.removeprefix('windows-renewal-')
-    prefix='renewed' if choice=='new' else 'current'
     secrets=parent/('candidate-secrets-renewal-'+cycle_id)
     require(not renewal.namespace_entry_exists(secrets));secrets.mkdir()
     stack.enter_context(renewal.hold_storage_namespace(secrets))
     with _held_private_input(secrets,directory=True):pass
     activation=root/'activation';activation.mkdir()
     with _held_private_input(activation,directory=True):pass
-    next_config=decode(packed(config))
-    next_config.pop('_historical_compose_sha256',None)
-    next_config.update(current_env=config[prefix+'_env'],current_secrets=config[prefix+'_secrets'],
-        renewed_env=str(root/'renewed.env'),renewed_secrets=str(secrets))
-    authority='/control/recovery-session-'+cycle_id+'/token'
-    next_config['native'].update(current=record['selected']['native_mirror'],
-        renewed='/control/windows-renewal-'+cycle_id+'/generation',token_file=authority)
-    for name in ['intent','result','new_log','rollback_log']:
-        path=activation/name;_new_private(path,b'');next_config[name]=str(path)
     layers=renewal.dependency_layers(observed['model'],observed['services'],
         renewal.owned_roles(observed['model'],observed['services']))
-    next_config['step_receipts']=[]
-    for index in range(len(layers)):
-        step={}
-        for name in ['new_started','new_completed','rollback_started','rollback_completed']:
-            path=activation/(str(index)+'-'+name);_new_private(path,b'');step[name]=str(path)
-        next_config['step_receipts'].append(step)
+    next_config=_stage_configuration(config,choice,record,root,layers)
+    authority='/control/recovery-session-'+cycle_id+'/token'
+    for name in ['intent','result','new_log','rollback_log']:
+        _new_private(Path(next_config[name]),b'')
+    for step in next_config['step_receipts']:
+        for path in step.values():_new_private(Path(path),b'')
     env=renewal.read_private_bytes(Path(next_config['current_env']));lines=env.splitlines(keepends=True)
     indices=[i for i,line in enumerate(lines) if line.startswith(b'SELFHOST_SECRET_DIR=')];require(len(indices)==1)
     index=indices[0];ending=b'\r\n' if lines[index].endswith(b'\r\n') else b'\n'
@@ -569,6 +622,7 @@ def _stage(config,choice,values,record,root,logical_project,stack):
     checkpoint('authority','completed',{})
     checkpoint('current','started',{})
     require(_prove(config,choice,values,stack,expected_data=record['data_sha256'],authority_file=authority)==record['data_sha256'])
+    observed['context'].check(before_intent=True)
     checkpoint('current','completed',{})
     renewed=produce_generation(next_config,values[choice],logical_project,cycle_id,stage['services_image'],checkpoint)
     require(set(renewed)==set(values[choice]))
@@ -577,11 +631,11 @@ def _stage(config,choice,values,record,root,logical_project,stack):
     held=stack.enter_context(renewal.hold_private_generation(secrets,sorted(renewed)));require(held==renewed)
     preflight(next_config['native'],config['project'],values[choice],held,docker.prefix)
     require(_prove(config,choice,values,stack,expected_data=record['data_sha256'],authority_file=authority)==record['data_sha256'])
-    require(renewal.observations(docker.containers(),config['project'],set())
-        ==renewal.observations(observed['baseline'],config['project'],set()))
+    items=observed['context'].check(before_intent=True)
     checkpoint('materialize','completed',{})
     receipts={name:renewal.read_private_bytes(root/name) for name in names}
     require(all(receipts.values()))
+    _retired_stage_helpers(items,_checked_stage_receipts(stage,config,receipts),cycle_id)
     hashes={name:digest(raw) for name,raw in receipts.items()}
     result={'schema':STAGE_SCHEMA,'guard_sha256':digest(packed(stage)),
         'config_sha256':digest(next_raw),'next_config':str(next_path),'authority_file':authority,
@@ -591,16 +645,27 @@ def _stage(config,choice,values,record,root,logical_project,stack):
     return {'stage':stage,'result':result}
 
 
-def _finish_stage(config,pending):
+def _finish_stage(config,pending,*,resume=False):
     """Publish only after selected-lease exit; the staging guard stays active."""
+    require(type(resume) is bool)
     stage=pending['stage'];result=pending['result'];root=Path(stage['root'])
     with ExitStack() as held:
+        next_config=None
+        def memberships():
+            marker='publication.json' if renewal.namespace_entry_exists(root/'publication.json') else 'publication.pending.json'
+            require(set(p.name for p in root.iterdir())==set(_stage_names())|{'result.json',marker,'renewed.env','activation'})
+            if next_config is not None:
+                paths=[next_config[n] for n in ('intent','result','new_log','rollback_log')]
+                paths += [p for step in next_config['step_receipts'] for p in step.values()]
+                require(set(p.name for p in (root/'activation').iterdir())=={'config.private.json',*(Path(p).name for p in paths)})
+        held.callback(memberships)
         held.enter_context(renewal.hold_private_input(Path(config['current_secrets']).parent/f'.{config["project"]}.renewal.lock',exclusive=True))
         held.enter_context(renewal.hold_storage_namespace(root))
         require(digest(held.enter_context(renewal.hold_private_input(renewal.renewal_staging_guard(config))))==result['guard_sha256'])
         for name,sha in result['phase_sha256'].items():
             require(digest(held.enter_context(renewal.hold_private_input(root/name)))==sha)
-        require(digest(held.enter_context(renewal.hold_private_input(Path(stage['config_path']))))==stage['config_sha256'])
+        next_raw=held.enter_context(renewal.hold_private_input(Path(stage['config_path'])))
+        require(digest(next_raw)==stage['config_sha256']);next_config=decode(next_raw)
         require(digest(held.enter_context(renewal.hold_private_input(root/'renewed.env')))==result['env_sha256'])
         model_raw=held.enter_context(renewal.hold_private_input(Path(config['compose_file']),max_bytes=2*1024*1024))
         require(digest(model_raw)==config['compose_sha256'])
@@ -608,20 +673,156 @@ def _finish_stage(config,pending):
             sorted(decode(model_raw)['secrets'])))
         require(fingerprint(generation)==result['secrets_sha256'])
         with _held_private_input(root,directory=True):
-            require(renewal.read_private_bytes(root/'result.json')==b'')
+            existing=renewal.read_private_bytes(root/'result.json')
+            require(existing==b'' or (resume and existing==packed(result)))
     # Publication must follow every held-input and lock exit check. A failure
     # while releasing any proof above leaves the result empty and inadmissible.
-    renewal.write_empty_private_file(root/'result.json',packed(result).decode())
+    if not existing:renewal.write_empty_private_file(root/'result.json',packed(result).decode())
     publication=packed({'schema':STAGE_SCHEMA,'result_sha256':digest(packed(result))})
-    renewal.write_empty_private_file(root/'publication.pending.json',publication.decode())
+    published=renewal.namespace_entry_exists(root/'publication.json')
+    require(resume or not published)
+    marker=root/('publication.json' if published else 'publication.pending.json')
+    saved=renewal.read_private_bytes(marker)
+    require(not saved or (resume and saved==publication))
+    require(not published or saved==publication)
+    if not saved:renewal.write_empty_private_file(marker,publication.decode())
     with ExitStack() as held:
         held.enter_context(renewal.hold_storage_namespace(root))
         require(held.enter_context(renewal.hold_private_input(root/'result.json'))==packed(result))
-        require(held.enter_context(renewal.hold_private_input(root/'publication.pending.json'))==publication)
+        require(held.enter_context(renewal.hold_private_input(marker))==publication)
     # Windows rename refuses an existing destination. Only this final atomic
     # boundary makes the result admissible; failed writers/exit checks retain
     # the pending file and staging guard without an admission marker.
-    (root/'publication.pending.json').rename(root/'publication.json')
+    if marker.name=='publication.pending.json':marker.rename(root/'publication.json')
+
+
+def _checked_stage_receipts(stage,config,raws,*,materialize_pending=False):
+    require(set(raws)==set(_stage_names()) and raws['intent.json']==packed(stage))
+    helpers={}
+    cycle=Path(stage['root']).name.removeprefix('windows-renewal-')
+    for name,raw in raws.items():
+        if name=='intent.json':continue
+        if materialize_pending and name=='materialize.completed.json' and not raw:continue
+        require(raw);phase,event,_=name.split('.')
+        item=decode(raw)
+        require(set(item)=={'phase','event','metadata'} and item['phase']==phase and item['event']==event)
+        metadata=item['metadata']
+        if event in {'created','helper'}:
+            require(type(metadata) is dict and set(metadata)=={'id','name','image'}
+                and type(metadata['id']) is str and re.fullmatch(r'[0-9a-f]{64}',metadata['id'])
+                and metadata['name']==config['project']+'-renew-'+phase+'-'+cycle
+                and metadata['image']==(stage['services_image'] if phase=='tls' else config['native']['helper_image']))
+            helpers[name]=metadata
+        else:require(metadata=={})
+    require(helpers['tls.created.json']==helpers['tls.helper.json'])
+    require(len({helpers[p+'.helper.json']['id'] for p in ('prepare','tls','keycloak')})==3)
+    return helpers
+
+
+def _retired_stage_helpers(items,helpers,cycle):
+    """A storage-disjoint helper is still an unfinished producer, not churn."""
+    ids={h['id'] for h in helpers.values()};names={'/'+h['name'] for h in helpers.values()}
+    require(not any(x['Id'] in ids or x.get('Name') in names
+        or (x.get('Config',{}).get('Labels') or {}).get('marty.windows.renewal')==cycle
+        for x in items))
+
+
+def reconcile_materialized(config_path):
+    """Reprove fully produced bytes and publish metadata; never mint or activate.
+
+    Earlier/uncertain producer phases, changed inputs and partial activation
+    remain blocked. The staging guard is retained for the normal prepare path.
+    """
+    from selfhost_windows_model import effective_config,history,immutable_binding,model_binding
+    from selfhost_windows_continuation import CHECKPOINT,checkpoint
+    from selfhost_windows_renewal_native import preflight
+    with _session(config_path) as (base,_base_raw,expected,_journal,raw,stack):
+        require(not any(renewal.namespace_entry_exists(getter(base)) for getter in
+            (renewal.recovery_guard,renewal.recovery_preparation_guard,
+             renewal.model_repair_guard,renewal.continuation_guard)))
+        intents,records=_parse(raw,expected);require(len(intents)==len(records))
+        intent=intents[len(records)];record=records[len(records)]
+        require(type(record['sequence']) is int and 1<=record['sequence']<MAX_SELECTIONS)
+        cfg_raw=stack.enter_context(renewal.hold_private_input(Path(intent['config_path'])))
+        config=decode(cfg_raw)
+        require(digest(cfg_raw)==intent['config_file_sha256'] and config_digest(config)==intent['config_sha256']
+            and immutable_binding(binding(config))==immutable_binding(expected))
+        _models,current_model,accepted=history(raw,expected,records)
+        if CHECKPOINT in raw:accepted.append(checkpoint(raw)['generation_model'])
+        require(model_binding(config) in accepted);config=effective_config(config,current_model)
+        values,snapshots=_inputs(config,stack);require(snapshots==intent['inputs'])
+        transition=stack.enter_context(renewal.hold_private_input(Path(config['intent'])))
+        previous_result=stack.enter_context(renewal.hold_private_input(Path(config['result'])))
+        require(digest(transition)==record['transition_intent_sha256'])
+        require(digest(previous_result)==record['result_sha256'] if record['result_sha256'] is not None else not previous_result)
+        guard=stack.enter_context(renewal.hold_private_input(renewal.renewal_staging_guard(config)))
+        stage=decode(guard);root=Path(stage['root'])
+        require(root.parent==Path(config['current_secrets']).parent
+            and re.fullmatch(r'windows-renewal-[0-9a-f]{32}',root.name))
+        stack.enter_context(renewal.hold_storage_namespace(root))
+        with _held_private_input(root,directory=True):pass
+        published=renewal.namespace_entry_exists(root/'publication.json')
+        marker='publication.json' if published else 'publication.pending.json'
+        expected_names=set(_stage_names())|{'result.json',marker,'renewed.env','activation'}
+        def root_membership():require(set(p.name for p in root.iterdir())==expected_names)
+        root_membership();stack.callback(root_membership)
+        activation_names=None
+        def activation_membership():
+            if activation_names is not None:require(set(p.name for p in (root/'activation').iterdir())==activation_names)
+        stack.callback(activation_membership)
+        receipts={name:(renewal.read_private_bytes(root/name) if name=='materialize.completed.json'
+            else stack.enter_context(renewal.hold_private_input(root/name))) for name in _stage_names()}
+        helpers=_checked_stage_receipts(stage,config,receipts,materialize_pending=True)
+        next_raw=stack.enter_context(renewal.hold_private_input(root/'activation/config.private.json'))
+        next_config=decode(next_raw)
+        # The current inspection supplies validated service closure and layers.
+        observed=_inspect(config,record['choice'],values,stack,expected_data=record['data_sha256'])
+        layers=renewal.dependency_layers(observed['model'],observed['services'],
+            renewal.owned_roles(observed['model'],observed['services']))
+        require(next_raw==packed(_stage_configuration(config,record['choice'],record,root,layers)))
+        cycle=root.name.removeprefix('windows-renewal-')
+        expected_stage={'schema':STAGE_SCHEMA,'project':config['project'],'engine_id':config['engine_id'],
+            'sequence':record['sequence']+1,'selected_sha256':digest(packed(record['selected'])),
+            'data_sha256':record['data_sha256'],'root':str(root),'config_path':str(root/'activation/config.private.json'),
+            'config_sha256':digest(next_raw),'authority_file':'/control/recovery-session-'+cycle+'/token',
+            'logical_project':stage['logical_project'],
+            'services_image':observed['model']['services']['signing-keys']['image'],'candidate_only':True}
+        require(stage==expected_stage and re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',stage['logical_project']))
+        paths=[Path(next_config[n]) for n in ('intent','result','new_log','rollback_log')]
+        paths += [Path(p) for step in next_config['step_receipts'] for p in step.values()]
+        activation_names={'config.private.json',*(p.name for p in paths)}
+        activation_membership()
+        for path in paths:require(stack.enter_context(renewal.hold_private_input(path))==b'')
+        env=stack.enter_context(renewal.hold_private_input(root/'renewed.env'))
+        old_env=renewal.read_private_bytes(Path(next_config['current_env']))
+        require(renewal.env_body(env,Path(next_config['renewed_secrets']))
+            ==renewal.env_body(old_env,Path(next_config['current_secrets'])))
+        new=stack.enter_context(renewal.hold_private_generation(Path(next_config['renewed_secrets']),sorted(values[record['choice']])))
+        docker=observed['docker']
+        _retired_stage_helpers(docker.containers(),helpers,cycle)
+        _native_current(config,record['choice'],values,docker,stage['authority_file'])
+        preflight(next_config['native'],config['project'],values[record['choice']],new,docker.prefix)
+        _retired_stage_helpers(observed['context'].check(before_intent=True),helpers,cycle)
+        completed=packed({'phase':'materialize','event':'completed','metadata':{}})
+        require(receipts['materialize.completed.json'] in (b'',completed))
+        if not receipts['materialize.completed.json']:
+            renewal.write_empty_private_file(root/'materialize.completed.json',completed.decode())
+        receipts['materialize.completed.json']=stack.enter_context(renewal.hold_private_input(root/'materialize.completed.json'))
+        _checked_stage_receipts(stage,config,receipts)
+        result={'schema':STAGE_SCHEMA,'guard_sha256':digest(guard),'config_sha256':digest(next_raw),
+            'next_config':stage['config_path'],'authority_file':stage['authority_file'],
+            'files':len(new),'changed_files':sum(values[record['choice']][n]!=new[n] for n in new),
+            'secrets_sha256':fingerprint(new),'env_sha256':digest(env),
+            'phase_sha256':{n:digest(v) for n,v in receipts.items()}}
+        saved=stack.enter_context(renewal.hold_private_input(root/'result.json'))
+        publication=stack.enter_context(renewal.hold_private_input(root/marker))
+        require(saved in (b'',packed(result)))
+        require(publication in (b'',packed({'schema':STAGE_SCHEMA,'result_sha256':digest(packed(result))})))
+        require(not publication or saved)
+        require(not published or (saved and publication))
+    # Every selected ancestry/input exit must succeed before admission metadata.
+    _finish_stage(config,{'stage':stage,'result':result},resume=True)
+    return result
 
 
 def _staging_admission(config,raw_config,previous,stack,sha):
@@ -649,23 +850,11 @@ def _staging_admission(config,raw_config,previous,stack,sha):
     require(result['schema']==STAGE_SCHEMA and result['guard_sha256']==sha
         and result['next_config']==stage['config_path'] and result['config_sha256']==digest(raw_config)
         and result['authority_file']==stage['authority_file'] and set(result['phase_sha256'])==set(_stage_names()))
-    helpers={}
+    receipts={}
     for name,expected in result['phase_sha256'].items():
         raw=stack.enter_context(renewal.hold_private_input(root/name));require(raw and digest(raw)==expected)
-        if name!='intent.json':
-            phase,event,_=name.split('.')
-            receipt=decode(raw);require(set(receipt)=={'phase','event','metadata'}
-                and receipt['phase']==phase and receipt['event']==event)
-            metadata=receipt['metadata']
-            if event in {'created','helper'}:
-                require(type(metadata) is dict and set(metadata)=={'id','name','image'}
-                    and type(metadata['id']) is str and re.fullmatch(r'[0-9a-f]{64}',metadata['id'])
-                    and metadata['name']==config['project']+'-renew-'+phase+'-'+cycle
-                    and metadata['image']==(stage['services_image'] if phase=='tls' else config['native']['helper_image']))
-                helpers[name]=metadata
-            else:require(metadata=={})
-    require(helpers['tls.created.json']==helpers['tls.helper.json'])
-    require(len({helpers[phase+'.helper.json']['id'] for phase in ('prepare','tls','keycloak')})==3)
+        receipts[name]=raw
+    _checked_stage_receipts(stage,config,receipts)
     require(set(p.name for p in root.iterdir())==set(_stage_names())|{'result.json','publication.json','renewed.env','activation'})
     return stage,result
 
@@ -673,6 +862,9 @@ def _staging_admission(config,raw_config,previous,stack,sha):
 def _handoff_staged(config_path,sha,sequence,intent_sha):
     """A registered pending intent is durable before staging loses authority."""
     with _session(config_path) as (config,raw_config,expected,root,raw,stack):
+        require(not any(renewal.namespace_entry_exists(getter(config)) for getter in
+            (renewal.recovery_guard,renewal.recovery_preparation_guard,
+             renewal.model_repair_guard,renewal.continuation_guard)))
         guard=renewal.renewal_staging_guard(config)
         require(digest(stack.enter_context(renewal.hold_private_input(guard)))==sha)
         intents,records=_parse(raw,expected)
@@ -690,10 +882,20 @@ def _handoff_staged(config_path,sha,sequence,intent_sha):
 def renew_once(config_path,logical_project):
     """One online candidate cycle; never retry a pending/uncertain operation."""
     with selected_inputs(config_path) as lease:
-        require(lease.sequence<MAX_SELECTIONS)
-        root=lease.secrets_dir.parent/('windows-renewal-'+uuid.uuid4().hex)
-        root.mkdir()
-        staged=lease.stage_renewal(root,logical_project)
+        continued=lease.sequence>=MAX_SELECTIONS
+        if continued:lease.continue_journal()
+        else:
+            next_generation=lease.generation_sequence+1;journal=lease.journal_path
+            root=lease.secrets_dir.parent/('windows-renewal-'+uuid.uuid4().hex)
+            root.mkdir()
+            staged=lease.stage_renewal(root,logical_project)
+    if continued:
+        with selected_inputs(config_path) as lease:
+            require(lease.sequence<MAX_SELECTIONS)
+            next_generation=lease.generation_sequence+1;journal=lease.journal_path
+            root=lease.secrets_dir.parent/('windows-renewal-'+uuid.uuid4().hex)
+            root.mkdir()
+            staged=lease.stage_renewal(root,logical_project)
     path=Path(staged['next_config']);authority=staged['authority_file']
     prepare(path,authority_file=authority,staging_sha256=staged['guard_sha256'])
     cfg=decode(renewal.read_private_bytes(path))
@@ -706,7 +908,8 @@ def renew_once(config_path,logical_project):
     require(result['result']=='activated')
     selected=complete(path,authority_file=authority)
     return {'schema':STAGE_SCHEMA,'project':cfg['project'],'result':'renewed-and-selected',
-        'sequence':selected['sequence'],'config_path':str(path),'staging_root':str(root),
+        'sequence':selected['sequence'],'generation_sequence':next_generation,'journal':str(journal),
+        'config_path':str(path),'staging_root':str(root),
         'production_admission':False,'automatic_lifecycle':False}
 
 
@@ -717,7 +920,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
     The explicit callback delegates live readiness/custody checks after Bao is
     available. No startup or Docker mutation is performed by this context.
     """
-    completion = [];staging=[];model_completion=[]
+    completion = [];staging=[];model_completion=[];continuation=[];continuation_started=False
     with _session(config_path) as (_config, _cfg_raw, expected, _root, raw, stack):
         if terminal_guard_sha256 is None:
             require(not renewal.recovery_pending(_config))
@@ -726,6 +929,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
             require(not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(_config)))
             require(not renewal.namespace_entry_exists(renewal.renewal_staging_guard(_config)))
             require(not renewal.namespace_entry_exists(renewal.model_repair_guard(_config)))
+            require(not renewal.namespace_entry_exists(renewal.continuation_guard(_config)))
             guard_raw = stack.enter_context(renewal.hold_private_input(renewal.recovery_guard(_config)))
             require(digest(guard_raw) == terminal_guard_sha256)
         intents, records = _parse(raw, expected);require(len(intents) == len(records))
@@ -736,6 +940,8 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
         require(digest(cfg_raw) == intent['config_file_sha256'] and config_digest(cfg) == intent['config_sha256']
                 and immutable_binding(binding(cfg)) == immutable_binding(expected))
         _models, current_model, accepted_models = history(raw, expected, records)
+        from selfhost_windows_continuation import CHECKPOINT, checkpoint
+        if CHECKPOINT in raw:accepted_models.append(checkpoint(raw)['generation_model'])
         require(model_binding(cfg) in accepted_models)
         cfg = effective_config(cfg, current_model)
         values, snapshots = _inputs(cfg, stack);require(snapshots == intent['inputs'])
@@ -747,24 +953,23 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
         lease_lock = threading.Lock();active = True
         def check_current(authority_file=None):
             with lease_lock:
-                require(active and not model_completion)
+                require(active and not model_completion and not continuation_started)
                 with ExitStack() as proof_stack:
                     return _prove(cfg, choice, values, proof_stack, expected_data=record['data_sha256'], authority_file=authority_file)
         def check_configuration():
             with lease_lock:
-                require(active and not model_completion)
+                require(active and not model_completion and not continuation_started)
                 with ExitStack() as proof_stack:
                     observed=_inspect(cfg,choice,values,proof_stack,
                         expected_data=record['data_sha256'],require_ready=False)
                     from selfhost_windows_recovery import plan
                     plan(observed)
-                    require(renewal.observations(observed['docker'].containers(),cfg['project'],set())
-                            ==renewal.observations(observed['baseline'],cfg['project'],set()))
+                    observed['context'].check(before_intent=True)
                     return {'services':len(observed['services']),'configuration_verified':True,
                             'native_admission':False,'runtime_readiness':False}
         def recover_existing(output_dir, authority_file=None, *, preparation_sha256=None, fresh_authority=False):
             with lease_lock:
-                require(active and not completion and not staging and not model_completion and terminal_guard_sha256 is None)
+                require(active and not completion and not staging and not model_completion and not continuation_started and terminal_guard_sha256 is None)
                 from selfhost_windows_recovery import start_existing
                 with ExitStack() as proof_stack:
                     pending = start_existing(cfg, choice, values, record, output_dir, proof_stack,
@@ -774,7 +979,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
                 return decode(packed(pending['result']))
         def stage_renewal(output_dir,logical_project):
             with lease_lock:
-                require(active and not completion and not staging and not model_completion and terminal_guard_sha256 is None)
+                require(active and not completion and not staging and not model_completion and not continuation_started and terminal_guard_sha256 is None)
                 with ExitStack() as proof_stack:
                     pending=_stage(cfg,choice,values,record,output_dir,logical_project,proof_stack)
                 staging.append(pending)
@@ -782,18 +987,31 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
         def repair_model(new_model, output_dir):
             with lease_lock:
                 require(active and not completion and not staging and not model_completion
-                        and terminal_guard_sha256 is None)
+                        and not continuation_started and terminal_guard_sha256 is None)
                 from selfhost_windows_model import repair
                 with ExitStack() as proof_stack:
                     pending = repair(cfg, choice, values, record, intent, raw, _root,
                                      new_model, output_dir, proof_stack)
                 model_completion.append(pending)
                 return decode(packed(pending['result']))
+        def continue_journal():
+            nonlocal continuation_started
+            with lease_lock:
+                require(active and not completion and not staging and not model_completion
+                        and not continuation_started and terminal_guard_sha256 is None)
+                continuation_started=True
+                from selfhost_windows_continuation import start
+                with ExitStack() as proof_stack:
+                    pending=start(cfg,choice,values,record,raw,_root,proof_stack)
+                continuation.append(pending)
+                return decode(packed(pending['result']))
+        from selfhost_windows_continuation import CHECKPOINT, checkpoint
+        generation_sequence=sequence+(checkpoint(raw)['sequence_offset'] if CHECKPOINT in raw else 0)
         try:
             yield SelectedInputs(cfg['project'], cfg['docker_host'], cfg['engine_id'], Path(cfg['compose_file']),
                 cfg['compose_sha256'], Path(selected['env_file']), Path(selected['secrets_dir']), sequence,
-                digest(packed(selected)),
-                check_configuration, check_current, recover_existing, stage_renewal, repair_model)
+                digest(packed(selected)), _root, generation_sequence,
+                check_configuration, check_current, recover_existing, stage_renewal, repair_model, continue_journal)
         finally:
             with lease_lock:
                 active = False;values.clear()
@@ -804,6 +1022,9 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
     if model_completion:
         from selfhost_windows_model import finish
         finish(cfg,model_completion[0])
+    if continuation:
+        from selfhost_windows_continuation import finish
+        finish(cfg,config_path,continuation[0])
 
 
 @contextmanager

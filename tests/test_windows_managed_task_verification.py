@@ -51,21 +51,38 @@ $global:started=$false
 $user=[Security.Principal.WindowsIdentity]::GetCurrent().Name
 $shell=Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell/v1.0/powershell.exe'
 $recovery=Join-Path SCRIPTS 'recover-marty-after-reboot.ps1'
-$expected='-NoProfile -NonInteractive -File "'+$recovery+'" -RecoveryConfigurationFile "'+CONFIG+'" -ManagedPython "'+PYTHON+'" -WaitForEngine'
+$expected='-NoProfile -NonInteractive -WindowStyle Hidden -File "'+$recovery+'" -RecoveryConfigurationFile "'+CONFIG+'" -ManagedPython "'+PYTHON+'" -WaitForEngine'
 if ('CASE' -like 'renew*') { $expected+=' -RenewCredentials -LogicalTlsProject "marty-selfhost-synthetic"' }
 $global:task=[pscustomobject]@{
- TaskName='Marty-Candidate-Qualification';TaskPath='\';State='Ready'
+ TaskName='Marty-Candidate-Qualification';TaskPath='\';State='Ready';Date=''
  Principal=[pscustomobject]@{UserId=$user;LogonType='Interactive';RunLevel='Limited'}
  Actions=@([pscustomobject]@{Execute=$shell;Arguments=$expected;WorkingDirectory=ROOT})
  Triggers=@([pscustomobject]@{CimClass=[pscustomobject]@{CimClassName='MSFT_TaskLogonTrigger'};
- UserId=$user;Delay='PT2M';Enabled=$true;Repetition=[pscustomobject]@{Interval='';Duration='';StopAtDurationEnd=$false}})
+ UserId=$user;Delay='PT2M';Enabled=$true;EndBoundary='';Repetition=[pscustomobject]@{Interval='';Duration='';StopAtDurationEnd=$false}})
  Settings=[pscustomobject]@{Enabled=$true;StartWhenAvailable=$true;MultipleInstances='IgnoreNew';
  ExecutionTimeLimit='PT20M';RestartCount=3;RestartInterval='PT2M'} }
 if ('CASE' -like 'renew*') {
- $global:task.Triggers[0].Repetition.Interval='PT240M'
- $global:task.Settings.ExecutionTimeLimit='PT1H';$global:task.Settings.RestartCount=0
+ $registered=[DateTimeOffset]::UtcNow
+ $registered=$registered.AddTicks(-($registered.Ticks % [TimeSpan]::TicksPerSecond))
+ $delay=if ('CASE' -eq 'renew-first-check') {15} else {14400}
+ $global:task.Date=$registered.ToString("yyyy-MM-dd'T'HH:mm:sszzz")
+ $global:task.Triggers+=@([pscustomobject]@{
+  CimClass=[pscustomobject]@{CimClassName='MSFT_TaskTimeTrigger'};Enabled=$true;EndBoundary='';RandomDelay=''
+  StartBoundary=$registered.AddSeconds($delay).ToString("yyyy-MM-dd'T'HH:mm:sszzz")
+  Repetition=[pscustomobject]@{Interval='PT240M';Duration='';StopAtDurationEnd=$false} })
+ $global:task.Settings.ExecutionTimeLimit='PT1H';$global:task.Settings.RestartCount=0;$global:task.Settings.RestartInterval=''
+ if ('CASE' -like 'renew-window*') {
+  foreach($trigger in $global:task.Triggers) {$trigger.EndBoundary=$registered.AddMinutes(300).ToString("yyyy-MM-dd'T'HH:mm:sszzz")}
+ }
 }
 switch ('CASE') {
+ 'local-account-check' {$global:task.Principal.UserId=[Environment]::UserName;$global:task.Triggers[0].UserId=[Environment]::UserName}
+ 'sid-account-check' {$global:task.Principal.UserId=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$global:task.Triggers[0].UserId=$global:task.Principal.UserId}
+ 'unknown-account' {$global:task.Principal.UserId='Marty-Unknown-Qualification-Account'}
+ 'renew-window-missing-logon' {$global:task.Triggers[0].EndBoundary=''}
+ 'renew-window-missing-timer' {$global:task.Triggers[1].EndBoundary=''}
+ 'renew-window-wrong-end' {$global:task.Triggers[0].EndBoundary=$registered.AddMinutes(301).ToString("yyyy-MM-dd'T'HH:mm:sszzz")}
+ 'renew-window-local-end' {$global:task.Triggers[1].EndBoundary='2026-11-05T10:00:00'}
  'wrong-user' {$global:task.Principal.UserId='SYSTEM'}
  'highest' {$global:task.Principal.RunLevel='Highest'}
  'wrong-logon' {$global:task.Principal.LogonType='ServiceAccount'}
@@ -81,8 +98,23 @@ switch ('CASE') {
  'disabled' {$global:task.Settings.Enabled=$false}
  'parallel' {$global:task.Settings.MultipleInstances='Parallel'}
  'renew-retries' {$global:task.Settings.RestartCount=3}
- 'renew-duration' {$global:task.Triggers[0].Repetition.Duration='PT1H'}
- 'renew-interval' {$global:task.Triggers[0].Repetition.Interval='PT15M'}
+ 'renew-dangling-interval' {$global:task.Settings.RestartInterval='PT2M'}
+ 'renew-duration' {$global:task.Triggers[1].Repetition.Duration='PT1H'}
+ 'renew-interval' {$global:task.Triggers[1].Repetition.Interval='PT15M'}
+ 'renew-logon-repetition' {$global:task.Triggers[0].Repetition.Interval='PT240M'}
+ 'renew-legacy-logon-only' {$global:task.Triggers=@($global:task.Triggers[0]);$global:task.Triggers[0].Repetition.Interval='PT240M'}
+ 'renew-local-boundary' {$global:task.Triggers[1].StartBoundary='2026-11-05T10:00:00'}
+ 'renew-wrong-delay' {$global:task.Triggers[1].StartBoundary=$registered.AddSeconds(14401).ToString("yyyy-MM-dd'T'HH:mm:sszzz")}
+ 'renew-missing-date' {$global:task.Date=''}
+ 'renew-timer-disabled' {$global:task.Triggers[1].Enabled=$false}
+ 'renew-timer-end' {$global:task.Triggers[1].EndBoundary='2027-01-01T00:00:00+00:00'}
+ 'renew-timer-random' {$global:task.Triggers[1].RandomDelay='PT1H'}
+ 'renew-duplicate-logon' {$global:task.Triggers[1]=$global:task.Triggers[0]}
+ 'renew-reordered-check' {$global:task.Triggers=@($global:task.Triggers[1],$global:task.Triggers[0])}
+ 'renew-utc-z-check' {$global:task.Date=$global:task.Date.Replace('+00:00','Z');$global:task.Triggers[1].StartBoundary=$global:task.Triggers[1].StartBoundary.Replace('+00:00','Z')}
+ 'renew-offset-check' {$global:task.Triggers[1].StartBoundary=$registered.AddSeconds(14400).ToOffset([TimeSpan]::FromHours(-7)).ToString("yyyy-MM-dd'T'HH:mm:sszzz")}
+ 'renew-window-offset-check' {$global:task.Triggers[1].StartBoundary=$registered.AddSeconds(14400).ToOffset([TimeSpan]::FromHours(-7)).ToString("yyyy-MM-dd'T'HH:mm:sszzz");foreach($trigger in $global:task.Triggers){$trigger.EndBoundary=$registered.AddMinutes(300).ToOffset([TimeSpan]::FromHours(-7)).ToString("yyyy-MM-dd'T'HH:mm:sszzz")}}
+ 'renew-future-registration' {$global:task.Date=$registered.AddDays(1).ToString("yyyy-MM-dd'T'HH:mm:sszzz");$global:task.Triggers[1].StartBoundary=$registered.AddDays(1).AddSeconds(14400).ToString("yyyy-MM-dd'T'HH:mm:sszzz")}
 }
 function Get-ScheduledTask {
  param($TaskName,$TaskPath)
@@ -113,9 +145,13 @@ function Unregister-ScheduledTask {throw 'Delete forbidden'}
 function Set-ScheduledTask {throw 'Update forbidden'}
 & VERIFIER -TaskName 'Marty-Candidate-Qualification' -RecoveryConfigurationFile CONFIG -ManagedPython PYTHON -TimeoutSeconds 1 -PreflightTimeoutSeconds PREFLIGHT OPTIONS
 '''
-    options = '-CheckOnly' if case in {'check', 'renew-check','default-check','real-default-check'} else ''
+    options = '-CheckOnly' if case.endswith('check') else ''
     if case.startswith('renew'):
         options += " -RenewCredentials -LogicalTlsProject 'marty-selfhost-synthetic' -RenewalIntervalMinutes 240"
+        if case=='renew-first-check':options+=' -FirstRenewalDelaySeconds 15'
+        elif case=='renew-invalid-first-delay':options+=' -FirstRenewalDelaySeconds 14'
+        elif case=='renew-wrong-delay-config':options+=' -FirstRenewalDelaySeconds 120'
+        if case.startswith('renew-window'):options+=' -RenewalWindowMinutes 300'
     for key, value in {'CASE': case, 'SCRIPTS': legacy.quote(scripts), 'ROOT': legacy.quote(tmp_path),
                        'CONFIG': legacy.quote(config), 'PYTHON': legacy.quote(python),
                        'STARTED': legacy.quote(started), 'VERIFIER': legacy.quote(verifier),
@@ -141,6 +177,8 @@ function Set-ScheduledTask {throw 'Update forbidden'}
 
 
 @pytest.mark.parametrize('case', ['check', 'renew-check', 'run', 'renew-run',
+                                'renew-first-check','renew-reordered-check','renew-utc-z-check','renew-window-check',
+                                'local-account-check','sid-account-check','renew-offset-check','renew-window-offset-check',
                                 'default-check','real-default-check'])
 def test_exact_managed_task_check_or_one_bounded_run(tmp_path, case):
     result, child, started = invoke(tmp_path, case)
@@ -167,11 +205,15 @@ def test_oversized_preflight_budget_refuses_before_task_access(tmp_path):
     assert not (tmp_path/'task-accessed.json').exists()
 
 
-@pytest.mark.parametrize('case', ['wrong-user', 'highest', 'wrong-logon', 'wrong-folder',
+@pytest.mark.parametrize('case', ['wrong-user', 'unknown-account', 'highest', 'wrong-logon', 'wrong-folder',
     'wrong-action', 'wrong-launcher', 'wrong-cwd', 'extra-action', 'extra-trigger',
     'wrong-trigger-user', 'wrong-trigger-type', 'busy', 'disabled', 'parallel',
-    'renew-retries', 'renew-duration', 'renew-interval', 'inventory-failure', 'missing', 'preflight-failure',
-    'preflight-timeout'])
+    'renew-retries', 'renew-dangling-interval', 'renew-duration', 'renew-interval', 'inventory-failure', 'missing', 'preflight-failure',
+    'preflight-timeout','renew-logon-repetition','renew-legacy-logon-only','renew-local-boundary',
+    'renew-wrong-delay','renew-missing-date','renew-timer-disabled','renew-timer-end',
+    'renew-timer-random','renew-duplicate-logon','renew-future-registration',
+    'renew-invalid-first-delay','renew-wrong-delay-config','renew-window-missing-logon',
+    'renew-window-missing-timer','renew-window-wrong-end','renew-window-local-end'])
 def test_unqualified_task_never_starts(tmp_path, case):
     result, _child, started = invoke(tmp_path, case)
     assert result.returncode != 0 and not started.exists()

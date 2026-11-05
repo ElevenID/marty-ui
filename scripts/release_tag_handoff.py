@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Bound the original CD attempt to an authenticated operator tag result.
+"""Start and authenticate the original CD's independent tag operator once.
 
-This module never executes a release payload and never changes a Git reference.
+The publisher dispatches the existing operator workflow with its ephemeral job
+token. This module never executes a release payload or changes a Git reference.
 The separate operator entry point owns the reviewed REST and native Git writes.
 """
 from __future__ import annotations
@@ -30,6 +31,7 @@ OPERATOR_WORKFLOW = ".github/workflows/release-tag-handoff.yml"
 TAG_HANDOFF_CONTRACT = "marty.create-only-annotated-tag/v1"
 TAG_RESULT_SCHEMA = "marty.release-tag-handoff-result/v2"
 TAG_ADMISSION_SCHEMA = "marty.release-tag-admission/v2"
+DISPATCH_SCHEMA = "marty.release-tag-dispatch/v1"
 REF_CREATION_SCOPE = "absent_tag_only"
 MAIN_CHECK_SCOPE = "before_after_observation"
 REF_CREATION_TRANSPORT = "github-rest-create-ref/v1"
@@ -570,8 +572,124 @@ def successful_result(github: GitHub, run_id: int, request: dict, request_sha: s
             "intent_object_sha": intent["sha"]}
 
 
+def wait_for_dispatch_step(github: GitHub, request: dict, *,
+                           now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+                           sleep: Callable[[float], None] = time.sleep) -> None:
+    """Allow only read polling while the running wait step becomes API-visible.
+
+    The operator still independently checks every prerequisite and exact step.
+    Dispatching from this step avoids a second CD job that would itself violate
+    the existing operator's completed-prerequisite requirement.
+    """
+    deadline = timestamp(request["not_after"])
+    while True:
+        require(now() < deadline, "Tag dispatch deadline expired")
+        run = github.run(request["run_id"], CD_WORKFLOW, request["source_sha"])
+        require(run.get("status") == "in_progress" and run.get("conclusion") is None,
+                "Original CD attempt is no longer running")
+        require(github.main()["commit"]["sha"] == request["protected_main_commit"],
+                "Protected main changed before tag dispatch")
+        jobs = github.pages(f"repos/{REPOSITORY}/actions/runs/{request['run_id']}/attempts/1/jobs", "jobs")
+        publishers = [job for job in jobs if job.get("name") == "publish-manifest"]
+        require(len(publishers) == 1, "Tag dispatch requires one original publisher")
+        publisher = publishers[0]
+        require(type(publisher.get("run_id")) is int and publisher["run_id"] == request["run_id"]
+                and type(publisher.get("run_attempt")) is int and publisher["run_attempt"] == 1
+                and publisher.get("head_sha") == request["source_sha"]
+                and publisher.get("status") == "in_progress" and publisher.get("conclusion") is None,
+                "Tag dispatch publisher differs from the running original attempt")
+        steps = publisher.get("steps")
+        require(isinstance(steps, list) and all(isinstance(step, dict) for step in steps),
+                "Publisher steps are unavailable before tag dispatch")
+        waiting = [step for step in steps if step.get("name") == WAIT_STEP]
+        require(len(waiting) <= 1, "Publisher tag wait is ambiguous")
+        if waiting:
+            step = waiting[0]
+            require(step.get("conclusion") is None
+                    and step.get("status") in {"queued", "pending", "in_progress"},
+                    "Publisher has left its original tag wait")
+            if step["status"] == "in_progress":
+                return
+        sleep(min(2.0, max(0.0, (deadline - now()).total_seconds())))
+
+
+def dispatch_operator_once(github: GitHub, request: dict, request_sha: str,
+                           checkpoint: dict, receipt_path: Path, *,
+                           now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> int:
+    """Journal one workflow POST, then authenticate only its returned run ID.
+
+    The 2026-03-10 dispatch API returns HTTP 200 with the exact run and URLs.
+    A missing response, legacy 204, malformed result or existing journal never
+    permits another POST or a search for a run to adopt. Original attempt guards
+    and the operator's create-only ownership still apply across workflow runs.
+    """
+    deadline = timestamp(request["not_after"])
+    require(github.deadline == deadline and now() < deadline,
+            "Tag dispatch requires the original unexpired checkpoint deadline")
+    require(positive(request.get("run_id")) and isinstance(request.get("claim_run_id"), str)
+            and re.fullmatch(r"[1-9][0-9]*", request["claim_run_id"]) is not None
+            and positive(int(request["claim_run_id"]))
+            and isinstance(request_sha, str) and DIGEST.fullmatch(request_sha) is not None
+            and positive(checkpoint.get("id"))
+            and isinstance(checkpoint.get("digest"), str) and DIGEST.fullmatch(checkpoint["digest"]) is not None,
+            "Tag dispatch requires the exact bounded candidate and checkpoint identities")
+    endpoint = f"repos/{REPOSITORY}/actions/workflows/release-tag-handoff.yml/dispatches"
+    payload = {"ref": "main", "inputs": {"mode": "create-qualified-tag",
+               "promotion_run_id": str(request["run_id"]), "claim_run_id": request["claim_run_id"]}}
+    receipt = {"schema": DISPATCH_SCHEMA, "repository": REPOSITORY,
+               "candidate_run_id": request["run_id"], "candidate_run_attempt": 1,
+               "source_sha": request["source_sha"], "protected_main_commit": request["protected_main_commit"],
+               "request_sha256": request_sha, "checkpoint_artifact_id": checkpoint["id"],
+               "checkpoint_artifact_sha256": checkpoint["digest"], "not_after": request["not_after"],
+               "method": "POST", "endpoint": endpoint, "request": payload,
+               "requested_at": now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+               "outcome": "unknown", "run_identity_verified": False}
+    # Exclusive creation is also the no-replay barrier for another helper
+    # process in this original attempt. Keep unknown outcomes intact on error.
+    with receipt_path.open("xb") as stream:
+        os.fchmod(stream.fileno(), 0o600)
+
+        def persist() -> None:
+            stream.seek(0)
+            stream.truncate()
+            stream.write(encoded(receipt))
+            stream.flush()
+            os.fsync(stream.fileno())
+
+        persist()
+        status, raw = github.response(endpoint, method="POST", payload=payload)
+        if type(status) is int:
+            receipt["http_status"] = status
+        receipt["outcome"] = "response_received"
+        persist()
+        require(type(status) is int and status == 200,
+                "Tag operator dispatch was not confirmed; do not retry")
+        value = decode(raw)
+        require(isinstance(value, dict) and positive(value.get("workflow_run_id")),
+                "Tag operator dispatch lacks an exact run ID; do not retry")
+        operator_run = value["workflow_run_id"]
+        require(value.get("run_url") == f"https://api.github.com/repos/{REPOSITORY}/actions/runs/{operator_run}"
+                and value.get("html_url") == f"https://github.com/{REPOSITORY}/actions/runs/{operator_run}",
+                "Tag operator dispatch returned foreign run URLs; do not retry")
+        receipt.update(outcome="dispatch_confirmed", operator_run_id=operator_run)
+        persist()
+        run = github.run(operator_run, OPERATOR_WORKFLOW, request["protected_main_commit"])
+        require(timestamp(request["created_at"]) <= timestamp(run["created_at"]) <= deadline,
+                "Dispatched tag operator is outside the original checkpoint window")
+        require((run.get("status") in {"queued", "in_progress", "waiting", "pending"}
+                 and run.get("conclusion") is None)
+                or (run.get("status") == "completed" and run.get("conclusion") == "success"),
+                "Dispatched tag operator has already failed or has an unknown status")
+        require(github.main()["commit"]["sha"] == request["protected_main_commit"],
+                "Protected main changed during tag dispatch")
+        require(now() < deadline, "Tag dispatch exceeded the original checkpoint deadline")
+        receipt["run_identity_verified"] = True
+        persist()
+    return operator_run
+
+
 def wait_for_operator(checkpoint_directory: Path, artifact_id: int, artifact_digest: str,
-                      output: Path, *, github: GitHub | None = None,
+                      output: Path, *, dispatch_receipt: Path | None = None, github: GitHub | None = None,
                       now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
                       sleep: Callable[[float], None] = time.sleep) -> dict:
     if __package__:
@@ -602,6 +720,12 @@ def wait_for_operator(checkpoint_directory: Path, artifact_id: int, artifact_dig
     require_review_only_history(source, admitted_main, run_id, 1, authority["review_required"],
                                 record_sha256=authority["record_sha256"],
                                 timeout_seconds=remaining(github.deadline, 30))
+    wait_for_dispatch_step(github, request, now=now, sleep=sleep)
+    require(annotated_tag(github, request["tag"]) is None
+            and annotated_tag(github, release_intent_tag(request["tag"])) is None,
+            "Tag dispatch refuses an existing release or ownership coordinate")
+    operator_run = dispatch_operator_once(github, request, request_sha, artifact,
+                                          dispatch_receipt or output.with_suffix(".dispatch.json"), now=now)
     with tempfile.TemporaryDirectory(prefix="marty-tag-result-") as temporary:
         directory = Path(temporary)
         while True:
@@ -610,11 +734,17 @@ def wait_for_operator(checkpoint_directory: Path, artifact_id: int, artifact_dig
             require(current.get("status") == "in_progress", "Original CD attempt is no longer running")
             main = github.main()["commit"]["sha"]
             require(main == request["protected_main_commit"], "Protected main changed during tag handoff")
+            operator = github.run(operator_run, OPERATOR_WORKFLOW, request["protected_main_commit"])
+            require((operator.get("status") in {"queued", "in_progress", "waiting", "pending"}
+                     and operator.get("conclusion") is None)
+                    or (operator.get("status") == "completed" and operator.get("conclusion") == "success"),
+                    "Dispatched tag operator did not complete successfully")
             # These exact immutable commit objects/history were admitted once.
             # Poll only the authenticated current-main identity thereafter.
             tag = annotated_tag(github, request["tag"])
             if tag is not None:
-                operator_run = operator_from_message(tag.get("message", ""))
+                require(operator_from_message(tag.get("message", "")) == operator_run,
+                        "Tag belongs to an operator other than the exact dispatched run")
                 intent = owned_intent(github, request, request_sha, artifact, operator_run)
                 require(tag["object"]["sha"] == source
                         and tag.get("message", "").rstrip("\n") == tag_message(
@@ -645,9 +775,12 @@ def main() -> int:
     parser.add_argument("--artifact-id", type=int, required=True)
     parser.add_argument("--artifact-digest", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--dispatch-receipt", type=Path,
+                        help="Exclusive dispatch journal; defaults to OUTPUT with .dispatch.json suffix")
     args = parser.parse_args()
     try:
-        wait_for_operator(args.checkpoint, args.artifact_id, args.artifact_digest, args.output)
+        wait_for_operator(args.checkpoint, args.artifact_id, args.artifact_digest, args.output,
+                          dispatch_receipt=args.dispatch_receipt)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, zipfile.BadZipFile):
         print("Release tag handoff refused; immutable state was preserved.")
         return 1

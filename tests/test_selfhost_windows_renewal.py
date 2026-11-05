@@ -296,22 +296,37 @@ def test_historical_native_bind_inference_requires_exact_project_source_and_zero
         with pytest.raises(ValueError): renewal.disjoint_storage([bad], PROJECT, volumes, proofs)
 
 
-def test_large_docker_inventories_are_batched_below_windows_command_limit(monkeypatch):
+@pytest.mark.parametrize('name_size', [64, 255])
+def test_large_docker_inventories_are_batched_below_windows_command_limit(monkeypatch, name_size):
     import subprocess
-    names = [f'{i:064x}' for i in range(1200)]
+    names = [format(i, 'x').zfill(name_size) for i in range(1200)]
     docker = object.__new__(renewal.Docker);docker.prefix = ['SYNTHETIC_DOCKER']
     monkeypatch.setattr(renewal.subprocess, 'run', lambda *_a, **_k:
                         subprocess.CompletedProcess([], 0, ('\n'.join(names)+'\n').encode(), b''))
     batches = []
     def inspect(args):
         values = args[2:] if args[:2] == ['volume', 'inspect'] else args[1:]
-        assert 0 < len(values) <= 64
+        assert 0 < len(values) <= (256 if args[:2] == ['volume', 'inspect'] else 64)
+        assert len(subprocess.list2cmdline([*docker.prefix, *args])) <= 24*1024
         batches.append(values)
         return [{'Name': name, 'Id': name} for name in values]
     monkeypatch.setattr(docker, 'json', inspect)
     assert len(docker.volumes()) == 1200
+    volume_batches = len(batches)
+    assert volume_batches < 19
+    assert [name for batch in batches for name in batch] == names
     assert len(docker.containers()) == 1200
-    assert len(batches) == 38
+    assert len(batches) == volume_batches + 19
+
+
+@pytest.mark.parametrize('name', ['-option', 'space name', 'x'*256, 'bad/name'])
+def test_volume_batches_refuse_noncanonical_names_before_inspection(monkeypatch, name):
+    import subprocess
+    docker = object.__new__(renewal.Docker);docker.prefix = ['SYNTHETIC_DOCKER']
+    monkeypatch.setattr(renewal.subprocess, 'run', lambda *_a, **_k:
+                        subprocess.CompletedProcess([], 0, (name+'\n').encode(), b''))
+    monkeypatch.setattr(docker, 'json', lambda *_: pytest.fail('Invalid names reached inspect'))
+    with pytest.raises(ValueError):docker.volumes()
 
 
 def test_mount_order_is_not_identity_but_every_field_and_duplicate_is_preserved():
@@ -434,8 +449,21 @@ def test_mutating_timeout_preserves_diagnostic_and_uncertain_classification(monk
             renewal.recreate(None, ['SYNTHETIC_COMPOSE'], {'gateway'}, services, m, path)
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='Actual NTFS diagnostic failure boundary')
+def test_unsafe_progress_context_survives_diagnostic_failure_without_mutation(monkeypatch):
+    from test_selfhost_windows_inputs import private_fixture
+    with private_fixture() as (root, path):
+        path.write_bytes(b'');m = model(root);services = {x['Service'] for x in states(m)}
+        monkeypatch.setattr(renewal, 'run_owned_mutation', lambda *_a, **_k: pytest.fail('Unsafe context wrote Docker'))
+        def refuse(*_):raise renewal.UnsafeRenewalContext('SYNTHETIC_UNSAFE_CONTEXT')
+        def log_failure(*_):raise ValueError('SYNTHETIC_LOG_FAILURE')
+        monkeypatch.setattr(renewal, 'write_empty_private_file', log_failure)
+        with pytest.raises(renewal.UncertainComposeMutation):
+            renewal.recreate(None, ['SYNTHETIC_COMPOSE'], {'gateway'}, services, m, path, progress=refuse)
+
+
 @pytest.mark.skipif(os.name != 'nt', reason='Actual held NTFS transaction')
-@pytest.mark.parametrize('fail_new', [False, True, 'rollback', 'unselected', 'uncertain'])
+@pytest.mark.parametrize('fail_new', [False, True, 'rollback', 'unselected', 'uncertain', 'foreign', 'foreign-unknown'])
 def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreation(monkeypatch, fail_new):
     import hashlib
 
@@ -491,6 +519,10 @@ def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreat
                                                        'com.docker.compose.service': name,
                                                        'com.docker.compose.config-hash':
                                                            ('2' if phase['root'] == new_root and name == 'gateway' else '1') * 64}}})
+                if phase.get('foreign_created'):
+                    foreign = context_container('new-foreign', 'other', volume='other-data')
+                    foreign['Mounts'] = [] if fail_new == 'foreign' else foreign['Mounts']
+                    rows.append(foreign)
                 return rows
         def native(_, project, old_bytes, new_bytes, prefix):
             assert project == PROJECT and old_bytes.keys() == new_bytes.keys()
@@ -506,6 +538,7 @@ def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreat
             renewal.write_empty_private_file(log, 'SYNTHETIC_COMPOSE_LOG\n')
             if fail_new == 'uncertain': raise renewal.UncertainComposeMutation('SYNTHETIC_TIMEOUT')
             elif fail_new == 'unselected': phase['unselected_changed'] = True
+            elif fail_new in {'foreign', 'foreign-unknown'}:phase['foreign_created'] = True
             elif fail_new and (phase['root'] == new_root or fail_new == 'rollback'):
                 raise RuntimeError('SYNTHETIC_PARTIAL_FAILURE')
             progress('completed', 0, sorted(changing))
@@ -520,15 +553,15 @@ def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreat
             assert Path(cfg['result']).read_bytes() == b''
             assert Path(cfg['intent']).read_bytes()
             return
-        if fail_new in {'rollback', 'unselected'}:
+        if fail_new in {'rollback', 'unselected', 'foreign-unknown'}:
             with pytest.raises(RuntimeError, match='requires operator recovery'):
                 renewal.activate(cfg)
-            assert calls == ['native', 'new', 'old']
+            assert calls == (['native', 'new', 'old'] if fail_new == 'rollback' else ['native', 'new'])
             assert Path(cfg['result']).read_bytes() == b''
             assert Path(cfg['intent']).read_bytes()
             (old_root / 'smtp_password').write_bytes(b'AFTER_RECOVERY_REFUSAL')
             return
-        if fail_new:
+        if fail_new and fail_new != 'foreign':
             with pytest.raises(RuntimeError, match='prior generation restored'):
                 renewal.activate(cfg)
             assert calls == ['native', 'new', 'old'] and phase['root'] == old_root
@@ -536,12 +569,255 @@ def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreat
             assert renewal.activate(cfg)['result'] == 'activated'
             assert calls == ['native', 'new'] and phase['root'] == new_root
         result = json.loads(Path(cfg['result']).read_text())
-        assert result['result'] == ('rolled_back' if fail_new else 'activated')
+        assert result['result'] == ('rolled_back' if fail_new is True else 'activated')
+        assert len(result['foreign_context_proofs']) == (1 if fail_new == 'foreign' else 0)
         assert result['production_admission'] is False
         assert (output / 'intent').read_bytes()
         # Locks are released but durable one-shot intent prevents a blind retry.
         with pytest.raises(ValueError): renewal.activate(cfg)
         (old_root / 'smtp_password').write_bytes(b'AFTER_RELEASE')
+
+
+def context_container(identity, project=PROJECT, service='gateway', volume='candidate-data'):
+    return {'Id': identity, 'Created': 'FIXED', 'Image': 'SYNTHETIC_IMAGE', 'RestartCount': 0,
+            'State': {'Status': 'running', 'StartedAt': 'FIXED', 'Pid': 10, 'ExitCode': 0},
+            'HostConfig': {'PidMode': ''},
+            'Mounts': [{'Type': 'volume', 'Name': volume, 'Source': '/var/lib/docker/volumes/'+volume+'/_data',
+                        'Destination': '/data', 'RW': True}],
+            'Config': {'Labels': {'com.docker.compose.project': project, 'com.docker.compose.service': service}}}
+
+
+class ContextDocker:
+    def __init__(self, items):
+        self.items = deepcopy(items)
+        self.inventory = {name: {'Name': name, 'Driver': 'local', 'Options': None,
+                                'Mountpoint': '/var/lib/docker/volumes/'+name+'/_data'}
+                          for name in ['candidate-data', 'other-data']}
+        self.witness_calls = 0
+        self.during_witness = lambda: None
+
+    def containers(self): return deepcopy(self.items)
+    def volumes(self): return deepcopy(self.inventory)
+    def native_witnesses(self, *_):
+        self.witness_calls += 1
+        self.during_witness()
+        return {}
+
+
+def foreign_context():
+    docker = ContextDocker([context_container('candidate'), context_container('foreign', 'other', volume='other-data')])
+    context = renewal.ForeignContext(docker, PROJECT, {'gateway'}, docker.containers(), docker.volumes(), 'synthetic')
+    return docker, context
+
+
+@pytest.mark.parametrize('change', ['create', 'remove', 'restart', 'unlabelled'])
+def test_foreign_churn_requires_fresh_whole_storage_proof(change):
+    docker, context = foreign_context()
+    if change in {'create', 'unlabelled'}:
+        docker.items.append(context_container('new', 'other' if change == 'create' else None, volume='other-data'))
+    elif change == 'remove':docker.items.pop()
+    else:
+        docker.items[1]['RestartCount'] += 1
+        docker.items[1]['State'].update(Pid=11, StartedAt='RESTARTED')
+    assert context.check() == docker.items
+    assert docker.witness_calls == 1 and len(context.proofs) == 1
+    assert len(context.proofs[0]['sha256']) == 64
+    category = 'added' if change in {'create', 'unlabelled'} else 'removed' if change == 'remove' else 'updated'
+    assert context.proofs[0]['drift'][category]['count'] == 1
+    context.check()
+    assert docker.witness_calls == 2  # unchanged strings still require fresh mount/path identities
+
+
+@pytest.mark.parametrize('field', ['Image', 'Created', 'Mounts', 'project', 'service'])
+def test_surviving_foreign_identity_cannot_be_requalified(field):
+    docker, context = foreign_context()
+    if field == 'Mounts':docker.items[1][field] = []
+    elif field in {'project', 'service'}:
+        docker.items[1]['Config']['Labels']['com.docker.compose.'+field] = 'CHANGED'
+    else:docker.items[1][field] = 'CHANGED'
+    with pytest.raises(renewal.UnsafeRenewalContext):context.check()
+    assert docker.witness_calls == 0 and context.proofs == []
+
+
+@pytest.mark.parametrize('readonly', [False, True])
+def test_foreign_addition_cannot_mount_candidate_storage_even_readonly(readonly):
+    docker, context = foreign_context()
+    item = context_container('overlap', None)
+    item['Mounts'][0]['RW'] = not readonly
+    docker.items.append(item)
+    with pytest.raises(renewal.UnsafeRenewalContext):context.check()
+    assert context.proofs == []
+
+
+@pytest.mark.parametrize('change', ['missing-role', 'duplicate-role', 'new-role', 'image', 'data', 'foundation', 'before-intent'])
+def test_candidate_changes_remain_strict(change):
+    docker, context = foreign_context()
+    if change == 'missing-role':docker.items.pop(0)
+    elif change in {'duplicate-role', 'new-role'}:
+        docker.items.append(context_container('duplicate', service='extra' if change == 'new-role' else 'gateway'))
+    elif change == 'image':docker.items[0]['Image'] = 'CHANGED'
+    elif change == 'data':docker.items[0]['Mounts'] = []
+    elif change == 'foundation':
+        context.changing = set()
+        context.protected = {k: v for k, v in context.initial.items() if v['project'] == PROJECT}
+        docker.items[0]['State']['StartedAt'] = 'CHANGED'
+    else:docker.items[0]['Id'] = 'RECREATED'
+    with pytest.raises(renewal.UnsafeRenewalContext):context.check(before_intent=change == 'before-intent')
+
+
+def test_selected_recreation_is_allowed_between_but_never_during_storage_proofs():
+    docker, context = foreign_context()
+    docker.items[0]['Id'] = 'RECREATED'
+    context.check()
+    docker.items.append(context_container('new', 'other', volume='other-data'))
+    docker.during_witness = lambda: docker.items[0]['State'].update(Pid=999)
+    with pytest.raises(renewal.UnsafeRenewalContext):context.check()
+    assert context.proofs == []
+
+
+def test_only_successful_readonly_proof_inventory_drift_can_retry():
+    docker, context = foreign_context()
+    docker.items.append(context_container('new', 'other', volume='other-data'))
+    def once():
+        docker.items.pop()
+        docker.during_witness = lambda: None
+    docker.during_witness = once
+    context.check()
+    assert docker.witness_calls == 2 and context.proofs == []  # freshly proved the original context again
+    docker.items.append(context_container('new', 'other', volume='other-data'))
+    def unavailable():raise ValueError('SYNTHETIC_UNKNOWN_WITNESS')
+    docker.during_witness = unavailable
+    with pytest.raises(renewal.UnsafeRenewalContext):context.check()
+    assert docker.witness_calls == 3
+
+
+def test_continuous_foreign_churn_has_finite_readonly_attempts():
+    docker, context = foreign_context()
+    docker.items.append(context_container('new', 'other', volume='other-data'))
+    docker.during_witness = lambda: docker.items[-1]['State'].update(Pid=docker.witness_calls+100)
+    with pytest.raises(renewal.UnsafeRenewalContext):context.check()
+    assert docker.witness_calls == 3 and context.proofs == []
+
+
+def test_unchanged_context_cannot_pass_after_its_deadline(monkeypatch):
+    docker, context = foreign_context()
+    clock = {'now': 0}
+    monkeypatch.setattr(renewal.time, 'monotonic', lambda: clock['now'])
+    original = docker.volumes
+    def late():
+        clock['now'] = 61
+        return original()
+    docker.volumes = late
+    with pytest.raises(renewal.UnsafeRenewalContext):context.check()
+    assert docker.witness_calls == 0
+
+
+def test_unchanged_context_closes_census_after_volume_discovery():
+    docker, context = foreign_context()
+    original = docker.volumes
+    def introduce_overlap():
+        docker.items.append(context_container('overlap', None))
+        docker.volumes = original
+        return original()
+    docker.volumes = introduce_overlap
+    with pytest.raises(renewal.UnsafeRenewalContext):context.check()
+    assert docker.witness_calls == 2 and context.proofs == []
+
+
+def test_proof_closes_census_after_final_volume_discovery():
+    docker, context = foreign_context()
+    docker.items.append(context_container('new', 'other', volume='other-data'))
+    original = docker.volumes
+    calls = []
+    def introduce_overlap():
+        calls.append(True)
+        if len(calls) == 2:docker.items.append(context_container('overlap', None))
+        return original()
+    docker.volumes = introduce_overlap
+    with pytest.raises(renewal.UnsafeRenewalContext):context.check()
+    assert docker.witness_calls == 2 and context.proofs == []
+
+
+def test_proof_hashing_cannot_accept_after_deadline(monkeypatch):
+    docker, context = foreign_context()
+    docker.items.append(context_container('new', 'other', volume='other-data'))
+    clock = {'now': 0}
+    monkeypatch.setattr(renewal.time, 'monotonic', lambda: clock['now'])
+    original = renewal.hashlib.sha256
+    def late(raw):
+        clock['now'] = 61
+        return original(raw)
+    monkeypatch.setattr(renewal.hashlib, 'sha256', late)
+    with pytest.raises(renewal.UnsafeRenewalContext) as caught:context.check()
+    assert caught.value.__context__ is None
+    assert context.proofs == []
+
+
+def test_new_foreign_identity_cannot_change_during_a_readonly_retry():
+    docker, context = foreign_context()
+    docker.items.append(context_container('new', 'other', volume='other-data'))
+    docker.during_witness = lambda: docker.items[-1].update(Image='CHANGED')
+    with pytest.raises(renewal.UnsafeRenewalContext):context.check()
+    assert docker.witness_calls == 1 and context.proofs == []
+
+
+def test_identical_inspect_strings_cannot_hide_windows_namespace_retarget(monkeypatch):
+    docker, context = foreign_context()
+    foreign = docker.items[1]
+    foreign['Mounts'] = [{'Type': 'bind', 'Source': 'C:/foreign-alias', 'Destination': '/data', 'RW': False}]
+    selected = docker.items[0]
+    selected['Mounts'] = [{'Type': 'bind', 'Source': 'C:/candidate-data', 'Destination': '/data', 'RW': True}]
+    context = renewal.ForeignContext(docker, PROJECT, {'gateway'}, docker.containers(), docker.volumes(), 'synthetic')
+    phase = {'retargeted': False}
+    def identity(path):
+        own = str(path).replace('\\', '/').endswith('candidate-data')
+        inode = 1 if own else 3 if phase['retargeted'] else 2
+        return path, (1, inode), {(1, inode)}
+    monkeypatch.setattr(renewal, 'windows_identity', identity)
+    original = docker.volumes
+    calls = []
+    def retarget():
+        calls.append(True)
+        if len(calls) == 2:phase['retargeted'] = True
+        return original()
+    docker.volumes = retarget
+    with pytest.raises(renewal.UnsafeRenewalContext):context.check()
+    assert context.proofs == []
+
+
+def test_volume_metadata_changes_force_requalification_and_cannot_overlap():
+    docker, context = foreign_context()
+    docker.inventory['other-data']['Options'] = {'type': 'none', 'o': 'bind', 'device': '/unknown'}
+    with pytest.raises(renewal.UnsafeRenewalContext):context.check()
+    assert docker.witness_calls == 1 and context.proofs == []
+
+
+def test_many_context_proofs_keep_total_result_evidence_bounded():
+    import hashlib
+    _docker, context = foreign_context()
+    proof = {'sha256': '1'*64, 'foreign_containers': 1000, 'native_witnesses': 100,
+             'drift': {name: {'count': 1000, 'ids': [str(i)*64 for i in range(4)], 'sha256': '2'*64}
+                       for name in ['added', 'removed', 'updated']}}
+    expected = ''
+    for _ in range(200):
+        expected = hashlib.sha256(expected.encode()+json.dumps(proof, sort_keys=True).encode()).hexdigest()
+        context._record_proof(proof)
+    assert context.proof_count == 200 and context.proof_sha256 == expected
+    assert len(context.proofs) < 10
+    assert len(json.dumps(context.proofs, sort_keys=True).encode()) <= 8192
+
+
+def test_late_aggregate_hash_does_not_publish_context_evidence(monkeypatch):
+    _docker, context = foreign_context()
+    clock = {'now': 0}
+    monkeypatch.setattr(renewal.time, 'monotonic', lambda: clock['now'])
+    original = renewal.hashlib.sha256
+    def late(raw):
+        clock['now'] = 61
+        return original(raw)
+    monkeypatch.setattr(renewal.hashlib, 'sha256', late)
+    with pytest.raises(ValueError):context._record_proof({'sha256': '1'*64}, deadline=60)
+    assert context.proofs == [] and context.proof_count == 0 and context.proof_sha256 is None
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Win32 owned job containment')

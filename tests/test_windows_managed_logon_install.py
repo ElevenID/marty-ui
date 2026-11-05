@@ -28,21 +28,25 @@ def invoke(tmp_path,case):
         '\nexit '+('1' if case=='preflight-failure' else '0')+'\n')
     code=r'''
 $ErrorActionPreference='Stop'
-$global:record=@{}
+$global:record=@{trigger_types=@()}
 function Get-ScheduledTask {
  if ('CASE' -eq 'inventory-failure') { throw 'synthetic inventory failure' }
  if ('CASE' -eq 'existing-task') { return [pscustomobject]@{TaskName='Marty-Candidate-Recovery';TaskPath='\OtherOwner\'} }
 }
 function Register-ScheduledTask { throw 'Native task cmdlet forbidden in managed recorder' }
-$global:trigger=[pscustomobject]@{UserId='';Delay='';Repetition=[pscustomobject]@{Interval='';StopAtDurationEnd=$true}}
+$global:trigger=[pscustomobject]@{UserId='';Delay='';EndBoundary='';Repetition=[pscustomobject]@{Interval='';StopAtDurationEnd=$true}}
+$global:timer=[pscustomobject]@{Enabled=$false;StartBoundary='';EndBoundary='';Repetition=[pscustomobject]@{Interval='';StopAtDurationEnd=$true}}
 $global:action=[pscustomobject]@{Path='';Arguments='';WorkingDirectory=''}
 $global:definition=[pscustomobject]@{
- RegistrationInfo=[pscustomobject]@{Description=''}
+ RegistrationInfo=[pscustomobject]@{Description='';Date=''}
  Principal=[pscustomobject]@{UserId='';LogonType=0;RunLevel=0}
  Settings=[pscustomobject]@{StartWhenAvailable=$false;ExecutionTimeLimit='';RestartCount=0;RestartInterval='';MultipleInstances=0;Enabled=$false}
  Triggers=[pscustomobject]@{};Actions=[pscustomobject]@{} }
 $global:definition.Triggers | Add-Member ScriptMethod Create { param($kind)
- $global:record.trigger_type=$kind;return $global:trigger }
+ $global:record.trigger_types+=@($kind)
+ if ($kind -eq 9) {return $global:trigger}
+ if ($kind -eq 1) {return $global:timer}
+ throw 'Unexpected trigger kind' }
 $global:definition.Actions | Add-Member ScriptMethod Create { param($kind)
  $global:record.action_type=$kind;return $global:action }
 $global:folder=[pscustomobject]@{}
@@ -55,6 +59,8 @@ $global:folder | Add-Member ScriptMethod RegisterTaskDefinition {
  $global:record.action=$global:action.Arguments;$global:record.launcher=$global:action.Path
  $global:record.delay=$global:trigger.Delay;$global:record.settings=$definition.Settings
  $global:record.repetition=$global:trigger.Repetition
+ $global:record.logon_end=$global:trigger.EndBoundary
+ $global:record.timer=$global:timer;$global:record.registered=$definition.RegistrationInfo.Date
  if ('CASE' -eq 'late-collision') {
   $global:record | ConvertTo-Json | Set-Content COLLISION
   throw 'Synthetic registration-time collision; existing task preserved'
@@ -86,6 +92,15 @@ function New-Object { param($ComObject)
         if case=='renew-bad-interval':task=task.replace('240','0')
         elif case=='renew-bad-project':task=task.replace('marty-selfhost-synthetic','PRIVATE_SENTINEL')
         elif case=='renew-no-python':code=code.replace(' -ManagedPython PYTHON','')
+        elif case=='renew-short-first-delay':task+=' -FirstRenewalDelaySeconds 14'
+        elif case=='renew-long-first-delay':task+=' -FirstRenewalDelaySeconds 14401'
+        elif case=='renew-window':task+=' -RenewalWindowMinutes 300'
+        elif case=='renew-window-before-first':task+=' -RenewalWindowMinutes 240'
+        elif case=='renew-window-negative':task+=' -RenewalWindowMinutes -1'
+        elif case=='renew-window-long':task+=' -RenewalWindowMinutes 1441'
+        elif case=='renew-first':task+=' -FirstRenewalDelaySeconds 15'
+    if case=='recovery-first-delay':task+=' -FirstRenewalDelaySeconds 15'
+    if case=='recovery-window':task+=' -RenewalWindowMinutes 30'
     for key,value in {'CASE':case,'COLLISION':legacy.quote(tmp_path/'collision.json'),
         'RECORD':legacy.quote(record),'INSTALLER':legacy.quote(installer),
         'CONFIG':legacy.quote(config),'PYTHON':legacy.quote(python),'TASK':task}.items():
@@ -102,7 +117,7 @@ def test_managed_install_retains_explicit_interpreter_and_separate_logon_task(tm
         'configuration':str(config),'python':str(python),'check':True,'renew':False,'logical':''}
     task=json.loads(record.read_text(encoding='utf-8-sig'))
     assert task['name']=='Marty-Candidate-Recovery' and task['flags']==2
-    assert task['trigger_type']==9 and task['action_type']==0
+    assert task['trigger_types']==[9] and task['action_type']==0
     assert task['principal'][1:]==[3,0] and task['registration_logon']==3 and task['no_password']
     assert Path(task['launcher']).is_absolute() and task['launcher'].lower().endswith('powershell.exe')
     assert task['delay']=='PT2M' and task['settings']['ExecutionTimeLimit']=='PT20M'
@@ -110,16 +125,28 @@ def test_managed_install_retains_explicit_interpreter_and_separate_logon_task(tm
     assert '-ManagedPython "'+str(python)+'"' in task['action']
     assert '-RecoveryConfigurationFile "'+str(config)+'"' in task['action']
     assert '-WaitForEngine' in task['action'] and '-CheckOnly' not in task['action']
+    assert '-WindowStyle Hidden -File ' in task['action']
 
 
-def test_renewal_install_is_separate_create_only_and_preflight_never_mints(tmp_path):
-    result,config,python,child,record=invoke(tmp_path,'renew')
+@pytest.mark.parametrize('case',['renew','renew-first','renew-window'])
+def test_renewal_install_is_separate_create_only_and_preflight_never_mints(tmp_path,case):
+    from datetime import datetime, timedelta
+    result,config,python,child,record=invoke(tmp_path,case)
     assert result.returncode==0,result.stderr
     checked=json.loads(child.read_text(encoding='utf-8-sig'))
     assert checked['check'] and checked['renew'] and checked['logical']=='marty-selfhost-synthetic'
     task=json.loads(record.read_text(encoding='utf-8-sig'))
     assert task['flags']==2 and task['name']=='Marty-Candidate-Recovery'
-    assert task['repetition']=={'Interval':'PT240M','StopAtDurationEnd':False}
+    assert task['trigger_types']==[9,1] and task['repetition']['Interval']==''
+    assert task['timer']['Repetition']=={'Interval':'PT240M','StopAtDurationEnd':False}
+    registered=datetime.fromisoformat(task['registered']);first=datetime.fromisoformat(task['timer']['StartBoundary'])
+    assert registered.utcoffset()==first.utcoffset()==timedelta(0)
+    assert (first-registered).total_seconds()==(15 if case=='renew-first' else 14400)
+    if case=='renew-window':
+        assert datetime.fromisoformat(task['logon_end'])==registered+timedelta(minutes=300)
+        assert task['logon_end']==task['timer']['EndBoundary']
+    else:
+        assert not task['logon_end'] and not task['timer']['EndBoundary']
     assert task['settings']['RestartCount']==0 and task['settings']['ExecutionTimeLimit']=='PT1H'
     assert '-RenewCredentials -LogicalTlsProject "marty-selfhost-synthetic"' in task['action']
     assert '-CheckOnly' not in task['action']
@@ -127,7 +154,9 @@ def test_renewal_install_is_separate_create_only_and_preflight_never_mints(tmp_p
 
 @pytest.mark.parametrize('case',['missing-name','historical-name','unsafe-name','missing-python',
                                'existing-task','inventory-failure','preflight-failure','late-collision','legacy-custom',
-                               'renew-bad-interval','renew-bad-project','renew-no-python'])
+                               'renew-bad-interval','renew-bad-project','renew-no-python',
+                               'renew-short-first-delay','renew-long-first-delay','recovery-first-delay',
+                               'renew-window-before-first','renew-window-negative','renew-window-long','recovery-window'])
 def test_managed_install_never_registers_on_bad_identity_inventory_or_preflight(tmp_path,case):
     result,_config,_python,child,record=invoke(tmp_path,case)
     assert result.returncode!=0 and not record.exists()

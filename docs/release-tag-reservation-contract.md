@@ -37,18 +37,25 @@ The decision changes one guarantee:
 | Concurrent main advance | Transaction or subsequent admission fails | Observed advance fails admission; an unused tag may remain |
 | Failed or unknown tag write | Preserve evidence; no automatic retry or cleanup | Same, including no adoption or version reuse |
 
-No permission, token, ruleset, branch-protection, merge-queue, or required-check
-change is part of this contract. The release operator never updates main.
+The release operator retains its existing ref permissions and never updates
+main. The publisher has job-scoped `actions: write` permission to dispatch that
+operator automatically. Rulesets, branch protection, merge queues, and required
+checks remain unchanged.
 
 ## Admission sequence
 
 1. Qualify the exact source with the required original full CI, claim, candidate,
-   official evidence, and any exact protected review-only history. Preserve the
-   fixed review window and the existing original-attempt requirements.
+   official evidence and the v2 automated verifier assessment. Preserve the
+   existing original-attempt requirements. Protected main remains the candidate
+   source; no per-release review commit or human review window is required.
 2. Seal the original 32 publication assets, official gate authority, and
    exact candidate identity in a versioned checkpoint. The tag handoff retains
    its fixed 15-minute deadline.
-3. On protected main, authenticate the original waiting publisher, its claim,
+3. The publisher dispatches the independent operator once using its scoped
+   `GITHUB_TOKEN` with `actions: write`, after persisting a dispatch receipt.
+   Require GitHub API version `2026-03-10` to return HTTP 200 with the exact run
+   ID and canonical URLs. A lost or ambiguous response stops without another
+   dispatch. On protected main, the operator authenticates the waiting publisher, its claim,
    checkpoint ZIP, visible rules, source/review authority, image digests, and all
    cryptographic proofs. Recheck current main immediately before the tag action.
 4. Acquire the per-version annotated ownership tag
