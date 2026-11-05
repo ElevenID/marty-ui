@@ -216,6 +216,13 @@ pub async fn prepare_verification_submission(
     let raw_vp_token = input.vp_token;
     let oid4vp_transport =
         evaluation_transport(context, presentation_submission.as_ref(), &raw_vp_token)?;
+    if context.contains_key(crate::public_verification_session::PUBLIC_SESSION)
+        && oid4vp_transport.is_none()
+    {
+        return Err(FlowVerificationSubmissionError::InvalidContext(
+            "public_verification_query_binding",
+        ));
+    }
     let vp_token = select_vp_token(&raw_vp_token);
     let mut evaluation_context = BTreeMap::new();
     if let Some(digest) = expected_policy_digest {

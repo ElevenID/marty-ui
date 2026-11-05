@@ -133,16 +133,35 @@ pub(super) fn credential(issuer: &'static str, holder_key: u8) -> String {
 }
 
 fn credential_with_lifetime(issuer: &'static str, holder_key: u8, lifetime: i64) -> String {
+    credential_with_type(issuer, holder_key, lifetime, VCT)
+}
+
+pub(super) fn credential_with_type(
+    issuer: &'static str,
+    holder_key: u8,
+    lifetime: i64,
+    vct: &str,
+) -> String {
+    credential_with_profile(issuer, holder_key, lifetime, vct, "dc+sd-jwt")
+}
+
+pub(super) fn credential_with_profile(
+    issuer: &'static str,
+    holder_key: u8,
+    lifetime: i64,
+    vct: &str,
+    typ: &str,
+) -> String {
     let signer = IssuerFixture { issuer, holder_key };
     let claims: CredentialClaims = serde_json::from_value(json!({
-        "subject_id":HOLDER, "credential_type":VCT, "claims":{"age_over_18":true,"age_over_21":false,"nickname":"do-not-disclose"},
+        "subject_id":HOLDER, "credential_type":vct, "claims":{"age_over_18":true,"age_over_21":false,"nickname":"do-not-disclose"},
         "expiration_seconds":lifetime, "selective_disclosure_claims":["age_over_18","age_over_21","nickname"]
     })).unwrap();
     let prepared = prepare_sd_jwt_with_options(
         &signer,
         &claims,
         SdJwtPreparationOptions {
-            typ: Some("dc+sd-jwt".into()),
+            typ: Some(typ.into()),
             confirmation: Some(json!({"jwk":jwk(signer.holder_key)})),
             ..Default::default()
         },

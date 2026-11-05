@@ -227,11 +227,16 @@ impl crate::PresentationPolicyProvider for ActualPolicy {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Mutation {
     None,
     Signature,
     Audience,
+    WrongVct,
+    WrongFormat,
+    WrongQueryId,
+    MultipleTokens,
+    ExtraQueryId,
 }
 async fn run_actual_case(
     specimen: &str,
@@ -254,16 +259,77 @@ async fn run_actual_case(
     .unwrap() else {
         panic!("request expired")
     };
-    let presentation = holder
-        .presentation(&providers, &ready.instance, &profile, specimen)
-        .await
-        .unwrap()
-        .into_compact();
+    let presentation = if matches!(mutation, Mutation::WrongVct | Mutation::WrongFormat) {
+        // Model an independent wallet: it can present a valid issuer-signed
+        // credential that differs from the requested type. Do not route this
+        // through the example producer's extra profile checks.
+        use p256::ecdsa::{signature::Signer as _, Signature, SigningKey};
+        let specimen = super::tests::credential_with_profile(
+            ISSUER,
+            7,
+            300,
+            if matches!(mutation, Mutation::WrongVct) {
+                "urn:marty:demo:other:1"
+            } else {
+                VCT
+            },
+            if matches!(mutation, Mutation::WrongFormat) {
+                "vc+sd-jwt"
+            } else {
+                "dc+sd-jwt"
+            },
+        );
+        let keys = TrustedSdJwtIssuerKeys::new(vec![ResolvedSdJwtIssuerKey::new(
+            ISSUER,
+            Some(format!("{ISSUER}#key")),
+            marty_oid4vci::types::SigningAlgorithm::ES256,
+            jwk(3).to_string(),
+        )])
+        .unwrap();
+        let prepared = WalletEngine::new()
+            .prepare_verified_sd_jwt_presentation(
+                &specimen,
+                &[claim.to_owned()],
+                ready.instance.context["nonce"].as_str().unwrap(),
+                ready.instance.context["oid4vp_client_id"].as_str().unwrap(),
+                &jwk(7).to_string(),
+                &keys,
+            )
+            .unwrap();
+        let signature: Signature = SigningKey::from_bytes((&[7u8; 32]).into())
+            .unwrap()
+            .sign(prepared.signing_input());
+        prepared.complete(&signature.to_bytes()).unwrap()
+    } else {
+        holder
+            .presentation(&providers, &ready.instance, &profile, specimen)
+            .await
+            .unwrap()
+            .into_compact()
+    };
     let mut input =
         crate::public_verification_example::example_submission(&ready.instance, presentation)
             .unwrap();
     match mutation {
-        Mutation::None => {}
+        Mutation::None | Mutation::WrongVct | Mutation::WrongFormat => {}
+        Mutation::WrongQueryId | Mutation::ExtraQueryId | Mutation::MultipleTokens => {
+            let mut wire: serde_json::Value = serde_json::from_str(&input.vp_token).unwrap();
+            let response = wire.as_object_mut().unwrap();
+            let id = response.keys().next().unwrap().clone();
+            let tokens = response[&id].clone();
+            if matches!(mutation, Mutation::WrongQueryId) {
+                response.remove(&id);
+            }
+            if matches!(mutation, Mutation::MultipleTokens) {
+                response[&id]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(tokens[0].clone());
+            } else {
+                response.insert("unrequested-query".into(), tokens);
+            }
+            input.vp_token = wire.to_string();
+        }
         Mutation::Audience => {
             input.audience_override = Some("did:web:wrong.example:verifier".into())
         }
@@ -302,6 +368,85 @@ async fn run_actual_case(
     .await
     .unwrap();
     result
+}
+
+#[tokio::test]
+async fn independent_wallet_type_format_query_and_token_mismatches_cannot_satisfy_the_age_request()
+{
+    for mutation in [
+        Mutation::WrongVct,
+        Mutation::WrongFormat,
+        Mutation::WrongQueryId,
+        Mutation::MultipleTokens,
+        Mutation::ExtraQueryId,
+    ] {
+        let result =
+            run_actual_case(&credential(ISSUER, 7), "age_over_18", true, true, mutation).await;
+        match result {
+            crate::PreparedVerificationSubmission::Retryable(response) => {
+                assert_eq!(response.status, "AWAITING_WALLET");
+                assert_eq!(response.verified_claims, json!({}));
+            }
+            crate::PreparedVerificationSubmission::RetryableSnapshot(snapshot) => {
+                assert!(!snapshot.instance.status.is_terminal());
+                assert_eq!(snapshot.response.verified_claims, json!({}));
+            }
+            other => panic!("{mutation:?} must be a nonterminal input rejection: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn public_submission_cannot_fall_back_when_the_stored_query_transport_is_missing() {
+    let (providers, instance, _, _, _) =
+        setup_with_policy(Arc::new(OpaqueSigner::new()), None).await;
+    let crate::PreparedVerificationRequest::Ready(mut ready) = crate::prepare_verification_request(
+        &providers,
+        instance,
+        "https://demo.example",
+        &Default::default(),
+        Utc::now(),
+    )
+    .await
+    .unwrap() else {
+        panic!("request expired");
+    };
+    let state = ready.instance.context["oid4vp_expected_state"]
+        .as_str()
+        .unwrap_or(&ready.instance.id)
+        .to_owned();
+    ready
+        .instance
+        .context
+        .as_object_mut()
+        .unwrap()
+        .remove("mip_messages");
+    let result = crate::prepare_verification_submission(
+        &providers,
+        ready.instance,
+        crate::VerificationSubmissionInput {
+            vp_token: "unverified-input".into(),
+            presentation_submission: None,
+            state: Some(state),
+            audience_override: None,
+        },
+        &crate::VerificationSubmissionOptions {
+            callback_destinations: Default::default(),
+            callback_secret: None,
+            verifier_sender_id: "did:web:demo.example:verifier".into(),
+            nonce_ttl_seconds: 900,
+            callback_retention_seconds: 3600,
+            callback_max_attempts: 3,
+        },
+        Utc::now(),
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(crate::FlowVerificationSubmissionError::InvalidContext(
+            "public_verification_query_binding"
+        ))
+    ));
 }
 
 #[tokio::test]

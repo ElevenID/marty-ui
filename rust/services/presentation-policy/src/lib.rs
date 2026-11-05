@@ -10,6 +10,7 @@ pub mod native_kernel;
 pub mod persistence;
 pub mod postgres;
 pub mod runtime;
+mod sd_jwt_query_binding;
 pub mod verification;
 
 pub use application::{
