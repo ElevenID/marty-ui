@@ -7,6 +7,7 @@ initialization. Every publication/admission/cutover gate remains external.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -63,6 +64,28 @@ print(json.dumps(rows))
 def require(value, message='Windows renewal preflight refused'):
     if not value:
         raise ValueError(message)
+
+
+def recovery_guard(config):
+    return Path(config['current_secrets']).parent / ('.'+config['project']+'.recovery-in-progress.json')
+
+
+def recovery_preparation_guard(config):
+    return Path(config['current_secrets']).parent / ('.'+config['project']+'.recovery-preparation.json')
+
+
+def namespace_entry_exists(path):
+    """Any entry blocks admission, including a dangling link; never follow it."""
+    try:
+        Path(path).lstat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def recovery_pending(config):
+    return (namespace_entry_exists(recovery_guard(config))
+            or namespace_entry_exists(recovery_preparation_guard(config)))
 
 
 def windows_healthy(items, services, model):
@@ -477,7 +500,7 @@ def dependency_layers(model, services, changing):
     return layers
 
 
-def run_owned_mutation(arguments, timeout=240):
+def run_owned_mutation(arguments, timeout=240, *, stdin_bytes=None):
     """Contain only this gated CLI tree; daemon work remains outside the job.
 
     No command is sent until its blocked helper belongs to a nonbreakaway,
@@ -490,6 +513,8 @@ def run_owned_mutation(arguments, timeout=240):
     require(os.name == 'nt' and isinstance(arguments, list) and arguments
             and all(isinstance(x, str) and '\0' not in x for x in arguments))
     require(type(timeout) in {int, float} and 0 < timeout <= 240)
+    require(stdin_bytes is None or isinstance(stdin_bytes, bytes) and len(stdin_bytes) <= 8 * 1024 * 1024,
+            'Owned CLI input too large')
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
     pointer = ctypes.c_void_p
 
@@ -545,8 +570,10 @@ def run_owned_mutation(arguments, timeout=240):
         limits = ExtendedLimits();limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE, no breakaway
         require(bool(inherit(job, 1, 0)) and bool(configure(job, 9, ctypes.byref(limits), ctypes.sizeof(limits))),
                 'Owned CLI job configuration unavailable')
-        helper = ('import json,sys; d=json.load(sys.stdin); import subprocess; '
-                  'sys.exit(subprocess.run(d["argv"],stdin=subprocess.DEVNULL,close_fds=True).returncode)')
+        helper = ('import json,sys; d=json.load(sys.stdin); import subprocess,base64; '
+                  'body=base64.b64decode(d["input"],validate=True) if d["input"] is not None else None; '
+                  'options={"stdin":subprocess.DEVNULL} if body is None else {"input":body}; '
+                  'sys.exit(subprocess.run(d["argv"],close_fds=True,**options).returncode)')
         process = subprocess.Popen([sys.executable, '-I', '-S', '-c', helper],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    creationflags=subprocess.CREATE_NO_WINDOW, close_fds=True)
@@ -559,8 +586,10 @@ def run_owned_mutation(arguments, timeout=240):
         for index, stream in enumerate([process.stdout, process.stderr]):
             thread = threading.Thread(target=drain, args=(stream, index), daemon=True)
             threads.append(thread);thread.start()
-        payload = json.dumps({'argv': arguments}).encode()
-        require(len(payload) <= 128 * 1024, 'Owned CLI request too large')
+        require(len(json.dumps(arguments).encode()) <= 128 * 1024, 'Owned CLI request too large')
+        payload = json.dumps({'argv': arguments, 'input': None if stdin_bytes is None
+                             else base64.b64encode(stdin_bytes).decode('ascii')}).encode()
+        require(len(payload) <= 12 * 1024 * 1024, 'Owned CLI request too large')
 
         def release_gate():
             try:
@@ -718,6 +747,7 @@ def activate(config):
     try:
         with ExitStack() as stack:
             stack.enter_context(hold_private_input(lock, exclusive=True))
+            require(not recovery_pending(config), 'An interrupted recovery requires reconciliation')
             raw_model = stack.enter_context(hold_private_input(source, max_bytes=2 * 1024 * 1024))
             require(hashlib.sha256(raw_model).hexdigest() == config['compose_sha256'])
             before_env = stack.enter_context(hold_private_input(old_env))
@@ -732,6 +762,8 @@ def activate(config):
             old_bytes = stack.enter_context(hold_private_generation(current, names))
             new_bytes = stack.enter_context(hold_private_generation(renewed, names))
             checked_models(old_model, new_model, current, renewed, names)
+            from selfhost_windows_selection import activation_admission
+            stack.enter_context(activation_admission(config, old_bytes, new_bytes, before_env, after_env))
             baseline = docker.containers()
             owned = [x for x in baseline if _project(x) == project]
             services = {_service(x) for x in owned}

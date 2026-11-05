@@ -99,3 +99,112 @@ outputs. The durable intent retains the layer plan and receipt paths. A started
 receipt is flushed before each mutating invocation, and a completed receipt only
 after readiness. Rollback uses the same validated ordering with the old env.
 Never replay an interrupted layer from these records without reconciliation.
+
+The generation-selection owner can call `preflight_current` for a read-only
+current-custody and minimum-one-hour lifetime check. It verifies both native
+mirrors against held bytes, materializes private snapshots and delegates scoped
+authority, orphan-token and certificate/key/chain/lifetime decisions to the signed
+native operator. This separate entry point does not verify a changing-generation
+transition. `preflight` still requires distinct mirrors and changed renewable
+inputs, including the native generation verifier.
+
+Native requests now use the existing owned Win32 job runner's bounded binary
+stdin pipe. Private payloads are absent from command arguments. Command arguments,
+private input, encoded gate request and output tails each have separate bounds;
+every owned command inherits a private pipe or DEVNULL rather than the gate stdin.
+Durable selection/reconciliation and recovery integration remain separate work.
+
+`selfhost_windows_selection.py` adds a candidate selection journal beside its
+generations, at `.<project>.generation-selection`. It uses the same existing
+exclusive project lock, private NTFS proofs and immutable model/engine/operator
+binding. Records are append-only, sequence/parent-linked and bounded; secret
+values are never stored in them. Original transaction configs, intents and results
+remain unchanged.
+
+The library exposes these bounded operations:
+
+- `adopt(config_path)` proves an existing successful activation, then selects its
+  renewed inputs. Interrupted initial metadata adoption can resume after proof.
+- `prepare(next_config_path)` proves the selected current inputs and writes the
+  pending intent before activation. An initialized owner makes unregistered or
+  changed activation requests fail before mutation.
+- `complete(config_path)` verifies the durable activation/rollback result and
+  current runtime before appending selection. `reconcile=True` never replays
+  Docker: an empty original intent permits only the unchanged old selection;
+  otherwise the terminal phase needs every durable started/completed boundary.
+  Incomplete or uncertain commands remain operator recovery cases even when a
+  snapshot looks healthy. Original empty result files stay empty.
+- `status(config_path)` reports journal state, not live readiness. Pending,
+  malformed, partial or extra records never silently fall back to older inputs.
+- `selected_inputs(config_path)` holds the project lock, selected metadata,
+  model/env and complete generations for a recovery consumer. Its immutable lease
+  exposes paths and a current-proof callback, no secret bytes; the callback refuses
+  use after the context closes.
+
+Read-only proofs may use a fresh scoped authority token file without rewriting
+historical configs. Native authority/lifetime decisions remain mandatory. Existing
+Linux generation owners and Windows Compose/native validators are reused; this
+library starts no services and installs no task. PowerShell startup integration,
+producer scheduling, expired-credential recovery and engine/logon/host-reboot
+qualification remain required before unattended operation. Process-interruption
+controls do not claim power-loss durability qualification.
+
+The legacy Windows recovery wrapper refuses a default-active `openbao-tls-init`
+in either its product or OpenBao Compose inventory before any service mutation,
+including in check-only mode. Combined `up` and dependency traversal can replay
+that completed job. A retained managed candidate therefore needs the selected-
+generation recovery integration; passing paths to the legacy wrapper is unsafe.
+Existing standalone shapes without that initializer retain their recovery path.
+
+The selected-input lease now offers `recover_existing(output_dir, authority_file)`
+as a library callback. It holds the same project lock, original receipts and
+complete generations throughout recovery. The output directory must already be
+empty/private and named `windows-recovery-*` beside the generations. Missing,
+paused, invalid or failed completed jobs refuse before mutation. Only existing
+IDs may start; completed migrations and the TLS initializer never start again.
+Bao and its unseal helper start as a foundation group, then the native owner must
+admit the selected credentials before application roles start in dependency order.
+The full final readiness, storage, identity and native proof remains mandatory.
+
+A shared recovery marker blocks renewal, selection changes and new recovery after
+an interrupted/uncertain attempt. No failure path clears it or rolls back daemon
+operations. Preserve the marker, attempt receipts and generations for operator
+reconciliation. The callback returns a provisional result; only a clean exit from
+the entire selected-input context publishes success and clears the exact marker.
+Receipt tampering, a caller exception or a failed held-input exit leaves the marker.
+The marker remains authoritative even if a result file was written before a final
+publication-lock exit failure. Never interpret that result independently. Admission
+uses no-follow namespace checks: dangling marker/selection links and metadata errors
+must not fall back to an installation without an owner.
+No CLI, scheduled task, automatic marker removal or PowerShell managed-mode dispatch
+is installed by this library. Those integrations and interruption reconciliation
+remain required before unattended recovery is qualified.
+
+An explicitly coordinated planned stop may retain a separate
+`.<project>.recovery-preparation.json` marker. It blocks every new admission just
+like the recovery marker, including dangling entries. Only the already-held lease
+can call `recover_existing(..., preparation_sha256=...)` to hand it off. The
+private completion receipt must bind the exact preparation hash, returned stop
+CLI, all stopped IDs and retained completed-job IDs. Model/engine/selection/data
+identity, actual stopped state and protected observations are rechecked. Unknown,
+incomplete, mismatched or changed stop records never authorize startup.
+
+The owner flushes the normal recovery intent and marker before unlinking the
+preparation marker. Both exist during transfer; interruption leaves at least one
+authoritative marker. The original preparation and completion evidence remains
+linked by hashes in the recovery intent. This supports controlled planned-stop
+handoff; it does not automatically reconcile an uncertain stop or interrupted start.
+
+`reconcile_existing(config_path, authority_file=...)` is a separate read-only
+terminal operation. Use it only after verifying the original recovery owner has
+finished. It requires the exact guarded intent, registered selection, model-derived
+layers, current IDs, all matching started/completed command boundaries, and fresh
+native readiness/custody/lifetime proof. Missing or uncertain boundaries refuse
+even when containers appear healthy. A preparation marker also refuses this path.
+No workload command is issued. Original result bytes remain unchanged, including
+an empty original result; a separate deterministic `reconciliation.json` records
+the current proof. All original receipts and directory membership are rechecked
+before the marker clears, after lease and publication-lock exit checks. A prior
+valid reconciliation record can be retained during a fresh proof after publication
+interruption. This does not resume an unfinished start, prepared stop or expired
+generation, and it is not automatic logon recovery.
