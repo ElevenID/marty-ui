@@ -92,3 +92,50 @@ storage. Record the ordered invocation, image identities, mount markers and
 container identities before/after recovery. Application login, registration,
 consoles, KMS-backed operations and credential flows need separate runtime tests.
 Marketing/pricing page availability does not qualify billing or real payments.
+
+## Retained managed OpenBao candidate
+
+For a candidate already adopted by the
+[Windows generation owner](windows-renewal-activation.md), use the managed
+schema instead of the legacy Compose configuration above:
+
+```json
+{
+  "schema": "marty.windows-managed-recovery/v1",
+  "selection_file": "C:/Marty/private/renewal/config.private.json"
+}
+```
+
+`selection_file` is the existing generation-owner configuration used for
+adoption, not a replacement Compose model or a new deployment. Store both files
+in private, operator-owned directories. Supply the trusted Python interpreter
+explicitly; the JSON cannot select an executable. For example:
+
+```powershell
+& "$Tooling/scripts/recover-marty-after-reboot.ps1" `
+  -RecoveryConfigurationFile 'C:/Marty/private/managed-recovery.json' `
+  -ManagedPython 'C:/Python312/python.exe' -CheckOnly
+```
+
+Managed `-CheckOnly` holds the selected generation and validates configuration,
+storage, the retained Linux engine and existing-ID dependency plan. It does not
+authenticate, mint a token, start containers or prove current credential lifetime
+or application readiness. Its output explicitly reports those limits. This mode
+does not use the legacy transcript or Compose `up` path.
+
+After applicable restart authorization, omit `-CheckOnly` to recover existing
+IDs through the selected owner. Once Bao and its unseal helper are ready, the
+verified native operator authenticates the existing renewal AppRole. A fresh
+private session directory and token file are reserved before login; the token is
+saved and flushed before its scoped authority is checked. Only the session path
+and nonsecret result metadata return to Windows. Existing enrollment, generations,
+roles and policies remain unchanged. A fresh session does not renew leaf
+credentials: native minimum-lifetime, certificate and custody checks still gate
+application startup. Failure retains the recovery marker and attempt evidence;
+never retry by removing those records.
+
+This entrypoint does not wait for a stopped engine, install a scheduled task,
+renew or repair expired generations, or resume an uncertain earlier attempt.
+The legacy task installer does not supply `-ManagedPython` and therefore cannot
+install this managed invocation. Producer scheduling, engine/logon/reboot tests
+and expired-credential recovery remain required for unattended operation.

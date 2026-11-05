@@ -33,6 +33,7 @@ class SelectedInputs:
     secrets_dir: Path
     sequence: int
     selected_sha256: str
+    check_configuration: Callable = field(repr=False, compare=False)
     check_current: Callable = field(repr=False, compare=False)
     recover_existing: Callable = field(repr=False, compare=False)
 
@@ -474,20 +475,33 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
                 require(active)
                 with ExitStack() as proof_stack:
                     return _prove(cfg, choice, values, proof_stack, expected_data=record['data_sha256'], authority_file=authority_file)
-        def recover_existing(output_dir, authority_file=None, *, preparation_sha256=None):
+        def check_configuration():
+            with lease_lock:
+                require(active)
+                with ExitStack() as proof_stack:
+                    observed=_inspect(cfg,choice,values,proof_stack,
+                        expected_data=record['data_sha256'],require_ready=False)
+                    from selfhost_windows_recovery import plan
+                    plan(observed)
+                    require(renewal.observations(observed['docker'].containers(),cfg['project'],set())
+                            ==renewal.observations(observed['baseline'],cfg['project'],set()))
+                    return {'services':len(observed['services']),'configuration_verified':True,
+                            'native_admission':False,'runtime_readiness':False}
+        def recover_existing(output_dir, authority_file=None, *, preparation_sha256=None, fresh_authority=False):
             with lease_lock:
                 require(active and not completion and terminal_guard_sha256 is None)
                 from selfhost_windows_recovery import start_existing
                 with ExitStack() as proof_stack:
                     pending = start_existing(cfg, choice, values, record, output_dir, proof_stack,
-                                             authority_file=authority_file, preparation_sha256=preparation_sha256)
+                                             authority_file=authority_file, preparation_sha256=preparation_sha256,
+                                             fresh_authority=fresh_authority)
                 completion.append(pending)
                 return decode(packed(pending['result']))
         try:
             yield SelectedInputs(cfg['project'], cfg['docker_host'], cfg['engine_id'], Path(cfg['compose_file']),
                 cfg['compose_sha256'], Path(selected['env_file']), Path(selected['secrets_dir']), sequence,
                 digest(packed(selected)),
-                check_current, recover_existing)
+                check_configuration, check_current, recover_existing)
         finally:
             with lease_lock:
                 active = False;values.clear()

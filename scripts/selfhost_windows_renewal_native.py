@@ -1,8 +1,9 @@
-"""Read-only signed Linux operator transport for held Windows renewal inputs.
+"""Signed Linux operator transport for held Windows renewal inputs.
 
 The caller selects an already release-verified operator; digest and embedded
 source/tag identity are rechecked while the NTFS asset remains held. This does
 not replace signature/provenance verification or admit a release for production.
+Preflights are read-only; scoped reauthentication writes only a fresh session.
 """
 from __future__ import annotations
 
@@ -10,9 +11,77 @@ import base64
 import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path, PurePosixPath
 
 from selfhost_windows_inputs import hold_private_input
+
+AUTHORITY_WORKER = r'''
+import hashlib,json,os,pathlib,subprocess,sys
+d=json.load(sys.stdin)
+binary='/operator/tool'
+assert hashlib.sha256(pathlib.Path(binary).read_bytes()).hexdigest()==d['binary_sha256']
+p=subprocess.run([binary,'--build-identity'],capture_output=True,timeout=20)
+assert p.returncode==0 and p.stdout.decode().strip()==d['source_sha']+':'+d['release_tag']
+os.umask(0o077)
+folder=pathlib.Path(d['session_dir']);folder.mkdir(mode=0o700)
+fd=os.open(folder/'token',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+p=subprocess.run([binary,'operator','approle-login','renewal',d['bao_addr'],'/input/ca.crt','/control/identity'],
+                 input=b'{}',capture_output=True,timeout=90)
+assert p.returncode==0
+login=json.loads(p.stdout)
+assert isinstance(login,dict) and isinstance(login.get('token'),str) and 20<=len(login['token'])<=8192
+with os.fdopen(fd,'w') as f:
+ f.write(login['token']);f.flush();os.fsync(f.fileno())
+for directory in [folder,folder.parent]:
+ fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY)
+ try:os.fsync(fd)
+ finally:os.close(fd)
+assert set(login)=={'role_id','secret_id','names','token'}
+assert isinstance(login['names'],list) and len(login['names'])==len(set(login['names']))==21
+assert all(isinstance(name,str) for name in login['names'])
+p=subprocess.run([binary,'operator','authority-check',d['bao_addr'],'/input/ca.crt'],
+                 input=json.dumps({'token':login['token'],'rotation':False}).encode(),capture_output=True,timeout=90)
+assert p.returncode==0 and json.loads(p.stdout)=={'value':None}
+print(json.dumps({'authority':True,'policy_count':21,'token_file':str(folder/'token')}))
+'''
+
+
+def reauthenticate(config, project, docker_prefix, session_dir):
+    """Refresh existing scoped enrollment; print/store no credentials on host."""
+    def require(value):
+        if not value:raise ValueError('Windows scoped authority refresh refused')
+    require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',project))
+    require(config['control_volume']==project+'-renewal-control' and config['network']==project+'_default')
+    require(config['bao_addr']=='https://openbao:8200')
+    require(re.fullmatch(r'/control/recovery-session-[0-9a-f]{32}',session_dir))
+    require(re.fullmatch(r'[0-9a-f]{64}',config['binary_sha256']))
+    require(re.fullmatch(r'[0-9a-f]{40}',config['source_sha']))
+    require(re.fullmatch(r'v\d+\.\d+\.\d+(?:-nightly\.20\d{6}\.[1-9]\d*)?',config['release_tag']))
+    require(re.fullmatch(r'[a-z0-9./_-]+@sha256:[0-9a-f]{64}',config['helper_image']))
+    # Docker must not silently create an empty control volume during recovery.
+    p=subprocess.run([*docker_prefix,'volume','inspect',config['control_volume']],capture_output=True,timeout=30)
+    require(p.returncode==0 and len(p.stdout)<=65536)
+    volumes=json.loads(p.stdout)
+    require(isinstance(volumes,list) and len(volumes)==1 and volumes[0]['Name']==config['control_volume']
+            and volumes[0]['Driver']=='local' and volumes[0].get('Options') in (None,{}))
+    with hold_private_input(Path(config['binary']),max_bytes=256*1024*1024) as binary:
+        require(hashlib.sha256(binary).hexdigest()==config['binary_sha256'])
+        with hold_private_input(Path(config['ca_file'])):
+            request={k:config[k] for k in ['binary_sha256','source_sha','release_tag','bao_addr']}
+            request['session_dir']=session_dir
+            args=[*docker_prefix,'run','--rm','--pull','never','-i','--read-only','--cap-drop','ALL',
+                '--security-opt','no-new-privileges','--network',config['network'],'--memory','256m','--cpus','1',
+                '--mount',f'type=volume,src={config["control_volume"]},dst=/control',
+                '--mount',f'type=bind,src={config["binary"]},dst=/operator/tool,readonly',
+                '--mount',f'type=bind,src={config["ca_file"]},dst=/input/ca.crt,readonly',
+                '--entrypoint','python',config['helper_image'],'-c',AUTHORITY_WORKER]
+            from selfhost_windows_renewal import run_owned_mutation
+            p=run_owned_mutation(args,stdin_bytes=json.dumps(request).encode(),timeout=240)
+            require(p.returncode==0)
+            expected={'authority':True,'policy_count':21,'token_file':session_dir+'/token'}
+            require(json.loads(p.stdout)==expected)
+    return expected['token_file']
 
 WORKER = r'''
 import base64,hashlib,json,os,pathlib,subprocess,sys
