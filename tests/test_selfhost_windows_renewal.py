@@ -462,18 +462,37 @@ def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreat
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Win32 owned job containment')
-def test_owned_cli_job_returns_nonzero_and_drains_bounded_output():
+def retained_owned_processes(monkeypatch):
+    actual = renewal.subprocess.Popen;processes = []
+    def retain(*args, **kwargs):
+        process = actual(*args, **kwargs);processes.append(process);return process
+    monkeypatch.setattr(renewal.subprocess, 'Popen', retain)
+    return processes
+
+
+def assert_owned_process_resources_closed(processes):
+    assert len(processes) == 1
+    process = processes[0]
+    assert process.returncode is not None and process._handle.closed
+    assert all(stream.closed for stream in [process.stdin, process.stdout, process.stderr])
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Actual Win32 owned job containment')
+def test_owned_cli_job_returns_nonzero_and_drains_bounded_output(monkeypatch):
     import sys
+    processes = retained_owned_processes(monkeypatch)
     result = renewal.run_owned_mutation([sys.executable, '-I', '-S', '-c',
         'import sys;sys.stdout.write("x"*200000);sys.stderr.write("y"*200000);sys.exit(7)'], timeout=10)
     assert result.returncode == 7
     assert result.stdout == b'x' * 30000 and result.stderr == b'y' * 30000
+    assert_owned_process_resources_closed(processes)
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Win32 owned descendant containment')
 @pytest.mark.parametrize('parent_exits', [False, True])
-def test_owned_cli_job_terminates_descendant_and_keeps_outcome_uncertain(tmp_path, parent_exits):
+def test_owned_cli_job_terminates_descendant_and_keeps_outcome_uncertain(tmp_path, parent_exits, monkeypatch):
     import sys
+    processes = retained_owned_processes(monkeypatch)
     marker = tmp_path / 'synthetic-child-started'
     child = ('import pathlib,time;pathlib.Path('+repr(str(marker))+').write_text("PUBLIC_SYNTHETIC");'
              'print("PUBLIC_SYNTHETIC_CHILD",flush=True);time.sleep(120)')
@@ -488,12 +507,15 @@ def test_owned_cli_job_terminates_descendant_and_keeps_outcome_uncertain(tmp_pat
     assert marker.read_text() == 'PUBLIC_SYNTHETIC'
     assert caught.value.owned_processes_zero is True
     assert b'PUBLIC_SYNTHETIC_CHILD' in caught.value.stdout
+    assert_owned_process_resources_closed(processes)
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Win32 blocked gate assignment')
-def test_owned_cli_assignment_failure_never_releases_command_gate(tmp_path, monkeypatch):
+@pytest.mark.parametrize('interrupt', [False, True])
+def test_owned_cli_assignment_failure_never_releases_command_gate(tmp_path, monkeypatch, interrupt):
     import ctypes
     import sys
+    processes = retained_owned_processes(monkeypatch)
     marker = tmp_path / 'must-not-exist'
     actual = ctypes.WinDLL
     class DeniedAssignment:
@@ -501,10 +523,16 @@ def test_owned_cli_assignment_failure_never_releases_command_gate(tmp_path, monk
             self.dll = actual('kernel32', use_last_error=True)
         def __getattr__(self, name):
             if name == 'AssignProcessToJobObject':
-                return lambda *_: False
+                def deny(*_):
+                    if interrupt:
+                        raise KeyboardInterrupt('PUBLIC_SYNTHETIC_INTERRUPT')
+                    return False
+                return deny
             return getattr(self.dll, name)
     monkeypatch.setattr(ctypes, 'WinDLL', lambda *_a, **_k: DeniedAssignment())
-    with pytest.raises(ValueError, match='containment unavailable'):
+    expected = KeyboardInterrupt if interrupt else ValueError
+    with pytest.raises(expected):
         renewal.run_owned_mutation([sys.executable, '-I', '-S', '-c',
             'import pathlib;pathlib.Path('+repr(str(marker))+').write_text("BAD")'], timeout=3)
     assert not marker.exists()
+    assert_owned_process_resources_closed(processes)

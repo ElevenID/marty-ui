@@ -553,7 +553,7 @@ def run_owned_mutation(arguments, timeout=240):
         for stream in [process.stdin, process.stdout, process.stderr]:
             stream.close()
         return subprocess.CompletedProcess(arguments, code, bytes(tails[0]), bytes(tails[1]))
-    except Exception:
+    except BaseException:
         if gated:
             # Even a fully terminated CLI tree cannot prove daemon quiescence.
             deadline = time.monotonic() + 10
@@ -564,12 +564,14 @@ def run_owned_mutation(arguments, timeout=240):
                     if active() == 0:
                         zero = True;break
                     time.sleep(0.05)
-            except Exception:
+                if zero:
+                    process.wait(timeout=max(0, deadline - time.monotonic()))
+            except BaseException:
                 pass  # Keep uncertainty even when containment accounting fails.
             for thread in threads:
                 try:
                     thread.join(max(0, deadline - time.monotonic()))
-                except Exception:
+                except BaseException:
                     pass
             error = UncertainComposeMutation('Owned Compose outcome requires operator recovery')
             error.stdout, error.stderr = bytes(tails[0]), bytes(tails[1])
@@ -577,12 +579,31 @@ def run_owned_mutation(arguments, timeout=240):
             raise error from None
         if process is not None and not gated:
             # No command bytes were sent; this is only our blocked gate process.
-            process.kill()
-            process.wait(timeout=10)
+            try:
+                process.kill()
+                process.wait(timeout=10)
+            except BaseException:
+                error = UncertainComposeMutation('Blocked owned helper cleanup requires operator recovery')
+                error.stdout, error.stderr = bytes(tails[0]), bytes(tails[1])
+                raise error from None
         raise
     finally:
-        if not close(job) and gated:
-            error = UncertainComposeMutation('Owned Compose job close requires operator recovery')
+        cleanup_complete = False
+        try:
+            job_closed = bool(close(job))
+            cleanup_complete = process is None or (
+                not any(thread.is_alive() for thread in threads) and process.poll() is not None)
+            if process is not None and cleanup_complete:
+                for stream in [process.stdin, process.stdout, process.stderr]:
+                    stream.close()
+                # CPython's Windows Popen owns this Handle independently of its
+                # streams; release it even when a caller retains the Popen object.
+                process._handle.Close()
+        except BaseException:
+            job_closed = False
+            cleanup_complete = False
+        if not job_closed or not cleanup_complete:
+            error = UncertainComposeMutation('Owned Compose resource cleanup requires operator recovery')
             error.stdout, error.stderr = bytes(tails[0]), bytes(tails[1])
             error.owned_processes_zero = False
             raise error from None
