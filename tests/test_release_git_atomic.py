@@ -76,6 +76,48 @@ def report(request: dict, outcomes: tuple = ("ok", "ok"), diagnostic: bytes = b"
     return atomic.pkt(b"\1" + body) + (atomic.pkt(b"\2" + diagnostic) if diagnostic else b"") + b"0000"
 
 
+class HistoricalProtectedMainRefusalTests(unittest.TestCase):
+    def test_actual_current_main_positive_remains_refused_and_full_packet_history_is_unchanged(self) -> None:
+        # Exact authenticated observation artifact from original run 41943309794
+        # attempt 1 (artifact 13377590831); never new-contract success evidence.
+        raw = (ROOT / "tests/fixtures/release-tag-capability-failed-41943309794.json").read_bytes()
+        self.assertEqual(len(raw), 76972)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+                         "a639f1f92ff461335fa093d520886a9ed6f511508b7a070c1b948c64557cdff2")
+        value = json.loads(raw)
+        self.assertEqual(value["schema"], "marty.release-tag-operator-observations/v2")
+        self.assertEqual((value["operator_run_id"], value["operator_run_attempt"]), ("41943309794", "1"))
+        self.assertEqual(value["operator_source_sha"], "c3dea5ed8982f674bbdb96a462ea21520de4633f")
+        self.assertIs(value["automatic_retry_or_cleanup_performed"], False)
+        self.assertEqual(len(value["git_transactions"]), 2)
+        bodies = []
+        for index, transaction in enumerate(value["git_transactions"]):
+            request = atomic.validate_spec(transaction["request"])
+            _, discovery = atomic.validate_http(transaction["discovery"]["https"], method="GET")
+            self.assertEqual(atomic.parse_advertisement(discovery, request), transaction["discovery"]["admitted"])
+            sent = base64.b64decode(transaction["mutation"]["body_base64"], validate=True)
+            self.assertEqual(sent, atomic.request_bytes(request))
+            self.assertEqual(len(sent), transaction["mutation"]["body_bytes"])
+            self.assertEqual(atomic.digest(sent), transaction["mutation"]["body_sha256"])
+            _, body = atomic.validate_http(transaction["mutation"]["https"], method="POST")
+            bodies.append(body)
+            parsed = atomic.parse_report(body, request)
+            self.assertEqual(parsed, transaction["mutation"]["report"])
+            if index == 0:
+                self.assertEqual(atomic.admit_report(request, parsed), "confirmed_main_policy_refusal")
+                self.assertEqual(transaction["decision"], "confirmed_main_policy_refusal")
+            else:
+                self.assertEqual(request["commands"][0], {"ref": "refs/heads/main",
+                    "old_oid": value["operator_source_sha"], "new_oid": value["operator_source_sha"]})
+                with self.assertRaises(atomic.AtomicGitError):
+                    atomic.admit_report(request, parsed)
+                self.assertEqual(transaction["decision"], "unadmitted")
+                self.assertEqual(transaction["mutation"]["outcome"], "unknown")
+        self.assertEqual(bodies[0], bodies[1])
+        self.assertEqual(hashlib.sha256(bodies[1]).hexdigest(),
+                         "823d21cc0eba765769a5df2d88142c80db2f1c5a2598ca03dc2610700d5e16bb")
+
+
 class LocalReceivePackTests(unittest.TestCase):
     """The sender under test talks to stock Git through local pipes only."""
 

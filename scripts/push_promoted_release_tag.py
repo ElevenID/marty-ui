@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Create one qualified annotated tag through an exact native operator workflow.
+"""Reserve one annotated tag through an exact bounded operator workflow.
 
 The default inspect mode is read-only. Production ref creation requires the
 original CD attempt to be waiting on an authenticated, byte-exact checkpoint.
 No mode changes main, overwrites a tag, retries an ambiguous mutation, signs a
-candidate payload, or publishes a release.
+candidate payload, or publishes a release. Tag creation is conditioned only on
+tag absence; independent main observations are not an atomic main assertion.
 """
 from __future__ import annotations
 
@@ -48,6 +49,7 @@ LANES = frozenset({"oid4vci-issuer", "oid4vp-final", "oid4vp-url-query", "oid4vp
 REFUSAL_STAGES = frozenset({
     "initialization", "repository_inspection", "mode_validation", "capability_protection",
     "capability_ancestor", "capability_tag_absence", "capability_tag_object",
+    "capability_intent_object", "capability_intent_reservation", "capability_intent_readback",
     "capability_negative", "capability_negative_readback", "capability_before_positive",
     "capability_positive", "capability_positive_readback", "capability_final_inspection",
     "qualified_tag", "observation_finalization",
@@ -342,13 +344,22 @@ def qualify_capability(github: handoff.GitHub, native: atomic.NativeGit,
                                     ".github/workflows", deadline=github.deadline),
                     "Capability ancestor must have identical workflow files; use the separate version-only change")
     tag = f"v-release-capability-{run_id}-1"
+    intent_tag = f"v-release-capability-intent-{run_id}-1"
     diagnostics.enter("capability_tag_absence")
-    handoff.require(github.json(f"repos/{REPOSITORY}/git/ref/tags/{tag}", absent=True) is None,
-                    "Capability audit ref already exists")
-    message = ("Non-release atomic-ref capability qualification\n\n"
-               f"Operator-Run: {run_id}\nOperator-Attempt: 1\n"
-               f"Operator-Source: {main}\nAncestor-Source: {ancestor}\n"
-               f"Rulesets-SHA256: {inspection['rulesets_sha256']}\n")
+    handoff.require(github.json(f"repos/{REPOSITORY}/git/ref/tags/{tag}", absent=True) is None
+                    and github.json(f"repos/{REPOSITORY}/git/ref/tags/{intent_tag}", absent=True) is None,
+                    "Capability audit or retained intent ref already exists")
+    bindings = (f"Handoff-Contract: {handoff.TAG_HANDOFF_CONTRACT}\n"
+                f"Main-Check-Scope: {handoff.MAIN_CHECK_SCOPE}\n"
+                f"Audit-Tag: {tag}\nOperator-Run: {run_id}\nOperator-Attempt: 1\n"
+                f"Operator-Source: {main}\nAncestor-Source: {ancestor}\n"
+                f"Operator-Not-After: {github.deadline.strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
+                f"Rulesets-SHA256: {inspection['rulesets_sha256']}\n")
+    intent_message = "Non-release exclusive capability intent\n\n" + bindings
+    diagnostics.enter("capability_intent_object")
+    intent_object = create_tag_object(github, intent_tag, ancestor, intent_message)
+    message = ("Non-release create-only tag capability qualification\n\n" + bindings
+               + f"Intent-Ref: refs/tags/{intent_tag}\nIntent-Object: {intent_object['sha']}\n")
     diagnostics.enter("capability_tag_object")
     obj = create_tag_object(github, tag, ancestor, message)
     handoff.require(github.main()["commit"]["sha"] == main, "Main changed before capability comparison")
@@ -365,26 +376,43 @@ def qualify_capability(github: handoff.GitHub, native: atomic.NativeGit,
                     "Negative atomic capability transaction unexpectedly changed a ref")
     diagnostics.enter("capability_before_positive")
     handoff.require(inspect_repository(github) == (run_id, main, inspection),
-                    "Operator context or repository rules changed before the positive capability transaction")
+                    "Operator context or repository rules changed before the positive tag reservation")
+    diagnostics.enter("capability_intent_reservation")
+    intent_reservation = github.create_tag_ref(intent_tag, intent_object["sha"])
+    diagnostics.enter("capability_intent_readback")
+    read_exact_tag(github, intent_tag, intent_object["sha"], ancestor, intent_message)
+    handoff.remaining(github.deadline)
+    handoff.require(github.main()["commit"]["sha"] == main, "Main changed after capability intent reservation")
+    handoff.require(inspect_repository(github) == (run_id, main, inspection),
+                    "Operator context or repository rules changed after capability intent reservation")
     diagnostics.enter("capability_positive")
-    positive = native.exchange(atomic.transaction_spec(main, main, tag, obj["sha"],
-                                                        f"capability-positive-{run_id}-1"))
-    handoff.require(positive["decision"] == "confirmed_success", "Positive capability transaction did not succeed")
+    # The native negative remains evidence of a real stale/policy refusal only.
+    # GitHub rejects even a current-main no-op under the required merge queue.
+    # This separately versioned contract reserves ONLY the absent annotated tag.
+    read_exact_tag(github, intent_tag, intent_object["sha"], ancestor, intent_message)
+    positive = github.create_tag_ref(tag, obj["sha"])
     diagnostics.enter("capability_positive_readback")
     read_exact_tag(github, tag, obj["sha"], ancestor, message)
+    read_exact_tag(github, intent_tag, intent_object["sha"], ancestor, intent_message)
     handoff.require(github.main()["commit"]["sha"] == main, "Main changed during capability qualification")
     diagnostics.enter("capability_final_inspection")
     final_run, final_source, final_inspection = inspect_repository(github)
     handoff.require((final_run, final_source, final_inspection) == (run_id, main, inspection),
                     "Operator context or repository rules changed during capability qualification")
-    return {"schema": "marty.release-tag-capability/v4", "status": "success", "repository": REPOSITORY,
+    handoff.remaining(github.deadline)
+    return {"schema": "marty.release-tag-capability/v5", "status": "success", "repository": REPOSITORY,
+            "tag_handoff_contract": handoff.TAG_HANDOFF_CONTRACT,
+            "ref_creation_scope": handoff.REF_CREATION_SCOPE, "main_check_scope": handoff.MAIN_CHECK_SCOPE,
+            "tag_alone_authorizes_publication": False,
             "operator_run_id": run_id, "operator_run_attempt": 1, "operator_source_sha": main,
             "ancestor_source_sha": ancestor, "audit_tag": tag, "tag_object_sha": obj["sha"],
+            "intent_tag": intent_tag, "intent_object_sha": intent_object["sha"],
+            "intent_ref_creation": intent_reservation,
             "main_protection_ruleset_ids": [value["ruleset_id"] for value in protection],
             "main_protection_scope": "current_workflow_credential",
             "main_protection_observations": protection,
-            "transport": atomic.TRANSPORT,
-            "negative_transaction": transaction_summary(negative), "positive_transaction": transaction_summary(positive),
+            "negative_probe_scope": "stale_or_policy_refusal_only",
+            "negative_transaction": transaction_summary(negative), "positive_ref_creation": positive,
             "main_before_sha": main, "main_after_sha": main, "completed_at": utc_now(), **inspection}
 
 
@@ -456,6 +484,7 @@ def create_qualified_tag(github: handoff.GitHub, native: atomic.NativeGit, opera
         from stable_publication_checkpoint import (
             CHECKPOINT_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, load_checkpoint, request_digest,
         )
+    require_capability_main_protection(inspection)
     raw_run = github.json(f"repos/{REPOSITORY}/actions/runs/{cd_run}")
     handoff.require(isinstance(raw_run, dict) and handoff.SHA.fullmatch(raw_run.get("head_sha", "")) is not None,
                     "Original candidate source is unavailable")
@@ -477,6 +506,12 @@ def create_qualified_tag(github: handoff.GitHub, native: atomic.NativeGit, opera
                         and request["claim_run_id"] == claim_run and request["protected_main_commit"] == main,
                         "Publication checkpoint differs from this candidate, claim or protected main")
         request_sha = request_digest(checkpoint)
+        intent_tag = handoff.release_intent_tag(request["tag"])
+        # This permanent per-version owner fences all later production writes,
+        # including a different operator after an unknown production outcome.
+        # An existing owner is never adopted, even by an identical invocation.
+        handoff.require(github.json(f"repos/{REPOSITORY}/git/ref/tags/{intent_tag}", absent=True) is None,
+                        "A retained original operator already owns this release version")
         transaction = validate_resume(
             handoff.decode(handoff.bounded_file(checkpoint / "assets/release-transaction.json", 65536)),
             repository=REPOSITORY, source_sha=source, stack_lock=ROOT / "release/stack-lock.json",
@@ -510,23 +545,44 @@ def create_qualified_tag(github: handoff.GitHub, native: atomic.NativeGit, opera
         waiting_run(github, cd_run, source)
         handoff.require(github.main()["commit"]["sha"] == main, "Protected main changed before tag creation")
         handoff.remaining(github.deadline)
-        message = handoff.tag_message(request, request_sha, artifact, operator_run)
+        intent_message = handoff.intent_message(request, request_sha, artifact, operator_run)
+        intent_object = create_tag_object(github, intent_tag, source, intent_message)
+        waiting_run(github, cd_run, source)
+        handoff.require(github.main()["commit"]["sha"] == main, "Protected main changed before intent reservation")
+        intent_reservation = github.create_tag_ref(intent_tag, intent_object["sha"])
+        read_exact_tag(github, intent_tag, intent_object["sha"], source, intent_message)
+        handoff.remaining(github.deadline)
+        # No production mutation is permitted until ownership was created by
+        # THIS invocation and confirmed. An unknown owner acquisition stops
+        # here; it cannot have sent the production reference request.
+        waiting_run(github, cd_run, source)
+        handoff.require(github.main()["commit"]["sha"] == main, "Protected main changed after intent reservation")
+        handoff.require(inspect_repository(github) == (operator_run, main, inspection),
+                        "Operator context or repository rules changed after intent reservation")
+        message = handoff.tag_message(request, request_sha, artifact, operator_run,
+                                      intent_object_sha=intent_object["sha"])
         tag_object = create_tag_object(github, request["tag"], source, message)
         # No automatic retry. If the result is lost, preserve the immutable
         # object/ref and require exact API inspection before any later action.
         waiting_run(github, cd_run, source)
-        handoff.require(github.main()["commit"]["sha"] == main, "Protected main changed before atomic tag handoff")
-        native.exchange(atomic.transaction_spec(main, main, request["tag"], tag_object["sha"],
-                                                f"release-tag-{operator_run}-1"))
+        handoff.require(github.main()["commit"]["sha"] == main, "Protected main changed before tag reservation")
+        read_exact_tag(github, intent_tag, intent_object["sha"], source, intent_message)
+        reservation = github.create_tag_ref(request["tag"], tag_object["sha"])
         read_exact_tag(github, request["tag"], tag_object["sha"], source, message)
-        handoff.require(github.main()["commit"]["sha"] == main, "Main changed after atomic tag creation")
+        read_exact_tag(github, intent_tag, intent_object["sha"], source, intent_message)
+        handoff.require(github.main()["commit"]["sha"] == main, "Main changed after tag reservation")
         waiting_run(github, cd_run, source)
         final_run, final_source, final_inspection = inspect_repository(github)
         handoff.require((final_run, final_source, final_inspection) == (operator_run, main, inspection),
                         "Operator context or repository rules changed during tag creation")
         handoff.remaining(github.deadline)
         return {
-            "schema": "marty.release-tag-handoff-result/v1", "status": "success", "mode": "create-qualified-tag",
+            "schema": handoff.TAG_RESULT_SCHEMA, "status": "success", "mode": "create-qualified-tag",
+            "tag_handoff_contract": handoff.TAG_HANDOFF_CONTRACT,
+            "ref_creation_scope": handoff.REF_CREATION_SCOPE, "main_check_scope": handoff.MAIN_CHECK_SCOPE,
+            "tag_alone_authorizes_publication": False, "tag_ref_creation": reservation,
+            "intent_tag": intent_tag, "intent_object_sha": intent_object["sha"],
+            "intent_ref_creation": intent_reservation,
             "repository": REPOSITORY, "operator_run_id": operator_run, "operator_run_attempt": 1,
             "operator_source_sha": main, "source_sha": source, "candidate_run_id": cd_run,
             "candidate_run_attempt": 1, "claim_run_id": claim_run, "tag": request["tag"],
@@ -557,7 +613,9 @@ def main() -> int:
     def observations() -> dict:
         run = os.environ.get("GITHUB_RUN_ID", "")
         source = os.environ.get("GITHUB_SHA", "")
-        return {"schema": "marty.release-tag-operator-observations/v2", "repository": REPOSITORY,
+        return {"schema": "marty.release-tag-operator-observations/v3", "repository": REPOSITORY,
+                "tag_handoff_contract": handoff.TAG_HANDOFF_CONTRACT,
+                "ref_creation_scope": handoff.REF_CREATION_SCOPE, "main_check_scope": handoff.MAIN_CHECK_SCOPE,
                 "mode": args.mode, "operator_run_id": run if re.fullmatch(r"[1-9][0-9]*", run) else "",
                 "operator_run_attempt": "1" if os.environ.get("GITHUB_RUN_ATTEMPT") == "1" else "",
                 "operator_source_sha": source if handoff.SHA.fullmatch(source) else "",

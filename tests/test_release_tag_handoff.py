@@ -23,6 +23,7 @@ from scripts import release_tag_handoff as handoff
 SOURCE = "a" * 40
 MAIN = "b" * 40
 TAG_OBJECT = "c" * 40
+INTENT_OBJECT = "8" * 40
 
 
 class BoundedTransportTests(unittest.TestCase):
@@ -97,6 +98,10 @@ class BoundedTransportTests(unittest.TestCase):
             with self.subTest(key=key), mock.patch.object(github, "json", return_value={**run, key: True}):
                 with self.assertRaises(handoff.HandoffError):
                     github.run(1, handoff.CD_WORKFLOW, SOURCE)
+        for attempt in (2, 1.0):
+            with self.subTest(attempt=attempt), mock.patch.object(github, "json", return_value={**run, "run_attempt": attempt}):
+                with self.assertRaises(handoff.HandoffError):
+                    github.run(1, handoff.CD_WORKFLOW, SOURCE)
         artifact = {"id": 2, "name": "synthetic", "expired": False, "size_in_bytes": 20,
                     "digest": "sha256:" + "d" * 64,
                     "workflow_run": {"id": 1, "head_sha": SOURCE, "head_branch": "main", "run_attempt": 1}}
@@ -161,19 +166,134 @@ class ArtifactAdmissionTests(unittest.TestCase):
                 github.download({**artifact, "digest": "sha256:" + "0" * 64}, path)
 
 
+class CreateOnlyReservationTests(unittest.TestCase):
+    """Local API controls, not evidence of a live GitHub capability success."""
+
+    tag = "v1.2.3"
+    endpoint = "repos/ElevenID/marty-ui/git/refs"
+
+    def body(self) -> dict:
+        return {"ref": "refs/tags/" + self.tag, "object": {"type": "tag", "sha": TAG_OBJECT}}
+
+    def test_only_one_create_ref_post_can_reserve_the_exact_annotated_object(self) -> None:
+        github = handoff.GitHub()
+        with mock.patch.object(github, "response", return_value=(201, handoff.encoded(self.body()))) as response:
+            receipt = github.create_tag_ref(self.tag, TAG_OBJECT)
+            self.assertEqual(receipt, handoff.tag_ref_creation(self.tag, TAG_OBJECT))
+            response.assert_called_once_with(self.endpoint, method="POST",
+                                            payload={"ref": "refs/tags/" + self.tag, "sha": TAG_OBJECT})
+            for object_sha in (TAG_OBJECT, SOURCE):
+                with self.assertRaisesRegex(handoff.HandoffError, "already consumed"):
+                    github.create_tag_ref(self.tag, object_sha)
+            self.assertEqual(response.call_count, 1)
+        self.assertNotIn("refs/heads/main", json.dumps(receipt))
+        self.assertEqual(receipt["condition"], "absent_tag_only")
+
+    def test_collisions_even_at_the_same_target_and_non201_status_never_adopt_or_retry(self) -> None:
+        for status in (200, 202, 204, 301, 401, 403, 409, 422, 500, 201.0, True):
+            with self.subTest(status=status):
+                github = handoff.GitHub()
+                with mock.patch.object(github, "response", return_value=(status, handoff.encoded(self.body()))) as response:
+                    with self.assertRaises(handoff.HandoffError):
+                        github.create_tag_ref(self.tag, TAG_OBJECT)
+                    with self.assertRaisesRegex(handoff.HandoffError, "already consumed"):
+                        github.create_tag_ref(self.tag, TAG_OBJECT)
+                    self.assertEqual(response.call_count, 1)
+
+    def test_malformed_or_mismatched_success_response_consumes_the_coordinate(self) -> None:
+        variants = [b"lost acknowledgement", b"null", b"[]", b"{}",
+                    handoff.encoded({**self.body(), "ref": "refs/heads/main"}),
+                    handoff.encoded({**self.body(), "ref": "refs/tags/v1.2.4"}),
+                    handoff.encoded({**self.body(), "object": {"type": "commit", "sha": TAG_OBJECT}}),
+                    handoff.encoded({**self.body(), "object": {"type": "tag", "sha": SOURCE}}),
+                    handoff.encoded({**self.body(), "object": None})]
+        for raw in variants:
+            with self.subTest(raw=raw):
+                github = handoff.GitHub()
+                with mock.patch.object(github, "response", return_value=(201, raw)) as response:
+                    with self.assertRaises(handoff.HandoffError):
+                        github.create_tag_ref(self.tag, TAG_OBJECT)
+                    with self.assertRaisesRegex(handoff.HandoffError, "already consumed"):
+                        github.create_tag_ref(self.tag, TAG_OBJECT)
+                    self.assertEqual(response.call_count, 1)
+
+    def test_real_transport_persists_intent_before_io_and_unknown_outcome_allows_only_readback(self) -> None:
+        persisted = []
+        github = handoff.GitHub(observer=lambda: persisted.append(copy.deepcopy(github.mutations)))
+
+        def lose_response(arguments, **kwargs):
+            self.assertEqual(persisted[-1][0]["request"], {"ref": "refs/tags/" + self.tag, "sha": TAG_OBJECT})
+            self.assertEqual(persisted[-1][0]["outcome"], "unknown")
+            self.assertEqual(json.loads(kwargs["input_bytes"]), persisted[-1][0]["request"])
+            raise TimeoutError("synthetic lost acknowledgement")
+
+        with mock.patch.object(handoff, "command", side_effect=lose_response) as command:
+            with self.assertRaises(TimeoutError):
+                github.create_tag_ref(self.tag, TAG_OBJECT)
+            with self.assertRaisesRegex(handoff.HandoffError, "already consumed"):
+                github.create_tag_ref(self.tag, TAG_OBJECT)
+            self.assertEqual(command.call_count, 1)
+        self.assertEqual(github.mutations[0]["outcome"], "unknown")
+        with mock.patch.object(handoff, "command", return_value=(0, b"HTTP/2.0 200 OK\r\n\r\n" + handoff.encoded(self.body()))) as command:
+            self.assertEqual(github.json("repos/ElevenID/marty-ui/git/ref/tags/" + self.tag), self.body())
+            self.assertIn("GET", command.call_args.args[0])
+        self.assertEqual(len(github.mutations), 1)
+
+    def test_journal_failure_and_deadline_expiry_prevent_io_but_still_poison_the_coordinate(self) -> None:
+        for kind in ("journal", "deadline"):
+            with self.subTest(kind=kind):
+                github = handoff.GitHub(
+                    deadline=datetime.now(timezone.utc) - timedelta(seconds=1) if kind == "deadline" else None,
+                    observer=mock.Mock(side_effect=OSError("synthetic journal outage")) if kind == "journal" else None)
+                with mock.patch.object(handoff, "command") as command:
+                    with self.assertRaises((OSError, handoff.HandoffError)):
+                        github.create_tag_ref(self.tag, TAG_OBJECT)
+                    with self.assertRaisesRegex(handoff.HandoffError, "already consumed"):
+                        github.create_tag_ref(self.tag, TAG_OBJECT)
+                    command.assert_not_called()
+                self.assertEqual(github.mutations[0]["outcome"], "unknown")
+
+    def test_invalid_coordinate_cannot_dispatch_a_main_update_or_zero_object(self) -> None:
+        for tag, object_sha in (("refs/heads/main", TAG_OBJECT), ("main", TAG_OBJECT),
+                                ("v1.2.3/foreign", TAG_OBJECT), ("v1.2.3\nrefs/heads/main", TAG_OBJECT),
+                                (self.tag, "0" * 40), (self.tag, "main"), (self.tag, True)):
+            with self.subTest(tag=tag, object_sha=object_sha):
+                github = handoff.GitHub()
+                with mock.patch.object(github, "response") as response, self.assertRaises(handoff.HandoffError):
+                    github.create_tag_ref(tag, object_sha)
+                response.assert_not_called()
+
+
 class OperatorReceiptTests(unittest.TestCase):
     def setUp(self) -> None:
         start = datetime.now(timezone.utc).replace(microsecond=0)
-        self.request = {"tag": "v1.2.3", "transaction_id": "synthetic-transaction", "claim_run_id": "456",
+        self.request = {"tag": "v1.2.3", "tag_handoff_contract": handoff.TAG_HANDOFF_CONTRACT,
+                        "transaction_id": "synthetic-transaction", "claim_run_id": "456",
                         "source_sha": SOURCE, "run_id": 123, "protected_main_commit": MAIN,
                         "created_at": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "not_after": (start + timedelta(seconds=900)).strftime("%Y-%m-%dT%H:%M:%SZ")}
         self.request_sha = "sha256:" + "d" * 64
         self.checkpoint = {"id": 11, "digest": "sha256:" + "e" * 64}
         self.tag = {"sha": TAG_OBJECT}
+        self.intent = {"sha": INTENT_OBJECT, "tag": "v-release-intent-1.2.3",
+                       "object": {"type": "commit", "sha": SOURCE},
+                       "message": handoff.intent_message(self.request, self.request_sha, self.checkpoint, 789)}
+
+    def read_intent(self, path, **kwargs):
+        if path == "repos/ElevenID/marty-ui/git/ref/tags/v-release-intent-1.2.3":
+            return {"ref": "refs/tags/v-release-intent-1.2.3", "object": {"type": "tag", "sha": INTENT_OBJECT}}
+        if path == "repos/ElevenID/marty-ui/git/tags/" + INTENT_OBJECT:
+            return copy.deepcopy(self.intent)
+        raise AssertionError("Unexpected intent read: " + path)
 
     def result(self) -> dict:
-        return {"schema": "marty.release-tag-handoff-result/v1", "status": "success", "mode": "create-qualified-tag",
+        return {"schema": handoff.TAG_RESULT_SCHEMA, "status": "success", "mode": "create-qualified-tag",
+                "tag_handoff_contract": handoff.TAG_HANDOFF_CONTRACT,
+                "ref_creation_scope": handoff.REF_CREATION_SCOPE, "main_check_scope": handoff.MAIN_CHECK_SCOPE,
+                "tag_alone_authorizes_publication": False,
+                "tag_ref_creation": handoff.tag_ref_creation("v1.2.3", TAG_OBJECT),
+                "intent_tag": "v-release-intent-1.2.3", "intent_object_sha": INTENT_OBJECT,
+                "intent_ref_creation": handoff.tag_ref_creation("v-release-intent-1.2.3", INTENT_OBJECT),
                 "repository": handoff.REPOSITORY, "operator_run_id": 789, "operator_run_attempt": 1,
                 "operator_source_sha": MAIN, "source_sha": SOURCE, "candidate_run_id": 123,
                 "candidate_run_attempt": 1, "claim_run_id": "456", "tag": "v1.2.3", "protected_main_commit": MAIN,
@@ -189,21 +309,38 @@ class OperatorReceiptTests(unittest.TestCase):
             self.assertIsNone(handoff.successful_result(github, 789, self.request, self.request_sha,
                                                        self.checkpoint, self.tag, Path(temporary)))
             artifact.assert_not_called()
-        run.update(status="completed", conclusion="failure")
-        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(github, "run", return_value=run):
-            with self.assertRaises(handoff.HandoffError):
-                handoff.successful_result(github, 789, self.request, self.request_sha,
-                                          self.checkpoint, self.tag, Path(temporary))
+        for conclusion in ("failure", "cancelled", "skipped", "timed_out", None):
+            run.update(status="completed", conclusion=conclusion)
+            with self.subTest(conclusion=conclusion), tempfile.TemporaryDirectory() as temporary, \
+                 mock.patch.object(github, "run", return_value=run), mock.patch.object(github, "artifact") as artifact:
+                with self.assertRaises(handoff.HandoffError):
+                    handoff.successful_result(github, 789, self.request, self.request_sha,
+                                              self.checkpoint, self.tag, Path(temporary))
+                artifact.assert_not_called()
 
     def test_exact_api_digested_bound_result_is_required(self) -> None:
         for mutation in (None, "source_sha", "candidate_run_attempt", "crypto_verified", "checkpoint_artifact_sha256", "extra",
                          "boolean:operator_run_id", "boolean:operator_run_attempt", "boolean:candidate_run_id",
-                         "boolean:candidate_run_attempt", "boolean:checkpoint_artifact_id"):
+                         "boolean:candidate_run_attempt", "boolean:checkpoint_artifact_id",
+                         "old_schema", "tag_handoff_contract", "ref_creation_scope", "main_check_scope",
+                         "tag_alone_authorizes_publication", "zero_boolean", "float_http_status",
+                         "tag_ref_creation", "missing_contract", "intent_tag", "intent_object_sha",
+                         "intent_ref_creation", "float_intent_status"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 value = self.result()
                 if mutation == "extra":
                     value["extra"] = "not admitted"
+                elif mutation == "old_schema":
+                    value["schema"] = "marty.release-tag-handoff-result/v1"
+                elif mutation == "missing_contract":
+                    value.pop("tag_handoff_contract")
+                elif mutation == "zero_boolean":
+                    value["tag_alone_authorizes_publication"] = 0
+                elif mutation == "float_http_status":
+                    value["tag_ref_creation"]["http_status"] = 201.0
+                elif mutation == "float_intent_status":
+                    value["intent_ref_creation"]["http_status"] = 201.0
                 elif mutation is not None and mutation.startswith("boolean:"):
                     value[mutation.split(":", 1)[1]] = True
                 elif mutation is not None:
@@ -220,23 +357,49 @@ class OperatorReceiptTests(unittest.TestCase):
                     kwargs["destination"].write_bytes(original.read_bytes())
                     return 0, b""
 
-                with mock.patch.object(github, "run", return_value=run), mock.patch.object(github, "artifact", return_value=artifact), mock.patch.object(handoff, "command", side_effect=download):
+                with mock.patch.object(github, "run", return_value=run), mock.patch.object(github, "artifact", return_value=artifact), \
+                     mock.patch.object(github, "json", side_effect=self.read_intent), mock.patch.object(handoff, "command", side_effect=download):
                     if mutation is None:
                         admitted = handoff.successful_result(github, 789, self.request, self.request_sha,
                                                              self.checkpoint, self.tag, root)
                         self.assertEqual(admitted["result_artifact_sha256"], artifact["digest"])
+                        self.assertEqual(admitted["schema"], handoff.TAG_ADMISSION_SCHEMA)
+                        self.assertEqual(admitted["tag_handoff_contract"], handoff.TAG_HANDOFF_CONTRACT)
                     else:
                         with self.assertRaises(handoff.HandoffError):
                             handoff.successful_result(github, 789, self.request, self.request_sha,
                                                       self.checkpoint, self.tag, root)
 
     def test_annotation_has_noncyclic_request_and_actual_operator_identity(self) -> None:
-        message = handoff.tag_message(self.request, self.request_sha, self.checkpoint, 789)
+        message = handoff.tag_message(self.request, self.request_sha, self.checkpoint, 789,
+                                      intent_object_sha=INTENT_OBJECT)
         self.assertEqual(handoff.operator_from_message(message), 789)
+        self.assertIn("Handoff-Contract: " + handoff.TAG_HANDOFF_CONTRACT, message)
+        self.assertIn("Intent-Ref: refs/tags/v-release-intent-1.2.3", message)
+        self.assertIn("Intent-Object: " + INTENT_OBJECT, message)
         self.assertIn("Handoff-Request: " + self.request_sha, message)
         self.assertNotIn("result_sha", message)
         with self.assertRaises(handoff.HandoffError):
             handoff.operator_from_message(message + "Operator-Run: 790\n")
+
+    def test_retained_intent_must_bind_the_same_original_operator_candidate_and_checkpoint(self) -> None:
+        github = handoff.GitHub()
+        for mutation in ("absent", "source", "operator", "checkpoint", "object", "contract"):
+            intent = copy.deepcopy(self.intent)
+            if mutation == "source":
+                intent["object"]["sha"] = MAIN
+            elif mutation in {"operator", "checkpoint", "contract"}:
+                old, new = {"operator": ("Operator-Run: 789", "Operator-Run: 790"),
+                            "checkpoint": (self.request_sha, "sha256:" + "f" * 64),
+                            "contract": (handoff.TAG_HANDOFF_CONTRACT, "foreign")}[mutation]
+                intent["message"] = intent["message"].replace(old, new)
+            elif mutation == "object":
+                intent["sha"] = TAG_OBJECT
+            with self.subTest(mutation=mutation), \
+                 mock.patch.object(handoff, "annotated_tag", return_value=None if mutation == "absent" else intent), \
+                 self.assertRaises(handoff.HandoffError):
+                handoff.owned_intent(github, self.request, self.request_sha, self.checkpoint, 789,
+                                     expected_sha=INTENT_OBJECT)
 
 
 if __name__ == "__main__":
