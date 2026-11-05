@@ -425,13 +425,23 @@ def bounded_diagnostic(raw):
     return 'Bounded Compose diagnostic tail; malformed bytes replaced:\n' + tail
 
 
+class UncertainComposeMutation(RuntimeError):
+    """The mutating CLI did not establish a completed operation boundary."""
+
+
 def recreate(docker, command, changing, services, model, log):
     deadline = time.monotonic() + 600
     tail = b''
+    uncertain = False
     try:
-        p = subprocess.run([*command, 'up', '-d', '--no-deps', '--no-build',
-                            '--pull', 'never', '--force-recreate', *sorted(changing)],
-                           capture_output=True, timeout=240)
+        try:
+            p = subprocess.run([*command, 'up', '-d', '--no-deps', '--no-build',
+                                '--pull', 'never', '--force-recreate', *sorted(changing)],
+                               capture_output=True, timeout=240)
+        except subprocess.TimeoutExpired as error:
+            uncertain = True
+            tail = ((error.stdout or b'') + (error.stderr or b''))[-60000:]
+            raise UncertainComposeMutation('Compose timeout requires operator recovery') from None
         tail = (p.stdout + p.stderr)[-60000:]
         # A nonzero invocation may still leave authoritative ready state. A
         # partial closure instead enters rollback; never re-up successful jobs.
@@ -445,13 +455,20 @@ def recreate(docker, command, changing, services, model, log):
             for item in items:
                 state = item.get('State', '').lower()
                 completed = item['Service'] in COMPLETED_SERVICES | {'openbao-tls-init'}
+                require(state in {'running', 'restarting', 'exited', 'dead'},
+                        'Owned role was not started; rollback required')
                 if state in {'dead', 'exited'} and (not completed or item.get('ExitCode') != 0):
                     raise RuntimeError('Owned role exited during renewal')
             # Readiness polling only: no extra starts of completed jobs.
             time.sleep(2)
         raise RuntimeError('Windows renewal did not become ready')
     finally:
-        write_empty_private_file(log, bounded_diagnostic(tail))
+        try:
+            write_empty_private_file(log, bounded_diagnostic(tail))
+        except Exception:
+            if uncertain:
+                raise UncertainComposeMutation('Compose timeout evidence requires operator recovery') from None
+            raise
 
 
 def activate(config):
@@ -542,6 +559,10 @@ def activate(config):
                 recreate(docker, new, changing, services, new_model, outputs['new_log'])
                 mounts = verify(new, renewed, new_model)
                 result = {'result': 'activated', 'secret_mounts': mounts}
+            except UncertainComposeMutation:
+                # A daemon may have accepted work and a CLI child may survive.
+                # Never race an uncertain operation with an automatic rollback.
+                raise
             except Exception:
                 recreate(docker, old, changing, services, old_model, outputs['rollback_log'])
                 mounts = verify(old, current, old_model)

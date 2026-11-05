@@ -319,7 +319,42 @@ def test_partial_creation_does_not_restart_a_successful_completed_job(monkeypatc
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='Actual held NTFS transaction')
-@pytest.mark.parametrize('fail_new', [False, True, 'rollback', 'unselected'])
+def test_returned_up_with_created_role_refuses_without_readiness_sleep(monkeypatch):
+    from test_selfhost_windows_inputs import private_fixture
+    import subprocess
+    with private_fixture() as (root, path):
+        path.write_bytes(b'');m = model(root);rows = states(m);services = {x['Service'] for x in rows}
+        next(x for x in rows if x['Service'] == 'gateway')['State'] = 'created'
+        calls = []
+        def up(args, **_):
+            calls.append(args);return subprocess.CompletedProcess(args, 1, b'CREATED_NOT_STARTED', b'')
+        monkeypatch.setattr(renewal.subprocess, 'run', up)
+        monkeypatch.setattr(renewal, 'statuses', lambda *_a, **_k: rows)
+        monkeypatch.setattr(renewal.time, 'sleep', lambda _: pytest.fail('Created containers cannot first-start themselves'))
+        with pytest.raises(ValueError, match='not started'):
+            renewal.recreate(None, ['SYNTHETIC_COMPOSE'], {'gateway', 'db-migrate'}, services, m, path)
+        assert len(calls) == 1
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Real NTFS private timeout diagnostic')
+def test_mutating_timeout_preserves_diagnostic_and_uncertain_classification(monkeypatch):
+    from test_selfhost_windows_inputs import private_fixture
+    import subprocess
+    with private_fixture() as (root, path):
+        path.write_bytes(b'');m = model(root);services = {x['Service'] for x in states(m)}
+        def timeout(*_a, **_k):
+            raise subprocess.TimeoutExpired('SYNTHETIC_COMPOSE', 240, output=b'PUBLIC_SYNTHETIC_TIMEOUT', stderr=b'\xff')
+        monkeypatch.setattr(renewal.subprocess, 'run', timeout)
+        with pytest.raises(renewal.UncertainComposeMutation):
+            renewal.recreate(None, ['SYNTHETIC_COMPOSE'], {'gateway'}, services, m, path)
+        assert b'PUBLIC_SYNTHETIC_TIMEOUT' in path.read_bytes()
+        monkeypatch.setattr(renewal, 'write_empty_private_file', lambda *_: (_ for _ in ()).throw(ValueError('SYNTHETIC_LOG_FAILURE')))
+        with pytest.raises(renewal.UncertainComposeMutation):
+            renewal.recreate(None, ['SYNTHETIC_COMPOSE'], {'gateway'}, services, m, path)
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Actual held NTFS transaction')
+@pytest.mark.parametrize('fail_new', [False, True, 'rollback', 'unselected', 'uncertain'])
 def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreation(monkeypatch, fail_new):
     from test_selfhost_windows_inputs import private_fixture
     import hashlib
@@ -382,13 +417,21 @@ def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreat
             phase['root'] = new_root if str(new_env) in command else old_root
             calls.append('new' if phase['root'] == new_root else 'old')
             renewal.write_empty_private_file(log, 'SYNTHETIC_COMPOSE_LOG\n')
-            if fail_new == 'unselected': phase['unselected_changed'] = True
+            if fail_new == 'uncertain': raise renewal.UncertainComposeMutation('SYNTHETIC_TIMEOUT')
+            elif fail_new == 'unselected': phase['unselected_changed'] = True
             elif fail_new and (phase['root'] == new_root or fail_new == 'rollback'):
                 raise RuntimeError('SYNTHETIC_PARTIAL_FAILURE')
         monkeypatch.setattr(renewal, 'Docker', FakeDocker)
         monkeypatch.setattr(renewal, 'native_preflight', native)
         monkeypatch.setattr(renewal, 'recreate', recreate)
         monkeypatch.setattr(renewal, 'statuses', lambda *_a, **_k: states(old_m))
+        if fail_new == 'uncertain':
+            with pytest.raises(RuntimeError, match='requires operator recovery'):
+                renewal.activate(cfg)
+            assert calls == ['native', 'new']
+            assert Path(cfg['result']).read_bytes() == b''
+            assert Path(cfg['intent']).read_bytes()
+            return
         if fail_new in {'rollback', 'unselected'}:
             with pytest.raises(RuntimeError, match='requires operator recovery'):
                 renewal.activate(cfg)

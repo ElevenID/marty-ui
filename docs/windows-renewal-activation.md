@@ -64,3 +64,12 @@ isolated Docker activation/rollback, then the owned application's authentication
 and KMS journeys. A successful return establishes candidate readiness and mounts;
 it does not establish production release admission, credential retirement,
 continuous availability or automatic engine/logon/host recovery.
+
+Returned Compose invocations that leave a role in `created`, paused or another
+nonprogressing state fail promptly rather than polling for a first start that
+Docker will not perform. A mutating CLI timeout is an uncertain outcome: preserve
+its bounded diagnostics and intent, and do not launch automatic rollback. The
+Windows standard subprocess timeout does not contain a Compose plugin child;
+owned-process containment and dependency-layer qualification remain blockers to
+exposing a CLI or unattended lifecycle. This guard does not claim bounded process
+cleanup or Docker daemon operation quiescence.
