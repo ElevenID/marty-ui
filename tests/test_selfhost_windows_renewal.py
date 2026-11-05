@@ -296,22 +296,37 @@ def test_historical_native_bind_inference_requires_exact_project_source_and_zero
         with pytest.raises(ValueError): renewal.disjoint_storage([bad], PROJECT, volumes, proofs)
 
 
-def test_large_docker_inventories_are_batched_below_windows_command_limit(monkeypatch):
+@pytest.mark.parametrize('name_size', [64, 255])
+def test_large_docker_inventories_are_batched_below_windows_command_limit(monkeypatch, name_size):
     import subprocess
-    names = [f'{i:064x}' for i in range(1200)]
+    names = [format(i, 'x').zfill(name_size) for i in range(1200)]
     docker = object.__new__(renewal.Docker);docker.prefix = ['SYNTHETIC_DOCKER']
     monkeypatch.setattr(renewal.subprocess, 'run', lambda *_a, **_k:
                         subprocess.CompletedProcess([], 0, ('\n'.join(names)+'\n').encode(), b''))
     batches = []
     def inspect(args):
         values = args[2:] if args[:2] == ['volume', 'inspect'] else args[1:]
-        assert 0 < len(values) <= 64
+        assert 0 < len(values) <= (256 if args[:2] == ['volume', 'inspect'] else 64)
+        assert len(subprocess.list2cmdline([*docker.prefix, *args])) <= 24*1024
         batches.append(values)
         return [{'Name': name, 'Id': name} for name in values]
     monkeypatch.setattr(docker, 'json', inspect)
     assert len(docker.volumes()) == 1200
+    volume_batches = len(batches)
+    assert volume_batches < 19
+    assert [name for batch in batches for name in batch] == names
     assert len(docker.containers()) == 1200
-    assert len(batches) == 38
+    assert len(batches) == volume_batches + 19
+
+
+@pytest.mark.parametrize('name', ['-option', 'space name', 'x'*256, 'bad/name'])
+def test_volume_batches_refuse_noncanonical_names_before_inspection(monkeypatch, name):
+    import subprocess
+    docker = object.__new__(renewal.Docker);docker.prefix = ['SYNTHETIC_DOCKER']
+    monkeypatch.setattr(renewal.subprocess, 'run', lambda *_a, **_k:
+                        subprocess.CompletedProcess([], 0, (name+'\n').encode(), b''))
+    monkeypatch.setattr(docker, 'json', lambda *_: pytest.fail('Invalid names reached inspect'))
+    with pytest.raises(ValueError):docker.volumes()
 
 
 def test_mount_order_is_not_identity_but_every_field_and_duplicate_is_preserved():

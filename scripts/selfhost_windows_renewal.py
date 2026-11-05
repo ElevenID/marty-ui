@@ -414,12 +414,22 @@ class Docker:
     def volumes(self):
         p = subprocess.run([*self.prefix, 'volume', 'ls', '-q'], capture_output=True, timeout=30)
         require(p.returncode == 0)
-        names = p.stdout.decode('ascii').split()
-        # Anonymous volume inventories can exceed CreateProcessW's 32767-char
-        # command line. Docker names are bounded; batches of64 stay below it.
+        names = p.stdout.decode('ascii').splitlines()
+        # Anonymous inventories can contain thousands of names. Preserve the
+        # CreateProcessW limit without paying one CLI startup per64 names: names
+        # are validated ASCII, then bounded by both command length and row count.
         rows = []
-        for start in range(0, len(names), 64):
-            rows.extend(self.json(['volume', 'inspect', *names[start:start + 64]]))
+        command_size = len(subprocess.list2cmdline([*self.prefix, 'volume', 'inspect'])) + 1
+        batch = [];size = command_size
+        for name in names:
+            require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,254}', name), 'Invalid Docker volume name')
+            if batch and (len(batch) == 256 or size + len(name) + 1 > 24 * 1024):
+                rows.extend(self.json(['volume', 'inspect', *batch]))
+                batch = [];size = command_size
+            require(size + len(name) + 1 <= 24 * 1024)
+            batch.append(name);size += len(name) + 1
+        if batch:
+            rows.extend(self.json(['volume', 'inspect', *batch]))
         return {v['Name']: {k: v.get(k) for k in ['Name', 'Driver', 'Mountpoint', 'Options']} for v in rows}
 
     def compose(self, project, env, source):
