@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::domain::{
-    generate_pkce_pair, random_urlsafe_token, AuthenticatedUser, OidcValidatedIdentity, PkceState,
-    Session, SessionSpec,
+    generate_pkce_pair, random_urlsafe_token, AuthenticatedUser, OidcValidatedIdentity,
+    PasskeyEnrollmentBinding, PkceState, Session, SessionSpec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -39,6 +39,10 @@ pub enum AuthApplicationError {
     MissingAccessToken,
     #[error("OIDC provider did not return an ID token")]
     MissingIdToken,
+    #[error("passkey enrollment is unavailable for this session")]
+    PasskeyEnrollmentUnavailable,
+    #[error("passkey enrollment account or session changed")]
+    PasskeyEnrollmentMismatch,
     #[error("{operation} failed: {source}")]
     Port {
         operation: &'static str,
@@ -162,6 +166,19 @@ pub trait PkceStateRepository: Send + Sync {
 #[async_trait]
 pub trait OidcProvider: Send + Sync {
     fn authorization_url(&self, request: &OidcAuthorizationRequest) -> Result<String, PortError>;
+    fn supports_passkey_enrollment(&self) -> bool {
+        false
+    }
+    fn passkey_enrollment_url(
+        &self,
+        _request: &OidcAuthorizationRequest,
+        _id_token_hint: &str,
+    ) -> Result<String, PortError> {
+        Err(PortError::new(
+            "passkey_enrollment_unsupported",
+            "Provider does not support native passkey enrollment",
+        ))
+    }
     async fn exchange_code(&self, request: &OidcCodeExchange) -> Result<OidcTokenSet, PortError>;
     async fn validate_tokens(
         &self,
@@ -197,6 +214,7 @@ pub trait AuthAuditSink: Send + Sync {
 
 #[derive(Clone)]
 pub struct AuthApplication {
+    passkeys_enabled: bool,
     sessions: Arc<dyn SessionRepository>,
     pkce_states: Arc<dyn PkceStateRepository>,
     oidc: Arc<dyn OidcProvider>,
@@ -219,6 +237,7 @@ pub struct AuthApplicationPorts {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthApplicationConfig {
+    pub passkeys_enabled: bool,
     pub session_ttl_seconds: i64,
     pub post_logout_redirect_uri: String,
 }
@@ -227,6 +246,7 @@ impl AuthApplication {
     #[must_use]
     pub fn new(ports: AuthApplicationPorts, config: AuthApplicationConfig) -> Self {
         Self {
+            passkeys_enabled: config.passkeys_enabled,
             sessions: ports.sessions,
             pkce_states: ports.pkce_states,
             oidc: ports.oidc,
@@ -243,7 +263,7 @@ impl AuthApplication {
         command: InitiateLoginCommand,
         now: DateTime<Utc>,
     ) -> Result<InitiateLoginResult, AuthApplicationError> {
-        self.initiate(command, false, now).await
+        self.initiate(command, false, None, now).await
     }
 
     pub async fn initiate_registration(
@@ -251,13 +271,48 @@ impl AuthApplication {
         command: InitiateLoginCommand,
         now: DateTime<Utc>,
     ) -> Result<InitiateLoginResult, AuthApplicationError> {
-        self.initiate(command, true, now).await
+        self.initiate(command, true, None, now).await
+    }
+
+    #[must_use]
+    pub fn passkey_enrollment_available(&self, session: &Session) -> bool {
+        self.passkeys_enabled
+            && self.oidc.supports_passkey_enrollment()
+            && session
+                .user
+                .impersonation
+                .as_ref()
+                .is_none_or(|context| !context.active)
+            && session
+                .id_token
+                .as_ref()
+                .is_some_and(|token| !token.is_empty())
+            && session
+                .oidc_claims
+                .as_ref()
+                .and_then(|claims| claims["sub"].as_str())
+                .is_some_and(|sub| !sub.is_empty())
+    }
+
+    pub async fn initiate_passkey_enrollment(
+        &self,
+        session_id: &str,
+        command: InitiateLoginCommand,
+        now: DateTime<Utc>,
+    ) -> Result<InitiateLoginResult, AuthApplicationError> {
+        let session = self
+            .validate_session(session_id, now)
+            .await?
+            .filter(|session| self.passkey_enrollment_available(session))
+            .ok_or(AuthApplicationError::PasskeyEnrollmentUnavailable)?;
+        self.initiate(command, false, Some(&session), now).await
     }
 
     async fn initiate(
         &self,
         command: InitiateLoginCommand,
         registration: bool,
+        enrollment: Option<&Session>,
         now: DateTime<Utc>,
     ) -> Result<InitiateLoginResult, AuthApplicationError> {
         let pkce = generate_pkce_pair();
@@ -269,23 +324,36 @@ impl AuthApplication {
             redirect_uri: command.redirect_uri.unwrap_or_else(|| "/".to_owned()),
             oidc_redirect_uri: command.oidc_redirect_uri.clone(),
             nonce: Some(nonce.clone()),
+            passkey_enrollment: enrollment.map(|session| PasskeyEnrollmentBinding {
+                session_id: session.session_id.clone(),
+                subject: session
+                    .oidc_claims
+                    .as_ref()
+                    .and_then(|claims| claims["sub"].as_str())
+                    .unwrap_or_default()
+                    .to_owned(),
+            }),
             created_at: now,
             expires_at: now + Duration::minutes(10),
         };
+        let request = OidcAuthorizationRequest {
+            state: state.clone(),
+            code_challenge: pkce.challenge,
+            nonce,
+            redirect_uri: command.oidc_redirect_uri,
+            registration,
+        };
+        let authorization_url = if let Some(session) = enrollment {
+            self.oidc
+                .passkey_enrollment_url(&request, session.id_token.as_deref().unwrap_or_default())
+        } else {
+            self.oidc.authorization_url(&request)
+        }
+        .map_err(|error| port("build OIDC authorization URL", error))?;
         self.pkce_states
             .save(&stored)
             .await
             .map_err(|error| port("save OIDC state", error))?;
-        let authorization_url = self
-            .oidc
-            .authorization_url(&OidcAuthorizationRequest {
-                state: state.clone(),
-                code_challenge: pkce.challenge,
-                nonce,
-                redirect_uri: command.oidc_redirect_uri,
-                registration,
-            })
-            .map_err(|error| port("build OIDC authorization URL", error))?;
         Ok(InitiateLoginResult {
             authorization_url,
             state,
@@ -330,6 +398,35 @@ impl AuthApplication {
             .validate_tokens(&id_token, &tokens.access_token, nonce)
             .await
             .map_err(|error| port("validate OIDC tokens", error))?;
+        if let Some(binding) = state.passkey_enrollment {
+            // The ID-token hint constrains Keycloak before the required action.
+            // Independently bind the callback before provisioning or issuing any
+            // application session. Account settings must not switch accounts or
+            // replace the original session's roles/organization context.
+            if identity.user_info.sub != binding.subject {
+                return Err(AuthApplicationError::PasskeyEnrollmentMismatch);
+            }
+            let session = self
+                .sessions
+                .get(&binding.session_id)
+                .await
+                .map_err(|error| port("read enrollment session", error))?
+                .filter(|session| {
+                    session.is_valid_at(now)
+                        && self.passkey_enrollment_available(session)
+                        && session
+                            .oidc_claims
+                            .as_ref()
+                            .and_then(|claims| claims["sub"].as_str())
+                            == Some(binding.subject.as_str())
+                })
+                .ok_or(AuthApplicationError::PasskeyEnrollmentMismatch)?;
+            return Ok(HandleCallbackResult {
+                session,
+                redirect_uri: state.redirect_uri,
+                audit_warning: None,
+            });
+        }
         let user = self
             .provisioner
             .provision(&identity)

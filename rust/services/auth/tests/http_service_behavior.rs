@@ -23,6 +23,7 @@ use tower::ServiceExt as _;
 
 #[derive(Default)]
 struct AppStub {
+    enrollments: Mutex<Vec<(String, String, String)>>,
     initiated: Mutex<Vec<(bool, String, String)>>,
     session: Mutex<Option<Session>>,
     callback_error: Mutex<Option<PortError>>,
@@ -30,6 +31,21 @@ struct AppStub {
 
 #[async_trait]
 impl AuthHttpApplication for AppStub {
+    fn passkey_enrollment_available(&self, _session: &Session) -> bool {
+        true
+    }
+    async fn enroll_passkey(
+        &self,
+        session_id: &str,
+        redirect_uri: String,
+        oidc_redirect_uri: String,
+    ) -> Result<String, PortError> {
+        self.enrollments
+            .lock()
+            .unwrap()
+            .push((session_id.into(), redirect_uri, oidc_redirect_uri));
+        Ok("https://identity.example/authorize?kc_action=webauthn-register-passwordless".into())
+    }
     async fn initiate(
         &self,
         registration: bool,
@@ -262,7 +278,7 @@ async fn request(
 fn core_surface_is_the_exact_non_credential_route_subset() {
     let contract: Value =
         serde_json::from_str(include_str!("../../../../contracts/auth-behavior.json")).unwrap();
-    let expected = contract["http_routes"].as_array().unwrap()[..8]
+    let expected = contract["http_routes"].as_array().unwrap()[..9]
         .iter()
         .map(|route| {
             (
@@ -280,8 +296,74 @@ fn core_surface_is_the_exact_non_credential_route_subset() {
     );
 }
 
+#[tokio::test]
+async fn passkey_enrollment_requires_same_origin_and_authenticated_session() {
+    let (router, app, _) = harness();
+    for (origin, cookie, expected) in [
+        (None, Some("sessionId=session-1"), StatusCode::FORBIDDEN),
+        (
+            Some("https://foreign.example"),
+            Some("sessionId=session-1"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            Some("https://elevenidllc.com"),
+            None,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            Some("https://elevenidllc.com"),
+            Some("sessionId=missing"),
+            StatusCode::UNAUTHORIZED,
+        ),
+    ] {
+        let mut headers = vec![("content-type", "application/json")];
+        if let Some(origin) = origin {
+            headers.push(("origin", origin));
+        }
+        if let Some(cookie) = cookie {
+            headers.push(("cookie", cookie));
+        }
+        let response = request(
+            &router,
+            Method::POST,
+            "/v1/auth/passkeys/enroll",
+            &headers,
+            "{}",
+        )
+        .await;
+        assert_eq!(response.status(), expected);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "no-store, max-age=0"
+        );
+    }
+    assert!(app.enrollments.lock().unwrap().is_empty());
+    let response = request(
+        &router,
+        Method::POST,
+        "/v1/auth/passkeys/enroll",
+        &[
+            ("content-type", "application/json"),
+            ("origin", "https://elevenidllc.com"),
+            ("cookie", "sessionId=session-1"),
+        ],
+        r#"{"redirect_uri":"/console/profile"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        app.enrollments.lock().unwrap().as_slice(),
+        &[(
+            "session-1".into(),
+            "/console/profile".into(),
+            "https://elevenidllc.com/v1/auth/callback".into()
+        )]
+    );
+}
+
 #[test]
-fn combined_surface_matches_all_fourteen_frozen_routes() {
+fn combined_surface_matches_declared_routes() {
     let contract: Value =
         serde_json::from_str(include_str!("../../../../contracts/auth-behavior.json")).unwrap();
     let expected = contract["http_routes"]

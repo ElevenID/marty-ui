@@ -37,7 +37,7 @@ import BusinessIcon from '@mui/icons-material/Business';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import { useAuth } from '../hooks/useAuth';
 import { useConsole } from '../contexts/ConsoleContext';
-import { updateProfilePicture } from '../services/authApi';
+import { updateProfilePicture, startPasskeyEnrollment } from '../services/authApi';
 import { formatOfficialReference, pickOfficialReference } from '../utils/officialReferences';
 import OrganizationMembershipHub from './organizations/OrganizationMembershipHub';
 
@@ -57,6 +57,19 @@ function ProfilePage() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [enrollingPasskey, setEnrollingPasskey] = useState(false);
+  const [passkeyError, setPasskeyError] = useState(null);
+
+  const handleCreatePasskey = async () => {
+    setEnrollingPasskey(true);
+    setPasskeyError(null);
+    try {
+      await startPasskeyEnrollment(window.location.pathname);
+    } catch (error) {
+      setPasskeyError(error.message);
+      setEnrollingPasskey(false);
+    }
+  };
 
   if (!user) {
     return (
@@ -349,6 +362,19 @@ function ProfilePage() {
               </List>
 
               {/* Roles */}
+              {user.passkey_enrollment_available && (
+                <Box sx={{ my: 2 }} data-testid="profile-passkey-enrollment">
+                  <Typography variant="h6" gutterBottom>Passkeys</Typography>
+                  <Typography variant="body2" sx={{ mb: 2 }}>
+                    Create a passkey for this account using your phone, computer, or security key.
+                    Your other sign-in options stay available. You will confirm your account before enrollment.
+                  </Typography>
+                  {passkeyError && <Alert severity="error" sx={{ mb: 2 }}>{passkeyError}</Alert>}
+                  <Button variant="outlined" onClick={handleCreatePasskey} disabled={enrollingPasskey}>
+                    {enrollingPasskey ? 'Opening passkey setup…' : 'Create a passkey'}
+                  </Button>
+                </Box>
+              )}
               {user.roles && user.roles.length > 0 && (
                 <>
                   <Divider sx={{ my: 2 }} />

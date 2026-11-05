@@ -197,12 +197,20 @@ impl Session {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PasskeyEnrollmentBinding {
+    pub session_id: String,
+    pub subject: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PkceState {
     pub state: String,
     pub code_verifier: String,
     pub redirect_uri: String,
     pub oidc_redirect_uri: Option<String>,
     pub nonce: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passkey_enrollment: Option<PasskeyEnrollmentBinding>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }

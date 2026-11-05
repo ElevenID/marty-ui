@@ -310,6 +310,35 @@ fn authorization_request(registration: bool) -> OidcAuthorizationRequest {
     }
 }
 
+#[test]
+fn passkey_enrollment_uses_pkce_fresh_authentication_and_subject_bound_id_token_hint() {
+    let provider = provider(Arc::new(FakeHttp::default()));
+    let url = Url::parse(
+        &provider
+            .passkey_enrollment_url(&authorization_request(false), "signed+hint")
+            .unwrap(),
+    )
+    .unwrap();
+    let query = url
+        .query_pairs()
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(
+        query.get("kc_action").unwrap(),
+        "webauthn-register-passwordless"
+    );
+    assert_eq!(query.get("id_token_hint").unwrap(), "signed+hint");
+    assert_eq!(query.get("code_challenge_method").unwrap(), "S256");
+    assert_eq!(query.get("state").unwrap(), "state-1");
+    assert_eq!(query.get("prompt").unwrap(), "consent login");
+    assert_eq!(query.get("max_age").unwrap(), "0");
+    assert!(provider
+        .passkey_enrollment_url(&authorization_request(true), "hint")
+        .is_err());
+    assert!(provider
+        .passkey_enrollment_url(&authorization_request(false), "")
+        .is_err());
+}
+
 fn exchange_request() -> OidcCodeExchange {
     OidcCodeExchange {
         code: "one-time-code".into(),

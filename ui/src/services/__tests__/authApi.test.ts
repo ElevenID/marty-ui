@@ -15,10 +15,31 @@ import {
   getCurrentUser,
   isAuthenticated,
   getUserOrganizations,
+  startPasskeyEnrollment,
 } from '../authApi'
+import { redirectBrowser } from '../../application/routing/appHandoff'
+vi.mock('../../application/routing/appHandoff', () => ({ redirectBrowser: vi.fn() }))
 import { mockUsers, mockOrganization } from '@test/mocks/fixtures'
 
 describe('authApi', () => {
+  it('starts passkey enrollment with a cookie-bearing JSON POST before navigating', async () => {
+    let payload: unknown
+    server.use(http.post('/v1/auth/passkeys/enroll', async ({ request }) => {
+      expect(request.credentials).toBe('include')
+      expect(request.headers.get('content-type')).toBe('application/json')
+      payload = await request.json()
+      return HttpResponse.json({ authorization_url: 'https://identity.example/auth?kc_action=webauthn-register-passwordless' })
+    }))
+    await startPasskeyEnrollment('/console/profile')
+    expect(payload).toEqual({ redirect_uri: '/console/profile' })
+    expect(redirectBrowser).toHaveBeenCalledWith('https://identity.example/auth?kc_action=webauthn-register-passwordless', { replace: false })
+  })
+
+  it('does not navigate when enrollment is unavailable', async () => {
+    server.use(http.post('/v1/auth/passkeys/enroll', () => HttpResponse.json({ detail: 'Sign in again' }, { status: 409 })))
+    await expect(startPasskeyEnrollment()).rejects.toThrow('Sign in again')
+    expect(redirectBrowser).not.toHaveBeenCalled()
+  })
   beforeEach(() => {
     vi.clearAllMocks()
   })

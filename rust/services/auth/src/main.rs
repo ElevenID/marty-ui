@@ -205,6 +205,7 @@ fn assemble_applications(
             audit: Some(postgres.clone()),
         },
         AuthApplicationConfig {
+            passkeys_enabled: config.passkeys_enabled,
             session_ttl_seconds: config.session_ttl_seconds,
             post_logout_redirect_uri: config.post_logout_redirect_uri.clone(),
         },

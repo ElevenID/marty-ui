@@ -71,6 +71,7 @@ pub fn is_rate_limited_auth_path(path: &str) -> bool {
     [
         "/v1/auth/login",
         "/v1/auth/register",
+        "/v1/auth/passkeys/enroll",
         "/v1/auth/callback",
         "/v1/auth/credential-login",
     ]

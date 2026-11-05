@@ -116,6 +116,7 @@ async fn pkce_state_is_consumed_atomically() {
         redirect_uri: "/console".to_owned(),
         oidc_redirect_uri: Some("https://ui.example/v1/auth/callback".to_owned()),
         nonce: Some("nonce".to_owned()),
+        passkey_enrollment: None,
         created_at: now,
         expires_at: now + Duration::minutes(10),
     };

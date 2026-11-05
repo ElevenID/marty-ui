@@ -140,7 +140,7 @@ fn frozen_surface_is_unique_and_complete() {
         .iter()
         .map(|route| format!("{} {}", route["method"], route["path"]))
         .collect::<std::collections::HashSet<_>>();
-    assert_eq!(routes.len(), 14);
+    assert_eq!(routes.len(), 15);
     assert_eq!(unique.len(), routes.len());
     assert_eq!(
         fixture["grpc_methods"]

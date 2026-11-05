@@ -191,9 +191,10 @@ def test_virtual_authenticator_enrollment_and_login_keep_the_same_subject(keyclo
             assert any(item["type"] == "password" for item in stored)
             credentials = cdp.send("WebAuthn.getCredentials", {"authenticatorId": authenticator})["credentials"]
             assert len(credentials) == 1 and credentials[0]["isResidentCredential"] is True
-            # Virtual authenticators may immediately fulfill conditional requests.
-            # Hold simulated presence until the explicit modal button is clicked,
-            # keeping the actual configured conditional policy unchanged.
+            # Virtual devices automatically fulfill conditional requests. For the
+            # modal case, model an autofill request on which no user has selected
+            # a credential. The explicit request still uses the real browser API
+            # and virtual device; the separate conditional case is unmodified.
             # A completely new browser context rules out SSO/cookie state from
             # the enrollment callback. Transfer only the virtual device key.
             cdp.send("WebAuthn.removeVirtualAuthenticator", {"authenticatorId": authenticator})
@@ -206,15 +207,30 @@ def test_virtual_authenticator_enrollment_and_login_keep_the_same_subject(keyclo
             authenticator = cdp.send("WebAuthn.addVirtualAuthenticator", {"options": {
                 "protocol": "ctap2", "transport": "internal", "hasResidentKey": True,
                 "hasUserVerification": True, "isUserVerified": True,
-                "automaticPresenceSimulation": mode == "conditional"}})["authenticatorId"]
+                "automaticPresenceSimulation": True}})["authenticatorId"]
             cdp.send("WebAuthn.addCredential", {"authenticatorId": authenticator, "credential": credentials[0]})
+            if mode == "modal":
+                page.add_init_script("""(() => {
+                  const originalGet = navigator.credentials.get.bind(navigator.credentials);
+                  window.passkeyTestRequests = [];
+                  navigator.credentials.get = (options) => {
+                    window.passkeyTestRequests.push(options.mediation || 'modal');
+                    if (options.mediation === 'conditional') {
+                      return new Promise((resolve, reject) => {
+                        options.signal.addEventListener('abort', () =>
+                          reject(new DOMException('Autofill cancelled', 'AbortError')), {once: true});
+                      });
+                    }
+                    return originalGet(options);
+                  };
+                })();""")
             url, verifier = authorization()
             page.goto(url)
             if mode == "modal":
+                page.wait_for_function("window.passkeyTestRequests?.includes('conditional')")
                 assert page.locator("#authenticateWebAuthnButton").count() == 1, (
                     page.locator("body").inner_text(), page_errors)
                 page.locator("#authenticateWebAuthnButton").click(timeout=30000, no_wait_after=True)
-                cdp.send("WebAuthn.setAutomaticPresenceSimulation", {"authenticatorId": authenticator, "enabled": True})
             try:
                 assert_identity(page, verifier)
             except Exception as error:

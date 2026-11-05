@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@test/utils';
-import { within } from '@testing-library/react';
+import { fireEvent, waitFor, within } from '@testing-library/react';
 
 import ProfilePage from '../ProfilePage';
+
+const passkeyMock = vi.hoisted(() => ({ available: false, start: vi.fn() }));
 
 const mockSetActiveOrganizationId = vi.fn();
 const mockSetActiveOrgId = vi.fn();
@@ -10,6 +12,7 @@ const mockRefreshUser = vi.fn();
 
 vi.mock('../../services/authApi', () => ({
   updateProfilePicture: vi.fn(),
+  startPasskeyEnrollment: passkeyMock.start,
 }));
 
 vi.mock('../../hooks/useAuth', () => ({
@@ -20,6 +23,7 @@ vi.mock('../../hooks/useAuth', () => ({
       name: 'Ada Lovelace',
       applicant_id: 'app-1',
       roles: ['applicant'],
+      passkey_enrollment_available: passkeyMock.available,
     },
     isAdministrator: false,
     isApplicant: true,
@@ -57,8 +61,20 @@ vi.mock('../../contexts/ConsoleContext', () => ({
 }));
 
 describe('ProfilePage', () => {
+  beforeEach(() => { passkeyMock.available = false; passkeyMock.start.mockReset(); });
+
+  it('offers optional enrollment only when the authenticated server session supports it', async () => {
+    passkeyMock.available = true;
+    passkeyMock.start.mockRejectedValue(new Error('Please sign in again'));
+    render(<ProfilePage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Create a passkey' }));
+    await waitFor(() => expect(screen.getByText('Please sign in again')).toBeInTheDocument());
+    expect(passkeyMock.start).toHaveBeenCalledWith(window.location.pathname);
+    expect(screen.getByRole('button', { name: 'Create a passkey' })).toBeEnabled();
+  });
   it('surfaces the shared organizations hub and canonical discovery routes', () => {
     render(<ProfilePage />);
+    expect(screen.queryByTestId('profile-passkey-enrollment')).not.toBeInTheDocument();
 
     const membershipSection = screen.getByTestId('profile-organization-membership-section');
 

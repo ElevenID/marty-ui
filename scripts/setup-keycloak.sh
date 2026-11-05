@@ -275,7 +275,6 @@ main() {
     
     authenticate_keycloak
     configure_realm_login_settings
-    configure_passkey_login
     configure_browser_flow_alignment
     configure_realm_smtp_settings
     configure_google_idp
@@ -288,6 +287,9 @@ main() {
     ensure_demo_reviewer_user
     ensure_marty_org_admin_user
     ensure_marty_org_admin_role
+    # Apply/read back passkey policy after other realm updates, so the final
+    # reported state includes the existing provider, email and browser settings.
+    configure_passkey_login
     
     log_success "=== Keycloak Setup Complete ==="
 }

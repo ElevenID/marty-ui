@@ -32,6 +32,24 @@ separate migration/enrollment design. Never delete credentials as rollback.
 
 ## Account lifecycle and qualification
 
+With managed passkeys enabled, the authenticated profile offers **Create a
+passkey** when the session has a trusted Keycloak identity and ID token. The
+application uses a same-origin, cookie-authenticated JSON POST to
+`/v1/auth/passkeys/enroll`, then follows Keycloak's passwordless registration
+required action through the existing PKCE callback. Keycloak receives an ID-token
+hint and requires fresh authentication. The callback independently checks the
+original subject and still-valid application session before returning to the
+profile; it retains that session's roles and organization context. AIA
+cancellation returns without claiming enrollment succeeded.
+
+Sessions without the Keycloak identity/token binding cannot use this entry point
+yet. In particular, Open Badge deployments with token exchange disabled need
+additional enrollment integration and qualification before this feature is
+complete. This limitation is remaining implementation work; it does not change
+Open Badge login or require existing users to create a local password. Credential
+management and prevention of removing the last usable method also remain rollout
+gates until implemented and verified.
+
 Users should enroll only from a trusted authenticated account, with appropriate
 fresh authentication. Keep email verification and existing linking policies.
 Encourage a second passkey and a verified recovery method; second-factor recovery
