@@ -244,3 +244,29 @@ before the marker clears, after lease and publication-lock exit checks. A prior
 valid reconciliation record can be retained during a fresh proof after publication
 interruption. This does not resume an unfinished start, prepared stop or expired
 generation, and it is not automatic logon recovery.
+
+`renew_once(config_path, logical_project)` performs one explicit online candidate
+renewal through the existing selected-input lease, scoped AppRole authority,
+signed native producers, private export, activation and selection journal. The
+logical TLS namespace must match the existing enrollment. This API requires an
+already healthy, unexpired generation; it does not install a timer, qualify
+expired-credential recovery or admit images for production.
+
+Before minting, the owner reserves a private `windows-renewal-<uuid>` operation
+directory, separate generation directory, exact next configuration and durable
+`.<project>.renewal-staging.json` guard. Phase receipts bind named helper IDs,
+images and the cycle. Helpers have logging disabled; only confirmed successful
+helpers are removed, without volumes or force. Unknown helpers and failed phases
+remain recorded. Keycloak responses, including partial timeout output, are
+flushed to the private control volume before interpreting success or refusal.
+
+All held-input and publication checks must finish before a final Windows
+no-overwrite rename creates `publication.json`. A result file without this seal
+is provisional and cannot authorize activation. Admission rechecks the seal,
+all phase/helper relationships, exact inventory, native proof and current data.
+The staging guard remains until a durable pending activation intent takes over;
+an interrupted transfer therefore retains at least one admission blocker. Neither
+another renewal nor recovery automatically clears an uncertain operation. Keep
+its configuration, receipts, helper identities and old generations for operator
+reconciliation. Known completed rollback is recorded through the existing
+selection owner; unknown activation is never replayed.

@@ -19,6 +19,170 @@ from selfhost_windows_inputs import hold_private_input
 
 EXPORT_CHUNK_BYTES = 12000
 EXPORT_LIMIT_BYTES = 8 * 1024 * 1024
+
+PRODUCER_PREPARE = r'''
+import base64,json,os,pathlib,sys
+d=json.load(sys.stdin);os.umask(0o077);root=pathlib.Path(d['root'])
+root.mkdir(mode=0o700)
+for name in ['source','tls','keycloak','generation']:(root/name).mkdir(mode=0o700)
+for name,value in d['current'].items():
+ raw=base64.b64decode(value,validate=True)
+ assert len(raw)<=65536 and b'\0' not in raw and b'PRIVATE KEY' not in raw
+ raw.decode('utf-8')
+ fd=os.open(root/'source'/name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+ with os.fdopen(fd,'wb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
+for folder in [root/'source',root,root.parent]:
+ fd=os.open(folder,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+ try:os.fsync(fd)
+ finally:os.close(fd)
+print(json.dumps({'prepared':True}))
+'''
+
+PRODUCER_ASSEMBLE = r'''
+import hashlib,json,os,pathlib,secrets,subprocess,sys
+d=json.load(sys.stdin);os.umask(0o077);root=pathlib.Path(d['root']);binary='/operator/tool'
+assert hashlib.sha256(pathlib.Path(binary).read_bytes()).hexdigest()==d['binary_sha256']
+p=subprocess.run([binary,'--build-identity'],capture_output=True,timeout=20)
+assert p.returncode==0 and p.stdout.decode().strip()==d['source_sha']+':'+d['release_tag']
+token=pathlib.Path(d['authority']).read_text().strip()
+fd=os.open(root/'keycloak-response.private.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+timed_out=False
+try:
+ p=subprocess.run([binary,'operator','keycloak-provision',d['bao_addr'],'/input/ca.crt'],
+  input=json.dumps({'token':token,'renew':True,'pki_mount':'keycloak-pki','nonce':secrets.token_hex(6)}).encode(),
+  capture_output=True,timeout=90)
+ captured=p.stdout
+except subprocess.TimeoutExpired as error:
+ captured=error.stdout or b'';timed_out=True
+with os.fdopen(fd,'wb') as f:f.write(captured);f.flush();os.fsync(f.fileno())
+fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+try:os.fsync(fd)
+finally:os.close(fd)
+assert not timed_out and len(captured)<=128*1024 and p.returncode==0
+outputs=json.loads(captured)
+expected={'keycloak_signing_kms_token','keycloak_master_rs256_cert','keycloak_11id_rs256_cert',
+ *(f'keycloak_{realm}_{purpose}_token' for realm in ['master','11id'] for purpose in ['cookie','ciba'])}
+assert set(outputs)==expected and len({v for k,v in outputs.items() if k.endswith('_token')})==5
+for name,value in outputs.items():
+ assert isinstance(value,str) and value and len(value.encode())<=65536 and '\0' not in value and 'PRIVATE KEY' not in value
+ fd=os.open(root/'keycloak'/name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+ with os.fdopen(fd,'w') as f:f.write(value);f.flush();os.fsync(f.fileno())
+def call(op,body,network=False):
+ args=[binary,'operator',op]
+ if network:args += [d['bao_addr'],'/input/ca.crt']
+ p=subprocess.run(args,input=json.dumps(body).encode(),capture_output=True,timeout=90)
+ assert p.returncode==0
+ return json.loads(p.stdout)
+assert call('generation',{'operation':'stage','current':str(root/'source'),'tls':str(root/'tls'),
+ 'keycloak':str(root/'keycloak'),'output':str(root/'generation'),'ca_overlap':False})=={'value':d['files']}
+assert call('generation',{'operation':'verify','current':str(root/'source'),'candidate':str(root/'generation'),
+ 'ca_overlap':False,'ca_retire':False})=={'value':[d['files'],39]}
+body={'token':token,'old':str(root/'source'),'new':str(root/'generation'),'minimum_ttl':d['minimum_ttl'],
+ 'require_orphan_new':True,'require_orphan_old':False,'replacement':None,'retiring':False}
+for op in ['activation-tokens','activation-certificates']:assert call(op,body,True)=={'value':None}
+print(json.dumps({'files':d['files'],'changed_files':39,'native_verified':True}))
+'''
+
+
+def produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint):
+    """Produce under the selected owner's durable guard; never activate here.
+
+    The caller holds the selected lease, fresh authority and current native proof.
+    checkpoint(phase,event,metadata) must durably record each started/completed
+    boundary and named helper identity. Unknown outcomes retain their helpers.
+    """
+    from selfhost_windows_renewal import UncertainComposeMutation
+    uncertain=False;zero=False
+    try:
+        return _produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint)
+    except UncertainComposeMutation as error:
+        uncertain=True;zero=getattr(error,'owned_processes_zero',False) is True
+    except Exception:
+        pass
+    current=None
+    if uncertain:
+        clean=UncertainComposeMutation('Windows renewal producer requires operator reconciliation')
+        clean.stdout=clean.stderr=b'';clean.owned_processes_zero=zero
+        raise clean
+    raise ValueError('Windows renewal producer refused; preserve its guard and outputs')
+
+
+def _produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint):
+    from selfhost_windows_renewal import Docker, require, run_owned_mutation
+    from selfhost_windows_selection import decode
+    config=json.loads(json.dumps(config));project=config['project'];native=config['native']
+    require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',project))
+    require(re.fullmatch(r'[a-z0-9./_-]+@sha256:[0-9a-f]{64}',native['helper_image']))
+    require(re.fullmatch(r'[0-9a-f]{32}',cycle_id))
+    require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',logical_project))
+    root='/control/windows-renewal-'+cycle_id
+    require(native['renewed']==root+'/generation' and native['token_file']=='/control/recovery-session-'+cycle_id+'/token')
+    require(native['control_volume']==project+'-renewal-control' and native['network']==project+'_default'
+            and native['bao_addr']=='https://openbao:8200')
+    require(re.fullmatch(r'[^\s]+@sha256:[0-9a-f]{64}',services_image))
+    require(40<=len(current)<=512 and all(re.fullmatch(r'[a-z][a-z0-9_]{0,127}',n) for n in current))
+    docker=Docker(config['docker_host'],config['engine_id']);deadline=time.monotonic()+900
+    def command(args,body=None):
+        remaining=deadline-time.monotonic();require(remaining>0)
+        p=run_owned_mutation([*docker.prefix,*args],stdin_bytes=body,timeout=min(240,remaining))
+        require(p.returncode==0 and time.monotonic()<deadline)
+        return p.stdout
+    def completed_helper(phase,name,image,expected_id=None):
+        items=docker.json(['inspect',name]);require(len(items)==1)
+        item=items[0];cid=item['Id']
+        require(re.fullmatch(r'[0-9a-f]{64}',cid) and item['Name']=='/'+name
+                and (expected_id is None or cid==expected_id)
+                and item['State']['Status']=='exited' and item['State']['ExitCode']==0
+                and item['RestartCount']==0 and item['Config']['Image']==image
+                and item['Config']['Labels']['marty.windows.renewal']==cycle_id
+                and item['HostConfig']['LogConfig']['Type']=='none')
+        checkpoint(phase,'helper',{'id':cid,'name':name,'image':image})
+        command(['rm',cid]) # confirmed completed helper only, no volumes/force
+    common=['run','--pull','never','-i','--log-driver','none','--read-only','--cap-drop','ALL',
+            '--security-opt','no-new-privileges','--memory','512m','--cpus','1']
+    with hold_private_input(Path(native['binary']),max_bytes=256*1024*1024) as binary:
+        require(hashlib.sha256(binary).hexdigest()==native['binary_sha256'])
+        with hold_private_input(Path(native['ca_file'])):
+            checkpoint('prepare','started',{})
+            name=project+'-renew-prepare-'+cycle_id
+            request={'root':root,'current':{n:base64.b64encode(v).decode() for n,v in current.items()}}
+            args=[*common,'--name',name,'--label','marty.windows.renewal='+cycle_id,'--network','none',
+                '--mount',f'type=volume,src={native["control_volume"]},dst=/control,volume-nocopy',
+                '--entrypoint','python',native['helper_image'],'-c',PRODUCER_PREPARE]
+            require(decode(command(args,json.dumps(request).encode()))=={'prepared':True})
+            completed_helper('prepare',name,native['helper_image']);checkpoint('prepare','completed',{})
+            checkpoint('tls','started',{})
+            name=project+'-renew-tls-'+cycle_id
+            args=['create','--pull','never','--name',name,'--label','marty.windows.renewal='+cycle_id,
+                '--log-driver','none','--network',native['network'],'--user','0:0','--read-only','--cap-drop','ALL',
+                '--security-opt','no-new-privileges','--memory','512m','--cpus','1','--tmpfs','/tmp:rw,mode=1777',
+                '--mount',f'type=bind,src={native["ca_file"]},dst=/input/ca.crt,readonly',
+                '--mount',f'type=volume,src={native["control_volume"]},dst=/input/renewal,volume-subpath=recovery-session-{cycle_id},readonly,volume-nocopy',
+                '--mount',f'type=volume,src={native["control_volume"]},dst=/output,volume-subpath=windows-renewal-{cycle_id}/tls,volume-nocopy',
+                '-e','BAO_ADDR='+native['bao_addr'],'-e','BAO_CACERT=/input/ca.crt','-e','BAO_RENEWAL_TOKEN_FILE=/input/renewal/token',
+                '-e','MARTY_TLS_BOOTSTRAP_PROFILE=selfhost-renew','-e','MARTY_SELFHOST_PROJECT='+logical_project,
+                '-e','SELFHOST_TLS_OUTPUT_DIR=/output','--entrypoint','/usr/local/bin/marty-passport-tls-bootstrap',services_image]
+            cid=command(args).decode().strip();require(re.fullmatch(r'[0-9a-f]{64}',cid))
+            checkpoint('tls','created',{'id':cid,'name':name,'image':services_image})
+            command(['start',cid]);require(command(['wait',cid]).decode().strip()=='0')
+            completed_helper('tls',name,services_image,cid);checkpoint('tls','completed',{})
+            checkpoint('keycloak','started',{})
+            name=project+'-renew-keycloak-'+cycle_id
+            request={k:native[k] for k in ['binary_sha256','source_sha','release_tag','bao_addr','minimum_ttl']}
+            request.update(root=root,authority=native['token_file'],files=len(current))
+            args=[*common,'--name',name,'--label','marty.windows.renewal='+cycle_id,'--network',native['network'],
+                '--mount',f'type=volume,src={native["control_volume"]},dst=/control,volume-nocopy',
+                '--mount',f'type=bind,src={native["binary"]},dst=/operator/tool,readonly',
+                '--mount',f'type=bind,src={native["ca_file"]},dst=/input/ca.crt,readonly',
+                '--entrypoint','python',native['helper_image'],'-c',PRODUCER_ASSEMBLE]
+            require(decode(command(args,json.dumps(request).encode()))=={'files':len(current),'changed_files':39,'native_verified':True})
+            completed_helper('keycloak',name,native['helper_image']);checkpoint('keycloak','completed',{})
+            checkpoint('export','started',{})
+            values=export_generation(config,native['renewed'])
+            require(set(values)==set(current) and sum(values[n]!=current[n] for n in current)==39)
+            checkpoint('export','completed',{})
+    require(time.monotonic()<deadline)
+    return values
 EXPORT_WORKER = r'''
 import base64,contextlib,hashlib,json,os,pathlib,stat,sys
 d=json.load(sys.stdin);root=pathlib.Path(d['mirror'])
