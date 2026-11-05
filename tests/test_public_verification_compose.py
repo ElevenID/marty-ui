@@ -7,6 +7,7 @@ import runpy
 import subprocess
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,17 @@ BIND = runpy.run_path(str(ROOT / "scripts/test_beta_application_image_compose.py
 TOKEN = "sign_grant_mint_flow_demo_holder_token"
 CONFIG_INPUT = "MARTY_PUBLIC_VERIFICATION_CONFIG_PATH"
 TOKEN_INPUT = "MARTY_PUBLIC_VERIFICATION_HOLDER_MINT_TOKEN_FILE"
+
+
+def assert_no_automatic_host_creation(mount, overlay=OVERLAY):
+    # Compose versions may omit false JSON fields after interpolation. Require
+    # the explicit safe source setting and refuse any true/unexpected output.
+    source = yaml.safe_load(overlay.read_text(encoding="utf-8"))["services"]["flow"][
+        "volumes"
+    ][0]
+    assert source.get("bind", {}).get("create_host_path") is False
+    value = mount.get("bind", {}).get("create_host_path")
+    assert value is False or value is None
 
 
 def test_opt_in_overlay_preserves_every_unrelated_service_and_authority():
@@ -43,7 +55,7 @@ def test_opt_in_overlay_preserves_every_unrelated_service_and_authority():
     ]
     assert len(config) == 1
     assert config[0]["type"] == "bind" and config[0]["read_only"] is True
-    assert config[0].get("bind", {}).get("create_host_path") is False
+    assert_no_automatic_host_creation(config[0])
     recipients = {
         name
         for name, service in after["services"].items()
@@ -124,7 +136,7 @@ def test_interpolated_files_are_read_only_and_render_does_not_change_them(tmp_pa
     mount = model["services"]["flow"]["volumes"][0]
     assert Path(mount["source"]).resolve() == config.resolve()
     assert mount["read_only"] is True
-    assert mount.get("bind", {}).get("create_host_path") is False
+    assert_no_automatic_host_creation(mount)
     assert Path(model["secrets"][TOKEN]["file"]).resolve() == token.resolve()
     assert all(path.read_bytes() == content for path, content in contents.items())
 
@@ -135,3 +147,18 @@ def test_no_default_stack_or_bundle_selects_public_admission():
             assert "public-verification/compose.openbao.yml" not in path.read_text(
                 encoding="utf-8"
             ), path
+
+
+@pytest.mark.parametrize("unsafe", [None, True])
+def test_omitted_render_field_cannot_hide_an_unsafe_source(tmp_path, unsafe):
+    assert_no_automatic_host_creation({"type": "bind"})
+    source = yaml.safe_load(OVERLAY.read_text(encoding="utf-8"))
+    binding = source["services"]["flow"]["volumes"][0]["bind"]
+    if unsafe is None:
+        binding.pop("create_host_path")
+    else:
+        binding["create_host_path"] = unsafe
+    altered = tmp_path / "unsafe-source.yml"
+    altered.write_text(yaml.safe_dump(source), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        assert_no_automatic_host_creation({"type": "bind"}, altered)

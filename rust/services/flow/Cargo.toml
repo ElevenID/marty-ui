@@ -58,6 +58,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# Registered cross-owner fixture exercises the actual policy kernel/evaluator;
+# this dependency must remain absent from production and build dependencies.
 marty-presentation-policy = { path = "../presentation-policy" }
 p256 = { workspace = true, features = ["ecdsa"] }
 http.workspace = true
