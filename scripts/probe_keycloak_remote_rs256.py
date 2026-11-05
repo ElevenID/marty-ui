@@ -248,7 +248,7 @@ def wait_for(path: Path, seconds: int = 30) -> None:
     raise RuntimeError("OpenBao public CA did not become ready")
 
 
-def wait_for_keycloak(base: str, container: str, seconds: int = 35) -> None:
+def wait_for_keycloak(base: str, container: str, seconds: int = 150) -> None:
     deadline = time.monotonic() + seconds
     last_discovery = "not_attempted"
     while time.monotonic() < deadline:

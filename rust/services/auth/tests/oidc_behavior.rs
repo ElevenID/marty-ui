@@ -311,6 +311,28 @@ fn authorization_request(registration: bool) -> OidcAuthorizationRequest {
 }
 
 #[test]
+fn management_console_uses_only_managed_public_issuer_and_encodes_the_return_location() {
+    let provider = provider(Arc::new(FakeHttp::default()));
+    let target = "https://ui.example/console/profile?section=security&from=passkeys";
+    let url = Url::parse(&provider.passkey_management_url(target).unwrap()).unwrap();
+    assert_eq!(
+        url.path(),
+        "/realms/marty/account/account-security/signing-in"
+    );
+    assert_eq!(url.fragment(), None);
+    let query = url
+        .query_pairs()
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(query.get("referrer_uri").unwrap(), target);
+    assert!(provider
+        .passkey_management_url("javascript:alert(1)")
+        .is_none());
+    let external =
+        KeycloakOidcProvider::new(external_config(), Arc::new(FakeHttp::default())).unwrap();
+    assert!(external.passkey_management_url(target).is_none());
+}
+
+#[test]
 fn passkey_enrollment_uses_pkce_fresh_authentication_and_subject_bound_id_token_hint() {
     let provider = provider(Arc::new(FakeHttp::default()));
     let url = Url::parse(

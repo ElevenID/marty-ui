@@ -87,6 +87,9 @@ impl SessionCookieConfig {
 
 #[async_trait]
 pub trait AuthHttpApplication: Send + Sync {
+    fn passkey_management_url(&self, _session: &Session, _return_uri: &str) -> Option<String> {
+        None
+    }
     fn passkey_enrollment_available(&self, _session: &Session) -> bool {
         false
     }
@@ -117,6 +120,9 @@ pub trait AuthHttpApplication: Send + Sync {
 
 #[async_trait]
 impl AuthHttpApplication for AuthApplication {
+    fn passkey_management_url(&self, session: &Session, return_uri: &str) -> Option<String> {
+        AuthApplication::passkey_management_url(self, session, return_uri)
+    }
     fn passkey_enrollment_available(&self, session: &Session) -> bool {
         AuthApplication::passkey_enrollment_available(self, session)
     }
@@ -537,7 +543,20 @@ async fn me(State(state): State<AuthHttpState>, headers: HeaderMap) -> Response 
     let available = session
         .as_ref()
         .is_some_and(|session| state.application.passkey_enrollment_available(session));
-    auth_status(session.as_ref().map(|session| &session.user), available)
+    let return_uri = format!(
+        "{}/console/profile",
+        request_ui_base(&state.origins, &headers).trim_end_matches('/')
+    );
+    let management_url = session.as_ref().and_then(|session| {
+        state
+            .application
+            .passkey_management_url(session, &return_uri)
+    });
+    auth_status(
+        session.as_ref().map(|session| &session.user),
+        available,
+        management_url,
+    )
 }
 
 #[derive(Deserialize)]
@@ -574,6 +593,13 @@ async fn update_me(
     auth_status(
         Some(&session.user),
         state.application.passkey_enrollment_available(&session),
+        state.application.passkey_management_url(
+            &session,
+            &format!(
+                "{}/console/profile",
+                request_ui_base(&state.origins, &headers).trim_end_matches('/')
+            ),
+        ),
     )
 }
 
@@ -782,11 +808,15 @@ fn no_store(response: &mut Response) {
 fn auth_status(
     user: Option<&crate::AuthenticatedUser>,
     passkey_enrollment_available: bool,
+    passkey_management_url: Option<String>,
 ) -> Response {
     let mut response = Json(if let Some(user) = user {
         let mut value = user_response(user);
         if passkey_enrollment_available {
             value["passkey_enrollment_available"] = json!(true);
+            if let Some(url) = passkey_management_url {
+                value["passkey_management_url"] = json!(url);
+            }
         }
         json!({"authenticated": true, "user": value})
     } else {

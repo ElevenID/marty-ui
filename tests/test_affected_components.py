@@ -197,6 +197,27 @@ def test_real_git_diff_narrows_only_regular_owned_marketing(tmp_path, event, cha
             "ui/src/components/Marketing.jsx", "ui/src/components/Moved.jsx"}
 
 
+def test_passkey_provider_source_selects_the_packaged_keycloak_qualification_lane(tmp_path):
+    repo, git, base = fixture_repo(tmp_path)
+    source = repo / "keycloak/passkey-provider/src/main/java/dev/marty/keycloak/passkeys/GuardedPasskeyProvider.java"
+    source.parent.mkdir(parents=True)
+    source.write_text("// changed native lifecycle policy\n")
+    git("add", ".")
+    git("commit", "-qm", "passkey lifecycle")
+    sha = git("rev-parse", "HEAD")
+    output = tmp_path / "outputs"
+    output.write_text("")
+    env = {**os.environ, **environment(), "SOURCE_SHA": sha, "HEAD_SHA": sha,
+           "BASE_SHA": base, "RUNNER_TEMP": str(tmp_path), "GITHUB_OUTPUT": str(output)}
+    subprocess.run(["bash", "scripts/ci/affected_components.sh"], cwd=repo, env=env,
+                   check=True, capture_output=True, text=True)
+    raw = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    value = json.loads(raw["plan"])
+    CI.validate_plan(value, env)
+    assert value["flags"]["openbao"] and value["flags"]["security"] and value["flags"]["rust"]
+    assert "test-openbao-didcomm-plugin" in value["selected_jobs"]
+
+
 def test_codeql_diff_is_complete_and_preserves_status_without_api_limits():
     raw = b"".join(f"M\0rust/src/input{index}.rs\0".encode() for index in range(3501))
     files = parse_diff(raw)

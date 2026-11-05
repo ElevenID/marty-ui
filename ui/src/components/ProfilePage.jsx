@@ -381,6 +381,15 @@ function ProfilePage() {
                   <Button variant="outlined" onClick={handleCreatePasskey} disabled={enrollingPasskey || passkeyEmailSent}>
                     {passkeyEmailSent ? 'Enrollment email sent' : enrollingPasskey ? 'Opening passkey setup…' : 'Create a passkey'}
                   </Button>
+                  {user.passkey_management_url && (
+                    <Box sx={{ mt: 2 }}>
+                      <Button component="a" href={user.passkey_management_url}>Manage passkeys</Button>
+                      <Typography variant="body2" color="text.secondary">
+                        Confirm your account in the identity account console to rename or remove passkeys.
+                        Keep another passkey or a working password before removing your last passkey.
+                      </Typography>
+                    </Box>
+                  )}
                 </Box>
               )}
               {user.roles && user.roles.length > 0 && (

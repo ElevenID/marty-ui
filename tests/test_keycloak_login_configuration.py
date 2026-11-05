@@ -22,7 +22,9 @@ PASSKEY_POLICY = {
 
 
 def passkey_readbacks():
-    return [json.dumps({"systemInfo": {"version": "26.8.0"}}),
+    return [json.dumps({"systemInfo": {"version": "26.8.0"}, "providers": {"credential": {"providers": {
+                "keycloak-webauthn-passwordless": {"order": 100, "operationalInfo": {"martyPasskeyLifecycleGuard": "1"}}
+            }}}}),
             '{"webAuthnPolicyPasswordlessRpId":""}',
             *[json.dumps({"webAuthnPolicyPasswordless" + key: value})
               for key, value in PASSKEY_POLICY.items()],
@@ -131,6 +133,20 @@ def test_passkey_rollback_only_disables_login_and_retains_policy_and_credentials
                               'webAuthnPolicyPasswordlessPasskeysEnabled=false']
 
 
+@pytest.mark.parametrize("provider", [None, {"order": 0},
+    {"order": 0, "operationalInfo": {"martyPasskeyLifecycleGuard": "1"}},
+    {"order": 100, "operationalInfo": {"martyPasskeyLifecycleGuard": "2"}}])
+def test_passkey_enablement_requires_the_selected_qualified_lifecycle_provider(tmp_path, provider):
+    info = {"systemInfo": {"version": "26.8.0"}, "providers": {"credential": {"providers": {}}}}
+    if provider is not None:
+        info["providers"]["credential"]["providers"]["keycloak-webauthn-passwordless"] = provider
+    result, calls = run_setup(tmp_path, "configure_passkey_login", readback=json.dumps(info),
+                              KEYCLOAK_PASSKEYS_ENABLED="true", KEYCLOAK_PASSKEY_RP_ID="login.example.test")
+    assert result.returncode != 0
+    assert len(calls) == 1 and calls[0]["args"][0] == "get"
+    assert "lifecycle provider" in result.stderr
+
+
 def test_passkey_policy_readback_preserves_whitespace_inside_string_values(tmp_path):
     readbacks = passkey_readbacks()
     readbacks[8] = '{"webAuthnPolicyPasswordlessAuthenticatorAttachment":"notspecified"}'
@@ -167,9 +183,10 @@ def test_passkey_rp_change_is_refused_before_mutation(tmp_path):
     assert all(call['args'][0] == 'get' for call in calls)
 
 
-def test_unqualified_keycloak_version_cannot_silently_ignore_passkey_fields(tmp_path):
+@pytest.mark.parametrize("version", ["25.0.0", "26.8.1", "26.9.0"])
+def test_unqualified_keycloak_version_cannot_silently_ignore_passkey_fields(tmp_path, version):
     result, calls = run_setup(tmp_path, "configure_passkey_login",
-                              readback='{"systemInfo":{"version":"25.0.0"}}',
+                              readback=json.dumps({"systemInfo": {"version": version}}),
                               KEYCLOAK_PASSKEYS_ENABLED="false")
     assert result.returncode != 0
     assert len(calls) == 1

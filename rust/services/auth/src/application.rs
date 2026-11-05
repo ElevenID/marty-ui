@@ -223,6 +223,9 @@ pub trait PkceStateRepository: Send + Sync {
 
 #[async_trait]
 pub trait OidcProvider: Send + Sync {
+    fn passkey_management_url(&self, _return_uri: &str) -> Option<String> {
+        None
+    }
     fn authorization_url(&self, request: &OidcAuthorizationRequest) -> Result<String, PortError>;
     fn supports_passkey_enrollment(&self) -> bool {
         false
@@ -305,6 +308,12 @@ pub struct AuthApplicationConfig {
 }
 
 impl AuthApplication {
+    pub fn passkey_management_url(&self, session: &Session, return_uri: &str) -> Option<String> {
+        self.passkey_enrollment_available(session)
+            .then(|| self.oidc.passkey_management_url(return_uri))
+            .flatten()
+    }
+
     #[must_use]
     pub fn new(ports: AuthApplicationPorts, config: AuthApplicationConfig) -> Self {
         Self {

@@ -701,6 +701,28 @@ impl KeycloakOidcProvider {
 
 #[async_trait]
 impl OidcProvider for KeycloakOidcProvider {
+    fn passkey_management_url(&self, return_uri: &str) -> Option<String> {
+        if self.config.provider_mode != OidcProviderMode::Keycloak {
+            return None;
+        }
+        let target = Url::parse(return_uri).ok()?;
+        if !matches!(target.scheme(), "https" | "http")
+            || !target.username().is_empty()
+            || target.password().is_some()
+        {
+            return None;
+        }
+        let mut url = Url::parse(&format!(
+            "{}/account/account-security/signing-in",
+            self.config.external_issuer_url
+        ))
+        .ok()?;
+        url.query_pairs_mut()
+            .append_pair("referrer", &self.config.client_id)
+            .append_pair("referrer_uri", return_uri);
+        Some(url.into())
+    }
+
     fn supports_passkey_enrollment(&self) -> bool {
         self.config.provider_mode == OidcProviderMode::Keycloak
     }

@@ -4,7 +4,7 @@ import { fireEvent, waitFor, within } from '@testing-library/react';
 
 import ProfilePage from '../ProfilePage';
 
-const passkeyMock = vi.hoisted(() => ({ available: false, start: vi.fn() }));
+const passkeyMock = vi.hoisted(() => ({ available: false, managementUrl: undefined as string | undefined, start: vi.fn() }));
 
 const mockSetActiveOrganizationId = vi.fn();
 const mockSetActiveOrgId = vi.fn();
@@ -24,6 +24,7 @@ vi.mock('../../hooks/useAuth', () => ({
       applicant_id: 'app-1',
       roles: ['applicant'],
       passkey_enrollment_available: passkeyMock.available,
+      passkey_management_url: passkeyMock.managementUrl,
     },
     isAdministrator: false,
     isApplicant: true,
@@ -61,7 +62,15 @@ vi.mock('../../contexts/ConsoleContext', () => ({
 }));
 
 describe('ProfilePage', () => {
-  beforeEach(() => { passkeyMock.available = false; passkeyMock.start.mockReset(); });
+  beforeEach(() => { passkeyMock.available = false; passkeyMock.managementUrl = undefined; passkeyMock.start.mockReset(); });
+
+  it('opens the server-selected native console and explains the remaining-method safeguard', () => {
+    passkeyMock.available = true;
+    passkeyMock.managementUrl = 'https://identity.example/realms/11id/account/account-security/signing-in';
+    render(<ProfilePage />);
+    expect(screen.getByRole('link', { name: 'Manage passkeys' })).toHaveAttribute('href', passkeyMock.managementUrl);
+    expect(screen.getByText(/Keep another passkey or a working password/)).toBeInTheDocument();
+  });
 
   it('shows email confirmation and prevents duplicate requests on the badge enrollment path', async () => {
     passkeyMock.available = true;

@@ -117,6 +117,9 @@ struct FakeOidc {
 
 #[async_trait]
 impl OidcProvider for FakeOidc {
+    fn passkey_management_url(&self, _return_uri: &str) -> Option<String> {
+        Some("https://login.example/account/account-security/signing-in".into())
+    }
     fn supports_passkey_enrollment(&self) -> bool {
         true
     }
@@ -565,6 +568,38 @@ async fn enrollment_email_rejects_stale_contradictory_and_cross_origin_bindings_
         assert!(harness.emails.sent.lock().unwrap().is_empty());
         assert!(harness.states.0.lock().unwrap().is_empty());
     }
+}
+
+#[test]
+fn management_requires_an_enabled_bound_non_impersonated_session() {
+    let enabled = harness();
+    let disabled = harness_with_passkeys(false);
+    let mut session = enrollment_session();
+    let target = "https://ui.example/console/profile";
+    assert!(enabled
+        .app
+        .passkey_management_url(&session, target)
+        .is_some());
+    assert!(disabled
+        .app
+        .passkey_management_url(&session, target)
+        .is_none());
+    session.id_token = None;
+    session.oidc_claims = None;
+    assert!(enabled
+        .app
+        .passkey_management_url(&session, target)
+        .is_none());
+    session.keycloak_subject = Some("trusted-badge-account".into());
+    assert!(enabled
+        .app
+        .passkey_management_url(&session, target)
+        .is_some());
+    session.user.impersonation = Some(serde_json::from_value(json!({"active":true})).unwrap());
+    assert!(enabled
+        .app
+        .passkey_management_url(&session, target)
+        .is_none());
 }
 
 fn enrollment_command() -> InitiateLoginCommand {

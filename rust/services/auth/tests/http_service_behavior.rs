@@ -23,6 +23,7 @@ use tower::ServiceExt as _;
 
 #[derive(Default)]
 struct AppStub {
+    management_returns: Mutex<Vec<String>>,
     email_enrollment: Mutex<bool>,
     enrollments: Mutex<Vec<(String, String, String)>>,
     initiated: Mutex<Vec<(bool, String, String)>>,
@@ -32,6 +33,13 @@ struct AppStub {
 
 #[async_trait]
 impl AuthHttpApplication for AppStub {
+    fn passkey_management_url(&self, _session: &Session, return_uri: &str) -> Option<String> {
+        self.management_returns
+            .lock()
+            .unwrap()
+            .push(return_uri.to_owned());
+        Some("https://identity.example/realms/marty/account/account-security/signing-in".into())
+    }
     fn passkey_enrollment_available(&self, _session: &Session) -> bool {
         true
     }
@@ -688,6 +696,14 @@ async fn callback_me_update_and_logout_preserve_browser_boundary_behavior() {
     )
     .unwrap();
     assert_eq!(authenticated_body["user"]["email"], "alice@example.com");
+    assert_eq!(
+        app.management_returns.lock().unwrap().last().unwrap(),
+        "https://elevenidllc.com/console/profile"
+    );
+    assert_eq!(
+        authenticated_body["user"]["passkey_management_url"],
+        "https://identity.example/realms/marty/account/account-security/signing-in"
+    );
     assert!(authenticated_body["user"].get("picture").is_none());
 
     let invalid_picture = request(

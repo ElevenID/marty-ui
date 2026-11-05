@@ -16,6 +16,10 @@ RUN for class in org.keycloak.protocol.RestartLoginCookie \
     javap -classpath /out/keycloak-services.jar -public "$class" > /tmp/remote-api; \
     diff -u /tmp/upstream-api /tmp/remote-api; \
     done
+WORKDIR /passkeys
+COPY keycloak/passkey-provider/pom.xml ./
+COPY keycloak/passkey-provider/src ./src
+RUN mvn -B -q -DskipTests package
 # Remove upstream key factories (generated/imported/keystore). Only the four
 # explicitly registered remote factories in the provider JAR may be discovered.
 RUN mkdir -p /work/remote-only/META-INF/services && \
@@ -40,3 +44,4 @@ RUN set -eu; \
     test "$(cat "$probe_dir/snapshot")" = 'Aa1!credential-reader-check'
 COPY --from=build /out/keycloak-services.jar /opt/keycloak/lib/lib/main/org.keycloak.keycloak-services-26.8.0.jar
 COPY --from=build /work/target/keycloak-openbao-provider-0.0.0-probe.jar /opt/keycloak/providers/marty-openbao-provider.jar
+COPY --from=build /passkeys/target/keycloak-passkey-provider-0.0.0-probe.jar /opt/keycloak/providers/marty-passkey-provider.jar

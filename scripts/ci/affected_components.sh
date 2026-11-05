@@ -273,7 +273,7 @@ else
       rust/*|proto/*|contracts/*)
         rust=true
         ;;
-      openbao/*|docker/openbao-*|keycloak/openbao-provider/*|scripts/probe_keycloak_remote_rs256.py|scripts/sql/keycloak-kms-only-verify.sql)
+      openbao/*|docker/openbao-*|keycloak/openbao-provider/*|keycloak/passkey-provider/*|scripts/probe_keycloak_remote_rs256.py|scripts/sql/keycloak-kms-only-verify.sql)
         openbao=true
         rust=true
         security=true
