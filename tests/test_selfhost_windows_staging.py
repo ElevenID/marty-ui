@@ -268,3 +268,19 @@ def test_full_segment_continues_before_next_credential_mint(monkeypatch):
         assert second['selected']!=first['selected']
         assert events.count('authority')==2 and events.count('produce')==2 and events.count('activate')==2
         assert not selection.renewal.continuation_guard(cfg).exists()
+
+
+@pytest.mark.parametrize('guard_name',['model_repair_guard','continuation_guard'])
+def test_staged_admission_refuses_foreign_operation_guard_before_native_or_append(monkeypatch,guard_name):
+    with staged_candidate(monkeypatch) as (_root,path,cfg,output,events):
+        with selection.selected_inputs(path) as lease:
+            result=lease.stage_renewal(output,'marty-selfhost-synthetic')
+        guard=getattr(selection.renewal,guard_name)(cfg)
+        guard.write_bytes(b'PUBLIC_OTHER_OPERATION_PENDING')
+        before=list(events)
+        def forbidden(*_a,**_kw):raise AssertionError('Foreign guard must refuse before native call')
+        monkeypatch.setattr(selection.renewal,'native_preflight',forbidden)
+        with pytest.raises(ValueError):
+            selection.prepare(Path(result['next_config']),staging_sha256=result['guard_sha256'])
+        assert events==before and not (selection.directory(cfg)/'000002.intent.json').exists()
+        assert guard.exists() and selection.renewal.renewal_staging_guard(cfg).exists()

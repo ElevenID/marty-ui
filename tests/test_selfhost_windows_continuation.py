@@ -163,6 +163,15 @@ def test_deep_ancestor_remains_held_across_later_publication(monkeypatch):
         assert blocked == [True] and not renewal.continuation_guard(cfg).exists()
 
 
+def test_new_child_in_sealed_ancestor_refuses_ordinary_lease_exit(monkeypatch):
+    with candidate(monkeypatch) as (_root, _phase, _tx, _outcome, path, _cfg):
+        ancestor, _new, _result=advance(monkeypatch,path)
+        with pytest.raises((ValueError,OSError)):
+            with selection.selected_inputs(path):
+                (ancestor/'unknown.json').write_bytes(b'PUBLIC_PRESERVED_UNKNOWN')
+        assert (ancestor/'unknown.json').read_bytes()==b'PUBLIC_PRESERVED_UNKNOWN'
+
+
 @pytest.mark.parametrize('repair_first', [False, True])
 def test_model_repair_and_continuation_compose_in_both_orders(monkeypatch, repair_first):
     from test_selfhost_windows_model import runtime
@@ -216,3 +225,38 @@ def test_reconciliation_only_completes_derived_missing_or_empty_seed_files(monke
         else:
             continuation.reconcile(path)
             assert not renewal.continuation_guard(cfg).exists()
+
+
+@pytest.mark.parametrize('terminal',[False,True])
+@pytest.mark.parametrize('tamper',['content','child'])
+def test_recovery_publication_retains_full_history_through_lock_exit(monkeypatch,terminal,tamper):
+    from test_selfhost_windows_recovery import candidate as runtime
+    with runtime(monkeypatch,warm=True) as (_root,path,cfg,output,_events,_items,_observed,_tx):
+        ancestor,_new,_result=advance(monkeypatch,path)
+        if terminal:
+            with pytest.raises(RuntimeError):
+                with selection.selected_inputs(path) as lease:
+                    lease.recover_existing(output)
+                    raise RuntimeError('PUBLIC_CALLER_FAILURE')
+        original=renewal.hold_private_input;injected=[]
+        @contextmanager
+        def hold(file,*args,**kwargs):
+            with original(file,*args,**kwargs) as value:yield value
+            decision=output/('reconciliation.json' if terminal else 'result.json')
+            if kwargs.get('exclusive') and decision.exists() and decision.stat().st_size and not injected:
+                injected.append(True)
+                if tamper=='content':
+                    with pytest.raises(OSError):(ancestor/'owner.json').write_bytes(b'PUBLIC_TAMPER')
+                else:(ancestor/'unknown.json').write_bytes(b'PUBLIC_PRESERVED_UNKNOWN')
+        monkeypatch.setattr(renewal,'hold_private_input',hold)
+        def operation():
+            if terminal:return selection.reconcile_existing(path)
+            with selection.selected_inputs(path) as lease:return lease.recover_existing(output)
+        if tamper=='child':
+            with pytest.raises((ValueError,OSError)):operation()
+            assert renewal.recovery_guard(cfg).exists()
+            assert (ancestor/'unknown.json').exists()
+        else:
+            operation()
+            assert not renewal.recovery_guard(cfg).exists()
+        assert injected==[True]

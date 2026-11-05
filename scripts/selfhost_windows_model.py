@@ -286,7 +286,8 @@ def finish(config, pending):
                 require(session_journal == journal and selection.digest(raw_cfg) == intent['config_file_sha256']
                         and not renewal.namespace_entry_exists(renewal.recovery_guard(cfg))
                         and not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(cfg))
-                        and not renewal.namespace_entry_exists(renewal.renewal_staging_guard(cfg)))
+                        and not renewal.namespace_entry_exists(renewal.renewal_staging_guard(cfg))
+                        and not renewal.namespace_entry_exists(renewal.continuation_guard(cfg)))
                 _generations, records = selection._parse(raw, expected, allow_pending_model=True)
                 items, _current, _accepted = history(raw, expected, records, allow_pending=True)
                 require(items[-1] == (intent, None)

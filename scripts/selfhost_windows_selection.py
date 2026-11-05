@@ -230,6 +230,10 @@ def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_
         try:
             yield config, raw_config, expected, root, raw, stack
         finally:
+            for prior_root, prior_raw in ancestry:
+                require({p.name for p in prior_root.iterdir()} == set(prior_raw))
+                stack.enter_context(_held_private_input(prior_root, directory=True))
+                require({p.name for p in prior_root.iterdir()} == set(prior_raw))
             require(sorted(p.name for p in root.iterdir()) == sorted(raw))
             # New entries are complete before the immutable directory proof.
             stack.enter_context(_held_private_input(root, directory=True))
@@ -351,7 +355,9 @@ def prepare(config_path, *, authority_file=None, staging_sha256=None):
         if staging_sha256 is None:require(not renewal.recovery_pending(config))
         else:
             require(not renewal.namespace_entry_exists(renewal.recovery_guard(config))
-                and not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(config)))
+                and not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(config))
+                and not renewal.namespace_entry_exists(renewal.model_repair_guard(config))
+                and not renewal.namespace_entry_exists(renewal.continuation_guard(config)))
         intents, records = _parse(raw, expected)
         require(len(intents) == len(records) and len(intents) < MAX_SELECTIONS)
         previous = records[len(records)];values, snapshots = _inputs(config, stack)
@@ -451,7 +457,8 @@ def activation_admission(config, old, new, old_env, new_env):
         stack.enter_context(_held_private_input(root, directory=True))
         raw = _read(root, stack)
         from selfhost_windows_continuation import resolve
-        _resolved, root, raw, _models = resolve(config, root, raw, stack)
+        ancestry=[]
+        _resolved, root, raw, _models = resolve(config, root, raw, stack, ancestry=ancestry)
         stack.enter_context(_held_private_input(root, directory=True))
         from selfhost_windows_model import hold_history, model_binding, owner_binding
         expected = owner_binding(raw, config)
@@ -465,7 +472,10 @@ def activation_admission(config, old, new, old_env, new_env):
                 'secrets_dir': str(Path(config[prefix+'_secrets'])), 'secrets_sha256': fingerprint(data),
                 'native_mirror': config['native'][mirror]})
         try:yield
-        finally:require(sorted(p.name for p in root.iterdir()) == sorted(raw))
+        finally:
+            require(sorted(p.name for p in root.iterdir()) == sorted(raw))
+            for prior_root, prior_raw in ancestry:
+                require({p.name for p in prior_root.iterdir()} == set(prior_raw))
 
 
 def complete(config_path, *, reconcile=False, authority_file=None):
@@ -706,6 +716,9 @@ def _staging_admission(config,raw_config,previous,stack,sha):
 def _handoff_staged(config_path,sha,sequence,intent_sha):
     """A registered pending intent is durable before staging loses authority."""
     with _session(config_path) as (config,raw_config,expected,root,raw,stack):
+        require(not any(renewal.namespace_entry_exists(getter(config)) for getter in
+            (renewal.recovery_guard,renewal.recovery_preparation_guard,
+             renewal.model_repair_guard,renewal.continuation_guard)))
         guard=renewal.renewal_staging_guard(config)
         require(digest(stack.enter_context(renewal.hold_private_input(guard)))==sha)
         intents,records=_parse(raw,expected)
