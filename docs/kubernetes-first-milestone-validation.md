@@ -55,13 +55,16 @@ reboot, a sample showed **2427 MiB** and **1892 millicores** during startup.
 Because several services were failing, these samples do **not** establish the
 capacity of a healthy complete installation.
 
-## Corrections produced by the trial
+## Corrections produced by the trial and configuration audit
 
 The Helm package now supplies verified Redis TLS, preserves upstream Redis
 startup behavior, disables unconfigured social login, retains the public HTTPS
 port in managed issuer configuration, supplies Flow's authenticated HTTPS
-signer endpoint and CA, supplies Presentation Policy's issuance API key, and
-uses the signer's Redis database for bootstrap registry records.
+signer endpoint and CA, supplies Presentation Policy and Applicant with the
+existing issuance API key required by their native API calls, and uses the
+signer's Redis database for bootstrap registry records. The final configuration
+audit checked all 18 service contracts and resolved all 87 secret-backed file
+references against their volume projections and native Secret catalog.
 
 The runtime correction explicitly selects the standard AWS-LC Rustls provider
 before TLS construction in all 34 executables copied by the two signed service

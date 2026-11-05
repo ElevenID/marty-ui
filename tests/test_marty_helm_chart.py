@@ -256,7 +256,7 @@ def test_production_redis_tls_preserves_public_trust_and_confines_private_key(re
     assert "redis://redis:" not in json.dumps(rendered)
 
 
-def test_flow_signer_transport_and_presentation_policy_credentials(rendered: list[dict]) -> None:
+def test_flow_signer_transport_and_native_issuance_credentials(rendered: list[dict]) -> None:
     deployments = resources(rendered, "Deployment")
     flow = deployments["flow"]["spec"]["template"]["spec"]
     env = {item["name"]: item for item in flow["containers"][0]["env"]}
@@ -269,9 +269,10 @@ def test_flow_signer_transport_and_presentation_policy_credentials(rendered: lis
     for name, deployment in deployments.items():
         if name != "flow":
             assert all(volume["name"] != "signing-ca" for volume in deployment["spec"]["template"]["spec"].get("volumes", []))
-    policy = deployments["presentation-policy"]["spec"]["template"]["spec"]["containers"][0]
-    env = {item["name"]: item for item in policy["env"]}
-    assert env["ISSUANCE_API_KEY"]["valueFrom"]["secretKeyRef"] == {"name": "marty-secrets", "key": "ISSUANCE_API_KEY"}
+    for name in ["presentation-policy", "applicant"]:
+        container = deployments[name]["spec"]["template"]["spec"]["containers"][0]
+        env = {item["name"]: item for item in container["env"]}
+        assert env["ISSUANCE_API_KEY"]["valueFrom"]["secretKeyRef"] == {"name": "marty-secrets", "key": "ISSUANCE_API_KEY"}
 
 
 def test_development_requests_leave_room_for_cluster_and_openbao(rendered: list[dict]) -> None:

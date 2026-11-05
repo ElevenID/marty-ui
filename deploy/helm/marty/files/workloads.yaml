@@ -630,6 +630,11 @@ applicant:
       secretKeyRef:
         name: marty-secrets
         key: GRPC_SERVICE_TOKEN
+  - name: ISSUANCE_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: marty-secrets
+        key: ISSUANCE_API_KEY
   - name: NOTIFICATION_EVENT_PRODUCER_ID
     value: applicant
   - name: NOTIFICATION_APPLICANT_EVENT_TOKEN
