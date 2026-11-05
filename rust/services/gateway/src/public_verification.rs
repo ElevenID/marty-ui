@@ -58,6 +58,25 @@ pub fn unambiguous_headers(headers: &HeaderMap) -> bool {
     })
 }
 
+/// Authentication resolves only the requested public route for CORS preflight.
+/// Runtime still requires a configured Origin and an existing unauthenticated
+/// route for this method; OPTIONS never becomes an upstream operation.
+pub(crate) fn preflight_method(path: &str, headers: &HeaderMap) -> Option<HttpMethod> {
+    if !is_public_path(path) || !unambiguous_headers(headers) {
+        return None;
+    }
+    let mut values = headers.get_all("access-control-request-method").iter();
+    let value = values.next()?.to_str().ok()?;
+    if values.next().is_some() {
+        return None;
+    }
+    match value {
+        "GET" => Some(HttpMethod::Get),
+        "POST" => Some(HttpMethod::Post),
+        _ => None,
+    }
+}
+
 pub fn restrict_headers(headers: &mut BTreeMap<String, String>) {
     headers.retain(|name, _| {
         matches!(

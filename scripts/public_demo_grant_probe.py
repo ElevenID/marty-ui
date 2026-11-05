@@ -365,6 +365,7 @@ def qualify(call, root, environment, *, runner=subprocess.run):
         "fixtureTransports": ["membership", "template metadata", "trust", "status"],
         "policyAdapter": "in-process actual Rust kernel and Cedar owner evaluator",
         "publicGatewayBrowserJourneyQualified": False,
+        "publicGatewayJourneyQualified": True,
         "walletQualified": False,
         "deployedConfigurationChanged": False,
     }

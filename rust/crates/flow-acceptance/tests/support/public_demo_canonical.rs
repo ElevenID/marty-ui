@@ -232,6 +232,17 @@ async fn public_call(
                 .uri(path)
                 .header("origin", ORIGIN)
                 .header("x-verification-session", key)
+                .header("cookie", "sessionId=forged-browser-session")
+                .header("authorization", "Bearer forged-browser-authority")
+                .header("x-user-id", "forged-visitor")
+                .header("x-organization-id", "forged-tenant")
+                .header("x-api-key", "forged-key")
+                .header("x-api-key-id", "forged-id")
+                .header("x-api-key-scopes", "*")
+                .header("x-authenticated-user-id", "forged-authenticated-user")
+                .header("x-service-token", "forged-service-token")
+                .header("idempotency-key", "must-not-cache-public-requests")
+                .header("if-none-match", "*")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     payload.map_or_else(String::new, Value::to_string),
@@ -416,14 +427,85 @@ pub async fn run(
             },
             application_approval: Default::default(),
         });
+        let gateway = super::public_gateway::wrap(app, ORIGIN).await;
+        let app = &gateway.router;
         let base = "/v1/flows/public/verification";
+        let preflight = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri(format!("{base}/sessions"))
+                    .header("origin", ORIGIN)
+                    .header("access-control-request-method", "POST")
+                    .header(
+                        "access-control-request-headers",
+                        "content-type,x-verification-session",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(preflight.status().as_u16(), 200);
+        assert_eq!(preflight.headers()["access-control-allow-origin"], ORIGIN);
+        assert_eq!(preflight.headers()["access-control-allow-headers"], "*");
+        assert_eq!(preflight.headers()["cache-control"], "no-store");
+        for (path, method, origin) in [
+            (format!("{base}/catalog"), "POST", ORIGIN),
+            (format!("{base}/sessions"), "DELETE", ORIGIN),
+            ("/v1/flows/definitions".into(), "POST", ORIGIN),
+            (
+                format!("{base}/sessions"),
+                "POST",
+                "https://attacker.example",
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("OPTIONS")
+                        .uri(path)
+                        .header("origin", origin)
+                        .header("access-control-request-method", method)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert!(!response.status().is_success());
+            assert!(!response
+                .headers()
+                .contains_key("access-control-allow-origin"));
+        }
+        let ambiguous = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri(format!("{base}/sessions"))
+                    .header("origin", ORIGIN)
+                    .header("access-control-request-method", "POST")
+                    .header("access-control-request-method", "GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(!ambiguous.status().is_success());
+        assert_eq!(
+            gateway.observed.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "preflight must never reach Flow"
+        );
         let key = URL_SAFE_NO_PAD.encode([31 + index; 32]);
         let (status, catalog) =
-            public_call(&app, "GET", &format!("{base}/catalog"), &key, None).await;
+            public_call(app, "GET", &format!("{base}/catalog"), &key, None).await;
         assert_eq!(status, 200);
         let preview_selection = json!({"catalog_revision":catalog["revision"],"scenario_id":"age","choice_id":"threshold"});
         let (status, preview) = public_call(
-            &app,
+            app,
             "POST",
             &format!("{base}/preview"),
             &key,
@@ -436,8 +518,77 @@ pub async fn run(
         selection["consent"] = json!(true);
         selection["example_id"] = json!("fictional-adult");
         selection["request_digest"] = preview["request_digest"].clone();
+        let mut injected = selection.clone();
+        injected["organization_id"] = json!("forged-tenant");
+        let (status, _) = public_call(
+            app,
+            "POST",
+            &format!("{base}/sessions"),
+            &key,
+            Some(&injected),
+        )
+        .await;
+        assert_eq!(status, 422);
+        let (status, _) = public_call(
+            app,
+            "POST",
+            &format!("{base}/sessions"),
+            &key,
+            Some(&json!({"padding":"a".repeat(4096)})),
+        )
+        .await;
+        assert_eq!(status, 413);
+        for duplicate in ["origin", "x-verification-session"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post(format!("{base}/sessions"))
+                        .header("origin", ORIGIN)
+                        .header("x-verification-session", &key)
+                        .header(duplicate, if duplicate == "origin" { ORIGIN } else { &key })
+                        .header("content-type", "application/json")
+                        .body(Body::from(selection.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 400);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+        }
+        let wrong_origin = app
+            .clone()
+            .oneshot(
+                Request::post(format!("{base}/sessions"))
+                    .header("origin", "https://attacker.example")
+                    .header("x-verification-session", &key)
+                    .header("content-type", "application/json")
+                    .body(Body::from(selection.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(wrong_origin.status().as_u16(), 403);
+        assert_eq!(wrong_origin.headers()["cache-control"], "no-store");
+        for path in ["/v1/flows/definitions", "/v1/flows/instances"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post(path)
+                        .header("content-type", "application/json")
+                        .header("x-verification-session", &key)
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert!(
+                matches!(response.status().as_u16(), 401 | 403),
+                "{path}: {}",
+                response.status()
+            );
+        }
         let (status, session) = public_call(
-            &app,
+            app,
             "POST",
             &format!("{base}/sessions"),
             &key,
@@ -447,7 +598,7 @@ pub async fn run(
         assert_eq!(status, 201, "{session}");
         let id = session["session_id"].as_str().unwrap();
         let path = format!("{base}/sessions/{id}/example");
-        let (status, result) = public_call(&app, "POST", &path, &key, Some(&json!({}))).await;
+        let (status, result) = public_call(app, "POST", &path, &key, Some(&json!({}))).await;
         assert_eq!(status, 200, "{result}");
         if let Some(verified) = verified {
             assert_eq!(result["verified"], verified, "{result}");
@@ -461,7 +612,7 @@ pub async fn run(
             assert_eq!(result["example_status"], "input_rejected", "{result}");
         }
         let (_, recovered) =
-            public_call(&app, "GET", &format!("{base}/sessions/{id}"), &key, None).await;
+            public_call(app, "GET", &format!("{base}/sessions/{id}"), &key, None).await;
         assert_eq!(recovered, result);
         let text = result.to_string();
         for private in [ISSUER, HOLDER, claim, "do-not-disclose", compact.as_str()] {
@@ -477,6 +628,7 @@ pub async fn run(
         .await
         .unwrap();
         assert_eq!(consumed, if verified.is_some() { 1 } else { 0 });
+        assert!(gateway.observed.load(std::sync::atomic::Ordering::SeqCst) >= 5);
     }
     pool.close().await;
 }

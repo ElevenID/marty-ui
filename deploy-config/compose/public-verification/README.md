@@ -131,9 +131,15 @@ produce age18 success and age21 denial; a tampered specimen remains an input
 rejection without nonce consumption. Results omit claims and credential data.
 Membership, template metadata and trust/status transports are explicit local
 fixtures, and the real policy evaluator is called through an in-process adapter.
+The same journey runs through the production Gateway and its real HTTP upstream
+to Flow. The fixture audits workload-token forwarding and removal of spoofed
+browser authority, exercises CORS preflight, closed management access, duplicate
+headers, bounded bodies and no-store responses. Preflight resolves only an
+existing public GET/POST target for a configured Origin; it never reaches Flow
+or opens a management route.
 The regular `--grant-verifier` probe also includes these cases. Their scope is
-the isolated canonical Flow example journey, remote custody and service signing
-admission. Public Gateway/browser integration, governed deployed readiness,
+the isolated Gateway/Flow canonical example journey, remote custody and service
+signing admission. Browser integration, governed deployed readiness,
 retention/renewal operations and real-wallet interoperability need their own
 qualification. All three owned fixture container IDs are removed and verified.
 There is no endpoint/operator-secret option for pointing this probe at an

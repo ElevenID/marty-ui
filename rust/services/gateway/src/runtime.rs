@@ -610,7 +610,32 @@ async fn authentication_middleware(
             MipError::new("method_not_allowed", "Method not allowed"),
         );
     };
-    let route_request = GatewayRequest::new(method, request.uri().path(), now_ms());
+    // The public catalog has explicit GET/POST routes, so a browser preflight
+    // otherwise fails lookup before the existing innermost CORS stage. Resolve
+    // only its declared target; retain OPTIONS through the middleware chain.
+    let lookup_method = if method == HttpMethod::Options
+        && request
+            .headers()
+            .get(header::ORIGIN)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|origin| state.cors_origins.contains(origin))
+    {
+        crate::public_verification::preflight_method(request.uri().path(), request.headers())
+            .filter(|target| {
+                state
+                    .routes
+                    .find(&GatewayRequest::new(
+                        *target,
+                        request.uri().path(),
+                        now_ms(),
+                    ))
+                    .is_ok_and(|found| !found.route.auth_required)
+            })
+            .unwrap_or(method)
+    } else {
+        method
+    };
+    let route_request = GatewayRequest::new(lookup_method, request.uri().path(), now_ms());
     let required = match state.routes.find(&route_request) {
         Ok(found) => found.route.auth_required,
         Err(_) => {
