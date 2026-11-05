@@ -36,6 +36,8 @@ def candidate(monkeypatch, *, warm=False, fault=None):
         class Docker:
             prefix = ['docker', '--host', 'SYNTHETIC']
             def containers(self):return deepcopy(items)
+            def compose(self,*_a):return [*self.prefix,'compose']
+            def json(self,_a):return deepcopy(model)
         observed = {'docker': Docker(), 'owned': deepcopy(baseline), 'baseline': baseline,
                     'services': roles, 'model': model, 'command': ['SYNTHETIC_COMPOSE'], 'data_sha256': 'd'*64,
                     'cwd': root}
@@ -61,6 +63,7 @@ def candidate(monkeypatch, *, warm=False, fault=None):
                      'Health': 'healthy' if model['services'][selection.renewal._service(x)].get('healthcheck') else ''}
                     for x in items if selection.renewal._project(x) == cfg['project']]
         monkeypatch.setattr(selection, '_inspect', lambda *_a, **_kw: observed)
+        monkeypatch.setattr(selection.renewal,'Docker',lambda *_a:observed['docker'])
         monkeypatch.setattr(selection, '_native_current', native)
         monkeypatch.setattr(selection.renewal, 'run_owned_mutation', start)
         monkeypatch.setattr(selection.renewal, 'statuses', status)
@@ -140,16 +143,17 @@ def test_successful_cli_cannot_publish_after_input_or_receipt_failure(monkeypatc
 
 def test_final_publication_lock_exit_failure_keeps_authoritative_guard(monkeypatch):
     with candidate(monkeypatch) as (root, path, cfg, output, _events, _items, _observed, _tx):
-        actual = selection.renewal.hold_private_input
+        actual = selection.renewal.hold_private_input;injected = []
         @contextmanager
         def held(p, *a, **kw):
             with actual(p, *a, **kw) as value:yield value
             if Path(p) == root/f'.{cfg["project"]}.renewal.lock' and (output/'result.json').exists() and (output/'result.json').read_bytes():
+                injected.append(True)
                 raise ValueError('PUBLIC_FINAL_LOCK_EXIT_FAILURE')
         monkeypatch.setattr(selection.renewal, 'hold_private_input', held)
-        with pytest.raises(ValueError, match='PUBLIC_FINAL_LOCK_EXIT_FAILURE'):
+        with pytest.raises(ValueError):
             with selection.selected_inputs(path) as lease:lease.recover_existing(output)
-        assert selection.renewal.recovery_pending(cfg)
+        assert injected and selection.renewal.recovery_pending(cfg)
         with pytest.raises(ValueError):
             with selection.selected_inputs(path):pytest.fail('Failed finalization was accepted')
 
@@ -352,3 +356,41 @@ def test_preparation_marker_alone_blocks_new_admissions(monkeypatch):
         with pytest.raises(ValueError):selection.prepare(next_path)
         with pytest.raises(ValueError):selection.complete(path)
         with pytest.raises(ValueError):selection.renewal.activate(cfg)
+
+
+@pytest.mark.parametrize('boundary',['receipt-exit','publication-lock-exit'])
+def test_ordinary_completion_keeps_guard_on_late_extra_entry(monkeypatch,boundary):
+    with candidate(monkeypatch) as (root,path,cfg,output,_events,_items,_observed,_tx):
+        actual=selection.renewal.hold_private_input
+        @contextmanager
+        def held(p,*a,**kw):
+            with actual(p,*a,**kw) as value:yield value
+            result=output/'result.json'
+            if result.exists() and result.read_bytes() and (
+                boundary=='receipt-exit' and Path(p)==output/'000.completed.json'
+                or boundary=='publication-lock-exit' and Path(p)==root/f'.{cfg["project"]}.renewal.lock'):
+                (output/'late-extra').write_bytes(b'PUBLIC_EXTRA')
+        monkeypatch.setattr(selection.renewal,'hold_private_input',held)
+        with pytest.raises(ValueError):
+            with selection.selected_inputs(path) as lease:lease.recover_existing(output)
+        assert selection.renewal.recovery_pending(cfg)
+
+
+@pytest.mark.parametrize('boundary',['receipt-exit','publication-lock-exit'])
+def test_ordinary_completion_locks_records_and_result_across_exit_checks(monkeypatch,boundary):
+    with candidate(monkeypatch) as (root,path,cfg,output,_events,_items,_observed,_tx):
+        actual=selection.renewal.hold_private_input;denied=[]
+        @contextmanager
+        def held(p,*a,**kw):
+            with actual(p,*a,**kw) as value:yield value
+            result=output/'result.json'
+            if result.exists() and result.read_bytes():
+                target=None
+                if boundary=='receipt-exit' and Path(p)==output/'000.completed.json':target=result
+                elif boundary=='publication-lock-exit' and Path(p)==root/f'.{cfg["project"]}.renewal.lock':target=output/'000.completed.json'
+                if target is not None:
+                    with pytest.raises(OSError):target.write_bytes(b'PUBLIC_TAMPER')
+                    denied.append(True)
+        monkeypatch.setattr(selection.renewal,'hold_private_input',held)
+        with selection.selected_inputs(path) as lease:lease.recover_existing(output)
+        assert denied and not selection.renewal.recovery_pending(cfg)

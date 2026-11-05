@@ -194,3 +194,17 @@ preparation marker. Both exist during transfer; interruption leaves at least one
 authoritative marker. The original preparation and completion evidence remains
 linked by hashes in the recovery intent. This supports controlled planned-stop
 handoff; it does not automatically reconcile an uncertain stop or interrupted start.
+
+`reconcile_existing(config_path, authority_file=...)` is a separate read-only
+terminal operation. Use it only after verifying the original recovery owner has
+finished. It requires the exact guarded intent, registered selection, model-derived
+layers, current IDs, all matching started/completed command boundaries, and fresh
+native readiness/custody/lifetime proof. Missing or uncertain boundaries refuse
+even when containers appear healthy. A preparation marker also refuses this path.
+No workload command is issued. Original result bytes remain unchanged, including
+an empty original result; a separate deterministic `reconciliation.json` records
+the current proof. All original receipts and directory membership are rechecked
+before the marker clears, after lease and publication-lock exit checks. A prior
+valid reconciliation record can be retained during a fresh proof after publication
+interruption. This does not resume an unfinished start, prepared stop or expired
+generation, and it is not automatic logon recovery.

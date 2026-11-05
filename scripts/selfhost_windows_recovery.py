@@ -228,28 +228,115 @@ def start_existing(config, choice, values, record, output_dir, stack, *, authori
             'receipt_sha256': hashes, 'result': result}
 
 
-def finish_existing(config, pending):
-    """Publish only after original generation/config/namespace handles closed."""
-    root = Path(pending['root']);guard = renewal.recovery_guard(config)
-    parent = Path(config['current_secrets']).parent
-    with renewal.hold_private_input(parent/f'.{config["project"]}.renewal.lock', exclusive=True):
-        with ExitStack() as held:
-            selection.require(not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(config)))
-            held.enter_context(renewal.hold_storage_namespace(parent))
-            held.enter_context(renewal.hold_storage_namespace(root))
-            with _held_private_input(root, directory=True):pass
-            selection.require(sorted(p.name for p in root.iterdir())
-                              == sorted([*pending['receipt_sha256'], 'result.json']))
-            for name, expected in pending['receipt_sha256'].items():
-                selection.require(selection.digest(held.enter_context(renewal.hold_private_input(root/name))) == expected)
-            raw_guard = renewal.read_private_bytes(guard)
-            selection.require(selection.digest(raw_guard) == pending['guard_sha256'])
-            selection.require(raw_guard == renewal.read_private_bytes(root/'intent.json'))
-            selection.require(renewal.read_private_bytes(root/'result.json') == b'')
-        # Keep the project lock across validation exit checks and publication.
-        selection.require(selection.digest(renewal.read_private_bytes(guard)) == pending['guard_sha256'])
-        renewal.write_empty_private_file(root/'result.json', selection.packed(pending['result']).decode())
-    # The marker remains authoritative through the final lock's exit proof.
-    # Other mutators refuse it during this gap; removing it is the last action.
-    selection.require(selection.digest(renewal.read_private_bytes(guard)) == pending['guard_sha256'])
+def _finish_publication(config,pending,target_name,body,*,allow_existing=False):
+    """One guard-clearing boundary for ordinary and reconciled completion."""
+    root=Path(pending['root']);guard=renewal.recovery_guard(config)
+    parent=Path(config['current_secrets']).parent
+    names=set(pending['receipt_sha256'])|{target_name}
+    selection.require(target_name in {'result.json','reconciliation.json'})
+    selection.require(pending['receipt_sha256'].get('intent.json')==pending['guard_sha256'])
+    with ExitStack() as protected:
+        protected.enter_context(renewal.hold_storage_namespace(parent))
+        protected.enter_context(renewal.hold_storage_namespace(root))
+        protected.enter_context(_held_private_input(root,directory=True))
+        with ExitStack() as receipts:
+            with renewal.hold_private_input(parent/f'.{config["project"]}.renewal.lock',exclusive=True):
+                selection.require(not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(config)))
+                selection.require(set(p.name for p in root.iterdir())==names)
+                for name,sha in pending['receipt_sha256'].items():
+                    selection.require(selection.digest(receipts.enter_context(renewal.hold_private_input(root/name)))==sha)
+                selection.require(selection.digest(receipts.enter_context(renewal.hold_private_input(guard)))==pending['guard_sha256'])
+                saved=renewal.read_private_bytes(root/target_name)
+                selection.require(not saved or allow_existing and saved==body)
+                if not saved:renewal.write_empty_private_file(root/target_name,body.decode())
+                selection.require(protected.enter_context(renewal.hold_private_input(root/target_name))==body)
+            # Receipt, decision and directory handles survive publication-lock
+            # exit. Decision/directory proofs also survive receipt exit checks.
+            selection.require(set(p.name for p in root.iterdir())==names)
+        selection.require(set(p.name for p in root.iterdir())==names)
+    for name,sha in pending['receipt_sha256'].items():
+        selection.require(selection.digest(renewal.read_private_bytes(root/name))==sha)
+    selection.require(renewal.read_private_bytes(root/target_name)==body)
+    selection.require(selection.digest(renewal.read_private_bytes(guard))==pending['guard_sha256'])
+    selection.require(set(p.name for p in root.iterdir())==names)
     guard.unlink()
+
+
+def finish_existing(config,pending):
+    """A written result remains provisional until the shared guard is cleared."""
+    _finish_publication(config,pending,'result.json',selection.packed(pending['result']))
+
+
+def verify_terminal(lease, guard_raw, *, authority_file=None):
+    """Prove completed boundaries and current state; issue no workload command."""
+    intent = selection.decode(guard_raw)
+    selection.require(set(intent) == {'schema','project','engine_id','sequence','selected','data_sha256',
+                                      'output_dir','ids','layers','preparation','candidate_only'})
+    selection.require(intent['schema'] == SCHEMA and intent['candidate_only'] is True
+        and intent['project'] == lease.project and intent['engine_id'] == lease.engine_id
+        and type(intent['sequence']) is int and intent['sequence'] == lease.sequence
+        and selection.digest(selection.packed(intent['selected'])) == lease.selected_sha256)
+    root = Path(intent['output_dir'])
+    selection.require(root.is_absolute() and root.parent == lease.secrets_dir.parent
+                      and root.name.startswith('windows-recovery-'))
+    docker = renewal.Docker(lease.docker_host,lease.engine_id)
+    before = docker.containers();owned = [x for x in before if renewal._project(x) == lease.project]
+    ids = {renewal._service(x):x['Id'] for x in owned}
+    selection.require(len(ids) == len(owned) and intent['ids'] == ids)
+    command = docker.compose(lease.project,lease.env_file,lease.compose_file)
+    model = docker.json(command[len(docker.prefix):]+['--profile','*','config','--format','json'])
+    observed = {'owned':owned,'services':set(ids),'model':model}
+    _,layers = plan(observed);selection.require(intent['layers'] == layers)
+    names = ['intent.json','result.json','diagnostic.private.log']
+    if intent['preparation'] is not None:names += ['preparation.json','stop-completed.json']
+    for index in range(len(layers)):names += [f'{index:03}.started.json',f'{index:03}.completed.json']
+    with ExitStack() as held:
+        held.enter_context(renewal.hold_storage_namespace(root))
+        with _held_private_input(root,directory=True):pass
+        selection.require(set(p.name for p in root.iterdir()) <= set(names)|{'reconciliation.json'})
+        raw = {name:held.enter_context(renewal.hold_private_input(root/name)) for name in names}
+        selection.require(raw['intent.json'] == guard_raw)
+        if intent['preparation'] is not None:
+            prep = intent['preparation']
+            selection.require(set(prep) == {'marker_sha256','completion_file','completion_sha256','preparation_copy','completion_copy'})
+            selection.require(prep['preparation_copy'] == 'preparation.json' and prep['completion_copy'] == 'stop-completed.json')
+            selection.require(selection.digest(raw['preparation.json']) == prep['marker_sha256']
+                and selection.digest(raw['stop-completed.json']) == prep['completion_sha256'])
+        started = set()
+        for index,layer in enumerate(layers):
+            begin,end = raw[f'{index:03}.started.json'],raw[f'{index:03}.completed.json']
+            selection.require(begin and end and begin == end)
+            receipt = selection.decode(begin)
+            selection.require(set(receipt) == {'roles','started_roles','ids'} and receipt['roles'] == layer)
+            roles = receipt['started_roles']
+            selection.require(isinstance(roles,list) and all(isinstance(r,str) for r in roles)
+                and len(set(roles)) == len(roles) and set(roles) <= set(layer)
+                and receipt['ids'] == [ids[r] for r in roles])
+            started.update(roles)
+        expected = {'schema':SCHEMA,'project':lease.project,'result':'recovered-existing',
+            'sequence':lease.sequence,'services':len(ids),'started_roles':sorted(started),
+            'container_ids_retained':True,'candidate_only':True,'production_admission':False,'automatic_lifecycle':False}
+        if raw['result.json']:
+            selection.require(selection.packed(selection.decode(raw['result.json'])) == selection.packed(expected))
+        selection.require(lease.check_current(authority_file=authority_file) == intent['data_sha256'])
+        selection.require(renewal.observations(docker.containers(),lease.project,set())
+                          == renewal.observations(before,lease.project,set()))
+        decision = {'schema':'marty.windows-existing-recovery-reconciliation/v1','project':lease.project,
+            'sequence':lease.sequence,'result':'reconciled-terminal-existing','services':len(ids),
+            'started_roles':sorted(started),'intent_sha256':selection.digest(guard_raw),
+            'original_result_sha256':selection.digest(raw['result.json']),'data_sha256':intent['data_sha256'],
+            'workload_commands_issued':False,'production_admission':False,'automatic_lifecycle':False}
+        target = root/'reconciliation.json'
+        if not renewal.namespace_entry_exists(target):
+            with target.open('xb'):pass
+        saved = held.enter_context(renewal.hold_private_input(target))
+        selection.require(not saved or saved == selection.packed(decision))
+        selection.require(set(p.name for p in root.iterdir()) == set(names)|{'reconciliation.json'})
+        hashes = {name:selection.digest(value) for name,value in raw.items()}
+    selection.require(set(p.name for p in root.iterdir()) == set(names)|{'reconciliation.json'})
+    return {'root':str(root),'guard_sha256':selection.digest(guard_raw),'receipt_sha256':hashes,'decision':decision}
+
+
+def finish_terminal(config,pending):
+    """Keep original results; clear the marker only after fresh proof exit checks."""
+    _finish_publication(config,pending,'reconciliation.json',selection.packed(pending['decision']),allow_existing=True)

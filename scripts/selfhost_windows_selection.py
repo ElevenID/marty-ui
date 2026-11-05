@@ -32,6 +32,7 @@ class SelectedInputs:
     env_file: Path
     secrets_dir: Path
     sequence: int
+    selected_sha256: str
     check_current: Callable = field(repr=False, compare=False)
     recover_existing: Callable = field(repr=False, compare=False)
 
@@ -440,7 +441,7 @@ def status(config_path):
 
 
 @contextmanager
-def selected_inputs(config_path):
+def _selected_inputs(config_path, *, terminal_guard_sha256=None):
     """Hold local selection and the project lock for a future recovery owner.
 
     The explicit callback delegates live readiness/custody checks after Bao is
@@ -448,7 +449,13 @@ def selected_inputs(config_path):
     """
     completion = []
     with _session(config_path) as (_config, _cfg_raw, expected, _root, raw, stack):
-        require(not renewal.recovery_pending(_config))
+        if terminal_guard_sha256 is None:
+            require(not renewal.recovery_pending(_config))
+        else:
+            require(type(terminal_guard_sha256) is str and re.fullmatch(r'[0-9a-f]{64}', terminal_guard_sha256))
+            require(not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(_config)))
+            guard_raw = stack.enter_context(renewal.hold_private_input(renewal.recovery_guard(_config)))
+            require(digest(guard_raw) == terminal_guard_sha256)
         intents, records = _parse(raw, expected);require(len(intents) == len(records))
         sequence = len(records);intent = intents[sequence];record = records[sequence]
         cfg_raw = stack.enter_context(renewal.hold_private_input(Path(intent['config_path'])))
@@ -469,7 +476,7 @@ def selected_inputs(config_path):
                     return _prove(cfg, choice, values, proof_stack, expected_data=record['data_sha256'], authority_file=authority_file)
         def recover_existing(output_dir, authority_file=None, *, preparation_sha256=None):
             with lease_lock:
-                require(active and not completion)
+                require(active and not completion and terminal_guard_sha256 is None)
                 from selfhost_windows_recovery import start_existing
                 with ExitStack() as proof_stack:
                     pending = start_existing(cfg, choice, values, record, output_dir, proof_stack,
@@ -479,6 +486,7 @@ def selected_inputs(config_path):
         try:
             yield SelectedInputs(cfg['project'], cfg['docker_host'], cfg['engine_id'], Path(cfg['compose_file']),
                 cfg['compose_sha256'], Path(selected['env_file']), Path(selected['secrets_dir']), sequence,
+                digest(packed(selected)),
                 check_current, recover_existing)
         finally:
             with lease_lock:
@@ -486,3 +494,23 @@ def selected_inputs(config_path):
     if completion:
         from selfhost_windows_recovery import finish_existing
         finish_existing(cfg, completion[0])
+
+
+@contextmanager
+def selected_inputs(config_path):
+    """Hold selected inputs for current proof or guarded existing-ID recovery."""
+    with _selected_inputs(config_path) as lease:
+        yield lease
+
+
+def reconcile_existing(config_path, *, authority_file=None):
+    """Read-only terminal reconciliation; unfinished commands remain blocked."""
+    config = decode(renewal.read_private_bytes(Path(config_path)))
+    binding(config)
+    guard_raw = renewal.read_private_bytes(renewal.recovery_guard(config))
+    from selfhost_windows_recovery import finish_terminal, verify_terminal
+    with _selected_inputs(config_path, terminal_guard_sha256=digest(guard_raw)) as lease:
+        require(lease.project == config['project'] and lease.secrets_dir.parent == Path(config['current_secrets']).parent)
+        pending = verify_terminal(lease, guard_raw, authority_file=authority_file)
+    finish_terminal(config, pending)
+    return decode(packed(pending['decision']))
