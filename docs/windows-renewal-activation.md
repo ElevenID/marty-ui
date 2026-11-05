@@ -16,9 +16,17 @@ storage overlap with any other Compose consumer, including read-only consumers,
 is refused. Known Docker/WSL Windows-drive spellings are resolved through real
 Windows identities (including junction targets and ancestor identities). Only
 default-root local Docker volumes without driver options have a native volume
-identity. A bind of the exact volume root shares that identity. Opaque Linux bind
-subpaths or unknown sources refuse before mutation; lexical paths are not treated
-as evidence of disjointness. These require additional metadata qualification.
+identity, including legacy inspect records whose Source is the volume name. A bind
+of the exact volume root shares that identity. Native bind subpaths require fresh
+kernel mount metadata from a trusted network-disabled helper sharing the existing
+container's PID namespace. It reads only filtered `/proc/1/mountinfo`, with no data
+volumes mounted and no added capabilities. Exact container/start identity, unique
+destinations, decoded normalized roots, a pinned Docker Desktop VM root prefix,
+ext4 filesystem type and a device number anchored by an ordinary named-volume
+mount are required. Whole-volume classification is conservative. A same-project
+zero-exit historical job with the exact same Source may reuse that live witness
+as a metadata inference; this never authorizes restarting it. Unknown evidence,
+inaccessible metadata, other filesystems or ambiguous mounts remain refused.
 
 The caller supplies a private configuration with the exact retained Compose hash,
 current/renewed env and generation paths, local Docker pipe/engine identity and
@@ -44,7 +52,8 @@ application writes remain permitted. Data mounts and image identities must remai
 unchanged. Running roles must match retained Compose config hashes; the preserved
 zero-exit historical TLS initializer requires an exact container/image/hash receipt.
 Ancestor names cannot be replaced while held. Unselected container
-identities, state, restarts and mounts must remain unchanged. An ordinary failure
+identities, state, restarts and mounts must remain unchanged, including a fresh
+all-container check immediately before intent. An ordinary failure
 recreates the prior generation and verifies it. Failure of rollback, held-input
 exit checks or final receipt writing preserves the intent and requires recovery.
 An activation result is written only after the held-input exit checks pass.

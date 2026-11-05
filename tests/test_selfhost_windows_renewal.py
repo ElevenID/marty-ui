@@ -129,6 +129,57 @@ def test_bind_and_named_volume_root_share_identity_and_unknown_subpaths_refuse()
     with pytest.raises(ValueError): renewal.disjoint_storage([owned], PROJECT, volumes)
 
 
+def test_legacy_volume_name_source_uses_inspected_local_identity():
+    name = 'synthetic';root = '/var/lib/docker/volumes/synthetic/_data'
+    volumes = {name: {'Name': name, 'Driver': 'local', 'Options': None, 'Mountpoint': root}}
+    assert renewal.storage_identity({'Type': 'volume', 'Source': name}, volumes) == ('volume', name)
+
+
+def kernel_fixture():
+    volumes = {name: {'Name': name, 'Driver': 'local', 'Options': None,
+                      'Mountpoint': '/var/lib/docker/volumes/'+name+'/_data'} for name in ['native', 'anchor']}
+    source = volumes['native']['Mountpoint'] + '/sub'
+    item = {'Mounts': [{'Type': 'bind', 'Source': source, 'Destination': '/state'},
+                       {'Type': 'volume', 'Name': 'anchor', 'Source': 'anchor', 'Destination': '/anchor'}]}
+    rows = [{'target': '/state', 'root': '/data/docker/volumes/native/_data/sub', 'device': '8:48', 'fstype': 'ext4'},
+            {'target': '/anchor', 'root': '/data/docker/volumes/anchor/_data', 'device': '8:48', 'fstype': 'ext4'}]
+    return volumes, source, item, rows
+
+
+def test_native_bind_kernel_witness_requires_ordinary_volume_device_anchor():
+    volumes, source, item, rows = kernel_fixture()
+    assert renewal.volume_witnesses(item, rows, volumes)[source]['volume'] == 'native'
+    for change in ['device', 'filesystem', 'root', 'prefix', 'duplicate', 'missing-anchor']:
+        bad = deepcopy(rows)
+        if change == 'device': bad[0]['device'] = '8:49'
+        elif change == 'filesystem': bad[0]['fstype'] = '9p'
+        elif change == 'root': bad[0]['root'] = '/data/docker/volumes/other/_data/sub'
+        elif change == 'prefix': bad[0]['root'] = '/untrusted/volumes/native/_data/sub'
+        elif change == 'duplicate': bad.append(deepcopy(bad[0]))
+        else: bad.pop()
+        with pytest.raises(ValueError): renewal.volume_witnesses(item, bad, volumes)
+    assert renewal.mount_path('/data/with\\040space') == '/data/with space'
+    for path in ['/data/../alias', '/data/./alias', '/data\\057alias']:
+        with pytest.raises(ValueError): renewal.mount_path(path)
+
+
+def test_historical_native_bind_inference_requires_exact_project_source_and_zero_exit():
+    volumes, source, item, rows = kernel_fixture()
+    evidence = renewal.volume_witnesses(item, rows, volumes)[source]
+    evidence['live_ids'] = {'live'}
+    witnesses = {('foreign', source): evidence}
+    foreign = {'Id': 'historical', 'Config': {'Labels': {'com.docker.compose.project': 'foreign'}},
+               'State': {'Status': 'exited', 'ExitCode': 0}, 'Mounts': [item['Mounts'][0]]}
+    renewal.disjoint_storage([foreign], PROJECT, volumes, witnesses)
+    for change in ['project', 'source', 'failed', 'no-live']:
+        bad = deepcopy(foreign);proofs = deepcopy(witnesses)
+        if change == 'project': bad['Config']['Labels']['com.docker.compose.project'] = 'unrelated'
+        elif change == 'source': bad['Mounts'][0]['Source'] += '/other'
+        elif change == 'failed': bad['State']['ExitCode'] = 1
+        else: proofs[('foreign', source)]['live_ids'] = set()
+        with pytest.raises(ValueError): renewal.disjoint_storage([bad], PROJECT, volumes, proofs)
+
+
 def test_large_docker_inventories_are_batched_below_windows_command_limit(monkeypatch):
     import subprocess
     names = [f'{i:064x}' for i in range(1200)]
@@ -205,7 +256,7 @@ def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreat
                'compose_file': str(source), 'compose_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
                'current_env': str(old_env), 'renewed_env': str(new_env),
                'docker_host': 'npipe:////./pipe/dockerDesktopLinuxEngine', 'engine_id': 'SYNTHETIC_ENGINE',
-               'native': {}, 'tls_init_receipt': {'id': 'openbao-tls-init', 'image': 'SYNTHETIC_IMAGE',
+               'native': {'helper_image': 'synthetic@sha256:'+'1'*64}, 'tls_init_receipt': {'id': 'openbao-tls-init', 'image': 'SYNTHETIC_IMAGE',
                                                 'config_hash': '1' * 64}}
         for name in ['intent', 'result', 'new_log', 'rollback_log']:
             p = output / name;p.write_bytes(b'');cfg[name] = str(p)
@@ -218,6 +269,7 @@ def test_real_ntfs_transaction_uses_same_held_inputs_and_restores_failed_recreat
             def json(self, args):
                 return new_m if str(new_env) in args else old_m
             def volumes(self): return {}
+            def native_witnesses(self, *_): return {}
             def hashes(self, command):
                 return {name: ('2' if str(new_env) in command and spec.get('secrets') else '1') * 64
                         for name, spec in old_m['services'].items()}
