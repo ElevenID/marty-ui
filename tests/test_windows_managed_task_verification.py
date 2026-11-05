@@ -36,6 +36,15 @@ def invoke(tmp_path, case):
         'def run_owned_mutation(args,timeout):\n'
         ' Path('+repr(str(tmp_path/'owned.json'))+').write_text(json.dumps({"args":args,"timeout":timeout}))\n'
         ' return subprocess.run(args,timeout=timeout,capture_output=True)\n')
+    if case=='real-default-check':
+        (scripts/'selfhost_windows_renewal.py').write_text(
+            'import sys,json,importlib.util\nfrom pathlib import Path\n'
+            'sys.path.insert(0,'+repr(str(legacy.ROOT/'scripts'))+')\n'
+            'spec=importlib.util.spec_from_file_location("real_owned_transport",'+repr(str(legacy.ROOT/'scripts/selfhost_windows_renewal.py'))+')\n'
+            'module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)\n'
+            'def run_owned_mutation(args,timeout):\n'
+            ' Path('+repr(str(tmp_path/'owned.json'))+').write_text(json.dumps({"args":args,"timeout":timeout}))\n'
+            ' return module.run_owned_mutation(args,timeout=timeout)\n')
     code = r'''
 $ErrorActionPreference='Stop'
 $global:started=$false
@@ -109,6 +118,7 @@ switch ('CASE') {
 }
 function Get-ScheduledTask {
  param($TaskName,$TaskPath)
+ @{accessed=$true}|ConvertTo-Json|Set-Content TASKACCESS
  if ($TaskName -ne 'Marty-Candidate-Qualification' -or $TaskPath -ne '\') {throw 'Foreign task access forbidden'}
  if ('CASE' -eq 'inventory-failure') {throw 'Synthetic inventory failure'}
  if ('CASE' -eq 'missing') {return}
@@ -146,15 +156,30 @@ function Set-ScheduledTask {throw 'Update forbidden'}
                        'CONFIG': legacy.quote(config), 'PYTHON': legacy.quote(python),
                        'STARTED': legacy.quote(started), 'VERIFIER': legacy.quote(verifier),
                        'PREFLIGHT': '1' if case == 'preflight-timeout' else '3',
+                       'TASKACCESS':legacy.quote(tmp_path/'task-accessed.json'),
                        'OPTIONS': options}.items():code = code.replace(key, value)
-    result = subprocess.run([legacy.POWERSHELL, '-NoProfile', '-NonInteractive', '-EncodedCommand',
-        base64.b64encode(code.encode('utf-16le')).decode()], capture_output=True, text=True, timeout=15)
+    if case in ('default-check','real-default-check'):
+        code=code.replace(' -PreflightTimeoutSeconds 3','')
+    elif case=='oversized-preflight-check':
+        code=code.replace(' -PreflightTimeoutSeconds 3',' -PreflightTimeoutSeconds 241')
+    args=[legacy.POWERSHELL, '-NoProfile', '-NonInteractive', '-EncodedCommand',
+          base64.b64encode(code.encode('utf-16le')).decode()]
+    if case=='real-default-check':
+        # Exercise the real inner transport while the verifier itself is owned
+        # by an outer job, just like the host qualification controller. Task APIs
+        # and the recovery child remain harmless recorders throughout.
+        sys.path.insert(0,str(legacy.ROOT/'scripts'))
+        from selfhost_windows_renewal import run_owned_mutation
+        result=run_owned_mutation(args,timeout=30)
+    else:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=15)
     return result, child, started
 
 
 @pytest.mark.parametrize('case', ['check', 'renew-check', 'run', 'renew-run',
                                 'renew-first-check','renew-reordered-check','renew-utc-z-check','renew-window-check',
-                                'local-account-check','sid-account-check','renew-offset-check','renew-window-offset-check'])
+                                'local-account-check','sid-account-check','renew-offset-check','renew-window-offset-check',
+                                'default-check','real-default-check'])
 def test_exact_managed_task_check_or_one_bounded_run(tmp_path, case):
     result, child, started = invoke(tmp_path, case)
     assert result.returncode == 0, result.stderr
@@ -168,9 +193,16 @@ def test_exact_managed_task_check_or_one_bounded_run(tmp_path, case):
     assert report['task_start_requested'] == report['fresh_task_completion_observed'] == run
     assert not report['requested_run_attribution_verified']
     owned = json.loads((tmp_path/'owned.json').read_text())
-    assert owned['timeout'] == 3 and '-CheckOnly' in owned['args']
+    assert owned['timeout'] == (240 if case in ('default-check','real-default-check') else 3)
+    assert '-CheckOnly' in owned['args']
     assert not report['operator_logon_qualified'] and not report['periodic_trigger_qualified']
     assert not report['host_reboot_qualified'] and not report['production_admission']
+
+
+def test_oversized_preflight_budget_refuses_before_task_access(tmp_path):
+    result,child,started=invoke(tmp_path,'oversized-preflight-check')
+    assert result.returncode!=0 and not child.exists() and not started.exists()
+    assert not (tmp_path/'task-accessed.json').exists()
 
 
 @pytest.mark.parametrize('case', ['wrong-user', 'unknown-account', 'highest', 'wrong-logon', 'wrong-folder',

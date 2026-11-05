@@ -308,7 +308,8 @@ Older logon-only renewal definitions refuse verification; create-only installati
 does not replace them. Their retirement or replacement requires ownership review.
 The verifier refuses active or mismatched tasks. Its read-only runtime
 preflight uses the existing owned-process job and bounded drains, with an
-independent `-PreflightTimeoutSeconds` budget (default 300; range 1–600).
+independent `-PreflightTimeoutSeconds` budget (default 240; range 1–240), matching
+the existing owned transport's maximum. Larger values refuse before task access.
 Check-only makes no task start request. The historical no-argument legacy
 verifier invocation retains its original administrator requirement and task.
 
