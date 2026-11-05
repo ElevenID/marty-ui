@@ -198,11 +198,35 @@ these or qualify unattended availability. Each tick performs a full renewal and
 recreates credential-consuming application roles, so qualify its availability
 impact too. Keep tooling at a reviewed, stable installed checkpoint rather than
 an active development checkout before installing a real task.
-The current append-only selection journal is bounded at 256 operations. Renewal
-refuses before minting when full; it never truncates or resets history. Its
-remaining capacity and a supported history-preserving continuation are additional
-unattended qualification requirements. Do not treat an indefinite trigger as
-proof of indefinite renewal capacity.
+Each append-only selection journal segment is bounded at 256 operations. Before
+minting at a full segment, renewal continues the existing selection into a new
+private segment, then acquires a fresh lease for normal staging. The stable
+managed manifest and all earlier configurations, models and journal records stay
+unchanged. The sealed predecessor binds the exact target owner and checkpoint;
+the checkpoint carries the selected input hashes, original generation/model
+bindings and cumulative sequence. Local segment numbering starts at one without
+resetting the cumulative sequence or discarding history. Neither continuation
+nor its receipt grants native admission, production admission or automatic
+lifecycle qualification. Subsequent staging and activation retain every native
+custody and lifetime check. Expired credentials are not repaired by continuation.
+
+Old owner versions reject continuation markers rather than falling back. Install
+and qualify the reviewed continuation-capable tooling before enabling a real
+timer. Retain every sealed segment and its referenced source files. Reads verify
+the full chain and keep sealed predecessors held; storage and validation cost
+grow with retained history. Actual continuation at the segment limit remains a
+host qualification requirement, along with trigger timing and outage behavior.
+
+An interrupted continuation stays blocked by its intent or guard. Explicit
+`selfhost_windows_continuation.reconcile(selection_config_path)` only reconciles
+this metadata operation: under the shared project lock it verifies the chain,
+reconstructs a missing guard, completes derived missing/empty checkpoint files,
+and publishes the exact linked decision after held-input exit checks. It does
+not invoke Docker mutations or replay any credential producer. Nonempty changed
+checkpoint files, unknown entries, altered predecessors or other operation
+guards refuse reconciliation; preserve that evidence for operator investigation.
+The guard clears last. A complete decision with a late publication failure can
+be reconciled without rewriting its existing bytes.
 
 The renewal task uses an interactive, limited operator logon trigger with a
 two-minute delay and repetition, no immediate failure retries, a one-hour task

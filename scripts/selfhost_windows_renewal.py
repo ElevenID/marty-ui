@@ -82,6 +82,10 @@ def model_repair_guard(config):
     return Path(config['current_secrets']).parent / ('.'+config['project']+'.model-repair.json')
 
 
+def continuation_guard(config):
+    return Path(config['current_secrets']).parent / ('.'+config['project']+'.selection-continuation.json')
+
+
 def namespace_entry_exists(path):
     """Any entry blocks admission, including a dangling link; never follow it."""
     try:
@@ -95,7 +99,8 @@ def recovery_pending(config):
     return (namespace_entry_exists(recovery_guard(config))
             or namespace_entry_exists(recovery_preparation_guard(config))
             or namespace_entry_exists(renewal_staging_guard(config))
-            or namespace_entry_exists(model_repair_guard(config)))
+            or namespace_entry_exists(model_repair_guard(config))
+            or namespace_entry_exists(continuation_guard(config)))
 
 
 def windows_healthy(items, services, model):

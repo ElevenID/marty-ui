@@ -34,7 +34,7 @@ def staged_candidate(monkeypatch,*,fault=None):
                     if phase=='tls':checkpoint(phase,'created',metadata)
                     checkpoint(phase,'helper',metadata)
                 if fault!='missing-boundary':checkpoint(phase,'completed',{})
-            return {name:(b'' if not value else b'PUBLIC_RENEWED_'+name.encode()) for name,value in current.items()}
+            return {name:(b'' if not value else b'PUBLIC_RENEWED_'+cycle.encode()+name.encode()) for name,value in current.items()}
         monkeypatch.setattr(native,'reauthenticate',reauthenticate)
         monkeypatch.setattr(native,'produce_generation',produce)
         monkeypatch.setattr(native,'preflight',lambda *_a:None)
@@ -71,16 +71,19 @@ def test_exhausted_journal_refuses_before_guard_or_credential_production(monkeyp
         assert not selection.renewal.renewal_staging_guard(cfg).exists()
 
 
-def test_full_journal_timer_tick_allocates_no_attempt_directory(monkeypatch):
+def test_refused_continuation_allocates_no_renewal_attempt_or_credentials(monkeypatch):
     with staged_candidate(monkeypatch) as (root,path,cfg,_output,events):
         original=selection.selected_inputs
+        def refuse():
+            events.append('continuation-refused')
+            raise ValueError('PUBLIC_CONTINUATION_REFUSAL')
         @contextmanager
         def full(path):
-            with original(path) as lease:yield replace(lease,sequence=selection.MAX_SELECTIONS)
+            with original(path) as lease:yield replace(lease,sequence=selection.MAX_SELECTIONS,continue_journal=refuse)
         monkeypatch.setattr(selection,'selected_inputs',full)
         before=set(root.iterdir())
         with pytest.raises(ValueError):selection.renew_once(path,'marty-selfhost-synthetic')
-        assert set(root.iterdir())==before and not events
+        assert set(root.iterdir())==before and events==['continuation-refused']
         assert not selection.renewal.renewal_staging_guard(cfg).exists()
 
 
@@ -244,3 +247,24 @@ def test_one_call_cycle_uses_registered_activation_and_never_replays_unknown_wor
                 with pytest.raises(ValueError):selection.renew_once(path,'marty-selfhost-synthetic')
                 assert events==before
         assert events.count('activate')==1
+
+
+def test_full_segment_continues_before_next_credential_mint(monkeypatch):
+    with staged_candidate(monkeypatch) as (_root,path,cfg,_output,events):
+        monkeypatch.setattr(selection,'MAX_SELECTIONS',2)
+        monkeypatch.setattr(selection,'_prove',lambda *_a,**_kw:'d'*64)
+        def activate(next_cfg):
+            events.append('activate')
+            result={'schema':selection.renewal.SCHEMA,'project':cfg['project'],'candidate_only':True,
+                'production_admission':False,'automatic_lifecycle':False,'result':'activated'}
+            selection.renewal.write_empty_private_file(Path(next_cfg['result']),selection.packed(result).decode())
+            return result
+        monkeypatch.setattr(selection.renewal,'activate',activate)
+        assert selection.renew_once(path,'marty-selfhost-synthetic')['sequence']==2
+        first=selection.status(path)
+        result=selection.renew_once(path,'marty-selfhost-synthetic')
+        second=selection.status(path)
+        assert result['sequence']==2 and result['generation_sequence']==3 and second['generation_sequence']==3
+        assert second['selected']!=first['selected']
+        assert events.count('authority')==2 and events.count('produce')==2 and events.count('activate')==2
+        assert not selection.renewal.continuation_guard(cfg).exists()

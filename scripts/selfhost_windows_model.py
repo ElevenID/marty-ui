@@ -260,7 +260,7 @@ def repair(config, choice, values, record, generation_intent, raw, journal, new_
         'intent_sha256': selection.digest(selection.packed(intent)), 'result': decision,
         'selected': selected, 'phase_sha256': {name: selection.digest(body) for name, body in bodies.items()},
         'candidate_only': True}
-    return {'intent': intent, 'decision': completion, 'result': result}
+    return {'intent': intent, 'decision': completion, 'result': result, 'journal': str(journal)}
 
 
 def finish(config, pending):
@@ -270,16 +270,19 @@ def finish(config, pending):
     intent = pending['intent'];decision = pending['decision']
     sha = selection.digest(selection.packed(intent))
     path = Path(intent['config_path']);root = Path(intent['attempt_dir'])
-    journal = selection.directory(config)
+    journal = Path(pending['journal'])
     guard = renewal.model_repair_guard(config)
     decision_name = f'{intent["sequence"]:06}.model-selection.json'
+    from selfhost_windows_continuation import hold_ancestry, check_ancestry
+    earlier = []
     with ExitStack() as protected:
         protected.enter_context(renewal.hold_storage_namespace(root.parent))
         protected.enter_context(renewal.hold_storage_namespace(root))
         protected.enter_context(renewal.hold_storage_namespace(journal))
         protected.enter_context(_held_private_input(root, directory=True))
         with ExitStack() as receipts:
-            with selection._session(path, _pending_model_sha256=sha) as (cfg, raw_cfg, expected, session_journal, raw, stack):
+            with selection._session(path, _pending_model_sha256=sha,
+                _preserve_history=lambda items: hold_ancestry(items, receipts, protected, earlier)) as (cfg, raw_cfg, expected, session_journal, raw, stack):
                 require(session_journal == journal and selection.digest(raw_cfg) == intent['config_file_sha256']
                         and not renewal.namespace_entry_exists(renewal.recovery_guard(cfg))
                         and not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(cfg))
@@ -315,6 +318,7 @@ def finish(config, pending):
     require(selection.digest(renewal.read_private_bytes(guard)) == sha)
     require(selection.digest(renewal.read_private_bytes(journal/decision_name))
             == selection.digest(selection.packed(decision)))
+    check_ancestry(earlier)
     guard.unlink()
 
 
