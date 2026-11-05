@@ -23,6 +23,8 @@ on:
       - 'tests/test_marty_helm_chart.py'
       - 'tests/test_prepare_kubernetes_helm_values.py'
       - 'tests/test_bootstrap_kubernetes_openbao.py'
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 permissions:

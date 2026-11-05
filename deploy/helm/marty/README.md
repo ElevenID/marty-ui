@@ -149,6 +149,63 @@ Ingress controller's default certificate separately (Traefik uses a
 `TLSStore`); a portable Ingress cannot select that default. Normal DNS names
 produce a host-specific rule and TLS host.
 
+## Direct issuance and persistence acceptance
+
+Once the required workloads and setup Jobs are ready, run
+`tests/scripts/run-kubernetes-acceptance.cjs` from a machine that can reach the
+public HTTPS origin. It uses the existing browser `AuthHelpers` and OID4VCI
+`receiveAndVerifyCredential` helper. Install Node 24 or newer and the locked
+test dependencies, including Chromium:
+
+```sh
+npm --prefix tests ci
+tests/node_modules/.bin/playwright install --with-deps chromium
+```
+
+The four arguments `--origin`, `--issuer-did`, `--password-file` and
+`--state-dir` are required. Use the actual HTTPS origin without a trailing
+slash, the matching managed `did:web` issuer, and absolute private file paths.
+The password must be an existing regular file with no group/other permissions.
+Choose a new state directory beneath an existing private parent; the driver
+creates it with mode `0700` and its files with mode `0600`.
+
+```sh
+node tests/scripts/run-kubernetes-acceptance.cjs --phase accept \
+  --origin https://marty.example.org:8443 \
+  --issuer-did did:web:marty.example.org%3A8443:orgs:marty-dev \
+  --password-file /private/marty/bootstrap/credentials/marty_org_admin_password \
+  --state-dir /private/marty/acceptance
+```
+
+The default login is `operator@localhost`, the organization is
+`00000000-0000-0000-0000-000000000001`, and the source credential template is the
+built-in Marty badge `50000000-0000-0000-0000-000000000040`. Override them with
+`--email`, `--organization-id` and `--credential-template-id` when needed.
+`--repo` defaults to the checkout containing the script; an override must be
+an absolute checkout path. The source template is discovered and validated
+through the authenticated API before use.
+
+The `accept` phase logs in normally, ensures the requested issuer identity
+exists, and, when needed, creates and activates a new version of the source
+template with that issuer. It initiates one synthetic credential directly
+through the native issuance API, redeems the offer, verifies the issuer's
+signature and holder binding, and reads back the exact transaction and issued
+credential hash. It does not require an application approval workflow.
+
+After the planned reboot, run the same command with `--phase resume` and the
+same arguments. Resume requires the successful acceptance receipt, performs a
+fresh login, verifies the retained credential against the live issuer DID
+document, and checks the same persisted IDs and hash. It creates no new offer.
+Record the node/PVC/OpenBao restart evidence separately; this driver verifies
+application continuity and does not reboot or inspect the cluster.
+
+Only non-secret receipts are printed. Passwords, offers and credential bodies
+remain private; state files are capped at 1 MiB and HTTP failure diagnostics at
+64 KiB. A failed run retains its partial state and exits nonzero. Diagnose that
+attempt before starting another; the driver refuses to reuse an acceptance
+directory and does not replay uncertain writes or issuance. Normal browser and
+Node TLS verification remain enabled throughout.
+
 ## Development capacity and persistence
 
 `values-k3s-dev.yaml` keeps one replica per service, bounds CPU/memory requests,
