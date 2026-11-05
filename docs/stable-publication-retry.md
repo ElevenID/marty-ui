@@ -9,6 +9,15 @@ containing the original checkpoint, signed assets, operator admission, policy
 digest, and a closed inventory of file hashes. It must finish successfully before
 publication.
 
+The tag handoff uses `marty.create-only-annotated-tag/v1`. Its v2 checkpoint,
+operator result and typed admission bind a create-only annotated-tag reservation
+and before/after main observations. Publication policy v3 explicitly binds that
+contract; the selected publication pipeline and candidate remain v2. Older atomic
+handoff records cannot be silently reinterpreted under the new policy. A reserved
+tag alone is not an admitted candidate or permission to retry a failed original
+CD. See the [reservation contract](release-tag-reservation-contract.md) for the
+precise guarantee change and explicit approval before activation.
+
 `Publish stable candidate` starts from that successful completion. The publisher
 uses reviewed code from protected `main`, authenticates the original CD run and
 artifact through GitHub, and verifies the original signatures, provenance,

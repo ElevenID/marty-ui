@@ -143,6 +143,7 @@
     "scripts/selfhost_managed_reference.py",
     "scripts/selfhost_approle_rotation.py",
     "scripts/selfhost_operator_inputs.py",
+    "scripts/selfhost_windows_inputs.py",
     "scripts/provision_selfhost_snapshot_rotator.py",
     "scripts/export-selfhost-openbao.py",
     "scripts/start_selfhost_disposable_openbao.py",

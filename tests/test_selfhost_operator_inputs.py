@@ -41,6 +41,7 @@ def forbidden(*args, **kwargs):
 subprocess.run = subprocess.Popen = forbidden
 owners = OWNERS
 consumers = [
+    'selfhost_windows_inputs',
     'provision_selfhost_audit_identity', 'provision_selfhost_evidence_identity',
     'provision_selfhost_snapshot_identity', 'provision_selfhost_snapshot_rotator',
     'activate_selfhost_renewed_secrets',

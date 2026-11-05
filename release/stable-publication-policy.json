@@ -1,8 +1,9 @@
 {
-  "schema": "elevenid.stable-publication-policy/v2",
+  "schema": "elevenid.stable-publication-policy/v3",
   "repository": "ElevenID/marty-ui",
   "producer_workflow": ".github/workflows/cd.yml",
   "publisher_workflow": ".github/workflows/publish-stable-candidate.yml",
   "candidate_lifetime_seconds": 86400,
-  "authorization_lifetime_seconds": 900
+  "authorization_lifetime_seconds": 900,
+  "tag_handoff_contract": "marty.create-only-annotated-tag/v1"
 }

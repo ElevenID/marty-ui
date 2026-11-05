@@ -21,13 +21,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 if __package__:
+    from .release_tag_handoff import TAG_HANDOFF_CONTRACT
     from .release_review_main import gate_authority, strict_json
     from .release_transaction import REQUIRED_IMAGE_ROLES, validate_claim
 else:
+    from release_tag_handoff import TAG_HANDOFF_CONTRACT
     from release_review_main import gate_authority, strict_json
     from release_transaction import REQUIRED_IMAGE_ROLES, validate_claim
 
-SCHEMA = "elevenid.stable-publication-checkpoint/v1"
+SCHEMA = "elevenid.stable-publication-checkpoint/v2"
 REPOSITORY = "ElevenID/marty-ui"
 WORKFLOW = ".github/workflows/cd.yml"
 LIFETIME_SECONDS = 900
@@ -59,7 +61,7 @@ MAX_FILE_BYTES.update({"assets/marty-deploy-linux-amd64": 512 * 1024 * 1024,
                        "request.json": 64 * 1024,
                        "official-interoperability.json": 256 * 1024})
 MAX_TOTAL_BYTES = 2 * 1024**3
-REQUEST_FIELDS = frozenset({"schema", "repository", "source_sha", "claim_run_id", "tag",
+REQUEST_FIELDS = frozenset({"schema", "tag_handoff_contract", "repository", "source_sha", "claim_run_id", "tag",
     "transaction_id", "run_id", "run_attempt", "origin_attempt", "protected_main_commit",
     "official_gate_sha256", "manifest_sha256", "transaction_sha256", "created_at",
     "not_after", "assets", "authority"})
@@ -137,10 +139,12 @@ def validate_request_identity(request: object) -> dict:
     """Validate archived identity without granting publication authority.
 
     Only a separately authenticated v2 candidate may use historical evidence.
-    The v1 loader and CLI still require the active original deadline.
+    The active loader and CLI still require the original deadline. Historical
+    atomic-main checkpoints are not converted into reservation authority.
     """
     _require(type(request) is dict and set(request) == REQUEST_FIELDS, "Checkpoint request fields differ")
-    _require(request["schema"] == SCHEMA and request["repository"] == REPOSITORY,
+    _require(request["schema"] == SCHEMA and request["repository"] == REPOSITORY
+             and request["tag_handoff_contract"] == TAG_HANDOFF_CONTRACT,
              "Checkpoint schema or repository differs")
     _require(_matches(SHA, request["source_sha"]) and _matches(SHA, request["protected_main_commit"])
              and _matches(TAG, request["tag"]) and _matches(RAW_DIGEST, request["transaction_id"])
@@ -515,7 +519,8 @@ def prepare_checkpoint(assets: Path, transaction: Path, official_gate: Path, *, 
                                 captured[name] = raw
                         _require(captured["release-transaction.json"] == transaction_bytes,
                                  "Signed transaction differs from the actual promoted transaction")
-                        request.update(schema=SCHEMA, repository=REPOSITORY, source_sha=source_sha,
+                        request.update(schema=SCHEMA, tag_handoff_contract=TAG_HANDOFF_CONTRACT,
+                            repository=REPOSITORY, source_sha=source_sha,
                             claim_run_id=claim_run_id, tag=tag, transaction_id=claim["transaction_id"], run_id=run_id,
                             run_attempt=1, origin_attempt=1, protected_main_commit=authority["protected_main_commit"],
                             official_gate_sha256=_digest(gate_bytes), manifest_sha256=inventory["stack-manifest.json"]["sha256"],

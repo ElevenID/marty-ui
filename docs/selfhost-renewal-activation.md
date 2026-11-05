@@ -1,5 +1,23 @@
 # Self-host KMS credential renewal candidate
 
+The shared operator input reader validates Windows credentials through an open
+NTFS file handle and its owner/DACL; POSIX mode bits are not a Windows privacy
+proof. It accepts current-user-owned files with effective full-control allow
+entries only for that user, SYSTEM and Administrators. Broader or unfamiliar
+ACLs, links, reparse ancestors, alternate streams and concurrent writers are
+refused without changing permissions. This read boundary does not enable the
+POSIX-only generation or activation commands on Windows, install a renewal
+task, or qualify lifecycle continuity.
+
+The same NTFS boundary can initialize an already-empty private input through
+`write_empty_private_file`. Its actual read/write handle proves the owner, DACL,
+complete file identity and zero length before writing, denies concurrent writers
+and replacement, flushes and reads the payload back before releasing the handle.
+It never creates a file, rewrites a nonempty value or changes an ACL. An error
+after a write can leave partial material: preserve it for operator inspection
+instead of retrying or treating the old static generation as unchanged. This
+limited file operation does not activate a credential generation.
+
 This source-level procedure is for an isolated KMS-only installation. A
 disposable HTTPS/Raft probe has crossed the one-hour evidence and audit token
 expiry boundary and recovered both with their separate scoped identities. The
