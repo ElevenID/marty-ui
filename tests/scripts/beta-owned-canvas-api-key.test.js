@@ -73,3 +73,14 @@ test('raw secret tamper is refused even with matching claimed ID',async t=>{cons
  await assert.rejects(m.keyOperation(f.input,f.p,async()=>{calls++;},f.write),{code:'BOUND_REF_CHANGED'});assert.equal(calls,0);});
 test('plan stays exact seven scopes and hash-bound credentials',t=>{const f=fixture(t);assert.equal(m.planFrom(f.input).organizationId,ORG);
  f.p.scopes=f.p.scopes.slice(1);f.input.plan=f.ref('plan.json',f.p);assert.throws(()=>m.planFrom(f.input),{code:'PLAN_CHANGED'});});
+test('PowerShell BOM-bearing JSON preserves raw hash binding across input, plan and created receipt',async t=>{
+ const f=fixture(t);
+ f.input.plan=f.ref('plan.json','\uFEFF'+JSON.stringify(f.p));
+ f.input.created=f.ref('created.json','\uFEFF'+JSON.stringify(m.boundJson(f.input.created)));
+ const inputRef=f.ref('input.json','\uFEFF'+JSON.stringify(f.input));
+ const input=m.boundJson(inputRef);assert.equal(m.planFrom(input).runId,f.p.runId);
+ const result=await m.keyOperation(input,f.p,async()=>({status:200,body:[f.row]}),f.write);
+ assert.equal(result.id,ID);
+ fs.writeFileSync(inputRef.path,JSON.stringify(f.input));
+ assert.throws(()=>m.boundJson(inputRef),{code:'BOUND_REF_CHANGED'});
+});

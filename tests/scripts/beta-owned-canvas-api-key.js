@@ -21,8 +21,9 @@ function bound(ref){
 function record(file,value){
  const fd=fs.openSync(file,'wx',0o600);try{fs.writeFileSync(fd,typeof value==='string'?value:JSON.stringify(value,null,2)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
 }
+function boundJson(ref){return JSON.parse(bound(ref).toString('utf8').replace(/^\uFEFF/,''));}
 function planFrom(input){
- const p=JSON.parse(bound(input.plan));
+ const p=boundJson(input.plan);
  check(p.schema==='marty.canvas-owned-api-key-plan/v1'&&p.organizationId===ORG&&p.ttlSeconds===7200
   &&JSON.stringify(p.scopes)===JSON.stringify(SCOPES)&&p.callbacks===false&&p.isTest===true&&p.createOnlyOnce===true
   &&p.cleanup==='revoke-exact-id-and-readback'&&p.outputSecret==='api-key.private'
@@ -60,7 +61,7 @@ async function keyOperation(input,p,api,write,active=()=>{}){
   record(input.secretOutput,r.body.key+'\n');owned(r.body,p,id);
   check(sameExpiry(r.body.expires_at,expiry),'KEY_STATE_CHANGED');
  }else{
-  const c=JSON.parse(bound(input.created));bound(input.secret);
+  const c=boundJson(input.created);bound(input.secret);
   check(c.schema==='marty.canvas-api-key-created/v1'&&c.runId===p.runId&&c.organizationId===ORG&&c.name===p.name
    &&c.secretRetired===false&&path.resolve(c.secretFile)===path.resolve(input.secret.path)
    &&/^mk_test_[A-Za-z0-9]{43}$/.test(bound(input.secret).toString('utf8').trim()),'KEY_OWNERSHIP_CHANGED');
@@ -159,9 +160,9 @@ async function run(input){
   (api,write)=>keyOperation(input,p,api,write,()=>check(!aborted,'ABORTED')));
  }finally{dispose();}
 }
-module.exports={SCOPES,planFrom,bound,owned,safeFailure,keyOperation,withAdmin,run};
+module.exports={SCOPES,planFrom,bound,boundJson,owned,safeFailure,keyOperation,withAdmin,run};
 if(require.main===module){(async()=>{try{
  check(process.argv.length===6&&process.argv[2]==='--input'&&process.argv[4]==='--input-sha256','INPUT_INVALID');
- const input=JSON.parse(bound({path:path.resolve(process.argv[3]),sha256:process.argv[5]}));await run(input);
+ const input=boundJson({path:path.resolve(process.argv[3]),sha256:process.argv[5]});await run(input);
  process.stdout.write(JSON.stringify({state:'KEY_LIFECYCLE_COMPLETE',functionalOnly:true,releaseQualified:false,mediaQualified:false})+'\n');
  }catch(error){process.stderr.write(JSON.stringify(safeFailure(error,'OPERATOR'))+'\n');process.exitCode=1;}})();}
