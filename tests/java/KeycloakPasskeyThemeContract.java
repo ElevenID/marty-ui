@@ -34,7 +34,10 @@ public final class KeycloakPasskeyThemeContract {
         data.put("url", Map.of("loginAction", "/realms/test/login-actions/authenticate?client_id=marty-ui&tab_id=synthetic",
             "loginResetCredentialsUrl", "/reset", "registrationUrl", "/register",
             "loginRestartFlowUrl", "/restart", "resourcesPath", "/resources/11id",
-            "resourcesCommonPath", "/resources/common"));
+            "resourcesCommonPath", "/resources/common",
+            "loginUrl", "/realms/test/login-actions/authenticate?client_id=marty-ui&tab_id=synthetic&client_data=value%26value%3Dtest"));
+        if (args[2].equals("error.ftl"))
+            data.put("message", Map.of("summary", "Synthetic authentication failure"));
         data.put("login", Map.of("username", "synthetic@example.invalid"));
         data.put("auth", Map.of("selectedCredential", "", "attemptedUsername", "synthetic@example.invalid"));
         data.put("messagesPerField", Map.of("existsError", (TemplateMethodModelEx) values -> false));

@@ -418,6 +418,55 @@ def test_native_enrollment_and_delete_actions_cancel_without_mutating_credential
             browser.close()
 
 
+@pytest.mark.parametrize("enabled", ["true", "false"])
+def test_expired_login_action_restarts_with_usable_existing_login_options(keycloak, enabled):
+    from playwright.sync_api import sync_playwright
+
+    assert configure(keycloak, enabled).returncode == 0
+    address = "restart-" + enabled + "@example.invalid"
+    password = secrets.token_urlsafe(24)
+    request(keycloak["admin"] + "/users", token=keycloak["token"], body={
+        "username": address, "email": address, "emailVerified": True, "enabled": True,
+        "firstName": "Synthetic", "lastName": "Restart",
+        "credentials": [{"type": "password", "value": password, "temporary": False}]})
+    query = urllib.parse.urlencode({"email": address, "exact": "true"})
+    subject = request(keycloak["admin"] + "/users?" + query, token=keycloak["token"])[0]["id"]
+    issuer = keycloak["base"] + f"/realms/{keycloak['realm']}/protocol/openid-connect"
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    state = secrets.token_urlsafe(24)
+    parameters = {"client_id": "passkey-test-ui", "response_type": "code", "scope": "openid",
+        "redirect_uri": keycloak["base"] + "/callback", "state": state, "nonce": secrets.token_urlsafe(24),
+        "code_challenge": challenge, "code_challenge_method": "S256"}
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(channel="chrome", headless=True)
+        try:
+            page = browser.new_page()
+            page.goto(issuer + "/auth?" + urllib.parse.urlencode(parameters))
+            action = urllib.parse.urlparse(page.locator("#kc-form-login").get_attribute("action"))
+            values = urllib.parse.parse_qs(action.query)
+            values["tab_id"] = ["synthetic-expired-tab"]
+            page.goto(urllib.parse.urlunparse(action._replace(query=urllib.parse.urlencode(values, doseq=True))))
+            page.locator(".elevenid-login-error").get_by_text("Your login attempt timed out", exact=False).wait_for(timeout=10000)
+            page.locator("#username").wait_for(timeout=15000)
+            assert not any(key.startswith("amp;") for key in urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query))
+            assert page.locator("#social-google").count() == 1
+            assert page.locator("#credential-login").count() == 1
+            assert page.locator("#authenticateWebAuthnButton").count() == (enabled == "true")
+            page.locator("#username").fill(address)
+            page.locator("#password").fill(password)
+            page.locator("#kc-login").click()
+            page.wait_for_url(keycloak["base"] + "/callback?**", timeout=30000)
+            callback = urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query)
+            assert callback["state"] == [state]
+            token = request(issuer + "/token", form={"grant_type": "authorization_code", "client_id": "passkey-test-ui",
+                "code": callback["code"][0], "code_verifier": verifier,
+                "redirect_uri": keycloak["base"] + "/callback"})["access_token"]
+            assert request(issuer + "/userinfo", token=token)["sub"] == subject
+        finally:
+            browser.close()
+
+
 def test_explicit_required_otp_remains_required_after_passkey_and_password_login(keycloak):
     from playwright.sync_api import sync_playwright
 
@@ -565,6 +614,191 @@ def test_explicit_required_otp_remains_required_after_passkey_and_password_login
                 "authenticationFlowBindingOverrides": {**original_bindings, "browser": original_bindings.get("browser", "")}})
             assert request(client_url, token=keycloak["token"]).get("authenticationFlowBindingOverrides", {}) == original_bindings
             assert configure(keycloak, "true").returncode == 0
+
+
+def test_native_assertion_rejects_tampering_replay_and_deleted_credentials(keycloak):
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from playwright.sync_api import sync_playwright
+
+    assert configure(keycloak, "true").returncode == 0
+    address = "assertion-negative@example.invalid"
+    password = secrets.token_urlsafe(24)
+    request(keycloak["admin"] + "/users", token=keycloak["token"], body={
+        "username": address, "email": address, "emailVerified": True, "enabled": True,
+        "firstName": "Synthetic", "lastName": "Negative",
+        "credentials": [{"type": "password", "value": password, "temporary": False}]})
+    users_url = keycloak["admin"] + "/users?" + urllib.parse.urlencode({"email": address, "exact": "true"})
+    subject = request(users_url, token=keycloak["token"])[0]["id"]
+    role_name = "passkey-qualified-reader"
+    request(keycloak["admin"] + "/roles", token=keycloak["token"], body={"name": role_name})
+    role = request(keycloak["admin"] + "/roles/" + role_name, token=keycloak["token"])
+    request(keycloak["admin"] + "/users/" + subject + "/role-mappings/realm",
+            token=keycloak["token"], body=[role])
+    credentials_url = keycloak["admin"] + "/users/" + subject + "/credentials"
+    issuer = keycloak["base"] + f"/realms/{keycloak['realm']}/protocol/openid-connect"
+    expected_authorization = None
+
+    def begin(page, enroll=False):
+        verifier = secrets.token_urlsafe(48)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        parameters = {"client_id": "passkey-test-ui", "response_type": "code", "scope": "openid",
+            "redirect_uri": keycloak["base"] + "/callback", "state": secrets.token_urlsafe(24),
+            "nonce": secrets.token_urlsafe(24), "code_challenge": challenge, "code_challenge_method": "S256"}
+        if enroll:
+            parameters["kc_action"] = "webauthn-register-passwordless"
+        page.goto(issuer + "/auth?" + urllib.parse.urlencode(parameters), wait_until="domcontentloaded")
+        return verifier
+
+    def complete(page, verifier):
+        nonlocal expected_authorization
+        page.wait_for_url(keycloak["base"] + "/callback?**", timeout=30000)
+        parameters = urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query)
+        token = request(issuer + "/token", form={"grant_type": "authorization_code", "client_id": "passkey-test-ui",
+            "code": parameters["code"][0], "code_verifier": verifier,
+            "redirect_uri": keycloak["base"] + "/callback"})["access_token"]
+        assert request(issuer + "/userinfo", token=token)["sub"] == subject
+        claims = json.loads(decode(token.split(".")[1]))
+        assert role_name in claims["realm_access"]["roles"]
+        authorization = {key: claims.get(key) for key in (
+            "realm_access", "resource_access", "organization", "groups", "badge_claims")}
+        if expected_authorization is None:
+            expected_authorization = authorization
+        else:
+            assert authorization == expected_authorization
+        return token
+
+    def decode(value):
+        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+    def encode(value):
+        return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(channel="chrome", headless=True)
+        try:
+            def device_context(credential=None):
+                context = browser.new_context()
+                page = context.new_page()
+                cdp = context.new_cdp_session(page)
+                cdp.send("WebAuthn.enable")
+                device = cdp.send("WebAuthn.addVirtualAuthenticator", {"options": {
+                    "protocol": "ctap2", "transport": "internal", "hasResidentKey": True,
+                    "hasUserVerification": True, "isUserVerified": True,
+                    "automaticPresenceSimulation": True}})["authenticatorId"]
+                if credential:
+                    cdp.send("WebAuthn.addCredential", {"authenticatorId": device, "credential": credential})
+                return context, page, cdp, device
+
+            context, page, cdp, device = device_context()
+            verifier = begin(page, enroll=True)
+            page.locator("#username").fill(address)
+            page.locator("#password").fill(password)
+            page.locator("#kc-login").click()
+            page.locator("#registerWebAuthn").wait_for(timeout=30000)
+            page.wait_for_load_state("load")
+            page.once("dialog", lambda dialog: dialog.accept("Negative-test key"))
+            page.locator("#registerWebAuthn").click()
+            complete(page, verifier)
+            credential = cdp.send("WebAuthn.getCredentials", {"authenticatorId": device})["credentials"][0]
+            context.close()
+            baseline = {}
+            context, page, cdp, device = device_context(credential)
+            def capture(route):
+                fields = urllib.parse.parse_qs(route.request.post_data or "", keep_blank_values=True)
+                if fields.get("clientDataJSON", [""])[0]:
+                    baseline.update({name: values[0] for name, values in fields.items()})
+                route.continue_()
+            page.route("**/login-actions/authenticate?**", capture)
+            complete(page, begin(page))
+            assert baseline and decode(baseline["authenticatorData"])[32] & 4
+            credential = cdp.send("WebAuthn.getCredentials", {"authenticatorId": device})["credentials"][0]
+            context.close()
+            # Only a browser-owned virtual key is exported here. Re-sign altered
+            # contexts so rejection proves RP/origin/UV checks, not just a broken
+            # signature. No production key or credential payload is logged.
+            private_key = serialization.load_der_private_key(base64.b64decode(credential["privateKey"]), password=None)
+            assert isinstance(private_key, ec.EllipticCurvePrivateKey)
+            original_credentials = request(credentials_url, token=keycloak["token"])
+            for case in ("signature", "origin", "rp", "uv", "replay", "unknown", "deleted"):
+                if case == "deleted":
+                    # A fresh valid assertion still works after all rejections.
+                    context, page, cdp, device = device_context(credential)
+                    token = complete(page, begin(page))
+                    credential = cdp.send("WebAuthn.getCredentials", {"authenticatorId": device})["credentials"][0]
+                    context.close()
+                    key_id = next(item["id"] for item in original_credentials if item["type"] == "webauthn-passwordless")
+                    request(keycloak["base"] + f"/realms/{keycloak['realm']}/account/credentials/" + key_id,
+                            token=token, method="DELETE")
+                context, page, cdp, device = device_context(credential)
+                submitted = []
+                callbacks = []
+                page.on("request", lambda outgoing: callbacks.append(True)
+                        if urllib.parse.urlparse(outgoing.url).path == "/callback" else None)
+                def tamper(route):
+                    values = urllib.parse.parse_qs(route.request.post_data or "", keep_blank_values=True)
+                    if not values.get("clientDataJSON", [""])[0]:
+                        return route.continue_()
+                    fields = {name: items[0] for name, items in values.items()}
+                    data = decode(fields["clientDataJSON"])
+                    authenticator = bytearray(decode(fields["authenticatorData"]))
+                    assert authenticator[:32] == hashlib.sha256(b"localhost").digest()
+                    if case == "origin":
+                        client = json.loads(data)
+                        client["origin"] = "https://other.example.invalid"
+                        data = json.dumps(client, separators=(",", ":")).encode()
+                    elif case == "rp":
+                        authenticator[:32] = hashlib.sha256(b"other.example.invalid").digest()
+                    elif case == "uv":
+                        authenticator[32] &= ~4
+                    if case in ("origin", "rp", "uv"):
+                        signed = bytes(authenticator) + hashlib.sha256(data).digest()
+                        signature = private_key.sign(signed, ec.ECDSA(hashes.SHA256()))
+                        private_key.public_key().verify(signature, signed, ec.ECDSA(hashes.SHA256()))
+                        fields.update(clientDataJSON=encode(data), authenticatorData=encode(authenticator), signature=encode(signature))
+                    elif case == "signature":
+                        fields["signature"] = encode(b"\0" * len(decode(fields["signature"])))
+                    elif case == "replay":
+                        assert json.loads(data)["challenge"] != json.loads(decode(baseline["clientDataJSON"]))["challenge"]
+                        fields.update({name: baseline[name] for name in (
+                            "clientDataJSON", "authenticatorData", "signature", "credentialId", "userHandle")})
+                    elif case == "unknown":
+                        fields["credentialId"] = encode(secrets.token_bytes(32))
+                    submitted.append(case)
+                    route.continue_(post_data=urllib.parse.urlencode(fields))
+                page.route("**/login-actions/authenticate?**", tamper)
+                verifier = begin(page)
+                try:
+                    page.locator("#kc-error-message, .elevenid-login-error, #input-error").first.wait_for(timeout=15000)
+                except Exception as error:
+                    raise AssertionError(f"No native rejection for {case}; callback observed={bool(callbacks)}") from error
+                assert submitted and not callbacks, case
+                after = cdp.send("WebAuthn.getCredentials", {"authenticatorId": device})["credentials"][0]
+                assert after["signCount"] > credential["signCount"], case
+                remaining = request(credentials_url, token=keycloak["token"])
+                assert remaining == ([item for item in original_credentials if item["type"] == "password"]
+                                     if case == "deleted" else original_credentials), case
+                cdp.send("WebAuthn.removeVirtualAuthenticator", {"authenticatorId": device})
+                page.locator("#username").wait_for(timeout=15000)
+                page.locator("#password").wait_for(timeout=15000)
+                page.locator("#username").fill(address)
+                page.locator("#password").fill(password)
+                page.locator("#kc-login").click()
+                complete(page, verifier)
+                context.close()
+                print(f"Native assertion rejection and password fallback passed: {case}", flush=True)
+            # Deleted/unknown/rejected keys cannot prevent the retained password
+            # from authenticating the same account in a new browser context.
+            context = browser.new_context()
+            page = context.new_page()
+            verifier = begin(page)
+            page.locator("#username").fill(address)
+            page.locator("#password").fill(password)
+            page.locator("#kc-login").click()
+            complete(page, verifier)
+            assert len(request(users_url, token=keycloak["token"])) == 1
+        finally:
+            browser.close()
 
 
 def test_real_realm_reconciliation_preserves_providers_and_policy_on_rollback(keycloak):

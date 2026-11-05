@@ -87,7 +87,14 @@ contract again on any upgrade. The disposable packaged qualification now covers
 two clustered Keycloak instances sharing PostgreSQL and remote KMS, native email
 and password enrollment, Account Console, native action cancellation and deletion,
 cross-node last-method protection, fresh surviving-key/password authentication,
-cookie rotation, CIBA and KMS-loss/custody checks. The CI image lane runs this
+configured OTP, expired-tab recovery, and server rejection of invalid signatures,
+wrong origins/RP scope, missing user verification, replayed assertions and
+unknown/deleted credentials. For origin/RP/verification cases the virtual test key
+re-signs the altered assertion, distinguishing context validation from signature
+validation. Rejections retain password fallback and assigned native realm roles;
+they do not establish Marty organization or Badge authorization end to end.
+The combined proof also covers cookie rotation, CIBA and KMS-loss/custody checks.
+The CI image lane runs this
 composite proof against its freshly built images. This is synthetic-account and
 virtual-device evidence; actual Google/Open Badge application journeys and
 physical/cross-device behavior remain rollout gates.

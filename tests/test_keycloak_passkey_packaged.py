@@ -100,6 +100,10 @@ def qualify_passkeys(context):
         native.test_real_realm_reconciliation_preserves_providers_and_policy_on_rollback(fixture)
         for mode in ("conditional", "modal"):
             native.test_virtual_authenticator_enrollment_and_login_keep_the_same_subject(fixture, mode)
+        for enabled in ("true", "false"):
+            native.test_expired_login_action_restarts_with_usable_existing_login_options(fixture, enabled)
+        print("Expired-tab recovery retained client/state/PKCE and existing login options with passkeys on/off", flush=True)
+        native.test_native_assertion_rejects_tampering_replay_and_deleted_credentials(fixture)
         native.test_explicit_required_otp_remains_required_after_passkey_and_password_login(fixture)
         print("Explicit required OTP and wrong-code denial passed for passkey/password with feature on/off", flush=True)
         assert native.request(admin, token=admin_token)["webAuthnPolicyPasswordlessPasskeysEnabled"] is True

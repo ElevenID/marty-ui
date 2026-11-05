@@ -11,7 +11,7 @@
                 <p style="color: #666; font-size: 14px;">
                     Redirecting to home page in <span id="countdown">5</span> seconds...
                 </p>
-                <a href="${redirectUrl}" style="color: #1976d2; text-decoration: none; font-weight: 500;">
+                <a id="kc-error-restart-link" href="${redirectUrl}" style="color: #1976d2; text-decoration: none; font-weight: 500;">
                     Click here if not redirected automatically
                 </a>
             </div>
@@ -21,7 +21,7 @@
             (function() {
                 var seconds = 5;
                 var countdownEl = document.getElementById('countdown');
-                var redirectUrl = '${redirectUrl}';
+                var redirectUrl = document.getElementById('kc-error-restart-link').href;
                 
                 var interval = setInterval(function() {
                     seconds--;

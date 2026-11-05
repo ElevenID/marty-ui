@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import urllib.request
+import urllib.parse
 
 import pytest
 
@@ -77,3 +78,36 @@ def test_native_passkeys_preserve_password_google_badge_and_recovery(passkey_ren
         assert 'mediation : "conditional"' in html  # missing optional attribute defaults
         assert html.count('name="userHandle"') == 1
         assert ('name="authn_use_chk"' in html) == (mode == "reauth")
+
+
+@pytest.mark.parametrize("restart", ["automatic", "keyboard"])
+def test_error_restart_preserves_client_and_tab_context_in_browser(passkey_renderer, restart):
+    from playwright.sync_api import sync_playwright
+
+    command, _, empty = passkey_renderer
+    result = subprocess.run([*command, str(empty), "error.ftl", "disabled", "normal"],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(channel="chrome", headless=True)
+        try:
+            page = browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            def serve(route):
+                if urllib.parse.urlparse(route.request.url).path == "/failure":
+                    route.fulfill(content_type="text/html", body=result.stdout)
+                else:
+                    route.fulfill(content_type="text/plain", body="Synthetic restart destination")
+            page.route("**/*", serve)
+            page.goto("https://theme.example.invalid/failure")
+            assert page.locator("#kc-error-message .instruction").inner_text() == "Synthetic authentication failure"
+            if restart == "keyboard":
+                page.locator("#kc-error-restart-link").focus()
+                page.keyboard.press("Enter")
+            page.wait_for_url("**/login-actions/authenticate?**", timeout=10000)
+            assert urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query) == {
+                "client_id": ["marty-ui"], "tab_id": ["synthetic"], "client_data": ["value&value=test"]}
+            assert errors == []
+        finally:
+            browser.close()
