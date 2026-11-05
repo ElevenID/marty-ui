@@ -160,6 +160,37 @@ does not rewrite authentication flows. Privileged step-up must retain its intend
 assurance. The current theme inherits the installed version's `passkeys.ftl` and
 JavaScript instead of maintaining a separate implementation.
 
+For a repeatable application regression, run
+`scripts/probe_keycloak_passkey_application.py --help`. This opt-in CLI starts
+17 real Marty services on the disposable packaged Keycloak/PostgreSQL/Redis/KMS
+network. It generates test credentials and accounts, applies native migrations,
+and checks password login, Origin rejection, native enrollment for the original
+subject, password retention, logout and fresh passkey login with unchanged
+application identity and authorization. Add `--administrator` to exercise the
+seeded administrator. Workload certificates use independent non-exportable
+Transit keys and exact SPIFFE role identities; sensitive RPCs use workload mTLS.
+This remains a local development stack with a Chrome virtual authenticator.
+
+Supply explicit cached Keycloak, OpenBao, application and Nginx images, a built
+application UI directory, and a new private output directory outside the checkout.
+The application image's `marty.source` label must match the UI manifest's
+`source_sha`; the runner compares runtime source content with that revision.
+Build the application image from `services/Dockerfile`'s runtime and default
+service binaries, also including the same-source `marty-migration-bootstrap`
+binary and native Issuance/Flow migration SQL under
+`/app/passport-native-migrations/{issuance,flow}`. This fixture image is a test
+artifact, not a qualified release image. The runner never executes the base
+Compose stack: it reads its resolved configuration using generated inputs and
+discards global mounts, published ports and container names. Test services use
+owned names, resource limits, read-only filesystems, temporary data and cleanup
+in `finally`; only the test front door binds a dynamic loopback port.
+
+The output directory contains synthetic secrets and private failure diagnostics;
+keep it private. `qualification-complete.json` is written only after the
+application journey, parent KMS/custody checks and cleanup finish. Earlier result
+files do not establish completion. This runner does not claim completed Google
+or Open Badge login, physical devices or deployed qualification.
+
 Before rollout, qualify actual password, Google and Open Badge login, enrollment
 against the same account subject, cancellation, credential removal, recovery and
 authorization. Use virtual-authenticator integration tests plus real Windows
