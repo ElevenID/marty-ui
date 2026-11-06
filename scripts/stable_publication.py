@@ -343,7 +343,11 @@ class Publisher:
             h.require(current["draft"] is True and current.get("body") in {None, ""}
                       and current.get("assets") == [], "new draft changed before ownership attachment")
             self.guard()
-            status, _ = self.github.response(f"repos/{h.REPOSITORY}/releases/{self.release_id}", method="PATCH", payload={"body": body})
+            # Keep the admitted coordinates explicit: an omitted tag_name can
+            # turn a draft ownership update into an untagged release.
+            status, _ = self.github.response(f"repos/{h.REPOSITORY}/releases/{self.release_id}", method="PATCH", payload={
+                "tag_name": self.candidate["tag"], "target_commitish": self.candidate["source_sha"],
+                "body": body, "draft": True, "prerelease": False, "make_latest": "false"})
             h.require(status == 200, "ownership attachment failed; do not claim an unknown draft")
             self.body = body
             current = self.release(fresh=True)
@@ -378,8 +382,9 @@ class Publisher:
             h.require(c.load_candidate(self.directory, now=self.clock()) == (self.candidate, self.request, self.admission),
                       "candidate custody changed before final publication")
             self.guard()
-            status, _ = self.github.response(f"repos/{h.REPOSITORY}/releases/{self.release_id}",
-                                              method="PATCH", payload={"draft": False, "make_latest": "true"})
+            status, _ = self.github.response(f"repos/{h.REPOSITORY}/releases/{self.release_id}", method="PATCH", payload={
+                "tag_name": self.candidate["tag"], "target_commitish": self.candidate["source_sha"],
+                "draft": False, "prerelease": False, "make_latest": "true"})
             h.require(status == 200, "publication outcome is unknown; use a fresh admitted retry")
         current = self.release(fresh=True)
         h.require(current["draft"] is False, "release was not published")
