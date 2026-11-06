@@ -1050,12 +1050,21 @@ mod tests {
         let (platform, binding, template) = fixture();
         let mut inputs = ready_inputs(template);
         for kind in ["OpenBadgeV2", "open_badge_v2", "OPEN-BADGE-V2"] {
-            inputs.credential_template.insert("credential_type".into(), json!(kind));
+            inputs
+                .credential_template
+                .insert("credential_type".into(), json!(kind));
             let result = evaluate_canvas_binding_readiness(&platform, &binding, &inputs, now(2));
             assert!(!result.ready);
-            assert!(!result.checks.iter().find(|check| check.code == "open_badge_template").unwrap().passed());
+            assert!(!result
+                .checks
+                .iter()
+                .find(|check| check.code == "open_badge_template")
+                .unwrap()
+                .passed());
         }
-        inputs.credential_template.insert("credential_type".into(), json!("OpenBadgeV3"));
+        inputs
+            .credential_template
+            .insert("credential_type".into(), json!("OpenBadgeV3"));
         assert!(evaluate_canvas_binding_readiness(&platform, &binding, &inputs, now(2)).ready);
     }
 

@@ -45,7 +45,7 @@ impl ResolvingCredentialKernel {
         let credentials: Vec<_> = match context.format {
             DetectedCredentialFormat::OpenbadgeV3 => {
                 // Resolve the exact credential the Open Badge verifier will consume,
-                // including its supported VP and assertion aliases. Never inspect
+                // including its supported VP wrapper. Never inspect
                 // an outer envelope or reinterpret a field inside the selected VC.
                 vec![open_badge_credential(&context.token)
                     .map_err(|_| "Invalid Open Badge credential selection")?]
@@ -258,7 +258,12 @@ impl CredentialVerificationKernel for ResolvingCredentialKernel {
         &self,
         context: &CredentialVerificationContext,
     ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
-        if is_retired_ob2(&context.token) {
+        if is_retired_ob2(&context.token)
+            || (matches!(
+                context.format,
+                DetectedCredentialFormat::Unknown | DetectedCredentialFormat::OpenbadgeV3
+            ) && context.token.get("assertion").is_some())
+        {
             return Ok(rejected(OB2_RETIRED));
         }
         let mut resolved = context.clone();
@@ -363,7 +368,12 @@ impl CredentialVerificationKernel for RustCredentialKernel {
         &self,
         context: &CredentialVerificationContext,
     ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
-        if is_retired_ob2(&context.token) {
+        if is_retired_ob2(&context.token)
+            || (matches!(
+                context.format,
+                DetectedCredentialFormat::Unknown | DetectedCredentialFormat::OpenbadgeV3
+            ) && context.token.get("assertion").is_some())
+        {
             return Ok(rejected(OB2_RETIRED));
         }
         match context.format {
@@ -1111,10 +1121,8 @@ fn open_badge_credential(token: &Value) -> Result<&JsonObject, PresentationVerif
     let object = token
         .as_object()
         .ok_or_else(|| invalid_input("Open Badge presentation must be a JSON object"))?;
-    for key in ["credential", "assertion"] {
-        if let Some(value) = object.get(key).and_then(Value::as_object) {
-            return Ok(value);
-        }
+    if let Some(value) = object.get("credential").and_then(Value::as_object) {
+        return Ok(value);
     }
     if let Some(vp) = object.get("vp").and_then(Value::as_object).or(Some(object)) {
         if let Some(value) = vp.get("verifiableCredential") {

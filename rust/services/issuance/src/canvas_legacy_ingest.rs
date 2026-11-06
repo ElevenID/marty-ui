@@ -576,7 +576,8 @@ fn canvas_approval_plan_failure(
         .flat_map(char::to_lowercase)
         .collect::<String>();
     if normalized == "openbadgev2" {
-        return "Open Badges 2.0 is retired; configure an Open Badges 3.0 credential template".to_owned();
+        return "Open Badges 2.0 is retired; configure an Open Badges 3.0 credential template"
+            .to_owned();
     }
     if !matches!(
         normalized.as_str(),

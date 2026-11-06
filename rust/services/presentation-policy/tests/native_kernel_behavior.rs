@@ -229,6 +229,25 @@ async fn retired_ob2_is_rejected_before_every_native_route_and_key_resolution() 
 }
 
 #[tokio::test]
+async fn retired_assertion_wrapper_cannot_redirect_to_ob3() {
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/governed_ob3.json")).unwrap();
+    for format in [
+        DetectedCredentialFormat::Unknown,
+        DetectedCredentialFormat::OpenbadgeV3,
+    ] {
+        let mut input = governed_badge_context(format, &fixture);
+        input.token = json!({"assertion": fixture["credential"]});
+        let evidence = RustCredentialKernel.verify(&input).await.unwrap();
+        assert!(!evidence.verified);
+        assert!(evidence.claims.is_empty());
+        assert!(evidence
+            .failure_reason
+            .unwrap()
+            .contains("Open Badges 2.0 is retired"));
+    }
+}
+
+#[tokio::test]
 async fn ob3_ignores_token_keys_even_when_they_match_proof_method_id() {
     let fixture: Value = serde_json::from_str(include_str!("fixtures/governed_ob3.json")).unwrap();
     let mut input = governed_badge_context(DetectedCredentialFormat::OpenbadgeV3, &fixture);

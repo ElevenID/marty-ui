@@ -11,8 +11,9 @@ outer-JWT verification path. Policy, status and holder-binding gates still apply
 OB2 signed assertions, unsigned hosted assertions, and assertions transported
 inside credential, presentation or JWT envelopes are rejected before issuer-key
 resolution and policy evaluation. Mixed OB2/OB3 contexts are also rejected.
-The rejection directs the holder to request a newly issued Open Badges 3.0
-credential. The verifier produces no verified claims, issuer trust, status
+The old `assertion` request wrapper is also retired; submit an OB3 credential
+using the `credential` field. The rejection directs the holder to request a newly
+issued Open Badges 3.0 credential. The verifier produces no verified claims, issuer trust, status
 acceptance or authenticated outer-JWT identifier from a retired assertion.
 
 Native diagnostics advertise only `open_badges_v3`. Canvas readiness and signing
