@@ -190,8 +190,14 @@ def test_producer_workflow_consumes_the_selected_plan_and_keeps_qualification_se
     assert matrix == "${{ fromJSON(needs.plan.outputs.matrix) }}"
     call = next(step for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "image")
     assert call["uses"] == "./.github/actions/build-product-image"
-    assert call["with"] == {"producer": "product", "source-sha": "${{ github.sha }}",
-                            "product": "${{ needs.plan.outputs.product }}", "image-plan": "${{ toJSON(matrix) }}"}
+    assert call["with"] == {
+        "producer": "product",
+        "source-sha": "${{ github.sha }}",
+        "product": "${{ needs.plan.outputs.product }}",
+        "image-plan": "${{ toJSON(matrix) }}",
+        "private-forks-enabled": "${{ vars.PRIVATE_FORKS_ENABLED == 'true' && (matrix.role == 'services' || matrix.role == 'migrations') && 'true' || 'false' }}",
+        "private-forks-read-token": "${{ vars.PRIVATE_FORKS_ENABLED == 'true' && (matrix.role == 'services' || matrix.role == 'migrations') && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}",
+    }
     shared = yaml.safe_load((ROOT / ".github/actions/build-product-image/action.yml").read_bytes())
     image = next(step["with"] for step in shared["runs"]["steps"] if step.get("id") == "image")
     assert image["file"] == "${{ steps.recipe.outputs.dockerfile }}"

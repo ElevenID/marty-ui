@@ -30,7 +30,7 @@ concurrency:
 jobs:
   rust:
     name: Warm Rust cache
-    if: github.ref == 'refs/heads/main'
+    if: vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -76,7 +76,7 @@ jobs:
 
   images:
     name: Warm Rust service image cache
-    if: github.ref == 'refs/heads/main'
+    if: vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -133,7 +133,7 @@ jobs:
 
   public-services:
     name: Warm public service builder cache
-    if: github.ref == 'refs/heads/main'
+    if: vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:

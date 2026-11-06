@@ -491,10 +491,18 @@ jobs:
       id-token: write
       attestations: write
       artifact-metadata: write
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
@@ -502,7 +510,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Expose public image compiler cache credentials
-        if: needs.resolve-transaction.outputs.services_digest == ''
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (needs.resolve-transaction.outputs.services_digest == '')
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
@@ -516,6 +524,9 @@ jobs:
       - id: services
         if: needs.resolve-transaction.outputs.services_digest == ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
           context: .
           file: services/Dockerfile
@@ -524,17 +535,24 @@ jobs:
             SERVICE_NAME=gateway
             MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
             MARTY_UI_SHA=${{ github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=marty-ui-public-services
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-public-services' || '' }}
           secret-envs: |
             sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
             sccache_url=SCCACHE_GHA_CACHE_URL
             sccache_mode=SCCACHE_GHA_RW_MODE
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
       - id: migrations
         if: needs.resolve-transaction.outputs.migrations_digest == ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: services/Dockerfile.migrations
           outputs: type=image,name=${{ env.MIGRATIONS_IMAGE }},push-by-digest=true,name-canonical=true,push=true
@@ -550,6 +568,7 @@ jobs:
             MARTY_ISO18013_VERSION=${{ needs.validate-stack.outputs.marty_iso18013_version }}
             MARTY_ISO18013_URI=${{ needs.validate-stack.outputs.marty_iso18013_uri }}
             MARTY_ISO18013_DIGEST=${{ needs.validate-stack.outputs.marty_iso18013_digest }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: mode=max
           sbom: true
       - id: digests
@@ -859,6 +878,7 @@ jobs:
       contents: read
       actions: read
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
       HARNESS_SHA: b71078cb18998014765bcfe6850b75714d852794
     steps:
@@ -866,9 +886,22 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: stack-release-official-candidate-${{ github.run_id }}
@@ -1165,14 +1198,29 @@ jobs:
       contents: read
       id-token: write
       packages: read
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           path: marty-ui
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 "marty-ui/.github/scripts/private-forks.py" check
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 "marty-ui/.github/scripts/private-forks.py" fetch --manifest-path "marty-ui/rust/Cargo.toml"
       - name: Build the Rust public-key fixture converter
         working-directory: marty-ui/rust
         shell: bash
@@ -1228,7 +1276,7 @@ jobs:
           python -m pip install --disable-pip-version-check
           --require-hashes --only-binary=:all:
           --requirement requirements/official-py312.lock
-      - name: Build the exact attested Core KMS verifier producer
+      - name: Prepare the exact attested Core KMS verifier source
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -1267,6 +1315,16 @@ jobs:
             --expected-root "marty-core-${version}" --expected-sha256 "$digest" \
             --history core-history --expected-commit "$commit"
           rustup toolchain install 1.97.1 --profile minimal
+      - name: Fetch the attested Core private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 marty-ui/.github/scripts/private-forks.py fetch --manifest-path core-source/Cargo.toml
+      - name: Build the exact attested Core KMS verifier producer
+        shell: bash
+        run: |
+          set -euo pipefail
           cargo +1.97.1 build --locked --manifest-path core-source/Cargo.toml \
             -p marty-test-wallet --bin marty-kms-positive-verifier-input \
             --bin marty-test-signer-agent
@@ -1467,11 +1525,18 @@ jobs:
       contents: read
       packages: read
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -1483,6 +1548,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Prepare source-matched Rust KMS operator for image qualification
         run: cargo build --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
       - name: Verify and exercise the exact published OpenBao DIDComm image
@@ -1770,11 +1842,19 @@ jobs:
       packages: read
       attestations: write
       id-token: write
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -1870,6 +1950,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Package and record the unqualified exact-lock ZIP
         env:
           SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
@@ -2039,11 +2126,19 @@ jobs:
       contents: read
       id-token: write
       attestations: write
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - name: Require the exact qualified protected-main source
         env:
           SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
@@ -2059,6 +2154,13 @@ jobs:
         with:
           toolchain: 1.95.0
           targets: ${{ matrix.target }}
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Prepare source-matched Rust execution policy
         run: bash scripts/ci/prepare-native-ci-execution.sh
       - name: Build and test the native operator binary
