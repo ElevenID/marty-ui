@@ -388,7 +388,7 @@ def test_workflow_retains_tiny_failure_evidence_without_weakening_recovery():
         in cache["run"]
     )
     retained = steps["Retain recovery preparation evidence"]
-    assert retained["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
+    assert retained["if"] == "always()"
     assert retained["continue-on-error"] is True
     assert (
         retained["uses"]

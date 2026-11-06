@@ -42,9 +42,7 @@ def validate(items):
     assert "set -o noclobber" in prepare["run"]
     assert "MARTY_RUNTIME_DIAGNOSTICS_OWNER" in prepare["run"]
     assert set(upload) == {"name", "if", "uses", "with"}
-    assert upload["if"] == (
-        "vars.PRIVATE_FORKS_ENABLED != 'true' && (always() && matrix.lane == 'canvas')"
-    )
+    assert upload["if"] == "always() && matrix.lane == 'canvas'"
     assert (
         upload["uses"]
         == "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
