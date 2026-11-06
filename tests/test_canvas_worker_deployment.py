@@ -978,6 +978,50 @@ def test_ci_keeps_old_bundle_gate_and_checks_pinned_modern_binary_before_explici
     assert builds and consumers < min(builds)
 
 
+def test_ci_fetches_private_sources_before_host_canvas_catalog_compilation():
+    workflow = _yaml(".github/workflows/ci.yml")
+    job = workflow["jobs"]["test-rust-service-images"]
+    steps = job["steps"]
+    names = [step.get("name") for step in steps]
+    authorization = names.index("Authorize private fork access")
+    fetch = names.index("Fetch locked private fork dependencies")
+    toolchains = [
+        index
+        for index, step in enumerate(steps)
+        if step.get("uses", "").startswith("dtolnay/rust-toolchain@")
+    ]
+    assert len(toolchains) == 1
+    toolchain = toolchains[0]
+    first_render = names.index("Verify merged Canvas worker deployment configuration")
+    consumer = names.index("Verify complete Canvas worker consumer configurations")
+    assert authorization < toolchain < fetch < first_render < consumer
+    assert steps[authorization]["if"] == "vars.PRIVATE_FORKS_ENABLED == 'true'"
+    assert steps[authorization]["run"].strip() == (
+        'python3 ".github/scripts/private-forks.py" check'
+    )
+    assert steps[toolchain] == {
+        "uses": "dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de",
+        "with": {"toolchain": "1.95.0"},
+    }
+    assert steps[fetch] == {
+        "name": "Fetch locked private fork dependencies",
+        "if": "vars.PRIVATE_FORKS_ENABLED == 'true'",
+        "shell": "bash",
+        "working-directory": "${{ github.workspace }}",
+        "env": {"PRIVATE_FORKS_READ_TOKEN": "${{ secrets.PRIVATE_FORKS_READ_TOKEN }}"},
+        "run": (
+            'python3 ".github/scripts/private-forks.py" fetch '
+            '--manifest-path "rust/Cargo.toml"'
+        ),
+    }
+    assert "PRIVATE_FORKS_READ_TOKEN" not in workflow.get("env", {})
+    assert "PRIVATE_FORKS_READ_TOKEN" not in job.get("env", {})
+    for index, step in enumerate(steps):
+        if index == fetch or step.get("uses", "").startswith("docker/build-push-action@"):
+            continue
+        assert "PRIVATE_FORKS_READ_TOKEN" not in step.get("env", {})
+
+
 def test_canvas_worker_is_required_by_production_deployment_catalogs() -> None:
     catalog = CatalogView.load(ROOT)
 
