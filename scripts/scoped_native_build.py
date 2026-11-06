@@ -463,6 +463,29 @@ def start(prepared_ref, helper, git, profile=None):
     preparation_sha = prepared_ref["sha256"]
     require(plan.get("executionOperatorSha256") == sha(Path(__file__)), "BUILD_OPERATOR_CHANGED")
     private, output = verify(plan, git, profile)
+    if profile == "d12-passport-current-three-role":
+        # This is the original committed lock, before Core path localization.
+        # Cache preparation is a separate terminal owned operation; the native
+        # build remains offline and network=none. Refuse before any build intent.
+        from scoped_native_cargo_cache import validate_bound_receipt
+        bound = plan.get("cargoCacheReceipt")
+        require(isinstance(bound, dict) and set(bound) == {"path", "sha256", "bytes"},
+                "D12_EXACT_CARGO_CACHE_RECEIPT_REQUIRED")
+        require(Path(bound["path"]).resolve().is_relative_to(private),
+                "D12_PRIVATE_CARGO_CACHE_RECEIPT_REQUIRED")
+        validate_bound_receipt(plan, Path(bound["path"]), bound["sha256"])
+        cached = json.loads(read_ref(bound).read_bytes())
+        require(plan["cargoCacheRunId"] == cached["runId"]
+                and plan["cargoCacheJournalBackend"] == cached["journalBackend"],
+                "D12_CACHE_JOURNAL_CHANGED")
+        from scoped_linux_journal import LinuxBuildJournal
+        cache_store = LinuxBuildJournal(private, cached["runId"], cached["journalBackend"])
+        require(cache_store.read("build-receipt.json") == cached,
+                "D12_AUTHORITATIVE_CACHE_RECEIPT_CHANGED")
+        volume = json.loads(helper.run("docker", "--context", "desktop-linux", "volume", "inspect", "ui-canvas-cargo").stdout)[0]
+        require(volume["Name"] == "ui-canvas-cargo"
+                and volume["CreatedAt"] == cached["cargoVolumeCreatedAt"],
+                "D12_CARGO_CACHE_VOLUME_REPLACED")
     store = build_journal(plan, private, profile)
     require(sha(helper.__file__) == REVIEWED_BUILD_HELPER_SHA256, "REVIEWED_SHARED_BUILD_HELPER_CHANGED")
     require(os.environ.get("DOCKER_CONTEXT") == "desktop-linux", "EXPLICIT_DESKTOP_CONTEXT_REQUIRED")
