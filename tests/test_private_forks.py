@@ -17,6 +17,34 @@ SPEC.loader.exec_module(private_forks)
 
 
 class PrivateForkAccessTests(unittest.TestCase):
+    def test_catalog_compose_checks_fetch_before_host_cargo_without_test_credentials(self):
+        import yaml
+        workflow = yaml.safe_load((HELPER.parents[2] / ".github/workflows/ci.yml").read_text())
+        job = workflow["jobs"]["test-rust-service-images"]
+        steps = job["steps"]
+        check = next(i for i, step in enumerate(steps)
+                     if 'private-forks.py" check' in step.get("run", ""))
+        fetch = next(i for i, step in enumerate(steps)
+                     if 'private-forks.py" fetch' in step.get("run", ""))
+        toolchain = next(i for i, step in enumerate(steps)
+                         if step.get("uses", "").startswith("dtolnay/rust-toolchain@"))
+        first_catalog_check = next(i for i, step in enumerate(steps)
+                                   if 'test_canvas_worker_compose_render.py' in step.get("run", ""))
+        self.assertLess(check, toolchain)
+        self.assertLess(toolchain, fetch)
+        self.assertLess(fetch, first_catalog_check)
+        self.assertEqual(steps[toolchain]["with"]["toolchain"], "1.95.0")
+        self.assertEqual(steps[fetch]["if"], "vars.PRIVATE_FORKS_ENABLED == 'true'")
+        self.assertIn('--manifest-path "rust/Cargo.toml"', steps[fetch]["run"])
+        self.assertEqual(steps[fetch]["env"],
+                         {"PRIVATE_FORKS_READ_TOKEN": "${{ secrets.PRIVATE_FORKS_READ_TOKEN }}"})
+        self.assertLessEqual(steps[fetch]["timeout-minutes"], 5)
+        self.assertNotIn("PRIVATE_FORKS_READ_TOKEN", job.get("env", {}))
+        for step in steps:
+            if step is steps[fetch] or "docker/build-push-action@" in step.get("uses", ""):
+                continue
+            self.assertNotIn("PRIVATE_FORKS_READ_TOKEN", step.get("env", {}))
+
     def context(self, name="pull_request"):
         env = {
             "GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "ElevenID/marty-ui",
