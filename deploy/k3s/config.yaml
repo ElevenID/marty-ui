@@ -1,0 +1,5 @@
+# Single-node development profile. Application sizing is in the Helm values.
+# Keep the API private; use kubectl on the host through your existing SSH/SSM path.
+write-kubeconfig-mode: "0600"
+secrets-encryption: true
+node-name: marty-dev

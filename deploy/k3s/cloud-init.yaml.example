@@ -1,0 +1,74 @@
+#cloud-config
+# Fill STOP_AT_UTC with an absolute UTC date, e.g. 2026-11-05 23:00:00 UTC.
+# Launch only an isolated disposable Linux amd64 development node. The fixed
+# deadline survives reboot and does not renew the trial's compute window.
+write_files:
+  - path: /etc/systemd/system/marty-dev-stop.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Stop bounded Marty Kubernetes development trial
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/systemctl poweroff
+  - path: /etc/systemd/system/marty-dev-stop.timer
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Absolute deadline for Marty Kubernetes development trial
+      [Timer]
+      OnCalendar=STOP_AT_UTC
+      Persistent=true
+      AccuracySec=1s
+      Unit=marty-dev-stop.service
+      [Install]
+      WantedBy=timers.target
+  - path: /etc/rancher/k3s/config.yaml
+    permissions: '0600'
+    content: |
+      write-kubeconfig-mode: "0600"
+      secrets-encryption: true
+      node-name: marty-dev
+  - path: /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
+    permissions: '0644'
+    content: |
+      apiVersion: helm.cattle.io/v1
+      kind: HelmChartConfig
+      metadata:
+        name: traefik
+        namespace: kube-system
+      spec:
+        valuesContent: |-
+          ports:
+            web:
+              exposedPort: 80
+            websecure:
+              exposedPort: 8443
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+runcmd:
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, marty-dev-stop.timer]
+  - |
+    set -eu
+    # cloud-init can continue after an earlier runcmd item fails. Require the
+    # stop timer in this same block before installing or starting Kubernetes.
+    systemctl is-active --quiet marty-dev-stop.timer
+    cd /var/tmp
+    curl --fail --silent --show-error --location --retry 3 --max-time 180 \
+      'https://github.com/k3s-io/k3s/releases/download/v1.36.6%2Bk3s1/k3s' -o k3s
+    printf '%s  %s\n' 66ceb8e67edfa547195135d74783bfadc2ecc04a91059e90ae5f70a3dbc98c15 k3s | sha256sum --check --strict
+    install -m 0755 k3s /usr/local/bin/k3s
+    curl --fail --silent --show-error --location --retry 3 --max-time 60 \
+      'https://raw.githubusercontent.com/k3s-io/k3s/v1.36.6%2Bk3s1/install.sh' -o k3s-install.sh
+    printf '%s  %s\n' 46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad k3s-install.sh | sha256sum --check --strict
+    INSTALL_K3S_SKIP_DOWNLOAD=true sh k3s-install.sh
+    curl --fail --silent --show-error --location --retry 3 --max-time 60 \
+      https://get.helm.sh/helm-v3.22.1-linux-amd64.tar.gz -o helm.tar.gz
+    printf '%s  %s\n' 896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea helm.tar.gz | sha256sum --check --strict
+    tar -xzf helm.tar.gz linux-amd64/helm
+    install -m 0755 linux-amd64/helm /usr/local/bin/helm

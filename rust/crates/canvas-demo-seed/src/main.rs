@@ -37,6 +37,7 @@ fn usage() {
 
 #[tokio::main]
 async fn main() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let mut args = env::args().skip(1);
     let mut env_file = String::from(".env.tunnel.beta.local");
     let mut skip_canvas_lms_seed = false;

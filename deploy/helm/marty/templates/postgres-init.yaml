@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-scripts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marty.labels" . | nindent 4 }}
+data:
+  init-databases.sh: |
+    {{- .Files.Get "files/postgres/init-databases.sh" | nindent 4 }}

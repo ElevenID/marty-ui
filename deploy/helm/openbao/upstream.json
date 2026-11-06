@@ -1,0 +1,9 @@
+{
+  "chart": "openbao",
+  "repository": "https://openbao.github.io/openbao-helm",
+  "version": "0.30.6",
+  "archive": "openbao-0.30.6.tgz",
+  "sha256": "76e90c2315a4922b4b0c6c63fd8a00b9f4bdf0cffda160664f8ea5762d59911c",
+  "upstreamAppVersion": "2.7.2",
+  "martyPluginOpenBaoVersion": "2.5.5"
+}

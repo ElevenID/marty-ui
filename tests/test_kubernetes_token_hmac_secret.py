@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 
@@ -220,7 +221,8 @@ kubectl() {
 readonly -f kubectl
 """
 
-    def run(changes=None, *, operation="setup", file_bytes=None, next_file_value=None):
+    def run(changes=None, *, operation="setup", file_bytes=None, next_file_value=None,
+            timeout=20):
         selected = dict(env)
         if file_bytes is not None:
             path = tmp_path / "synthetic-token.txt"
@@ -234,16 +236,39 @@ readonly -f kubectl
             "setup": "cmd_setup_secrets",
             "resolve": 'value="$(resolve_secret_input TOKEN_HMAC_KEY)"\nrequire_resolved_secret TOKEN_HMAC_KEY "$value"\nprintf "%s" "$value"',
         }[operation]
-        result = subprocess.run(
-            [bash, "--noprofile", "--norc", "-s"],
-            input=prelude + extracted_functions() + "\n" + suffix + "\n",
+        script = prelude + extracted_functions() + "\n" + suffix + "\n"
+        command = [bash, "--noprofile", "--norc", "-s"]
+        process = subprocess.Popen(
+            command,
             text=True,
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             cwd=tmp_path,
             env=selected,
-            timeout=20,
-            check=False,
+            start_new_session=os.name == "posix",
         )
+        try:
+            stdout, stderr = process.communicate(script, timeout=timeout)
+        except BaseException:
+            # The shell owns a native publisher, wrappers and client children.
+            # Stop that test-owned group on timeout or interruption before the
+            # API fixture is torn down, and preserve the original exception.
+            try:
+                if os.name == "posix":
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+            raise
+        result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
         calls = [
             path.read_bytes().decode().rstrip("\0").split("\0")
             for path in tmp_path.glob("call-*")
@@ -675,6 +700,39 @@ def test_native_apply_stops_at_first_failure(harness):
     assert len([call for call in calls if call[:3] == ["create", "secret", "generic"]]) == 1
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group ownership")
+def test_harness_timeout_stops_native_client_descendants(harness, tmp_path):
+    import fcntl
+    import time
+
+    # The actual shell -> native publisher -> wrapper chain starts this owned
+    # client. A lock held by the client proves it has exited after the deadline.
+    client = tmp_path / "hanging-kubectl"
+    client.write_text(
+        f"#!{sys.executable}\n"
+        "import fcntl, os, time\n"
+        "from pathlib import Path\n"
+        "root = Path(os.environ['TEST_ROOT'])\n"
+        "with (root / 'client.lock').open('w') as lock:\n"
+        "    fcntl.flock(lock, fcntl.LOCK_EX)\n"
+        "    (root / 'client-ready').write_text('ready')\n"
+        "    time.sleep(30)\n"
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    client.chmod(0o700)
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        harness({"TOKEN_HMAC_KEY": TOKEN, "TEST_REAL_KUBECTL": str(client),
+                 "TEST_API_SERVER": "http://127.0.0.1:1",
+                 "TEST_KUBECONFIG": str(tmp_path / "unused-kubeconfig")}, timeout=5)
+    assert time.monotonic() - started < 15, "timed-out descendants were not stopped promptly"
+    assert (tmp_path / "client-ready").read_text() == "ready"
+    with (tmp_path / "client.lock").open() as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert len((tmp_path / "native-manifest.json").read_text().splitlines()) == 1
+
+
 def test_real_kubectl_applies_synthetic_secret_schema_against_owned_api(harness, tmp_path):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread
@@ -720,9 +778,12 @@ def test_real_kubectl_applies_synthetic_secret_schema_against_owned_api(harness,
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
+        # This integration launches 33 real clients sequentially. Give their
+        # startup/API work a bounded aggregate budget while each request
+        # retains the wrapper's three-second timeout.
         result, _ = harness({"TOKEN_HMAC_KEY": TOKEN, "TEST_REAL_KUBECTL": binary,
                              "TEST_API_SERVER": f"http://127.0.0.1:{server.server_port}",
-                             "TEST_KUBECONFIG": str(config)})
+                             "TEST_KUBECONFIG": str(config)}, timeout=120)
     finally:
         server.shutdown()
         server.server_close()

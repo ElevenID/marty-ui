@@ -1,0 +1,7 @@
+apiVersion: v2
+name: marty
+description: Marty application and persistent development dependencies for an existing Kubernetes cluster
+type: application
+version: 0.1.0
+appVersion: "release-pinned"
+kubeVersion: ">=1.28.0-0"

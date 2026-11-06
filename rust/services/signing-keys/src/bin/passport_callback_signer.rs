@@ -49,6 +49,7 @@ fn required_configuration() -> Result<(SocketAddr, String, String, String), Stri
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     let (addr, bao_addr, token, key) = required_configuration()?;
     let provider = OpenBaoEnvelopeProvider::new(bao_addr, token)?;
     let listener = TcpListener::bind(addr).await?;

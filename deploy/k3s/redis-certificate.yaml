@@ -1,0 +1,56 @@
+# Apply with kubectl --namespace <Marty namespace> after cert-manager is Ready.
+# This CA serves the development Redis endpoint only. Redis's private key is
+# projected only into Redis; application pods receive only the public CA.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: marty-redis-selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: marty-redis-ca
+spec:
+  secretName: marty-redis-ca
+  commonName: Marty development Redis CA
+  isCA: true
+  duration: 8760h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: marty-redis-selfsigned
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: marty-redis-ca
+spec:
+  ca:
+    secretName: marty-redis-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: marty-redis-tls
+spec:
+  secretName: marty-redis-tls
+  dnsNames:
+    - redis
+  duration: 720h
+  renewBefore: 168h
+  usages:
+    - digital signature
+    - server auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: marty-redis-ca
+    kind: Issuer
