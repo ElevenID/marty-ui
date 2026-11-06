@@ -984,7 +984,9 @@ def test_ci_fetches_private_sources_before_host_canvas_catalog_compilation():
     steps = job["steps"]
     names = [step.get("name") for step in steps]
     authorization = names.index("Authorize private fork access")
-    fetch = names.index("Fetch locked private fork dependencies")
+    fetch = names.index(
+        "Fetch locked private fork dependencies for Compose catalog checks"
+    )
     toolchains = [
         index
         for index, step in enumerate(steps)
@@ -1004,8 +1006,9 @@ def test_ci_fetches_private_sources_before_host_canvas_catalog_compilation():
         "with": {"toolchain": "1.95.0"},
     }
     assert steps[fetch] == {
-        "name": "Fetch locked private fork dependencies",
+        "name": "Fetch locked private fork dependencies for Compose catalog checks",
         "if": "vars.PRIVATE_FORKS_ENABLED == 'true'",
+        "timeout-minutes": 5,
         "shell": "bash",
         "working-directory": "${{ github.workspace }}",
         "env": {"PRIVATE_FORKS_READ_TOKEN": "${{ secrets.PRIVATE_FORKS_READ_TOKEN }}"},
