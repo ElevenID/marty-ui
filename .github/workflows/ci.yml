@@ -2276,6 +2276,19 @@ jobs:
         with:
           driver-opts: image=${{ env.MARTY_CI_BUILDKIT_IMAGE }}
           buildkitd-config: .github/buildkit-ci-mirror.toml
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      # Catalog-backed Compose checks invoke Cargo on the runner, independently
+      # of later image builds. Fetch sources here without giving tests a token.
+      - name: Fetch locked private fork dependencies for Compose catalog checks
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        timeout-minutes: 5
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Verify merged Canvas worker deployment configuration
         run: python3 scripts/test_canvas_worker_compose_render.py
       - name: Verify self-host native owner preservation

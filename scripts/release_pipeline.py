@@ -92,7 +92,7 @@ OPERATIONS = {
     "validate_context", "validate_checkout", "load_configuration", "source_preflight",
     "read_pipeline_run", "create_stage_journal", "execute_stage", "write_stage_outputs",
     "check_deadline", "check_protected_main", "read_child_run", "validate_child_run",
-    "read_child_jobs", "validate_child_jobs", "wait_child", "prepare_dispatch",
+    "read_child_jobs", "validate_child_jobs", "validate_child_title", "wait_child", "prepare_dispatch",
     "record_dispatch_intent", "dispatch_workflow", "record_dispatch_response",
     "validate_dispatch_response", "record_dispatch_acknowledgment", "record_child_success",
     "find_stable_publisher", "record_stable_publisher", "finalize_stage",
@@ -309,7 +309,15 @@ class Pipeline:
         self.child_run_id = run_id if transport.positive(run_id) else None
         while True:
             self.current()
-            run = self.run(run_id, workflow, event=event, title=title)
+            run = self.run(run_id, workflow, event=event)
+            self.operation = "validate_child_title"
+            # Newly acknowledged runs may expose their default title before the
+            # input-derived run-name. Follow only this exact child while active;
+            # completed evidence must have the expected title. The existing
+            # stage deadline and every source/invocation check still apply.
+            title_ready = title is None or run.get("display_title") == title
+            require(title_ready or (run.get("status") in ACTIVE and run.get("conclusion") is None),
+                    "child_title_mismatch")
             self.operation = "wait_child"
             if run.get("status") == "completed":
                 require(run.get("conclusion") == "success", "child_workflow_failed")

@@ -153,7 +153,7 @@ class PipelineTests(unittest.TestCase):
         from scripts import build_selfhost_image_lock as image_lock
 
         plan = pipeline.configuration("both", "", "full", "false")
-        self.assertEqual(plan["external_images"], (ROOT / "release/external-images.json").read_text())
+        self.assertEqual(plan["external_images"], (ROOT / "release/external-images.json").read_bytes().decode("utf-8"))
         pins = json.loads(plan["external_images"])
         self.assertEqual(set(pins), {"edge", "postgres", "redis"})
         base = ROOT / "docker-compose.selfhost.prod.yml"
@@ -240,6 +240,51 @@ class PipelineTests(unittest.TestCase):
     def publisher(self, number=70, *, event="workflow_run", title="Publish stable candidate 60") -> None:
         self.github.add(number, pipeline.PUBLISHER, event=event, title=title, jobs=["intake", "publish"])
         self.github.publisher_ids.append(number)
+
+    def test_acknowledged_child_waits_for_active_title_convergence(self) -> None:
+        driver = self.driver("stable-publish")
+        self.publisher(event="workflow_dispatch", title="default workflow title")
+        child = self.github.runs[70]
+        child.update(status="queued", conclusion=None)
+        sleeps = []
+        def advance(seconds):
+            sleeps.append(seconds)
+            child.update(status="completed", conclusion="success", display_title="Publish stable candidate 60")
+        driver.sleep = advance
+        run = driver.wait(70, pipeline.PUBLISHER, {"intake", "publish"},
+                          title="Publish stable candidate 60")
+        self.assertEqual(run["id"], 70)
+        self.assertEqual(len(sleeps), 1)
+        self.assertEqual(self.github.posts, [])
+
+    def test_wrong_terminal_title_stops_without_wait_or_dispatch(self) -> None:
+        driver = self.driver("stable-publish")
+        self.publisher(event="workflow_dispatch", title="Publish stable candidate 61")
+        driver.sleep = mock.Mock(side_effect=AssertionError("must not wait"))
+        with self.assertRaises(pipeline.PipelineError) as caught:
+            driver.wait(70, pipeline.PUBLISHER, {"intake", "publish"},
+                        title="Publish stable candidate 60")
+        self.assertEqual(caught.exception.code, "child_title_mismatch")
+        self.assertEqual(self.github.posts, [])
+
+    def test_pending_title_does_not_extend_deadline_or_relax_child_identity(self) -> None:
+        for mutation in (None, "head_sha", "run_attempt", "path", "event"):
+            with self.subTest(mutation=mutation):
+                driver = self.driver("stable-publish", name=f"title-{mutation}.json")
+                self.publisher(event="workflow_dispatch", title="default workflow title")
+                child = self.github.runs[70]
+                child.update(status="in_progress", conclusion=None)
+                if mutation is not None:
+                    child[mutation] = 2 if mutation == "run_attempt" else "foreign"
+                clock = [driver.deadline - timedelta(seconds=1)]
+                driver.now = lambda: clock[0]
+                driver.sleep = lambda seconds: clock.__setitem__(0, clock[0] + timedelta(seconds=seconds))
+                expected = "stage_deadline_exceeded" if mutation is None else "child_identity_mismatch"
+                with self.assertRaises(pipeline.PipelineError) as caught:
+                    driver.wait(70, pipeline.PUBLISHER, {"intake", "publish"},
+                                title="Publish stable candidate 60")
+                self.assertEqual(caught.exception.code, expected)
+                self.assertEqual(self.github.posts, [])
 
     def test_automatic_publisher_is_observed_without_any_second_dispatch(self) -> None:
         self.publisher()
