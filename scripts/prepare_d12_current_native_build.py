@@ -17,6 +17,7 @@ import sys
 
 import prepare_local_official_native_build as source_exporter
 import scoped_native_build as build
+import scoped_native_cargo_cache as cargo_cache
 import run_local_official_native_build as native_runner
 from scoped_native_profiles import D12_PASSPORT_CURRENT
 from scoped_native_runtime import read_ref, ref, require, sha
@@ -27,6 +28,7 @@ CORE = D12_PASSPORT_CURRENT.core_revision
 ORIGIN = source_exporter.ORIGINS
 OPERATORS = ("prepare_d12_current_native_build.py", "prepare_local_official_native_build.py",
              "scoped_native_build.py", "scoped_native_profiles.py", "scoped_native_runtime.py",
+             "scoped_native_cargo_cache.py",
              "scoped_linux_journal.py", "desktop_journal_transport.py",
              "run_local_official_native_build.py", "seed_local_official_native_target.py")
 PRIVATE = (Path.home() / ".codex/private").resolve()
@@ -197,9 +199,75 @@ def journal_input(value: dict, *, run_id: str, engine_id: str) -> None:
             "D12_DESKTOP_JOURNAL_REQUIRED")
 
 
+def prepare_cache(packet_path: Path, packet_sha: str, journal_path: Path,
+                  journal_sha: str, run_id: str, engine_id: str,
+                  builder_image: str) -> dict:
+    packet = source_packet(packet_path, packet_sha)
+    require(RUN.fullmatch(run_id) and builder_image == native_runner.IMAGE
+            and isinstance(engine_id, str) and bool(engine_id),
+            "D12_CACHE_IDENTIFIERS_REQUIRED")
+    journal = exact_file(journal_path, journal_sha)
+    journal_input(journal, run_id=run_id, engine_id=engine_id)
+    root = packet_path.parent.resolve()
+    output = root / ("cargo-cache-output-" + run_id)
+    output.mkdir()
+    lock = Path(packet["sources"]["ui"]["directory"]) / "rust/Cargo.lock"
+    lock_bytes = lock.read_bytes()
+    sources = cargo_cache.git_sources(lock_bytes)
+    require("marty-core@" + CORE in sources, "D12_CACHE_FROZEN_CORE_LOCK_CHANGED")
+    script = root / ("cargo-cache-fetch-" + run_id + ".sh")
+    with script.open("xb") as stream:
+        stream.write(cargo_cache.render_fetch_script(hashlib.sha256(lock_bytes).hexdigest(), sources))
+    plan = {"sourceExportReceipt": ref(packet_path), "buildProfile": PROFILE,
+            "sources": packet["sources"], "cacheRunId": run_id,
+            "cacheOutputDirectory": str(output), "cacheScript": ref(script),
+            "cacheGuard": packet["operators"]["scoped_native_cargo_cache.py"],
+            "originalLockSha256": hashlib.sha256(lock_bytes).hexdigest(),
+            "gitSources": sources, "builderImage": builder_image,
+            "engineId": engine_id, "journalBackend": journal,
+            "imagesBuilt": False, "releaseQualified": False, "recordingQualified": False}
+    path = root / ("prepared-cache-" + run_id + ".json")
+    with path.open("x", encoding="utf-8") as stream:
+        json.dump(plan, stream, indent=2)
+        stream.write("\n")
+    return {"state": "CACHE_PREPARED_NO_FETCH", "preparedCache": ref(path)}
+
+
+def hydrate_cache(packet_path: Path, packet_sha: str,
+                  cache_plan_path: Path, cache_plan_sha: str) -> dict:
+    packet = source_packet(packet_path, packet_sha)
+    plan = exact_file(cache_plan_path, cache_plan_sha)
+    run_id = plan["cacheRunId"]
+    require(plan["sourceExportReceipt"]["sha256"] == packet_sha
+            and plan["sources"] == packet["sources"]
+            and plan["buildProfile"] == PROFILE
+            and cache_plan_path.resolve() == packet_path.parent.resolve() / ("prepared-cache-" + run_id + ".json")
+            and plan["originalLockSha256"] == sha(Path(plan["sources"]["ui"]["directory"]) / "rust/Cargo.lock")
+            and plan["gitSources"] == cargo_cache.git_sources(
+                (Path(plan["sources"]["ui"]["directory"]) / "rust/Cargo.lock").read_bytes()),
+            "D12_CACHE_PREPARED_SOURCE_CHANGED")
+    for name in ("ui", "core"):
+        source = plan["sources"][name]
+        build.verify_export(source["repository"], source["revision"],
+                            source["directory"], source["inventory"], verified_git)
+    journal_input(plan["journalBackend"], run_id=run_id, engine_id=plan["engineId"])
+    require(os.environ.get("DOCKER_CONTEXT") == "desktop-linux"
+            and os.environ.get("DOCKER_CONFIG") == plan["journalBackend"]["desktop"]["configDirectory"],
+            "EXPLICIT_DESKTOP_CONTEXT_REQUIRED")
+    from scoped_linux_journal import LinuxBuildJournal
+    store = LinuxBuildJournal(packet_path.parent, run_id, plan["journalBackend"])
+    value = cargo_cache.hydrate(plan, native_runner.helper_module(), store)
+    require(store.read("build-receipt.json") == value, "D12_CACHE_AUTHORITATIVE_RECEIPT_CHANGED")
+    path = packet_path.parent / ("cargo-cache-receipt-" + run_id + ".json")
+    with path.open("x", encoding="utf-8") as stream:
+        json.dump(value, stream, indent=2)
+        stream.write("\n")
+    return {"state": value["state"], "cacheReceipt": ref(path), "releaseQualified": False}
+
+
 def prepare(packet_path: Path, packet_sha: str, target_path: Path, target_sha: str,
             journal_path: Path, journal_sha: str, run_id: str, engine_id: str,
-            builder_image: str) -> dict:
+            builder_image: str, cache_path: Path, cache_sha: str) -> dict:
     packet = source_packet(packet_path, packet_sha)
     require(RUN.fullmatch(run_id) and builder_image == native_runner.IMAGE
             and isinstance(engine_id, str) and bool(engine_id), "D12_EXACT_BUILD_IDENTIFIERS_REQUIRED")
@@ -209,6 +277,9 @@ def prepare(packet_path: Path, packet_sha: str, target_path: Path, target_sha: s
             and journal_path.resolve().is_relative_to(PRIVATE), "D12_PRIVATE_INPUT_REQUIRED")
     target_input(target, run_id=run_id, engine_id=engine_id)
     journal_input(journal, run_id=run_id, engine_id=engine_id)
+    from scoped_native_cargo_cache import validate_bound_receipt
+    cache_path = cache_path.resolve()
+    require(cache_path.is_relative_to(PRIVATE), "D12_PRIVATE_CACHE_RECEIPT_REQUIRED")
     root = packet_path.parent.resolve()
     plan = {"privateDirectory": str(root), "buildProfile": PROFILE,
             "profileSourceSha256": packet["operators"]["scoped_native_profiles.py"]["sha256"],
@@ -220,6 +291,12 @@ def prepare(packet_path: Path, packet_sha: str, target_path: Path, target_sha: s
             "outputDirectory": str(root / "output"), "journalBackend": journal,
             "targetVolumeReceipt": ref(target_path), "releaseQualified": False,
             "recordingQualified": False}
+    validate_bound_receipt(plan, cache_path, cache_sha)
+    cache = exact_file(cache_path, cache_sha)
+    journal_input(cache["journalBackend"], run_id=cache["runId"], engine_id=engine_id)
+    plan["cargoCacheRunId"] = cache["runId"]
+    plan["cargoCacheJournalBackend"] = cache["journalBackend"]
+    plan["cargoCacheReceipt"] = ref(cache_path)
     require(plan["targetVolumeReceipt"]["sha256"] == target_sha, "D12_TARGET_RECEIPT_CHANGED")
     build.verify(plan, verified_git, PROFILE)
     path = root / "prepared-build.json"
@@ -249,7 +326,8 @@ def execute(mode: str, packet_path: Path, packet_sha: str, prepared_sha: str) ->
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("bootstrap", "export", "prepare", "check", "start", "finish"))
+    parser.add_argument("mode", choices=("bootstrap", "export", "prepare-cache", "hydrate-cache",
+                                         "prepare", "check", "start", "finish"))
     parser.add_argument("--ui-repo", type=Path)
     parser.add_argument("--core-repo", type=Path)
     parser.add_argument("--producer-revision")
@@ -260,6 +338,10 @@ def main() -> None:
     parser.add_argument("--target-sha256")
     parser.add_argument("--journal-backend", type=Path)
     parser.add_argument("--journal-sha256")
+    parser.add_argument("--cargo-cache-receipt", type=Path)
+    parser.add_argument("--cargo-cache-sha256")
+    parser.add_argument("--cache-plan", type=Path)
+    parser.add_argument("--cache-plan-sha256")
     parser.add_argument("--run-id")
     parser.add_argument("--engine-id")
     parser.add_argument("--builder-image")
@@ -274,13 +356,29 @@ def main() -> None:
                 "D12_EXPORT_INPUTS_REQUIRED")
         value = export_source(args.ui_repo, args.core_repo, args.producer_revision, args.output)
         print(json.dumps({"state": value["state"], "source": SOURCE, "core": CORE}))
+    elif args.mode == "prepare-cache":
+        require(all((args.source_export, args.source_export_sha256,
+                     args.journal_backend, args.journal_sha256,
+                     args.run_id, args.engine_id, args.builder_image)),
+                "D12_CACHE_PREPARE_INPUTS_REQUIRED")
+        print(json.dumps(prepare_cache(args.source_export, args.source_export_sha256,
+              args.journal_backend, args.journal_sha256, args.run_id, args.engine_id,
+              args.builder_image)))
+    elif args.mode == "hydrate-cache":
+        require(all((args.source_export, args.source_export_sha256,
+                     args.cache_plan, args.cache_plan_sha256)),
+                "D12_CACHE_EXECUTE_INPUTS_REQUIRED")
+        print(json.dumps(hydrate_cache(args.source_export, args.source_export_sha256,
+              args.cache_plan, args.cache_plan_sha256)))
     elif args.mode == "prepare":
         require(all((args.source_export, args.source_export_sha256, args.target_receipt,
                      args.target_sha256, args.journal_backend, args.journal_sha256,
-                     args.run_id, args.engine_id, args.builder_image)), "D12_PREPARE_INPUTS_REQUIRED")
+                     args.run_id, args.engine_id, args.builder_image,
+                     args.cargo_cache_receipt, args.cargo_cache_sha256)), "D12_PREPARE_INPUTS_REQUIRED")
         print(json.dumps(prepare(args.source_export, args.source_export_sha256,
              args.target_receipt, args.target_sha256, args.journal_backend, args.journal_sha256,
-             args.run_id, args.engine_id, args.builder_image)))
+             args.run_id, args.engine_id, args.builder_image,
+             args.cargo_cache_receipt, args.cargo_cache_sha256)))
     else:
         require(args.source_export and args.source_export_sha256 and args.prepared_sha256,
                 "D12_PREPARED_INPUTS_REQUIRED")
