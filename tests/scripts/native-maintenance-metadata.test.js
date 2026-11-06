@@ -1,6 +1,29 @@
  'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const m=require('./native-maintenance-metadata');
+function withGitSqlFixture(body){
+ const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto'),cp=require('node:child_process');
+ const repo=path.resolve(__dirname,'../..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'marty-d12-git-sql-')),refs={};
+ try{
+  for(const [name,sha256]of Object.entries(m.SQL_SOURCES)){
+   const bytes=cp.execFileSync('git',['show',m.D12_SOURCE+':scripts/sql/'+name],{cwd:repo,maxBuffer:1024*1024});
+   assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'),sha256,'EXACT_GIT_BLOB_SQL_REQUIRED:'+name);
+   const file=path.join(dir,name);fs.writeFileSync(file,bytes);refs[name]={path:file,sha256,bytes:bytes.length};
+  }
+  return body({refs,bytes:name=>fs.readFileSync(refs[name].path),dir});
+ }finally{fs.rmSync(dir,{recursive:true});}
+}
+test('current D12 database scope refuses stale source and unbound preimage',()=>{
+ const approved='a'.repeat(64),engine='11111111-1111-4111-8111-111111111111',scope=m.closedScope(m.D12_PROFILE,approved,engine);
+ assert.equal(scope.source,m.D12_SOURCE);assert.equal(scope.core,m.D12_CORE);
+ assert.equal(scope.databaseBeforeSha256,approved);
+ assert.notEqual(scope.source,m.SOURCE);
+ assert.equal(scope.engineId,engine);
+ assert.throws(()=>m.closedScope(m.D12_PROFILE,'b'.repeat(40),engine));
+ assert.throws(()=>m.closedScope(m.D12_PROFILE,approved,'not-an-engine'));
+ assert.throws(()=>m.closedScope('foreign-profile',approved));
+ assert.equal(m.closedScope().source,m.SOURCE);
+});
 function catalog(){return {schema:'marty.native-maintenance-catalog/v1',control:{database:'marty',databaseOid:'16387',systemIdentifier:'7698090346923700258',fenceTable:'passport_cutover.state',activeMartyConnections:0,activeMigratorConnections:0,roles:['marty','marty_beta_migrator','marty_passport_fence_owner'].map(name=>({name,canLogin:false,superuser:false}))},acl:{appIssuanceCreate:false,appFlowCreate:false},ledgerTables:{issuance:'issuance_service.rust_schema_migrations',flow:'flow_service.rust_schema_versions'},aclTables:{flowIntent:'flow_service.physical_start_intents',cancellationHistory:'issuance_service.passport_job_administrative_cancellations'},ledgers:{issuance:['baseline','0010_passport_start_idempotency','0011_passport_administrative_cancellation'],flow:['rust_flow_0001','rust_flow_0002']},relations:['flow_service.physical_start_intents','flow_service.flow_definitions','flow_service.flow_instances','issuance_service.physical_document_jobs','issuance_service.passport_beta_batch_intents','issuance_service.passport_job_administrative_cancellations','passport_cutover.state','passport_cutover.native_migration_receipt'].map(n=>({schema:n.split('.')[0],name:n.split('.')[1],kind:'r',owner:'marty_passport_fence_owner'}))};}
 test('current unfenced observation cannot become a fenced projection',()=>{const c=catalog();c.control.fenceTable=null;c.control.roles=[{name:'marty',canLogin:true,superuser:false}];assert.throws(()=>m.catalog(c,'BEFORE_SCHEMA'));});
 test('catalog phases enforce real login/count/identity distinctions',()=>{const c=catalog();m.catalog(c,'BEFORE_SCHEMA');assert.throws(()=>m.catalog(c,'BEFORE_START'));c.control.roles[0].canLogin=true;m.catalog(c,'BEFORE_START');c.control.activeMartyConnections=1;assert.throws(()=>m.catalog(c,'BEFORE_START'));});
@@ -13,22 +36,21 @@ for(const [name,edit]of [['missing native migration',c=>c.ledgers.flow=['rust_fl
 
 
 test('both standalone verifiers authenticate one exact generated trigger guard',()=>{
- const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
- const root=path.resolve(__dirname,'../../scripts/sql'),refs={};
- for(const [name,sha256]of Object.entries(m.SQL_SOURCES)){const file=path.join(root,name),bytes=fs.readFileSync(file);assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'),sha256);refs[name]={path:file,sha256,bytes:bytes.length};}
+ withGitSqlFixture(({refs})=>{
  for(const name of ['passport-beta-fence-verify.sql','passport-beta-rust-owner-verify.sql']){
   const raw=m.operationalSql(name,refs).toString();assert(!raw.includes('\\ir '));assert.equal(raw.split('DO $native_triggers$').length-1,1);
   assert(raw.includes('FULL JOIN actual'));assert(raw.includes("'0011_passport_administrative_cancellation'"));
  }
  const helper='passport-beta-issuer-trigger-verify.sql';assert.throws(()=>m.operationalSql('passport-beta-fence-verify.sql',{...refs,[helper]:{...refs[helper],sha256:'0'.repeat(64)}}));
+ });
 });
 
 
 test('one canonical generator covers template and standalone verifier callers',()=>{
- const fs=require('node:fs'),path=require('node:path');const root=path.resolve(__dirname,'../../scripts/sql');
- const guard=fs.readFileSync(path.join(root,'passport-beta-issuer-trigger-verify.sql'));
+ withGitSqlFixture(({bytes})=>{
+ const guard=bytes('passport-beta-issuer-trigger-verify.sql');
  for(const name of ['passport-beta-fence-verify.sql','passport-beta-rust-owner-verify.sql']){
-  const standalone=fs.readFileSync(path.join(root,name));assert(!/^\\[a-z]/im.test(standalone.toString()));
+  const standalone=bytes(name);assert(!/^\\[a-z]/im.test(standalone.toString()));
   assert(m.generateStandaloneVerifier(name,standalone,guard).equals(standalone));
   const template=Buffer.from(standalone.toString().replace(guard.toString(),'\\ir passport-beta-issuer-trigger-verify.sql'));
   assert(m.generateStandaloneVerifier(name,template,guard).equals(standalone));
@@ -36,4 +58,14 @@ test('one canonical generator covers template and standalone verifier callers',(
   assert(m.generateStandaloneVerifier(name,stale,guard).equals(standalone));
  }
  assert.throws(()=>m.generateStandaloneVerifier('unreviewed.sql',Buffer.from('SELECT 1'),guard));
+ });
+});
+
+test('CRLF checkout bytes cannot impersonate the exact exported SQL blob',()=>{
+ withGitSqlFixture(({refs,bytes,dir})=>{
+  const fs=require('node:fs'),path=require('node:path'),name='passport-beta-native-attestation.sql';
+  const normalized=bytes(name);assert(normalized.includes(10));
+  fs.writeFileSync(path.join(dir,name),Buffer.from(normalized.toString().replaceAll('\n','\r\n')));
+  assert.throws(()=>m.operationalSql(name,refs));
+ });
 });

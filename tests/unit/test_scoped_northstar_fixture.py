@@ -1,4 +1,4 @@
-import copy, importlib.util, json, sys, tempfile, types, unittest
+import copy, hashlib, importlib.util, json, subprocess, sys, tempfile, types, unittest
 from pathlib import Path
 UI = Path(__file__).resolve().parents[2]
 HERE = UI / "scripts"
@@ -51,7 +51,15 @@ class Scenario:
         self.old["HostConfig"]["Mounts"][0]["Source"] = reps.daemon_source(str(self.old_fixture))
         self.rows[self.old["Id"]] = copy.deepcopy(self.old)
         old_model = original_model(); old_model["secrets"]["northstar_run"]["file"] = str(self.old_fixture)
-        server = UI / "demo-apps/northstar-admissions/src/server.mjs"
+        relative_server = "demo-apps/northstar-admissions/src/server.mjs"
+        working_server = UI / relative_server
+        # Use the checked-out candidate in shallow CI; the reviewed byte hash remains mandatory.
+        reviewed_server = subprocess.check_output(["git", "-C", str(UI), "show", f"HEAD:{relative_server}"])
+        assert hashlib.sha256(reviewed_server).hexdigest() == m.SERVER_SHA256
+        assert working_server.read_bytes().replace(b"\r\n", b"\n") == reviewed_server
+        subprocess.run(["git", "-C", str(UI), "diff", "--quiet", "HEAD", "--", relative_server], check=True)
+        server = root / "server.mjs"
+        server.write_bytes(reviewed_server)
         new_model = copy.deepcopy(old_model); new_model["secrets"]["northstar_run"]["file"] = str(self.new_fixture)
         new_model["services"][m.ROLE].update(init=True, deploy={"resources": {"limits": {"memory": str(m.REPAIRED_MEMORY_BYTES)}}}, volumes=[dict(type="bind", source=str(server),
             target=m.SERVER_TARGET, read_only=True, bind={"create_host_path": False})])

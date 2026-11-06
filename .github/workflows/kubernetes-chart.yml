@@ -23,6 +23,10 @@ on:
       - 'tests/test_marty_helm_chart.py'
       - 'tests/test_prepare_kubernetes_helm_values.py'
       - 'tests/test_bootstrap_kubernetes_openbao.py'
+      - 'tests/scripts/run-kubernetes-acceptance.cjs'
+      - 'tests/scripts/run-kubernetes-acceptance.test.cjs'
+      - 'contracts/gateway-routes.json'
+      - 'contracts/gateway-public-openapi-schemas.json'
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -45,6 +49,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
       - name: Install pinned Helm and test dependencies
         shell: bash
         run: |
@@ -59,6 +66,8 @@ jobs:
           tar -xzf "$chart_tools/helm.tar.gz" -C "$chart_tools" linux-amd64/helm
           printf '%s\n' "$chart_tools/linux-amd64" >> "$GITHUB_PATH"
           python -m pip install 'pytest==9.2.0' 'PyYAML==6.0.3'
+      - name: Check Kubernetes acceptance against the public API contract
+        run: node --test tests/scripts/run-kubernetes-acceptance.test.cjs
       - name: Render actual chart and test the existing trust boundary
         shell: bash
         run: |

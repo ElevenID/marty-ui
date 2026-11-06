@@ -111,8 +111,8 @@ slower CI run. The new checkpoint must still pass protected-source CI.
 
 ## Remaining acceptance sequence
 
-1. Complete the normal protected-source CI and review/merge process for the
-   runtime correction.
+1. The runtime correction completed the normal protected-source CI and merged
+   in PR #1809 as `9cd6028da879a34b305bb643203e4a462f55f036`.
 2. Use the existing signed nightly producer for the resulting exact main
    source. Authenticate its complete artifact set using the unchanged verifier
    and project its immutable images into Helm values.
@@ -129,3 +129,39 @@ migration bootstrap token for two hours. Retained trial state must not be
 treated as an indefinitely resumable installation. Public certificate renewal,
 application-credential renewal, storage backup and production availability are
 distinct concerns; only the bounded development behavior above was tested.
+
+## Acceptance preparation follow-up — 2026-11-06 UTC
+
+A fresh AWS inventory read found the original Kubernetes trial and all five
+other retained development instances stopped. No instance was started for
+this follow-up. The previously published runtime still preceded the Rustls
+correction, so it was not used for another application trial.
+
+Source review found two additional problems before live acceptance:
+
+- The acceptance driver called internal issuance routes through the public
+  gateway and sent the backend-only `offer_ttl_seconds` field. It now uses the
+  public `POST /v1/issuance` and `GET /v1/issuance/{issuance_id}` contract and
+  leaves the offer lifetime to that contract. The gateway continues to reject
+  unknown request fields; no runtime API was widened.
+- One-replica application Deployments used rolling updates with
+  `maxUnavailable: 1`. Pinned Helm 3.22.1 waits for desired replicas minus
+  maximum unavailable replicas, so that configuration could accept zero Ready
+  pods. Single-replica applications now use `Recreate`, preserving the no-surge
+  budget while requiring one Ready pod. The applicant remains a single writer;
+  other applications with multiple replicas retain their rolling strategy.
+
+The chart/bootstrap/provenance suite passed all 76 focused tests with no skips,
+including actual rendering with the checksum-verified Helm 3.22.1 binary. The
+new readiness regression also rejected the original chart as a negative
+control. Four Node contract tests passed with controlled browser/HTTP
+boundaries and the existing OID4VCI/signature helpers. They exercise issuance,
+private-state retention, readback without new issuance, and rejection of a
+changed stored hash or live issuer key. Restoring each old issuance URL or the
+unsupported TTL field independently caused those tests to fail with the
+expected 404 or 422 response.
+
+These checks establish the source corrections; they do not establish
+successful live application acceptance. The next trial still requires the
+corrected signed runtime and the complete acceptance/reboot/readback sequence
+above.

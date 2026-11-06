@@ -4,6 +4,15 @@
 
 `Release pipeline` coordinates full CI, the selected nightly/stable claims and
 producers, automatic stable publication, and optional production web packaging.
+The stable publication stage reuses a unique authenticated automatic publisher if
+already present; otherwise it explicitly dispatches the existing publisher once
+with the original successful candidate run ID. It waits only for the returned
+original run and never searches for a replacement after an uncertain response.
+Both entry points retain the publisher's per-tag concurrency, signed ownership
+and asset checks. GitHub token-created events generally do not start further
+workflows, with explicit dispatch exceptions; see the
+[GitHub token documentation](https://docs.github.com/en/actions/concepts/security/github_token).
+
 Each child retains its existing source and artifact checks. The coordinator
 passes exact run IDs between stages and fails on a failed, skipped, foreign or
 ambiguous required result. The runtime path has no screenshot review, private

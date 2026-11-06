@@ -6,12 +6,14 @@ mutation entry point requiring a separately reviewed prepared-input digest.
 The default passport source, recipe bytes and durability gate remain unchanged.
 """
 from __future__ import annotations
+import importlib.util
 import json
 import math
 import os
 from pathlib import Path
 import re
 import shutil
+import sys
 from contextlib import contextmanager
 from scoped_native_runtime import (CORE_REVISION, UI_REVISION, ROLE_BINARIES,
     daemon_source, durable_barrier, read_ref, ref, require, save_exclusive, save_state, selected_sources, sha)
@@ -415,9 +417,97 @@ class LocalBuildJournal:
 def build_journal(plan, private, profile=None):
     if "journalBackend" not in plan:
         return LocalBuildJournal(private)
-    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", *CURRENT_ISSUER_READY_PROFILES, "canvas-issuer-scoped-jobs", *OFFICIAL_PROFILES), "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED")
+    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", *CURRENT_ISSUER_READY_PROFILES,
+                        "canvas-issuer-scoped-jobs", "d12-passport-current-three-role", *OFFICIAL_PROFILES),
+            "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED")
     from scoped_linux_journal import LinuxBuildJournal
     return LinuxBuildJournal(private, plan["runId"], plan["journalBackend"])
+
+
+def bound_cache_journal(plan, bound, cached, git):
+    """Read the cache journal from its own verified source root, not this build root."""
+    receipt = Path(bound["path"])
+    require(receipt.is_absolute() and receipt.is_file() and not receipt.is_symlink()
+            and receipt.resolve(strict=True) == receipt
+            and sha(receipt) == bound["sha256"]
+            and receipt.stat().st_size == bound["bytes"],
+            "D12_CACHE_RECEIPT_PRIVATE_PATH_CHANGED")
+    private = receipt.parent
+    approved = (Path.home() / ".codex/private").resolve()
+    require(private.name == "source-export" and private.is_relative_to(approved)
+            and not private.is_symlink() and not private.is_junction(),
+            "D12_CACHE_PRIVATE_ROOT_CHANGED")
+    backend = cached["journalBackend"]
+    desktop = backend["desktop"]
+    require(cached["runId"] == plan["cargoCacheRunId"]
+            and backend == plan["cargoCacheJournalBackend"]
+            and desktop["engineId"] == plan["engineId"]
+            and desktop["image"] == plan["builderImage"]
+            and Path(desktop["configDirectory"]).resolve() == private / "docker-config"
+            and desktop["volumeName"] == "marty-d02-journal-" + cached["runId"]
+            and desktop["volumeProof"]["Labels"] == {
+                "elevenid.owner": "d02-private-journal", "elevenid.run": cached["runId"]},
+            "D12_CACHE_JOURNAL_CUSTODY_CHANGED")
+    source_receipt = private / "source-export-receipt.json"
+    require(source_receipt.is_file() and not source_receipt.is_symlink(),
+            "D12_CACHE_SOURCE_RECEIPT_MISSING")
+    source = json.loads(source_receipt.read_bytes())
+    require(source.get("schema") == "marty.d12-current-native-source-export/v1"
+            and source.get("state") == "SOURCE_EXPORTED_NO_COMPILER"
+            and source["sources"]["ui"]["revision"] == cached["uiRevision"]
+            and source["sources"]["ui"]["tree"] == cached["uiTree"]
+            and source["sources"]["ui"]["inventory"]["sha256"] == cached["uiInventorySha256"]
+            and source["sources"]["ui"]["repository"] == plan["sources"]["ui"]["repository"]
+            and source["sources"]["core"]["revision"] == plan["coreRevision"],
+            "D12_CACHE_SOURCE_CUSTODY_CHANGED")
+    names = {"scoped_linux_journal.py": backend["workerSha256"],
+             "scoped_native_runtime.py": backend["sharedSha256"],
+             "desktop_journal_transport.py": desktop["transportSha256"]}
+    for name, digest in names.items():
+        file = private / "operator" / name
+        stated = source["operators"][name]
+        require(file.is_file() and not file.is_symlink()
+                and file.resolve(strict=True) == file
+                and stated["path"] == str(file)
+                and stated["sha256"] == digest == sha(file)
+                and git(["-C", source["sources"]["ui"]["repository"], "show",
+                         source["producerRevision"] + ":scripts/" + name]) == file.read_bytes(),
+                "D12_CACHE_OPERATOR_SOURCE_CHANGED")
+    worker = private / "operator/scoped_linux_journal.py"
+    loaded_shared = Path(sys.modules["scoped_native_runtime"].__file__)
+    require(loaded_shared.is_file() and sha(loaded_shared) == backend["sharedSha256"],
+            "D12_CACHE_LOADED_SHARED_CHANGED")
+    name = "marty_bound_cache_journal_" + cached["runId"].replace("-", "_")
+    spec = importlib.util.spec_from_file_location(name, worker)
+    require(spec is not None and spec.loader is not None, "D12_CACHE_JOURNAL_IMPORT_REFUSED")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.LinuxBuildJournal(private, cached["runId"], backend)
+
+
+def require_d12_fresh_target(plan, helper):
+    """Refuse Docker's implicit volume creation or reuse for the new D12 build."""
+    from scoped_native_profiles import D12_PASSPORT_CURRENT
+    volume = D12_PASSPORT_CURRENT.volumes[1]
+    proof = json.loads(read_ref(plan["targetVolumeReceipt"]).read_bytes())
+    require(proof.get("state") == "CREATED_EMPTY_OWNED_TARGET"
+            and proof.get("volume") == volume
+            and proof.get("runId") == plan["runId"]
+            and proof.get("engineId") == plan["engineId"]
+            and proof.get("owner") == D12_PASSPORT_CURRENT.owner
+            and proof.get("emptyReadback") is True
+            and proof.get("sourceIndependent") is True
+            and proof.get("consumers") == [], "D12_FRESH_OWNED_TARGET_REQUIRED")
+    rows = json.loads(helper.run("docker", "--context", "desktop-linux", "volume", "inspect", volume).stdout)
+    require(len(rows) == 1 and rows[0]["Name"] == volume
+            and rows[0]["Driver"] == rows[0]["Scope"] == "local"
+            and rows[0]["CreatedAt"] == proof["createdAt"]
+            and rows[0]["Labels"].get("elevenid.owner") == D12_PASSPORT_CURRENT.owner
+            and rows[0]["Labels"].get("elevenid.run") == plan["runId"],
+            "D12_OWNED_TARGET_CHANGED")
+    consumers = helper.run("docker", "--context", "desktop-linux", "ps", "--all", "--quiet",
+                           "--filter", "volume=" + volume).stdout.strip()
+    require(not consumers, "D12_TARGET_ALREADY_CONSUMED")
 
 
 @contextmanager
@@ -436,11 +526,33 @@ def start(prepared_ref, helper, git, profile=None):
     preparation_sha = prepared_ref["sha256"]
     require(plan.get("executionOperatorSha256") == sha(Path(__file__)), "BUILD_OPERATOR_CHANGED")
     private, output = verify(plan, git, profile)
+    if profile == "d12-passport-current-three-role":
+        # This is the original committed lock, before Core path localization.
+        # Cache preparation is a separate terminal owned operation; the native
+        # build remains offline and network=none. Refuse before any build intent.
+        from scoped_native_cargo_cache import validate_bound_receipt
+        bound = plan.get("cargoCacheReceipt")
+        require(isinstance(bound, dict) and set(bound) == {"path", "sha256", "bytes"},
+                "D12_EXACT_CARGO_CACHE_RECEIPT_REQUIRED")
+        validate_bound_receipt(plan, Path(bound["path"]), bound["sha256"])
+        cached = json.loads(read_ref(bound).read_bytes())
+        require(plan["cargoCacheRunId"] == cached["runId"]
+                and plan["cargoCacheJournalBackend"] == cached["journalBackend"],
+                "D12_CACHE_JOURNAL_CHANGED")
+        cache_store = bound_cache_journal(plan, bound, cached, git)
+        require(cache_store.read("build-receipt.json") == cached,
+                "D12_AUTHORITATIVE_CACHE_RECEIPT_CHANGED")
+        volume = json.loads(helper.run("docker", "--context", "desktop-linux", "volume", "inspect", "ui-canvas-cargo").stdout)[0]
+        require(volume["Name"] == "ui-canvas-cargo"
+                and volume["CreatedAt"] == cached["cargoVolumeCreatedAt"],
+                "D12_CARGO_CACHE_VOLUME_REPLACED")
     store = build_journal(plan, private, profile)
     require(sha(helper.__file__) == REVIEWED_BUILD_HELPER_SHA256, "REVIEWED_SHARED_BUILD_HELPER_CHANGED")
     require(os.environ.get("DOCKER_CONTEXT") == "desktop-linux", "EXPLICIT_DESKTOP_CONTEXT_REQUIRED")
     require(not list(output.iterdir()), "PRESERVE_PREVIOUS_BUILD_OUTPUTS")
     require(helper.VOLUMES == VOLUMES, "SHARED_RESOURCE_SCOPE_CHANGED")
+    if profile == "d12-passport-current-three-role":
+        require_d12_fresh_target(plan, helper)
     if profile in CURRENT_ISSUER_READY_PROFILES:
         current_issuer_capacity(helper, private, profile)
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED")
@@ -486,6 +598,8 @@ def start(prepared_ref, helper, git, profile=None):
                         "DURABLE_TARGET_SEED_RESULT_REQUIRED")
             with selected_resource_volumes(helper, build_scope(profile)["volumes"]):
                 resource = helper.resources(private, plan["builderImage"])
+            if profile == "d12-passport-current-three-role":
+                require_d12_fresh_target(plan, helper)
             resource_state.update(state="RESOURCE_CHECK_READY", resourcesBefore=resource)
             resource_state["resourceProbe"]["outcome"] = "HELPER_RETURNED_READY_CID_NOT_EXPOSED"
             require(durable_barrier(store.state(resource_state)),
@@ -565,6 +679,28 @@ def finish(prepared_ref, helper, git, profile=None):
                     "OFFICIAL_COMPILER_VOLUME_CHANGED")
         require(all(mounts[d]["RW"] is False for d in ("/src/ui", "/build/core", "/build.sh", "/build/tool.sh", "/build/lock_guard.py")),
                 "OFFICIAL_SOURCE_MOUNT_CHANGED")
+    if profile == "d12-passport-current-three-role":
+        mounts = {mount["Destination"]: mount for mount in row["Mounts"]}
+        require(len(mounts) == len(row["Mounts"]) == 6
+                and set(mounts) == {"/src/ui", "/build/core", "/out", "/build.sh", "/cargo", "/target"}
+                and mounts["/cargo"]["Type"] == mounts["/target"]["Type"] == "volume"
+                and mounts["/cargo"]["Name"] == scope["volumes"][0]
+                and mounts["/target"]["Name"] == scope["volumes"][1]
+                and all(mounts[d]["Type"] == "bind" and mounts[d]["RW"] is False
+                        for d in ("/src/ui", "/build/core", "/build.sh"))
+                and mounts["/out"]["Type"] == "bind" and mounts["/out"]["RW"] is True
+                and all(daemon_source(mounts[d]["Source"]) == daemon_source(p)
+                        for d, p in (("/src/ui", plan["sources"]["ui"]["directory"]),
+                                     ("/build/core", plan["sources"]["core"]["directory"]),
+                                     ("/out", plan["outputDirectory"]),
+                                     ("/build.sh", plan["recipe"]["path"])))
+                and row["Name"] == "/" + plan["containerName"]
+                and row["Config"]["Entrypoint"] == ["/bin/sh"]
+                and row["Config"]["Cmd"] == ["/build.sh"]
+                and row["HostConfig"]["NetworkMode"] == "none"
+                and row["HostConfig"]["Memory"] == 2 * 1024 ** 3
+                and row["HostConfig"]["MemorySwap"] == 4 * 1024 ** 3,
+                "D12_COMPILER_MOUNTS_CHANGED")
     result = {**state, "state": "BUILD_FAILED_RETAINED", "exitCode": row["State"]["ExitCode"], "oomKilled": row["State"].get("OOMKilled", False), "uiRevision": scope["uiRevision"], "coreRevision": scope["coreRevision"], "roleBinaries": scope["roles"]}
     if result["exitCode"] == 0 and not result["oomKilled"]:
         output = Path(plan["outputDirectory"])

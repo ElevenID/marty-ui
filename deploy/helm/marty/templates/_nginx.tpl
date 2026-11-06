@@ -10,6 +10,10 @@ server {
     server_name _;
     root /usr/share/nginx/html;
     index index.html;
+
+    # Commercial terms and plan checkout are withheld from browser delivery.
+    location = /pricing { return 404; }
+    location ^~ /pricing/ { return 404; }
     client_max_body_size 50M;
     proxy_buffer_size 128k;
     proxy_buffers 4 256k;

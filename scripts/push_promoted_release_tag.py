@@ -45,6 +45,7 @@ MANDATORY_JOBS = frozenset({
     "official-gate-evidence", "qualify-release", "prepare-selfhost-image-lock",
     "preflight-selfhost-prepared-consumer", "prepare-installer-inputs",
 })
+REUSABLE_PREFLIGHT_JOB = "release-environment-preflight / validate"
 LANES = frozenset({"oid4vci-issuer", "oid4vp-final", "oid4vp-url-query", "oid4vp-mdoc", "haip", "w3c-v2", "eudi"})
 REFUSAL_STAGES = frozenset({
     "initialization", "repository_inspection", "mode_validation", "capability_protection",
@@ -208,6 +209,49 @@ def inspect_repository(github: handoff.GitHub) -> tuple[int, str, dict]:
                                   "rulesets_sha256": handoff.sha256(handoff.encoded(sorted(details, key=lambda value: value["id"])))}
 
 
+def validate_finished_reusable_preflight(job: dict, publisher: dict) -> None:
+    """Require terminal evidence for the named reusable job's stale API status."""
+    handoff.require(job.get("name") == REUSABLE_PREFLIGHT_JOB
+                    and job.get("status") == "in_progress" and job.get("conclusion") == "success",
+                    "Reusable preflight lacks terminal success")
+    publisher_steps = publisher.get("steps")
+    handoff.require(isinstance(publisher_steps, list)
+                    and all(isinstance(step, dict) for step in publisher_steps),
+                    "Publisher steps are unavailable")
+    waiting = [step for step in publisher_steps if step.get("name") == handoff.WAIT_STEP]
+    handoff.require(len(waiting) == 1 and waiting[0].get("status") == "in_progress"
+                    and waiting[0].get("conclusion") is None,
+                    "Publisher is not at the unique bounded tag wait")
+    started = handoff.timestamp(job.get("started_at"))
+    completed = handoff.timestamp(job.get("completed_at"))
+    wait_started = handoff.timestamp(waiting[0].get("started_at"))
+    handoff.require(started <= completed <= wait_started,
+                    "Reusable preflight completion is outside the original tag wait")
+
+    steps = job.get("steps")
+    handoff.require(isinstance(steps, list) and bool(steps)
+                    and all(isinstance(step, dict) and step.get("status") == "completed"
+                            and step.get("conclusion") == "success" for step in steps),
+                    "Reusable preflight steps have not all succeeded")
+    numbers = [step.get("number") for step in steps]
+    handoff.require(all(handoff.positive(number) for number in numbers)
+                    and len(set(numbers)) == len(numbers),
+                    "Reusable preflight step numbering is ambiguous")
+    protection = [step for step in steps
+                  if step.get("name") == "Require protected and complete release environment"]
+    completion = [step for step in steps if step.get("name") == "Complete job"]
+    handoff.require(len(protection) == 1 and len(completion) == 1
+                    and completion[0]["number"] == max(numbers),
+                    "Reusable preflight protection or final completion evidence differs")
+    previous_completed = started
+    for step in sorted(steps, key=lambda item: item["number"]):
+        step_started = handoff.timestamp(step.get("started_at"))
+        step_completed = handoff.timestamp(step.get("completed_at"))
+        handoff.require(previous_completed <= step_started <= step_completed <= completed,
+                        "Reusable preflight step timestamps are inconsistent")
+        previous_completed = step_completed
+
+
 def validate_waiting_jobs(jobs: list[dict], run_id: int, source: str) -> None:
     handoff.require(jobs and all(handoff.positive(job.get("id")) for job in jobs)
                     and len({job["id"] for job in jobs}) == len(jobs), "CD job listing is ambiguous")
@@ -217,6 +261,8 @@ def validate_waiting_jobs(jobs: list[dict], run_id: int, source: str) -> None:
                         and job.get("head_sha") == source, "CD job belongs to another invocation")
     names = [job.get("name") for job in jobs]
     handoff.require(MANDATORY_JOBS <= set(names), "CD transitive prerequisite jobs are missing")
+    handoff.require(names.count(REUSABLE_PREFLIGHT_JOB) == 1,
+                    "Exactly one release environment preflight is required")
     official = {name.removeprefix("Collect seven official candidate lanes / ") for name in names
                 if isinstance(name, str) and name.startswith("Collect seven official candidate lanes / ")}
     handoff.require(official == LANES, "The complete seven official collection jobs are required")
@@ -235,6 +281,9 @@ def validate_waiting_jobs(jobs: list[dict], run_id: int, source: str) -> None:
                             or (job.get("status") in {"queued", "waiting", "pending"}
                                 and job.get("conclusion") is None),
                             "Unexpected downstream Cloudflare execution before publication")
+            continue
+        if job.get("name") == REUSABLE_PREFLIGHT_JOB and job.get("status") == "in_progress":
+            validate_finished_reusable_preflight(job, publisher)
             continue
         handoff.require(job.get("status") == "completed" and job.get("conclusion") == "success",
                         "An independent or transitive release prerequisite has not succeeded")
