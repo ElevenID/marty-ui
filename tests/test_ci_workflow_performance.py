@@ -3422,7 +3422,13 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
         "Require workflow policy test collection",
     ):
         assert "if" not in steps[name]
-    assert "if" not in release["steps"][0]  # Main checkout remains mandatory.
+    boundary, checkout = release["steps"][:2]
+    assert boundary["name"] == "Enforce private native build boundary"
+    assert boundary["if"] == "vars.PRIVATE_FORKS_ENABLED == 'true'"
+    assert boundary["run"].rstrip().endswith("exit 1")
+    assert not boundary.get("continue-on-error", False)
+    assert checkout["uses"] == "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+    assert "if" not in checkout  # Main checkout remains mandatory after the cutover guard.
     assert workflow["jobs"]["ci-gate"]["env"]["DIDCOMM_RELEASE_TEST_ONLY"] == (
         f"${{{{ {focused_flag} }}}}"
     )
