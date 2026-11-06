@@ -149,7 +149,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
-      actions: read
+      actions: write
     outputs:
       publisher_run_id: ${{ steps.run.outputs.publisher_run_id }}
     steps:
@@ -161,7 +161,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: run
-        name: Observe the existing automatic stable publisher
+        name: Continue through the existing stable publisher
         env:
           GH_TOKEN: ${{ github.token }}
           CI_RUN_ID: ${{ needs.full-ci.outputs.ci_run_id }}
@@ -170,7 +170,7 @@ jobs:
           python scripts/release_pipeline.py stable-publish
           --ci-run-id "$CI_RUN_ID" --stable-run-id "$STABLE_RUN_ID"
           --journal "$RUNNER_TEMP/release-pipeline.json"
-      - name: Preserve automatic publisher observation
+      - name: Preserve original publisher observation or dispatch
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
