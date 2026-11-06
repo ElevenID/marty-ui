@@ -95,7 +95,6 @@ fn native_backend_router() -> Router {
             "vc_jwt",
             "data_integrity",
             "sd_jwt",
-            "open_badges_v2",
             "open_badges_v3",
             "live_trust",
             "credential_status",
@@ -132,7 +131,7 @@ mod tests {
             serde_json::json!({
                 "backend": "marty-presentation-policy-rust",
                 "version": env!("CARGO_PKG_VERSION"),
-                "capabilities": ["policy_lifecycle", "verified_fact_evaluation", "vc_jwt", "data_integrity", "sd_jwt", "open_badges_v2", "open_badges_v3", "live_trust", "credential_status"]
+                "capabilities": ["policy_lifecycle", "verified_fact_evaluation", "vc_jwt", "data_integrity", "sd_jwt", "open_badges_v3", "live_trust", "credential_status"]
             })
         );
     }

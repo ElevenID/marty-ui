@@ -6,6 +6,7 @@ use marty_verification::mdoc::{
     disclosed_claims, verify_mdoc_presentation, MdocDocumentVerificationEvidence,
     MdocPresentationVerificationResult,
 };
+use marty_verification::open_badges::is_retired_ob2;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -15,8 +16,9 @@ use crate::{
 };
 
 type JsonObject = Map<String, Value>;
-type VerifiedJwtMaterial = (CredentialVerificationEvidence, Option<JsonObject>);
-type OpenBadgeDocument = (JsonObject, JsonObject);
+
+const OB2_RETIRED: &str =
+    "Open Badges 2.0 is retired; request a newly issued Open Badges 3.0 credential";
 
 struct DataIntegrityDocument<'a> {
     is_presentation: bool,
@@ -45,7 +47,7 @@ impl ResolvingCredentialKernel {
                 // Resolve the exact credential the Open Badge verifier will consume,
                 // including its supported VP and assertion aliases. Never inspect
                 // an outer envelope or reinterpret a field inside the selected VC.
-                vec![open_badge_credential(&context.token, "credential")
+                vec![open_badge_credential(&context.token)
                     .map_err(|_| "Invalid Open Badge credential selection")?]
             }
             DetectedCredentialFormat::W3cVcdmDi => {
@@ -256,6 +258,9 @@ impl CredentialVerificationKernel for ResolvingCredentialKernel {
         &self,
         context: &CredentialVerificationContext,
     ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
+        if is_retired_ob2(&context.token) {
+            return Ok(rejected(OB2_RETIRED));
+        }
         let mut resolved = context.clone();
         // The public request map cannot supply this field. Clear even caller
         // hints so this adapter only admits its own bounded resolver result.
@@ -358,12 +363,14 @@ impl CredentialVerificationKernel for RustCredentialKernel {
         &self,
         context: &CredentialVerificationContext,
     ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
+        if is_retired_ob2(&context.token) {
+            return Ok(rejected(OB2_RETIRED));
+        }
         match context.format {
             DetectedCredentialFormat::W3cVc => verify_vc_jwt(context, false).await,
             DetectedCredentialFormat::W3cVcdmDi => verify_data_integrity(context).await,
             DetectedCredentialFormat::SdJwt => verify_sd_jwt(context),
-            DetectedCredentialFormat::OpenbadgeV2 => verify_open_badge(context, 2).await,
-            DetectedCredentialFormat::OpenbadgeV3 => verify_open_badge(context, 3).await,
+            DetectedCredentialFormat::OpenbadgeV3 => verify_open_badge(context).await,
             DetectedCredentialFormat::Mdoc => verify_mdoc(context),
             DetectedCredentialFormat::Unknown => {
                 Ok(rejected("Unsupported or malformed credential presentation"))
@@ -670,14 +677,6 @@ async fn verify_vc_jwt(
     context: &CredentialVerificationContext,
     open_badge_v3: bool,
 ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
-    let (evidence, _) = verify_vc_jwt_material(context, open_badge_v3).await?;
-    Ok(evidence)
-}
-
-async fn verify_vc_jwt_material(
-    context: &CredentialVerificationContext,
-    open_badge_v3: bool,
-) -> Result<VerifiedJwtMaterial, PresentationVerificationError> {
     let token = token_string(&context.token)?;
     let mut request = json!({"token": token});
     if let Some(public_jwk) = context
@@ -695,16 +694,13 @@ async fn verify_vc_jwt_material(
     let result = internal_json(&raw, "VC-JWT")?;
     let valid = result.get("valid").and_then(Value::as_bool) == Some(true);
     if !valid {
-        return Ok((
-            rejected_counted(
-                if open_badge_v3 {
-                    "Open Badges v3 VC-JWT"
-                } else {
-                    "VCDM VC-JWT"
-                },
-                error_count(&result),
-            ),
-            None,
+        return Ok(rejected_counted(
+            if open_badge_v3 {
+                "Open Badges v3 VC-JWT"
+            } else {
+                "VCDM VC-JWT"
+            },
+            error_count(&result),
         ));
     }
     let claims = result
@@ -725,7 +721,7 @@ async fn verify_vc_jwt_material(
     evidence.algorithm = jwt_algorithm(token);
     evidence.validity_checked = true;
     evidence.is_expired = Some(false);
-    Ok((evidence, Some(credential.clone())))
+    Ok(evidence)
 }
 
 fn data_integrity_document(
@@ -946,176 +942,29 @@ fn verify_sd_jwt(
 
 async fn verify_open_badge(
     context: &CredentialVerificationContext,
-    version: u8,
 ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
     if context.token.as_str().is_some() {
-        let (jwt, credential) = verify_vc_jwt_material(context, version == 3).await?;
-        if !jwt.verified || version == 3 {
-            return Ok(jwt);
-        }
-        // OB2 profile semantics are still checked below against the credential
-        // authenticated by the outer VC-JWT.
-        let credential = credential.ok_or_else(|| {
-            invalid_native("VC-JWT verifier omitted the authenticated credential")
-        })?;
-        return verify_open_badge_document(context, version, Some((jwt, credential))).await;
+        return verify_vc_jwt(context, true).await;
     }
-    verify_open_badge_document(context, version, None).await
-}
-
-async fn verify_open_badge_document(
-    context: &CredentialVerificationContext,
-    version: u8,
-    authenticated_jwt: Option<(CredentialVerificationEvidence, JsonObject)>,
-) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
-    let (credential, document_store) = if let Some((_, credential)) = authenticated_jwt.as_ref() {
-        (credential.clone(), Map::new())
-    } else {
-        open_badge_document(
-            &context.token,
-            if version == 2 {
-                "assertion"
-            } else {
-                "credential"
-            },
-        )?
-    };
-    let signed_ob2 = version == 2 && credential.get("signature").is_some();
-    let governed_methods = if authenticated_jwt.is_some() || (version == 2 && !signed_ob2) {
-        Map::new()
-    } else {
-        governed_open_badge_methods(context)?
-    };
-    let mut store = if version == 2 {
-        // OB2 badge and issuer references may be transported with the token.
-        // Their contents never establish verification-key authority.
-        document_store
-    } else {
-        Map::new()
-    };
-    if authenticated_jwt.is_some() {
-        if let Some(profile_store) =
-            trust_value(context, "document_store").and_then(Value::as_object)
-        {
-            store.extend(profile_store.clone());
-        }
-    } else if signed_ob2 {
-        let Some(creator) = credential
-            .get("verification")
-            .and_then(|value| value.get("creator"))
-            .and_then(Value::as_str)
-        else {
-            return Ok(rejected("Open Badge signing key is not governed"));
-        };
-        let mut signed_body = credential.clone();
-        let signature = signed_body
-            .remove("signature")
-            .and_then(|value| value.as_str().map(str::to_owned));
-        let authenticated_body = signature
-            .as_deref()
-            .and_then(|signature| signature.split('.').nth(1))
-            .and_then(|payload| URL_SAFE_NO_PAD.decode(payload).ok())
-            .and_then(|payload| serde_json::from_slice::<Value>(&payload).ok());
-        if authenticated_body.as_ref() != Some(&Value::Object(signed_body.clone())) {
-            // Older OB2 assertions added only {type, creator} after signing.
-            // Mirror Core's bounded compatibility form, never unsigned claims.
-            let legacy_instructions = authenticated_body
-                .as_ref()
-                .is_some_and(|payload| payload.get("verification").is_none())
-                && credential
-                    .get("verification")
-                    .and_then(Value::as_object)
-                    .is_some_and(|verification| {
-                        verification.len() == 2
-                            && verification.get("creator").and_then(Value::as_str) == Some(creator)
-                            && verification
-                                .get("type")
-                                .and_then(Value::as_str)
-                                .is_some_and(|kind| {
-                                    kind.eq_ignore_ascii_case("signed")
-                                        || kind.eq_ignore_ascii_case("signedbadge")
-                                })
-                    });
-            if legacy_instructions {
-                signed_body.remove("verification");
-            }
-            if !legacy_instructions || authenticated_body != Some(Value::Object(signed_body)) {
-                return Ok(rejected(
-                    "Open Badge signed body differs from presented assertion",
-                ));
-            }
-        }
-        let Some(method) = governed_methods.get(creator) else {
-            return Ok(rejected("Open Badge signing key is not governed"));
-        };
-        if let Some(issuer) = issuer_id(&credential) {
-            if method.get("controller").and_then(Value::as_str) != Some(issuer) {
-                return Ok(rejected("Open Badge signing key is not bound to issuer"));
-            }
-        }
-        store.insert(creator.to_owned(), method.clone());
-    } else if version == 3 {
-        store = governed_methods;
-    }
-    let request = if version == 2 {
-        json!({"assertion": credential, "document_store": store})
-    } else {
-        json!({"credential": credential, "document_store": store})
-    };
-    let raw = if version == 2 {
-        marty_verification::open_badges::verify_ob2_json(&request.to_string())
-            .map_err(|_| invalid_input("Open Badges v2 verification rejected the credential"))?
-    } else {
-        marty_verification::open_badges::verify_ob3_json_async(&request.to_string())
-            .await
-            .map_err(|_| invalid_input("Open Badges v3 verification rejected the credential"))?
-    };
+    let credential = open_badge_credential(&context.token)?.clone();
+    let store = governed_open_badge_methods(context)?;
+    let request = json!({"credential": credential, "document_store": store});
+    let raw = marty_verification::open_badges::verify_ob3_json_async(&request.to_string())
+        .await
+        .map_err(|_| invalid_input("Open Badges v3 verification rejected the credential"))?;
     let result = internal_json(&raw, "Open Badges")?;
     if result.get("valid").and_then(Value::as_bool) != Some(true) {
         return Ok(rejected_counted("Open Badges", error_count(&result)));
-    }
-    if version == 2 && !signed_ob2 && authenticated_jwt.is_none() {
-        // Core can parse hosted OB2 and reports its unsigned warning, but a
-        // hosted assertion has no cryptographic credential or issuer evidence.
-        let mut evidence =
-            rejected("Hosted Open Badge assertion is not cryptographically verified");
-        evidence.warnings = result
-            .get("warnings")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect();
-        return Ok(evidence);
     }
     let mut claims = result
         .get("normalized")
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    if version == 2 && authenticated_jwt.is_none() {
-        // Core resolves structural OB2 references from the transported store.
-        // Only the signed assertion, not those documents, may supply policy claims.
-        claims.remove("badge_id");
-        claims.remove("issuer_id");
-        let badge_id = credential.get("badge").and_then(|badge| {
-            badge
-                .as_str()
-                .or_else(|| badge.get("id").and_then(Value::as_str))
-        });
-        if let Some(badge_id) = badge_id {
-            claims.insert("badge_id".into(), Value::String(badge_id.to_owned()));
-        }
-        if let Some(issuer) = issuer_id(&credential) {
-            claims.insert("issuer_id".into(), Value::String(issuer.to_owned()));
-        }
-    }
     let subject = claims
         .get("credential_subject")
         .or_else(|| claims.get("credentialSubject"))
         .or_else(|| credential.get("credentialSubject"))
-        .or_else(|| credential.get("recipient"))
         .and_then(Value::as_object)
         .cloned();
     if let Some(subject) = subject {
@@ -1140,23 +989,13 @@ async fn verify_open_badge_document(
         .filter_map(Value::as_str)
         .map(str::to_owned)
         .collect();
-    if let Some((jwt, _)) = authenticated_jwt {
-        evidence.credential_id = jwt.credential_id;
-        evidence.authenticated_outer_jti = jwt.authenticated_outer_jti;
-        evidence.issuer_id = jwt.issuer_id;
-        evidence.issued_at_epoch_seconds = jwt.issued_at_epoch_seconds;
-        evidence.algorithm = jwt.algorithm;
-        evidence.validity_checked = jwt.validity_checked;
-        evidence.is_expired = jwt.is_expired;
-    } else {
-        evidence.algorithm = result
-            .get("algorithm")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| proof_algorithm(&credential));
-        evidence.validity_checked = true;
-        evidence.is_expired = Some(false);
-    }
+    evidence.algorithm = result
+        .get("algorithm")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| proof_algorithm(&credential));
+    evidence.validity_checked = true;
+    evidence.is_expired = Some(false);
     apply_open_badge_status(&mut evidence, &result);
     Ok(evidence)
 }
@@ -1268,28 +1107,11 @@ fn bind_authenticated_jwt_credential_id(
         .insert(0, credential_id.to_owned());
 }
 
-fn open_badge_document(
-    token: &Value,
-    default_key: &str,
-) -> Result<OpenBadgeDocument, PresentationVerificationError> {
-    let credential = open_badge_credential(token, default_key)?.clone();
-    let store = token
-        .get("document_store")
-        .or_else(|| token.get("documentStore"))
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    Ok((credential, store))
-}
-
-fn open_badge_credential<'a>(
-    token: &'a Value,
-    default_key: &str,
-) -> Result<&'a JsonObject, PresentationVerificationError> {
+fn open_badge_credential(token: &Value) -> Result<&JsonObject, PresentationVerificationError> {
     let object = token
         .as_object()
         .ok_or_else(|| invalid_input("Open Badge presentation must be a JSON object"))?;
-    for key in [default_key, "credential", "assertion"] {
+    for key in ["credential", "assertion"] {
         if let Some(value) = object.get(key).and_then(Value::as_object) {
             return Ok(value);
         }
@@ -1678,34 +1500,6 @@ mod tests {
                     .verified
             );
         }
-    }
-
-    #[tokio::test]
-    async fn authenticated_ob2_jwt_keeps_its_outer_governed_evidence() {
-        let fixture: Value =
-            serde_json::from_str(include_str!("../tests/fixtures/governed_ob2.json")).unwrap();
-        let mut credential = fixture["assertion"].as_object().unwrap().clone();
-        credential.remove("signature");
-        credential.remove("verification");
-        let mut verification_context =
-            context(json!({"document_store": fixture["document_store"]}));
-        verification_context.format = DetectedCredentialFormat::OpenbadgeV2;
-        let jwt = CredentialVerificationEvidence {
-            verified: true,
-            issuer_id: Some("did:example:issuer".into()),
-            algorithm: Some("EdDSA".into()),
-            validity_checked: true,
-            is_expired: Some(false),
-            ..Default::default()
-        };
-        let evidence =
-            verify_open_badge_document(&verification_context, 2, Some((jwt, credential)))
-                .await
-                .unwrap();
-        assert!(evidence.verified);
-        assert_eq!(evidence.issuer_id.as_deref(), Some("did:example:issuer"));
-        assert_eq!(evidence.algorithm.as_deref(), Some("EdDSA"));
-        assert!(evidence.validity_checked);
     }
 
     #[test]

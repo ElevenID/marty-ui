@@ -466,7 +466,6 @@ fn cedar_credential_format(format: DetectedCredentialFormat) -> &'static str {
         DetectedCredentialFormat::W3cVcdmDi => "W3C_VCDM_V2_DI",
         DetectedCredentialFormat::SdJwt => "SD_JWT_VC",
         DetectedCredentialFormat::Mdoc => "MDOC",
-        DetectedCredentialFormat::OpenbadgeV2 => "OPEN_BADGES_V2",
         DetectedCredentialFormat::OpenbadgeV3 => "OPEN_BADGES_V3",
         DetectedCredentialFormat::Unknown => "UNKNOWN",
     }

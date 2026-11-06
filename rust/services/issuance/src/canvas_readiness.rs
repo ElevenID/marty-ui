@@ -343,7 +343,7 @@ pub fn evaluate_canvas_binding_readiness(
         "templates",
         credential_template_ready,
         true,
-        "Link the same active, KMS-supported Open Badge template used by the application template.",
+        "Link the same active, KMS-supported Open Badges 3.0 template used by the application template.",
         &timestamp,
         true,
     );
@@ -839,7 +839,7 @@ fn open_badge_type(value: &str) -> bool {
             .flat_map(char::to_lowercase)
             .collect::<String>()
             .as_str(),
-        "openbadge" | "openbadgev2" | "openbadgev3" | "openbadgecredential"
+        "openbadge" | "openbadgev3" | "openbadgecredential"
     )
 }
 
@@ -1043,6 +1043,20 @@ mod tests {
             Value::String("other-organization".to_owned()),
         );
         assert!(!status_profile_ready(&binding, &inputs));
+    }
+
+    #[test]
+    fn retired_ob2_template_aliases_cannot_be_activated() {
+        let (platform, binding, template) = fixture();
+        let mut inputs = ready_inputs(template);
+        for kind in ["OpenBadgeV2", "open_badge_v2", "OPEN-BADGE-V2"] {
+            inputs.credential_template.insert("credential_type".into(), json!(kind));
+            let result = evaluate_canvas_binding_readiness(&platform, &binding, &inputs, now(2));
+            assert!(!result.ready);
+            assert!(!result.checks.iter().find(|check| check.code == "open_badge_template").unwrap().passed());
+        }
+        inputs.credential_template.insert("credential_type".into(), json!("OpenBadgeV3"));
+        assert!(evaluate_canvas_binding_readiness(&platform, &binding, &inputs, now(2)).ready);
     }
 
     #[test]

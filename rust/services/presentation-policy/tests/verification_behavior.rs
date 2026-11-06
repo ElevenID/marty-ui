@@ -184,7 +184,7 @@ fn fixture() -> Value {
 }
 
 #[tokio::test]
-async fn hosted_ob2_cannot_turn_parsed_claims_into_policy_trust() {
+async fn retired_ob2_never_produces_verified_policy_material() {
     let fixture: Value = serde_json::from_str(include_str!("fixtures/governed_ob2.json")).unwrap();
     let mut assertion = fixture["assertion"].clone();
     assertion.as_object_mut().unwrap().remove("signature");
@@ -242,12 +242,15 @@ async fn hosted_ob2_cannot_turn_parsed_claims_into_policy_trust() {
     request.vp_token =
         json!({"credential": referenced, "document_store": fixture["document_store"]});
     let standard = orchestrator.verify(&policy(), &request).await.unwrap();
-    assert_eq!(standard["credentials"][0]["signature_verified"], true);
+    assert_eq!(standard["credentials"][0]["signature_verified"], false);
     assert_eq!(standard["credentials"][0]["trust_profile_verified"], false);
     assert_eq!(standard["credentials"][0]["issuer_id"], "unknown");
-    assert!(standard["credentials"][0]["claims"]
-        .get("issuer_id")
-        .is_none());
+    assert_eq!(standard["credentials"][0]["claims"], json!({}));
+    assert_eq!(
+        standard["credentials"][0]["signature_failure_reason"],
+        "Open Badges 2.0 is retired; request a newly issued Open Badges 3.0 credential"
+    );
+    assert!(status.calls.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
