@@ -2009,6 +2009,46 @@ def test_independent_rust_lanes_remain_required_without_transferring_builds() ->
     )
 
 
+def _assert_gone_or_zombie_process(pid: str) -> None:
+    try:
+        observed = Path(f"/proc/{pid}/stat").read_text()
+    except (FileNotFoundError, ProcessLookupError):
+        # Linux can remove a task after procfs open succeeds but before read.
+        return
+    assert observed.rsplit(") ", 1)[1].startswith("Z ")
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError, ProcessLookupError])
+def test_native_operator_timeout_accepts_process_disappearance(monkeypatch, error) -> None:
+    def read_stat(path):
+        assert path == Path("/proc/123/stat")
+        raise error("synthetic task disappeared")
+
+    monkeypatch.setattr(Path, "read_text", read_stat)
+    _assert_gone_or_zombie_process("123")
+
+
+@pytest.mark.parametrize("state", ["R", "S", "D"])
+def test_native_operator_timeout_rejects_surviving_process(monkeypatch, state) -> None:
+    monkeypatch.setattr(Path, "read_text", lambda _: f"123 (cargo worker) {state} 1 2 3")
+    with pytest.raises(AssertionError):
+        _assert_gone_or_zombie_process("123")
+
+
+def test_native_operator_timeout_accepts_unreaped_zombie(monkeypatch) -> None:
+    monkeypatch.setattr(Path, "read_text", lambda _: "123 (cargo worker) Z 1 2 3")
+    _assert_gone_or_zombie_process("123")
+
+
+def test_native_operator_timeout_preserves_unavailable_procfs_failure(monkeypatch) -> None:
+    def read_stat(_):
+        raise PermissionError("synthetic procfs access denied")
+
+    monkeypatch.setattr(Path, "read_text", read_stat)
+    with pytest.raises(PermissionError):
+        _assert_gone_or_zombie_process("123")
+
+
 @pytest.mark.parametrize("arch,cpu,budget", [("amd64", "x86_64", 30), ("arm64", "aarch64", 25)])
 @pytest.mark.parametrize("scenario,expected_status,expected_modes", [
     ("success", 0, ["fetch", "test", "build"]),
@@ -2137,12 +2177,7 @@ exec "$TEST_REAL_TIMEOUT" --kill-after=1s 5s "$@"
     if scenario == "timeout":
         assert len(pids.read_text(encoding="utf-8").splitlines()) == 2
         for pid in pids.read_text(encoding="utf-8").splitlines():
-            state = Path(f"/proc/{pid}/stat")
-            try:
-                observed = state.read_text()
-            except FileNotFoundError:
-                continue
-            assert observed.rsplit(") ", 1)[1].startswith("Z ")
+            _assert_gone_or_zombie_process(pid)
 
 
 def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
