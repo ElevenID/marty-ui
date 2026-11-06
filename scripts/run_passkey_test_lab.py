@@ -198,6 +198,8 @@ class Lab:
                     native.request(resource + "/google", token=token, method="PUT", body=provider)
             self.google_action = connect_google
             self.urls["console"] = self.keycloak + "/realms/11id/account/account-security/signing-in"
+            kms.assert_stale_identity_cookie_shows_login(
+                self.keycloak, "11id", "passkey-lab-ui", self.origin + "/return")
             credential, compact, public = badge_fixture(context)
             for name, value in (("openbadge.json", credential), ("issuer-public.json", public), ("lab-accounts.json", self.accounts)):
                 (self.output / name).write_text(json.dumps(value, indent=2), encoding="utf-8")

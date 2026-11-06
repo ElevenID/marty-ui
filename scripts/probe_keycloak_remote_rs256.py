@@ -147,6 +147,35 @@ class PendingCibaDevice(BaseHTTPRequestHandler):
         pass
 
 
+def assert_stale_identity_cookie_shows_login(base: str, realm: str,
+                                           client_id: str, callback: str) -> None:
+    """Unknown cookie keys must use native login failure handling, not HTTP500."""
+    def encoded(value: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
+
+    verifier = secrets.token_urlsafe(32)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    params = {"client_id": client_id, "response_type": "code", "scope": "openid",
+              "redirect_uri": callback, "state": secrets.token_urlsafe(16),
+              "code_challenge": challenge, "code_challenge_method": "S256"}
+    cookie = encoded({"alg": "HS512", "kid": "disposable-unknown-identity-key"}) + "." + encoded({
+        "iss": base + f"/realms/{realm}", "sub": "synthetic-unknown-user",
+        "typ": "Serialized-ID", "exp": int(time.time()) + 60,
+    }) + ".AA"
+    request = Request(base + f"/realms/{realm}/protocol/openid-connect/auth?" + urlencode(params),
+                      headers={"Cookie": "KEYCLOAK_IDENTITY=" + cookie})
+    with urlopen(request, timeout=10) as response:
+        form = LoginForm()
+        form.feed(response.read().decode())
+        if response.status != 200 or not form.action:
+            raise RuntimeError("Unknown identity-cookie key did not return the native login form")
+        for value in response.headers.get_all("Set-Cookie", []):
+            if value.startswith("KEYCLOAK_IDENTITY=") and value.split(";", 1)[0] not in (
+                "KEYCLOAK_IDENTITY=", 'KEYCLOAK_IDENTITY=""'
+            ):
+                raise RuntimeError("Invalid identity cookie unexpectedly established authentication")
+
+
 def browser_code(opener, base: str, callback: str, realm: str,
                  username: str, *, login: bool,
                  before_submit: Callable[[], None] | None = None) -> dict:
@@ -819,6 +848,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                         "protocol": "openid-connect", "redirectUris": [callback],
                         "attributes": {"pkce.code.challenge.method": "S256"},
                     })
+                    assert_stale_identity_cookie_shows_login(base, realm, "probe-browser", callback)
                 post_admin(base + "/admin/realms/11id/clients", token, {
                     "clientId": "probe-ciba", "enabled": True,
                     "publicClient": False, "clientAuthenticatorType": "client-secret",

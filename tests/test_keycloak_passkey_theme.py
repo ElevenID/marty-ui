@@ -17,6 +17,8 @@ email_renderer = email_contract.renderer
 ROOT = Path(__file__).resolve().parents[1]
 PARENT_URL = "https://raw.githubusercontent.com/keycloak/keycloak/26.8.0/themes/src/main/resources/theme/base/login/passkeys.ftl"
 PARENT_SHA256 = "64acd32cc34fa1e4537912f0c54e1730bb8b7b29d04640804c8bf7a6029a2f01"
+ERROR_URL = "https://raw.githubusercontent.com/keycloak/keycloak/26.8.0/themes/src/main/resources/theme/base/login/error.ftl"
+ERROR_SHA256 = "1a358dc521c16ac678d72de5dfa1a4fa356f2fb0e532cadfffcc6e6caa283bc3"
 
 
 @pytest.fixture(scope="module")
@@ -35,6 +37,12 @@ def passkey_renderer(email_renderer):
     (parent / "passkeys.ftl").write_bytes(data)
     empty = working / "no-passkey-parent"
     empty.mkdir()
+    with opener.open(ERROR_URL, timeout=30) as response:
+        assert response.status == 200 and response.url == ERROR_URL
+        error_template = response.read(65537)
+    assert hashlib.sha256(error_template).hexdigest() == ERROR_SHA256
+    for directory in (parent, empty):
+        (directory / "error.ftl").write_bytes(error_template)
     subprocess.run([shutil.which("javac"), "-J-Xmx128m", "-cp", classpath,
                     "-d", str(working), str(ROOT / "tests/java/KeycloakPasskeyThemeContract.java")],
                    check=True, capture_output=True, text=True, timeout=30)
@@ -80,12 +88,12 @@ def test_native_passkeys_preserve_password_google_badge_and_recovery(passkey_ren
         assert ('name="authn_use_chk"' in html) == (mode == "reauth")
 
 
-@pytest.mark.parametrize("restart", ["automatic", "keyboard"])
-def test_error_restart_preserves_client_and_tab_context_in_browser(passkey_renderer, restart):
+@pytest.mark.parametrize("mode", ["normal", "no-client"])
+def test_native_error_page_stays_visible_and_uses_registered_app_link(passkey_renderer, mode):
     from playwright.sync_api import sync_playwright
 
     command, _, empty = passkey_renderer
-    result = subprocess.run([*command, str(empty), "error.ftl", "disabled", "normal"],
+    result = subprocess.run([*command, str(empty), "error.ftl", "disabled", mode],
                             capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     with sync_playwright() as playwright:
@@ -102,12 +110,17 @@ def test_error_restart_preserves_client_and_tab_context_in_browser(passkey_rende
             page.route("**/*", serve)
             page.goto("https://theme.example.invalid/failure")
             assert page.locator("#kc-error-message .instruction").inner_text() == "Synthetic authentication failure"
-            if restart == "keyboard":
-                page.locator("#kc-error-restart-link").focus()
+            # Errors must remain readable; the former five-second redirect
+            # looped on a login-action URL without a valid authentication tab.
+            page.wait_for_timeout(6000)
+            assert page.url == "https://theme.example.invalid/failure"
+            assert page.get_by_text("ElevenID LLC", exact=True).is_visible()
+            if mode == "normal":
+                page.locator("#backToApplication").focus()
                 page.keyboard.press("Enter")
-            page.wait_for_url("**/login-actions/authenticate?**", timeout=10000)
-            assert urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query) == {
-                "client_id": ["marty-ui"], "tab_id": ["synthetic"], "client_data": ["value&value=test"]}
+                page.wait_for_url("https://theme.example.invalid/", timeout=10000)
+            else:
+                assert page.locator("#backToApplication").count() == 0
             assert errors == []
         finally:
             browser.close()

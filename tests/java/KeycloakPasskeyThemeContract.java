@@ -31,6 +31,7 @@ public final class KeycloakPasskeyThemeContract {
             "internationalizationEnabled", false, "displayName", "Synthetic Realm"));
         data.put("properties", Map.of("credentialLoginUrl", "/custom-badge-login"));
         data.put("client", Map.of("baseUrl", "/"));
+        if (args[4].equals("no-client")) data.remove("client");
         data.put("url", Map.of("loginAction", "/realms/test/login-actions/authenticate?client_id=marty-ui&tab_id=synthetic",
             "loginResetCredentialsUrl", "/reset", "registrationUrl", "/register",
             "loginRestartFlowUrl", "/restart", "resourcesPath", "/resources/11id",
