@@ -116,8 +116,38 @@ and `.provenance.jsonl` sidecars together in a private directory:
 
 Use the existing installer verifier pins from `install.sh`. The adapter checks
 the `gh` and `cosign` executable hashes again. Directories must be `0700`, input
-artifacts `0600`, and verifier executables `0700`. Install the repository's
-existing PyYAML dependency (`python3-yaml` on Ubuntu).
+artifacts `0600`, and verifier executables `0700`. The files and their immediate
+parent directories must also belong to the user running the adapter. A correct
+checksum and mode do not satisfy that ownership check.
+
+When staging the pinned GitHub CLI archive, explicitly discard its recorded
+ownership and apply the caller's umask. GNU tar otherwise restores archive
+owners when run as root; a publisher-owned `gh` then fails the private-input
+check even inside a root-owned `0700` directory. After downloading the archive
+into an existing caller-owned `0700` directory, use the current pins and extract
+only the verifier:
+
+```sh
+set -eu
+umask 077
+: "${VERIFIER_DIR:?Set the absolute private verifier directory}"
+test ! -e "$VERIFIER_DIR/gh"
+test ! -L "$VERIFIER_DIR/gh"
+printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 \
+  "$VERIFIER_DIR/gh.tar.gz" | sha256sum --check --strict
+tar -xzf "$VERIFIER_DIR/gh.tar.gz" --directory "$VERIFIER_DIR" \
+  --no-same-owner --no-same-permissions --strip-components=2 \
+  gh_2.103.2_linux_amd64/bin/gh
+printf '%s  %s\n' cbfdc94f3a5c0713c0d6df3e0a1d88a59a76b0c52332aad7d21d112f9da2cc0e \
+  "$VERIFIER_DIR/gh" | sha256sum --check --strict
+chmod 0700 "$VERIFIER_DIR/gh"
+```
+
+These extraction options work for both root and unprivileged staging. Keep the
+adapter's ownership checks enabled; `chmod` alone cannot correct an archive
+owner mismatch. See [GNU tar's ownership options](https://www.gnu.org/software/tar/manual/html_node/Option-Summary.html).
+
+Install the repository's existing PyYAML dependency (`python3-yaml` on Ubuntu).
 
 Download the official OpenBao chart archive; the bootstrap validates its exact
 checksum against [`upstream.json`](../deploy/helm/openbao/upstream.json):
