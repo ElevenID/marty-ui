@@ -215,6 +215,17 @@ directory PVC. PostgreSQL and Redis use persistent StatefulSets; Redis has
 append-only persistence. StatefulSet PVCs survive Helm uninstall, and the
 applicant PVC has Helm's `keep` policy. Delete data only as an explicit reset.
 
+Single-replica application Deployments use `Recreate`. This keeps the
+development node within its existing no-surge budget and makes Helm wait for
+the application's one Ready pod. With `RollingUpdate` and
+`maxUnavailable: 1`, Helm 3.22.1 can otherwise consider a one-replica
+Deployment ready with zero Ready pods. Recreate causes a service interruption
+during a rollout; this development target does not promise uninterrupted
+updates. When `apps.replicas` is greater than one, applications retain the
+existing rolling strategy with one unavailable replica and no surge; applicant
+remains a single writer. Upgrade and multi-replica qualification remain
+separate work.
+
 The development profile requests **875 millicores and 2336 MiB** for its steady
 workloads, leaving room on a 2 CPU / 8 GiB node for K3s, the Ingress controller,
 OpenBao and setup Jobs. Requests are a
