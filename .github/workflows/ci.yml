@@ -2264,6 +2264,17 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           python3 ".github/scripts/private-forks.py" check
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        timeout-minutes: 5
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Prefer cached Docker Hub images without restarting the runner daemon
         run: bash scripts/ci/configure-dockerhub-mirror.sh
       - name: Select the exact BuildKit image with registry fallback
