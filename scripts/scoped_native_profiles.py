@@ -70,6 +70,18 @@ CANVAS_SCOPED_JOBS = BuildProfile(
     "44040270000f93b7e7499cbec31b3bb3dd7e3df1",
 )
 
+D12_PASSPORT_CURRENT = BuildProfile(
+    "d12-passport-current-three-role",
+    "6117cea9290f57406cf109eae56f64f7986e3783",
+    (("flow", "marty-flow"), ("gateway", "marty-gateway"),
+     ("issuance-native", "marty-issuance-service")),
+    ("marty-flow", "marty-gateway", "marty-issuance-service"),
+    "marty-d12-current-",
+    "d12-passport-current-native",
+    "ffa24febcd0fb3fced15da7f28190af6d61ae0f9",
+    volumes=("ui-canvas-cargo", "marty-d12-current-native-target"),
+)
+
 
 ISSUANCE_OFFER_FORMAT = BuildProfile(
     "d05-issuance-offer-format-only",
@@ -118,7 +130,7 @@ LATEST_ALL_SERVICES = BuildProfile(
 
 
 def reviewed_profile(name):
-    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, CANVAS_SCOPED_JOBS, ISSUANCE_OFFER_FORMAT, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
+    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, CANVAS_SCOPED_JOBS, D12_PASSPORT_CURRENT, ISSUANCE_OFFER_FORMAT, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
         if name == profile.name:
             return profile
     raise ValueError("UNKNOWN_REVIEWED_BUILD_PROFILE")

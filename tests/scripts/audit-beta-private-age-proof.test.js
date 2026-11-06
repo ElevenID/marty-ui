@@ -238,7 +238,8 @@ test('D03 functional readiness requires original assertions, two distinct stock 
 });
 
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
-const {prepareAgeProofLiveInputs,finalizeAgeProofFunctional}=require('./audit-beta-private-age-proof');
+const {prepareAgeProofLiveInputs,finalizeAgeProofRun,ageProofUsesLiveClient}=require('./audit-beta-private-age-proof');
+const finalizeAgeProofFunctional=(report,client,annotate)=>finalizeAgeProofRun(report,client,{functionalRerun:true,recordVideo:false},annotate);
 function completedFunctionalReport(){return {errors:[],cleanup:{ok:true},androidGate:{result:'PASS'},
  lanes:[{laneId:'eudi-age-proof-interoperability'},{laneId:'spruceid-age-proof-interoperability'}],
  behaviorAssertions:Object.fromEntries(['trusted_mdl_issuance','request_only_age_over_21','verify_issuer_trust_and_minimum_response','untrusted_issuer_denied','independent_wallets_pass'].map(k=>[k,true]))};}
@@ -295,4 +296,34 @@ test('D03 completion, annotation and close failures keep original errors and can
  const original=completedFunctionalReport();original.errors.push('original feature error');
  await finalizeAgeProofFunctional(original,{complete(){throw Error('must not complete');},close(){throw Error('close also failed');}},annotate);
  assert.deepEqual(original.errors,['original feature error','close also failed']);
+});
+
+test('D03 selected parent lifecycle applies to both modes; only standalone recording can omit it',()=>{
+ const functional=ageProofExecutionMode({RECORD_VIDEO:'0'}),recording=ageProofExecutionMode({RECORD_VIDEO:'1'});
+ assert.equal(ageProofUsesLiveClient(functional,{}),true);
+ assert.equal(ageProofUsesLiveClient(recording,{}),false);
+ for(const mode of [functional,recording])for(const value of ['selected-helper.js',''])
+  assert.equal(ageProofUsesLiveClient(mode,{DEMO_EXECUTION_EVIDENCE_HELPER:value}),true);
+});
+test('D03 normal recording with a selected parent retains media gates and awaits COMPLETE before release readiness',async()=>{
+ const mode=ageProofExecutionMode({RECORD_VIDEO:'1'}),report=completedFunctionalReport();
+ report.applicationVideo={path:'actual-test-recording.webm',sha256:'a'.repeat(64)};
+ let acknowledge;const wait=new Promise(resolve=>acknowledge=resolve),events=[];
+ const pending=finalizeAgeProofRun(report,{async complete(){events.push('complete');await wait;},close(){events.push('close');}},mode);
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(report.releaseReady,false);assert.deepEqual(events,['complete']);
+ acknowledge();assert.equal(await pending,true);assert.equal(report.releaseReady,true);assert.equal(report.functionalReady,false);
+ assert.equal(report.liveEvidenceCompletion.acknowledged,true);assert.deepEqual(events,['complete','close']);
+ for(const fault of ['media','assertion','cleanup','complete','close']){
+  const r=completedFunctionalReport();r.applicationVideo=report.applicationVideo;let completed=0,closed=0;
+  if(fault==='media')delete r.applicationVideo;if(fault==='assertion')r.behaviorAssertions.untrusted_issuer_denied=false;if(fault==='cleanup')r.cleanup.ok=false;
+  const passed=await finalizeAgeProofRun(r,{complete(){completed++;if(fault==='complete')throw Error('recording COMPLETE refused');},close(){closed++;if(fault==='close')throw Error('recording evidence close refused');}},mode);
+  assert.equal(passed,false);assert.equal(r.releaseReady,false);assert.equal(closed,1);assert.equal(completed,['complete','close'].includes(fault)?1:0);
+ }
+});
+test('D03 standalone recording keeps its strict media success while functional mode cannot fall back to standalone',async()=>{
+ const report=completedFunctionalReport();report.applicationVideo={path:'actual-test-recording.webm'};
+ assert.equal(await finalizeAgeProofRun(report,null,ageProofExecutionMode({RECORD_VIDEO:'1'})),true);
+ assert.equal(report.liveEvidenceCompletion.selected,false);assert.equal(report.liveEvidenceCompletion.acknowledged,false);
+ const functional=completedFunctionalReport();assert.equal(await finalizeAgeProofRun(functional,null,ageProofExecutionMode({RECORD_VIDEO:'0'})),false);
+ assert.equal(functional.functionalReady,false);assert.match(functional.errors[0],/requires its live evidence client/);
 });

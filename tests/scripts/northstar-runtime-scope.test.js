@@ -55,3 +55,12 @@ test('diagnostics retain fixed class and code without provider text, values or d
   const safe=m.safeFailure(new Error(message));assert.equal(safe.code,'SCOPE_NATIVE_VERIFICATION_FAILED');assert(!JSON.stringify(safe).includes('private'));
  }
 });
+
+
+test('native failures preserve fixed code and bounded summary without any provider payload',()=>{
+ const error=Object.assign(Error('secret-provider-token /private/path'),{code:'NATIVE_DOCKER_SYNC_FAILED',operationSummary:{status:4294967295,timedOut:false,signalled:true,stdoutBytes:0,stderrBytes:43,stderr:'secret-provider-token'}});
+ const value=m.safeFailure(error);assert.equal(value.code,'NATIVE_DOCKER_SYNC_FAILED');assert.deepEqual(value.operationSummary,{status:4294967295,timedOut:false,signalled:true,stdoutBytes:0,stderrBytes:43});assert(!JSON.stringify(value).includes('secret'));
+ const invalid=m.safeFailure({...error,operationSummary:{status:true,timedOut:'secret',signalled:1,stdoutBytes:64*1024**2+1,stderrBytes:-1}});
+ assert.deepEqual(invalid.operationSummary,{status:null,timedOut:false,signalled:false,stdoutBytes:null,stderrBytes:null});
+ const foreign=m.safeFailure({code:'secret-code',message:'private token',operationSummary:error.operationSummary});assert.equal(foreign.code,'SCOPE_NATIVE_VERIFICATION_FAILED');assert(!Object.hasOwn(foreign,'operationSummary'));
+});

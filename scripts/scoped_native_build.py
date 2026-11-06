@@ -415,7 +415,9 @@ class LocalBuildJournal:
 def build_journal(plan, private, profile=None):
     if "journalBackend" not in plan:
         return LocalBuildJournal(private)
-    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", *CURRENT_ISSUER_READY_PROFILES, "canvas-issuer-scoped-jobs", *OFFICIAL_PROFILES), "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED")
+    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", *CURRENT_ISSUER_READY_PROFILES,
+                        "canvas-issuer-scoped-jobs", "d12-passport-current-three-role", *OFFICIAL_PROFILES),
+            "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED")
     from scoped_linux_journal import LinuxBuildJournal
     return LinuxBuildJournal(private, plan["runId"], plan["journalBackend"])
 

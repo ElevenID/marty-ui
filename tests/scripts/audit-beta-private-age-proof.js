@@ -236,45 +236,57 @@ async function prepareAgeProofLiveInputs(artifactDir, client, page, inputs) {
   return acknowledgeDemoInputs(artifactDir, 'd03-fixture-input.json', inputs, client);
 }
 
-async function finalizeAgeProofFunctional(report, client, applyReadiness = applyLocalNativeReadiness) {
-  report.recordingStatus = 'NOT_CAPTURED';
-  report.releaseQualified = false;
-  report.demoQualified = false;
+function ageProofUsesLiveClient(mode, environment = process.env) {
+  return mode.functionalRerun || environment.DEMO_EXECUTION_EVIDENCE_HELPER !== undefined;
+}
+
+async function finalizeAgeProofRun(report, client, mode, applyReadiness = applyLocalNativeReadiness) {
   report.releaseReady = false;
   report.functionalReady = false;
   report.operations_verified = false;
-  report.liveEvidenceCompletion = {acknowledged:false};
+  report.liveEvidenceCompletion = {selected:!!client, acknowledged:false};
+  if (mode.functionalRerun) {
+    report.recordingStatus = 'NOT_CAPTURED';
+    report.releaseQualified = false;
+    report.demoQualified = false;
+  }
   try {
-    const ready = ageProofOperationsComplete(report);
-    if (!client) {
+    const ready = ageProofOperationsComplete(report) && (mode.functionalRerun || !!report.applicationVideo);
+    if (mode.functionalRerun && !client) {
       if (ready) throw Error('D03 functional completion requires its live evidence client');
       return false;
     }
-    const annotatedReady = applyReadiness(report, client, {ready, cleanupComplete:report.cleanup?.ok === true});
-    // Annotation alone is not execution acknowledgement. Do not publish ready
-    // until the same sealed client has drained observations and COMPLETE is ACKed.
+    const annotatedReady = mode.functionalRerun
+      ? applyReadiness(report, client, {ready, cleanupComplete:report.cleanup?.ok === true}) : ready;
+    // Neither mode publishes ready before the selected parent acknowledges
+    // COMPLETE. Standalone recording retains its existing strict media gates.
     report.functionalReady = false;
     report.operations_verified = false;
     if (ready && annotatedReady === true) {
-      await client.complete();
-      report.liveEvidenceCompletion.acknowledged = true;
-      report.functionalReady = true;
+      if (client) {
+        await client.complete();
+        report.liveEvidenceCompletion.acknowledged = true;
+      }
+      report.functionalReady = mode.functionalRerun;
       report.operations_verified = true;
+      report.releaseReady = !mode.functionalRerun;
     }
   } catch (error) {
     report.errors.push(String(error.message || error).slice(0, 2000));
     report.functionalReady = false;
     report.operations_verified = false;
+    report.releaseReady = false;
   } finally {
     try { await client?.close(); }
     catch (error) {
       report.errors.push(String(error.message || error).slice(0, 2000));
       report.functionalReady = false;
       report.operations_verified = false;
+      report.releaseReady = false;
     }
-    report.releaseReady = false;
+    if (mode.functionalRerun) report.releaseReady = false;
   }
-  return report.functionalReady === true;
+  return mode.functionalRerun ? report.functionalReady === true : report.releaseReady === true;
 }
 
 async function main() {
@@ -289,9 +301,9 @@ async function main() {
     ] };
   let browser, context, video, controller, liveEvidence;
   try {
-    if (mode.functionalRerun) {
+    if (ageProofUsesLiveClient(mode)) {
       liveEvidence = await createDemoLiveEvidence();
-      if (!liveEvidence.functionalRuntimeBinding) throw Error('D03 functional execution requires recorder-bound current runtime evidence');
+      if (mode.functionalRerun && !liveEvidence.functionalRuntimeBinding) throw Error('D03 functional execution requires recorder-bound current runtime evidence');
     }
     if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0' || process.env.BETA_LOCAL_PROXY === '1' || process.env.MARTY_UI_CANDIDATE_DIST) throw Error('D03 production capture requires authenticated HTTPS and the deployed UI');
     const fixturePath = process.env.D03_FIXTURE_PATH;
@@ -317,7 +329,7 @@ async function main() {
     browser = await chromium.launch({ headless: process.env.HEADED !== '1' });
     context = await browser.newContext({ viewport: VIDEO_SIZE, ...(mode.recordVideo ? {recordVideo: { dir: artifactDir, size: VIDEO_SIZE }} : {}) });
     const page = await context.newPage();
-    if (mode.functionalRerun) await prepareAgeProofLiveInputs(artifactDir, liveEvidence, page, {
+    if (liveEvidence) await prepareAgeProofLiveInputs(artifactDir, liveEvidence, page, {
       schemaVersion:1, scenario:'private-online-age-proof', expected, syntheticClaims:fixture.syntheticClaims,
       fixtureSha256:report.fixtureSha256, sourceRevision:report.source.revision, recorderRevision:report.recorderSource.revision,
     });
@@ -378,9 +390,7 @@ async function main() {
       } catch (error) { report.errors.push(error.message); }
     }
     if (browser) await browser.close().catch(error => report.errors.push(error.message));
-    const ready = ageProofOperationsComplete(report);
-    report.releaseReady = mode.recordVideo && ready && !!report.applicationVideo;
-    if (mode.functionalRerun) await finalizeAgeProofFunctional(report, liveEvidence);
+    await finalizeAgeProofRun(report, liveEvidence, mode);
     report.result = (mode.functionalRerun ? report.functionalReady === true : report.releaseReady) ? 'PASS' : report.lanes?.length ? 'FAIL' : 'BLOCKED';
     report.completedAt = new Date().toISOString();
     fs.writeFileSync(path.join(artifactDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -390,4 +400,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(error => { console.error(error.message); process.exitCode = 1; });
-module.exports = { createAgeProofController, rustCheck, sourceBinding, successful, ageProofExecutionMode, ageProofOperationsComplete, prepareAgeProofLiveInputs, finalizeAgeProofFunctional };
+module.exports = { createAgeProofController, rustCheck, sourceBinding, successful, ageProofExecutionMode, ageProofOperationsComplete, prepareAgeProofLiveInputs, finalizeAgeProofRun, ageProofUsesLiveClient };
