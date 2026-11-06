@@ -461,6 +461,7 @@ class LoginLab(base.ApplicationLab):
             body={
                 "attributes": {**realm.get("attributes", {}), "frontendUrl": origin},
                 "loginTheme": "11id",
+                "accountTheme": "11id",
             },
         )
         try:
@@ -569,6 +570,7 @@ class LoginLab(base.ApplicationLab):
                 body={
                     "attributes": realm.get("attributes", {}),
                     "loginTheme": realm.get("loginTheme", "keycloak"),
+                    "accountTheme": realm.get("accountTheme", ""),
                 },
             )
 

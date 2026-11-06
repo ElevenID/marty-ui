@@ -129,7 +129,7 @@ def keycloak():
             "grant_type": "password", "client_id": "admin-cli", "username": "passkey-test-admin", "password": password})["access_token"]
         admin = base + "/admin/realms/passkey-test"
         request(base + "/admin/realms", token=token, body={"realm": "passkey-test", "enabled": True,
-            "loginTheme": "11id", "emailTheme": "11id", "sslRequired": "none", "registrationAllowed": True,
+            "loginTheme": "11id", "emailTheme": "11id", "accountTheme": "11id", "sslRequired": "none", "registrationAllowed": True,
             "resetPasswordAllowed": True, "registrationEmailAsUsername": True,
             "smtpServer": {"host": "smtp", "port": "1025", "from": "noreply@example.invalid",
                            "auth": "false", "ssl": "false", "starttls": "false"}})
@@ -341,6 +341,15 @@ def qualify_native_lifecycle(keycloak, page, cdp, device, subject, credentials_u
         page.get_by_text("Travel key", exact=True).wait_for(timeout=30000)
     except Exception as error:
         raise AssertionError(page.locator("body").inner_text()) from error
+
+    # Verify branding on the inherited native credential-management screen.
+    assert page.title() == "ElevenID LLC Account"
+    brand = page.locator("header img[src$='/img/elevenid.svg']")
+    assert brand.count() == 1 and brand.is_visible()
+    assert page.locator("link[href$='/css/elevenid.css']").count() == 1
+    assert page.locator(".pf-v5-c-masthead").evaluate(
+        "element => getComputedStyle(element).backgroundColor"
+    ) == "rgb(25, 118, 210)"
 
     # Native registration on a second device, without adding a password.
     device_keys = cdp.send("WebAuthn.getCredentials", {"authenticatorId": device})["credentials"]

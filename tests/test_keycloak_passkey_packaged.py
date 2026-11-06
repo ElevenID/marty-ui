@@ -45,7 +45,7 @@ def qualify_passkeys(context):
             "--label", "marty.test=keycloak-passkeys", "--tmpfs", "/tmp:rw,nosuid,nodev,size=16m",
             "python:3.12.10-slim-bookworm", "python", "-u", "-c", native.SMTP_CAPTURE)
         native.request(admin, token=admin_token, method="PUT", body={
-            "loginTheme": "11id", "emailTheme": "11id", "registrationAllowed": True,
+            "loginTheme": "11id", "emailTheme": "11id", "accountTheme": "11id", "registrationAllowed": True,
             "resetPasswordAllowed": True, "registrationEmailAsUsername": True,
             "smtpServer": {"host": "passkey-smtp", "port": "1025", "from": "noreply@example.invalid",
                            "auth": "false", "ssl": "false", "starttls": "false"}})

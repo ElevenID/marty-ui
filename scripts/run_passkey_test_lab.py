@@ -143,7 +143,7 @@ class Lab:
             self.smtp = native.docker("run", "-d", "--name", smtp_name, "--memory", "64m", "--read-only",
                 "--network", context["network"], "--network-alias", "lab-smtp", "--label", "marty.test=passkey-manual-lab",
                 "--tmpfs", "/tmp:rw,nosuid,nodev,size=16m", "python:3.12.10-slim-bookworm", "python", "-u", "-c", native.SMTP_CAPTURE)
-            native.request(admin, token=token, method="PUT", body={"loginTheme": "11id", "emailTheme": "11id",
+            native.request(admin, token=token, method="PUT", body={"loginTheme": "11id", "emailTheme": "11id", "accountTheme": "11id",
                 "registrationEmailAsUsername": True, "resetPasswordAllowed": True,
                 "smtpServer": {"host": "lab-smtp", "port": "1025", "from": "lab@example.invalid",
                                "auth": "false", "ssl": "false", "starttls": "false"}})

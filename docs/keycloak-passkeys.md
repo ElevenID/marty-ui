@@ -5,6 +5,15 @@ Open Badge credential presentation and recovery remain available. A passkey
 authenticates the same Keycloak account and does not confer badge claims or
 application permissions.
 
+The `11id` account theme inherits Keycloak 26.8.0's `keycloak.v3` console and
+adds the ElevenID LLC wordmark, blue header and account title. Native passkey
+creation, naming and removal stay upstream. New realm imports and disposable
+labs select `accountTheme=11id` alongside the login and email themes. For an
+existing installation, deploy the complete `11id` theme directory, then select
+**Realm settings → Themes → Account theme → 11id** during its authorized rollout.
+Preserve an operator's other custom theme unless its replacement is agreed.
+Changing the account theme does not change passkeys, passwords or broker links.
+
 ## Configuration
 
 The existing Keycloak configurator owns these settings. On the qualified
