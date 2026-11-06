@@ -380,7 +380,7 @@ def test_workflow_retains_tiny_failure_evidence_without_weakening_recovery():
     assert job["env"]["SCCACHE_GHA_RW_MODE"] == "READ_ONLY"
     cache = steps["Record optional recovery compiler cache outcomes"]
     assert (
-        cache["if"] == "always()"
+        cache["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
         and "timeout 10s sccache --show-stats 2>/dev/null" in cache["run"]
     )
     assert (
@@ -388,7 +388,7 @@ def test_workflow_retains_tiny_failure_evidence_without_weakening_recovery():
         in cache["run"]
     )
     retained = steps["Retain recovery preparation evidence"]
-    assert retained["if"] == "always()"
+    assert retained["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
     assert retained["continue-on-error"] is True
     assert (
         retained["uses"]

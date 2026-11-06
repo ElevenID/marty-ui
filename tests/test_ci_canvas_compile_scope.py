@@ -259,7 +259,8 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
         "matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit'"
     )
     assert steps["Remove owned Rust test services and volumes"]["if"] == (
-        "always() && matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit'"
+        "vars.PRIVATE_FORKS_ENABLED != 'true' && "
+        "(always() && matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit')"
     )
     selfhost_source = (
         ROOT / "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs"

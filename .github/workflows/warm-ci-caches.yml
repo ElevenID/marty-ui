@@ -78,7 +78,7 @@ jobs:
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Report compiler cache effectiveness
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         run: sccache --show-stats
 
   images:

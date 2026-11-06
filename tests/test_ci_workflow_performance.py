@@ -2150,7 +2150,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     assert "cargo test --locked -p marty-issuance-service --lib --no-run" in compile_step
     assert "--renewal-unit-only \"$artifacts\" target" in compile_step
     assert steps["Preserve synthetic runtime failure diagnostics"]["if"] == (
-        "always() && matrix.lane == 'canvas'"
+        "vars.PRIVATE_FORKS_ENABLED != 'true' && (always() && matrix.lane == 'canvas')"
     )
     assert "${{ matrix.lane }}" in steps["Upload Rust build evidence"]["with"]["name"]
 
@@ -5348,7 +5348,7 @@ def test_bookworm_compile_phase_timings_keep_exact_offline_targets() -> None:
     ):
         assert f"run_cargo_phase {phase} {command} --locked --offline" in compile_step
     assert "python3 ../scripts/ci/verify-canvas-test-artifacts.py" in compile_step
-    assert capture_step["if"] == "always()"
+    assert capture_step["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
     assert "test ! -L rust/target/bookworm-compile-phases.tsv" in capture_step["run"]
     assert "-le 4096" in capture_step["run"]
     assert "rust-build-evidence/bookworm-compile-phases.tsv" in capture_step["run"]
@@ -5377,7 +5377,7 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
         step = next(
             step for step in jobs[job_name]["steps"] if step.get("name") == step_name
         )
-        assert step["if"] == "always()"
+        assert step["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
         assert not step.get("continue-on-error", False)
         scripts[job_name] = step["run"]
     service_steps = jobs["test-rust-services"]["steps"]

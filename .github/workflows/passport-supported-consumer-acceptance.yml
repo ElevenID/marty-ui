@@ -111,7 +111,7 @@ jobs:
           jq -e '.schema == "marty.passport-supported-consumer-acceptance/v1"
             and .status == "accepted"' "$report"
       - name: Upload blocked supported consumer receipt
-        if: always() && (steps.collect.outcome == 'success' || steps.collect.outcome == 'failure')
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always() && (steps.collect.outcome == 'success' || steps.collect.outcome == 'failure'))
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: passport-supported-consumer-acceptance-${{ github.run_id }}

@@ -579,7 +579,7 @@ jobs:
           CARGO_PROFILE_TEST_DEBUG: 0
         run: python3 scripts/probe_integration_secret_coordinated_restore.py
       - name: Record optional recovery compiler cache outcomes
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         shell: bash
         run: |
           set -euo pipefail
@@ -587,7 +587,7 @@ jobs:
             awk -v phase=recovery_probe -f scripts/ci/public-sccache-stats.awk |
             tee "$RUNNER_TEMP/rust-recovery-cache-counters.jsonl" || true
       - name: Retain recovery preparation evidence
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -1086,7 +1086,7 @@ jobs:
               "$artifacts" target
           fi
       - name: Capture host compiler cache counters after compile
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         shell: bash
         run: |
           set -euo pipefail
@@ -1810,7 +1810,7 @@ jobs:
           run_timed passport_reconciliation cargo test --locked -p marty-issuance-service \
             --lib passport_http::reconciliation_tests:: -- --ignored --test-threads=1
       - name: Preserve synthetic runtime failure diagnostics
-        if: always() && matrix.lane == 'canvas'
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always() && matrix.lane == 'canvas')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: owned-runtime-failure-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1838,7 +1838,7 @@ jobs:
           "${executables[0]}" --list | grep -Fx 'canvas_operation_http::tests::native_socket_case: test'
           "$RUNNER_TEMP/canvas-operation-tls/bin/python" ../scripts/run_canvas_timeout_consumer_oracle.py --native-executable "${executables[0]}" --qualification "$MARTY_CANVAS_FULL_QUALIFICATION"
       - name: Report compiler cache effectiveness
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         shell: bash
         run: |
           set -euo pipefail
@@ -1848,7 +1848,7 @@ jobs:
             cp rust/target/cargo-timings/cargo-timing.html "$RUNNER_TEMP/rust-build-evidence/cargo-timing.html"
           fi
       - name: Upload Rust build evidence
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: rust-build-evidence-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1883,7 +1883,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Remove owned Rust test services and volumes
-        if: always() && matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit'
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always() && matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit')
         shell: bash
         run: |
           set -euo pipefail
@@ -2160,7 +2160,7 @@ jobs:
           grep -F 'SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017' <<<"$rendered"
           grep -F 'RUST_LOG: info' <<<"$rendered"
       - name: Report compiler cache effectiveness
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         shell: bash
         run: |
           set -euo pipefail

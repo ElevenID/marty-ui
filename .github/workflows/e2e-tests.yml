@@ -439,7 +439,7 @@ jobs:
         run: node tests/scripts/audit-beta-credential-lifecycle.js
 
       - name: Upload lifecycle evidence
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: mip-03-beta-credential-lifecycle
@@ -448,12 +448,12 @@ jobs:
           retention-days: 30
 
       - name: Collect wallet logs
-        if: failure()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (failure())
         run: |
           cat marty-test-wallet.log || true
 
       - name: Stop browser wallet
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         run: |
           if [[ -f marty-test-wallet.pid ]]; then
             kill "$(cat marty-test-wallet.pid)" || true
