@@ -296,6 +296,36 @@ def test_development_requests_leave_room_for_cluster_and_openbao(rendered: list[
         assert stateful["spec"]["volumeClaimTemplates"]
 
 
+def test_single_replica_apps_require_a_ready_pod_without_surge(rendered: list[dict]) -> None:
+    # Helm 3 waits for replicas - MaxUnavailable. A one-replica rolling update
+    # with maxUnavailable=1 therefore accepts zero Ready pods. Recreate keeps
+    # the no-surge budget and requires the desired Ready replica instead.
+    workloads = yaml.safe_load((CHART / "files/workloads.yaml").read_text())
+    deployments = resources(rendered, "Deployment")
+    for name in workloads:
+        spec = deployments[name]["spec"]
+        assert spec["replicas"] == 1, name
+        assert spec["strategy"] == {"type": "Recreate"}, name
+
+
+def test_multiple_replicas_retain_rolling_updates_and_applicant_single_writer(tmp_path: Path) -> None:
+    values = installation_values()
+    values["apps"] = {"replicas": 3}
+    deployments = resources(render(tmp_path, values), "Deployment")
+    workloads = yaml.safe_load((CHART / "files/workloads.yaml").read_text())
+    for name in workloads:
+        spec = deployments[name]["spec"]
+        if name == "applicant":
+            assert spec["replicas"] == 1
+            assert spec["strategy"] == {"type": "Recreate"}
+        else:
+            assert spec["replicas"] == 3, name
+            assert spec["strategy"] == {
+                "type": "RollingUpdate",
+                "rollingUpdate": {"maxUnavailable": 1, "maxSurge": 0},
+            }, name
+
+
 def test_ip_ingress_omits_disallowed_hosts_and_preserves_https_port(tmp_path: Path) -> None:
     values = installation_values()
     values.update(publicHost="192.0.2.20", publicOrigin="https://192.0.2.20:8443")
