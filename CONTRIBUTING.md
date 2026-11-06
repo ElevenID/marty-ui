@@ -24,11 +24,14 @@ pull request should identify any checks that could not be run locally.
 
 ## Public/private boundary
 
-This repository must build without private dependencies. Payment providers,
-subscriptions, commercial prices, checkout UI, payment credentials, and
-commercial release inputs belong in a separately distributed commerce
-extension. Changes that intentionally add an extension point should provide a
-working public no-op implementation and a boundary test.
+Web-only builds and public source checks must remain independent of private
+code. Native Rust builds follow the downstream fork access policy in
+[Native build access](docs/private-native-builds.md); private source credentials
+and dependency caches must stay in private build environments. Payment
+providers, subscriptions, commercial prices, checkout UI, payment credentials,
+and commercial release inputs belong in a separately distributed commerce
+extension. Changes that intentionally add a commerce extension point should
+provide a working public no-op implementation and a boundary test.
 
 Never commit credentials, production data, private repository snapshots, or
 generated build output.
