@@ -422,6 +422,31 @@ def build_journal(plan, private, profile=None):
     return LinuxBuildJournal(private, plan["runId"], plan["journalBackend"])
 
 
+def require_d12_fresh_target(plan, helper):
+    """Refuse Docker's implicit volume creation or reuse for the new D12 build."""
+    from scoped_native_profiles import D12_PASSPORT_CURRENT
+    volume = D12_PASSPORT_CURRENT.volumes[1]
+    proof = json.loads(read_ref(plan["targetVolumeReceipt"]).read_bytes())
+    require(proof.get("state") == "CREATED_EMPTY_OWNED_TARGET"
+            and proof.get("volume") == volume
+            and proof.get("runId") == plan["runId"]
+            and proof.get("engineId") == plan["engineId"]
+            and proof.get("owner") == D12_PASSPORT_CURRENT.owner
+            and proof.get("emptyReadback") is True
+            and proof.get("sourceIndependent") is True
+            and proof.get("consumers") == [], "D12_FRESH_OWNED_TARGET_REQUIRED")
+    rows = json.loads(helper.run("docker", "--context", "desktop-linux", "volume", "inspect", volume).stdout)
+    require(len(rows) == 1 and rows[0]["Name"] == volume
+            and rows[0]["Driver"] == rows[0]["Scope"] == "local"
+            and rows[0]["CreatedAt"] == proof["createdAt"]
+            and rows[0]["Labels"].get("elevenid.owner") == D12_PASSPORT_CURRENT.owner
+            and rows[0]["Labels"].get("elevenid.run") == plan["runId"],
+            "D12_OWNED_TARGET_CHANGED")
+    consumers = helper.run("docker", "--context", "desktop-linux", "ps", "--all", "--quiet",
+                           "--filter", "volume=" + volume).stdout.strip()
+    require(not consumers, "D12_TARGET_ALREADY_CONSUMED")
+
+
 @contextmanager
 def selected_resource_volumes(helper, volumes):
     """Use the reviewed resource probe on one closed volume pair, then restore it."""
@@ -443,6 +468,8 @@ def start(prepared_ref, helper, git, profile=None):
     require(os.environ.get("DOCKER_CONTEXT") == "desktop-linux", "EXPLICIT_DESKTOP_CONTEXT_REQUIRED")
     require(not list(output.iterdir()), "PRESERVE_PREVIOUS_BUILD_OUTPUTS")
     require(helper.VOLUMES == VOLUMES, "SHARED_RESOURCE_SCOPE_CHANGED")
+    if profile == "d12-passport-current-three-role":
+        require_d12_fresh_target(plan, helper)
     if profile in CURRENT_ISSUER_READY_PROFILES:
         current_issuer_capacity(helper, private, profile)
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED")
@@ -488,6 +515,8 @@ def start(prepared_ref, helper, git, profile=None):
                         "DURABLE_TARGET_SEED_RESULT_REQUIRED")
             with selected_resource_volumes(helper, build_scope(profile)["volumes"]):
                 resource = helper.resources(private, plan["builderImage"])
+            if profile == "d12-passport-current-three-role":
+                require_d12_fresh_target(plan, helper)
             resource_state.update(state="RESOURCE_CHECK_READY", resourcesBefore=resource)
             resource_state["resourceProbe"]["outcome"] = "HELPER_RETURNED_READY_CID_NOT_EXPOSED"
             require(durable_barrier(store.state(resource_state)),
@@ -567,6 +596,28 @@ def finish(prepared_ref, helper, git, profile=None):
                     "OFFICIAL_COMPILER_VOLUME_CHANGED")
         require(all(mounts[d]["RW"] is False for d in ("/src/ui", "/build/core", "/build.sh", "/build/tool.sh", "/build/lock_guard.py")),
                 "OFFICIAL_SOURCE_MOUNT_CHANGED")
+    if profile == "d12-passport-current-three-role":
+        mounts = {mount["Destination"]: mount for mount in row["Mounts"]}
+        require(len(mounts) == len(row["Mounts"]) == 6
+                and set(mounts) == {"/src/ui", "/build/core", "/out", "/build.sh", "/cargo", "/target"}
+                and mounts["/cargo"]["Type"] == mounts["/target"]["Type"] == "volume"
+                and mounts["/cargo"]["Name"] == scope["volumes"][0]
+                and mounts["/target"]["Name"] == scope["volumes"][1]
+                and all(mounts[d]["Type"] == "bind" and mounts[d]["RW"] is False
+                        for d in ("/src/ui", "/build/core", "/build.sh"))
+                and mounts["/out"]["Type"] == "bind" and mounts["/out"]["RW"] is True
+                and all(daemon_source(mounts[d]["Source"]) == daemon_source(p)
+                        for d, p in (("/src/ui", plan["sources"]["ui"]["directory"]),
+                                     ("/build/core", plan["sources"]["core"]["directory"]),
+                                     ("/out", plan["outputDirectory"]),
+                                     ("/build.sh", plan["recipe"]["path"])))
+                and row["Name"] == "/" + plan["containerName"]
+                and row["Config"]["Entrypoint"] == ["/bin/sh"]
+                and row["Config"]["Cmd"] == ["/build.sh"]
+                and row["HostConfig"]["NetworkMode"] == "none"
+                and row["HostConfig"]["Memory"] == 2 * 1024 ** 3
+                and row["HostConfig"]["MemorySwap"] == 4 * 1024 ** 3,
+                "D12_COMPILER_MOUNTS_CHANGED")
     result = {**state, "state": "BUILD_FAILED_RETAINED", "exitCode": row["State"]["ExitCode"], "oomKilled": row["State"].get("OOMKilled", False), "uiRevision": scope["uiRevision"], "coreRevision": scope["coreRevision"], "roleBinaries": scope["roles"]}
     if result["exitCode"] == 0 and not result["oomKilled"]:
         output = Path(plan["outputDirectory"])
