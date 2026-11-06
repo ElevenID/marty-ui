@@ -1939,6 +1939,30 @@ jobs:
         with:
           toolchain: 1.95.0
           targets: ${{ matrix.target }}
+      - name: Fetch locked native operator dependencies
+        timeout-minutes: 5
+        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          host_target="$(rustc -vV | sed -n 's/^host: //p')"
+          test -n "$host_target"
+          for attempt in 1 2; do
+            printf 'Locked native operator dependency acquisition: attempt %s of 2.\n' "$attempt"
+            if timeout --kill-after=5s 120s \
+              cargo --config net.git-fetch-with-cli=true fetch --locked \
+                --manifest-path rust/Cargo.toml \
+                --target "$host_target" --target "$TARGET"; then
+              exit 0
+            else
+              status=$?
+              printf 'Locked native operator dependency acquisition attempt %s failed (exit %s).\n' "$attempt" "$status" >&2
+            fi
+            if [ "$attempt" -eq 1 ]; then sleep 2; fi
+          done
+          echo '::error::Locked native operator dependency acquisition failed after two bounded attempts.'
+          exit 1
       - name: Exercise the static native operator against real HTTPS
         shell: bash
         run: |
@@ -1948,8 +1972,8 @@ jobs:
           MARTY_DEPLOY_SOURCE_SHA="$(git rev-parse HEAD)"
           export MARTY_DEPLOY_SOURCE_SHA
           export MARTY_DEPLOY_RELEASE_TAG=v0.0.0
-          cargo test --locked --manifest-path rust/Cargo.toml -p marty-managed-key-reference
-          env "CC_${TARGET//-/_}=musl-gcc" cargo build --locked --target "$TARGET" \
+          cargo test --locked --offline --manifest-path rust/Cargo.toml -p marty-managed-key-reference
+          env "CC_${TARGET//-/_}=musl-gcc" cargo build --locked --offline --target "$TARGET" \
             --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
           export MARTY_DEPLOY_BIN="$GITHUB_WORKSPACE/rust/target/$TARGET/debug/marty-deploy"
           readelf -h "$MARTY_DEPLOY_BIN" | grep -F "$ELF_MACHINE"

@@ -28,7 +28,9 @@ services:
     pull_policy: always
   envoy:
     image: envoyproxy/envoy@sha256:5a292b91adc87aa56146fb9ee52fc85c30570d0f175d95b48cde8035a2e641dd
-    pull_policy: always
+    # conformance_stack.py acquires this exact digest before runtime startup.
+    # Reuse its cache while preserving cold-cache direct Compose consumers.
+    pull_policy: missing
     build: !reset null
     healthcheck:
       test:

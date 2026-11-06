@@ -9,6 +9,22 @@ passes exact run IDs between stages and fails on a failed, skipped, foreign or
 ambiguous required result. The runtime path has no screenshot review, private
 decryption key, approval PR or timed operator dispatch.
 
+After durably recording a confirmed dispatch, the coordinator immediately logs
+the exact child run ID and original attempt. This makes a running stage
+observable before its final journal artifact is uploaded. A stopped stage adds
+a bounded `failure` object to that journal and emits a matching job annotation:
+the fixed error code and explanation, stage, operation, and known child ID.
+A main-source mismatch also includes the expected and observed public commit
+SHAs. These diagnostics exclude arbitrary exception text, response bodies,
+credentials and request payloads. If journal finalization also fails, the first
+failure annotation remains and a separate warning identifies the incomplete
+journal; preserve the last saved dispatch record.
+
+This reporting does not change source admission: protected main must still
+match the request throughout the existing release checks. A main advance stops
+the request. Preserve its original child results, and reconcile the release
+state before any new request; an uncertain dispatch is never repeated.
+
 The [automated release requirements](automated-release-requirements.md) define
 the deterministic replacement for known upstream review obligations and the
 local development workflow. Source review and exploratory/visual work remain
