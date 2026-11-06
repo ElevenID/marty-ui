@@ -1,0 +1,231 @@
+"""Read-only compatibility witnesses for an owned Windows product transition.
+
+These probes neither authorize a deployment nor replace native signer/token
+custody admission. No password, token, row data or private key is returned.
+Postgres computes catalog/ledger hashes inside read-only sessions; its ordinary
+application rows are not copied, backed up or migrated by these probes.
+"""
+import hashlib
+import json
+from dataclasses import dataclass
+from pathlib import Path
+import re
+import ssl
+import subprocess
+import time
+import urllib.request
+
+import selfhost_windows_renewal as renewal
+
+NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,62}\Z')
+SHA = re.compile(r'[0-9a-f]{64}\Z')
+PG_OPTIONS = 'PGOPTIONS=-c default_transaction_read_only=on -c statement_timeout=10000 -c search_path=pg_catalog'
+DATABASES_SQL = """SELECT COALESCE(jsonb_agg(datname ORDER BY datname),'[]'::jsonb)
+FROM pg_database WHERE datallowconn AND NOT datistemplate AND datname <> 'postgres'"""
+LEDGERS_SQL = """SELECT COALESCE(jsonb_agg(jsonb_build_object('schema',n.nspname,'name',c.relname)
+ORDER BY n.nspname,c.relname),'[]'::jsonb) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+WHERE c.relkind IN ('r','p') AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+AND c.relname ~* '(migrat|changelog|schema_version)' AND lower(c.relname) <> 'databasechangeloglock'"""
+LEDGERS_SQL = LEDGERS_SQL.replace("'(migrat|changelog|schema_version)'",
+                                "'(migrat|changelog|schema_version|^alembic_version$|^flyway_schema_history$)'")
+# One statement observes one MVCC catalog snapshot. OIDs deliberately detect
+# drop/recreate events with otherwise identical definitions. Sequence values,
+# statistics, ordinary rows and credentials are excluded.
+CATALOG_SQL = """WITH n AS (SELECT oid,nspname,nspowner,nspacl FROM pg_namespace
+WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'),
+c AS (SELECT * FROM pg_class WHERE relnamespace IN (SELECT oid FROM n)),
+p AS (SELECT * FROM pg_proc WHERE pronamespace IN (SELECT oid FROM n))
+SELECT to_json(encode(sha256(convert_to(jsonb_build_object(
+'namespaces',(SELECT jsonb_agg(to_jsonb(n) ORDER BY oid) FROM n),
+'relations',(SELECT jsonb_agg(jsonb_build_object('oid',oid,'name',relname,'namespace',relnamespace,
+'kind',relkind,'owner',relowner,'persistence',relpersistence,'acl',relacl,'options',reloptions,
+'metadata',to_jsonb(c)-ARRAY['relpages','reltuples','relallvisible','relallfrozen','relfrozenxid','relminmxid'],
+'rowsecurity',relrowsecurity,'forcerowsecurity',relforcerowsecurity,'tablespace',reltablespace,
+'view',CASE WHEN relkind IN ('v','m') THEN pg_get_viewdef(oid,true) ELSE NULL END) ORDER BY oid) FROM c),
+'attributes',(SELECT jsonb_agg(to_jsonb(a) ORDER BY attrelid,attnum) FROM pg_attribute a WHERE attrelid IN (SELECT oid FROM c) AND attnum>0),
+'defaults',(SELECT jsonb_agg(jsonb_build_object('relation',adrelid,'column',adnum,'expression',pg_get_expr(adbin,adrelid)) ORDER BY adrelid,adnum)
+FROM pg_attrdef WHERE adrelid IN (SELECT oid FROM c)),
+'constraints',(SELECT jsonb_agg(jsonb_build_object('oid',oid,'relation',conrelid,'name',conname,'definition',pg_get_constraintdef(oid,true),
+'validated',convalidated,'deferred',condeferred,'deferrable',condeferrable) ORDER BY oid) FROM pg_constraint WHERE connamespace IN (SELECT oid FROM n)),
+'indexes',(SELECT jsonb_agg(jsonb_build_object('oid',indexrelid,'definition',pg_get_indexdef(indexrelid),'valid',indisvalid,'ready',indisready)
+ORDER BY indexrelid) FROM pg_index WHERE indrelid IN (SELECT oid FROM c)),
+'functions',(SELECT jsonb_agg(jsonb_build_object('metadata',to_jsonb(p),'definition',CASE WHEN prokind IN ('f','p','w')
+THEN pg_get_functiondef(oid) ELSE NULL END) ORDER BY oid) FROM p),
+'aggregates',(SELECT jsonb_agg(to_jsonb(a) ORDER BY aggfnoid) FROM pg_aggregate a WHERE aggfnoid IN (SELECT oid FROM p)),
+'triggers',(SELECT jsonb_agg(jsonb_build_object('oid',oid,'definition',pg_get_triggerdef(oid,true),'enabled',tgenabled)
+ORDER BY oid) FROM pg_trigger WHERE tgrelid IN (SELECT oid FROM c) AND NOT tgisinternal),
+'policies',(SELECT jsonb_agg(to_jsonb(a) ORDER BY oid) FROM pg_policy a WHERE polrelid IN (SELECT oid FROM c)),
+'types',(SELECT jsonb_agg(to_jsonb(a) ORDER BY oid) FROM pg_type a WHERE typnamespace IN (SELECT oid FROM n)),
+'enums',(SELECT jsonb_agg(to_jsonb(a) ORDER BY enumtypid,enumsortorder) FROM pg_enum a WHERE enumtypid IN (SELECT oid FROM pg_type WHERE typnamespace IN (SELECT oid FROM n))),
+'sequences',(SELECT jsonb_agg(to_jsonb(a) ORDER BY seqrelid) FROM pg_sequence a WHERE seqrelid IN (SELECT oid FROM c)),
+'extensions',(SELECT jsonb_agg(to_jsonb(a) ORDER BY oid) FROM pg_extension a),
+'collations',(SELECT jsonb_agg(to_jsonb(a) ORDER BY oid) FROM pg_collation a WHERE collnamespace IN (SELECT oid FROM n))
+,'inheritance',(SELECT jsonb_agg(to_jsonb(a) ORDER BY inhrelid,inhseqno) FROM pg_inherits a WHERE inhrelid IN (SELECT oid FROM c) OR inhparent IN (SELECT oid FROM c))
+,'partitions',(SELECT jsonb_agg(to_jsonb(a) ORDER BY partrelid) FROM pg_partitioned_table a WHERE partrelid IN (SELECT oid FROM c))
+,'rules',(SELECT jsonb_agg(to_jsonb(a) ORDER BY oid) FROM pg_rewrite a WHERE ev_class IN (SELECT oid FROM c))
+,'default_acl',(SELECT jsonb_agg(to_jsonb(a) ORDER BY oid) FROM pg_default_acl a)
+)::text,'UTF8')),'hex'))"""
+SCHEMA = 'marty.windows-postgres-schema/v2'
+PROBE = 'catalog-and-source-ledger-profile/v2'
+PROFILE_ID = 'marty-selfhost-ledgers/v1'
+CONSISTENCY = 'per-database-repeatable-read;two-equal-observations'
+APPLICATION_LEDGERS = frozenset({
+    ('auth_service', 'rust_schema_versions'), ('compliance_profile_service', 'native_migrations'),
+    ('credential_template_service', 'rust_schema_versions'), ('deployment_profile_service', 'native_migrations'),
+    ('flow_service', 'rust_schema_versions'), ('issuance_service', 'rust_schema_migrations'),
+    ('organization_service', 'rust_schema_versions'), ('revocation_profile_service', 'rust_schema_migrations'),
+    ('trust_profile_service', 'native_migrations'),
+    # Explicit compatibility ledgers owned by the native device/notification
+    # migrations; arbitrary Alembic/Flyway inventories remain unsupported.
+    ('device_registration_service', 'alembic_version'), ('notification_service', 'alembic_version')})
+KEYCLOAK_LEDGERS = frozenset({('public', 'databasechangelog'), ('public', 'migration_model')})
+BINARY_PATHS = {'plugin_sha256': '/plugins/openbao-didcomm-authcrypt',
+                'unseal_sha256': '/usr/local/bin/selfhost-unseal',
+                'ready_sha256': '/usr/local/bin/selfhost-openbao-ready', 'bao_sha256': '/bin/bao'}
+
+
+def require(value, message='Product compatibility probe refused'):
+    renewal.require(value, message)
+
+
+def owned_role(items, project, role):
+    require(isinstance(project, str) and re.fullmatch(r'marty-(?:production|selfhost)-[a-z0-9][a-z0-9-]{0,59}', project))
+    require(isinstance(items, list) and all(renewal._project(item) == project for item in items))
+    rows = [item for item in items if renewal._service(item) == role]
+    require(len(rows) == 1 and re.fullmatch(r'[0-9a-f]{64}', rows[0]['Id']))
+    return rows[0]
+
+
+@dataclass(frozen=True)
+class LedgerProfile:
+    """Known runtime schemas, not an artifact-supplied migration guess.
+
+    Database names may be mapped from held installation settings. Ledger names
+    come from this reviewed runtime profile; unsupported/missing inventories
+    refuse. Applicants' idempotent schema has explicitly no migration ledger.
+    """
+    application: str = 'marty'
+    keycloak: str = 'keycloak'
+    applicants: str = 'marty_applicants'
+
+    def __post_init__(self):
+        names = (self.application, self.keycloak, self.applicants)
+        require(all(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9_]{0,62}', name) for name in names)
+                and len(set(names)) == 3)
+
+    @property
+    def tables(self):
+        return {self.application: APPLICATION_LEDGERS, self.keycloak: KEYCLOAK_LEDGERS, self.applicants: frozenset()}
+
+
+def _database_script(expected):
+    statements = [r'\set ON_ERROR_STOP on', 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;',
+        "SELECT jsonb_build_object('kind','catalog','sha256',witness,'supported',NOT(EXISTS(SELECT 1 FROM pg_foreign_table) OR EXISTS(SELECT 1 FROM pg_event_trigger))) FROM ("+CATALOG_SQL+") AS c(witness);",
+        "SELECT jsonb_build_object('kind','inventory','tables',witness) FROM ("+LEDGERS_SQL+") AS i(witness);"]
+    for schema, name in sorted(expected):
+        require(NAME.fullmatch(schema) and NAME.fullmatch(name))
+        statements.append("SELECT jsonb_build_object('kind','ledger','schema','"+schema+"','name','"+name+
+            "','sha256',encode(sha256(convert_to(COALESCE(jsonb_agg(to_jsonb(m) ORDER BY to_jsonb(m)::text),'[]'::jsonb)::text,'UTF8')),'hex')) FROM \""+
+            schema+'"."'+name+'" m;')
+    statements.append('COMMIT;')
+    return ('\n'.join(statements)+'\n').encode()
+
+
+def _database_snapshot(docker, base, database, expected):
+    args = ['exec', '--interactive', *base[1:], '--dbname', database, '--file=-']
+    output = _text(docker, args, stdin_bytes=_database_script(expected))
+    records = [json.loads(line) for line in output.splitlines()]
+    require(len(records) == 2+len(expected) and all(type(row) is dict for row in records))
+    catalog, inventory, *ledgers = records
+    require(set(catalog) == {'kind', 'sha256', 'supported'} and catalog['kind'] == 'catalog' and catalog['supported'] is True
+            and isinstance(catalog['sha256'], str) and SHA.fullmatch(catalog['sha256']))
+    require(set(inventory) == {'kind', 'tables'} and inventory['kind'] == 'inventory' and type(inventory['tables']) is list)
+    names = []
+    for row in inventory['tables']:
+        require(type(row) is dict and set(row) == {'schema', 'name'}
+                and all(isinstance(value, str) and NAME.fullmatch(value) for value in row.values()))
+        names.append((row['schema'], row['name']))
+    require(len(names) == len(set(names)) and set(names) == expected, 'Migration ledger inventory differs from reviewed profile')
+    values = {}
+    for row in ledgers:
+        require(set(row) == {'kind', 'schema', 'name', 'sha256'} and row['kind'] == 'ledger'
+                and (row['schema'], row['name']) in expected and isinstance(row['sha256'], str) and SHA.fullmatch(row['sha256']))
+        key = row['schema']+'.'+row['name'];require(key not in values);values[key] = row['sha256']
+    require(len(values) == len(expected))
+    raw = json.dumps(values, sort_keys=True, separators=(',', ':')).encode()
+    return {'catalog_sha256': catalog['sha256'], 'migration_sha256': hashlib.sha256(raw).hexdigest()}
+
+
+def schema_snapshot(docker, items, project, *, profile=LedgerProfile()):
+    """Coherent per-DB transactions, bracketed by equal full observations.
+
+    PostgreSQL has no shared snapshot across databases. The owning transition
+    must hold its project lock/quiesce its own DDL writers; these observations
+    refuse drift but do not prevent an external administrator's future DDL.
+    """
+    require(type(profile) is LedgerProfile)
+    deadline = time.monotonic()+60
+    postgres = owned_role(items, project, 'postgres')
+    environment = postgres['Config'].get('Env', [])
+    require(type(environment) is list and all(isinstance(row, str) for row in environment))
+    users = [row[len('POSTGRES_USER='):] for row in environment if row.startswith('POSTGRES_USER=')]
+    require(len(users) == 1 and NAME.fullmatch(users[0]))
+    base = ['exec', '--user', 'postgres', '--env', PG_OPTIONS, postgres['Id'], 'psql', '--no-psqlrc',
+            '--no-password', '--quiet', '--tuples-only', '--no-align', '--username', users[0]]
+    def observe():
+        require(time.monotonic() < deadline)
+        databases = docker.json([*base, '--dbname', 'postgres', '--command', DATABASES_SQL])
+        require(type(databases) is list and all(isinstance(name, str) for name in databases)
+                and len(databases) == len(set(databases)) and set(databases) == set(profile.tables))
+        result = {}
+        for database, expected in sorted(profile.tables.items()):
+            require(time.monotonic() < deadline)
+            result[database] = _database_snapshot(docker, base, database, expected)
+        require(time.monotonic() < deadline)
+        return result
+    first = observe();second = observe()
+    require(first == second, 'Schema changed during compatibility observation')
+    return {'schema': SCHEMA, 'probe': PROBE, 'profile': PROFILE_ID, 'consistency': CONSISTENCY,
+            'database_roles': {'application': profile.application, 'keycloak': profile.keycloak, 'applicants': profile.applicants},
+            'databases': second}
+
+
+def _text(docker, args, *, stdin_bytes=None):
+    pipe = {'stdin': subprocess.DEVNULL} if stdin_bytes is None else {'input': stdin_bytes}
+    result = subprocess.run([*docker.prefix, *args], capture_output=True, timeout=30, **pipe)
+    require(result.returncode == 0 and len(result.stdout) <= 65536)
+    return result.stdout.decode('utf-8').strip()
+
+
+def provider_snapshot(docker, items, project, ca_file):
+    """Public TLS health and immutable binary fingerprints; not native admission."""
+    from selfhost_windows_inputs import hold_private_input
+    bao = owned_role(items, project, 'openbao')
+    ports = bao.get('NetworkSettings', {}).get('Ports', {}).get('8200/tcp')
+    require(type(ports) is list and len(ports) == 1 and ports[0].get('HostIp') == '127.0.0.1'
+            and isinstance(ports[0].get('HostPort'), str) and ports[0]['HostPort'].isdigit()
+            and 1 <= int(ports[0]['HostPort']) <= 65535)
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *_args, **_kwargs):return None
+    with hold_private_input(Path(ca_file)) as ca:
+        context = ssl.create_default_context(cadata=ca.decode('ascii'))
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(), urllib.request.HTTPSHandler(context=context))
+        with opener.open('https://127.0.0.1:'+ports[0]['HostPort']+'/v1/sys/health', timeout=15) as response:
+            require(response.status == 200)
+            raw = response.read(65537);require(len(raw) <= 65536)
+    status = json.loads(raw)
+    require(type(status) is dict and status.get('initialized') is True and status.get('sealed') is False and status.get('version') == '2.5.5'
+            and isinstance(status.get('cluster_id'), str)
+            and re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', status['cluster_id']))
+    text = _text(docker, ['exec', '--user', '65534:65534', bao['Id'], 'sha256sum', *BINARY_PATHS.values()])
+    hashes = {}
+    for line in text.splitlines():
+        fields = line.split()
+        require(len(fields) == 2 and SHA.fullmatch(fields[0]) and fields[1] in BINARY_PATHS.values() and fields[1] not in hashes)
+        hashes[fields[1]] = fields[0]
+    require(set(hashes) == set(BINARY_PATHS.values()))
+    version = _text(docker, ['exec', '--user', '65534:65534', bao['Id'], '/bin/bao', 'version'])
+    require(version.startswith('OpenBao v2.5.5 ') and '\n' not in version)
+    return {'schema': 'marty.windows-provider-custody/v1', 'cluster_id': status['cluster_id'],
+            'ca_sha256': hashlib.sha256(ca).hexdigest(), 'bao_version': version,
+            **{key: hashes[path] for key, path in BINARY_PATHS.items()}}

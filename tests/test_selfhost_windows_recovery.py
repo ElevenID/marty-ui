@@ -162,6 +162,24 @@ def test_final_publication_lock_exit_failure_keeps_authoritative_guard(monkeypat
             with selection.selected_inputs(path):pytest.fail('Failed finalization was accepted')
 
 
+@pytest.mark.parametrize('entry', ['file', 'directory'])
+def test_product_marker_before_publication_preserves_recovery_guard_and_empty_result(monkeypatch, entry):
+    with candidate(monkeypatch, warm=True) as (_root, path, cfg, output, _events, _items, _observed, _tx):
+        journal = selection.directory(cfg)
+        before = {item.name: item.read_bytes() for item in journal.iterdir()}
+        product_guard = selection.renewal.product_transition_guard(cfg)
+        with pytest.raises(ValueError):
+            with selection.selected_inputs(path) as lease:
+                lease.recover_existing(output)
+                recovery_guard = selection.renewal.recovery_guard(cfg).read_bytes()
+                if entry == 'file':product_guard.write_bytes(b'PUBLIC_PENDING_PRODUCT')
+                else:product_guard.mkdir()
+        assert (output/'result.json').read_bytes() == b''
+        assert selection.renewal.recovery_guard(cfg).read_bytes() == recovery_guard
+        assert product_guard.exists()
+        assert before == {item.name: item.read_bytes() for item in journal.iterdir()}
+
+
 def test_diagnostic_failure_preserves_uncertain_outcome(monkeypatch):
     with candidate(monkeypatch, fault='uncertain') as (_root, path, cfg, output, _events, _items, _observed, _tx):
         actual = selection.renewal.write_empty_private_file
