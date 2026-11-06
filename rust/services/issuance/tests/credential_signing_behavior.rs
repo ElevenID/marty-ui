@@ -44,6 +44,7 @@ struct SigningState {
     grant_collision: bool,
     ensure_transaction_count: usize,
     block_builder: bool,
+    complete_before_claim: bool,
     repository_failure_reason: Option<String>,
 }
 
@@ -125,6 +126,7 @@ impl SigningHarness {
                 grant_collision: false,
                 ensure_transaction_count: 0,
                 block_builder: false,
+                complete_before_claim: false,
                 repository_failure_reason: None,
             })),
             build_started: Arc::new(Notify::new()),
@@ -231,6 +233,10 @@ impl CredentialRepository for SigningHarness {
         state
             .events
             .push("claim_transaction_for_signing".to_owned());
+        if state.complete_before_claim {
+            state.transaction.status = CredentialTransactionStatus::Issued;
+            return Ok(None);
+        }
         if state.transaction.status != CredentialTransactionStatus::Authorized {
             return Ok(None);
         }
@@ -756,6 +762,152 @@ async fn retired_ob2_profiles_never_allocate_status_or_reach_any_credential_buil
                     | "finalize_credential_issuance"
                     | "post_issuance_side_effects"
             )));
+        }
+    }
+}
+
+#[tokio::test]
+async fn retired_ob2_cached_credentials_never_replay_or_recover() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let legacy = json!({
+        "@context": "https://w3id.org/openbadges/v2",
+        "type": "Assertion",
+        "id": "https://issuer.example/assertions/retired"
+    });
+    let legacy_jwt = format!(
+        "{}.{}.signature",
+        encode(json!({"alg": "ES256"})),
+        encode(json!({"vc": legacy}))
+    );
+    let current = json!({
+        "@context": ["https://www.w3.org/ns/credentials/v2", "https://w3id.org/openbadges/v3"],
+        "type": ["VerifiableCredential", "OpenBadgeCredential"],
+        "proof": {"type": "DataIntegrityProof"}
+    })
+    .to_string();
+    for case in contract["formats"].as_array().unwrap() {
+        for concurrent in [false, true] {
+            for (legacy_type, legacy_document, stored) in [
+                (false, false, legacy.to_string()),
+                (false, false, legacy_jwt.clone()),
+                (false, false, format!("{legacy_jwt}~")),
+                (true, false, current.clone()),
+                (false, true, current.clone()),
+            ] {
+                let mut case = case.clone();
+                if legacy_type {
+                    case["credential_type"] = json!("OpenBadgeV2");
+                    let selector = case["credential_configuration_id"].as_str().unwrap();
+                    let suffix = selector.find('#').map_or("", |index| &selector[index..]);
+                    case["credential_configuration_id"] = json!(format!("OpenBadgeV2{suffix}"));
+                }
+                let harness = SigningHarness::new(&case, &contract);
+                {
+                    let mut state = harness.state.lock().unwrap();
+                    state.complete_before_claim = concurrent;
+                    if !concurrent {
+                        state.transaction.status = CredentialTransactionStatus::Issued;
+                    }
+                    if legacy_document {
+                        state
+                            .transaction
+                            .claims
+                            .insert("_credential_document".into(), legacy.clone());
+                    }
+                    state.existing = Some(ExistingCredential {
+                        id: "stored-credential".into(),
+                        credential: stored.clone(),
+                        notification_id: "original-notification".into(),
+                    });
+                }
+                let response = app(harness.clone(), &contract)
+                    .oneshot(request(&case, &contract))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status().as_u16(),
+                    400,
+                    "{case}; concurrent={concurrent}"
+                );
+                assert_eq!(
+                    body(response).await,
+                    json!({
+                        "detail": CredentialIssuanceError::RetiredOpenBadge.to_string()
+                    })
+                );
+                let state = harness.state.lock().unwrap();
+                assert_eq!(state.builder_count, 0);
+                assert_eq!(state.existing.as_ref().unwrap().credential, stored);
+                assert_eq!(
+                    state.transaction.status,
+                    CredentialTransactionStatus::Issued
+                );
+                assert!(!state.events.iter().any(|event| matches!(
+                    event.as_str(),
+                    "allocate_status"
+                        | "credential_builder"
+                        | "issuer_did_sign"
+                        | "finalize_credential_issuance"
+                        | "post_issuance_side_effects"
+                )));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn current_credentials_keep_replay_and_recovery_without_resigning() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    for case in contract["formats"].as_array().unwrap() {
+        for concurrent in [false, true] {
+            let harness = SigningHarness::new(case, &contract);
+            let stored = if case["builder"] == "data_integrity" {
+                json!({"type": ["VerifiableCredential", "OpenBadgeCredential"],
+                    "proof": {"type": "DataIntegrityProof"}})
+                .to_string()
+            } else {
+                "original-current-credential".to_owned()
+            };
+            {
+                let mut state = harness.state.lock().unwrap();
+                state.complete_before_claim = concurrent;
+                if !concurrent {
+                    state.transaction.status = CredentialTransactionStatus::Issued;
+                }
+                state.existing = Some(ExistingCredential {
+                    id: "stored-credential".into(),
+                    credential: stored.clone(),
+                    notification_id: "original-notification".into(),
+                });
+            }
+            let response = app(harness.clone(), &contract)
+                .oneshot(request(case, &contract))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status().as_u16(),
+                200,
+                "{case}; concurrent={concurrent}"
+            );
+            let response = body(response).await;
+            assert_eq!(response["notification_id"], "original-notification");
+            assert_eq!(
+                response["credentials"][0]["credential"],
+                if case["builder"] == "data_integrity" {
+                    serde_json::from_str::<Value>(&stored).unwrap()
+                } else {
+                    json!(stored)
+                }
+            );
+            let state = harness.state.lock().unwrap();
+            assert_eq!(state.builder_count, 0);
+            assert_eq!(state.existing.as_ref().unwrap().credential, stored);
         }
     }
 }

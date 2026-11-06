@@ -761,6 +761,7 @@ impl CredentialIssuanceService {
             .credential_by_transaction(&transaction.id)
             .await?
             .ok_or(CredentialIssuanceError::CredentialAlreadyIssued)?;
+        reject_retired_open_badge(transaction, Some(&existing.credential))?;
         let policy = format_policy(request, transaction)?;
         let response = response(
             &existing.credential,
@@ -822,11 +823,12 @@ impl CredentialIssuanceService {
             .repository
             .credential_by_transaction(transaction_id)
             .await?;
-        if current
+        if let Some(current) = current
             .as_ref()
-            .is_some_and(|transaction| transaction.status == CredentialTransactionStatus::Issued)
+            .filter(|transaction| transaction.status == CredentialTransactionStatus::Issued)
         {
             if let Some(existing) = existing {
+                reject_retired_open_badge(current, Some(&existing.credential))?;
                 let response = response(
                     &existing.credential,
                     policy.kind,
@@ -894,6 +896,28 @@ pub(crate) struct CredentialMaterializationContext<'a> {
     pub(crate) issuer_base_url: &'a str,
 }
 
+/// Reject retired profiles without changing stored credentials or authenticating claims.
+pub(crate) fn reject_retired_open_badge(
+    transaction: &CredentialTransaction,
+    credential: Option<&str>,
+) -> Result<(), CredentialIssuanceError> {
+    let retired_stored = credential.is_some_and(|credential| {
+        let document = serde_json::from_str(credential)
+            .unwrap_or_else(|_| Value::String(credential.to_owned()));
+        is_retired_ob2(&document)
+    });
+    if retired_stored
+        || is_retired_ob2(&serde_json::json!({"type": transaction.credential_type}))
+        || transaction
+            .claims
+            .get("_credential_document")
+            .is_some_and(is_retired_ob2)
+    {
+        return Err(CredentialIssuanceError::RetiredOpenBadge);
+    }
+    Ok(())
+}
+
 pub(crate) async fn materialize_credential(
     context: CredentialMaterializationContext<'_>,
     transaction: &CredentialTransaction,
@@ -902,14 +926,7 @@ pub(crate) async fn materialize_credential(
     issuer: IssuerContext,
     proof: VerifiedCredentialProof,
 ) -> Result<IssuedCredential, CredentialIssuanceError> {
-    if is_retired_ob2(&serde_json::json!({"type": transaction.credential_type}))
-        || transaction
-            .claims
-            .get("_credential_document")
-            .is_some_and(is_retired_ob2)
-    {
-        return Err(CredentialIssuanceError::RetiredOpenBadge);
-    }
+    reject_retired_open_badge(transaction, None)?;
     let status = context
         .lifecycle
         .allocate_status(transaction, credential_id, &policy.remote_format)
@@ -955,6 +972,7 @@ pub(crate) async fn materialize_credential(
     if built.credential_id != credential_id {
         return Err(CredentialIssuanceError::BuilderChangedCredentialId);
     }
+    reject_retired_open_badge(transaction, Some(&built.credential))?;
     let issued_at = Utc::now();
     let expires_at = issued_at + Duration::days(transaction.validity_days);
     Ok(IssuedCredential {

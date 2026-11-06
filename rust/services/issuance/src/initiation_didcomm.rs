@@ -32,9 +32,10 @@ use url::Host;
 use crate::{
     credential::{
         apply_issuer_context, didcomm_format_policy, materialize_credential,
-        reserved_credential_id, CredentialBuilder, CredentialIssuanceError, CredentialLifecycle,
-        CredentialMaterializationContext, CredentialTransaction, CredentialTransactionStatus,
-        IssuedCredential, IssuerContextResolver, VerifiedCredentialProof,
+        reject_retired_open_badge, reserved_credential_id, CredentialBuilder,
+        CredentialIssuanceError, CredentialLifecycle, CredentialMaterializationContext,
+        CredentialTransaction, CredentialTransactionStatus, IssuedCredential,
+        IssuerContextResolver, VerifiedCredentialProof,
     },
     didcomm_kms::RegisteredDidcommKms,
     initiation_response::{
@@ -1001,6 +1002,8 @@ pub enum NativeInitiationDidcommDeliveryError {
     Prerequisite(NativeDidcommError),
     #[error("credential materialization is unavailable")]
     CredentialUnavailable,
+    #[error("Open Badges 2.0 is retired; request a newly issued Open Badges 3.0 credential")]
+    RetiredOpenBadge,
     #[error("another delivery attempt owns the issuance transaction")]
     ConcurrentDelivery,
     #[error("DIDComm delivery outcome is unknown and requires reconciliation")]
@@ -1138,7 +1141,7 @@ impl NativeInitiationDidcommDelivery {
                         return Err(NativeInitiationDidcommDeliveryError::Prerequisite(reason));
                     }
                 };
-                return self.deliver_claimed(claim, endpoint).await;
+                return self.deliver_claimed(transaction, claim, endpoint).await;
             }
             InitiationDidcommTransportClaimOutcome::Transported(pending) => {
                 Self::validate_pending_delivery(transaction, holder_did, &pending)?;
@@ -1160,6 +1163,8 @@ impl NativeInitiationDidcommDelivery {
             }
             InitiationDidcommTransportClaimOutcome::Absent => {}
         }
+        reject_retired_open_badge(transaction, None)
+            .map_err(|_| NativeInitiationDidcommDeliveryError::RetiredOpenBadge)?;
         if !matches!(
             transaction.status,
             CredentialTransactionStatus::Pending | CredentialTransactionStatus::Authorized
@@ -1241,11 +1246,15 @@ impl NativeInitiationDidcommDelivery {
         .await
         {
             Ok(issued) => issued,
-            Err(_) => {
+            Err(error) => {
                 return self
                     .release_failure(
                         &claim,
-                        NativeInitiationDidcommDeliveryError::CredentialUnavailable,
+                        if error == CredentialIssuanceError::RetiredOpenBadge {
+                            NativeInitiationDidcommDeliveryError::RetiredOpenBadge
+                        } else {
+                            NativeInitiationDidcommDeliveryError::CredentialUnavailable
+                        },
                     )
                     .await
             }
@@ -1342,14 +1351,30 @@ impl NativeInitiationDidcommDelivery {
             }
         };
         Self::validate_pending_delivery(&claim.transaction, holder_did, transport_claim.pending())?;
-        self.deliver_claimed(transport_claim, endpoint).await
+        self.deliver_claimed(&claim.transaction, transport_claim, endpoint)
+            .await
     }
 
     async fn deliver_claimed(
         &self,
+        transaction: &CredentialTransaction,
         claim: InitiationDidcommTransportClaim,
         endpoint: ValidatedDidcommEndpoint,
     ) -> Result<NativeInitiationDidcommDeliveryReceipt, NativeInitiationDidcommDeliveryError> {
+        if reject_retired_open_badge(transaction, None).is_err()
+            || reject_retired_open_badge(
+                &claim.pending().transaction,
+                Some(&claim.pending().credential.credential),
+            )
+            .is_err()
+        {
+            self.ports
+                .repository
+                .mark_transport_unattempted(&claim)
+                .await
+                .map_err(|_| NativeInitiationDidcommDeliveryError::RetryStateUnavailable)?;
+            return Err(NativeInitiationDidcommDeliveryError::RetiredOpenBadge);
+        }
         match self
             .ports
             .transport
@@ -3610,6 +3635,110 @@ mod tests {
             ["validate-endpoint", "transport", "mark-transport-failed"]
         );
         assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn retired_ob2_new_deliveries_fail_before_prerequisite_work() {
+        for document_marker in [false, true] {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            let mut current = transaction();
+            if document_marker {
+                current.claims.insert(
+                    "_credential_document".into(),
+                    json!({
+                        "@context": "https://w3id.org/openbadges/v2", "type": "Assertion"
+                    }),
+                );
+            } else {
+                current.credential_type = Some("OpenBadgeV2".into());
+            }
+            assert_eq!(
+                delivery
+                    .deliver_native(&current, "did:example:holder")
+                    .await,
+                Err(NativeInitiationDidcommDeliveryError::RetiredOpenBadge)
+            );
+            assert!(order.lock().unwrap().is_empty());
+            assert!(repository.delivery.lock().unwrap().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn retired_ob2_pending_deliveries_cannot_reach_transport() {
+        let legacy = json!({
+            "@context": "https://w3id.org/openbadges/v2",
+            "type": "Assertion"
+        });
+        let legacy_jwt = format!(
+            "{}.{}.signature",
+            URL_SAFE_NO_PAD.encode(json!({"alg": "ES256"}).to_string()),
+            URL_SAFE_NO_PAD.encode(json!({"vc": legacy}).to_string())
+        );
+        for case in [
+            "stored_json",
+            "stored_jwt",
+            "stored_sd_jwt",
+            "pending_type",
+            "pending_document",
+            "current_type",
+            "current_document",
+        ] {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            let mut current = transaction();
+            let mut pending = staged_pending_delivery();
+            match case {
+                "stored_json" => pending.credential.credential = legacy.to_string(),
+                "stored_jwt" => pending.credential.credential = legacy_jwt.clone(),
+                "stored_sd_jwt" => pending.credential.credential = format!("{legacy_jwt}~"),
+                "pending_type" => pending.transaction.credential_type = Some("OpenBadgeV2".into()),
+                "pending_document" => {
+                    pending
+                        .transaction
+                        .claims
+                        .insert("_credential_document".into(), legacy.clone());
+                }
+                "current_type" => current.credential_type = Some("OpenBadgeV2".into()),
+                "current_document" => {
+                    current
+                        .claims
+                        .insert("_credential_document".into(), legacy.clone());
+                }
+                _ => unreachable!(),
+            }
+            let before = InitiationDidcommDeliveryState::Pending(Box::new(pending));
+            *repository.delivery.lock().unwrap() = Some(before.clone());
+            assert_eq!(
+                delivery
+                    .deliver_native(&current, "did:example:holder")
+                    .await,
+                Err(NativeInitiationDidcommDeliveryError::RetiredOpenBadge),
+                "{case}"
+            );
+            assert!(
+                !order.lock().unwrap().iter().any(|stage| matches!(
+                    *stage,
+                    "build" | "allocate-status" | "transport" | "after-didcomm"
+                )),
+                "{case}"
+            );
+            assert_eq!(*repository.delivery.lock().unwrap(), Some(before));
+            assert_eq!(
+                *repository.transport_claim.lock().unwrap(),
+                HarnessTransportClaimState::Idle,
+                "rejection must release the claim without rewriting the archived payload"
+            );
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[tokio::test]
