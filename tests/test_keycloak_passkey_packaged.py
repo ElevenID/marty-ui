@@ -90,8 +90,8 @@ def qualify_passkeys(context):
             time.sleep(1)
         fixture["replica_account"] = replica_base + "/realms/11id/account/credentials"
 
-        # These exercise the installed canonical configurator/theme/provider,
-        # native browser WebAuthn, signed email and shared database removal lock.
+        # Exercise canonical configuration/theme, the stock passkey provider,
+        # native browser WebAuthn, signed email and cross-node credential changes.
         print("Both disposable Keycloak nodes observed the two-member cluster; starting native lifecycle checks", flush=True)
         native.test_native_google_redirect_uses_supported_prompt_without_weakening_keycloak_login(fixture)
         print("Native supported Google redirect/default and explicit prompt preservation passed with passkeys on/off", flush=True)

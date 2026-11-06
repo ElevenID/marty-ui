@@ -197,11 +197,11 @@ def test_real_git_diff_narrows_only_regular_owned_marketing(tmp_path, event, cha
             "ui/src/components/Marketing.jsx", "ui/src/components/Moved.jsx"}
 
 
-def test_passkey_provider_source_selects_the_packaged_keycloak_qualification_lane(tmp_path):
+def test_keycloak_image_source_selects_the_packaged_keycloak_qualification_lane(tmp_path):
     repo, git, base = fixture_repo(tmp_path)
-    source = repo / "keycloak/passkey-provider/src/main/java/dev/marty/keycloak/passkeys/GuardedPasskeyProvider.java"
+    source = repo / "keycloak/openbao-provider/Dockerfile"
     source.parent.mkdir(parents=True)
-    source.write_text("// changed native lifecycle policy\n")
+    source.write_text("# changed native Keycloak image\n")
     git("add", ".")
     git("commit", "-qm", "passkey lifecycle")
     sha = git("rev-parse", "HEAD")

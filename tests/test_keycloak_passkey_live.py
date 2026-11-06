@@ -1,6 +1,5 @@
 """Opt-in disposable Keycloak check; never reads existing deployment credentials."""
 import base64
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import hmac
 import email.policy
@@ -12,7 +11,6 @@ from pathlib import Path
 import secrets
 import re
 import subprocess
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -94,11 +92,6 @@ def keycloak():
     container = None
     smtp = None
     network = None
-    provider_mount = []
-    if os.environ.get("MARTY_PASSKEY_PROVIDER_JAR"):
-        provider = Path(os.environ["MARTY_PASSKEY_PROVIDER_JAR"]).resolve(strict=True)
-        assert provider.is_file() and provider.suffix == ".jar"
-        provider_mount = ["--mount", f"type=bind,source={provider},target=/opt/keycloak/providers/marty-passkey-provider.jar,readonly"]
     try:
         network = docker("network", "create", "--label", "marty.test=keycloak-passkeys", name)
         smtp = docker("run", "-d", "--name", name + "-smtp", "--memory", "64m",
@@ -108,7 +101,6 @@ def keycloak():
         container = docker("run", "-d", "--name", name, "--memory", "768m", "--cpus", "2",
             "--network", network,
             "--label", "marty.test=keycloak-passkeys", "-p", "127.0.0.1::8080",
-            *provider_mount,
             "--mount", f"type=bind,source={ROOT / 'config/keycloak/themes/11id'},target=/opt/keycloak/themes/11id,readonly",
             "--tmpfs", "/opt/keycloak/data:rw,nosuid,nodev,size=128m",
             "-e", "KC_BOOTSTRAP_ADMIN_USERNAME=passkey-test-admin", "-e", "KC_BOOTSTRAP_ADMIN_PASSWORD",
@@ -307,7 +299,7 @@ def test_native_email_action_enrolls_a_verified_existing_account_without_passwor
 
 
 def qualify_native_lifecycle(keycloak, page, cdp, device, subject, credentials_url, action_query):
-    """Exercise native account APIs, including the concurrent deletion race."""
+    """Exercise upstream account management and native deletion semantics."""
     issuer = keycloak["base"] + f"/realms/{keycloak['realm']}/protocol/openid-connect"
     account = keycloak["base"] + f"/realms/{keycloak['realm']}/account/credentials"
 
@@ -329,10 +321,9 @@ def qualify_native_lifecycle(keycloak, page, cdp, device, subject, credentials_u
     stored = request(credentials_url, token=keycloak["token"])
     credential_id = stored[0]["id"]
     metadata = request(account, token=token)
-    assert next(item for item in metadata if item["type"] == "webauthn-passwordless")["removeable"] is False
-    with pytest.raises(urllib.error.HTTPError) as refused:
-        request(account + "/" + credential_id, token=token, method="DELETE")
-    assert refused.value.code == 400
+    # Stock Keycloak permits removing the last passkey. Marty adds no credential
+    # provider or database policy; keep recovery guidance explicit instead.
+    assert next(item for item in metadata if item["type"] == "webauthn-passwordless")["removeable"] is True
     assert len(request(credentials_url, token=keycloak["token"])) == 1
     request(account + "/" + credential_id + "/label", token=token, method="PUT", body="Travel key")
     assert request(credentials_url, token=keycloak["token"])[0]["userLabel"] == "Travel key"
@@ -377,24 +368,13 @@ def qualify_native_lifecycle(keycloak, page, cdp, device, subject, credentials_u
     token = account_token()
     device_keys.extend(cdp.send("WebAuthn.getCredentials", {"authenticatorId": second_device})["credentials"])
     assert next(item for item in request(account, token=token) if item["type"] == "webauthn-passwordless")["removeable"] is True
-    barrier = threading.Barrier(2)
-
-    def remove(indexed):
-        index, credential = indexed
-        endpoint = keycloak.get("replica_account", account) if index else account
-        barrier.wait(timeout=10)
-        try:
-            request(endpoint + "/" + credential["id"], token=token, method="DELETE")
-            return 204
-        except urllib.error.HTTPError as error:
-            return error.code
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(remove, enumerate(stored)))
-    assert sorted(results) == [204, 400], results
+    # In the packaged lane, delete through the other cluster member and verify
+    # that the first node observes the native change and retains the second key.
+    request(keycloak.get("replica_account", account) + "/" + stored[0]["id"],
+            token=token, method="DELETE")
     remaining = request(credentials_url, token=keycloak["token"])
     assert len(remaining) == 1 and remaining[0]["type"] == "webauthn-passwordless"
-    assert next(item for item in request(account, token=token) if item["type"] == "webauthn-passwordless")["removeable"] is False
+    assert next(item for item in request(account, token=token) if item["type"] == "webauthn-passwordless")["removeable"] is True
     # Restore only the surviving key in a cookie-free browser context. A retained
     # database row alone does not establish that native login still works.
     surviving_id = json.loads(remaining[0]["credentialData"])["credentialId"]
@@ -411,8 +391,7 @@ def qualify_native_lifecycle(keycloak, page, cdp, device, subject, credentials_u
         account_token()
         after = fresh_cdp.send("WebAuthn.getCredentials", {"authenticatorId": fresh_device})["credentials"][0]
         assert after["signCount"] > survivor["signCount"]
-        # The native AIA must enforce the same policy after confirmation, even
-        # when its challenge was shown for a credential that cannot be removed.
+        # Native AIA owns confirmation and deletion, including the final key.
         verifier = secrets.token_urlsafe(48)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         parameters = {"client_id": "passkey-test-ui", "response_type": "code", "scope": "openid",
@@ -421,8 +400,10 @@ def qualify_native_lifecycle(keycloak, page, cdp, device, subject, credentials_u
                       "kc_action": "delete_credential:" + remaining[0]["id"]}
         page.goto(issuer + "/auth?" + urllib.parse.urlencode(parameters))
         page.locator("#kc-accept").click(timeout=30000)
-        page.get_by_text("Credential type cannot be removed", exact=False).wait_for(timeout=10000)
-        assert [item["id"] for item in request(credentials_url, token=keycloak["token"])] == [remaining[0]["id"]]
+        page.wait_for_function("""base => location.pathname === '/callback' ||
+            [...document.querySelectorAll('a')].some(link => link.href.startsWith(base + '/callback'))""",
+            arg=keycloak["base"], timeout=30000)
+        assert request(credentials_url, token=keycloak["token"]) == []
     finally:
         fresh.close()
 
@@ -494,6 +475,21 @@ def test_native_enrollment_and_delete_actions_cancel_without_mutating_credential
             page.locator("#kc-accept").click(timeout=30000)
             complete(page, verifier, "success")
             assert request(credentials_url, token=keycloak["token"]) == original
+
+            # Exercise the actual native-console buttons, not only a hand-built
+            # AIA URL: Set up Passkey opens registration; REGISTER starts WebAuthn.
+            console = keycloak["base"] + f"/realms/{keycloak['realm']}/account/account-security/signing-in"
+            page.goto(console)
+            page.get_by_text("Set up Passkey", exact=True).click(timeout=30000)
+            page.locator("#registerWebAuthn").wait_for(timeout=30000)
+            page.once("dialog", lambda dialog: dialog.accept("Console key"))
+            page.locator("#registerWebAuthn").click()
+            page.wait_for_url(console + "**", timeout=30000)
+            page.get_by_text("Console key", exact=True).wait_for(timeout=30000)
+            stored = request(credentials_url, token=keycloak["token"])
+            assert len(stored) == len(original) + 1
+            assert any(item["type"] == "password" for item in stored)
+            assert any(item["type"] == "webauthn-passwordless" and item["userLabel"] == "Console key" for item in stored)
         finally:
             browser.close()
 

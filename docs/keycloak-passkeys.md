@@ -10,7 +10,7 @@ adds the ElevenID LLC wordmark, blue header and account title. Native passkey
 creation, naming and removal stay upstream. New realm imports and disposable
 labs select `accountTheme=11id` alongside the login and email themes. For an
 existing installation, deploy the complete `11id` theme directory, then select
-**Realm settings → Themes → Account theme → 11id** during its authorized rollout.
+**Realm settings â†’ Themes â†’ Account theme â†’ 11id** during its authorized rollout.
 Preserve an operator's other custom theme unless its replacement is agreed.
 Changing the account theme does not change passkeys, passwords or broker links.
 
@@ -75,39 +75,31 @@ its own authentication and assurance checks; the link does not replace the Marty
 session or transfer its authorization. External OIDC, disabled and impersonated
 sessions do not receive this link.
 
-The packaged Keycloak image includes `keycloak/passkey-provider`. It preserves
-native WebAuthn validation and credential storage and changes passwordless
-credential metadata only while managed passkeys are enabled. Native Account API
-and delete-credential AIA removal are refused unless another stored passkey or
-a local password remains and its authenticator is enabled in the applicable
-browser flow. Google links, Badge access, OTP and email alone do not count as
-proven recovery methods for this decision. A local password is not mandatory:
-enrolling a second passkey permits removal. Unknown/federated storage without
-a local user row is denied for removal. Explicit administrator deletion retains
-its privileged semantics and must follow operator recovery policy.
+Passkey registration, assertion verification, credential storage and removal use
+the stock Keycloak provider. Marty installs no passkey provider, database locking
+policy, authenticator or WebAuthn JavaScript implementation. The existing remote
+KMS provider remains separate and continues to own only its existing signing
+responsibilities.
 
-The guard locks the local user row through the Keycloak transaction and reads
-credential rows with database locks, preventing two native removal requests from
-each counting the other's credential as a remaining method. Provisioning checks
-the selected passwordless factory's priority and lifecycle protocol marker before
-enabling managed passkeys. A stock upstream image alone cannot satisfy that gate.
-The image remains pinned to Keycloak26.8.0; qualify this internal SPI and JPA
-contract again on any upgrade. The disposable packaged qualification now covers
-two clustered Keycloak instances sharing PostgreSQL and remote KMS, native email
-and password enrollment, Account Console, native action cancellation and deletion,
-cross-node last-method protection, fresh surviving-key/password authentication,
-configured OTP, expired-tab recovery, and server rejection of invalid signatures,
-wrong origins/RP scope, missing user verification, replayed assertions and
-unknown/deleted credentials. For origin/RP/verification cases the virtual test key
-re-signs the altered assertion, distinguishing context validation from signature
-validation. Rejections retain password fallback and assigned native realm roles;
-they do not establish Marty organization or Badge authorization end to end.
-The combined proof also covers cookie rotation, CIBA and KMS-loss/custody checks.
-The CI image lane runs this
-composite proof against its freshly built images. This is synthetic-account and
-virtual-device evidence. The separate real-service application/Badge proof is
-described below; completed Google login, external wallet/device behavior and
-deployed qualification remain rollout gates.
+Keycloak permits users to remove their final passkey. Keep another working login
+or a verified recovery method before deleting a credential. Marty does not replace
+this upstream behavior with a custom last-method rule. The native Account Console
+and `delete_credential` application-initiated action own management and confirmation.
+
+Marty's enrollment endpoint is an authenticated adapter to Keycloak: it either
+starts the native `webauthn-register-passwordless` action through the existing
+OIDC/PKCE flow, or asks Keycloak's `execute-actions-email` API to send that action
+to the already-bound verified Badge account. It never creates passkey challenges,
+verifies assertions, stores passkey credentials or signs registration links.
+The subject/session checks preserve the existing account and authorization.
+
+The packaged qualification covers stock native enrollment, signed email,
+Account Console, action cancellation/deletion, cross-node credential changes,
+fresh passkey/password authentication, configured OTP, expired-tab recovery and
+rejection of invalid signatures, wrong origins/RP scope, missing user verification,
+replay and deleted credentials. These are synthetic-account/virtual-device checks;
+actual Google, hardware/cross-device use and deployed qualification remain rollout
+gates. See the [version-matched native passkey setup](https://github.com/keycloak/keycloak/blob/26.8.0/docs/documentation/server_admin/topics/authentication/passkeys.adoc).
 
 Google's provider prompt defaults to `select_account` when it is unset or empty;
 the configurator preserves an explicit provider prompt. This keeps Marty's fresh
@@ -125,9 +117,8 @@ codes alone must not be assumed to recover a passwordless account. Password/emai
 fallback retains its existing security characteristics.
 
 If a device is lost, sign in using a retained method and verify that method in a
-fresh browser session before removing the lost credential. The removal guard
-checks stored credentials and enabled authenticators; it cannot establish that
-the user still possesses another device or remembers a stored password. Keep
+fresh browser session before removing the lost credential. Keycloak does not
+prove that another stored method is still usable before allowing deletion. Keep
 credential labels clear and confirm the account shown in the native console.
 
 Use the existing **Forgot password** flow when password/email recovery is

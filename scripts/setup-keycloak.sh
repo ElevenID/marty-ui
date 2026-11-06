@@ -823,7 +823,7 @@ passkey_field_matches() {
 }
 
 configure_passkey_login() {
-    local enabled="$KEYCLOAK_PASSKEYS_ENABLED" rp="$KEYCLOAK_PASSKEY_RP_ID" label current server_info guard
+    local enabled="$KEYCLOAK_PASSKEYS_ENABLED" rp="$KEYCLOAK_PASSKEY_RP_ID" label current server_info
     [ -n "$enabled" ] || return 0
     if [[ "$enabled" != true && "$enabled" != false ]]; then
         log_error "KEYCLOAK_PASSKEYS_ENABLED must be true, false, or empty to preserve policy"
@@ -847,7 +847,7 @@ configure_passkey_login() {
             return 1
         fi
     fi
-    # The integrated forms, internal lifecycle SPI and JPA contract are qualified
+    # The integrated forms and native passkey policy are qualified
     # against the exact pinned version. Requalify before extending this boundary.
     # Fail closed for explicit management on a different version, rather than
     # claiming that an ignored representation field successfully enabled login.
@@ -862,14 +862,6 @@ configure_passkey_login() {
         return 1
     fi
     if [ "$enabled" = true ]; then
-        # This is metadata from the selected credential factory, not merely a
-        # file-presence check. Do not enable managed login without its guard.
-        guard=$(printf '%s' "$server_info" | sed -n 's/.*"keycloak-webauthn-passwordless":\({[^}]*}\).*/\1/p')
-        if ! printf '%s' "$guard" | grep -q '"order":100[,}]' \
-            || ! printf '%s' "$guard" | grep -q '"martyPasskeyLifecycleGuard":"1"'; then
-            log_error "Managed passkeys require the qualified Marty lifecycle provider in the Keycloak image"
-            return 1
-        fi
         # A configured RP ID is a credential boundary, not a replaceable setting.
         if ! passkey_field_matches "realms/$REALM" webAuthnPolicyPasswordlessRpId '""' \
             && ! passkey_field_matches "realms/$REALM" webAuthnPolicyPasswordlessRpId "\"$rp\""; then

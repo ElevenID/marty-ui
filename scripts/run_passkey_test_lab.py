@@ -62,7 +62,7 @@ def badge_fixture(context):
         "issuer": {"id": issuer, "type": ["Profile"], "name": "Marty isolated passkey lab"},
         "validFrom": datetime.fromtimestamp(now, timezone.utc).isoformat().replace("+00:00", "Z"),
         "validUntil": datetime.fromtimestamp(now + 3600, timezone.utc).isoformat().replace("+00:00", "Z"),
-        "name": "Passkey testing — synthetic Open Badge",
+        "name": "Passkey testing â€” synthetic Open Badge",
         "credentialSubject": {"id": holder, "type": ["AchievementSubject"],
             "identifier": [{"type": "IdentityObject", "hashed": False,
                 "identityHash": "badge.lab@example.invalid", "identityType": "emailAddress"}],
@@ -114,16 +114,16 @@ class Lab:
         return f"""<!doctype html><meta charset=utf-8><title>Marty passkey test lab</title>
 <style>body{{font:17px system-ui;max-width:1000px;margin:40px auto;padding:20px;line-height:1.55}}table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #ccc;padding:10px;text-align:left}}button,a{{margin:8px}}code{{overflow-wrap:anywhere}}section{{margin:30px 0}}label{{display:block;margin:10px}}</style>
 <h1>Marty passkey test lab</h1><p>Isolated synthetic accounts. This lab closes automatically after {self.minutes} minutes.</p>
-<p><a href="{html.escape(self.urls['console'], quote=True)}">Open native account console</a> · <a href="/">Refresh inbox</a></p>
+<p><a href="{html.escape(self.urls['console'], quote=True)}">Open native account console</a> Â· <a href="/">Refresh inbox</a></p>
 <table><tr><th>Case</th><th>Username / email</th><th>Test password</th></tr>{rows}</table>
-<section><h2>Try a real passkey</h2><ol><li>Open the account console and use the password account.</li><li>Under Signing in, create a passkey using Windows Hello or a USB security key.</li><li>Sign out, open a private browser window, then sign in with the passkey.</li><li>Rename it, add a second key, and test removal. Keep another passkey or a working password.</li></ol>
+<section><h2>Try a real passkey</h2><ol><li>Open the account console and use the password account.</li><li>Under Signing in, choose Set up Passkey, then REGISTER on the ElevenID registration page. Complete the browser prompt using Windows Hello or a USB security key.</li><li>Sign out, open a private browser window, then sign in with the passkey.</li><li>Rename it, add a second key, and test removal. Keep another passkey or a working password.</li></ol>
 <p>For a password-free account, send a local enrollment email below, open the captured link, then use its passkey in a private window.</p>
 <form method=post action=/email><input type=hidden name=csrf value="{self.csrf}"><button>Send password-free enrollment email</button></form>
 <ul>{''.join(messages) or '<li>No captured mail yet.</li>'}</ul></section>
 <section><h2>Broker and Google</h2><p>The Test broker option uses a separate native OIDC identity and the broker account above. It is a simulator; actual Google qualification remains open.</p>
 <p>For real Google, create a nonproduction web OAuth client with this exact redirect URI: <code>{html.escape(self.keycloak)}/realms/11id/broker/google/endpoint</code>. Enter its client values only into this local form.</p>
 <form method=post action=/google><input type=hidden name=csrf value="{self.csrf}"><label>Client ID <input name=client_id required autocomplete=off></label><label>Client secret <input type=password name=client_secret required autocomplete=off></label><button>Connect Google to this disposable realm</button></form></section>
-<section><h2>Open Badge fixture</h2><p><a href=/openbadge.jwt>Signed VC-JWT</a> · <a href=/openbadge.json>Credential JSON</a> · <a href=/issuer-public.json>Public issuer and holder details</a></p>
+<section><h2>Open Badge fixture</h2><p><a href=/openbadge.jwt>Signed VC-JWT</a> Â· <a href=/openbadge.json>Credential JSON</a> Â· <a href=/issuer-public.json>Public issuer and holder details</a></p>
 <p>The issuer and holder have separate non-exportable lab keys. This prepares credential material; the actual Marty presentation-policy, wallet and credential-login journey still needs its governed connection. The password-free account above exercises its native Keycloak enrollment portion.</p></section>
 <section><h2>Record the result</h2><p>Use RESULT-TEMPLATE.md in the lab output folder. Desktop localhost is a secure browser context. Phone-native and cross-device checks still need a suitable trusted HTTPS test origin and physical prompts.</p>
 <form method=post action=/stop><input type=hidden name=csrf value="{self.csrf}"><button>Close and clean up this lab</button></form></section>"""
@@ -208,7 +208,7 @@ class Lab:
                 "# Passkey lab results\n\nRecord date, OS/browser/device and each observed result.\n\n"
                 "- Password login / recovery:\n- Windows Hello:\n- Hardware key:\n- Phone / cross-device:\n"
                 "- Broker simulation / stable account:\n- Actual Google:\n- Password-free email enrollment:\n"
-                "- Rename / second key / last-method refusal:\n- Actual Marty Open Badge presentation:\n"
+                "- Rename / second key / native removal confirmation:\n- Actual Marty Open Badge presentation:\n"
                 "- Cancellation / errors:\n- Missing or blocked checks:\n", encoding="utf-8")
             self.ready = True
             print(f"PASSKEY LAB READY {self.origin}\nPrivate test files: {self.output}\nCloses after {self.minutes} minutes, or use Close lab.", flush=True)

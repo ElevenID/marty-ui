@@ -22,9 +22,7 @@ PASSKEY_POLICY = {
 
 
 def passkey_readbacks():
-    return [json.dumps({"systemInfo": {"version": "26.8.0"}, "providers": {"credential": {"providers": {
-                "keycloak-webauthn-passwordless": {"order": 100, "operationalInfo": {"martyPasskeyLifecycleGuard": "1"}}
-            }}}}),
+    return [json.dumps({"systemInfo": {"version": "26.8.0"}}),
             '{"webAuthnPolicyPasswordlessRpId":""}',
             *[json.dumps({"webAuthnPolicyPasswordless" + key: value})
               for key, value in PASSKEY_POLICY.items()],
@@ -131,20 +129,6 @@ def test_passkey_rollback_only_disables_login_and_retains_policy_and_credentials
     assert [call['args'][0] for call in calls] == ['get', 'update', 'get']
     assert calls[1]['args'] == ['update', 'realms/11id', '-s',
                               'webAuthnPolicyPasswordlessPasskeysEnabled=false']
-
-
-@pytest.mark.parametrize("provider", [None, {"order": 0},
-    {"order": 0, "operationalInfo": {"martyPasskeyLifecycleGuard": "1"}},
-    {"order": 100, "operationalInfo": {"martyPasskeyLifecycleGuard": "2"}}])
-def test_passkey_enablement_requires_the_selected_qualified_lifecycle_provider(tmp_path, provider):
-    info = {"systemInfo": {"version": "26.8.0"}, "providers": {"credential": {"providers": {}}}}
-    if provider is not None:
-        info["providers"]["credential"]["providers"]["keycloak-webauthn-passwordless"] = provider
-    result, calls = run_setup(tmp_path, "configure_passkey_login", readback=json.dumps(info),
-                              KEYCLOAK_PASSKEYS_ENABLED="true", KEYCLOAK_PASSKEY_RP_ID="login.example.test")
-    assert result.returncode != 0
-    assert len(calls) == 1 and calls[0]["args"][0] == "get"
-    assert "lifecycle provider" in result.stderr
 
 
 def test_passkey_policy_readback_preserves_whitespace_inside_string_values(tmp_path):

@@ -8,13 +8,13 @@ not connect to or change the held elevenidllc deployment.
 From the repository root, with the qualified local images and Python test tools:
 
 ```powershell
-py -3.12 scripts/run_passkey_test_lab.py --keycloak-image marty-passkey-keycloak:lifecycle-root --openbao-image marty-kms-final-openbao:d7285b9
+py -3.12 scripts/run_passkey_test_lab.py --keycloak-image marty-passkey-keycloak:native-26.8 --openbao-image marty-kms-final-openbao:d7285b9
 ```
 
 The launcher prints a localhost URL when ready, plus a private output folder.
 Open that page for the generated usernames/passwords, account-console link,
 captured enrollment/recovery mail, Google setup and credential downloads.
-The lab lasts 20 minutes by default; `--minutes` accepts 1–30. Close lab stops
+The lab lasts 20 minutes by default; `--minutes` accepts 1â€“30. Close lab stops
 the interactive window early. The launcher then finishes the custody regression
 and removes its disposable containers/network. Keep the terminal process alive
 during testing; do not reuse production accounts, credentials or RP IDs.
@@ -29,11 +29,14 @@ Marty presentation policy and actual credential-login journey remain separate
 integration requirements. The badge account's mail action tests the native
 Keycloak enrollment portion of that path.
 
-Use the password account to enroll Windows Hello or a hardware key. Sign out
+Use standalone desktop Edge or Chrome and sign in with the password account first.
+Choose **Signing in → Set up Passkey → REGISTER**, then complete the browser
+prompt using Windows Hello or a hardware key. Sign out
 and use a private browser window to prove a fresh passkey login. Rename the
 key, add another, and remove one. For the password-free account, use the local
-mail action and captured link. Test cancellation and the remaining-method
-safeguard; capture actual results in the template.
+mail action and captured link. Test cancellation and native removal confirmation;
+Keycloak permits final-passkey deletion, so retain a working fallback/recovery
+method. Capture actual results in the template.
 Label real test keys clearly. Closing the lab removes its server-side records;
 remove only the corresponding lab entries from your authenticator afterward.
 
@@ -65,7 +68,7 @@ synthetic credential follows the [Open Badges3 credential example](https://www.i
 For the automated combined PostgreSQL/two-node/KMS proof:
 
 ```powershell
-$env:MARTY_PASSKEY_PACKAGED_IMAGE='marty-passkey-keycloak:lifecycle-root'
+$env:MARTY_PASSKEY_PACKAGED_IMAGE='marty-passkey-keycloak:native-26.8'
 $env:MARTY_PASSKEY_PACKAGED_OPENBAO_IMAGE='marty-kms-final-openbao:d7285b9'
 py -3.12 -m pytest -q -s tests/test_keycloak_passkey_packaged.py
 ```
