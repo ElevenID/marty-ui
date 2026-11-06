@@ -84,6 +84,31 @@ Helm package CI workflow also passed on the pushed correction checkpoint.
 passed with Rust 1.95, covering compilation of the entire workspace's binary
 targets. The repository's protected-source CI remains a separate required gate.
 
+## Protected-source CI follow-up
+
+The complete PR CI run at `79c9acf` finished with one substantive failing job:
+[Release Contract Tests](https://github.com/ElevenID/marty-ui/actions/runs/42117585720/job/127564190021).
+Its existing real-`kubectl` Secret schema test exceeded the fixture's 20-second
+aggregate deadline. The Rust image builds, native operators on both
+architectures, service test matrices, credential lifecycle browser gate, lint
+and security jobs passed. The separate Helm, CodeQL and policy workflows also
+passed. A skipped installer-trial image job is not counted as a pass.
+
+The failing integration path launches 33 real clients sequentially. Its test
+budget is now 120 seconds; ordinary fixture calls keep the 20-second deadline,
+and real client requests retain their three-second timeout. Publication still
+stops on the first failure. The harness also terminates its owned POSIX process
+group on timeout or interruption before tearing down the local API fixture.
+No application code, Secret validation or release admission check changed in
+this follow-up.
+
+All **55 tests in the affected file passed without skips** using the same
+`kubectl v1.37.2` as the CI runner. This includes the real 33-Secret client
+contract and a regression proving a timed-out descendant releases its lock,
+returns promptly and attempts only the first Secret. The local real-client
+check took approximately 1.7 seconds; it does not establish the cause of the
+slower CI run. The new checkpoint must still pass protected-source CI.
+
 ## Remaining acceptance sequence
 
 1. Complete the normal protected-source CI and review/merge process for the
