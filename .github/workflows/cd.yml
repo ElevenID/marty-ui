@@ -492,6 +492,13 @@ jobs:
       attestations: write
       artifact-metadata: write
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -862,6 +869,13 @@ jobs:
       SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
       HARNESS_SHA: b71078cb18998014765bcfe6850b75714d852794
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
@@ -1166,6 +1180,13 @@ jobs:
       id-token: write
       packages: read
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           path: marty-ui
@@ -1469,6 +1490,13 @@ jobs:
     env:
       CARGO_PROFILE_DEV_DEBUG: 0
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -1771,6 +1799,13 @@ jobs:
       attestations: write
       id-token: write
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
@@ -2040,6 +2075,13 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0

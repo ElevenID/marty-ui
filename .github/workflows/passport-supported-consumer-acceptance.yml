@@ -56,6 +56,13 @@ jobs:
       SELFHOST_ORIGIN: ${{ inputs.selfhost_origin }}
       PASSPORT_SUPPORTED_ACCEPTANCE_API_KEY: ${{ secrets.PASSPORT_SUPPORTED_ACCEPTANCE_API_KEY }}
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Inspect dedicated Passport runner before preparing tools
         run: python3 scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
