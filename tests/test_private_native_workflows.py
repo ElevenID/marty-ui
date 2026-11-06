@@ -215,6 +215,7 @@ def test_service_image_catalog_checks_prepare_host_rust_without_leaking_reader()
     steps = job["steps"]
     names = [step.get("name") for step in steps]
     check = names.index("Authorize private fork access")
+    mirror = names.index("Prefer cached Docker Hub images without restarting the runner daemon")
     consumer = names.index("Verify complete Canvas worker consumer configurations")
     toolchains = [i for i, step in enumerate(steps)
                   if step.get("uses") == "dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de"]
@@ -222,7 +223,7 @@ def test_service_image_catalog_checks_prepare_host_rust_without_leaking_reader()
                if step.get("name") == "Fetch locked private fork dependencies"]
     assert len(toolchains) == len(fetches) == 1
     toolchain, fetch = toolchains[0], fetches[0]
-    assert check < toolchain < fetch < consumer
+    assert check < mirror < toolchain < fetch < consumer
     assert steps[toolchain]["with"] == {"toolchain": "1.95.0"}
     assert not steps[toolchain].get("if")
     assert steps[check]["if"] == steps[fetch]["if"] == "vars.PRIVATE_FORKS_ENABLED == 'true'"
