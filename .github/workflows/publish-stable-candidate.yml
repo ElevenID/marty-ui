@@ -1,12 +1,8 @@
 name: Publish stable candidate
 
-run-name: Publish stable candidate ${{ inputs.candidate_run_id || github.event.workflow_run.id }}
+run-name: Publish stable candidate ${{ inputs.candidate_run_id }}
 
 on:
-  workflow_run:
-    workflows: [Stack release]
-    branches: [main]
-    types: [completed]
   workflow_dispatch:
     inputs:
       candidate_run_id:
@@ -19,7 +15,7 @@ permissions:
 
 jobs:
   intake:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -30,7 +26,7 @@ jobs:
       tag: ${{ steps.intake.outputs.tag }}
       candidate_run_id: ${{ steps.intake.outputs.candidate_run_id }}
     steps:
-      # workflow_run uses the default-branch SHA. Never check out or execute
+      # The coordinator dispatches main. Never check out or execute
       # a ref, script, or action obtained from the candidate artifact/event.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

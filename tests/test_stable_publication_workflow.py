@@ -38,10 +38,13 @@ def test_candidate_is_sealed_after_admission_and_original_cd_stays_first_attempt
 
 def test_new_publisher_uses_trusted_default_source_and_readonly_intake():
     workflow = load("publish-stable-candidate.yml")
-    trigger = workflow[True]["workflow_run"]
-    assert trigger == {"workflows": ["Stack release"], "branches": ["main"], "types": ["completed"]}
+    assert set(workflow[True]) == {"workflow_dispatch"}
+    trigger = workflow[True]["workflow_dispatch"]["inputs"]
+    assert set(trigger) == {"candidate_run_id"}
+    assert trigger["candidate_run_id"]["required"] is True
+    assert trigger["candidate_run_id"]["type"] == "string"
     jobs = workflow["jobs"]
-    assert "conclusion == 'success'" in jobs["intake"]["if"]
+    assert jobs["intake"]["if"] == "github.event_name == 'workflow_dispatch'"
     assert jobs["intake"]["permissions"] == {"actions": "read", "contents": "read"}
     assert jobs["publish"]["needs"] == "intake"
     assert jobs["publish"]["if"] == "needs.intake.outputs.eligible == 'true'"

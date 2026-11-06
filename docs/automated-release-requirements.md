@@ -73,8 +73,14 @@ The customer application profile remains explicit.
 The coordinator runs full CI, then the applicable no-write claim and producer
 workflows. Nightly and stable retain their different artifact contracts. The
 stable producer qualifies automatically and starts its independent tag operator
-without a person. The coordinator observes the already automatic v2 stable
-publisher, requiring both intake and publication to complete successfully.
+without a person. After the exact original stable producer succeeds, the same
+stable job dispatches the v2 publisher once and records its returned run ID.
+This uses the job's existing dispatch permission and does not depend on a
+`workflow_run` completion listener. The publisher has only a
+`workflow_dispatch` trigger, avoiding a second automatic writer path.
+The separate read-only stage verifies that acknowledged publisher ID, exact
+candidate title, source, original attempt and successful intake/publication.
+Production web stages admit the same publisher identity.
 
 Optional production web packaging follows successful stable publication. The
 existing combined application and independent website producers feed the signed

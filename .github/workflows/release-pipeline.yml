@@ -118,6 +118,7 @@ jobs:
     outputs:
       stable_run_id: ${{ steps.run.outputs.stable_run_id }}
       stable_tag: ${{ steps.run.outputs.stable_tag }}
+      publisher_run_id: ${{ steps.run.outputs.publisher_run_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -127,7 +128,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: run
-        name: Claim and qualify the stable candidate
+        name: Claim, qualify and publish the stable candidate
         env:
           GH_TOKEN: ${{ github.token }}
           CI_RUN_ID: ${{ needs.full-ci.outputs.ci_run_id }}
@@ -161,16 +162,18 @@ jobs:
         with:
           python-version: '3.12'
       - id: run
-        name: Observe the existing automatic stable publisher
+        name: Verify the acknowledged stable publisher
         env:
           GH_TOKEN: ${{ github.token }}
           CI_RUN_ID: ${{ needs.full-ci.outputs.ci_run_id }}
           STABLE_RUN_ID: ${{ needs.stable.outputs.stable_run_id }}
+          PUBLISHER_RUN_ID: ${{ needs.stable.outputs.publisher_run_id }}
         run: >-
           python scripts/release_pipeline.py stable-publish
           --ci-run-id "$CI_RUN_ID" --stable-run-id "$STABLE_RUN_ID"
+          --publisher-run-id "$PUBLISHER_RUN_ID"
           --journal "$RUNNER_TEMP/release-pipeline.json"
-      - name: Preserve automatic publisher observation
+      - name: Preserve acknowledged publisher verification
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

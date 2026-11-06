@@ -40,6 +40,7 @@ DISPATCH = {
                        {"claim_run_id", "publication_contract", "selfhost_public_profile",
                         "publish_cloudflare_addon", "selfhost_external_images_json"},
                        {"official-gate-evidence", "qualify-release", "publish-manifest"}),
+    "stable-publisher": (PUBLISHER, {"candidate_run_id"}, {"intake", "publish"}),
     "web-application": (WEB, {"mode", "stack_release_tag", "expected_source_sha"}, {"release"}),
     "web-website": (WEB, {"mode", "expected_source_sha"}, {"release"}),
     "web-compose": (WEB, {"mode", "website_run_id", "website_run_attempt", "application_run_id",
@@ -357,46 +358,29 @@ class Pipeline:
         print(transport.encoded({"event": "child_dispatch_confirmed", "stage": self.phase,
                                  "step": name, "workflow": workflow, "run_id": run_id,
                                  "run_attempt": 1}).decode(), end="", flush=True)
-        self.wait(run_id, workflow, jobs)
+        title = f"Publish stable candidate {inputs['candidate_run_id']}" if name == "stable-publisher" else None
+        self.wait(run_id, workflow, jobs, title=title)
         step["outcome"] = "success"
         self.operation = "record_child_success"
         self.persist()
         return run_id
 
-    def stable_publisher(self, candidate: int) -> int:
+    def stable_publisher(self, candidate: int, publisher: int) -> int:
+        """Revalidate the publisher ID acknowledged by the stable job."""
         self.wait(candidate, DISPATCH["stable-release"][0], DISPATCH["stable-release"][2])
-        title = f"Publish stable candidate {candidate}"
-        step = {"name": "stable-publisher", "workflow": PUBLISHER, "event": "workflow_run",
-                "candidate_run_id": candidate, "outcome": "waiting"}
+        require(transport.positive(publisher), "invalid_child_run_id")
+        step = {"name": "stable-publisher", "workflow": PUBLISHER, "event": "workflow_dispatch",
+                "candidate_run_id": candidate, "run_id": publisher, "run_attempt": 1, "outcome": "waiting"}
         self.record["steps"].append(step)
-        self.child_run_id = None
+        self.child_run_id = publisher
         self.operation = "record_stable_publisher"
         self.persist()
-        while True:
-            self.current()
-            self.operation = "find_stable_publisher"
-            listing = self.github.json(f"repos/{transport.REPOSITORY}/actions/workflows/{Path(PUBLISHER).name}/runs"
-                                       f"?event=workflow_run&head_sha={self.source}&branch=main&per_page=100")
-            require(isinstance(listing, dict) and type(listing.get("total_count")) is int
-                    and 0 <= listing["total_count"] <= 100 and isinstance(listing.get("workflow_runs"), list)
-                    and len(listing["workflow_runs"]) == listing["total_count"]
-                    and all(isinstance(run, dict) and transport.positive(run.get("id")) for run in listing["workflow_runs"])
-                    and len({run["id"] for run in listing["workflow_runs"]}) == listing["total_count"],
-                    "publisher_listing_invalid")
-            matches = [run for run in listing["workflow_runs"] if run.get("display_title") == title]
-            require(len(matches) <= 1, "publisher_ambiguous")
-            if matches:
-                run_id = matches[0]["id"]
-                step.update(run_id=run_id, run_attempt=1, outcome="observed")
-                self.child_run_id = run_id
-                self.operation = "record_stable_publisher"
-                self.persist()
-                self.wait(run_id, PUBLISHER, {"intake", "publish"}, event="workflow_run", title=title)
-                step["outcome"] = "success"
-                self.operation = "record_child_success"
-                self.persist()
-                return run_id
-            self.sleep(min(15.0, max(0.0, (self.deadline - self.now()).total_seconds())))
+        self.wait(publisher, PUBLISHER, {"intake", "publish"}, event="workflow_dispatch",
+                  title=f"Publish stable candidate {candidate}")
+        step["outcome"] = "success"
+        self.operation = "record_child_success"
+        self.persist()
+        return publisher
 
     def execute(self, *, ci_run_id: int | None = None, stable_run_id: int | None = None,
                 publisher_run_id: int | None = None, application_run_id: int | None = None,
@@ -417,12 +401,14 @@ class Pipeline:
             release = self.dispatch("stable-release", {"claim_run_id": str(claim), "publication_contract": "v2",
                                     "selfhost_public_profile": self.plan["profile"], "publish_cloudflare_addon": False,
                                     "selfhost_external_images_json": self.plan["external_images"]})
-            return {"stable_claim_run_id": claim, "stable_run_id": release, "stable_tag": self.tag}
+            publisher = self.dispatch("stable-publisher", {"candidate_run_id": str(release)})
+            return {"stable_claim_run_id": claim, "stable_run_id": release, "stable_tag": self.tag,
+                    "publisher_run_id": publisher}
         if self.phase == "stable-publish":
-            return {"publisher_run_id": self.stable_publisher(stable_run_id)}
+            return {"publisher_run_id": self.stable_publisher(stable_run_id, publisher_run_id)}
         require(self.plan["production_web"], "web_not_requested")
         self.wait(stable_run_id, DISPATCH["stable-release"][0], DISPATCH["stable-release"][2])
-        self.wait(publisher_run_id, PUBLISHER, {"intake", "publish"}, event="workflow_run",
+        self.wait(publisher_run_id, PUBLISHER, {"intake", "publish"}, event="workflow_dispatch",
                   title=f"Publish stable candidate {stable_run_id}")
         if self.phase == "web-application":
             return {"application_run_id": self.dispatch("web-application", {"mode": "combined",

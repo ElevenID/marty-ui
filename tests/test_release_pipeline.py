@@ -41,7 +41,6 @@ class FakeGitHub:
         self.bad_details = None
         self.skipped_job = None
         self.main_sha = SOURCE
-        self.publisher_ids: list[int] = []
 
     def add(self, run_id: int, workflow: str, *, event="workflow_dispatch", title=None, jobs=None) -> dict:
         value = {"id": run_id, "path": workflow, "event": event, "head_branch": "main",
@@ -70,11 +69,13 @@ class FakeGitHub:
             ".github/workflows/prepare-stack-tag.yml": ["Validate exact main and persist the no-write claim"],
             ".github/workflows/nightly-release.yml": ["admit", "prepare-native", "prepare-installation", "runtime-happy-path", "sign-release", "publish"],
             ".github/workflows/cd.yml": ["official-gate-evidence", "qualify-release", "publish-manifest"],
+            ".github/workflows/publish-stable-candidate.yml": ["intake", "publish"],
             ".github/workflows/production-web-release.yml": ["compose" if payload["inputs"].get("mode") == "compose" else "release"],
         }[workflow]
         run_id = self.next_id
         self.next_id += 1
-        self.add(run_id, workflow, jobs=names)
+        title = f"Publish stable candidate {payload['inputs']['candidate_run_id']}" if workflow == pipeline.PUBLISHER else None
+        self.add(run_id, workflow, title=title, jobs=names)
         if self.after_post:
             self.after_post(self.runs[run_id])
         if self.lost_response:
@@ -86,8 +87,6 @@ class FakeGitHub:
 
     def json(self, path: str):
         self.reads.append(path)
-        if "/workflows/publish-stable-candidate.yml/runs?" in path:
-            return {"total_count": len(self.publisher_ids), "workflow_runs": [self.runs[number] for number in self.publisher_ids]}
         match = re.fullmatch(r"repos/ElevenID/marty-ui/actions/runs/([1-9][0-9]*)", path)
         assert match is not None, path
         return copy.deepcopy(self.runs[int(match[1])])
@@ -183,13 +182,17 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(nightly.execute(ci_run_id=200), {"nightly_claim_run_id": 201, "nightly_run_id": 202})
         self.assertEqual(self.github.posts[-1][1]["inputs"], {"claim_run_id": "201", "publish_cloudflare_addon": False})
         stable = self.driver("stable", name="stable.json")
-        self.assertEqual(stable.execute(ci_run_id=200), {"stable_claim_run_id": 203, "stable_run_id": 204, "stable_tag": "v1.2.3"})
-        self.assertEqual(self.github.posts[-1][1]["inputs"], {
+        self.assertEqual(stable.execute(ci_run_id=200), {"stable_claim_run_id": 203, "stable_run_id": 204,
+                         "stable_tag": "v1.2.3", "publisher_run_id": 205})
+        self.assertEqual(self.github.posts[-2][1]["inputs"], {
             "claim_run_id": "203", "publication_contract": "v2", "selfhost_public_profile": "full",
             "publish_cloudflare_addon": False, "selfhost_external_images_json": PINS})
+        self.assertEqual(self.github.posts[-1][1]["inputs"], {"candidate_run_id": "204"})
+        self.assertEqual(stable.record["steps"][-1]["run_id"], 205)
+        self.assertEqual(stable.record["steps"][-1]["outcome"], "success")
         self.assertEqual([path.split("/workflows/")[1] for path, _ in self.github.posts],
                          ["ci.yml/dispatches", "prepare-nightly-claim.yml/dispatches", "nightly-release.yml/dispatches",
-                          "prepare-stack-tag.yml/dispatches", "cd.yml/dispatches"])
+                          "prepare-stack-tag.yml/dispatches", "cd.yml/dispatches", "publish-stable-candidate.yml/dispatches"])
 
     def test_failed_ci_or_claim_prevents_the_next_producer(self) -> None:
         driver = self.driver("nightly")
@@ -235,37 +238,162 @@ class PipelineTests(unittest.TestCase):
                     driver.execute()
                 self.assertEqual(len(self.github.posts), 1)
 
-    def publisher(self, number=70, *, event="workflow_run", title="Publish stable candidate 60") -> None:
+    def publisher(self, number=70, *, event="workflow_dispatch", title="Publish stable candidate 60") -> None:
         self.github.add(number, pipeline.PUBLISHER, event=event, title=title, jobs=["intake", "publish"])
-        self.github.publisher_ids.append(number)
 
-    def test_automatic_publisher_is_observed_without_any_second_dispatch(self) -> None:
+    def test_acknowledged_publisher_is_verified_without_search_or_redispatch(self) -> None:
         self.publisher()
+        self.publisher(71, title="Publish stable candidate 61")
         driver = self.driver("stable-publish")
-        self.assertEqual(driver.execute(ci_run_id=50, stable_run_id=60), {"publisher_run_id": 70})
+        self.assertEqual(driver.execute(ci_run_id=50, stable_run_id=60, publisher_run_id=70),
+                         {"publisher_run_id": 70})
         self.assertEqual(self.github.posts, [])
         self.assertEqual(driver.record["steps"][0]["candidate_run_id"], 60)
+        self.assertEqual(driver.record["steps"][0]["run_id"], 70)
+        self.assertEqual(driver.record["steps"][0]["event"], "workflow_dispatch")
+        self.assertFalse(any("/actions/runs/71" in path or "/workflows/" in path for path in self.github.reads))
 
-    def test_automatic_publisher_cannot_be_manual_duplicated_or_a_successful_skip(self) -> None:
-        for kind in ("manual", "duplicate", "skipped", "wrong-source", "failed"):
+    def test_acknowledged_publisher_rejects_foreign_identity_and_unsuccessful_jobs(self) -> None:
+        for kind in ("completion-event", "wrong-title", "wrong-source", "wrong-workflow", "rerun", "skipped", "failed"):
             with self.subTest(kind=kind):
-                self.github.publisher_ids = []
                 self.publisher()
+                self.publisher(71)
                 self.github.skipped_job = None
-                if kind == "manual":
-                    self.github.runs[70]["event"] = "workflow_dispatch"
-                elif kind == "duplicate":
-                    self.publisher(71)
-                elif kind == "skipped":
-                    self.github.skipped_job = "publish"
+                if kind == "completion-event":
+                    self.github.runs[70]["event"] = "workflow_run"
+                elif kind == "wrong-title":
+                    self.github.runs[70]["display_title"] = "Publish stable candidate 61"
                 elif kind == "wrong-source":
                     self.github.runs[70]["head_sha"] = "b" * 40
+                elif kind == "wrong-workflow":
+                    self.github.runs[70]["path"] = ".github/workflows/foreign.yml"
+                elif kind == "rerun":
+                    self.github.runs[70]["run_attempt"] = 2
+                elif kind == "skipped":
+                    self.github.skipped_job = "publish"
                 else:
                     self.github.runs[70]["conclusion"] = "failure"
                 driver = self.driver("stable-publish", name=f"publisher-{kind}.json")
                 with self.assertRaises(ValueError):
-                    driver.execute(ci_run_id=50, stable_run_id=60)
+                    driver.execute(ci_run_id=50, stable_run_id=60, publisher_run_id=70)
                 self.assertEqual(self.github.posts, [])
+                self.assertFalse(any("/actions/runs/71" in path or "/workflows/" in path for path in self.github.reads))
+
+    def test_missing_publisher_id_cannot_select_an_unowned_run(self) -> None:
+        self.publisher()
+        for index, number in enumerate((None, False, 0, -1, "70")):
+            with self.subTest(number=number):
+                driver = self.driver("stable-publish", name=f"missing-publisher-{index}.json")
+                with self.assertRaises(ValueError):
+                    driver.execute(ci_run_id=50, stable_run_id=60, publisher_run_id=number)
+        self.assertEqual(self.github.posts, [])
+        self.assertFalse(any("/actions/runs/70" in path or "/workflows/" in path for path in self.github.reads))
+
+    def test_failed_skipped_or_unfinished_producer_prevents_publisher_dispatch(self) -> None:
+        for kind in ("failed", "skipped", "unfinished"):
+            with self.subTest(kind=kind):
+                self.github = FakeGitHub()
+                self.github.add(50, ".github/workflows/ci.yml", jobs=["CI Gate"])
+                driver = self.driver("stable", name=f"producer-barrier-{kind}.json")
+
+                def change(run):
+                    if run["path"] != ".github/workflows/cd.yml":
+                        return
+                    if kind == "failed":
+                        run["conclusion"] = "failure"
+                    elif kind == "skipped":
+                        self.github.skipped_job = "publish-manifest"
+                    else:
+                        run.update(status="in_progress", conclusion=None)
+
+                def expire(_seconds):
+                    self.assertEqual(len(self.github.posts), 2)
+                    self.assertEqual(self.github.runs[201]["status"], "in_progress")
+                    driver.now = lambda: driver.deadline
+
+                self.github.after_post = change
+                driver.sleep = expire
+                with self.assertRaises(ValueError):
+                    driver.execute(ci_run_id=50)
+                self.assertEqual([path.split("/workflows/")[1] for path, _ in self.github.posts],
+                                 ["prepare-stack-tag.yml/dispatches", "cd.yml/dispatches"])
+
+    def test_uncertain_publisher_dispatch_is_never_replayed_or_discovered(self) -> None:
+        for kind in ("lost", "missing-id", "legacy-response", "foreign-urls"):
+            with self.subTest(kind=kind):
+                self.github = FakeGitHub()
+                self.github.add(50, ".github/workflows/ci.yml", jobs=["CI Gate"])
+                original_response = self.github.response
+
+                def response(endpoint, *, method, payload):
+                    status, raw = original_response(endpoint, method=method, payload=payload)
+                    if not endpoint.endswith("/publish-stable-candidate.yml/dispatches"):
+                        return status, raw
+                    if kind == "lost":
+                        raise TimeoutError("synthetic publisher response lost")
+                    if kind == "missing-id":
+                        return 200, pipeline.transport.encoded({})
+                    if kind == "legacy-response":
+                        return 204, b""
+                    return 200, pipeline.transport.encoded({"workflow_run_id": 202,
+                        "run_url": "https://api.github.com/repos/ElevenID/marty-ui/actions/runs/999",
+                        "html_url": "https://github.com/ElevenID/marty-ui/actions/runs/999"})
+
+                self.github.response = response
+                name = f"publisher-uncertain-{kind}.json"
+                driver = self.driver("stable", name=name)
+                with self.assertRaises((TimeoutError, ValueError)):
+                    driver.execute(ci_run_id=50)
+                saved = json.loads((self.root / name).read_bytes())
+                self.assertEqual(len(saved["steps"]), 3)
+                self.assertEqual(saved["steps"][-1]["name"], "stable-publisher")
+                self.assertEqual(saved["steps"][-1]["request"]["inputs"], {"candidate_run_id": "201"})
+                self.assertEqual(saved["steps"][-1]["outcome"],
+                                 "unknown" if kind == "lost" else "response_received")
+                self.assertNotIn("run_id", saved["steps"][-1])
+                with self.assertRaisesRegex(ValueError, "already consumed"):
+                    driver.execute(ci_run_id=50)
+                self.assertEqual(len(self.github.posts), 3)
+                self.assertFalse(any("/actions/runs/202" in path or "/workflows/" in path for path in self.github.reads))
+
+    def test_publisher_dispatch_requires_the_original_candidate_title(self) -> None:
+        self.github.after_post = lambda run: run.update(display_title="Publish stable candidate 999") \
+            if run["path"] == pipeline.PUBLISHER else None
+        driver = self.driver("stable")
+        with self.assertRaises(pipeline.PipelineError) as caught:
+            driver.execute(ci_run_id=50)
+        self.assertEqual(caught.exception.code, "child_title_mismatch")
+        self.assertEqual(len(self.github.posts), 3)
+        self.assertEqual(driver.record["steps"][-1]["run_id"], 202)
+        self.assertEqual(driver.record["steps"][-1]["outcome"], "dispatch_confirmed")
+
+    def test_main_drift_after_producer_success_prevents_publisher_dispatch(self) -> None:
+        original_pages = self.github.pages
+
+        def pages(path, key):
+            rows = original_pages(path, key)
+            if "/actions/runs/201/" in path:
+                self.github.main_sha = "b" * 40
+            return rows
+
+        self.github.pages = pages
+        driver = self.driver("stable")
+        with self.assertRaises(pipeline.PipelineError) as caught:
+            driver.execute(ci_run_id=50)
+        self.assertEqual(caught.exception.code, "source_changed")
+        self.assertEqual(len(self.github.posts), 2)
+        self.assertEqual(driver.record["steps"][-1]["name"], "stable-release")
+        self.assertEqual(driver.record["steps"][-1]["outcome"], "success")
+
+    def test_web_stages_reject_a_publisher_for_another_candidate(self) -> None:
+        self.publisher(title="Publish stable candidate 61")
+        for phase in ("web-application", "web-website", "web-compose"):
+            with self.subTest(phase=phase):
+                driver = self.driver(phase, name=f"foreign-publisher-{phase}.json")
+                with self.assertRaises(pipeline.PipelineError) as caught:
+                    driver.execute(ci_run_id=50, stable_run_id=60, publisher_run_id=70)
+                self.assertEqual(caught.exception.code, "child_title_mismatch")
+        self.assertEqual(self.github.posts, [])
 
     def test_main_drift_and_stage_deadline_cannot_select_new_source_or_extend_a_wait(self) -> None:
         driver = self.driver("qualify")
@@ -509,9 +637,24 @@ class WorkflowContractTests(unittest.TestCase):
                 actual = {job.get("name", key) for key, job in workflow["jobs"].items()}
                 self.assertTrue(required_jobs <= actual, (name, required_jobs - actual))
         publisher = self.load(pipeline.PUBLISHER)
-        self.assertEqual(publisher["run-name"], "Publish stable candidate ${{ inputs.candidate_run_id || github.event.workflow_run.id }}")
-        self.assertEqual(publisher["on"]["workflow_run"], {"workflows": ["Stack release"], "branches": ["main"], "types": ["completed"]})
+        self.assertEqual(publisher["run-name"], "Publish stable candidate ${{ inputs.candidate_run_id }}")
+        self.assertEqual(set(publisher["on"]), {"workflow_dispatch"})
+        self.assertEqual(publisher["on"]["workflow_dispatch"]["inputs"]["candidate_run_id"]["required"], "true")
         self.assertEqual(set(publisher["jobs"]), {"intake", "publish"})
+
+    def test_publisher_acknowledgment_is_carried_through_readonly_job_outputs(self) -> None:
+        jobs = self.load(pipeline.WORKFLOW)["jobs"]
+        self.assertEqual(jobs["stable"]["outputs"]["publisher_run_id"], "${{ steps.run.outputs.publisher_run_id }}")
+        stage = jobs["stable-publish"]
+        self.assertEqual(stage["permissions"], {"contents": "read", "actions": "read"})
+        step = next(step for step in stage["steps"] if step.get("id") == "run")
+        self.assertEqual(step["env"]["PUBLISHER_RUN_ID"], "${{ needs.stable.outputs.publisher_run_id }}")
+        self.assertIn('--publisher-run-id "$PUBLISHER_RUN_ID"', step["run"])
+        self.assertEqual(stage["outputs"]["publisher_run_id"], "${{ steps.run.outputs.publisher_run_id }}")
+        for name in ("web-application", "web-website", "web-compose"):
+            step = next(step for step in jobs[name]["steps"] if step.get("id") == "run")
+            self.assertEqual(step["env"]["PUBLISHER_RUN_ID"], "${{ needs.stable-publish.outputs.publisher_run_id }}")
+            self.assertIn('--publisher-run-id "$PUBLISHER_RUN_ID"', step["run"])
 
 
 if __name__ == "__main__":
