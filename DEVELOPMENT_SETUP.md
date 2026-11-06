@@ -137,20 +137,16 @@ are owned and published by `ElevenID/marty-core`; use its build and release
 workflow, then update the digest-pinned artifacts in `release/stack-lock.json`.
 The UI repository does not build or check in local copies of those wheels.
 
-## Open Badges FFI
+## Open Badges
 
-Open Badges functions continue to be imported from
-`marty_common.crypto_bridge`, not from retired monolith modules and not
-directly from `_marty_rs`.
+Open Badges 3.0 is the supported badge format. UI-owned Rust services use the
+canonical `marty-verification` OB3 verifier and the KMS-backed issuance path.
+Open Badges 2.0 issuance, verification, Python bridge imports and Canvas template
+aliases are retired. Request a newly issued OB3 credential from the issuer;
+changing a signed OB2 payload or its version label cannot migrate its proof.
 
-```python
-from marty_common.crypto_bridge import (
-    open_badge_ob2_issue,
-    open_badge_ob2_verify,
-    open_badge_ob3_issue,
-    open_badge_ob3_verify,
-)
-```
+See [Open Badges verification and migration](docs/rust-migrations/presentation-open-badges-key-provenance.md)
+for proof-key requirements and the migration boundary.
 
 ## Troubleshooting
 

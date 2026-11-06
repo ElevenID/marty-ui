@@ -743,6 +743,7 @@ fn credential_status(error: CredentialIssuanceError) -> Status {
         | Error::InvalidProof(_)
         | Error::MdocHolderKeyRequired
         | Error::UnsupportedFormat(_)
+        | Error::RetiredOpenBadge
         | Error::InvalidDpopProof
         | Error::DpopMismatch => Status::invalid_argument(error.to_string()),
         Error::DpopRequired
