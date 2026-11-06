@@ -6,12 +6,14 @@ mutation entry point requiring a separately reviewed prepared-input digest.
 The default passport source, recipe bytes and durability gate remain unchanged.
 """
 from __future__ import annotations
+import importlib.util
 import json
 import math
 import os
 from pathlib import Path
 import re
 import shutil
+import sys
 from contextlib import contextmanager
 from scoped_native_runtime import (CORE_REVISION, UI_REVISION, ROLE_BINARIES,
     daemon_source, durable_barrier, read_ref, ref, require, save_exclusive, save_state, selected_sources, sha)
@@ -422,6 +424,67 @@ def build_journal(plan, private, profile=None):
     return LinuxBuildJournal(private, plan["runId"], plan["journalBackend"])
 
 
+def bound_cache_journal(plan, bound, cached, git):
+    """Read the cache journal from its own verified source root, not this build root."""
+    receipt = Path(bound["path"])
+    require(receipt.is_absolute() and receipt.is_file() and not receipt.is_symlink()
+            and receipt.resolve(strict=True) == receipt
+            and sha(receipt) == bound["sha256"]
+            and receipt.stat().st_size == bound["bytes"],
+            "D12_CACHE_RECEIPT_PRIVATE_PATH_CHANGED")
+    private = receipt.parent
+    approved = (Path.home() / ".codex/private").resolve()
+    require(private.name == "source-export" and private.is_relative_to(approved)
+            and not private.is_symlink() and not private.is_junction(),
+            "D12_CACHE_PRIVATE_ROOT_CHANGED")
+    backend = cached["journalBackend"]
+    desktop = backend["desktop"]
+    require(cached["runId"] == plan["cargoCacheRunId"]
+            and backend == plan["cargoCacheJournalBackend"]
+            and desktop["engineId"] == plan["engineId"]
+            and desktop["image"] == plan["builderImage"]
+            and Path(desktop["configDirectory"]).resolve() == private / "docker-config"
+            and desktop["volumeName"] == "marty-d02-journal-" + cached["runId"]
+            and desktop["volumeProof"]["Labels"] == {
+                "elevenid.owner": "d02-private-journal", "elevenid.run": cached["runId"]},
+            "D12_CACHE_JOURNAL_CUSTODY_CHANGED")
+    source_receipt = private / "source-export-receipt.json"
+    require(source_receipt.is_file() and not source_receipt.is_symlink(),
+            "D12_CACHE_SOURCE_RECEIPT_MISSING")
+    source = json.loads(source_receipt.read_bytes())
+    require(source.get("schema") == "marty.d12-current-native-source-export/v1"
+            and source.get("state") == "SOURCE_EXPORTED_NO_COMPILER"
+            and source["sources"]["ui"]["revision"] == cached["uiRevision"]
+            and source["sources"]["ui"]["tree"] == cached["uiTree"]
+            and source["sources"]["ui"]["inventory"]["sha256"] == cached["uiInventorySha256"]
+            and source["sources"]["ui"]["repository"] == plan["sources"]["ui"]["repository"]
+            and source["sources"]["core"]["revision"] == plan["coreRevision"],
+            "D12_CACHE_SOURCE_CUSTODY_CHANGED")
+    names = {"scoped_linux_journal.py": backend["workerSha256"],
+             "scoped_native_runtime.py": backend["sharedSha256"],
+             "desktop_journal_transport.py": desktop["transportSha256"]}
+    for name, digest in names.items():
+        file = private / "operator" / name
+        stated = source["operators"][name]
+        require(file.is_file() and not file.is_symlink()
+                and file.resolve(strict=True) == file
+                and stated["path"] == str(file)
+                and stated["sha256"] == digest == sha(file)
+                and git(["-C", source["sources"]["ui"]["repository"], "show",
+                         source["producerRevision"] + ":scripts/" + name]) == file.read_bytes(),
+                "D12_CACHE_OPERATOR_SOURCE_CHANGED")
+    worker = private / "operator/scoped_linux_journal.py"
+    loaded_shared = Path(sys.modules["scoped_native_runtime"].__file__)
+    require(loaded_shared.is_file() and sha(loaded_shared) == backend["sharedSha256"],
+            "D12_CACHE_LOADED_SHARED_CHANGED")
+    name = "marty_bound_cache_journal_" + cached["runId"].replace("-", "_")
+    spec = importlib.util.spec_from_file_location(name, worker)
+    require(spec is not None and spec.loader is not None, "D12_CACHE_JOURNAL_IMPORT_REFUSED")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.LinuxBuildJournal(private, cached["runId"], backend)
+
+
 def require_d12_fresh_target(plan, helper):
     """Refuse Docker's implicit volume creation or reuse for the new D12 build."""
     from scoped_native_profiles import D12_PASSPORT_CURRENT
@@ -471,15 +534,12 @@ def start(prepared_ref, helper, git, profile=None):
         bound = plan.get("cargoCacheReceipt")
         require(isinstance(bound, dict) and set(bound) == {"path", "sha256", "bytes"},
                 "D12_EXACT_CARGO_CACHE_RECEIPT_REQUIRED")
-        require(Path(bound["path"]).resolve().is_relative_to(private),
-                "D12_PRIVATE_CARGO_CACHE_RECEIPT_REQUIRED")
         validate_bound_receipt(plan, Path(bound["path"]), bound["sha256"])
         cached = json.loads(read_ref(bound).read_bytes())
         require(plan["cargoCacheRunId"] == cached["runId"]
                 and plan["cargoCacheJournalBackend"] == cached["journalBackend"],
                 "D12_CACHE_JOURNAL_CHANGED")
-        from scoped_linux_journal import LinuxBuildJournal
-        cache_store = LinuxBuildJournal(private, cached["runId"], cached["journalBackend"])
+        cache_store = bound_cache_journal(plan, bound, cached, git)
         require(cache_store.read("build-receipt.json") == cached,
                 "D12_AUTHORITATIVE_CACHE_RECEIPT_CHANGED")
         volume = json.loads(helper.run("docker", "--context", "desktop-linux", "volume", "inspect", "ui-canvas-cargo").stdout)[0]
