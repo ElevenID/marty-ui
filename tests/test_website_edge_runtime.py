@@ -40,6 +40,15 @@ def test_real_edge_routes_retained_assets_and_starts_while_product_is_unavailabl
                     self.send_header("Content-Length", str(len(raw)))
                     self.end_headers()
                     self.wfile.write(raw)
+                def do_POST(self):
+                    body = self.rfile.read(int(self.headers.get("Content-Length", "0"))).decode()
+                    raw = json.dumps({"owner": owner, "path": self.path,
+                                      "host": self.headers.get("Host"), "body": body}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
                 def log_message(self, *_args):
                     pass
             return Handler
@@ -65,11 +74,12 @@ def test_real_edge_routes_retained_assets_and_starts_while_product_is_unavailabl
     for key, value in replacements.items():
         template = template.replace("${" + key + "}", value)
     template = template.replace("listen 80;", f"listen 127.0.0.1:{port};")
-    template = template.replace("/etc/nginx/marty-website/*.conf", str(include))
+    template = template.replace("/etc/nginx/marty-website/*.conf", include.as_posix())
     configuration = tmp_path / "nginx.conf"
     (tmp_path / "logs").mkdir()
-    user = "user root;\n" if os.geteuid() == 0 else ""
-    configuration.write_text(user + f"daemon off; pid {tmp_path / 'nginx.pid'}; error_log {tmp_path / 'error.log'};\n"
+    (tmp_path / "temp").mkdir()
+    user = "user root;\n" if os.name != "nt" and os.geteuid() == 0 else ""
+    configuration.write_text(user + f"daemon off; pid {(tmp_path / 'nginx.pid').as_posix()}; error_log {(tmp_path / 'error.log').as_posix()};\n"
                              "events {}\nhttp { access_log off;\n" + template + "\n}\n")
     command = [nginx, "-p", str(tmp_path), "-c", str(configuration)]
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -77,6 +87,42 @@ def test_real_edge_routes_retained_assets_and_starts_while_product_is_unavailabl
     try:
         checked = subprocess.run([*command, "-t"], capture_output=True, text=True)
         assert checked.returncode == 0, checked.stderr
+        # First qualify the default combined route with no website overlay.
+        # A slash-ending proxy prefix otherwise redirects /resources into
+        # Keycloak, hiding the marketing page before the SPA can receive it.
+        include.write_text("")
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        origin = f"http://127.0.0.1:{port}"
+        for _ in range(60):
+            try:
+                with opener.open(origin + "/edge-healthz", timeout=1) as response:
+                    assert response.read() == b"ok\n"
+                break
+            except OSError:
+                assert process.poll() is None, process.stderr.read().decode()
+                time.sleep(0.05)
+        else:
+            pytest.fail("combined Nginx did not become ready")
+        for path, owner in (("/resources", "application"),
+                            ("/resources?next=%2Flogin", "application"),
+                            ("/resources/", "keycloak"),
+                            ("/resources/auth.css?version=1", "keycloak"),
+                            ("/api/organizations?limit=2", "gateway"),
+                            ("/auth/login?next=%2Fconsole", "gateway"),
+                            ("/console/assets/main.js?version=1", "application")):
+            with opener.open(origin + path, timeout=3) as response:
+                assert json.load(response) == {"owner": owner, "path": path,
+                                              "host": "127.0.0.1"}
+        request = urllib.request.Request(origin + "/api/auth/login?next=%2Fconsole",
+                                         data=b"synthetic=body", method="POST")
+        with opener.open(request, timeout=3) as response:
+            assert json.load(response) == {"owner": "gateway",
+                "path": "/api/auth/login?next=%2Fconsole", "host": "127.0.0.1",
+                "body": "synthetic=body"}
+        subprocess.run([*command, "-s", "quit"], capture_output=True, check=True, timeout=5)
+        process.communicate(timeout=5)
+        process = None
+        include.write_text(routes)
         # Remove all product listeners before even starting Nginx. Variable
         # upstreams must not impose startup readiness on these unavailable roles.
         for owner in ("application", "gateway", "keycloak"):
@@ -111,7 +157,8 @@ def test_real_edge_routes_retained_assets_and_starts_while_product_is_unavailabl
         assert error.value.code == 404
     finally:
         if process is not None:
-            process.terminate()
+            if process.poll() is None:
+                subprocess.run([*command, "-s", "quit"], capture_output=True, check=True, timeout=5)
             process.communicate(timeout=5)
         for server in servers.values():
             server.shutdown()
