@@ -576,10 +576,7 @@ fn denied(input: &AgeProofInput) -> Check<Value> {
         "external_reference",
         &binding.external_reference,
     )?;
-    if !matches!(
-        text(instance, "status")?,
-        "AWAITING_WALLET" | "IN_PROGRESS" | "FAILED"
-    ) {
+    if !matches!(text(instance, "status")?, "AWAITING_WALLET" | "IN_PROGRESS") {
         return Err("untrusted fixture request must not complete, expire or be cancelled before observation");
     }
     if instance["context_data"]["result"]["decision"] == "allow"
@@ -599,6 +596,45 @@ fn denied(input: &AgeProofInput) -> Check<Value> {
     {
         return Err("negative fixture must have its own exact issued credential");
     }
+    let result = successful_reply(&observed["result_reply"])?;
+    equal(result, "instance_id", &binding.instance_id)?;
+    if !matches!(
+        text(result, "status")?,
+        "AWAITING_WALLET" | "IN_PROGRESS" | "pending" | "awaiting_wallet" | "in_progress"
+    ) {
+        return Err("issuer rejection must remain retryable, not a completed session");
+    }
+    reject_authorized_facts(instance)?;
+    reject_authorized_facts(result)?;
+    let attempt: marty_oid4vp_contract::RejectedPresentationAttemptV1 =
+        serde_json::from_value(result["last_presentation_attempt"].clone())
+            .map_err(|_| "typed native presentation rejection required")?;
+    attempt
+        .validate()
+        .map_err(|_| "invalid native presentation rejection")?;
+    // The existing request validator retains its actual nonce digest, not a new nonce.
+    if attempt.instance_id != binding.instance_id
+        || attempt.policy_id != expected.policy_id
+        || attempt.nonce_sha256 != binding.nonce_sha256
+    {
+        return Err("native rejection differs from this issued fixture request");
+    }
+    recent(&attempt.observed_at, expected)?;
+    let auth = &attempt.authentication;
+    let rejected_certificate = expected
+        .rejected_issuer_id
+        .strip_prefix("x509-sha256:")
+        .ok_or("rejected issuer certificate pin required")?;
+    if auth.document_type != MDL_DOCTYPE
+        || !auth.issuer_signature_valid
+        || !auth.device_authentication_valid
+        || auth.certificate_trust_passed
+        || auth.certificate_trust_failures
+            != vec![marty_oid4vp_contract::CertificateTrustFailure::CertificateChainRejected]
+        || auth.issuer_certificate_sha256 != rejected_certificate
+    {
+        return Err("only the bound signature-valid device-authenticated issuer chain rejection proves denial");
+    }
     let report = &observed["wallet_report"];
     equal(report, "scenarioSlug", "private-online-age-proof")?;
     if !matches!(
@@ -607,91 +643,69 @@ fn denied(input: &AgeProofInput) -> Check<Value> {
     ) || report["result"] != "PASS"
         || report["profile"]["classification"] != "INDEPENDENT"
     {
-        return Err("live independent-wallet rejection recording required");
+        return Err("live independent-wallet presentation required");
     }
     recent(text(report, "startedAt")?, expected)?;
     recent(text(report, "completedAt")?, expected)?;
-    let action_index = observed["denial_action_index"]
+    let index = observed["denial_action_index"]
         .as_u64()
-        .and_then(|index| usize::try_from(index).ok())
-        .ok_or("negative wallet action index missing")?;
+        .and_then(|v| usize::try_from(v).ok())
+        .ok_or("verifier denial action index required")?;
     let action = report["actions"]
         .as_array()
-        .and_then(|actions| actions.get(action_index))
-        .ok_or("negative wallet action missing")?;
-    let package = text(&report["profile"], "walletPackage")?;
+        .and_then(|v| v.get(index))
+        .ok_or("verifier denial action required")?;
+    let browser = text(&report["profile"], "browserPackage")?;
     if action["result"] != "PASS"
         || action["type"] != "assertText"
-        || action["target"] != "wallet"
-        || action["before"]["package"] != package
-        || action["after"]["package"] != package
+        || action["target"] != "browser"
+        || action["before"]["package"] != browser
+        || action["after"]["package"] != browser
+        || action["assertion"]["kind"] != "native-verifier-issuer-rejection-text"
+        || action["assertion"]["textSha256"]
+            != digest(b"The issuer certificate was not accepted by this verifier.")
     {
-        return Err("explicit rejection must actually be observed in the pinned wallet");
-    }
-    let message = text(observed, "rejection_text")?;
-    let lower = message.to_ascii_lowercase();
-    if message.len() > 256
-        || [
-            "pending",
-            "timeout",
-            "timed out",
-            "waiting",
-            "unknown",
-            "not available",
-        ]
-        .iter()
-        .any(|word| lower.contains(word))
-        || ![
-            "untrusted",
-            "not trusted",
-            "invalid_presentation",
-            "verification failed",
-            "presentation failed",
-            "presentation rejected",
-        ]
-        .iter()
-        .any(|word| lower.contains(word))
-    {
-        return Err(
-            "pending, unknown or generic failure is not an explicit presentation rejection",
-        );
-    }
-    let words = lower
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let padded = format!(" {words} ");
-    if ![
-        " untrusted issuer ",
-        " issuer untrusted ",
-        " issuer is untrusted ",
-        " issuer not trusted ",
-        " issuer is not trusted ",
-        " issuer was not trusted ",
-        " issuer certificate not trusted ",
-        " issuer certificate is not trusted ",
-    ]
-    .iter()
-    .any(|phrase| padded.contains(phrase))
-    {
-        return Err(
-            "BLOCKED: generic presentation rejection does not establish issuer-trust denial",
-        );
+        return Err("the native verifier denial must be observed in the actual browser");
     }
     let scenario_sha256 = text(observed, "scenario_sha256")?;
     if scenario_sha256.len() != 64 || !scenario_sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("rejection controls must be bound to the measured runtime scenario");
+        return Err("denial controls must bind the measured runtime scenario");
     }
-    Ok(json!({
-        "instance_id": binding.instance_id, "credential_id": observed["issued_binding"]["credential_id"],
-        "observation": "ISSUER_TRUST_REJECTION_OBSERVED", "observation_source": "ANDROID_WALLET_UI",
-        "issuer_trust_denial_observed": true,
-        "observed_message": message, "backend_reason_code": Value::Null,
-        "typed_issuer_not_trusted_result_available": false,
-        "request_sha256": binding.request_sha256, "scenario_sha256": scenario_sha256,
-        "scope": "The pinned wallet explicitly reports this fixture's issuer as untrusted. The public API does not expose a typed backend reason for retryable mdoc authentication failure."
-    }))
+    Ok(
+        json!({"instance_id":binding.instance_id, "credential_id":observed["issued_binding"]["credential_id"],
+        "transaction_id":observed["issued_binding"]["transaction_id"], "observation":"ISSUER_TRUST_REJECTION_OBSERVED",
+        "observation_source":"NATIVE_VERIFIER_REQUEST_BOUND_ATTEMPT", "issuer_trust_denial_observed":true,
+        "attempt":attempt, "request_sha256":binding.request_sha256, "scenario_sha256":scenario_sha256,
+        "scope":"The native verifier rejected this signature-valid, device-authenticated mDL issuer certificate. The session remains retryable with no authorized claims."}),
+    )
+}
+
+// Fail closed on accepted claims anywhere in the public instance/result projections.
+fn reject_authorized_facts(value: &Value) -> Check<()> {
+    match value {
+        Value::Object(fields) => {
+            for (key, value) in fields {
+                if (key == "decision" && value == "allow")
+                    || (["result", "evaluation_result"].contains(&key.as_str())
+                        && value == "passed")
+                    || (key == "satisfied" && value == true)
+                    || (["verified_claims", "authenticated_disclosures"].contains(&key.as_str())
+                        && !value.is_null()
+                        && value.as_object().is_none_or(|v| !v.is_empty()))
+                {
+                    return Err("rejected presentation cannot contain authorized claims or an allow decision");
+                }
+                reject_authorized_facts(value)?;
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                reject_authorized_facts(value)?;
+            }
+        }
+        _ => (),
+    }
+    Ok(())
 }
 
 fn cleanup_plan(input: &AgeProofInput) -> Check<Value> {

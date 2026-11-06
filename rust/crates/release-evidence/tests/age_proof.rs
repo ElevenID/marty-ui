@@ -303,68 +303,115 @@ fn prepare_refuses_false_age_broader_trust_and_cross_organization_resources() {
 
 fn denial_input() -> AgeProofInput {
     input(json!({
-        "request_binding": {"instance_id": "flow-rejected", "request_sha256": "d".repeat(64),
-            "nonce_sha256": "e".repeat(64), "external_reference": "D03-run-1-eudi-rejected"},
-        "issued_binding": {"template_id": "template-2", "credential_id": "credential-2", "transaction_id": "transaction-2"},
-        "instance_reply": {"status": 200, "body": {"id": "flow-rejected", "organization_id": "org-1", "status": "AWAITING_WALLET",
-            "metadata": {"external_reference": "D03-run-1-eudi-rejected"}, "context_data": {}}},
-        "wallet_report": {"scenarioSlug": "private-online-age-proof", "laneId": "eudi-age-proof-interoperability", "result": "PASS",
-            "profile": {"classification": "INDEPENDENT", "walletPackage": "example.wallet"},
+        "request_binding": {
+            "instance_id": "flow-rejected", "request_sha256": "d".repeat(64),
+            "nonce_sha256": "e".repeat(64), "external_reference": "D03-run-1-eudi-rejected"
+        },
+        "issued_binding": {
+            "template_id": "template-2", "credential_id": "credential-2", "transaction_id": "transaction-2"
+        },
+        "instance_reply": {"status": 200, "body": {
+            "id": "flow-rejected", "organization_id": "org-1", "status": "AWAITING_WALLET",
+            "metadata": {"external_reference": "D03-run-1-eudi-rejected"}, "context_data": {}
+        }},
+        "result_reply": {"status": 200, "body": {
+            "instance_id": "flow-rejected", "status": "pending", "verified_claims": {}, "credential_results": [],
+            "last_presentation_attempt": {
+                "schema_version": 1, "instance_id": "flow-rejected", "policy_id": "policy-1",
+                "nonce_sha256": "e".repeat(64), "submission_digest": "f".repeat(64),
+                "vp_token_sha256": "1".repeat(64), "native_credential_count": 1,
+                "outcome": "rejected", "retryable": true, "observed_at": "2026-10-20T12:01:00Z",
+                "authentication": {
+                    "format": "mso_mdoc", "document_count": 1, "document_type": "org.iso.18013.5.1.mDL",
+                    "issuer_signature_valid": true, "certificate_trust_passed": false,
+                    "device_authentication_valid": true,
+                    "certificate_trust_failures": ["CERTIFICATE_CHAIN_REJECTED"],
+                    "issuer_certificate_sha256": "b".repeat(64)
+                }
+            }
+        }},
+        "wallet_report": {
+            "scenarioSlug": "private-online-age-proof", "laneId": "eudi-age-proof-interoperability", "result": "PASS",
+            "profile": {"classification": "INDEPENDENT", "walletPackage": "example.wallet", "browserPackage": "example.browser"},
             "startedAt": "2026-10-20T12:00:10Z", "completedAt": "2026-10-20T12:02:00Z",
-            "actions": [{"type": "assertText", "target": "wallet", "result": "PASS", "before": {"package": "example.wallet"}, "after": {"package": "example.wallet"}}]},
-        "denial_action_index": 0, "rejection_text": "Issuer is not trusted", "scenario_sha256": "f".repeat(64)
+            "actions": [{
+                "type": "assertText", "target": "browser", "result": "PASS",
+                "before": {"package": "example.browser"}, "after": {"package": "example.browser"},
+                "assertion": {
+                    "kind": "native-verifier-issuer-rejection-text",
+                    "textSha256": "7cff854811ba4b851f087c00a9c2a45c2e272f9002fb787b4b99ccf0e6b2f830"
+                }
+            }]
+        },
+        "denial_action_index": 0, "scenario_sha256": "f".repeat(64)
     }))
 }
 
 #[test]
-fn wallet_issuer_trust_rejection_is_observed_without_inventing_a_backend_reason() {
+fn verifier_issuer_chain_denial_preserves_retryable_stock_wallet_boundary() {
     let result = validate_age_proof("denied", &denial_input()).unwrap();
     assert_eq!(
-        result["evidence"]["observation"],
-        "ISSUER_TRUST_REJECTION_OBSERVED"
+        result["evidence"]["observation_source"],
+        "NATIVE_VERIFIER_REQUEST_BOUND_ATTEMPT"
     );
-    assert_eq!(result["evidence"]["backend_reason_code"], Value::Null);
     assert_eq!(result["evidence"]["issuer_trust_denial_observed"], true);
-    assert_eq!(
-        result["evidence"]["typed_issuer_not_trusted_result_available"],
-        false
-    );
+    assert_eq!(result["evidence"]["credential_id"], "credential-2");
 }
 
 #[test]
-fn pending_timeout_unknown_stale_or_unobserved_rejection_never_passes() {
-    for (pointer, value) in [
-        ("/rejection_text", json!("invalid_presentation")),
-        ("/rejection_text", json!("Presentation failed")),
-        ("/rejection_text", json!("Verifier is not trusted")),
-        (
-            "/rejection_text",
-            json!("Issuer responded: verifier is not trusted"),
-        ),
-        ("/rejection_text", json!("Verification failed: timeout")),
-        (
-            "/rejection_text",
-            json!("Presentation rejected: unknown error"),
-        ),
-        ("/rejection_text", json!("Waiting for presentation")),
-        ("/wallet_report/actions/0/result", json!("FAIL")),
-        (
-            "/wallet_report/actions/0/after/package",
-            json!("example.browser"),
-        ),
-        (
-            "/wallet_report/profile/classification",
-            json!("FIRST_PARTY_CONTROL"),
-        ),
-        ("/wallet_report/completedAt", json!("2026-10-19T12:02:00Z")),
-        ("/instance_reply/body/status", json!("COMPLETED")),
-        ("/instance_reply/body/status", json!("EXPIRED")),
-        ("/instance_reply/body/id", json!("old-session")),
+fn wrong_request_policy_certificate_crypto_claims_or_success_cannot_pass_denial() {
+    for (pointer,value) in [
+        ("/result_reply/body/instance_id",json!("old-flow")),
+        ("/result_reply/body/last_presentation_attempt/instance_id",json!("old-flow")),
+        ("/result_reply/body/last_presentation_attempt/policy_id",json!("other-policy")),
+        ("/result_reply/body/last_presentation_attempt/nonce_sha256",json!("2".repeat(64))),
+        ("/result_reply/body/last_presentation_attempt/authentication/issuer_certificate_sha256",json!("a".repeat(64))),
+        ("/result_reply/body/last_presentation_attempt/authentication/device_authentication_valid",json!(false)),
+        ("/result_reply/body/last_presentation_attempt/authentication/issuer_signature_valid",json!(false)),
+        ("/result_reply/body/last_presentation_attempt/authentication/certificate_trust_failures",json!(["MISSING_TRUST_ANCHORS"])),
+        ("/result_reply/body/last_presentation_attempt/authentication/certificate_trust_failures",json!(["INVALID_TRUST_CONFIGURATION"])),
+        ("/result_reply/body/last_presentation_attempt/observed_at",json!("2026-10-19T12:00:00Z")),
+        ("/result_reply/body/last_presentation_attempt/retryable",json!(false)),
+        ("/result_reply/body/verified_claims",json!({"age_over_21":true})),
+        ("/result_reply/body/status",json!("COMPLETED")),
+        ("/instance_reply/body/context_data",json!({"result":{"decision":"allow"}})),
+        ("/issued_binding/template_id",json!("template-1")),
+        ("/wallet_report/actions/0/result",json!("FAIL")),
+        ("/wallet_report/actions/0/target",json!("wallet")),
+        ("/wallet_report/completedAt",json!("2026-10-19T12:02:00Z")),
+    ] {
+        let mut input=denial_input();
+        *input.observed.pointer_mut(pointer).unwrap()=value;
+        assert!(validate_age_proof("denied",&input).is_err(),"{pointer}");
+    }
+    for (key, value) in [
+        ("result", json!("passed")),
+        ("evaluation_result", json!("passed")),
     ] {
         let mut input = denial_input();
-        *input.observed.pointer_mut(pointer).unwrap() = value;
-        assert!(validate_age_proof("denied", &input).is_err(), "{pointer}");
+        input.observed["result_reply"]["body"][key] = value;
+        assert!(validate_age_proof("denied", &input).is_err(), "{key}");
     }
+    for value in [
+        Value::Null,
+        json!({"kind":"native-verifier-issuer-rejection-text","textSha256":"0".repeat(64)}),
+        json!({"kind":"generic-wallet-error","textSha256":"7cff854811ba4b851f087c00a9c2a45c2e272f9002fb787b4b99ccf0e6b2f830"}),
+    ] {
+        let mut input = denial_input();
+        input.observed["wallet_report"]["actions"][0]["assertion"] = value;
+        assert!(validate_age_proof("denied", &input).is_err());
+    }
+    for container in ["result_reply", "instance_reply"] {
+        let mut input = denial_input();
+        input.observed[container]["body"]["authenticated_disclosures"] = json!({"documents":[{}]});
+        assert!(validate_age_proof("denied", &input).is_err());
+    }
+    let mut input = denial_input();
+    input.observed["result_reply"]["body"]
+        .as_object_mut()
+        .unwrap()
+        .remove("last_presentation_attempt");
+    assert!(validate_age_proof("denied", &input).is_err());
 }
 
 fn cleanup_input() -> AgeProofInput {

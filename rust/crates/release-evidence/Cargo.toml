@@ -12,6 +12,7 @@ base64.workspace = true
 chrono.workspace = true
 flate2.workspace = true
 marty-crypto = { workspace = true, features = ["jwk"] }
+marty-oid4vp-contract.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

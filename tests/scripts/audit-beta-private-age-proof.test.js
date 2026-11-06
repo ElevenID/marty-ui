@@ -217,7 +217,7 @@ test('D03 generic rejection diagnostics cannot become the issuer-trust assertion
   const item = templateId => ({ templateId, instanceId: 'instance-1', issuanceReply: okay({}), requestBinding: {} });
   await assert.rejects(controller.completeLane(lane, { trusted: item('template-1'), rejected: item('template-2') }, {
     report: {}, rejectionText: 'Presentation failed', scenarioSha256: 'f'.repeat(64), denialActionIndex: 1,
-  }), /BLOCKED: generic wallet rejection/);
+  }), /BLOCKED: request-bound native verifier issuer rejection/);
   assert.deepEqual(controller.laneResults, []);
 });
 
@@ -326,4 +326,23 @@ test('D03 standalone recording keeps its strict media success while functional m
  assert.equal(report.liveEvidenceCompletion.selected,false);assert.equal(report.liveEvidenceCompletion.acknowledged,false);
  const functional=completedFunctionalReport();assert.equal(await finalizeAgeProofRun(functional,null,ageProofExecutionMode({RECORD_VIDEO:'0'})),false);
  assert.equal(functional.functionalReady,false);assert.match(functional.errors[0],/requires its live evidence client/);
+});
+
+
+test('D03 denial consumes the exact rejected result endpoint and retains native request/issuance bindings', async () => {
+  let observed;
+  const f=fixture({onCheck:(operation,value)=>{
+    if(operation==='issued')return {credential_id:'owned-'+value.template_id,transaction_id:value.issuance_reply.body.id,template_id:value.template_id};
+    if(operation==='allowed')return {instance_id:'trusted-instance'};
+    if(operation==='denied'){observed=value;return {issuer_trust_denial_observed:true};}
+  }});
+  const binding={trusted:{instanceId:'trusted-instance',templateId:'template-1',issuanceReply:{status:201,body:{id:'trusted-tx'}},requestBinding:{nonce_sha256:'a'.repeat(64)}},
+    rejected:{instanceId:'rejected-instance',templateId:'template-2',issuanceReply:{status:201,body:{id:'rejected-tx'}},requestBinding:{nonce_sha256:'b'.repeat(64)}}};
+  await f.controller.completeLane(lane,binding,{report:{},denialActionIndex:8,scenarioSha256:'c'.repeat(64),controlSource:'pinned-stock'});
+  assert(f.calls.some(call=>call.route==='/v1/flows/instances/rejected-instance/result'&&call.method==='GET'));
+  assert.deepEqual(observed.request_binding,binding.rejected.requestBinding);
+  assert.equal(observed.issued_binding.transaction_id,'rejected-tx');
+  assert.equal(observed.issued_binding.template_id,'template-2');
+  assert.equal(observed.denial_action_index,8);
+  assert(!Object.hasOwn(observed,'rejection_text'));
 });
