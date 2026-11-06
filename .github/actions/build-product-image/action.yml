@@ -16,6 +16,12 @@ inputs:
   version:
     description: Admitted nightly version for the nightly producer
     default: ''
+  private-forks-enabled:
+    description: Fetch private native dependencies without exporting source caches
+    default: 'false'
+  private-forks-read-token:
+    description: Read-only source credential passed only to BuildKit's fetch secret
+    default: ''
 outputs:
   digest:
     description: Built immutable OCI digest
@@ -32,6 +38,7 @@ runs:
         IMAGE_PLAN: ${{ inputs.image-plan }}
         PRODUCT: ${{ inputs.product }}
         VERSION: ${{ inputs.version }}
+        PRIVATE_FORKS_ENABLED: ${{ inputs.private-forks-enabled }}
       run: |
         set -euo pipefail
         python scripts/product_image_build.py --producer "$PRODUCER" \
@@ -39,6 +46,9 @@ runs:
     - name: Build the verified image by digest
       id: image
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+      env:
+        PRIVATE_FORKS_READ_TOKEN: ${{ inputs.private-forks-read-token }}
+        DOCKER_BUILD_RECORD_UPLOAD: ${{ inputs.private-forks-enabled != 'true' && 'true' || 'false' }}
       with:
         context: ${{ steps.recipe.outputs.context }}
         file: ${{ steps.recipe.outputs.dockerfile }}

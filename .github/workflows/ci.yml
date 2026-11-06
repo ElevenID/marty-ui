@@ -427,20 +427,29 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+      CARGO_NET_OFFLINE: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path ".github/feature-regression/rust-probe/Cargo.toml"
       - name: Verify frozen Rust feature-regression probe
         shell: bash
         run: |
@@ -469,21 +478,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+      CARGO_NET_OFFLINE: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
       CARGO_PROFILE_DEV_DEBUG: 0
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
       SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - name: Prefer cached Docker Hub images without restarting the runner daemon
         run: bash scripts/ci/configure-dockerhub-mirror.sh
       - name: Select the exact BuildKit image with registry fallback
@@ -497,6 +507,7 @@ jobs:
           driver-opts: image=${{ env.MARTY_CI_BUILDKIT_IMAGE }}
           buildkitd-config: .github/buildkit-ci-mirror.toml
       - name: Expose public image compiler cache credentials
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
@@ -533,15 +544,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Use mold linker for Rust recovery probe
         uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
         with:
           mold-version: 2.41.0
       - name: Enable compiler cache for Rust recovery probe
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
       - name: Keep Rust recovery independent of optional compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         shell: bash
         run: bash scripts/ci/optional-sccache-fallback.sh
       - name: Prepare Rust KMS operator before scoped provisioning probes
@@ -587,7 +607,7 @@ jobs:
             awk -v phase=recovery_probe -f scripts/ci/public-sccache-stats.awk |
             tee "$RUNNER_TEMP/rust-recovery-cache-counters.jsonl" || true
       - name: Retain recovery preparation evidence
-        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
+        if: always()
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -638,27 +658,28 @@ jobs:
       actions: read
       contents: read
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+      CARGO_NET_OFFLINE: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
       FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@localhost:5432/marty_atomic_test
       VERIFICATION_SESSION_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/marty_atomic_test
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
       SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           # The PR merge ref may move after this event; checkout the immutable event SHA.
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - name: Prefer cached Docker Hub images without restarting the runner daemon
         if: matrix.lane != 'renewal-unit'
         run: bash scripts/ci/configure-dockerhub-mirror.sh
@@ -732,7 +753,7 @@ jobs:
             fi
           done
       - name: Expose public image compiler cache credentials
-        if: matrix.lane == 'selfhost'
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'selfhost')
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
@@ -747,6 +768,8 @@ jobs:
         id: public_selfhost_image
         if: matrix.lane == 'selfhost'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
           builder: ${{ steps.rust_contract_builder.outputs.name }}
           context: .
@@ -759,11 +782,13 @@ jobs:
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
             SERVICE_NAME=issuance_native
-          cache-from: type=gha,scope=marty-ui-public-services
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-public-services' || '' }}
           secret-envs: |
             sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
             sccache_url=SCCACHE_GHA_CACHE_URL
             sccache_mode=SCCACHE_GHA_RW_MODE
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
       - name: Retire completed selfhost builder cache
         if: matrix.lane == 'selfhost'
         shell: bash
@@ -837,15 +862,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Use mold linker
         uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
         with:
           mold-version: 2.41.0
       - name: Enable compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
       - name: Keep Rust service tests independent of optional compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         shell: bash
         run: bash scripts/ci/optional-sccache-fallback.sh
       - name: Prepare source-matched Rust execution policy
@@ -859,12 +893,12 @@ jobs:
           command -v envsubst
       - name: Bind offline compiler cache to the exact Bookworm recipe
         id: bookworm-cache-key
-        if: matrix.lane == 'canvas' || matrix.lane == 'worker' || matrix.lane == 'flow' || matrix.lane == 'selfhost'
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'canvas' || matrix.lane == 'worker' || matrix.lane == 'flow' || matrix.lane == 'selfhost')
         env:
           RUST_LANE: ${{ matrix.lane }}
         run: python3 scripts/ci/bookworm_cache_key.py
       - name: Restore trusted offline Bookworm compiler objects
-        if: matrix.lane == 'canvas' || matrix.lane == 'worker' || matrix.lane == 'flow' || matrix.lane == 'selfhost'
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'canvas' || matrix.lane == 'worker' || matrix.lane == 'flow' || matrix.lane == 'selfhost')
         continue-on-error: true
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -872,7 +906,7 @@ jobs:
           key: ${{ steps.bookworm-cache-key.outputs.key }}
           restore-keys: ${{ steps.bookworm-cache-key.outputs.prefix }}
       - name: Install verified portable compiler cache
-        if: matrix.lane == 'canvas' || matrix.lane == 'worker' || matrix.lane == 'flow' || matrix.lane == 'selfhost'
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'canvas' || matrix.lane == 'worker' || matrix.lane == 'flow' || matrix.lane == 'selfhost')
         continue-on-error: true
         run: bash scripts/ci/install-bookworm-sccache.sh
       - name: Compile reusable Rust test executables
@@ -1810,7 +1844,7 @@ jobs:
           run_timed passport_reconciliation cargo test --locked -p marty-issuance-service \
             --lib passport_http::reconciliation_tests:: -- --ignored --test-threads=1
       - name: Preserve synthetic runtime failure diagnostics
-        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always() && matrix.lane == 'canvas')
+        if: always() && matrix.lane == 'canvas'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: owned-runtime-failure-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1848,7 +1882,7 @@ jobs:
             cp rust/target/cargo-timings/cargo-timing.html "$RUNNER_TEMP/rust-build-evidence/cargo-timing.html"
           fi
       - name: Upload Rust build evidence
-        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: rust-build-evidence-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1883,7 +1917,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Remove owned Rust test services and volumes
-        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always() && matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit')
+        if: always() && matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit'
         shell: bash
         run: |
           set -euo pipefail
@@ -1908,7 +1942,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Save successful trusted-main offline compiler objects
-        if: >-
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (>-)
           success() && github.repository == 'ElevenID/marty-ui' && github.ref == 'refs/heads/main' &&
           (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
           matrix.lane == 'canvas'
@@ -1944,22 +1978,23 @@ jobs:
             target: aarch64-unknown-linux-musl
             elf_machine: AArch64
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+      CARGO_NET_OFFLINE: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: 0
       TARGET: ${{ matrix.target }}
       ELF_MACHINE: ${{ matrix.elf_machine }}
       MARTY_TEST_OPENBAO_CERTIFICATES: ${{ matrix.arch == 'amd64' && '1' || '0' }}
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -1967,6 +2002,13 @@ jobs:
         with:
           toolchain: 1.95.0
           targets: ${{ matrix.target }}
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Exercise the static native operator against real HTTPS
         shell: bash
         run: |
@@ -2002,36 +2044,46 @@ jobs:
     permissions:
       contents: read
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+      CARGO_NET_OFFLINE: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
       SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
           components: clippy,rustfmt
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml" --manifest-path ".github/feature-regression/rust-probe/Cargo.toml"
       - name: Use mold linker
         uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
         with:
           mold-version: 2.41.0
       - name: Enable compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
       - name: Keep Rust lint independent of optional compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         shell: bash
         run: bash scripts/ci/optional-sccache-fallback.sh
       - name: Check formatting
@@ -2178,17 +2230,18 @@ jobs:
     permissions:
       actions: write
       contents: read
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - name: Prefer cached Docker Hub images without restarting the runner daemon
         run: bash scripts/ci/configure-dockerhub-mirror.sh
       - name: Select the exact BuildKit image with registry fallback
@@ -2228,6 +2281,7 @@ jobs:
       - name: Verify default native Envoy configuration
         run: python3 scripts/test_envoy_native_compose.py --compose-command "$RUNNER_TEMP/compose-render-v5.4.0"
       - name: Expose compiler cache credentials to BuildKit secrets
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
@@ -2240,6 +2294,8 @@ jobs:
             core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
       - name: Build event-stream image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -2250,16 +2306,22 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
           # Only the trusted main-branch warmer publishes shared build caches.
           secret-envs: |
             sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
             sccache_url=SCCACHE_GHA_CACHE_URL
             sccache_mode=SCCACHE_GHA_RW_MODE
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
       - name: Build issuance image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: issuance
@@ -2269,11 +2331,16 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build gateway image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: gateway
@@ -2283,8 +2350,9 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Export the actual gateway contract without service startup
         run: |
           python3 scripts/check_gateway_openapi_export.py \
@@ -2310,7 +2378,11 @@ jobs:
           retention-days: 14
       - name: Build revocation-profile image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: revocation_profile
@@ -2320,11 +2392,16 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build signing-keys image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: signing_keys
@@ -2334,11 +2411,16 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build notification image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: notification
@@ -2348,11 +2430,16 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build flow image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: flow
@@ -2362,11 +2449,16 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build organization image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: organization
@@ -2376,11 +2468,16 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build credential-template image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: credential_template
@@ -2390,11 +2487,16 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build presentation-policy image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: presentation_policy
@@ -2404,11 +2506,16 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build trust-profile image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: trust_profile
@@ -2418,11 +2525,16 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build applicant image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: applicant
@@ -2432,11 +2544,16 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build device-registration image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: device_registration
@@ -2446,11 +2563,16 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build verification image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: verification
@@ -2460,14 +2582,19 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Smoke-test verification migration and compatibility runtime from one image
         shell: bash
         run: bash scripts/smoke-verification-image.sh marty-verification-service:ci dedicated
       - name: Build deployment-profile image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: deployment_profile
@@ -2477,11 +2604,16 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build compliance-profile image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: compliance_profile
@@ -2491,8 +2623,9 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Smoke-test gateway image
         shell: bash
         run: |
@@ -2728,19 +2861,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+      CARGO_NET_OFFLINE: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
       CARGO_PROFILE_DEV_DEBUG: 0
       PYTHONPATH: packages
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12.10"
@@ -2821,6 +2955,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Prepare Rust KMS operator for release contracts
         if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         run: bash scripts/ci/prepare-native-model-operator.sh
@@ -3165,20 +3306,29 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+      CARGO_NET_OFFLINE: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Audit Rust advisories, licenses, bans, and sources
         run: bash scripts/ci/run-cargo-deny.sh
 
@@ -3374,20 +3524,20 @@ jobs:
     permissions:
       contents: read
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - name: Check out the exact PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - name: Bind this disposable build to its source
         shell: bash
         env:
@@ -3406,7 +3556,11 @@ jobs:
           driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
       - name: Build exact-head gateway image for an unqualified VM trial
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: services/Dockerfile
           push: false
@@ -3417,6 +3571,7 @@ jobs:
             SERVICE_NAME=gateway
             MARTY_RELEASE_VERSION=engineering-trial
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           outputs: type=oci,dest=${{ runner.temp }}/installer-trial-image/services.oci.tar,compression=gzip,force-compression=true
           provenance: false
           sbom: false

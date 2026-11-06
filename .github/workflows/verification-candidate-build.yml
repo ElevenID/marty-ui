@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     permissions:
       contents: read
@@ -23,19 +24,18 @@ jobs:
       attestations: write
       artifact-metadata: write
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - name: Check out exact default-branch source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - name: Require reviewed default-branch candidate source
         id: source
         shell: bash
@@ -82,7 +82,11 @@ jobs:
 
       - name: Build one local Linux amd64 OCI archive
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: services/Dockerfile
           push: false
@@ -93,6 +97,7 @@ jobs:
             SERVICE_NAME=verification
             MARTY_RELEASE_VERSION=${{ steps.source.outputs.version }}
             MARTY_UI_SHA=${{ github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           outputs: type=oci,dest=${{ runner.temp }}/verification-candidate/marty-ui-services.oci.tar,compression=gzip,force-compression=true
           provenance: false
           sbom: false

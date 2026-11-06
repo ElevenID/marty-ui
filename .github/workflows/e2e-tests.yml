@@ -62,6 +62,8 @@ jobs:
     environment: beta-lifecycle
     timeout-minutes: 45
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+      CARGO_NET_OFFLINE: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
       BETA_ORIGIN: ${{ inputs.beta_origin || vars.BETA_ORIGIN || 'https://beta.elevenidllc.com' }}
       BETA_AUDIT_ORG_ID: ${{ inputs.audit_org_id || vars.BETA_AUDIT_ORG_ID }}
       TEST_APPLICANT_EMAIL: ${{ secrets.TEST_APPLICANT_EMAIL }}
@@ -82,15 +84,14 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       CI: "true"
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
@@ -183,7 +184,15 @@ jobs:
           ref: ${{ steps.release.outputs.protocol }}
           path: marty-protocol
 
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml" --manifest-path "marty-core/Cargo.toml"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         with:
           workspaces: marty-core
 
@@ -439,7 +448,7 @@ jobs:
         run: node tests/scripts/audit-beta-credential-lifecycle.js
 
       - name: Upload lifecycle evidence
-        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: mip-03-beta-credential-lifecycle
@@ -448,12 +457,12 @@ jobs:
           retention-days: 30
 
       - name: Collect wallet logs
-        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (failure())
+        if: failure()
         run: |
           cat marty-test-wallet.log || true
 
       - name: Stop browser wallet
-        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
+        if: always()
         run: |
           if [[ -f marty-test-wallet.pid ]]; then
             kill "$(cat marty-test-wallet.pid)" || true

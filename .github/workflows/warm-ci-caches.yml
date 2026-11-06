@@ -30,7 +30,7 @@ concurrency:
 jobs:
   rust:
     name: Warm Rust cache
-    if: github.ref == 'refs/heads/main'
+    if: vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -41,13 +41,6 @@ jobs:
       SCCACHE_GHA_ENABLED: 'true'
       SCCACHE_GHA_RW_MODE: READ_WRITE
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -78,25 +71,18 @@ jobs:
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Report compiler cache effectiveness
-        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
+        if: always()
         run: sccache --show-stats
 
   images:
     name: Warm Rust service image cache
-    if: github.ref == 'refs/heads/main'
+    if: vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       actions: write
       contents: read
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -147,20 +133,13 @@ jobs:
 
   public-services:
     name: Warm public service builder cache
-    if: github.ref == 'refs/heads/main'
+    if: vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
       actions: write
       contents: read
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
