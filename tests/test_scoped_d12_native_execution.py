@@ -141,7 +141,8 @@ def test_exact_git_exported_sql_bytes_pass_and_crlf_checkout_bytes_refuse(tmp_pa
     def exported(name):
         destination = root / name
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(subprocess.check_output(["git", "show", revision + ":" + name]))
+        # CI may have a shallow checkout; the production guard below pins every exported byte.
+        destination.write_bytes(subprocess.check_output(["git", "show", "HEAD:" + name]))
         return ref(destination)
     sql = {name: exported("scripts/sql/" + name) for name in operational_sql_sources()}
     catalog = exported("scripts/sql/passport-beta-maintenance-catalog.sql")

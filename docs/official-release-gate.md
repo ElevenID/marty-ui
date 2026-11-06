@@ -124,6 +124,16 @@ and `resume_artifact` inputs before building. Retain the original evidence and
 claimed coordinates. Any recovery needs a separately reviewed source and a fresh
 unused claim; do not reuse the failed version or relabel existing signatures.
 
+Before released conformance starts its runtime, the launcher reuses the exact
+pinned Envoy digest from the local image cache or acquires that same digest with
+at most three pulls. The cache inspection has a 30-second timeout; each pull has
+a 120-second timeout, with one- and two-second pauses between attempts. Envoy's
+released Compose profile then reuses that digest from the cache without forcing
+another registry read; direct Compose consumers can still populate a cold cache.
+Exhaustion stops before runtime startup; this does not retry a producer, KMS
+bootstrap, Compose startup, or provisioning. Both local execution modes retain
+their existing acquisition behavior.
+
 The digest of the automated receipt becomes required
 `official_interoperability` transaction evidence. The frozen public summaries
 and complete machine assessment are retained alongside that receipt.

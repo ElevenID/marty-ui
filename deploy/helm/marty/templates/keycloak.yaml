@@ -1,0 +1,282 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marty.labels" . | nindent 4 }}
+data:
+  11id-realm.json: |
+    {{- .Files.Get "files/keycloak/11id-realm.json" | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-setup-scripts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marty.labels" . | nindent 4 }}
+data:
+  {{- (.Files.Glob "files/keycloak/*.sh").AsConfig | nindent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-theme
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marty.labels" . | nindent 4 }}
+binaryData:
+  {{- range $path, $_ := .Files.Glob "files/keycloak/themes/11id/**" }}
+  {{ trimPrefix "files/keycloak/themes/11id/" $path | replace "/" "__" }}: {{ $.Files.Get $path | b64enc | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marty.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marty.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: keycloak
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: keycloak
+      annotations:
+        {{- include "marty.podAnnotations" . | nindent 8 }}
+        checksum/realm: {{ .Files.Get "files/keycloak/11id-realm.json" | sha256sum | quote }}
+        checksum/theme: {{ .Files.Glob "files/keycloak/themes/11id/**" | toJson | sha256sum | quote }}
+    spec:
+      {{- include "marty.podSettings" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: keycloak
+          image: {{ include "marty.image" (dict "root" . "role" "keycloak") | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: ["/opt/keycloak/bin/kc.sh"]
+          args: ["start", "--import-realm", "--features=organization"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+          envFrom:
+            - configMapRef:
+                name: marty-config
+          env:
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_METRICS_ENABLED
+              value: "true"
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_HTTP_MANAGEMENT_PORT
+              value: "9000"
+            - name: KC_HTTP_MANAGEMENT_SCHEME
+              value: "http"
+            - name: KC_PROXY_HEADERS
+              value: "xforwarded"
+            - name: KC_HOSTNAME_STRICT
+              value: "true"
+            - name: KC_DB
+              value: "postgres"
+            - name: KC_DB_USERNAME
+              value: "keycloak"
+            - name: KC_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "marty.secretName" (dict "root" . "name" "marty-secrets") }}
+                  key: KEYCLOAK_DB_URL
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "marty.secretName" (dict "root" . "name" "marty-secrets") }}
+                  key: KEYCLOAK_DB_PASSWORD
+            - name: KC_DB_POOL_INITIAL_SIZE
+              value: "1"
+            - name: KC_DB_POOL_MIN_SIZE
+              value: "1"
+            - name: KC_DB_POOL_MAX_SIZE
+              value: "10"
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "marty.secretName" (dict "root" . "name" "marty-secrets") }}
+                  key: KEYCLOAK_ADMIN
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "marty.secretName" (dict "root" . "name" "marty-secrets") }}
+                  key: KEYCLOAK_ADMIN_PASSWORD
+            - name: MARTY_API_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "marty.secretName" (dict "root" . "name" "marty-secrets") }}
+                  key: MARTY_API_CLIENT_SECRET
+            - name: BAO_CACERT
+              value: /run/secrets/openbao_tls_ca_cert
+            - name: BAO_TOKEN_FILE
+              value: /run/secrets/keycloak_signing_kms_token
+            - name: MARTY_KEYCLOAK_RS256_CERT_DIR
+              value: /run/secrets
+            - name: MARTY_KEYCLOAK_JWE_TOKEN_DIR
+              value: /run/secrets
+            - name: MARTY_KEYCLOAK_JWE_MOUNT
+              value: didcomm
+            - name: MARTY_KEYCLOAK_KMS_KEY_PREFIX
+              value: keycloak
+            - name: MARTY_KEYCLOAK_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: KEYCLOAK_KMS_KEY_VERSION
+            - name: JAVA_OPTS_APPEND
+              value: {{ .Values.keycloak.javaOptsAppend | quote }}
+          resources:
+            {{- toYaml .Values.keycloak.resources | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /health/started
+              port: management
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 120
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: management
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /realms/11id/.well-known/openid-configuration
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: realm
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+            - name: theme
+              mountPath: /opt/keycloak/themes/11id
+              readOnly: true
+            - name: kms
+              mountPath: /run/secrets
+              readOnly: true
+      volumes:
+        - name: realm
+          configMap:
+            name: keycloak-realm-config
+        - name: theme
+          configMap:
+            name: keycloak-theme
+            items:
+              {{- range $path, $_ := .Files.Glob "files/keycloak/themes/11id/**" }}
+              - key: {{ trimPrefix "files/keycloak/themes/11id/" $path | replace "/" "__" }}
+                path: {{ trimPrefix "files/keycloak/themes/11id/" $path | quote }}
+              {{- end }}
+        - name: kms
+          secret:
+            secretName: {{ include "marty.secretName" (dict "root" . "name" "keycloak-kms") }}
+            defaultMode: 0440
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: marty-keycloak-{{ .Release.Revision }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marty.labels" . | nindent 4 }}
+    app.kubernetes.io/component: keycloak-configurator
+spec:
+  activeDeadlineSeconds: {{ .Values.keycloak.configurator.activeDeadlineSeconds }}
+  backoffLimit: {{ .Values.keycloak.configurator.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.migrations.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: keycloak-configurator
+    spec:
+      {{- include "marty.podSettings" . | nindent 6 }}
+      restartPolicy: OnFailure
+      containers:
+        - name: configure
+          image: {{ include "marty.image" (dict "root" . "role" "keycloak") | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: ["/bin/bash", "/scripts/setup-keycloak-selfhost-production.sh"]
+          envFrom:
+            - configMapRef:
+                name: marty-config
+          env:
+            - name: KC_URL
+              value: http://keycloak:8080
+            - name: KEYCLOAK_SETUP_STRICT
+              value: "true"
+            - name: KEYCLOAK_REMOVE_DEMO_USERS
+              value: "true"
+            - name: KEYCLOAK_REPLACE_UI_ORIGINS
+              value: "true"
+            - name: CANVAS_DEMO_ADMIN_ENABLED
+              value: "false"
+            - name: MARTY_ORG_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "marty.secretName" (dict "root" . "name" "marty-operator") }}
+                  key: password
+            {{- range $name := list "KEYCLOAK_ADMIN" "KEYCLOAK_ADMIN_PASSWORD" "MARTY_API_CLIENT_SECRET" "GOOGLE_CLIENT_ID" "GOOGLE_CLIENT_SECRET" }}
+            - name: {{ $name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "marty.secretName" (dict "root" $ "name" "marty-secrets") }}
+                  key: {{ $name }}
+                  {{- if hasPrefix "GOOGLE_" $name }}
+                  optional: true
+                  {{- end }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: keycloak-setup-scripts
+            defaultMode: 0555

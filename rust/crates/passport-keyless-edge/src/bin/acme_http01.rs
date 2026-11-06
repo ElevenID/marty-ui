@@ -4,6 +4,7 @@
 #[cfg(unix)]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     use marty_passport_keyless_edge::{
         acme_http01::{validate_bind, AllowedIdentifiers, Responder},
         required,

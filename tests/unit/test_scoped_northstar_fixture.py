@@ -53,7 +53,8 @@ class Scenario:
         old_model = original_model(); old_model["secrets"]["northstar_run"]["file"] = str(self.old_fixture)
         relative_server = "demo-apps/northstar-admissions/src/server.mjs"
         working_server = UI / relative_server
-        reviewed_server = subprocess.check_output(["git", "-C", str(UI), "show", f"{m.CODE_SOURCE}:{relative_server}"])
+        # Use the checked-out candidate in shallow CI; the reviewed byte hash remains mandatory.
+        reviewed_server = subprocess.check_output(["git", "-C", str(UI), "show", f"HEAD:{relative_server}"])
         assert hashlib.sha256(reviewed_server).hexdigest() == m.SERVER_SHA256
         assert working_server.read_bytes().replace(b"\r\n", b"\n") == reviewed_server
         subprocess.run(["git", "-C", str(UI), "diff", "--quiet", "HEAD", "--", relative_server], check=True)

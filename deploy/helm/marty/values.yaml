@@ -1,0 +1,179 @@
+# Supply verified release and infrastructure digests plus installation inputs.
+# One release per namespace; external Secrets use the existing catalog contract.
+images:
+  services: ''
+  ui: ''
+  migrations: ''
+  keycloak: ''
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+release:
+  runtimeSourceSha: ''
+  chartSourceSha: ''
+  tag: ''
+publicHost: ''
+organization:
+  id: 00000000-0000-0000-0000-000000000001
+  slug: marty
+  adminEmail: ''
+  did: ''
+openbao:
+  address: https://openbao:8200
+existingSecrets:
+  marty-redis-tls: marty-redis-tls
+  marty-operator: marty-operator
+  marty-secrets: marty-secrets
+  keycloak-kms: keycloak-kms
+  signing-keys-integration-secret-server-tls: signing-keys-integration-secret-server-tls
+  signing-keys-tls-kms: signing-keys-tls-kms
+  signing-keys-integration-secret-ca: signing-keys-integration-secret-ca
+  org-workload-tls: org-workload-tls
+  org-tls-kms: org-tls-kms
+  rp-workload-tls: rp-workload-tls
+  rp-tls-kms: rp-tls-kms
+  ct-workload-tls: ct-workload-tls
+  ct-tls-kms: ct-tls-kms
+  es-workload-tls: es-workload-tls
+  es-tls-kms: es-tls-kms
+  presentation-policy-workload-tls: presentation-policy-workload-tls
+  pp-tls-kms: pp-tls-kms
+  flow-workload-tls: flow-workload-tls
+  flow-client-tls-kms: flow-client-tls-kms
+  flow-server-workload-tls: flow-server-workload-tls
+  flow-server-tls-kms: flow-server-tls-kms
+  auth-workload-tls: auth-workload-tls
+  auth-tls-kms: auth-tls-kms
+  auth-server-tls: auth-server-tls
+  auth-server-kms: auth-server-kms
+  gateway-auth-tls: gateway-auth-tls
+  gateway-auth-kms: gateway-auth-kms
+  issuance-server-tls: issuance-server-tls
+  issuance-server-kms: issuance-server-kms
+  verification-workload-tls: verification-workload-tls
+  verification-tls-kms: verification-tls-kms
+  deployment-profile-workload-tls: deployment-profile-workload-tls
+  deployment-profile-tls-kms: deployment-profile-tls-kms
+  compliance-profile-workload-tls: compliance-profile-workload-tls
+  compliance-profile-tls-kms: compliance-profile-tls-kms
+  notification-workload-tls: notification-workload-tls
+  notification-tls-kms: notification-tls-kms
+config: {}
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+apps:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  startupProbe:
+    periodSeconds: 10
+    failureThreshold: 60
+    timeoutSeconds: 5
+  overrides:
+    gateway:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    auth:
+      resources:
+        requests:
+          cpu: 75m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    issuance-native:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 192Mi
+        limits:
+          cpu: 750m
+          memory: 768Mi
+    signing-keys:
+      resources:
+        requests:
+          cpu: 75m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+canvasWorker:
+  enabled: true
+persistence:
+  storageClass: ''
+  postgresSize: 10Gi
+  redisSize: 1Gi
+  applicantSize: 1Gi
+postgres:
+  image: ''
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 750m
+      memory: 1Gi
+redis:
+  image: ''
+  maxmemory: 128mb
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+keycloak:
+  resources:
+    requests:
+      cpu: 150m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1536Mi
+  javaOptsAppend: -Xms256m -Xmx768m
+  configurator:
+    activeDeadlineSeconds: 900
+    backoffLimit: 5
+ui:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+  canvasFrameAncestors: '''self'''
+migrations:
+  enabled: true
+  activeDeadlineSeconds: 1800
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 86400
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+ingress:
+  enabled: true
+  className: ''
+  annotations: {}
+  tlsSecretName: ''
+  host: ''
+publicOrigin: ''
+networkPolicy:
+  enabled: true
+  ingressNamespace: kube-system

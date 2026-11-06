@@ -30,6 +30,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
+    marty_service_runtime::install_tls_crypto_provider();
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(worker_log_filter(
