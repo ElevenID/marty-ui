@@ -2150,7 +2150,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     assert "cargo test --locked -p marty-issuance-service --lib --no-run" in compile_step
     assert "--renewal-unit-only \"$artifacts\" target" in compile_step
     assert steps["Preserve synthetic runtime failure diagnostics"]["if"] == (
-        "vars.PRIVATE_FORKS_ENABLED != 'true' && (always() && matrix.lane == 'canvas')"
+        "always() && matrix.lane == 'canvas'"
     )
     assert "${{ matrix.lane }}" in steps["Upload Rust build evidence"]["with"]["name"]
 
@@ -3422,13 +3422,7 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
         "Require workflow policy test collection",
     ):
         assert "if" not in steps[name]
-    boundary, checkout = release["steps"][:2]
-    assert boundary["name"] == "Enforce private native build boundary"
-    assert boundary["if"] == "vars.PRIVATE_FORKS_ENABLED == 'true'"
-    assert boundary["run"].rstrip().endswith("exit 1")
-    assert not boundary.get("continue-on-error", False)
-    assert checkout["uses"] == "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-    assert "if" not in checkout  # Main checkout remains mandatory after the cutover guard.
+    assert "if" not in release["steps"][0]  # Main checkout remains mandatory.
     assert workflow["jobs"]["ci-gate"]["env"]["DIDCOMM_RELEASE_TEST_ONLY"] == (
         f"${{{{ {focused_flag} }}}}"
     )
@@ -5348,7 +5342,7 @@ def test_bookworm_compile_phase_timings_keep_exact_offline_targets() -> None:
     ):
         assert f"run_cargo_phase {phase} {command} --locked --offline" in compile_step
     assert "python3 ../scripts/ci/verify-canvas-test-artifacts.py" in compile_step
-    assert capture_step["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
+    assert capture_step["if"] == "always()"
     assert "test ! -L rust/target/bookworm-compile-phases.tsv" in capture_step["run"]
     assert "-le 4096" in capture_step["run"]
     assert "rust-build-evidence/bookworm-compile-phases.tsv" in capture_step["run"]
@@ -5377,7 +5371,7 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
         step = next(
             step for step in jobs[job_name]["steps"] if step.get("name") == step_name
         )
-        assert step["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
+        assert step["if"] == "always()"
         assert not step.get("continue-on-error", False)
         scripts[job_name] = step["run"]
     service_steps = jobs["test-rust-services"]["steps"]

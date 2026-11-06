@@ -119,7 +119,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Expose existing read-only compiler cache
-        if: vars.PRIVATE_FORKS_ENABLED != 'true'
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' || (matrix.role != 'services' && matrix.role != 'migrations')
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |

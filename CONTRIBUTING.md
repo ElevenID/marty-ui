@@ -26,8 +26,9 @@ pull request should identify any checks that could not be run locally.
 
 Web-only builds and public source checks must remain independent of private
 code. Native Rust builds follow the downstream fork access policy in
-[Native build access](docs/private-native-builds.md); private source credentials
-and dependency caches must stay in private build environments. Payment
+[Native build access](docs/private-native-builds.md). CI confines the private
+reader to dependency fetches and excludes private source from public caches
+and artifacts. Payment
 providers, subscriptions, commercial prices, checkout UI, payment credentials,
 and commercial release inputs belong in a separately distributed commerce
 extension. Changes that intentionally add a commerce extension point should

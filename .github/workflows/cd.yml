@@ -525,6 +525,7 @@ jobs:
         if: needs.resolve-transaction.outputs.services_digest == ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
           PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
           context: .
@@ -547,6 +548,7 @@ jobs:
         if: needs.resolve-transaction.outputs.migrations_digest == ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
           PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
           secret-envs: |

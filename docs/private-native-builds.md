@@ -1,48 +1,66 @@
 # Native build access
 
-The whole-fork privacy plan keeps the existing repositories and pinned Git
-dependencies: `ElevenID/isomdl-elevenid`, `ElevenID/ssi-elevenid`, and
-`ElevenID/sd-jwt-rust`. It does not extract replacement crates or change their
-upstream history, license files, or notices.
+Marty UI uses the existing pinned Git dependencies in
+`ElevenID/isomdl-elevenid`, `ElevenID/ssi-elevenid`, and
+`ElevenID/sd-jwt-rust`. The whole repositories can become private without
+extracting replacement crates or changing upstream history, license files,
+notices, or dependency URLs.
 
-## Prepared, inactive boundary
+## Enable authenticated builds
 
-`PRIVATE_FORKS_ENABLED` is a repository Actions variable. Leave it unset or
-`false` until an authenticated consuming build works in a private environment
-and the native CI/release pause is ready to take effect. This change does not
-set the variable or change repository visibility.
+The repository Actions secret `PRIVATE_FORKS_READ_TOKEN` must have only
+Contents read access to those three forks. Set the repository Actions variable
+`PRIVATE_FORKS_ENABLED` to exactly `true` only after the authenticated workflow
+changes have been reviewed and deployed. Leave the variable unset or `false`
+while preparing the cutover; existing public build behavior then remains active.
 
-When the variable is exactly `true`, public jobs that resolve the Rust workspace
-or compile native service/migration images fail before dependency setup or
-cache access. This includes native CI, native release tools, cache warmers,
-supply-chain checks, and credential/wallet acceptance tooling that compiles
-Rust. Existing CI Gate assertions remain intact: selected native jobs must
-still succeed, so their deliberate failure blocks the native CI/release path.
+Native jobs first check their event without receiving the reader. Only trusted
+same-repository pull requests, admitted merge groups, and repository-owned
+branch/tag builds may fetch private dependencies. External pull requests and
+Dependabot runs cannot receive native source access. An owner must review and
+import such a change to an internal branch before native validation. Drain any
+external or Dependabot queue entries admitted under the old policy before
+activation. Same-repository writers are trusted with the private fork source;
+the organization currently reserves that write access to its owners.
 
-Web/source checks, source-only CodeQL, and web-only production builds remain
-public. Product/nightly image guards target the `services` and `migrations`
-roles; the web, Go OpenBao, and Java Keycloak builders do not consume these Rust
-forks. Artifact-only consumers retain their existing provenance checks.
+A separate step uses the reader only for locked dependency fetches. Its Git
+credential helper responds only to the three exact GitHub repository paths and
+does not write a credential into Git configuration. Later Cargo compilation and
+tests run offline without the reader. Existing test commands, applicable job
+matrices, CI Gate requirements, and binary release provenance remain in force.
+The private manual coordinator is an optional additional validation tool; it is
+not required to satisfy the public CI Gate.
 
-## Authorized native work
+## Source and cache boundary
 
-Run native validation against trusted, exact Core and UI commits in the private
-[`ElevenID/marty-commercial-rust` build repository](https://github.com/ElevenID/marty-commercial-rust).
-Its manual coordinator must obtain read-only access to the three forks in its
-own private build context. Keep that credential, dependency source, build logs,
-Cargo Git cache, and Docker intermediate layers out of this public repository's
-Actions jobs and artifacts. Authorized local builds can use the same Git URLs
-with normal private-repository read credentials; no dependency repinning is
-needed merely because visibility changes.
+Private mode disables public Rust Git/target/compiler caches and native Docker
+cache imports/exports. The three optional native cache warmers are skipped.
+Frontend and source-only checks retain their existing behavior. Native test
+logs remain public and can contain diagnostics or source excerpts; private mode
+does not make the public Actions log confidential.
 
-The manual coordinator is an initial native validation path. It does **not**
-yet report PR/merge-queue checks or produce accepted release artifacts. A
-successful private run cannot be substituted for a required public check or
-the existing release provenance. Those integrations must be implemented and
-validated before native CI and releases can resume under the new model.
+The three canonical Dockerfiles receive the reader through a BuildKit secret
+only in a dedicated fetch instruction. Cargo-chef materializes its manifests
+without compiling before that fetch. Subsequent builds use an isolated Cargo
+home offline with no reader mount and no compiler cache. Final runtime stages
+copy the existing binaries and runtime assets; they do not copy that Cargo home
+or build-only helper. Never pass the reader as a Docker build argument or image
+environment variable, vendor private dependencies into this public repository,
+or publish their source directories, Git caches, or intermediate image layers.
+Normal compiled images and native packages retain their existing publication
+and attestation requirements.
 
-Enable the switch only at the coordinated cutover, after private authentication
-is working. Removing it later only re-enables the old anonymous workflows; it
-does not restore access to private forks or complete a rollback. Keep ordinary
-upstream fetch/merge workflows in the private forks and preserve all required
-license notices when distributing compiled Marty artifacts.
+## Authorized local builds
+
+Use the unchanged Git URLs with normal private-repository read credentials.
+For a canonical Docker build, supply `--build-arg PRIVATE_FORKS_ENABLED=true`
+and `--secret id=private_forks_read_token,env=PRIVATE_FORKS_READ_TOKEN`; the
+environment value is a read-only token authorized for the three forks. Keep
+intermediate/source cache exports disabled for that build. No token belongs in
+a command argument, source file, or image.
+
+Keep ordinary upstream fetch/merge maintenance in the private forks and retain
+all required notices when distributing compiled Marty artifacts. Changing
+visibility does not retract previously published source or artifacts. Removing
+the variable later only restores anonymous build behavior; it does not make a
+private fork public or restore unauthenticated access.
