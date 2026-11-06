@@ -67,9 +67,9 @@ def host_gateway_alias(network: str) -> str:
     return f"host.docker.internal:{gateway}"
 
 
-def http_json(url: str, body: dict[str, str] | None = None) -> dict:
+def http_json(url: str, body: dict[str, str] | None = None, *, timeout: float = 5) -> dict:
     request = Request(url, data=urlencode(body).encode() if body else None)
-    with urlopen(request, timeout=5) as response:
+    with urlopen(request, timeout=timeout) as response:
         return json.load(response)
 
 
@@ -248,12 +248,20 @@ def wait_for(path: Path, seconds: int = 30) -> None:
     raise RuntimeError("OpenBao public CA did not become ready")
 
 
-def wait_for_keycloak(base: str, container: str, seconds: int = 35) -> None:
+def wait_for_keycloak(base: str, container: str, seconds: float = 180) -> None:
+    # A cold PostgreSQL-backed startup can exceed 35 seconds on shared runners.
+    # Poll this same container within one budget; no restart or qualification
+    # check is retried or skipped when startup takes longer.
+    if type(seconds) not in (int, float) or not 0 < seconds <= 180:
+        raise ValueError("Invalid Keycloak startup budget")
     deadline = time.monotonic() + seconds
     last_discovery = "not_attempted"
-    while time.monotonic() < deadline:
+    while (remaining := deadline - time.monotonic()) > 0:
         try:
-            http_json(base + "/realms/master/.well-known/openid-configuration")
+            http_json(base + "/realms/master/.well-known/openid-configuration",
+                      timeout=min(5, remaining))
+            if time.monotonic() >= deadline:
+                break
             return
         except HTTPError as error:
             status = error.code
@@ -262,10 +270,26 @@ def wait_for_keycloak(base: str, container: str, seconds: int = 35) -> None:
             last_discovery = f"network_{type(error.reason).__name__}"
         except OSError as error:
             last_discovery = f"socket_{type(error).__name__}"
-        state = run("docker", "inspect", "-f", "{{.State.Running}}", container)
-        if state != "true":
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            state = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Running}}", container],
+                capture_output=True, text=True, timeout=min(5, remaining), check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError("Keycloak container state unavailable; class="
+                               + type(error).__name__) from None
+        if time.monotonic() >= deadline:
+            break
+        if state.returncode:
+            raise RuntimeError("Keycloak container state unavailable")
+        if state.stdout.strip() != "true":
             raise RuntimeError("Keycloak exited before OIDC discovery was ready")
-        time.sleep(0.4)
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.4, remaining))
     raise RuntimeError(f"Keycloak OIDC discovery did not become ready; last={last_discovery}")
 
 
