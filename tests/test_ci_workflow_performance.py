@@ -4994,6 +4994,9 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
             )
             assert init["with"]["languages"] == "rust"
             assert init["with"]["build-mode"] == "none"
+            assert init["with"]["dependency-caching"] is False
+            assert init["with"]["trap-caching"] is False
+            assert init["with"]["debug"] is False
             assert init["with"]["config-file"] == (
                 "${{ (github.event_name == 'schedule' || "
                 "github.event_name == 'workflow_dispatch') && "

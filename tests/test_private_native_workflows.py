@@ -1,12 +1,15 @@
 """Keep private dependency source out of public caches and build credentials."""
 from pathlib import Path
+import os
 import re
 import subprocess
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE = {
+    "codeql-rust.yml": {"analyze-rust"},
     "ci.yml": {"test-rust-feature-probe", "test-openbao-didcomm-plugin", "test-rust-services", "test-native-operator", "rust-lint-policy", "test-rust-service-images", "test-release-contracts", "rust-supply-chain", "installer-trial-image"},
     "cd.yml": {"build-services", "official-gate-evidence", "verifier-differential", "didcomm-plugin-image-qualification", "prepare-selfhost-image-lock", "build-operator-catalog"},
     "e2e-tests.yml": {"full-stack-credential-lifecycle"},
@@ -146,3 +149,61 @@ def test_lifecycle_lineage_compilers_fetch_before_validating_source_runs():
         assert '--manifest-path "rust/Cargo.toml"' in steps[fetch]["run"]
         assert "cargo run --locked" in steps[lineage]["run"]
         assert "PRIVATE_FORKS_READ_TOKEN" not in str(steps[lineage])
+
+
+def test_codeql_private_reader_preserves_scope_and_disables_source_exports():
+    job = workflow("codeql-rust.yml")["jobs"]["analyze-rust"]
+    steps = job["steps"]
+    names = [step.get("name") for step in steps]
+    scope = names.index("Classify Rust analysis scope")
+    proof = names.index("Prove test-only sources are outside production Rust analysis")
+    check = names.index("Authorize private fork access")
+    debug = names.index("Reject private source debug exports")
+    fetch = names.index("Fetch locked private fork dependencies")
+    init = names.index("Initialize production-focused analysis")
+    analyze = names.index("Analyze Rust")
+    assert scope < proof < check < debug < fetch < init < analyze
+    condition = (
+        "vars.PRIVATE_FORKS_ENABLED == 'true' && steps.scope.outputs.analyze == 'true' "
+        "&& steps.test_only.outputs.skip != 'true'"
+    )
+    for index in (check, debug, fetch):
+        assert steps[index]["if"] == condition
+        assert not steps[index].get("continue-on-error", False)
+    assert steps[check]["run"] == 'python3 ".github/scripts/private-forks.py" check'
+    assert steps[fetch]["run"] == (
+        'python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"'
+    )
+    assert steps[fetch]["env"] == {
+        "PRIVATE_FORKS_READ_TOKEN": "${{ secrets.PRIVATE_FORKS_READ_TOKEN }}",
+    }
+    for index, step in enumerate(steps):
+        if index != fetch:
+            assert "PRIVATE_FORKS_READ_TOKEN" not in str(step)
+        if index < check:
+            assert "secrets." not in str(step)
+        assert not any(action in step.get("uses", "") for action in (
+            "actions/cache", "rust-cache", "sccache-action", "actions/upload-artifact",
+        ))
+    checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
+    assert checkout["with"]["persist-credentials"] is False
+    assert job["env"]["CODEQL_OVERLAY_DATABASE_MODE"] == "none"
+    assert job["env"]["CODEQL_ACTION_DEBUG_COMBINED_SARIF"] == "false"
+    for option in ("dependency-caching", "trap-caching", "debug"):
+        assert steps[init]["with"][option] is False
+    assert steps[analyze]["with"] == {
+        "category": "/language:rust", "upload-database": False,
+    }
+
+
+@pytest.mark.parametrize("runner_debug,expected_status", [("", 0), ("0", 0), ("1", 1)])
+def test_codeql_debug_guard_stops_before_private_source_fetch(runner_debug, expected_status):
+    job = workflow("codeql-rust.yml")["jobs"]["analyze-rust"]
+    guard = next(step for step in job["steps"] if step.get("name") == "Reject private source debug exports")
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-c", guard["run"]],
+        env={**os.environ, "RUNNER_DEBUG": runner_debug},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == expected_status
+    assert ("Actions step debug logging to be disabled" in result.stdout) == bool(expected_status)
