@@ -56,6 +56,32 @@ def jobs_fixture() -> list[dict]:
     return jobs
 
 
+def observed_preflight_fixture() -> tuple[list[dict], dict, dict]:
+    # D42221831779/1 job127905537072's observed lifecycle and step timestamps,
+    # rebound to this file's synthetic run/source. This is not release evidence.
+    jobs = jobs_fixture()
+    preflight = next(job for job in jobs if job["name"] == "release-environment-preflight / validate")
+    rows = (
+        (1, "Set up job", "11", "11"),
+        (2, "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "11", "15"),
+        (3, "Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97", "15", "15"),
+        (4, "Require protected and complete release environment", "15", "16"),
+        (7, "Post Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97", "16", "16"),
+        (8, "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "16", "16"),
+        (9, "Complete job", "16", "16"),
+    )
+    preflight.update(status="in_progress", conclusion="success",
+                     started_at="2026-11-06T12:59:10Z", completed_at="2026-11-06T12:59:18Z",
+                     steps=[{"number": number, "name": name, "status": "completed", "conclusion": "success",
+                             "started_at": f"2026-11-06T12:59:{start}Z",
+                             "completed_at": f"2026-11-06T12:59:{end}Z"}
+                            for number, name, start, end in rows])
+    publisher = next(job for job in jobs if job["name"] == "publish-manifest")
+    waiting = next(step for step in publisher["steps"] if step["name"] == handoff.WAIT_STEP)
+    waiting["started_at"] = "2026-11-06T13:38:22Z"
+    return jobs, preflight, waiting
+
+
 class OperatorStateTests(unittest.TestCase):
     def test_actual_matrix_and_reusable_job_names_admit_only_completed_prerequisites(self) -> None:
         operator.validate_waiting_jobs(jobs_fixture(), 123, SOURCE)
@@ -113,6 +139,127 @@ class OperatorStateTests(unittest.TestCase):
             with self.subTest(field=field):
                 jobs = jobs_fixture()
                 jobs[0][field] = True
+                with self.assertRaises(handoff.HandoffError):
+                    operator.validate_waiting_jobs(jobs, 123, SOURCE)
+
+
+class ReusablePreflightCompletionTests(unittest.TestCase):
+    def test_observed_successful_preflight_admits_with_stale_job_status(self) -> None:
+        jobs, _, _ = observed_preflight_fixture()
+        operator.validate_waiting_jobs(jobs, 123, SOURCE)
+
+    def test_completion_and_step_bounds_allow_equal_api_seconds(self) -> None:
+        jobs, preflight, waiting = observed_preflight_fixture()
+        preflight["steps"][0]["started_at"] = preflight["started_at"]
+        preflight["steps"][-1]["completed_at"] = preflight["completed_at"]
+        waiting["started_at"] = preflight["completed_at"]
+        operator.validate_waiting_jobs(jobs, 123, SOURCE)
+
+    def test_named_preflight_must_be_present_once_on_both_paths(self) -> None:
+        for stale in (False, True):
+            for mutation in ("missing", "duplicate"):
+                with self.subTest(stale=stale, mutation=mutation):
+                    jobs = observed_preflight_fixture()[0] if stale else jobs_fixture()
+                    preflight = next(job for job in jobs
+                                     if job["name"] == "release-environment-preflight / validate")
+                    if mutation == "missing":
+                        jobs.remove(preflight)
+                    else:
+                        jobs.append({**copy.deepcopy(preflight), "id": max(job["id"] for job in jobs) + 1})
+                    with self.assertRaises(handoff.HandoffError):
+                        operator.validate_waiting_jobs(jobs, 123, SOURCE)
+
+    def test_finished_step_evidence_does_not_admit_an_ordinary_running_job(self) -> None:
+        jobs, preflight, _ = observed_preflight_fixture()
+        ordinary = next(job for job in jobs if job["name"] == "validate-stack")
+        ordinary.update({key: copy.deepcopy(preflight[key]) for key in
+                         ("status", "conclusion", "started_at", "completed_at", "steps")})
+        with self.assertRaises(handoff.HandoffError):
+            operator.validate_waiting_jobs(jobs, 123, SOURCE)
+
+    def test_preflight_still_requires_terminal_success_and_exact_invocation(self) -> None:
+        for field, value in (
+            ("status", "queued"), ("status", "waiting"), ("status", "pending"),
+            ("conclusion", None), ("conclusion", "failure"), ("conclusion", "skipped"),
+            ("conclusion", "cancelled"), ("id", True), ("id", 0), ("id", 1),
+            ("run_id", 124), ("run_id", True), ("run_attempt", 2), ("run_attempt", True),
+            ("head_sha", MAIN),
+        ):
+            with self.subTest(field=field, value=value):
+                jobs, preflight, _ = observed_preflight_fixture()
+                preflight[field] = value
+                with self.assertRaises(handoff.HandoffError):
+                    operator.validate_waiting_jobs(jobs, 123, SOURCE)
+
+    def test_every_preflight_step_must_have_completed_successfully(self) -> None:
+        for field, value in (
+            ("status", "in_progress"), ("status", "queued"),
+            ("conclusion", None), ("conclusion", "failure"), ("conclusion", "skipped"),
+            ("conclusion", "cancelled"), ("number", True), ("number", 0),
+        ):
+            with self.subTest(field=field, value=value):
+                jobs, preflight, _ = observed_preflight_fixture()
+                preflight["steps"][0][field] = value
+                with self.assertRaises(handoff.HandoffError):
+                    operator.validate_waiting_jobs(jobs, 123, SOURCE)
+
+    def test_missing_or_malformed_step_lists_refuse(self) -> None:
+        for steps in (None, [], [None], [{}]):
+            with self.subTest(steps=steps):
+                jobs, preflight, _ = observed_preflight_fixture()
+                if steps is None:
+                    preflight.pop("steps")
+                else:
+                    preflight["steps"] = steps
+                with self.assertRaises(handoff.HandoffError):
+                    operator.validate_waiting_jobs(jobs, 123, SOURCE)
+
+    def test_protection_and_complete_job_are_unique_and_completion_is_last(self) -> None:
+        for mutation in (
+            "missing_protection", "missing_completion", "duplicate_protection",
+            "duplicate_completion", "duplicate_number", "after_completion",
+        ):
+            with self.subTest(mutation=mutation):
+                jobs, preflight, _ = observed_preflight_fixture()
+                steps = preflight["steps"]
+                protection = next(step for step in steps
+                                  if step["name"] == "Require protected and complete release environment")
+                completion = next(step for step in steps if step["name"] == "Complete job")
+                if mutation.startswith("missing_"):
+                    steps.remove(protection if mutation == "missing_protection" else completion)
+                elif mutation.startswith("duplicate_") and mutation != "duplicate_number":
+                    target = protection if mutation == "duplicate_protection" else completion
+                    steps.append({**target, "number": max(step["number"] for step in steps) + 1})
+                elif mutation == "duplicate_number":
+                    completion["number"] = protection["number"]
+                else:
+                    steps.append({**completion, "number": 10, "name": "Unexpected work after Complete job"})
+                with self.assertRaises(handoff.HandoffError):
+                    operator.validate_waiting_jobs(jobs, 123, SOURCE)
+
+    def test_missing_malformed_reversed_or_late_timestamps_refuse(self) -> None:
+        for target, field, value in (
+            ("job", "started_at", None), ("job", "completed_at", None), ("wait", "started_at", None),
+            ("step", "started_at", None), ("step", "completed_at", None),
+            ("job", "started_at", "2026-11-06T12:59:19Z"),
+            ("job", "completed_at", "2026-11-06T12:59:09Z"),
+            ("job", "completed_at", "2026-11-06T13:38:23Z"),
+            ("wait", "started_at", "2026-11-06T12:59:17Z"),
+            ("step", "started_at", "2026-11-06T12:59:09Z"),
+            ("step", "completed_at", "2026-11-06T12:59:19Z"),
+            ("step", "completed_at", "2026-11-06T12:59:10Z"),
+            ("following", "started_at", "2026-11-06T12:59:10Z"),
+            ("job", "completed_at", "2026-11-06T12:59:18"),
+            ("step", "started_at", "2026-13-06T12:59:11Z"),
+        ):
+            with self.subTest(target=target, field=field, value=value):
+                jobs, preflight, waiting = observed_preflight_fixture()
+                record = {"job": preflight, "wait": waiting, "step": preflight["steps"][0],
+                          "following": preflight["steps"][1]}[target]
+                if value is None:
+                    record.pop(field)
+                else:
+                    record[field] = value
                 with self.assertRaises(handoff.HandoffError):
                     operator.validate_waiting_jobs(jobs, 123, SOURCE)
 
