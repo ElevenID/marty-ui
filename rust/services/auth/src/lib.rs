@@ -39,7 +39,8 @@ pub use credential_page::*;
 pub use credential_state::*;
 pub use domain::{
     generate_pkce_pair, pkce_s256_challenge, AuthenticatedUser, ImpersonationContext, OidcUserInfo,
-    OidcValidatedIdentity, PkcePair, PkceState, Session, SessionSpec, SessionStatus, UserType,
+    OidcValidatedIdentity, PasskeyEnrollmentBinding, PkcePair, PkceState, Session, SessionSpec,
+    SessionStatus, UserType,
 };
 pub use event_transport::*;
 pub use grpc_service::*;

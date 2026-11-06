@@ -91,6 +91,7 @@ impl CredentialAccountResolver for LinkedAccount {
         _request: &ResolveCredentialAccount,
     ) -> Result<Option<CredentialAccount>, PortError> {
         Ok(Some(CredentialAccount {
+            keycloak_subject: Some("linked-user".into()),
             user: None,
             id_token: Some("linked-account-token".into()),
             refresh_token: None,
@@ -256,6 +257,7 @@ async fn linked_account_token_exchange_cannot_supply_pairing_auth_time() {
     let sessions = sessions.0.lock().unwrap();
     let session = &sessions[0];
     assert_eq!(session.id_token.as_deref(), Some("linked-account-token"));
+    assert_eq!(session.keycloak_subject.as_deref(), Some("linked-user"));
     assert_eq!(session.oidc_claims.as_ref().unwrap()["sub"], "linked-user");
     assert!(session
         .oidc_claims

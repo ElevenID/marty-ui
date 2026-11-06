@@ -181,6 +181,24 @@ export async function updateProfilePicture(pictureDataUrl) {
   }
 }
 
+export async function startPasskeyEnrollment(redirectUri = '/console/applicant/profile') {
+  const response = await fetch(`${AUTH_BASE_URL}/passkeys/enroll`, {
+    method: 'POST',
+    credentials: 'include',
+    cache: 'no-store',
+    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ redirect_uri: redirectUri }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (response.ok && result.email_sent === true) {
+    return { email_sent: true };
+  }
+  if (!response.ok || typeof result.authorization_url !== 'string') {
+    throw new Error(result.detail || 'Passkey enrollment could not be started. Please sign in again and retry.');
+  }
+  redirectBrowser(result.authorization_url, { replace: false });
+}
+
 export default {
   getCurrentUser,
   initiateLogin,
@@ -189,4 +207,5 @@ export default {
   isAuthenticated,
   getUserOrganizations,
   updateProfilePicture,
+  startPasskeyEnrollment,
 };

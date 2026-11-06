@@ -21,13 +21,15 @@ use crate::{
     CredentialCallbackError, CredentialCallbackHeaders, CredentialCallbackResult,
     CredentialHttpError, CredentialLoginCompletion, CredentialLoginErrorPage,
     CredentialLoginHttpService, CredentialStateError, CredentialVerifiedPayload,
-    HandleCallbackCommand, HandleCallbackResult, InitiateLoginCommand, PortError, Session,
-    SessionRepository, UiOriginPolicy, CREDENTIAL_LOGIN_CSS, CREDENTIAL_LOGIN_JAVASCRIPT,
+    HandleCallbackCommand, HandleCallbackResult, InitiateLoginCommand, PasskeyEnrollmentStart,
+    PortError, Session, SessionRepository, UiOriginPolicy, CREDENTIAL_LOGIN_CSS,
+    CREDENTIAL_LOGIN_JAVASCRIPT,
 };
 
 pub const AUTH_CORE_HTTP_ROUTES: &[(&str, &str)] = &[
     ("GET", "/v1/auth/login"),
     ("GET", "/v1/auth/register"),
+    ("POST", "/v1/auth/passkeys/enroll"),
     ("GET", "/v1/auth/canvas-lti/finalize"),
     ("POST", "/v1/auth/canvas-lti/finalize"),
     ("GET", "/v1/auth/callback"),
@@ -85,6 +87,23 @@ impl SessionCookieConfig {
 
 #[async_trait]
 pub trait AuthHttpApplication: Send + Sync {
+    fn passkey_management_url(&self, _session: &Session, _return_uri: &str) -> Option<String> {
+        None
+    }
+    fn passkey_enrollment_available(&self, _session: &Session) -> bool {
+        false
+    }
+    async fn enroll_passkey(
+        &self,
+        _session_id: &str,
+        _redirect_uri: String,
+        _oidc_redirect_uri: String,
+    ) -> Result<PasskeyEnrollmentStart, PortError> {
+        Err(PortError::new(
+            "passkey_enrollment_unavailable",
+            "Passkey enrollment is unavailable",
+        ))
+    }
     async fn initiate(
         &self,
         registration: bool,
@@ -101,6 +120,30 @@ pub trait AuthHttpApplication: Send + Sync {
 
 #[async_trait]
 impl AuthHttpApplication for AuthApplication {
+    fn passkey_management_url(&self, session: &Session, return_uri: &str) -> Option<String> {
+        AuthApplication::passkey_management_url(self, session, return_uri)
+    }
+    fn passkey_enrollment_available(&self, session: &Session) -> bool {
+        AuthApplication::passkey_enrollment_available(self, session)
+    }
+
+    async fn enroll_passkey(
+        &self,
+        session_id: &str,
+        redirect_uri: String,
+        oidc_redirect_uri: String,
+    ) -> Result<PasskeyEnrollmentStart, PortError> {
+        self.initiate_passkey_enrollment(
+            session_id,
+            InitiateLoginCommand {
+                redirect_uri: Some(redirect_uri),
+                oidc_redirect_uri: Some(oidc_redirect_uri),
+            },
+            Utc::now(),
+        )
+        .await
+        .map_err(application_error)
+    }
     async fn initiate(
         &self,
         registration: bool,
@@ -198,6 +241,7 @@ pub fn auth_core_router(state: AuthHttpState) -> Result<Router, PortError> {
     Ok(Router::new()
         .route("/v1/auth/login", get(login))
         .route("/v1/auth/register", get(register))
+        .route("/v1/auth/passkeys/enroll", post(enroll_passkey))
         .route(
             "/v1/auth/canvas-lti/finalize",
             get(canvas_legacy_finalize).post(canvas_finalize),
@@ -229,6 +273,72 @@ async fn credential_login_no_store(mut response: Response) -> Response {
 #[derive(Deserialize)]
 struct LoginQuery {
     redirect_uri: Option<String>,
+}
+
+async fn enroll_passkey(
+    State(state): State<AuthHttpState>,
+    headers: HeaderMap,
+    Json(query): Json<LoginQuery>,
+) -> Response {
+    let mut response = start_passkey_enrollment(&state, &headers, query).await;
+    no_store(&mut response);
+    response
+}
+
+async fn start_passkey_enrollment(
+    state: &AuthHttpState,
+    headers: &HeaderMap,
+    query: LoginQuery,
+) -> Response {
+    if query
+        .redirect_uri
+        .as_ref()
+        .is_some_and(|value| value.len() > 2048)
+    {
+        return detail(StatusCode::BAD_REQUEST, "Return location is too long");
+    }
+    let ui_base = request_ui_base(&state.origins, headers);
+    if headers.get_all(header::ORIGIN).iter().count() != 1
+        || header_text(headers, header::ORIGIN) != Some(ui_base)
+    {
+        return detail(
+            StatusCode::FORBIDDEN,
+            "Account changes require the current application origin",
+        );
+    }
+    let Some(session_id) = cookie(headers, &state.cookie.name) else {
+        return detail(StatusCode::UNAUTHORIZED, "Not authenticated");
+    };
+    let session = match state.application.validate_session(session_id).await {
+        Ok(Some(session)) => session,
+        Ok(None) => return detail(StatusCode::UNAUTHORIZED, "Session not found or expired"),
+        Err(_) => return detail(StatusCode::SERVICE_UNAVAILABLE, "Session store unavailable"),
+    };
+    if !state.application.passkey_enrollment_available(&session) {
+        return detail(
+            StatusCode::CONFLICT,
+            "Passkey enrollment is unavailable for this account session",
+        );
+    }
+    let redirect = sanitize_redirect_uri(query.redirect_uri.as_deref(), ui_base);
+    match state
+        .application
+        .enroll_passkey(session_id, redirect, oidc_callback_url(ui_base))
+        .await
+    {
+        Ok(PasskeyEnrollmentStart::Authorization(start)) => {
+            Json(json!({"authorization_url": start.authorization_url})).into_response()
+        }
+        Ok(PasskeyEnrollmentStart::EmailSent) => Json(json!({"email_sent": true})).into_response(),
+        Err(error) if error.code == "auth_passkey_enrollment_unavailable" => detail(
+            StatusCode::UNAUTHORIZED,
+            "Sign in again before requesting passkey enrollment",
+        ),
+        Err(_) => detail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Passkey enrollment could not be started",
+        ),
+    }
 }
 
 async fn login(
@@ -430,7 +540,23 @@ async fn me(State(state): State<AuthHttpState>, headers: HeaderMap) -> Response 
     } else {
         None
     };
-    auth_status(session.as_ref().map(|session| &session.user))
+    let available = session
+        .as_ref()
+        .is_some_and(|session| state.application.passkey_enrollment_available(session));
+    let return_uri = format!(
+        "{}/console/applicant/profile",
+        request_ui_base(&state.origins, &headers).trim_end_matches('/')
+    );
+    let management_url = session.as_ref().and_then(|session| {
+        state
+            .application
+            .passkey_management_url(session, &return_uri)
+    });
+    auth_status(
+        session.as_ref().map(|session| &session.user),
+        available,
+        management_url,
+    )
 }
 
 #[derive(Deserialize)]
@@ -464,7 +590,17 @@ async fn update_me(
             return detail(StatusCode::SERVICE_UNAVAILABLE, "Session store unavailable");
         }
     }
-    auth_status(Some(&session.user))
+    auth_status(
+        Some(&session.user),
+        state.application.passkey_enrollment_available(&session),
+        state.application.passkey_management_url(
+            &session,
+            &format!(
+                "{}/console/applicant/profile",
+                request_ui_base(&state.origins, &headers).trim_end_matches('/')
+            ),
+        ),
+    )
 }
 
 async fn credential_login_styles() -> Response {
@@ -669,9 +805,20 @@ fn no_store(response: &mut Response) {
     );
 }
 
-fn auth_status(user: Option<&crate::AuthenticatedUser>) -> Response {
+fn auth_status(
+    user: Option<&crate::AuthenticatedUser>,
+    passkey_enrollment_available: bool,
+    passkey_management_url: Option<String>,
+) -> Response {
     let mut response = Json(if let Some(user) = user {
-        json!({"authenticated": true, "user": user_response(user)})
+        let mut value = user_response(user);
+        if passkey_enrollment_available {
+            value["passkey_enrollment_available"] = json!(true);
+            if let Some(url) = passkey_management_url {
+                value["passkey_management_url"] = json!(url);
+            }
+        }
+        json!({"authenticated": true, "user": value})
     } else {
         json!({"authenticated": false})
     })
@@ -776,6 +923,10 @@ fn application_error(error: AuthApplicationError) -> PortError {
         AuthApplicationError::MissingNonce => "auth_oidc_nonce_missing",
         AuthApplicationError::MissingAccessToken => "auth_oidc_access_token_missing",
         AuthApplicationError::MissingIdToken => "auth_oidc_id_token_missing",
+        AuthApplicationError::PasskeyEnrollmentUnavailable => "auth_passkey_enrollment_unavailable",
+        AuthApplicationError::PasskeyEnrollmentMismatch => {
+            "auth_passkey_enrollment_account_mismatch"
+        }
         AuthApplicationError::Port { operation, .. } => match *operation {
             "save OIDC state" => "auth_oidc_state_save_failed",
             "build OIDC authorization URL" => "auth_oidc_authorization_url_failed",
@@ -806,6 +957,8 @@ mod application_error_tests {
             AuthApplicationError::MissingNonce,
             AuthApplicationError::MissingAccessToken,
             AuthApplicationError::MissingIdToken,
+            AuthApplicationError::PasskeyEnrollmentUnavailable,
+            AuthApplicationError::PasskeyEnrollmentMismatch,
             port("save OIDC state"),
             port("build OIDC authorization URL"),
             port("consume OIDC state"),

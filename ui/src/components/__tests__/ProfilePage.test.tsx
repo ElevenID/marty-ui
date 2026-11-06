@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@test/utils';
-import { within } from '@testing-library/react';
+import { fireEvent, waitFor, within } from '@testing-library/react';
 
 import ProfilePage from '../ProfilePage';
+
+const passkeyMock = vi.hoisted(() => ({ available: false, managementUrl: undefined as string | undefined, start: vi.fn() }));
 
 const mockSetActiveOrganizationId = vi.fn();
 const mockSetActiveOrgId = vi.fn();
@@ -10,6 +12,7 @@ const mockRefreshUser = vi.fn();
 
 vi.mock('../../services/authApi', () => ({
   updateProfilePicture: vi.fn(),
+  startPasskeyEnrollment: passkeyMock.start,
 }));
 
 vi.mock('../../hooks/useAuth', () => ({
@@ -20,6 +23,8 @@ vi.mock('../../hooks/useAuth', () => ({
       name: 'Ada Lovelace',
       applicant_id: 'app-1',
       roles: ['applicant'],
+      passkey_enrollment_available: passkeyMock.available,
+      passkey_management_url: passkeyMock.managementUrl,
     },
     isAdministrator: false,
     isApplicant: true,
@@ -57,8 +62,38 @@ vi.mock('../../contexts/ConsoleContext', () => ({
 }));
 
 describe('ProfilePage', () => {
+  beforeEach(() => { passkeyMock.available = false; passkeyMock.managementUrl = undefined; passkeyMock.start.mockReset(); });
+
+  it('opens the server-selected native console and explains the remaining-method safeguard', () => {
+    passkeyMock.available = true;
+    passkeyMock.managementUrl = 'https://identity.example/realms/11id/account/account-security/signing-in';
+    render(<ProfilePage />);
+    expect(screen.getByRole('link', { name: 'Manage passkeys' })).toHaveAttribute('href', passkeyMock.managementUrl);
+    expect(screen.getByText(/Keep another passkey or a working password/)).toBeInTheDocument();
+  });
+
+  it('shows email confirmation and prevents duplicate requests on the badge enrollment path', async () => {
+    passkeyMock.available = true;
+    passkeyMock.start.mockResolvedValue({ email_sent: true });
+    render(<ProfilePage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Create a passkey' }));
+    await waitFor(() => expect(screen.getByText(/Check your account email/)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Enrollment email sent' })).toBeDisabled();
+    expect(passkeyMock.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers optional enrollment only when the authenticated server session supports it', async () => {
+    passkeyMock.available = true;
+    passkeyMock.start.mockRejectedValue(new Error('Please sign in again'));
+    render(<ProfilePage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Create a passkey' }));
+    await waitFor(() => expect(screen.getByText('Please sign in again')).toBeInTheDocument());
+    expect(passkeyMock.start).toHaveBeenCalledWith(window.location.pathname);
+    expect(screen.getByRole('button', { name: 'Create a passkey' })).toBeEnabled();
+  });
   it('surfaces the shared organizations hub and canonical discovery routes', () => {
     render(<ProfilePage />);
+    expect(screen.queryByTestId('profile-passkey-enrollment')).not.toBeInTheDocument();
 
     const membershipSection = screen.getByTestId('profile-organization-membership-section');
 

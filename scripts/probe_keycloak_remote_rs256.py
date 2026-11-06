@@ -147,6 +147,35 @@ class PendingCibaDevice(BaseHTTPRequestHandler):
         pass
 
 
+def assert_stale_identity_cookie_shows_login(base: str, realm: str,
+                                           client_id: str, callback: str) -> None:
+    """Unknown cookie keys must use native login failure handling, not HTTP500."""
+    def encoded(value: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
+
+    verifier = secrets.token_urlsafe(32)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    params = {"client_id": client_id, "response_type": "code", "scope": "openid",
+              "redirect_uri": callback, "state": secrets.token_urlsafe(16),
+              "code_challenge": challenge, "code_challenge_method": "S256"}
+    cookie = encoded({"alg": "HS512", "kid": "disposable-unknown-identity-key"}) + "." + encoded({
+        "iss": base + f"/realms/{realm}", "sub": "synthetic-unknown-user",
+        "typ": "Serialized-ID", "exp": int(time.time()) + 60,
+    }) + ".AA"
+    request = Request(base + f"/realms/{realm}/protocol/openid-connect/auth?" + urlencode(params),
+                      headers={"Cookie": "KEYCLOAK_IDENTITY=" + cookie})
+    with urlopen(request, timeout=10) as response:
+        form = LoginForm()
+        form.feed(response.read().decode())
+        if response.status != 200 or not form.action:
+            raise RuntimeError("Unknown identity-cookie key did not return the native login form")
+        for value in response.headers.get_all("Set-Cookie", []):
+            if value.startswith("KEYCLOAK_IDENTITY=") and value.split(";", 1)[0] not in (
+                "KEYCLOAK_IDENTITY=", 'KEYCLOAK_IDENTITY=""'
+            ):
+                raise RuntimeError("Invalid identity cookie unexpectedly established authentication")
+
+
 def browser_code(opener, base: str, callback: str, realm: str,
                  username: str, *, login: bool,
                  before_submit: Callable[[], None] | None = None) -> dict:
@@ -248,7 +277,7 @@ def wait_for(path: Path, seconds: int = 30) -> None:
     raise RuntimeError("OpenBao public CA did not become ready")
 
 
-def wait_for_keycloak(base: str, container: str, seconds: int = 35) -> None:
+def wait_for_keycloak(base: str, container: str, seconds: int = 150) -> None:
     deadline = time.monotonic() + seconds
     last_discovery = "not_attempted"
     while time.monotonic() < deadline:
@@ -391,7 +420,13 @@ def verify_jwt(jwt: str, jwks: dict, expected_kid: str,
 
 
 def probe(keycloak_image: str, openbao_image: str, jar: Path,
-          require_browser: bool = False) -> None:
+          require_browser: bool = False,
+          qualify_ready: Callable[[dict], None] | None = None,
+          qualification_theme: Path | None = None) -> None:
+    if qualify_ready is not None and not require_browser:
+        raise ValueError("Additional qualification requires the packaged browser/KMS fixture")
+    if qualification_theme is not None and (qualify_ready is None or not qualification_theme.is_dir()):
+        raise ValueError("A qualification theme requires the owned live fixture and an existing directory")
     if not require_browser and not jar.is_file():
         raise RuntimeError("Build keycloak/openbao-provider with Maven first")
     suffix = secrets.token_hex(5)
@@ -424,12 +459,23 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             run("docker", "network", "create", network)
             created_network = True
             run("docker", "run", "-d", "--name", pg_name,
+                "--label", "marty.test=keycloak-passkeys",
                 "--network", network, "--network-alias", "postgres",
+                "--memory", "768m", "--cpus", "2",
+                # Override the image's VOLUME. Removing a container alone would
+                # otherwise leave its synthetic database in an anonymous volume.
+                "--tmpfs", "/var/lib/postgresql/data:rw,nosuid,nodev,size=512m",
                 "-e", "POSTGRES_USER=keycloak",
                 "-e", "POSTGRES_PASSWORD=synthetic-probe-only",
                 "-e", "POSTGRES_DB=keycloak",
                 "postgres:15-alpine")
             started_pg = True
+            pg_state = json.loads(run("docker", "inspect", pg_name))[0]
+            if ("/var/lib/postgresql/data" not in pg_state["HostConfig"].get("Tmpfs", {}) or
+                    any(mount["Type"] == "volume" for mount in pg_state["Mounts"]) or
+                    run("docker", "exec", pg_name, "stat", "-f", "-c", "%T",
+                        "/var/lib/postgresql/data") != "tmpfs"):
+                raise RuntimeError("Disposable PostgreSQL storage must be temporary")
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 ready = subprocess.run(["docker", "exec", pg_name, "pg_isready",
@@ -619,6 +665,8 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 *(["--add-host", host_gateway_alias(network)]
                   if require_browser and os.name != "nt" else []),
                 *provider_mount,
+                *(["--mount", f"type=bind,src={qualification_theme or ROOT / 'config/keycloak/themes/11id'},dst=/opt/keycloak/themes/11id,readonly"]
+                  if qualify_ready is not None else []),
                 "--mount", f"type=bind,src={ca_dir / 'ca.crt'},dst=/run/kms/ca.crt,readonly",
                 "--mount", f"type=bind,src={scoped_token},dst=/run/kms/token,readonly",
                 "--mount", f"type=bind,src={cert_dir},dst=/run/kms/certs,readonly",
@@ -642,6 +690,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                    f"http://host.docker.internal:{ciba_device.server_port}/"]
                   if ciba_device else []),
                 keycloak_image, "start-dev",
+                *(["--cache=ispn", "--cache-stack=jdbc-ping"] if qualify_ready is not None else []),
             )
             started_kc = True
             port = run("docker", "port", kc_name, "8080/tcp").rsplit(":", 1)[-1]
@@ -769,6 +818,26 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                                        base + "/realms/11id")
             if realm_modulus == master_modulus:
                 raise RuntimeError("master and 11id reused one remote RSA key")
+            if qualify_ready is not None:
+                # In-process test seam; capabilities remain confined to this
+                # disposable PostgreSQL/OpenBao/Keycloak fixture and its lifetime.
+                qualify_ready({"container": kc_name, "network": network, "base": base,
+                               "openbao_container": bao_name})
+                # A human test window can outlive access tokens and idle refresh
+                # sessions. Start fresh probe sessions after the callback, keeping
+                # the original realm lifetimes and subsequent refresh proof.
+                master_tokens = http_json(base + "/realms/master/protocol/openid-connect/token", {
+                    "client_id": "admin-cli", "grant_type": "password",
+                    "username": "probe", "password": "synthetic-probe-only",
+                })
+                token = master_tokens["access_token"]
+                realm_tokens = http_json(base + "/realms/11id/protocol/openid-connect/token", {
+                    "client_id": "admin-cli", "grant_type": "password",
+                    "username": "probe11", "password": "synthetic-probe-only",
+                })
+                verify_jwt(token, jwks, f"{prefix}-master-rs256-v1", base + "/realms/master")
+                verify_jwt(realm_tokens["access_token"], jwks_11id,
+                           f"{prefix}-11id-rs256-v1", base + "/realms/11id")
             if require_browser:
                 callback = base + "/probe-callback"
                 for realm in ("master", "11id"):
@@ -779,6 +848,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                         "protocol": "openid-connect", "redirectUris": [callback],
                         "attributes": {"pkce.code.challenge.method": "S256"},
                     })
+                    assert_stale_identity_cookie_shows_login(base, realm, "probe-browser", callback)
                 post_admin(base + "/admin/realms/11id/clients", token, {
                     "clientId": "probe-ciba", "enabled": True,
                     "publicClient": False, "clientAuthenticatorType": "client-secret",
@@ -1053,9 +1123,9 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             if started_kc:
                 subprocess.run(["docker", "rm", "-f", kc_name], capture_output=True)
             if started_bao:
-                subprocess.run(["docker", "rm", "-f", bao_name], capture_output=True)
+                subprocess.run(["docker", "rm", "-f", "-v", bao_name], capture_output=True)
             if started_pg:
-                subprocess.run(["docker", "rm", "-f", pg_name], capture_output=True)
+                subprocess.run(["docker", "rm", "-f", "-v", pg_name], capture_output=True)
             if created_network:
                 subprocess.run(["docker", "network", "rm", network], capture_output=True)
 

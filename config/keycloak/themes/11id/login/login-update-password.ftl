@@ -13,7 +13,7 @@
                     <input type="text"
                            id="username"
                            name="username"
-                           value="${username!""}
+                           value="${username!""}"
                            autocomplete="username"
                            readonly="readonly"
                            style="display:none;"
