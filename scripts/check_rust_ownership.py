@@ -11,6 +11,11 @@ from pathlib import Path
 import re
 from typing import Any
 
+if __package__:
+    from .localize_marty_core_dependencies import validate_workspace_dependencies
+else:
+    from localize_marty_core_dependencies import validate_workspace_dependencies
+
 
 MANIFEST_PATH = Path("docs/rust-migration-ownership.json")
 VALID_STATUSES = {"native-active", "cutover-in-progress", "planned", "decision-pending"}
@@ -171,6 +176,12 @@ def scan_repository(root: Path, manifest_path: Path | None = None) -> list[str]:
     if not isinstance(manifest, dict):
         return ["Rust ownership manifest must be an object"]
     findings = _validate_capabilities(manifest)
+    cargo = root / "rust/Cargo.toml"
+    if cargo.exists():
+        try:
+            validate_workspace_dependencies(cargo)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            findings.append(f"invalid Cargo workspace dependency inheritance: {error}")
     guardrails = manifest.get("guardrails")
     if not isinstance(guardrails, dict):
         return sorted(findings + ["manifest guardrails must be an object"])

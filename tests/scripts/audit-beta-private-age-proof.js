@@ -131,9 +131,10 @@ function createAgeProofController({ page, expected, syntheticClaims, recording,
       result_reply: await get(`/v1/flows/instances/${binding.trusted.instanceId}/result`) });
     const denied = check('denied', expected, { request_binding: binding.rejected.requestBinding,
       issued_binding: issuedBindings.rejected, instance_reply: await get(`/v1/flows/instances/${binding.rejected.instanceId}`),
+      result_reply: await get(`/v1/flows/instances/${binding.rejected.instanceId}/result`),
       wallet_report: device.report, denial_action_index: device.denialActionIndex,
-      rejection_text: device.rejectionText, scenario_sha256: device.scenarioSha256 });
-    if (denied.issuer_trust_denial_observed !== true) throw Error('BLOCKED: generic wallet rejection is not issuer-trust denial evidence');
+      scenario_sha256: device.scenarioSha256 });
+    if (denied.issuer_trust_denial_observed !== true) throw Error('BLOCKED: request-bound native verifier issuer rejection is required');
     const result = { laneId, trustedIssuance: issuedBindings.trusted, rejectedIssuance: issuedBindings.rejected,
       allowed, denied, deviceReportSha256: device.report.reportSha256, scenarioSha256: device.scenarioSha256,
       controlSource: device.controlSource };
@@ -296,7 +297,7 @@ async function main() {
     startedAt: new Date().toISOString(), behaviorAssertions: {}, errors: [], limitations: [
       'Native API receipts do not replace EUDI and SpruceID Android recordings.',
       'API fixture issuance and native deep-link handoff are explicit; this does not claim a governed applicant claim UI or camera QR scanning.',
-      'Issuer-trust denial requires an explicit issuer-untrusted message observed in the pinned wallet. Generic presentation rejection cannot pass. A typed backend issuer_not_trusted reason remains unavailable.',
+      'Issuer-trust denial requires the native verifier request-bound certificate-chain rejection, valid issuer signature and device authentication, and no authorized claims; generic wallet failures cannot pass.',
       'Android emulator evidence does not establish physical-device security.',
     ] };
   let browser, context, video, controller, liveEvidence;
@@ -367,7 +368,7 @@ async function main() {
           || await summary.getAttribute('data-disclosed-claim-names') !== '["age_over_21"]'
           || await summary.getAttribute('data-issuer-trusted') !== 'true') throw Error('Recorded product result does not match the native D03 evidence');
         await recording.explain(page, 'allowed', 'The trusted mDL passed. Authenticated disclosures contain only age_over_21.', { title: '3. Trusted issuer / Minimal response' });
-        await recording.explain(page, 'denied', 'The wallet explicitly reports that this issuer is not trusted. The observed message is retained; the API does not provide a typed backend reason.', { title: '4. Issuer trust rejection' });
+        await recording.explain(page, 'denied', 'The native verifier rejected this credential issuer certificate. Signature and device authentication passed; the request remains retryable with no authorized claims.', { title: '4. Issuer trust rejection' });
         return evidence;
       },
     }, {functionalRerun:mode.functionalRerun});

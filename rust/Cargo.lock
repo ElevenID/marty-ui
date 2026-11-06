@@ -5005,6 +5005,7 @@ dependencies = [
  "chrono",
  "flate2",
  "marty-crypto",
+ "marty-oid4vp-contract",
  "prost",
  "serde",
  "serde_json",
