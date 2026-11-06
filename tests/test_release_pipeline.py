@@ -70,11 +70,13 @@ class FakeGitHub:
             ".github/workflows/prepare-stack-tag.yml": ["Validate exact main and persist the no-write claim"],
             ".github/workflows/nightly-release.yml": ["admit", "prepare-native", "prepare-installation", "runtime-happy-path", "sign-release", "publish"],
             ".github/workflows/cd.yml": ["official-gate-evidence", "qualify-release", "publish-manifest"],
+            pipeline.PUBLISHER: ["intake", "publish"],
             ".github/workflows/production-web-release.yml": ["compose" if payload["inputs"].get("mode") == "compose" else "release"],
         }[workflow]
         run_id = self.next_id
         self.next_id += 1
-        self.add(run_id, workflow, jobs=names)
+        title = f"Publish stable candidate {payload["inputs"]["candidate_run_id"]}" if workflow == pipeline.PUBLISHER else None
+        self.add(run_id, workflow, jobs=names, title=title)
         if self.after_post:
             self.after_post(self.runs[run_id])
         if self.lost_response:
@@ -246,26 +248,58 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.github.posts, [])
         self.assertEqual(driver.record["steps"][0]["candidate_run_id"], 60)
 
-    def test_automatic_publisher_cannot_be_manual_duplicated_or_a_successful_skip(self) -> None:
-        for kind in ("manual", "duplicate", "skipped", "wrong-source", "failed"):
-            with self.subTest(kind=kind):
-                self.github.publisher_ids = []
-                self.publisher()
-                self.github.skipped_job = None
-                if kind == "manual":
-                    self.github.runs[70]["event"] = "workflow_dispatch"
-                elif kind == "duplicate":
-                    self.publisher(71)
-                elif kind == "skipped":
-                    self.github.skipped_job = "publish"
-                elif kind == "wrong-source":
-                    self.github.runs[70]["head_sha"] = "b" * 40
-                else:
-                    self.github.runs[70]["conclusion"] = "failure"
-                driver = self.driver("stable-publish", name=f"publisher-{kind}.json")
+    def test_absent_automatic_publisher_uses_one_exact_existing_publisher_dispatch(self) -> None:
+        driver = self.driver("stable-publish")
+        self.assertEqual(driver.execute(ci_run_id=50, stable_run_id=60), {"publisher_run_id": 200})
+        self.assertEqual(self.github.posts, [("repos/ElevenID/marty-ui/actions/workflows/publish-stable-candidate.yml/dispatches",
+                                             {"ref": "main", "inputs": {"candidate_run_id": "60"}})])
+        self.assertEqual(driver.record["steps"][0]["run_id"], 200)
+
+    def test_publisher_dispatch_never_substitutes_a_late_automatic_run(self) -> None:
+        self.github.after_post = lambda _run: self.publisher()
+        driver = self.driver("stable-publish")
+        self.assertEqual(driver.execute(ci_run_id=50, stable_run_id=60), {"publisher_run_id": 200})
+        self.assertEqual(len(self.github.posts), 1)
+        self.assertEqual(driver.record["steps"][0]["run_id"], 200)
+
+    def test_ambiguous_observed_publishers_refuse_without_dispatch(self) -> None:
+        self.publisher()
+        self.publisher(71)
+        with self.assertRaises(ValueError):
+            self.driver("stable-publish").execute(ci_run_id=50, stable_run_id=60)
+        self.assertEqual(self.github.posts, [])
+
+    def test_publisher_wrong_identity_skipped_or_failed_cannot_continue(self) -> None:
+        for index, changes in enumerate(({"event": "workflow_run"}, {"head_sha": "b" * 40},
+                                         {"run_attempt": 2}, {"display_title": "Publish stable candidate 61"},
+                                         {"conclusion": "failure"}, {"skip": True})):
+            with self.subTest(changes=changes):
+                self.github.posts.clear()
+                self.github.after_post = lambda run: run.update({k: v for k, v in changes.items() if k != "skip"})
+                self.github.skipped_job = "publish" if changes.get("skip") else None
                 with self.assertRaises(ValueError):
-                    driver.execute(ci_run_id=50, stable_run_id=60)
-                self.assertEqual(self.github.posts, [])
+                    self.driver("stable-publish", name=f"publisher-invalid-{index}.json").execute(ci_run_id=50, stable_run_id=60)
+                self.assertEqual(len(self.github.posts), 1)
+
+    def test_uncertain_publisher_acknowledgment_never_replays_or_rediscovers(self) -> None:
+        driver = self.driver("stable-publish")
+        self.github.lost_response = True
+        with self.assertRaises(TimeoutError):
+            driver.execute(ci_run_id=50, stable_run_id=60)
+        saved = json.loads((self.root / "journal.json").read_bytes())
+        self.assertEqual(saved["steps"][0]["outcome"], "unknown")
+        self.assertNotIn("run_id", saved["steps"][0])
+        listings = sum("/workflows/publish-stable-candidate.yml/runs?" in path for path in self.github.reads)
+        with self.assertRaisesRegex(ValueError, "already consumed"):
+            driver.execute(ci_run_id=50, stable_run_id=60)
+        self.assertEqual(len(self.github.posts), 1)
+        self.assertEqual(listings, sum("/workflows/publish-stable-candidate.yml/runs?" in path for path in self.github.reads))
+
+    def test_web_continuation_admits_the_exact_dispatched_publisher(self) -> None:
+        self.publisher(event="workflow_dispatch")
+        output = self.driver("web-application").execute(ci_run_id=50, stable_run_id=60, publisher_run_id=70)
+        self.assertEqual(output, {"application_run_id": 200})
+        self.assertEqual(self.github.posts[0][1]["inputs"]["mode"], "combined")
 
     def test_main_drift_and_stage_deadline_cannot_select_new_source_or_extend_a_wait(self) -> None:
         driver = self.driver("qualify")
@@ -493,7 +527,7 @@ class WorkflowContractTests(unittest.TestCase):
         for name, job in workflow["jobs"].items():
             with self.subTest(job=name):
                 self.assertLess(int(job["timeout-minutes"]), 360)
-                self.assertEqual(job["permissions"], {"contents": "read", "actions": "read" if name == "stable-publish" else "write"})
+                self.assertEqual(job["permissions"], {"contents": "read", "actions": "write"})
                 uploads = [step for step in job["steps"] if step.get("uses", "").startswith("actions/upload-artifact@")]
                 self.assertEqual(len(uploads), 1)
                 self.assertEqual(uploads[0]["if"], "always()")
