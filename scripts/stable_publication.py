@@ -300,6 +300,7 @@ class Publisher:
         h.require(type(value) is dict and h.positive(value.get("id")) and value["id"] == self.release_id
                   and value.get("tag_name") == self.candidate["tag"]
                   and value.get("target_commitish") == self.candidate["source_sha"]
+                  and value.get("name") == self.candidate["tag"]
                   and type(value.get("draft")) is bool and value.get("prerelease") is False,
                   "release coordinate or identity changed")
         h.require(not owned or value.get("body") == self.body, "authenticated release ownership changed")
@@ -343,7 +344,10 @@ class Publisher:
             h.require(current["draft"] is True and current.get("body") in {None, ""}
                       and current.get("assets") == [], "new draft changed before ownership attachment")
             self.guard()
-            status, _ = self.github.response(f"repos/{h.REPOSITORY}/releases/{self.release_id}", method="PATCH", payload={"body": body})
+            status, _ = self.github.response(f"repos/{h.REPOSITORY}/releases/{self.release_id}", method="PATCH", payload={
+                "tag_name": self.candidate["tag"], "target_commitish": self.candidate["source_sha"],
+                "name": self.candidate["tag"], "body": body, "draft": True,
+                "prerelease": False, "make_latest": "false"})
             h.require(status == 200, "ownership attachment failed; do not claim an unknown draft")
             self.body = body
             current = self.release(fresh=True)
@@ -379,7 +383,10 @@ class Publisher:
                       "candidate custody changed before final publication")
             self.guard()
             status, _ = self.github.response(f"repos/{h.REPOSITORY}/releases/{self.release_id}",
-                                              method="PATCH", payload={"draft": False, "make_latest": "true"})
+                                              method="PATCH", payload={
+                "tag_name": self.candidate["tag"], "target_commitish": self.candidate["source_sha"],
+                "name": self.candidate["tag"], "body": self.body, "draft": False,
+                "prerelease": False, "make_latest": "true"})
             h.require(status == 200, "publication outcome is unknown; use a fresh admitted retry")
         current = self.release(fresh=True)
         h.require(current["draft"] is False, "release was not published")

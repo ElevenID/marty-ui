@@ -215,7 +215,7 @@ def test_intent_change_during_upload_stops_before_the_next_mutation(setup, monke
     with pytest.raises(ValueError, match="intent changed"):
         pub.publish()
     assert len(api.content) == 1 and api.releases[0]["draft"] is True
-    assert not any(write[2] == {"draft": False, "make_latest": "true"} for write in api.writes)
+    assert not any(write[0] == "PATCH" and write[2].get("draft") is False for write in api.writes)
 
 
 def test_publish_creates_owned_draft_exact_assets_and_one_final_transition(setup):
@@ -226,7 +226,7 @@ def test_publish_creates_owned_draft_exact_assets_and_one_final_transition(setup
     assert api.releases[0]["draft"] is False
     assert set(row["name"] for row in api.releases[0]["assets"]) == p.cp.ASSET_NAMES
     assert len([w for w in api.writes if w[0] == "upload"]) == len(p.cp.ASSET_NAMES)
-    assert len([w for w in api.writes if w[2] == {"draft": False, "make_latest": "true"}]) == 1
+    assert len([w for w in api.writes if w[0] == "PATCH" and w[2].get("draft") is False]) == 1
     before = copy.deepcopy(api.writes)
     # Fully matching published state is a read-only idempotent success.
     assert publisher(setup).publish()["release_id"] == result["release_id"]
@@ -349,3 +349,32 @@ def test_owner_crypto_command_binds_exact_publisher_run_and_custom_predicate(mon
     assert calls[0][calls[0].index("--predicate-type") + 1] == p.OWNER_TYPE
     assert certificates == [{"workflow": p.c.PUBLISHER_WORKFLOW, "source_sha": SOURCE,
                              "run_id": PUBLISHER, "run_attempt": 1}]
+
+
+def test_patch_retains_coordinate_when_omission_resets_the_tag(setup):
+    api = setup[3]
+    response = api.response
+    def reset_omitted_tag(path, *, method="GET", payload=None):
+        status, raw = response(path, method=method, payload=payload)
+        if method == "PATCH" and "tag_name" not in payload:
+            api.releases[0]["tag_name"] = "untagged-synthetic"
+        return status, raw
+    api.response = reset_omitted_tag
+    assert publisher(setup).publish()["status"] == "published"
+    patches = [write[2] for write in api.writes if write[0] == "PATCH"]
+    assert len(patches) == 2
+    owner, final = patches
+    expected = {"tag_name": TAG, "target_commitish": SOURCE, "name": TAG,
+                "body": api.releases[0]["body"], "prerelease": False}
+    assert owner == {**expected, "draft": True, "make_latest": "false"}
+    assert final == {**expected, "draft": False, "make_latest": "true"}
+
+
+def test_changed_release_name_is_not_overwritten_by_a_retry(setup):
+    publisher(setup).publish()
+    api = setup[3]
+    api.releases[0]["name"] = "foreign name"
+    before = copy.deepcopy(api.writes)
+    with pytest.raises(ValueError, match="coordinate or identity"):
+        publisher(setup).publish()
+    assert api.writes == before

@@ -105,3 +105,11 @@ checks, partial upload recovery, and workflow wiring using explicitly synthetic
 proof adapters. They do not claim to have produced or accepted a live release
 signature. Website activation and production deployment keep their own runtime
 qualification gates.
+
+
+Release metadata updates retain the candidate tag, source, name, canonical signed
+owner body and prerelease flag explicitly. Ownership attachment keeps the release
+a draft with latest disabled; only the final complete-asset transition publishes
+and selects latest. Readback still rejects any changed coordinate or ownership.
+An incident involving changed draft coordinates remains an explicit incident
+review; this field preservation does not authorize adoption or repair of it.
