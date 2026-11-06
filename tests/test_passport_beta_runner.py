@@ -143,6 +143,18 @@ def test_passport_jobs_have_dedicated_label_and_in_job_preflight():
                 continue
             passport_jobs += 1
             assert labels == ["self-hosted", "linux", "x64", "passport-beta-wsl2"]
-            first_script = next(step["run"] for step in job["steps"] if "run" in step)
-            assert "python3 scripts/check_passport_beta_runner.py" in first_script
+            scripts = [step for step in job["steps"] if "run" in step]
+            preflight_index = 0
+            if path.name == "passport-supported-consumer-acceptance.yml":
+                # This native owner authorizes context without credentials
+                # before inspecting the runner or installing/fetching tools.
+                assert scripts[0] == {
+                    "name": "Authorize private fork access",
+                    "if": "vars.PRIVATE_FORKS_ENABLED == 'true'",
+                    "shell": "bash",
+                    "working-directory": "${{ github.workspace }}",
+                    "run": 'python3 ".github/scripts/private-forks.py" check\n',
+                }
+                preflight_index = 1
+            assert "python3 scripts/check_passport_beta_runner.py" in scripts[preflight_index]["run"]
     assert passport_jobs == 14

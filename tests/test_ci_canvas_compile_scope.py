@@ -362,8 +362,12 @@ def test_selfhost_diagnostic_is_additive_and_uses_the_full_image_contract() -> N
     assert '\'["canvas","contracts","worker","selfhost"]\'' in matrix
     assert "|| needs.changes.outputs.rust_matrix) }}" in matrix
     steps = {step.get("name"): step for step in job["steps"]}
+    cache = steps["Expose public image compiler cache credentials"]
+    assert cache["if"] == (
+        "vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'selfhost')"
+    )
+    assert not cache.get("continue-on-error", False)
     for name in (
-        "Expose public image compiler cache credentials",
         "Build public selfhost image",
         "Prepare public selfhost image loader acceptance",
     ):

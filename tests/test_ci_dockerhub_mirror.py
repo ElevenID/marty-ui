@@ -68,8 +68,20 @@ def test_host_mirror_is_installed_before_docker_use_without_killing_services() -
     ):
         steps = JOBS[owner]["steps"]
         assert steps[0]["uses"].startswith("actions/checkout@"), owner
-        assert steps[1]["run"] == MIRROR_SCRIPT, owner
-        assert not steps[1].get("continue-on-error", False), owner
+        mirror_index = 1
+        if owner != "test-ui-crawler-nginx":
+            # Only the credential-free authorization check may precede the
+            # mirror in native jobs; no Docker or fetch work can move ahead.
+            assert steps[1] == {
+                "name": "Authorize private fork access",
+                "if": "vars.PRIVATE_FORKS_ENABLED == 'true'",
+                "shell": "bash",
+                "working-directory": "${{ github.workspace }}",
+                "run": 'python3 ".github/scripts/private-forks.py" check\n',
+            }, owner
+            mirror_index = 2
+        assert steps[mirror_index]["run"] == MIRROR_SCRIPT, owner
+        assert not steps[mirror_index].get("continue-on-error", False), owner
 
 
 def test_rust_service_images_start_after_registry_setup_with_exact_digests() -> None:
@@ -319,7 +331,8 @@ def test_organization_quality_uses_reviewed_cache_fallback_policy() -> None:
         )
     )["jobs"]["workflow-quality"]
     policy = "c6dd7de55112abb53284dd0254f3a5914301a3ed"
+    workflow = "c155d9328e06a72ad2ece3492e5a8eaf1ca27f51"
     assert quality["uses"] == (
-        f"ElevenID/.github/.github/workflows/quality-workflows.yml@{policy}"
+        f"ElevenID/.github/.github/workflows/quality-workflows.yml@{workflow}"
     )
     assert quality["with"] == {"policy-ref": policy}
