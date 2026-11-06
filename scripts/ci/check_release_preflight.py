@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from build_stack_manifest import validate_lock
+from localize_marty_core_dependencies import validate_workspace_dependencies
 from product_package_plan import PRODUCTS, build_plan
 from stack_tag_gate import require_release_eligible, version_from_tag
 
@@ -21,6 +22,8 @@ from stack_tag_gate import require_release_eligible, version_from_tag
 def check(root: Path, source_sha: str, *, require_eligible: bool = False) -> dict:
     if re.fullmatch(r"[0-9a-f]{40}", source_sha) is None:
         raise ValueError("source SHA must be a full lowercase commit")
+    # The same source-only validator runs before any dependency/build setup.
+    validate_workspace_dependencies(root / "rust/Cargo.toml")
     lock = json.loads((root / "release/stack-lock.json").read_bytes())
     validate_lock(lock)
     version = version_from_tag("v" + lock["release"].removeprefix("marty-ui@"))
