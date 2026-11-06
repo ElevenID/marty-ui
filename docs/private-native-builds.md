@@ -25,9 +25,11 @@ the organization currently reserves that write access to its owners.
 
 A separate step uses the reader only for locked dependency fetches. Its Git
 credential helper responds only to the three exact GitHub repository paths and
-does not write a credential into Git configuration. Later Cargo compilation and
-tests run offline without the reader. Existing test commands, applicable job
-matrices, CI Gate requirements, and binary release provenance remain in force.
+does not write a credential into Git configuration. Later host compilation and
+tests receive no reader and retain ordinary anonymous network access for their
+existing public tools and runtime downloads. Existing explicit offline tests,
+applicable job matrices, CI Gate requirements, and binary release provenance
+remain in force.
 The private manual coordinator is an optional additional validation tool; it is
 not required to satisfy the public CI Gate.
 

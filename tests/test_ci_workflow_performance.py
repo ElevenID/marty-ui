@@ -2058,13 +2058,16 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         assert steps[name]["if"] == "matrix.lane == 'canvas'"
         assert not steps[name].get("continue-on-error", False)
     for name in (
-        "Expose public image compiler cache credentials",
         "Build public selfhost image",
         "Prepare public selfhost image loader acceptance",
         "Verify local passport signing is forbidden",
     ):
         assert steps[name]["if"] == "matrix.lane == 'selfhost'"
         assert not steps[name].get("continue-on-error", False)
+    assert steps["Expose public image compiler cache credentials"]["if"] == (
+        "vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'selfhost')"
+    )
+    assert not steps["Expose public image compiler cache credentials"].get("continue-on-error", False)
     assert steps["Prepare isolated Canvas worker harness dependencies"]["if"] == (
         "matrix.lane == 'canvas' || matrix.lane == 'worker'"
     )
@@ -5151,8 +5154,12 @@ def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
     _, warm = _workflow(ROOT / ".github/workflows/warm-ci-caches.yml")
     for name in ("test-rust-services", "rust-lint-policy"):
         assert ci["jobs"][name]["env"]["SCCACHE_GHA_RW_MODE"] == "READ_ONLY"
-    for job in warm["jobs"].values():
-        assert job["if"] == "github.ref == 'refs/heads/main'"
+    for name, job in warm["jobs"].items():
+        assert job["if"] == (
+            "vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')"
+            if name in {"rust", "images", "public-services"}
+            else "github.ref == 'refs/heads/main'"
+        )
     for job, mode in (
         (ci["jobs"]["test-rust-service-images"], "READ_ONLY"),
         (warm["jobs"]["images"], "READ_WRITE"),
@@ -5213,7 +5220,7 @@ def test_required_rust_lanes_use_uncached_compiler_only_when_optional_cache_fail
     lint = names.index("Lint Rust services")
     assert cache < fallback < names.index("Check formatting") < lint
     assert not steps[fallback].get("continue-on-error", False)
-    assert not steps[fallback].get("if")
+    assert steps[fallback]["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true'"
     services = ci["jobs"]["test-rust-services"]
     service_steps = services["steps"]
     service_names = [step.get("name") for step in service_steps]
@@ -5227,9 +5234,10 @@ def test_required_rust_lanes_use_uncached_compiler_only_when_optional_cache_fail
         < service_names.index("Compile reusable Rust test executables")
     )
     assert not service_steps[service_fallback].get("continue-on-error", False)
-    assert not service_steps[service_fallback].get("if")
-    assert services["env"]["RUSTC_WRAPPER"] == "sccache"
-    assert ci["jobs"]["rust-lint-policy"]["env"]["RUSTC_WRAPPER"] == "sccache"
+    assert service_steps[service_fallback]["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true'"
+    expected_wrapper = "${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}"
+    assert services["env"]["RUSTC_WRAPPER"] == expected_wrapper
+    assert ci["jobs"]["rust-lint-policy"]["env"]["RUSTC_WRAPPER"] == expected_wrapper
     fallback_command = "bash scripts/ci/optional-sccache-fallback.sh"
     assert (
         steps[fallback]["run"]
@@ -5342,7 +5350,7 @@ def test_bookworm_compile_phase_timings_keep_exact_offline_targets() -> None:
     ):
         assert f"run_cargo_phase {phase} {command} --locked --offline" in compile_step
     assert "python3 ../scripts/ci/verify-canvas-test-artifacts.py" in compile_step
-    assert capture_step["if"] == "always()"
+    assert capture_step["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
     assert "test ! -L rust/target/bookworm-compile-phases.tsv" in capture_step["run"]
     assert "-le 4096" in capture_step["run"]
     assert "rust-build-evidence/bookworm-compile-phases.tsv" in capture_step["run"]
@@ -5371,7 +5379,7 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
         step = next(
             step for step in jobs[job_name]["steps"] if step.get("name") == step_name
         )
-        assert step["if"] == "always()"
+        assert step["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
         assert not step.get("continue-on-error", False)
         scripts[job_name] = step["run"]
     service_steps = jobs["test-rust-services"]["steps"]
@@ -5463,7 +5471,7 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
 def test_release_cache_probe_is_main_only_and_cannot_invalidate_builder() -> None:
     _, warm = _workflow(ROOT / ".github/workflows/warm-ci-caches.yml")
     job = warm["jobs"]["images"]
-    assert job["if"] == "github.ref == 'refs/heads/main'"
+    assert job["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')"
     probe = next(
         step
         for step in job["steps"]

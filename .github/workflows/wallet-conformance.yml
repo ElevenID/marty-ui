@@ -46,7 +46,6 @@ jobs:
     timeout-minutes: 15
     env:
       PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
-      CARGO_NET_OFFLINE: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
       GH_TOKEN: ${{ github.token }}
       RELEASE_VERSION: ${{ inputs.release_version }}
       STACK_RELEASE_RUN_ID: ${{ inputs.stack_release_run_id }}

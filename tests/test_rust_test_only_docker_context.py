@@ -26,7 +26,7 @@ def _assert_migration_issuer_contract_inputs(recipe: str, ignore_lines: list[str
         source = "contracts/" + name
         copy = f"COPY {source} /build/{source}"
         assert copy in recipe
-        assert recipe.index(copy) < recipe.index("RUN cargo build")
+        assert recipe.index(copy) < recipe.index("cargo build --locked --release")
         assert not _is_ignored(source, ignore_lines)
 
 

@@ -63,7 +63,6 @@ jobs:
     timeout-minutes: 45
     env:
       PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
-      CARGO_NET_OFFLINE: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
       BETA_ORIGIN: ${{ inputs.beta_origin || vars.BETA_ORIGIN || 'https://beta.elevenidllc.com' }}
       BETA_AUDIT_ORG_ID: ${{ inputs.audit_org_id || vars.BETA_AUDIT_ORG_ID }}
       TEST_APPLICANT_EMAIL: ${{ secrets.TEST_APPLICANT_EMAIL }}
