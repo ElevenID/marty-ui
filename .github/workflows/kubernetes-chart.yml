@@ -1,0 +1,70 @@
+name: Kubernetes Helm package
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/kubernetes-chart.yml'
+      - 'deploy/helm/**'
+      - 'deploy/k3s/**'
+      - 'deploy-config/catalog/kubernetes-secrets.json'
+      - 'scripts/prepare_kubernetes_helm_values.py'
+      - 'scripts/bootstrap_kubernetes_openbao.py'
+      - 'scripts/installer_*.py'
+      - 'scripts/verify_installer_provenance.py'
+      - 'scripts/build_selfhost_image_lock.py'
+      - 'scripts/release_transaction.py'
+      - 'scripts/stack_tag_gate.py'
+      - 'scripts/passport_remote_tls.py'
+      - 'scripts/provision_selfhost_disposable_tls.py'
+      - 'scripts/setup-keycloak.sh'
+      - 'scripts/setup-keycloak-selfhost-production.sh'
+      - 'scripts/load-secrets-env.sh'
+      - 'services/entrypoint.sh'
+      - 'tests/test_marty_helm_chart.py'
+      - 'tests/test_prepare_kubernetes_helm_values.py'
+      - 'tests/test_bootstrap_kubernetes_openbao.py'
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kubernetes-chart-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chart-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Install pinned Helm and test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          chart_tools="$(mktemp -d)"
+          curl --fail --silent --show-error --location --max-time 120 \
+            https://get.helm.sh/helm-v3.22.1-linux-amd64.tar.gz \
+            --output "$chart_tools/helm.tar.gz"
+          printf '%s  %s\n' \
+            896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea \
+            "$chart_tools/helm.tar.gz" | sha256sum --check --strict
+          tar -xzf "$chart_tools/helm.tar.gz" -C "$chart_tools" linux-amd64/helm
+          printf '%s\n' "$chart_tools/linux-amd64" >> "$GITHUB_PATH"
+          python -m pip install 'pytest==9.2.0' 'PyYAML==6.0.3'
+      - name: Render actual chart and test the existing trust boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          helm version --short
+          python -m pytest -q -o addopts= \
+            tests/test_marty_helm_chart.py \
+            tests/test_prepare_kubernetes_helm_values.py \
+            tests/test_bootstrap_kubernetes_openbao.py

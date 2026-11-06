@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 import re
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -115,6 +118,22 @@ class PipelineTests(unittest.TestCase):
                                   "v1.2.3", self.plan, self.root / name, github=self.github)
         self.addCleanup(lambda: None if value.stream.closed else value.stream.close())
         return value
+
+    def run_main(self, *, name="cli-journal.json", context_error=None) -> tuple[int, str, Path]:
+        journal = self.root / name
+        parent = {"status": "in_progress", "created_at": self.github.created.strftime("%Y-%m-%dT%H:%M:%SZ")}
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", ["release_pipeline.py", "qualify", "--journal", str(journal)]), \
+                mock.patch.dict(pipeline.os.environ, {"RELEASE_CHANNEL": "both", "SELFHOST_EXTERNAL_IMAGES_JSON": PINS,
+                                "SELFHOST_PUBLIC_PROFILE": "full", "PRODUCTION_WEB": "true",
+                                "GITHUB_OUTPUT": str(self.root / "outputs")}), \
+                mock.patch.object(pipeline.transport, "exact_context", return_value=(123, SOURCE), side_effect=context_error), \
+                mock.patch.object(pipeline.transport, "git", return_value=SOURCE), \
+                mock.patch.object(pipeline, "source_preflight", return_value={"stack_version": "1.2.3"}), \
+                mock.patch.object(pipeline.transport, "GitHub", return_value=self.github), \
+                mock.patch.object(self.github, "run", create=True, return_value=parent), redirect_stdout(output):
+            status = pipeline.main()
+        return status, output.getvalue(), journal
 
     def test_configuration_refuses_floating_or_incomplete_stable_pins_and_unrequested_web(self) -> None:
         for pins in ("null", "[]", '{"redis":"redis:latest"}',
@@ -261,6 +280,163 @@ class PipelineTests(unittest.TestCase):
             driver.execute()
         self.assertEqual(driver.deadline, original_deadline)
         self.assertEqual(self.github.posts, [])
+
+    def test_main_drift_after_acknowledgment_retains_the_original_child_and_specific_stop(self) -> None:
+        driver = self.driver("qualify")
+        deadline = driver.deadline
+        journal = self.root / "journal.json"
+        self.github.after_post = lambda run: run.update(status="in_progress", conclusion=None)
+        output = io.StringIO()
+        fsynced_steps = []
+        actual_fsync, actual_print = pipeline.os.fsync, print
+
+        def sync(fd):
+            actual_fsync(fd)
+            fsynced_steps.append(json.loads(journal.read_bytes())["steps"][-1])
+
+        def print_after_sync(*args, **kwargs):
+            if args and '"event":"child_dispatch_confirmed"' in args[0]:
+                self.assertEqual(fsynced_steps[-1]["outcome"], "dispatch_confirmed")
+                self.assertEqual(fsynced_steps[-1]["run_id"], 200)
+                self.assertEqual(fsynced_steps[-1]["run_attempt"], 1)
+            actual_print(*args, **kwargs)
+
+        def advance_main(_seconds):
+            # The child is still running. Its acknowledgment must already be
+            # visible, rather than waiting for the final stage artifact.
+            acknowledgment = json.loads(output.getvalue().splitlines()[0])
+            self.assertEqual(acknowledgment["run_id"], 200)
+            self.github.main_sha = "b" * 40
+
+        driver.sleep = advance_main
+        with redirect_stdout(output), mock.patch.object(pipeline.os, "fsync", side_effect=sync), \
+                mock.patch("builtins.print", side_effect=print_after_sync):
+            with self.assertRaises(pipeline.PipelineError) as caught:
+                driver.execute()
+            driver.stop(caught.exception)
+
+        saved = json.loads(journal.read_bytes())
+        self.assertEqual(saved["status"], "stopped")
+        self.assertEqual(saved["source_sha"], SOURCE)
+        self.assertEqual(saved["steps"][0]["outcome"], "dispatch_confirmed")
+        self.assertEqual(saved["steps"][0]["run_id"], 200)
+        self.assertEqual(saved["failure"], {
+            "schema": "marty.release-pipeline-stop/v1", "code": "source_changed",
+            "message": "Protected main changed; this release request cannot select new source",
+            "stage": "qualify", "operation": "check_protected_main", "child_run_id": 200,
+            "expected_source_sha": SOURCE, "observed_main_sha": "b" * 40,
+        })
+        lines = output.getvalue().splitlines()
+        self.assertEqual(json.loads(lines[0])["event"], "child_dispatch_confirmed")
+        self.assertEqual(json.loads(lines[1].split("::", 2)[2]), saved["failure"])
+        self.assertEqual(len(self.github.posts), 1)
+        self.assertEqual(driver.deadline, deadline)
+
+    def test_invalid_or_lost_dispatch_acknowledgments_never_report_or_repeat_a_child(self) -> None:
+        private = "ghp_synthetic_secret\n::error::injected https://example.invalid/?sig=private"
+        cases = ("lost", "malformed-json", "missing-id", "foreign-urls", "http-refusal")
+        for case in cases:
+            with self.subTest(case=case):
+                self.github = FakeGitHub()
+                original_response = self.github.response
+
+                def response(endpoint, *, method, payload):
+                    status, raw = original_response(endpoint, method=method, payload=payload)
+                    if case == "lost":
+                        raise TimeoutError(private)
+                    if case == "malformed-json":
+                        return status, private.encode()
+                    if case == "missing-id":
+                        return status, pipeline.transport.encoded({"message": private})
+                    if case == "foreign-urls":
+                        return status, pipeline.transport.encoded({"workflow_run_id": 200,
+                                      "run_url": private, "html_url": private})
+                    return 403, private.encode()
+
+                self.github.response = response
+                status, output, journal = self.run_main(name=f"stopped-{case}.json")
+                saved = json.loads(journal.read_bytes())
+                self.assertEqual(status, 1)
+                self.assertEqual(len(self.github.posts), 1)
+                self.assertNotIn("child_dispatch_confirmed", output)
+                self.assertNotIn("child_run_id", saved["failure"])
+                self.assertNotIn("run_id", saved["steps"][0])
+                self.assertNotIn(private, output)
+                self.assertNotIn("ghp_synthetic_secret", output)
+                self.assertNotIn("example.invalid", output)
+                self.assertNotIn("ghp_synthetic_secret", journal.read_text())
+                self.assertEqual(saved["steps"][0]["outcome"], "unknown" if case == "lost" else "response_received")
+                self.assertEqual(saved["failure"]["code"], {
+                    "lost": "io_timeout", "malformed-json": "invalid_json", "missing-id": "dispatch_missing_identity",
+                    "foreign-urls": "dispatch_foreign_urls", "http-refusal": "dispatch_unconfirmed",
+                }[case])
+                self.assertEqual(saved["failure"]["operation"],
+                                 "dispatch_workflow" if case == "lost" else "validate_dispatch_response")
+                self.assertEqual(saved["status"], "stopped")
+
+    def test_original_stop_is_reported_when_journal_finalization_also_fails(self) -> None:
+        private = "https://example.invalid/private?sig=do-not-print"
+        for error in (OSError(private), RuntimeError(private)):
+            with self.subTest(error=type(error).__name__):
+                self.github = FakeGitHub()
+                self.github.after_post = lambda _run: setattr(self.github, "main_sha", "b" * 40)
+                with mock.patch.object(pipeline.Pipeline, "finish", side_effect=error) as finish:
+                    status, output, journal = self.run_main(name=f"unfinished-{type(error).__name__}.json")
+                finish.assert_called_once_with(False)
+                self.assertEqual(status, 1)
+                lines = output.splitlines()
+                self.assertEqual(json.loads(lines[0])["event"], "child_dispatch_confirmed")
+                diagnostic = json.loads(lines[1].split("::", 2)[2])
+                self.assertEqual(diagnostic["code"], "source_changed")
+                self.assertEqual(diagnostic["child_run_id"], 200)
+                self.assertIn("::warning title=Release pipeline journal incomplete::", lines[2])
+                self.assertNotIn(private, output)
+                self.assertNotIn("Traceback", output)
+                self.assertEqual(len(self.github.posts), 1)
+                self.assertEqual(json.loads(journal.read_bytes())["steps"][0]["outcome"], "dispatch_confirmed")
+
+    def test_failure_before_journal_creation_has_a_bounded_safe_annotation(self) -> None:
+        private = "ghp_synthetic_secret\n::error::injected https://example.invalid/?sig=private"
+        status, output, journal = self.run_main(context_error=ValueError(private))
+        self.assertEqual(status, 1)
+        self.assertFalse(journal.exists())
+        self.assertEqual(self.github.posts, [])
+        self.assertNotIn(private, output)
+        self.assertNotIn("ghp_synthetic_secret", output)
+        self.assertNotIn("example.invalid", output)
+        diagnostic = json.loads(output.strip().split("::", 2)[2])
+        self.assertEqual(diagnostic["code"], "invalid_data")
+        self.assertEqual(diagnostic["operation"], "validate_context")
+        self.assertNotIn("expected_source_sha", diagnostic)
+        self.assertLess(len(output), 1024)
+
+    def test_diagnostics_admit_only_fixed_messages_and_bounded_public_fields(self) -> None:
+        private = "private-token\n::error::injected https://example.invalid/?sig=" + "x" * 10000
+        errors = (ValueError(private), OSError(private), TimeoutError(private),
+                  pipeline.transport.HandoffError(private), KeyError({"secret": private}))
+        for error in errors:
+            with self.subTest(error=type(error).__name__):
+                diagnostic = pipeline.stop_diagnostic(error, private, private, child_run_id=True,
+                                                      expected_source_sha=private, observed_main_sha=private)
+                raw = pipeline.transport.encoded(diagnostic)
+                self.assertLess(len(raw), 1024)
+                self.assertEqual(set(diagnostic), {"schema", "code", "message", "stage", "operation"})
+                self.assertEqual(diagnostic["stage"], "unknown")
+                self.assertEqual(diagnostic["operation"], "unknown")
+                self.assertNotIn(b"private-token", raw)
+                self.assertNotIn(b"https://", raw)
+        for code in pipeline.STOP_MESSAGES:
+            error = pipeline.PipelineError(code)
+            error.args = (private,)
+            diagnostic = pipeline.stop_diagnostic(error, "qualify", "check_protected_main", child_run_id=200,
+                                                  expected_source_sha=SOURCE, observed_main_sha="b" * 40)
+            self.assertEqual(diagnostic["code"], code)
+            self.assertEqual(diagnostic["message"], pipeline.STOP_MESSAGES[code])
+            self.assertLess(len(pipeline.transport.encoded(diagnostic)), 1024)
+        diagnostic = pipeline.stop_diagnostic(pipeline.transport.HandoffError("GitHub read failed with HTTP 503"),
+                                              "qualify", "read_child_run", child_run_id=200)
+        self.assertEqual(diagnostic["code"], "github_read_failed")
+        self.assertEqual(diagnostic["http_status"], 503)
 
     def test_web_composition_uses_exact_original_producer_ids_and_attempts(self) -> None:
         self.publisher()

@@ -854,4 +854,17 @@ function resourceRecreationSuccessor(previousRef,profile){
  return require('./beta-resource-runtime').resourceSuccessor(previousRef,profile,{boundJson,expectedRuntime,receiptDigests});
 }
 
-module.exports={resourceRecreationSuccessor,canonicalHostMountRepresentations:mdocHostRepresentations,validateMdocJournalRead:mdocJournalRead,produceMdocConfigurationSuccessor,validateMdocConfigContainer,validateMdocKnownOutcome,produceSignedImageObservation:(profile,{readDocker=defaultDockerRead}={})=>require('./nightly-functional-runtime').produce(profile,{readDocker,boundJson,verifyBoundFile,boundBytes,observeDocker,validateRuntimeObservation,validateRestartObservation}),verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,validateRestartObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+function retainedBetaOffAuthority(profile){
+ let predecessor=profile;
+ for(let depth=0;!predecessor.runtimeResume;depth++){
+  assert(depth<8&&predecessor.baseProfile,'RETAINED_OFF_PREDECESSOR_REQUIRED');
+  predecessor=boundJson(predecessor.baseProfile);
+ }
+ // Reuse the pinned resume authority, without its historical global verifyLive.
+ require('./beta-retained-runtime-resume').authority(predecessor,{boundJson,verifyBoundFile,expectedRuntime});
+ const plan=boundJson(predecessor.runtimeResume.plan),rows=plan.scope.alreadyOffBetaDoNotStart;
+ assert.equal(rows.length,14);assert.equal(new Set(rows.map(row=>row.cid)).size,14);
+ return {snapshot:plan.sources.retainedAfter,rows:rows.map(row=>({role:row.role,cid:row.cid}))};
+}
+
+module.exports={retainedBetaOffAuthority,verifyResourceAncillary:(profile,readDocker)=>require('./beta-resource-runtime').verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDigests}),resourceRecreationSuccessor,canonicalHostMountRepresentations:mdocHostRepresentations,validateMdocJournalRead:mdocJournalRead,produceMdocConfigurationSuccessor,validateMdocConfigContainer,validateMdocKnownOutcome,produceSignedImageObservation:(profile,{readDocker=defaultDockerRead}={})=>require('./nightly-functional-runtime').produce(profile,{readDocker,boundJson,verifyBoundFile,boundBytes,observeDocker,validateRuntimeObservation,validateRestartObservation}),verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,validateRestartObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};

@@ -1,0 +1,614 @@
+/**
+ * ElevenID LLC Keycloak Login Theme
+ * Replicates the exact MUI AppBar from the home screen.
+ */
+
+/* ===== Reset ===== */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+body {
+  background: #f3f4f6;
+  font-family: "Roboto", "Helvetica", "Arial", sans-serif;
+  color: rgba(0, 0, 0, 0.87);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ===== MUI AppBar (position: static, elevation 4) ===== */
+.elevenid-appbar {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  background-color: #1976d2;
+  color: #fff;
+  box-shadow:
+    0px 2px 4px -1px rgba(0, 0, 0, 0.2),
+    0px 4px 5px 0px rgba(0, 0, 0, 0.14),
+    0px 1px 10px 0px rgba(0, 0, 0, 0.12);
+  z-index: 1100;
+}
+
+/* ===== MUI Toolbar (desktop: min-height 64px, padding 0 24px) ===== */
+.elevenid-toolbar {
+  display: flex;
+  align-items: center;
+  min-height: 64px;
+  padding: 0 24px;
+  position: relative;
+}
+
+/* ===== Brand - MUI Typography variant="h6", flexGrow: 1 ===== */
+.elevenid-brand {
+  flex-grow: 1;
+  font-size: 1.25rem;
+  font-weight: 500;
+  line-height: 1.6;
+  letter-spacing: 0.0075em;
+  color: #fff;
+}
+
+/* ===== Right-side actions ===== */
+.elevenid-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* ===== Language switcher - MUI Select standard variant ===== */
+.elevenid-lang-switcher {
+  display: inline-flex;
+  align-items: center;
+  width: 120px;
+  position: relative;
+}
+
+.elevenid-lang-icon {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #fff;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.elevenid-lang-select {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.7);
+  color: #fff;
+  font-family: "Roboto", "Helvetica", "Arial", sans-serif;
+  font-size: 1rem;
+  line-height: 1.4375em;
+  width: 100%;
+  min-width: 120px;
+  padding: 4px 24px 5px 28px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  /* MUI-style white dropdown arrow */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%23ffffff' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0 center;
+  background-size: 24px 24px;
+  /* Force white text on macOS native selects */
+  color-scheme: dark;
+}
+
+.elevenid-lang-select:focus {
+  outline: none;
+  border-bottom-color: #fff;
+}
+
+.elevenid-lang-select option {
+  color: rgba(0, 0, 0, 0.87);
+  background: #fff;
+}
+
+/* ===== HOME button - MUI Button contained small ===== */
+.elevenid-home-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background-color: #fff;
+  color: #1976d2;
+  font-family: "Roboto", "Helvetica", "Arial", sans-serif;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.75;
+  letter-spacing: 0.02857em;
+  text-transform: uppercase;
+  text-decoration: none;
+  box-shadow:
+    0px 3px 1px -2px rgba(0, 0, 0, 0.2),
+    0px 2px 2px 0px rgba(0, 0, 0, 0.14),
+    0px 1px 5px 0px rgba(0, 0, 0, 0.12);
+  transition: background-color 250ms cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 250ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.elevenid-home-btn:hover {
+  background-color: rgba(255, 255, 255, 0.9);
+  color: #1976d2;
+  text-decoration: none;
+  box-shadow:
+    0px 2px 4px -1px rgba(0, 0, 0, 0.2),
+    0px 4px 5px 0px rgba(0, 0, 0, 0.14),
+    0px 1px 10px 0px rgba(0, 0, 0, 0.12);
+}
+
+/* ===== Page content ===== */
+.elevenid-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 16px 60px;
+  min-height: calc(100vh - 64px);
+}
+
+.elevenid-content {
+  width: 100%;
+  max-width: 520px;
+}
+
+/* ===== Re-authentication user display ===== */
+.elevenid-reauth-user {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.elevenid-reauth-username {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #1a1a2e;
+  letter-spacing: -0.01em;
+}
+
+.elevenid-different-user {
+  text-align: center;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.elevenid-different-user-link {
+  font-size: 0.8125rem;
+  color: #5c6bc0;
+  text-decoration: none;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.elevenid-different-user-link:hover {
+  color: #1565c0;
+  text-decoration: underline;
+}
+
+/* ===== Alerts ===== */
+.elevenid-alert {
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-size: 0.875rem;
+}
+
+.elevenid-alert-error {
+  background: #fdeded;
+  color: #5f2120;
+  border: 1px solid #f5c6cb;
+}
+
+.elevenid-alert-success {
+  background: #edf7ed;
+  color: #1e4620;
+  border: 1px solid #c3e6cb;
+}
+
+.elevenid-alert-warning {
+  background: #fff4e5;
+  color: #663c00;
+  border: 1px solid #ffe0b2;
+}
+
+.elevenid-alert-info {
+  background: #e8f4fd;
+  color: #0d3c61;
+  border: 1px solid #b8daff;
+}
+
+/* ===== Card ===== */
+#kc-form-wrapper,
+#kc-form {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 18px 42px rgba(17, 82, 147, 0.14);
+  padding: 36px;
+  text-align: center;
+}
+
+/* ===== Titles ===== */
+.elevenid-login-title {
+  margin: 0;
+  font-size: 1.42rem;
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.87);
+  text-align: center;
+}
+
+.elevenid-context-hint {
+  margin: 10px 0 24px;
+  color: rgba(0, 0, 0, 0.6);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  text-align: center;
+}
+
+/* ===== Form labels ===== */
+label,
+.pf-c-form__label,
+.pf-c-form__label-text {
+  color: rgba(0, 0, 0, 0.6);
+  font-size: 0.84rem;
+  font-weight: 500;
+  text-align: center;
+  display: block;
+}
+
+#kc-form-wrapper label {
+  text-align: center;
+  justify-content: center;
+}
+
+.pf-c-form__group {
+  margin-bottom: 22px;
+}
+
+/* ===== Form inputs ===== */
+.pf-c-form-control,
+#kc-form-wrapper input[type="text"],
+#kc-form-wrapper input[type="password"],
+#kc-form-wrapper input[type="email"] {
+  width: 100%;
+  border: 1px solid rgba(0, 0, 0, 0.23);
+  border-radius: 10px;
+  padding: 13px 14px;
+  font-size: 0.95rem;
+  font-family: "Roboto", "Helvetica", "Arial", sans-serif;
+  color: rgba(0, 0, 0, 0.87);
+  background-color: #fff;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  text-align: left;
+}
+
+.kc-password-toggle-wrap {
+  position: relative;
+}
+
+#kc-form-wrapper .kc-password-toggle-input {
+  padding-right: 44px;
+}
+
+.kc-password-toggle-btn {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+  padding: 4px;
+  line-height: 0;
+}
+
+.kc-password-toggle-btn:hover {
+  color: #1976d2;
+}
+
+.kc-password-toggle-btn:focus {
+  outline: 2px solid #1976d2;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.kc-password-toggle-btn.is-visible {
+  color: #1976d2;
+}
+
+.kc-password-toggle-icon {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
+.pf-c-form-control:focus,
+#kc-form-wrapper input[type="text"]:focus,
+#kc-form-wrapper input[type="password"]:focus,
+#kc-form-wrapper input[type="email"]:focus {
+  border-color: #1976d2;
+  box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.18);
+  outline: none;
+}
+
+/* ===== Submit buttons ===== */
+#kc-login,
+#kc-register,
+.pf-c-button.pf-m-primary {
+  width: 100%;
+  border: none;
+  border-radius: 10px;
+  padding: 12px 18px;
+  background-color: #1976d2;
+  color: #fff;
+  font-family: "Roboto", "Helvetica", "Arial", sans-serif;
+  font-size: 0.86rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 3px 1px -2px rgba(0,0,0,0.2), 0 2px 2px 0 rgba(0,0,0,0.14), 0 1px 5px 0 rgba(0,0,0,0.12);
+  transition: background-color 0.2s ease, transform 0.2s ease;
+}
+
+#kc-login:hover,
+#kc-register:hover,
+.pf-c-button.pf-m-primary:hover {
+  background-color: #115293;
+  transform: translateY(-1px);
+}
+
+/* ===== Links ===== */
+a {
+  color: #1976d2;
+  text-decoration: none;
+}
+
+a:hover {
+  color: #115293;
+  text-decoration: underline;
+}
+
+/* ===== Form options ===== */
+#kc-form-options,
+#kc-form-options .checkbox {
+  color: rgba(0, 0, 0, 0.6);
+  text-align: center;
+}
+
+#kc-form-options + div {
+  text-align: center;
+}
+
+.elevenid-login-error {
+  margin: 4px 0 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #f5c6cb;
+  background: #fdeded;
+  color: #7f1d1d;
+  font-size: 0.88rem;
+  text-align: left;
+  line-height: 1.4;
+}
+
+.elevenid-login-help {
+  margin: -6px 0 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #bfd7ff;
+  background: #eef5ff;
+  text-align: left;
+}
+
+.elevenid-login-help-text {
+  margin: 0 0 6px;
+  color: #0d3c61;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.elevenid-login-help-link {
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+/* ===== Registration link ===== */
+#kc-registration {
+  margin-top: 18px;
+  text-align: center;
+}
+
+#kc-registration span {
+  font-size: 0.86rem;
+  color: rgba(0, 0, 0, 0.6);
+}
+
+/* ===== Info section ===== */
+.elevenid-info {
+  margin-top: 18px;
+  text-align: center;
+}
+
+#kc-info {
+  margin-top: 18px;
+}
+
+/* ===== Error page ===== */
+#kc-error-message .instruction {
+  text-align: center;
+  font-size: 1rem;
+}
+
+/* ===== Social / Identity Provider buttons ===== */
+.elevenid-social-providers {
+  margin-top: 24px;
+}
+
+.elevenid-social-separator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  color: rgba(0, 0, 0, 0.4);
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.elevenid-social-separator::before,
+.elevenid-social-separator::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.elevenid-social-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 16px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.23);
+  border-radius: 10px;
+  background: #fff;
+  color: rgba(0, 0, 0, 0.75);
+  font-family: "Roboto", "Helvetica", "Arial", sans-serif;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.elevenid-social-btn:hover {
+  background: #f5f8ff;
+  border-color: #1976d2;
+  box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.12);
+  text-decoration: none;
+  color: rgba(0, 0, 0, 0.87);
+}
+
+.elevenid-social-btn:last-child {
+  margin-bottom: 0;
+}
+
+.elevenid-social-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+/* Credential login gets a slight brand accent */
+.elevenid-social-btn--credential {
+  color: #1976d2;
+  border-color: rgba(25, 118, 210, 0.4);
+}
+
+.elevenid-social-btn--credential:hover {
+  background: #e8f0fe;
+  border-color: #1976d2;
+}
+
+/* ===== Password Requirements Checklist ===== */
+.pwd-requirements {
+  background: #f8fafc;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-top: 8px;
+  margin-bottom: 4px;
+  text-align: left;
+}
+
+.pwd-req-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.55);
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pwd-requirements ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.pwd-req {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: rgba(0, 0, 0, 0.45);
+  transition: color 0.2s ease;
+}
+
+.pwd-req-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.1);
+  color: rgba(0, 0, 0, 0.4);
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.pwd-req.met {
+  color: #2e7d32;
+}
+
+.pwd-req.met .pwd-req-icon {
+  background: #2e7d32;
+  color: #fff;
+}
+
+.pwd-req.unmet-active {
+  color: #c62828;
+}
+
+.pwd-req.unmet-active .pwd-req-icon {
+  background: #c62828;
+  color: #fff;
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 768px) {
+  .elevenid-toolbar {
+    padding: 0 16px;
+    min-height: 56px;
+  }
+
+  .elevenid-page {
+    padding: 24px 12px 40px;
+  }
+
+  #kc-form-wrapper,
+  #kc-form {
+    padding: 24px 16px;
+  }
+}

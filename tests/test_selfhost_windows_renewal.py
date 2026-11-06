@@ -300,13 +300,14 @@ def test_historical_native_bind_inference_requires_exact_project_source_and_zero
 def test_large_docker_inventories_are_batched_below_windows_command_limit(monkeypatch, name_size):
     import subprocess
     names = [format(i, 'x').zfill(name_size) for i in range(1200)]
+    ids = [format(i, 'x').zfill(64) for i in range(1200)]
     docker = object.__new__(renewal.Docker);docker.prefix = ['SYNTHETIC_DOCKER']
-    monkeypatch.setattr(renewal.subprocess, 'run', lambda *_a, **_k:
-                        subprocess.CompletedProcess([], 0, ('\n'.join(names)+'\n').encode(), b''))
+    monkeypatch.setattr(renewal.subprocess, 'run', lambda args, **_k:
+                        subprocess.CompletedProcess([], 0, ('\n'.join(ids if 'ps' in args else names)+'\n').encode(), b''))
     batches = []
     def inspect(args):
         values = args[2:] if args[:2] == ['volume', 'inspect'] else args[1:]
-        assert 0 < len(values) <= (256 if args[:2] == ['volume', 'inspect'] else 64)
+        assert 0 < len(values) <= 256
         assert len(subprocess.list2cmdline([*docker.prefix, *args])) <= 24*1024
         batches.append(values)
         return [{'Name': name, 'Id': name} for name in values]
@@ -316,7 +317,18 @@ def test_large_docker_inventories_are_batched_below_windows_command_limit(monkey
     assert volume_batches < 19
     assert [name for batch in batches for name in batch] == names
     assert len(docker.containers()) == 1200
-    assert len(batches) == volume_batches + 19
+    assert len(batches) == volume_batches + 5
+    assert [cid for batch in batches[volume_batches:] for cid in batch] == ids
+
+
+@pytest.mark.parametrize('ids', [['-option'], ['a'*65], ['z'*64], ['a'*12, 'a'*12]])
+def test_container_batches_reject_invalid_or_duplicate_ids(monkeypatch, ids):
+    import subprocess
+    docker = object.__new__(renewal.Docker);docker.prefix = ['SYNTHETIC_DOCKER']
+    monkeypatch.setattr(renewal.subprocess, 'run', lambda *_a, **_k:
+                        subprocess.CompletedProcess([], 0, ('\n'.join(ids)+'\n').encode(), b''))
+    monkeypatch.setattr(docker, 'json', lambda *_: pytest.fail('Invalid inventory inspected'))
+    with pytest.raises(ValueError):docker.containers()
 
 
 @pytest.mark.parametrize('name', ['-option', 'space name', 'x'*256, 'bad/name'])
@@ -705,11 +717,24 @@ def test_unchanged_context_cannot_pass_after_its_deadline(monkeypatch):
     monkeypatch.setattr(renewal.time, 'monotonic', lambda: clock['now'])
     original = docker.volumes
     def late():
-        clock['now'] = 61
+        clock['now'] = 181
         return original()
     docker.volumes = late
     with pytest.raises(renewal.UnsafeRenewalContext):context.check()
     assert docker.witness_calls == 0
+
+
+def test_full_readonly_proof_can_finish_after_one_minute_without_skipping_closing_checks(monkeypatch):
+    docker, context = foreign_context()
+    clock = {'now': 0}
+    monkeypatch.setattr(renewal.time, 'monotonic', lambda: clock['now'])
+    docker.during_witness = lambda: clock.update(now=70)
+    assert context.check(before_intent=True) == docker.items
+    assert docker.witness_calls == 1
+    # A new overlapping row in the closing census still refuses at the same age.
+    clock['now'] = 0
+    docker.during_witness = lambda: (clock.update(now=70), docker.items.append(context_container('overlap', None)))
+    with pytest.raises(renewal.UnsafeRenewalContext):context.check(before_intent=True)
 
 
 def test_unchanged_context_closes_census_after_volume_discovery():
@@ -745,7 +770,7 @@ def test_proof_hashing_cannot_accept_after_deadline(monkeypatch):
     monkeypatch.setattr(renewal.time, 'monotonic', lambda: clock['now'])
     original = renewal.hashlib.sha256
     def late(raw):
-        clock['now'] = 61
+        clock['now'] = 181
         return original(raw)
     monkeypatch.setattr(renewal.hashlib, 'sha256', late)
     with pytest.raises(renewal.UnsafeRenewalContext) as caught:context.check()

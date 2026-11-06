@@ -24,6 +24,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(

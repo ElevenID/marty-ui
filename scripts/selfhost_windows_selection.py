@@ -410,12 +410,49 @@ def prepare(config_path, *, authority_file=None, staging_sha256=None):
     return sequence
 
 
-def _reconciliation_choice(config, stack):
+def _unstarted_activation_check(config, intent, stack):
+    """Bind an interrupted first boundary to the original, unchanged runtime.
+
+    The writer fsyncs a started receipt before invoking any workload command.
+    The caller has held every receipt empty; the project lock excludes a live
+    writer. Neither healthy appearance nor a diagnostic log substitutes for this
+    durable before-command boundary.
+    """
+    require(set(intent) == {'schema', 'project', 'compose_sha256', 'current_env', 'renewed_env',
+        'current_secrets', 'renewed_secrets', 'owned_before', 'data_mounts_before',
+        'changing', 'layers', 'step_receipts', 'candidate_only'} and intent['candidate_only'] is True)
+    require(stack.enter_context(renewal.hold_private_input(Path(config['new_log'])))
+            == renewal.bounded_diagnostic(b'').encode())
+    require(stack.enter_context(renewal.hold_private_input(Path(config['rollback_log']))) == b'')
+    expected = intent['owned_before']
+    require(isinstance(expected, dict) and expected and all(isinstance(role, str)
+        and re.fullmatch(r'[a-z0-9][a-z0-9_-]*', role) and isinstance(cid, str)
+        and re.fullmatch(r'[0-9a-f]{64}', cid) for role, cid in expected.items())
+        and len(set(expected.values())) == len(expected))
+    require(isinstance(intent['data_mounts_before'], dict)
+            and set(intent['data_mounts_before']) == set(expected))
+    docker = renewal.Docker(config['docker_host'], config['engine_id'])
+    command = docker.compose(config['project'], Path(config['current_env']), Path(config['compose_file']))
+    model = docker.json(command[len(docker.prefix):] + ['--profile', '*', 'config', '--format', 'json'])
+    services = set(expected)
+    changing = renewal.owned_roles(model, services)
+    require(sorted(changing) == intent['changing']
+            and renewal.dependency_layers(model, services, changing) == intent['layers'])
+    def unchanged():
+        items = [x for x in docker.containers() if renewal._project(x) == config['project']]
+        require(len(items) == len(expected)
+                and {renewal._service(x): x['Id'] for x in items} == expected
+                and renewal.data_mounts(items) == intent['data_mounts_before'])
+    unchanged()
+    return unchanged
+
+
+def _reconciliation_choice(config, stack, *, unstarted_checks=None):
     """A healthy snapshot cannot establish an unknown CLI's quiescence.
 
     No activation intent means no invocation was sent. Otherwise require the
-    terminal phase's complete durable boundaries; incomplete mutators stay with
-    their operator, even if a transient snapshot looks healthy.
+    terminal phase's complete durable boundaries, or the exact all-empty first
+    boundary whose writer could not have reached a workload invocation.
     """
     raw = stack.enter_context(renewal.hold_private_input(Path(config['intent'])))
     if not raw:
@@ -443,7 +480,7 @@ def _reconciliation_choice(config, stack):
     all_roles = [role for layer in layers for role in layer]
     require(all(isinstance(layer, list) and layer == sorted(set(layer)) and layer for layer in layers)
             and len(set(all_roles)) == len(all_roles) and sorted(all_roles) == intent['changing'])
-    ready = {'new': [], 'rollback': []};rollback_seen = False
+    ready = {'new': [], 'rollback': []};rollback_seen = False;any_boundary = False
     for layer, step in zip(layers, steps):
         require(set(step) == keys)
         for phase in ['new', 'rollback']:
@@ -451,6 +488,7 @@ def _reconciliation_choice(config, stack):
             for event in ['started', 'completed']:
                 value = stack.enter_context(renewal.hold_private_input(Path(step[phase+'_'+event])))
                 values[event] = bool(value)
+                any_boundary |= bool(value)
                 if value:
                     record = decode(value)
                     require(set(record) == {'roles', 'event', 'time'} and record['roles'] == layer and record['event'] == event)
@@ -458,6 +496,10 @@ def _reconciliation_choice(config, stack):
             require(not values['completed'] or values['started'])
             ready[phase].append(values['started'] and values['completed'])
             if phase == 'rollback':rollback_seen |= any(values.values())
+    if not any_boundary:
+        check = _unstarted_activation_check(config, intent, stack)
+        if unstarted_checks is not None:unstarted_checks.append(check)
+        return 'old'
     require(all(ready['rollback'] if rollback_seen else ready['new']))
     return 'old' if rollback_seen else 'new'
 
@@ -520,8 +562,10 @@ def complete(config_path, *, reconcile=False, authority_file=None):
             data_hash = _prove(config, choice, values, stack, expected_data=expected_data, authority_file=authority_file)
         else:
             require(reconcile)
-            choice = _reconciliation_choice(config, stack);decision = 'reconciled-'+choice
+            unstarted_checks = []
+            choice = _reconciliation_choice(config, stack, unstarted_checks=unstarted_checks);decision = 'reconciled-'+choice
             data_hash = _prove(config, choice, values, stack, expected_data=expected_data, authority_file=authority_file)
+            for check in unstarted_checks:check()
         record = {'schema': SCHEMA, 'sequence': sequence, 'parent': intent['parent'],
                   'intent_sha256': digest(raw[f'{sequence:06}.intent.json']), 'decision': decision, 'choice': choice,
                   'selected': snapshots[choice], 'data_sha256': data_hash,

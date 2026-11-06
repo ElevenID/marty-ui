@@ -411,9 +411,12 @@ class Docker:
         p = subprocess.run([*self.prefix, 'ps', '-aq'], capture_output=True, timeout=30)
         require(p.returncode == 0)
         ids = p.stdout.decode('ascii').split()
+        require(len(ids) == len(set(ids)) and all(re.fullmatch(r'[0-9a-f]{12,64}', cid) for cid in ids))
         rows = []
-        for start in range(0, len(ids), 64):
-            rows.extend(self.json(['inspect', *ids[start:start + 64]]))
+        # Validated hex IDs keep each256-row command below17KiB on Windows,
+        # including full64-character IDs. Avoid redundant CLI startup per64 rows.
+        for start in range(0, len(ids), 256):
+            rows.extend(self.json(['inspect', *ids[start:start + 256]]))
         return rows
 
     def volumes(self):
@@ -582,7 +585,10 @@ class ForeignContext:
             raise UnsafeRenewalContext('Renewal context requires fresh operator qualification')
 
     def _check(self, *, before_intent):
-        deadline = time.monotonic() + 60
+        # Full Windows/WSL kernel-witness and NTFS namespace observations can
+        # exceed one minute on shared engines. Keep one fixed budget across all
+        # retries; every opening/closing observation and late-result check stays.
+        deadline = time.monotonic() + 180
         seen = dict(self.foreign)
         for _attempt in range(3):
             require(time.monotonic() < deadline, 'Storage qualification deadline reached')

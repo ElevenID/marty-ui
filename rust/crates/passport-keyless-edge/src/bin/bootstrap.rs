@@ -788,6 +788,7 @@ async fn provision(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     let profile = match env::var("MARTY_TLS_BOOTSTRAP_PROFILE").as_deref() {
         Ok("selfhost-disposable") => Profile::Selfhost,
         Ok("selfhost-renew") => Profile::SelfhostRenew,

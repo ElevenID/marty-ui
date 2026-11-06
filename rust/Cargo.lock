@@ -4053,6 +4053,7 @@ dependencies = [
  "hmac 0.12.1",
  "marty-demo-vendor-seed",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4075,6 +4076,7 @@ dependencies = [
  "http-body-util",
  "rand 0.9.5",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4257,6 +4259,7 @@ dependencies = [
 name = "marty-demo-vendor-seed"
 version = "0.1.0"
 dependencies = [
+ "rustls",
  "serde_json",
  "sqlx",
  "tokio",

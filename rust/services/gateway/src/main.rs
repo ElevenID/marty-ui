@@ -25,6 +25,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     if std::env::args_os().nth(1).as_deref() == Some(OsStr::new("--export-openapi")) {
         if std::env::args_os().len() != 2 {
             return Err("--export-openapi accepts no additional arguments".into());

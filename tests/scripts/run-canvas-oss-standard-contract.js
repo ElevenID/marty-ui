@@ -3209,6 +3209,7 @@ module.exports = {
   createOauthDeveloperKey,
   createCanvasCaptureCustody,
   requireCanvasSetupMutationReconciliation,
+  fenceOwnedCanvasBinding,
   reconcileCanvasPrelaunchApplicationAbsence,
   retireCanvasOAuthAuthority,
   retireCanvasOwnedReferences,

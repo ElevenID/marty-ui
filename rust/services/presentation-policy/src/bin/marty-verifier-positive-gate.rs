@@ -400,6 +400,7 @@ async fn execute(input: GateInput) -> Result<Value, String> {
 
 #[tokio::main]
 async fn main() {
+    marty_service_runtime::install_tls_crypto_provider();
     let result = match read_input(std::io::stdin().lock()) {
         Ok(input) => execute(input).await,
         Err(error) => Err(error),
