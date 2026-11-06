@@ -68,6 +68,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
+      - name: Fetch current release evidence dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 "${RUNNER_TEMP}/marty-private-forks.py" fetch --manifest-path "rust/Cargo.toml"
 
       - name: Require successful immutable source runs
         id: source_runs

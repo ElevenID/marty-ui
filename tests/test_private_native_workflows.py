@@ -129,3 +129,20 @@ def test_historical_wallet_source_keeps_the_reviewed_workflow_helper():
     assert check < old_source < fetch
     assert 'cp ".github/scripts/private-forks.py" "$RUNNER_TEMP/marty-private-forks.py"' in steps[check]["run"]
     assert '${RUNNER_TEMP}/marty-private-forks.py' in steps[fetch]["run"]
+
+
+def test_lifecycle_lineage_compilers_fetch_before_validating_source_runs():
+    for file, name, validator in (
+        ("wallet-conformance.yml", "attest-release", "Require successful immutable source runs"),
+        ("e2e-tests.yml", "full-stack-credential-lifecycle", "Bind lifecycle to the successful stack release"),
+    ):
+        steps = workflow(file)["jobs"][name]["steps"]
+        names = [step.get("name") for step in steps]
+        check = names.index("Authorize private fork access")
+        fetch = names.index("Fetch current release evidence dependencies")
+        lineage = names.index(validator)
+        later_graph = names.index("Fetch locked private fork dependencies")
+        assert check < fetch < lineage < later_graph
+        assert '--manifest-path "rust/Cargo.toml"' in steps[fetch]["run"]
+        assert "cargo run --locked" in steps[lineage]["run"]
+        assert "PRIVATE_FORKS_READ_TOKEN" not in str(steps[lineage])
