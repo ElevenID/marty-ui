@@ -100,8 +100,15 @@ mounts, including read-only consumers and containers without Compose labels.
 A surviving foreign ID cannot change its creation identity, image, complete mount
 metadata or project/service identity. A closing volume inventory and container
 census must match the proof inputs; candidate drift is never retried. Foreign
-inventory drift allows at most three read-only attempts within a sixty-second
-acceptance budget. No workload mutation is retried by this check.
+inventory drift allows at most three read-only attempts within one fixed
+three-minute acceptance budget. Full Windows/WSL mount witnesses and NTFS identity
+passes can legitimately exceed one minute on shared engines. Opening and closing
+inventories, fresh witnesses, identity checks and late-result rejection remain
+mandatory; no proof is cached across writes. Container inspections use batches of
+at most256 validated hexadecimal IDs, keeping even full-ID Windows commands below
+17KiB. The independent ten-minute activation-phase budget remains unchanged.
+These are acceptance deadlines, not a hard process wall-time guarantee. No
+workload mutation is retried by this check.
 
 Accepted context changes add proof hashes, counts and bounded ID samples to the
 private activation result. Recent proof samples have an aggregate eight-KiB bound;
@@ -202,6 +209,15 @@ The library exposes these bounded operations:
   current runtime before appending selection. `reconcile=True` never replays
   Docker: an empty original intent permits only the unchanged old selection;
   otherwise the terminal phase needs every durable started/completed boundary.
+  A distinct pre-command case permits only the old selection when the full
+  retained intent/model/layer/path closure is valid, every phase receipt is empty,
+  the rollback log is empty, and the new log is exactly the empty-tail diagnostic
+  header. The writer flushes each started receipt before invoking Docker, so this
+  case cannot have reached a workload command. Original container IDs, images and
+  data mounts must still match the intent both before and after fresh native,
+  readiness and data proof. The project lock excludes a concurrent writer and all
+  original records stay held and unchanged. A single nonempty started/completed
+  marker uses the existing terminal-phase rules; no partial layer is replayed.
   Incomplete or uncertain commands remain operator recovery cases even when a
   snapshot looks healthy. Original empty result files stay empty.
 - `status(config_path)` reports journal state, not live readiness. Pending,
@@ -306,3 +322,52 @@ another renewal nor recovery automatically clears an uncertain operation. Keep
 its configuration, receipts, helper identities and old generations for operator
 reconciliation. Known completed rollback is recorded through the existing
 selection owner; unknown activation is never replayed.
+
+## Explicit signed product transition
+
+Image adoption is distinct from credential rotation. From accepted trusted
+tooling that includes the product journal reader, run one explicit attempt:
+
+```powershell
+python scripts/selfhost_windows_product_deploy.py `
+  --config C:/Marty/private/activation/config.private.json `
+  --assets C:/Marty/private/verified-composition `
+  --gh C:/Marty/private/tools/gh.exe `
+  --cosign C:/Marty/private/tools/cosign.exe `
+  --registry-config C:/Marty/private/registry/config.json
+```
+
+The assets directory must contain the original six composition subjects. The
+existing composition verifier authenticates outer and embedded subjects and OCI
+evidence again. Images must already be cached by their exact digest, on
+linux/amd64. This command never pulls images or changes registry credentials.
+PostgreSQL and Redis image pins stay fixed; new implicit volume targets refuse.
+All writable storage and credentials remain bound to the selected installation.
+Only the four recognized read-only local UI code mounts may be replaced by the
+authenticated application image. Other ports, networks and configuration stay
+unchanged. Initializers and the historical TLS initialization container never run.
+
+The existing Windows process owner recreates only changed roles in dependency
+order. Complete intent/guard records precede fresh scoped AppRole authority and
+Compose writes. Native custody is proved before/after; schema/ledger and provider
+observations must remain equal. This narrow path does not admit a database-format
+upgrade, changed migration ledger or reversible database rollback. An error or
+uncertain outcome leaves the guard and receipts; never retry the deployment to
+repair it. A returned callback result is provisional until the entire selected
+lease exits and the new product selection is published.
+
+If execution completed but metadata publication was interrupted, an operator may
+use `--config ... --reconcile --authority-file /control/recovery-session-<uuid>/token`
+with existing valid scoped authority. This validates every retained phase and
+fresh native/schema/provider/runtime proof before completing derived metadata.
+It never repeats authentication, Compose, migrations or credential minting.
+Missing completion boundaries, expired authority, unexpected files and live
+drift refuse. Preserve incomplete attempts for explicit operator recovery.
+
+The product successor retains the credential identity and cumulative credential
+generation; later ordinary renewal and recovery resolve its new model binding.
+Install the accepted product-aware operator source in every recovery consumer
+before adoption. Older operator code cannot read the product records. No task,
+logon hook, release publication, public route or reboot is installed or performed
+by this command. Installed-runtime/recovery and end-to-end application acceptance
+remain separate requirements.

@@ -4,6 +4,7 @@ import ast
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -713,7 +714,8 @@ def _classify_changed_paths(
     assert event in {"pull_request", "merge_group", "push", "workflow_dispatch", "schedule"}
     assert classifier["run"].strip() == "source scripts/ci/affected_components.sh"
     script = (ROOT / "scripts/ci/affected_components.sh").read_text()
-    script = script.replace("python3 scripts/ci/affected_components.py", "python3 " + str(ROOT / "scripts/ci/affected_components.py"))
+    classifier_path = shlex.quote((ROOT / "scripts/ci/affected_components.py").as_posix())
+    script = script.replace("python3 scripts/ci/affected_components.py", "python3 " + classifier_path)
     assert "${{" not in script
     # Run the actual Bash classifier, not a Python copy of its path patterns.
     # Git is a shell-local synthetic owner, so neither fetch nor diff touches a
@@ -3756,6 +3758,7 @@ def test_classifier_diff_failure_fails_closed(tmp_path: Path) -> None:
     output = tmp_path / "synthetic-actions-output"
     environment["GITHUB_OUTPUT"] = output.as_posix()
     prelude = 'git() { case "$1" in fetch) return 0 ;; rev-parse) printf "%s\\n" "$SOURCE_SHA" ;; *) return 42 ;; esac; }\n'
+    prelude += 'python3() { '+shlex.quote(Path(sys.executable).as_posix())+' "$@"; }\n'
     result = subprocess.run(
         [bash, "--noprofile", "--norc", "-s"],
         input=prelude + script,
