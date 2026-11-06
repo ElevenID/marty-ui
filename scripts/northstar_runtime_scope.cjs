@@ -25,12 +25,20 @@ function nativeRead(input,{bindSource,transportModule}={}){
  transport.requireStdinCanary(); // Existing owner verifies source, engine and retirement.
  return args=>transport.read(args);
 }
+function safeOperationSummary(value){
+ if(!value||typeof value!=='object'||Array.isArray(value))return null;
+ const bytes=n=>Number.isSafeInteger(n)&&n>=0&&n<=64*1024*1024?n:null;
+ return {status:Number.isSafeInteger(value.status)&&value.status>=-2147483648&&value.status<=4294967295?value.status:null,
+  timedOut:value.timedOut===true,signalled:value.signalled===true,stdoutBytes:bytes(value.stdoutBytes),stderrBytes:bytes(value.stderrBytes)};
+}
 function safeFailure(error){
  const first=String(error?.message||'').split('\n',1)[0];
  const match=/^((?:RESOURCE_|KEYCLOAK_|SCOPE_)[A-Z0-9_]{1,70})(?::[a-z0-9-]{1,80})?$/.exec(first);
  const classes=new Set(['Error','AssertionError','TypeError','RangeError','SyntaxError']);
+ const native=error?.code==='NATIVE_DOCKER_SYNC_FAILED';
  return {schema:'marty.northstar-runtime-scope-failure/v1',
-  errorClass:classes.has(error?.name)?error.name:'Error',code:match?match[1]:'SCOPE_NATIVE_VERIFICATION_FAILED'};
+  errorClass:classes.has(error?.name)?error.name:'Error',code:native?'NATIVE_DOCKER_SYNC_FAILED':match?match[1]:'SCOPE_NATIVE_VERIFICATION_FAILED',
+  ...(native?{operationSummary:safeOperationSummary(error.operationSummary)}:{})};
 }
 function main(){
  const raw=fs.readFileSync(0);assert(raw.length<=32768);

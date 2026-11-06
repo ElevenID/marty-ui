@@ -24,6 +24,22 @@ def row(i,project='elevenid-beta',network='beta-network'):
 
 
 class Controls(unittest.TestCase):
+    def test_native_failure_dto_preserves_only_safe_bounded_summary(self):
+        config={'protectedCohort':{'schema':m.SCHEMA,'profile':{'sha256':'a'*64}},
+                'runtimeAuthority':{'profile':{'sha256':'a'*64}},'sourceRepository':str(UI),
+                'currentSourceAuthority':{'ui':'a'*40},'nodeExecutable':{}}
+        core=types.SimpleNamespace(git_blob=lambda repo,revision,relative:(UI/relative).read_bytes(),read_executable_ref=lambda ref:Path('synthetic-node'))
+        summary={'status':4294967295,'timedOut':False,'signalled':True,'stdoutBytes':0,'stderrBytes':43}
+        failure={'schema':'marty.northstar-runtime-scope-failure/v1','errorClass':'Error','code':'NATIVE_DOCKER_SYNC_FAILED','operationSummary':{**summary,'stderr':'secret-provider-token'}}
+        terminal=types.SimpleNamespace(stdout=json.dumps(failure).encode(),returncode=1)
+        with patch.object(m,'native_projection',return_value={}),patch.object(m.subprocess,'run',return_value=terminal):
+            with self.assertRaisesRegex(ValueError,'NATIVE_DOCKER_SYNC_FAILED') as caught:m.runtime_authority(config,core,live=True)
+        self.assertEqual(caught.exception.scopeFailure['operationSummary'],summary)
+        self.assertNotIn('secret',json.dumps(caught.exception.scopeFailure))
+        self.assertEqual(m.safe_operation_summary({'status':True,'stdoutBytes':2**40,'stderrBytes':-1,'timedOut':'secret','signalled':1}),
+                         {'status':None,'stdoutBytes':None,'stderrBytes':None,'timedOut':False,'signalled':False})
+        self.assertIsNone(m.safe_operation_summary([]))
+
     def test_native_projection_binds_actual_fixture_without_inheriting_execution_authority(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d)

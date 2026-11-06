@@ -10,6 +10,8 @@ const { spawnSync } = require('node:child_process');
 const { browserJson, cancelOwnedIssuanceTransaction, selectOrganization } = require('./beta-demo-resource-helpers');
 const { createActionRecording, createArtifactDir, finalizeVideo, VIDEO_SIZE } = require('./demo-recording');
 
+const {createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness} = require('./demo-live-evidence');
+
 const ROOT = path.resolve(__dirname, '../..');
 const idPattern = /^[A-Za-z0-9_-]{1,128}$/;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -215,7 +217,80 @@ async function login(page, origin, email, password) {
   if (successful(await browserJson(page, '/v1/auth/me'), 'D03 authentication').authenticated !== true) throw Error('D03 did not authenticate');
 }
 
+function ageProofExecutionMode(environment = process.env) {
+  if (!['0','1'].includes(environment.RECORD_VIDEO)) throw Error('D03 requires explicit RECORD_VIDEO=0 or 1');
+  return {functionalRerun: environment.RECORD_VIDEO === '0', recordVideo: environment.RECORD_VIDEO === '1'};
+}
+
+function ageProofOperationsComplete(report) {
+  return report.errors.length === 0 && report.cleanup?.ok === true
+    && report.androidGate?.result === 'PASS'
+    && report.lanes?.length === REQUIRED_LANES.length
+    && REQUIRED_LANES.every(id => report.lanes.filter(lane => lane.laneId === id).length === 1)
+    && ['trusted_mdl_issuance','request_only_age_over_21','verify_issuer_trust_and_minimum_response',
+      'untrusted_issuer_denied','independent_wallets_pass'].every(key => report.behaviorAssertions[key] === true);
+}
+
+async function prepareAgeProofLiveInputs(artifactDir, client, page, inputs) {
+  client.bindPage(page);
+  return acknowledgeDemoInputs(artifactDir, 'd03-fixture-input.json', inputs, client);
+}
+
+function ageProofUsesLiveClient(mode, environment = process.env) {
+  return mode.functionalRerun || environment.DEMO_EXECUTION_EVIDENCE_HELPER !== undefined;
+}
+
+async function finalizeAgeProofRun(report, client, mode, applyReadiness = applyLocalNativeReadiness) {
+  report.releaseReady = false;
+  report.functionalReady = false;
+  report.operations_verified = false;
+  report.liveEvidenceCompletion = {selected:!!client, acknowledged:false};
+  if (mode.functionalRerun) {
+    report.recordingStatus = 'NOT_CAPTURED';
+    report.releaseQualified = false;
+    report.demoQualified = false;
+  }
+  try {
+    const ready = ageProofOperationsComplete(report) && (mode.functionalRerun || !!report.applicationVideo);
+    if (mode.functionalRerun && !client) {
+      if (ready) throw Error('D03 functional completion requires its live evidence client');
+      return false;
+    }
+    const annotatedReady = mode.functionalRerun
+      ? applyReadiness(report, client, {ready, cleanupComplete:report.cleanup?.ok === true}) : ready;
+    // Neither mode publishes ready before the selected parent acknowledges
+    // COMPLETE. Standalone recording retains its existing strict media gates.
+    report.functionalReady = false;
+    report.operations_verified = false;
+    if (ready && annotatedReady === true) {
+      if (client) {
+        await client.complete();
+        report.liveEvidenceCompletion.acknowledged = true;
+      }
+      report.functionalReady = mode.functionalRerun;
+      report.operations_verified = true;
+      report.releaseReady = !mode.functionalRerun;
+    }
+  } catch (error) {
+    report.errors.push(String(error.message || error).slice(0, 2000));
+    report.functionalReady = false;
+    report.operations_verified = false;
+    report.releaseReady = false;
+  } finally {
+    try { await client?.close(); }
+    catch (error) {
+      report.errors.push(String(error.message || error).slice(0, 2000));
+      report.functionalReady = false;
+      report.operations_verified = false;
+      report.releaseReady = false;
+    }
+    if (mode.functionalRerun) report.releaseReady = false;
+  }
+  return mode.functionalRerun ? report.functionalReady === true : report.releaseReady === true;
+}
+
 async function main() {
+  const mode = ageProofExecutionMode();
   const artifactDir = createArtifactDir(ROOT, 'private-online-age-proof');
   const report = { schemaVersion: 1, releaseReady: false, scenario: 'private-online-age-proof',
     startedAt: new Date().toISOString(), behaviorAssertions: {}, errors: [], limitations: [
@@ -224,9 +299,12 @@ async function main() {
       'Issuer-trust denial requires an explicit issuer-untrusted message observed in the pinned wallet. Generic presentation rejection cannot pass. A typed backend issuer_not_trusted reason remains unavailable.',
       'Android emulator evidence does not establish physical-device security.',
     ] };
-  let browser, context, video, controller;
+  let browser, context, video, controller, liveEvidence;
   try {
-    if (process.env.RECORD_VIDEO !== '1') throw Error('D03 requires fresh independent-wallet recordings; functional-only or saved-report qualification is unsupported');
+    if (ageProofUsesLiveClient(mode)) {
+      liveEvidence = await createDemoLiveEvidence();
+      if (mode.functionalRerun && !liveEvidence.functionalRuntimeBinding) throw Error('D03 functional execution requires recorder-bound current runtime evidence');
+    }
     if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0' || process.env.BETA_LOCAL_PROXY === '1' || process.env.MARTY_UI_CANDIDATE_DIST) throw Error('D03 production capture requires authenticated HTTPS and the deployed UI');
     const fixturePath = process.env.D03_FIXTURE_PATH;
     if (!fixturePath) throw Error('D03_FIXTURE_PATH must identify the frozen non-secret release fixture');
@@ -249,10 +327,14 @@ async function main() {
     if (!email || !password) throw Error('D03 requires the dedicated synthetic administrator runtime credentials');
     const { chromium } = require('@playwright/test');
     browser = await chromium.launch({ headless: process.env.HEADED !== '1' });
-    context = await browser.newContext({ viewport: VIDEO_SIZE, recordVideo: { dir: artifactDir, size: VIDEO_SIZE } });
+    context = await browser.newContext({ viewport: VIDEO_SIZE, ...(mode.recordVideo ? {recordVideo: { dir: artifactDir, size: VIDEO_SIZE }} : {}) });
     const page = await context.newPage();
-    video = page.video();
-    const recording = createActionRecording({ enabled: true, scenario: 'private-online-age-proof',
+    if (liveEvidence) await prepareAgeProofLiveInputs(artifactDir, liveEvidence, page, {
+      schemaVersion:1, scenario:'private-online-age-proof', expected, syntheticClaims:fixture.syntheticClaims,
+      fixtureSha256:report.fixtureSha256, sourceRevision:report.source.revision, recorderRevision:report.recorderSource.revision,
+    });
+    video = mode.recordVideo ? page.video() : null;
+    const recording = createActionRecording({ enabled: mode.recordVideo, scenario: 'private-online-age-proof',
       eyebrow: 'Private online age proof - Synthetic mDL holder', onEvent: evidence => { report.presentationRecording = evidence; } });
     await login(page, expected.service_origin, email, password);
     const selection = await selectOrganization(page, { organizationId: expected.organization_id, consoleOrigin: expected.service_origin });
@@ -288,7 +370,7 @@ async function main() {
         await recording.explain(page, 'denied', 'The wallet explicitly reports that this issuer is not trusted. The observed message is retained; the API does not provide a typed backend reason.', { title: '4. Issuer trust rejection' });
         return evidence;
       },
-    });
+    }, {functionalRerun:mode.functionalRerun});
     report.androidGate = gateway.report;
     report.lanes = controller.laneResults;
     if (gateway.report.result !== 'PASS' || REQUIRED_LANES.some(id => !gateway.receipts.some(result => result.laneId === id))) throw Error('Both EUDI and SpruceID live age-proof lanes must pass');
@@ -308,16 +390,14 @@ async function main() {
       } catch (error) { report.errors.push(error.message); }
     }
     if (browser) await browser.close().catch(error => report.errors.push(error.message));
-    report.releaseReady = report.errors.length === 0 && report.cleanup?.ok === true
-      && report.androidGate?.result === 'PASS' && !!report.applicationVideo
-      && report.behaviorAssertions.independent_wallets_pass === true;
-    report.result = report.releaseReady ? 'PASS' : report.lanes?.length ? 'FAIL' : 'BLOCKED';
+    await finalizeAgeProofRun(report, liveEvidence, mode);
+    report.result = (mode.functionalRerun ? report.functionalReady === true : report.releaseReady) ? 'PASS' : report.lanes?.length ? 'FAIL' : 'BLOCKED';
     report.completedAt = new Date().toISOString();
     fs.writeFileSync(path.join(artifactDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   }
-  if (!report.releaseReady) throw Error(`D03 ${report.result}: ${report.errors.join('; ') || 'cleanup or evidence incomplete'}`);
+  if (!(mode.functionalRerun ? report.functionalReady === true : report.releaseReady)) throw Error(`D03 ${report.result}: ${report.errors.join('; ') || 'cleanup or evidence incomplete'}`);
   return report;
 }
 
 if (require.main === module) main().catch(error => { console.error(error.message); process.exitCode = 1; });
-module.exports = { createAgeProofController, rustCheck, sourceBinding, successful };
+module.exports = { createAgeProofController, rustCheck, sourceBinding, successful, ageProofExecutionMode, ageProofOperationsComplete, prepareAgeProofLiveInputs, finalizeAgeProofRun, ageProofUsesLiveClient };

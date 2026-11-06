@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import re
 
-from scoped_native_profiles import OFFICIAL_ALL_SERVICES
+from scoped_native_profiles import OFFICIAL_ALL_SERVICES, D12_PASSPORT_CURRENT
 from scoped_native_runtime import ROLE_BINARIES, read_ref, require, sha
 
 PROFILE = "d12-passport-canonical-subset"
@@ -59,6 +59,25 @@ def _select_canonical_binaries(prepared_ref, receipt_ref, journal, build_profile
             "EXACT_CANONICAL_BUILD_PREPARATION_REQUIRED")
     prepared = json.loads(read_ref(prepared_ref).read_bytes())
     receipt = json.loads(read_ref(receipt_ref, 256 * 1024).read_bytes())
+    spec = _actual_build_journal(prepared, receipt, receipt_ref, journal)
+    _terminal_build(receipt, prepared, prepared_ref["sha256"], build_profile, exact_prepared)
+    # Preserve every original evidence ref. Do not manufacture a smaller build
+    # receipt or claim this subset was independently compiled.
+    for key in ("originalCargoLock", "localizedCargoLock", "localizedLockProof",
+                "lockedLocalizedMetadata", "coreFeatureResolution",
+                "productionFeatureTree", "canonicalCompilerLog", "coreCompilerArtifacts"):
+        read_ref(receipt[key], 64 * 1024 * 1024)
+    binaries = {role: receipt["binaries"][binary] for role, binary in roles.items()}
+    _selected_elfs(binaries)
+    return {"schema": "marty.passport-canonical-subset/v1", "profile": rollout_profile,
+            "state": "SELECTED_NOT_DEPLOYED", "sourceRevision": build_profile.ui_revision, "coreRevision": build_profile.core_revision,
+            "roleBinaries": dict(roles), "binaries": binaries,
+            "canonicalBuildReceipt": receipt_ref, "preparedSource": prepared_ref,
+            "journal": {"runId": prepared["runId"], "specification": spec},
+            "scope": "FUNCTIONAL_ONLY", "releaseQualified": False, "recordingQualified": False}
+
+
+def _actual_build_journal(prepared, receipt, receipt_ref, journal):
     spec = prepared["journalBackend"]
     require(type(journal).__name__ == "LinuxBuildJournal"
             and journal.run_id == prepared["runId"] and journal.specification == spec,
@@ -74,30 +93,66 @@ def _select_canonical_binaries(prepared_ref, receipt_ref, journal, build_profile
             and actual.get("sha256") == receipt_ref["sha256"]
             and actual.get("value") == receipt, "ACTUAL_CANONICAL_JOURNAL_RECEIPT_REQUIRED")
     require(sha(worker) == spec["workerSha256"], "ORIGINAL_JOURNAL_SOURCE_CHANGED")
-    _terminal_build(receipt, prepared, prepared_ref["sha256"], build_profile, exact_prepared)
-    # Preserve every original evidence ref. Do not manufacture a smaller build
-    # receipt or claim this subset was independently compiled.
-    for key in ("originalCargoLock", "localizedCargoLock", "localizedLockProof",
-                "lockedLocalizedMetadata", "coreFeatureResolution",
-                "productionFeatureTree", "canonicalCompilerLog", "coreCompilerArtifacts"):
-        read_ref(receipt[key], 64 * 1024 * 1024)
-    binaries = {role: receipt["binaries"][binary] for role, binary in roles.items()}
+    return spec
+
+
+def _selected_elfs(binaries):
     for bound in binaries.values():
         with read_ref(bound, 512 * 1024 * 1024).open("rb") as stream:
             header = stream.read(20)
         require(header[:6] == b"\x7fELF\x02\x01" and header[18:20] == b"\x3e\x00",
                 "SELECTED_AMD64_ELF_REQUIRED")
-    return {"schema": "marty.passport-canonical-subset/v1", "profile": rollout_profile,
-            "state": "SELECTED_NOT_DEPLOYED", "sourceRevision": build_profile.ui_revision, "coreRevision": build_profile.core_revision,
-            "roleBinaries": dict(roles), "binaries": binaries,
-            "canonicalBuildReceipt": receipt_ref, "preparedSource": prepared_ref,
-            "journal": {"runId": prepared["runId"], "specification": spec},
-            "scope": "FUNCTIONAL_ONLY", "releaseQualified": False, "recordingQualified": False}
 
 
 def select_canonical_binaries(prepared_ref, receipt_ref, journal):
     return _select_canonical_binaries(prepared_ref, receipt_ref, journal, OFFICIAL_ALL_SERVICES,
                                       ROLE_BINARIES, PROFILE, PREPARED_SHA256)
+
+
+CURRENT_PROFILE = "d12-passport-current-functional"
+
+
+def terminal_current_build(receipt, prepared, prepared_sha):
+    """The selected three-role build cannot masquerade as an old all-29 receipt."""
+    roles = dict(D12_PASSPORT_CURRENT.roles)
+    require(prepared.get("buildProfile") == D12_PASSPORT_CURRENT.name
+            and prepared.get("uiRevision") == D12_PASSPORT_CURRENT.ui_revision
+            and prepared.get("coreRevision") == D12_PASSPORT_CURRENT.core_revision
+            and prepared.get("roleBinaries") == roles,
+            "EXACT_CURRENT_D12_SOURCE_REQUIRED")
+    require(receipt.get("state") == "BUILD_SUCCEEDED" and type(receipt.get("exitCode")) is int
+            and receipt["exitCode"] == 0
+            and receipt.get("oomKilled") is False
+            and receipt.get("uiRevision") == D12_PASSPORT_CURRENT.ui_revision
+            and receipt.get("coreRevision") == D12_PASSPORT_CURRENT.core_revision
+            and receipt.get("roleBinaries") == roles
+            and receipt.get("buildProfile") == D12_PASSPORT_CURRENT.name
+            and receipt.get("preparationSha256") == prepared_sha
+            and receipt.get("runId") == prepared["runId"]
+            and set(receipt.get("binaries", {})) == set(roles.values())
+            and receipt.get("canonicalAllServices") is not True
+            and receipt.get("releaseQualified") is False
+            and receipt.get("recordingQualified") is False
+            and receipt.get("imagesBuilt") is not True,
+            "EXACT_CURRENT_D12_THREE_ROLE_BUILD_REQUIRED")
+    return roles
+
+
+def select_current_binaries(prepared_ref, receipt_ref, journal):
+    """Bind a newly built three-role source; never reinterpret the old all-29 receipt."""
+    prepared = json.loads(read_ref(prepared_ref).read_bytes())
+    receipt = json.loads(read_ref(receipt_ref, 256 * 1024).read_bytes())
+    roles = terminal_current_build(receipt, prepared, prepared_ref["sha256"])
+    spec = _actual_build_journal(prepared, receipt, receipt_ref, journal)
+    read_ref(receipt["coreCompilerArtifacts"], 64 * 1024 * 1024)
+    binaries = {role: receipt["binaries"][binary] for role, binary in roles.items()}
+    _selected_elfs(binaries)
+    return {"schema": "marty.passport-current-three-role/v1", "profile": CURRENT_PROFILE,
+            "state": "SELECTED_NOT_DEPLOYED", "sourceRevision": D12_PASSPORT_CURRENT.ui_revision,
+            "coreRevision": D12_PASSPORT_CURRENT.core_revision, "roleBinaries": roles,
+            "binaries": binaries, "canonicalBuildReceipt": receipt_ref, "preparedSource": prepared_ref,
+            "journal": {"runId": prepared["runId"], "specification": spec},
+            "scope": "FUNCTIONAL_ONLY", "releaseQualified": False, "recordingQualified": False}
 
 
 def _validate_compatibility(selection, plan_ref, result_ref, roles, required_gid=None):

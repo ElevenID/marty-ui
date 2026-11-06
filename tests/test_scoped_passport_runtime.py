@@ -16,6 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 build = importlib.import_module("scoped_native_build")
 shared = importlib.import_module("scoped_native_runtime")
 overlay = importlib.import_module("scoped_beta_binary_overlay")
+profiles = importlib.import_module("scoped_native_profiles")
 
 
 def selected():
@@ -60,6 +61,52 @@ def runtime_rows():
 
 
 class ScopeTests(unittest.TestCase):
+    def test_current_d12_profile_is_closed_and_old_lineage_stays_distinct(self):
+        current = profiles.D12_PASSPORT_CURRENT
+        self.assertEqual(current.ui_revision, "6117cea9290f57406cf109eae56f64f7986e3783")
+        self.assertEqual(current.core_revision, "ffa24febcd0fb3fced15da7f28190af6d61ae0f9")
+        self.assertEqual(dict(current.roles), shared.ROLE_BINARIES)
+        self.assertNotEqual(current.ui_revision, profiles.OFFICIAL_ALL_SERVICES.ui_revision)
+        scope = build.build_scope(current.name)
+        self.assertEqual(scope["coreRevision"], current.core_revision)
+        self.assertEqual(scope["roles"], dict(current.roles))
+        self.assertEqual(scope["volumes"][1], "marty-d12-current-native-target")
+        args = build.cargo_arguments(current.name)
+        self.assertEqual({args[index + 1] for index, item in enumerate(args[:-1]) if item == "--bin"},
+                         set(shared.ROLE_BINARIES.values()))
+        self.assertEqual(len([item for item in args if item == "--bin"]), 3)
+        self.assertEqual(overlay.overlay_roles("d12-passport-current-functional"), shared.ROLE_BINARIES)
+        with self.assertRaisesRegex(ValueError, "EXACT_D12_THREE_ROLE_SCOPE_REQUIRED"):
+            overlay.overlay_roles("d12-passport-current-functional", ["flow", "gateway"])
+        plan = {"rolloutProfile": "d12-passport-current-functional", "buildProfile": None,
+                "uiRevision": current.ui_revision, "coreRevision": current.core_revision,
+                "roleBinaries": dict(current.roles), "releaseQualified": False,
+                "recordingQualified": False}
+        shared.selected_sources(plan, plan["rolloutProfile"])
+        for key, value in (("uiRevision", profiles.OFFICIAL_ALL_SERVICES.ui_revision),
+                           ("coreRevision", profiles.OFFICIAL_ALL_SERVICES.core_revision)):
+            changed = dict(plan, **{key: value})
+            with self.assertRaises(ValueError):
+                shared.selected_sources(changed, changed["rolloutProfile"])
+
+    def test_current_d12_runtime_requires_exact_selected_source_and_core(self):
+        before, after, binaries = runtime_rows()
+        current = profiles.D12_PASSPORT_CURRENT
+        for row in after["roles"]:
+            if row["role"] in binaries:
+                row["source"], row["coreSource"] = current.ui_revision, current.core_revision
+                row.update(requiredContainerId=row["containerId"], requiredStartedAt=row["startedAt"],
+                           requiredHostPid=row["hostPid"], requiredEffectiveUid=row["effectiveUid"],
+                           requiredBinaryMounts=row["binaryMounts"])
+        overlay.validate_runtime_after(before, after, binaries, [], "d12-passport-current-functional")
+        for field, value in (("source", profiles.OFFICIAL_ALL_SERVICES.ui_revision),
+                             ("coreSource", shared.CORE_REVISION), ("kind", "native"),
+                             ("requiredContainerId", "a" * 64)):
+            changed = copy.deepcopy(after)
+            next(row for row in changed["roles"] if row["role"] == "flow")[field] = value
+            with self.assertRaises(ValueError):
+                overlay.validate_runtime_after(before, changed, binaries, [], "d12-passport-current-functional")
+
     def test_exact_source_and_three_roles_never_old_core_or_promotion(self):
         shared.selected_sources(selected())
         for edit in [lambda p: p.update(coreRevision="44040270000f93b7e7499cbec31b3bb3dd7e3df1"),

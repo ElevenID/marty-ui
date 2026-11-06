@@ -133,6 +133,12 @@ def selected_sources(plan, profile=None):
         require(plan.get("rolloutProfile") == PROFILE and plan.get("buildProfile") is None,
                 "D12_ROLLOUT_IS_NOT_A_BUILD_PROFILE")
         ui_revision, core_revision, roles = SOURCE, CORE, ROLE_BINARIES
+    elif profile == "d12-passport-current-functional":
+        from scoped_native_profiles import D12_PASSPORT_CURRENT
+        require(plan.get("rolloutProfile") == profile and plan.get("buildProfile") is None,
+                "D12_ROLLOUT_IS_NOT_BUILD_PROFILE")
+        ui_revision, core_revision, roles = (D12_PASSPORT_CURRENT.ui_revision,
+            D12_PASSPORT_CURRENT.core_revision, dict(D12_PASSPORT_CURRENT.roles))
     else:
         import scoped_native_profiles
         selected = scoped_native_profiles.reviewed_profile(profile)

@@ -85,6 +85,17 @@ def native_projection(config, core):
             'dockerTransport':fixture['dockerTransport'],'dockerCanary':fixture['dockerCanary'],'engineId':config['engineId']}
 
 
+def safe_operation_summary(value):
+    if not isinstance(value, dict):
+        return None
+    def bounded(number, minimum, maximum):
+        return number if type(number) is int and minimum <= number <= maximum else None
+    return {'status': bounded(value.get('status'), -2147483648, 4294967295),
+            'timedOut': value.get('timedOut') is True, 'signalled': value.get('signalled') is True,
+            'stdoutBytes': bounded(value.get('stdoutBytes'), 0, 64*1024*1024),
+            'stderrBytes': bounded(value.get('stderrBytes'), 0, 64*1024*1024)}
+
+
 def runtime_authority(config, core, *, live):
     scope = config['protectedCohort']
     require(scope['schema'] == SCHEMA and scope['profile'] == config['runtimeAuthority']['profile'], 'SCOPE_PROFILE_CHANGED')
@@ -103,6 +114,7 @@ def runtime_authority(config, core, *, live):
     if completed.returncode != 0:
         code='SCOPE_RUNTIME_AUTHORITY_FAILED'
         bridge_class='Error'
+        operation_summary=None
         try:
             failure=json.loads(completed.stdout)
             if (failure.get('schema')=='marty.northstar-runtime-scope-failure/v1'
@@ -110,11 +122,15 @@ def runtime_authority(config, core, *, live):
                 code=failure['code']
                 if failure.get('errorClass') in ('Error','AssertionError','TypeError','RangeError','SyntaxError'):
                     bridge_class=failure['errorClass']
+                if code=='NATIVE_DOCKER_SYNC_FAILED':
+                    operation_summary=safe_operation_summary(failure.get('operationSummary'))
         except (ValueError,TypeError,AttributeError):
             pass
         error=ValueError(code)
         error.scopeFailure={'errorClass':bridge_class,'code':code,'exitCode':completed.returncode,
                             'stdoutBytes':len(completed.stdout)}
+        if code=='NATIVE_DOCKER_SYNC_FAILED':
+            error.scopeFailure['operationSummary']=operation_summary
         raise error
     result = json.loads(completed.stdout)
     require(set(result) == {'schema','profileSha256','rows','off'} and result['schema'] == 'marty.northstar-resource-scope/v1'
