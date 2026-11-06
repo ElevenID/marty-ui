@@ -284,8 +284,13 @@ class PipelineTests(unittest.TestCase):
         for index, number in enumerate((None, False, 0, -1, "70")):
             with self.subTest(number=number):
                 driver = self.driver("stable-publish", name=f"missing-publisher-{index}.json")
-                with self.assertRaises(ValueError):
+                with self.assertRaises(pipeline.PipelineError) as caught:
                     driver.execute(ci_run_id=50, stable_run_id=60, publisher_run_id=number)
+                diagnostic = pipeline.stop_diagnostic(caught.exception, driver.phase, driver.operation,
+                                                       child_run_id=driver.child_run_id)
+                self.assertEqual(diagnostic["code"], "invalid_child_run_id")
+                self.assertEqual(diagnostic["operation"], "record_stable_publisher")
+                self.assertNotIn("child_run_id", diagnostic)
         self.assertEqual(self.github.posts, [])
         self.assertFalse(any("/actions/runs/70" in path or "/workflows/" in path for path in self.github.reads))
 

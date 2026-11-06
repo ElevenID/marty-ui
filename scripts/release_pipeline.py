@@ -368,12 +368,13 @@ class Pipeline:
     def stable_publisher(self, candidate: int, publisher: int) -> int:
         """Revalidate the publisher ID acknowledged by the stable job."""
         self.wait(candidate, DISPATCH["stable-release"][0], DISPATCH["stable-release"][2])
+        self.child_run_id = None
+        self.operation = "record_stable_publisher"
         require(transport.positive(publisher), "invalid_child_run_id")
         step = {"name": "stable-publisher", "workflow": PUBLISHER, "event": "workflow_dispatch",
                 "candidate_run_id": candidate, "run_id": publisher, "run_attempt": 1, "outcome": "waiting"}
         self.record["steps"].append(step)
         self.child_run_id = publisher
-        self.operation = "record_stable_publisher"
         self.persist()
         self.wait(publisher, PUBLISHER, {"intake", "publish"}, event="workflow_dispatch",
                   title=f"Publish stable candidate {candidate}")
