@@ -220,3 +220,79 @@ test('D03 generic rejection diagnostics cannot become the issuer-trust assertion
   }), /BLOCKED: generic wallet rejection/);
   assert.deepEqual(controller.laneResults, []);
 });
+
+const {ageProofExecutionMode,ageProofOperationsComplete}=require('./audit-beta-private-age-proof');
+test('D03 explicitly selects functional/no-media or full recording without treating missing mode as opt-out',()=>{
+ assert.deepEqual(ageProofExecutionMode({RECORD_VIDEO:'0'}),{functionalRerun:true,recordVideo:false});
+ assert.deepEqual(ageProofExecutionMode({RECORD_VIDEO:'1'}),{functionalRerun:false,recordVideo:true});
+ for(const value of [undefined,'false','true',''])assert.throws(()=>ageProofExecutionMode({RECORD_VIDEO:value}),/explicit RECORD_VIDEO/);
+});
+test('D03 functional readiness requires original assertions, two distinct stock lanes, and exact cleanup',()=>{
+ const valid=()=>({errors:[],cleanup:{ok:true},androidGate:{result:'PASS'},lanes:[{laneId:'eudi-age-proof-interoperability'},{laneId:'spruceid-age-proof-interoperability'}],
+ behaviorAssertions:Object.fromEntries(['trusted_mdl_issuance','request_only_age_over_21','verify_issuer_trust_and_minimum_response','untrusted_issuer_denied','independent_wallets_pass'].map(k=>[k,true]))});
+ assert.equal(ageProofOperationsComplete(valid()),true);
+ for(const change of [r=>r.cleanup.ok=false,r=>r.lanes.pop(),r=>r.lanes[1].laneId=r.lanes[0].laneId,
+  r=>r.androidGate.result='FAIL',r=>r.errors.push('failure'),...Object.keys(valid().behaviorAssertions).map(k=>r=>r.behaviorAssertions[k]=false)]){
+  const r=valid();change(r);assert.equal(ageProofOperationsComplete(r),false);
+ }
+});
+
+const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const {prepareAgeProofLiveInputs,finalizeAgeProofFunctional}=require('./audit-beta-private-age-proof');
+function completedFunctionalReport(){return {errors:[],cleanup:{ok:true},androidGate:{result:'PASS'},
+ lanes:[{laneId:'eudi-age-proof-interoperability'},{laneId:'spruceid-age-proof-interoperability'}],
+ behaviorAssertions:Object.fromEntries(['trusted_mdl_issuance','request_only_age_over_21','verify_issuer_trust_and_minimum_response','untrusted_issuer_denied','independent_wallets_pass'].map(k=>[k,true]))};}
+const annotate=(_report,_client,{ready,cleanupComplete})=>ready&&cleanupComplete;
+test('D03 binds its actual page then uses the shared exact-byte input acknowledgement and seal',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'d03-inputs-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const page={},events=[],inputs={schemaVersion:1,scenario:'private-online-age-proof',expected:{run_id:'actual-current-test-run'},syntheticClaims:{age_over_21:true}};
+ let releaseRead;const ack=new Promise(resolve=>releaseRead=resolve);let returned=false;
+ const client={bindPage(actual){assert.equal(actual,page);events.push('bind');},async readFixture(file){
+  events.push('read');assert.equal(file,'d03-fixture-input.json');await ack;return fs.readFileSync(path.join(dir,file));
+ },async seal(){events.push('seal');}};
+ const pending=prepareAgeProofLiveInputs(dir,client,page,inputs).then(actual=>{returned=true;assert.deepEqual(actual,inputs);});
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(returned,false);assert.deepEqual(events,['bind','read']);
+ releaseRead();await pending;assert.deepEqual(events,['bind','read','seal']);
+ // The shared writer is exclusive; a second invocation cannot replace consumed inputs.
+ await assert.rejects(prepareAgeProofLiveInputs(dir,client,page,inputs),/EEXIST/);
+});
+test('D03 refuses altered acknowledged input bytes and a rejected seal before any feature',async t=>{
+ for(const fault of ['bytes','seal']){
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'d03-input-refuse-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  let sealed=false;
+  const client={bindPage(){},async readFixture(file){return fault==='bytes'?Buffer.from('{}'):fs.readFileSync(path.join(dir,file));},
+   async seal(){sealed=true;throw Error('parent rejected SEAL');}};
+  await assert.rejects(prepareAgeProofLiveInputs(dir,client,{}, {run_id:'fresh-test'}),fault==='bytes'?/fixture differs/:/parent rejected SEAL/);
+  assert.equal(sealed,fault==='seal');
+ }
+});
+test('D03 never publishes functional readiness until the same client COMPLETE is acknowledged',async()=>{
+ const report=completedFunctionalReport(),events=[];let releaseComplete;
+ const ack=new Promise(resolve=>releaseComplete=resolve);
+ const client={async complete(){events.push('complete');assert.equal(report.cleanup.ok,true);await ack;},close(){events.push('close');}};
+ const pending=finalizeAgeProofFunctional(report,client,annotate);
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(events,['complete']);assert.equal(report.functionalReady,false);assert.equal(report.operations_verified,false);
+ assert.equal(report.liveEvidenceCompletion.acknowledged,false);releaseComplete();assert.equal(await pending,true);
+ assert.deepEqual(events,['complete','close']);assert.equal(report.liveEvidenceCompletion.acknowledged,true);
+ assert.equal(report.functionalReady,true);assert.equal(report.operations_verified,true);assert.equal(report.releaseReady,false);
+});
+test('D03 refuses COMPLETE for failed cleanup, missing stock lane, original assertion failure or earlier error',async()=>{
+ for(const fail of [r=>r.cleanup.ok=false,r=>r.lanes.pop(),r=>r.behaviorAssertions.untrusted_issuer_denied=false,r=>r.errors.push('original feature error')]){
+  const report=completedFunctionalReport();fail(report);let completed=0,closed=0;
+  assert.equal(await finalizeAgeProofFunctional(report,{complete(){completed++;},close(){closed++;}},annotate),false);
+  assert.equal(completed,0);assert.equal(closed,1);assert.equal(report.functionalReady,false);assert.equal(report.operations_verified,false);
+ }
+});
+test('D03 completion, annotation and close failures keep original errors and cannot report functional success',async()=>{
+ for(const fault of ['complete','annotation','close']){
+  const report=completedFunctionalReport();let closed=0;
+  const client={async complete(){if(fault==='complete')throw Error('parent COMPLETE rejected');},close(){closed++;if(fault==='close')throw Error('evidence close rejected');}};
+  const apply=(...args)=>{if(fault==='annotation')throw Error('runtime acknowledgement rejected');return annotate(...args);};
+  assert.equal(await finalizeAgeProofFunctional(report,client,apply),false);assert.equal(closed,1);
+  assert.equal(report.functionalReady,false);assert.equal(report.operations_verified,false);assert.equal(report.releaseReady,false);assert.equal(report.errors.length,1);
+ }
+ const original=completedFunctionalReport();original.errors.push('original feature error');
+ await finalizeAgeProofFunctional(original,{complete(){throw Error('must not complete');},close(){throw Error('close also failed');}},annotate);
+ assert.deepEqual(original.errors,['original feature error','close also failed']);
+});
