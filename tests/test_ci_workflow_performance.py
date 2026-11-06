@@ -2140,7 +2140,7 @@ exec "$TEST_REAL_TIMEOUT" --kill-after=1s 5s "$@"
             state = Path(f"/proc/{pid}/stat")
             try:
                 observed = state.read_text()
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 continue
             assert observed.rsplit(") ", 1)[1].startswith("Z ")
 
