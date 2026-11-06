@@ -22,6 +22,9 @@ was approved before retirement. Configure an OB3 template and obtain a fresh
 readiness result before issuing a replacement badge. Do not rename the type or
 context of an already signed OB2 credential: reissuance requires the issuer to
 construct and sign a new OB3 credential from authoritative achievement evidence.
+The shared native issuance boundary also rejects retired transaction types and
+credential-document markers before allocating status or invoking any credential
+builder, including generic SD-JWT and DIDComm delivery paths.
 
 The `governed_ob2.json` test fixture is retained only as an archived negative
 vector. It proves that previously accepted signed badges and hosted variants

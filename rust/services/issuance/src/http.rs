@@ -3745,6 +3745,10 @@ impl IntoResponse for CredentialIssuanceHttpError {
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({"detail": format!("Unsupported credential signing format: {value}")}),
             ),
+            Error::RetiredOpenBadge => (
+                StatusCode::BAD_REQUEST,
+                json!({"detail": Error::RetiredOpenBadge.to_string()}),
+            ),
             Error::IssuerUnavailable(detail)
             | Error::SigningUnavailable(detail)
             | Error::LifecycleUnavailable(detail) => {

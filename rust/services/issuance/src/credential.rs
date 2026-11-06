@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, sync::Arc};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Duration, Utc};
+use marty_verification::open_badges::is_retired_ob2;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -901,6 +902,14 @@ pub(crate) async fn materialize_credential(
     issuer: IssuerContext,
     proof: VerifiedCredentialProof,
 ) -> Result<IssuedCredential, CredentialIssuanceError> {
+    if is_retired_ob2(&serde_json::json!({"type": transaction.credential_type}))
+        || transaction
+            .claims
+            .get("_credential_document")
+            .is_some_and(is_retired_ob2)
+    {
+        return Err(CredentialIssuanceError::RetiredOpenBadge);
+    }
     let status = context
         .lifecycle
         .allocate_status(transaction, credential_id, &policy.remote_format)
@@ -1389,6 +1398,8 @@ pub enum CredentialIssuanceError {
     MdocHolderKeyRequired,
     #[error("unsupported credential format: {0}")]
     UnsupportedFormat(String),
+    #[error("Open Badges 2.0 is retired; request a newly issued Open Badges 3.0 credential")]
+    RetiredOpenBadge,
     #[error("credential issuance is in progress")]
     IssuanceInProgress,
     #[error("credential builder changed the reserved credential ID")]

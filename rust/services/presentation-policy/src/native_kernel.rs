@@ -10,15 +10,13 @@ use marty_verification::open_badges::is_retired_ob2;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
+use crate::verification::OB2_RETIRED;
 use crate::{
     CredentialStatusEvidence, CredentialVerificationContext, CredentialVerificationEvidence,
     CredentialVerificationKernel, PresentationVerificationError,
 };
 
 type JsonObject = Map<String, Value>;
-
-const OB2_RETIRED: &str =
-    "Open Badges 2.0 is retired; request a newly issued Open Badges 3.0 credential";
 
 struct DataIntegrityDocument<'a> {
     is_presentation: bool,

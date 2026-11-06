@@ -690,6 +690,77 @@ async fn native_credential_signing_matches_every_python_format_contract() {
 }
 
 #[tokio::test]
+async fn retired_ob2_profiles_never_allocate_status_or_reach_any_credential_builder() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    for case in contract["formats"].as_array().unwrap() {
+        let supported_document = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", case["credential_type"]]
+        });
+        let mut variants = Vec::new();
+        for legacy in ["Assertion", "OpenBadgeV2", "open_badge_v2", "Open Badge V2"] {
+            let mut legacy_case = case.clone();
+            legacy_case["credential_type"] = json!(legacy);
+            let selector = case["credential_configuration_id"].as_str().unwrap();
+            let suffix = selector.find('#').map_or("", |index| &selector[index..]);
+            legacy_case["credential_configuration_id"] = json!(format!("{legacy}{suffix}"));
+            // Keep the document supported so the transaction-type guard must fire.
+            variants.push((legacy_case, supported_document.clone()));
+        }
+        for (field, value) in [
+            (
+                "@context",
+                json!([
+                    "https://www.w3.org/ns/credentials/v2",
+                    "https://purl.imsglobal.org/spec/ob/v3p0/context.json",
+                    "https://w3id.org/openbadges/v2"
+                ]),
+            ),
+            ("context", json!("https://w3id.org/openbadges/v2")),
+            ("type", json!(["VerifiableCredential", "Assertion"])),
+        ] {
+            let mut document = supported_document.clone();
+            document[field] = value;
+            variants.push((case.clone(), document));
+        }
+        for (case, document) in variants {
+            let harness = SigningHarness::new(&case, &contract);
+            harness
+                .state
+                .lock()
+                .unwrap()
+                .transaction
+                .claims
+                .insert("_credential_document".to_owned(), document);
+            let response = app(harness.clone(), &contract)
+                .oneshot(request(&case, &contract))
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 400, "{case}");
+            assert_eq!(
+                body(response).await,
+                json!({"detail": CredentialIssuanceError::RetiredOpenBadge.to_string()})
+            );
+            let state = harness.state.lock().unwrap();
+            assert_eq!(state.builder_count, 0);
+            assert!(state.build_request.is_none());
+            assert!(state.existing.is_none());
+            assert!(!state.events.iter().any(|event| matches!(
+                event.as_str(),
+                "allocate_status"
+                    | "credential_builder"
+                    | "issuer_did_sign"
+                    | "finalize_credential_issuance"
+                    | "post_issuance_side_effects"
+            )));
+        }
+    }
+}
+
+#[tokio::test]
 async fn credential_endpoint_fails_closed_on_ambiguous_access_token_grant() {
     let contract: Value = serde_json::from_str(include_str!(
         "../../../../contracts/issuance-credential-signing.json"

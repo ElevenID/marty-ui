@@ -40,8 +40,8 @@ codegen-units = 1
 # workspace's source selections so this standalone governed probe compiles the
 # exact candidate dependency graph.
 [patch.crates-io]
-bls12_381_plus = { git = "https://github.com/ElevenID/marty-core", rev = "b04128ab576f3171de529153538eb963f6f08dcb" }
-elliptic-curve = { git = "https://github.com/ElevenID/marty-core", rev = "b04128ab576f3171de529153538eb963f6f08dcb" }
+bls12_381_plus = { git = "https://github.com/ElevenID/marty-core", rev = "f116ceb9b62d68a5f87f645faa0560ec4cbedd0c" }
+elliptic-curve = { git = "https://github.com/ElevenID/marty-core", rev = "f116ceb9b62d68a5f87f645faa0560ec4cbedd0c" }
 # Shared upstream arithmetic with verification-only module gates; see its patch notes.
 ecdsa = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
 # KMS-only SSI fork; keep all selected SSI and DID crates on one revision.
