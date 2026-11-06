@@ -366,7 +366,6 @@ async fn ob3_wrappers_apply_registry_controls_to_the_credential_the_native_verif
         ),
         ("root-array", json!({"verifiableCredential":[credential]})),
         ("credential", json!({"credential":credential})),
-        ("assertion-alias", json!({"assertion":credential})),
         ("direct", credential),
     ] {
         for case in [
@@ -483,4 +482,94 @@ async fn ob3_wrappers_apply_registry_controls_to_the_credential_the_native_verif
             }
         }
     }
+}
+
+#[tokio::test]
+async fn retired_assertion_wrapper_is_rejected_before_scoped_registry_lookup() {
+    use marty_issuer_key_resolution::governed::{
+        IssuerResolutionRequest, OrganizationIssuerResolver, RegistryIssuerResolution,
+    };
+    use marty_presentation_policy::RustCredentialKernel;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct NoRegistry(Arc<AtomicUsize>);
+    #[async_trait]
+    impl OrganizationIssuerResolver for NoRegistry {
+        async fn resolve(
+            &self,
+            _: &IssuerResolutionRequest,
+        ) -> Result<RegistryIssuerResolution, IssuerKeyResolutionError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            panic!("a retired assertion wrapper must not resolve registry keys")
+        }
+    }
+
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/governed_ob3.json")).unwrap();
+    let issuer = fixture["credential"]["issuer"].as_str().unwrap();
+    let method = fixture["governed_method"]["id"].as_str().unwrap();
+    let mut context = CredentialVerificationContext {
+        resolved_issuer_public_jwk: None,
+        format: DetectedCredentialFormat::OpenbadgeV3,
+        token: fixture["credential"].clone(),
+        nonce: None,
+        audience: None,
+        presentation_only: false,
+        verifier_context: Map::new(),
+        trust_profile: Some(ResolvedTrustProfile {
+            id: Uuid::new_v4(),
+            organization_id: Uuid::new_v4(),
+            document: json!({
+                "status": "active",
+                "resolved_verification_methods": [fixture["governed_method"]]
+            }),
+        }),
+    };
+    assert!(
+        RustCredentialKernel
+            .verify(&context)
+            .await
+            .unwrap()
+            .verified,
+        "the underlying signed OB3 credential must be valid without the retired wrapper"
+    );
+
+    context.trust_profile.as_mut().unwrap().document["trust_sources"] = json!([{
+        "issuer_did": issuer,
+        "organization_id": "org-1",
+        "verification_method_ids": [method],
+        "did_resolution": {"allow_public_fallback": true, "cache_ttl_seconds": 0}
+    }]);
+    context.token = json!({"assertion": fixture["credential"]});
+    let calls = Arc::new(AtomicUsize::new(0));
+    let kernel = ResolvingCredentialKernel::new(Arc::new(NoPublic))
+        .with_registry(Arc::new(NoRegistry(calls.clone())));
+    for format in [
+        DetectedCredentialFormat::Unknown,
+        DetectedCredentialFormat::OpenbadgeV3,
+    ] {
+        context.format = format;
+        for (name, evidence) in [
+            (
+                "native",
+                RustCredentialKernel.verify(&context).await.unwrap(),
+            ),
+            ("scoped", kernel.verify(&context).await.unwrap()),
+        ] {
+            assert!(!evidence.verified, "{name}/{format:?}");
+            assert!(evidence.claims.is_empty(), "{name}/{format:?}");
+            assert!(evidence.issuer_id.is_none(), "{name}/{format:?}");
+            assert!(
+                evidence.authenticated_outer_jti.is_none(),
+                "{name}/{format:?}"
+            );
+            assert_eq!(
+                evidence.failure_reason.as_deref(),
+                Some(
+                    "Open Badges 2.0 is retired; request a newly issued Open Badges 3.0 credential"
+                ),
+                "{name}/{format:?}"
+            );
+        }
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "registry lookup");
 }
