@@ -340,6 +340,41 @@ def test_ip_ingress_omits_disallowed_hosts_and_preserves_https_port(tmp_path: Pa
     assert config["MARTY_ISSUER_DID"] == "did:web:192.0.2.20%3A8443:orgs:marty"
 
 
+@pytest.mark.parametrize("public_origin", [None, "https://192.0.2.20:8443"])
+def test_canvas_worker_inherits_complete_public_urls(tmp_path: Path, public_origin: str | None) -> None:
+    values = installation_values()
+    if public_origin:
+        values.update(publicHost="192.0.2.20", publicOrigin=public_origin)
+    origin = public_origin or "https://marty.example.test"
+    rendered = render(tmp_path, values)
+    config = resources(rendered, "ConfigMap")["marty-config"]["data"]
+    expected = {
+        "ISSUER_BASE_URL": origin,
+        "CANVAS_OAUTH_COMPLETION_REDIRECT_URL": origin + "/console/org/deploy/canvas",
+    }
+    assert {name: config[name] for name in expected} == expected
+    worker = resources(rendered, "Deployment")["canvas-sync-worker"]["spec"]["template"]["spec"]["containers"][0]
+    assert {"configMapRef": {"name": "marty-config"}} in worker["envFrom"]
+    assert set(expected).isdisjoint(entry["name"] for entry in worker["env"])
+
+
+@pytest.mark.parametrize("overrides", [
+    {"ISSUER_BASE_URL": "https://issuer.example.test:9443"},
+    {"CANVAS_OAUTH_COMPLETION_REDIRECT_URL": "https://console.example.test/canvas-complete"},
+])
+def test_canvas_public_url_overrides_preserve_other_generated_defaults(tmp_path: Path, overrides: dict) -> None:
+    values = installation_values()
+    origin = "https://192.0.2.20:8443"
+    values.update(publicHost="192.0.2.20", publicOrigin=origin, config=overrides)
+    config = resources(render(tmp_path, values), "ConfigMap")["marty-config"]["data"]
+    expected = {
+        "ISSUER_BASE_URL": origin,
+        "CANVAS_OAUTH_COMPLETION_REDIRECT_URL": origin + "/console/org/deploy/canvas",
+        **overrides,
+    }
+    assert {name: config[name] for name in expected} == expected
+
+
 @pytest.mark.parametrize("role", ["services", "ui", "migrations", "keycloak", "postgres", "redis"])
 def test_mutable_image_tags_are_rejected(tmp_path: Path, role: str) -> None:
     values = installation_values()

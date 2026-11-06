@@ -149,6 +149,11 @@ Ingress controller's default certificate separately (Traefik uses a
 `TLSStore`); a portable Ingress cannot select that default. Normal DNS names
 produce a host-specific rule and TLS host.
 
+The generated ConfigMap also sets the Canvas worker's `ISSUER_BASE_URL` to the
+installation origin and `CANVAS_OAUTH_COMPLETION_REDIRECT_URL` to that origin
+plus `/console/org/deploy/canvas`, preserving a configured HTTPS port. Explicit
+values for these keys in `config` take precedence over the generated defaults.
+
 ## Direct issuance and persistence acceptance
 
 Once the required workloads and setup Jobs are ready, run

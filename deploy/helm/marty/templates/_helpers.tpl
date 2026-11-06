@@ -37,6 +37,8 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
 {{- $_ := set $cfg "PUBLIC_DOMAIN" (trimSuffix "/" (trimPrefix "https://" $origin)) -}}
 {{- $_ := set $cfg "PUBLIC_API_URL" $origin -}}
 {{- $_ := set $cfg "UI_BASE_URL" $origin -}}
+{{- $_ := set $cfg "ISSUER_BASE_URL" $origin -}}
+{{- $_ := set $cfg "CANVAS_OAUTH_COMPLETION_REDIRECT_URL" (printf "%s/console/org/deploy/canvas" $origin) -}}
 {{- $_ := set $cfg "KC_HOSTNAME" $origin -}}
 {{- $_ := set $cfg "CORS_ORIGINS" $origin -}}
 {{- $_ := set $cfg "MARTY_ISSUER_BASE_URL" $origin -}}
