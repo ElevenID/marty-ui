@@ -220,7 +220,7 @@ async function main(argv) {
       stage = 'initiate-credential';
       const requestId = crypto.randomUUID();
       const request = { organization_id: cfg['organization-id'], credential_template_id: template.id,
-        issuer_did: cfg['issuer-did'], offer_ttl_seconds: 900, claims: {
+        issuer_did: cfg['issuer-did'], claims: {
           member_id: memberId, email: cfg.email, given_name: 'Milestone', family_name: 'Operator',
           organization_id: cfg['organization-id'], organization_name: 'Marty', role: 'applicant',
           achievement_name: 'Kubernetes milestone acceptance',
@@ -228,7 +228,7 @@ async function main(argv) {
           issued_at: new Date().toISOString(),
         } };
       privateWrite('issuance-requested.json', { requestId, request });
-      const offer = await api('POST', '/v1/issuance/initiate', request, { 'Idempotency-Key': requestId });
+      const offer = await api('POST', '/v1/issuance', request, { 'Idempotency-Key': requestId });
       check(typeof offer.id === 'string' && offer.id
         && offer.organization_id === cfg['organization-id'] && offer.credential_template_id === template.id
         && typeof offer.credential_offer_uri === 'string' && offer.credential_offer_uri,
@@ -267,7 +267,7 @@ async function main(argv) {
     }
 
     stage = 'transaction-persistence-readback';
-    const transaction = await api('GET', '/v1/issuance/transactions/' + encodeURIComponent(receipt.transactionId));
+    const transaction = await api('GET', '/v1/issuance/' + encodeURIComponent(receipt.transactionId));
     check(transaction.id === receipt.transactionId && transaction.organization_id === receipt.organizationId
       && transaction.credential_template_id === receipt.credentialTemplateId
       && transaction.status === 'issued' && transaction.application_id == null,
