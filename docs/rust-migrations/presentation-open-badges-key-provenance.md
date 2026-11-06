@@ -26,8 +26,9 @@ The shared native issuance boundary also rejects retired transaction types and
 credential-document markers before allocating status or invoking any credential
 builder, including generic SD-JWT and DIDComm delivery paths.
 Cached credential replay, concurrent issuance recovery and pending DIDComm
-transport apply the same rejection to the transaction and stored JSON or JWT
-credential. Historical records and terminal delivery receipts remain intact;
+transport or transported lifecycle recovery apply the same rejection to the
+transaction and stored JSON or JWT credential. Historical records and terminal
+delivery receipts remain intact;
 retired credentials are neither returned as successful issuance nor resent.
 
 The `governed_ob2.json` test fixture is retained only as an archived negative
