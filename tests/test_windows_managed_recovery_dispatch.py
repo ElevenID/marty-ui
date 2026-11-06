@@ -19,7 +19,7 @@ def recorder(tmp_path_factory):
     legacy.native_docker_recorder.__wrapped__(tmp_path_factory)
 
 
-def invoke(tmp_path,*,check=False,wait=False,renew=False,bad=None):
+def invoke(tmp_path,*,check=False,wait=False,renew=False,resume=False,bad=None):
     selection=tmp_path/'private selector.json';selection.touch()
     config=tmp_path/'retained managed.json'
     value={'schema':'marty.windows-managed-recovery/v1','selection_file':str(selection)}
@@ -35,6 +35,7 @@ def invoke(tmp_path,*,check=False,wait=False,renew=False,bad=None):
     if check:script+=' -CheckOnly'
     if wait:script+=' -WaitForEngine'
     if renew:script+=" -RenewCredentials -LogicalTlsProject 'marty-selfhost-synthetic'"
+    if resume:script+=' -ResumeActivation'
     env={**os.environ,'MARTY_TEST_DOCKER_LOG':str(log)}
     p=subprocess.run([legacy.POWERSHELL,'-NoProfile','-NonInteractive','-EncodedCommand',
         base64.b64encode(script.encode('utf-16le')).decode()],capture_output=True,text=True,env=env,timeout=30)
@@ -67,3 +68,17 @@ def test_renewal_flags_reach_only_existing_managed_owner(tmp_path,check):
     if check:expected+=['--check-only']
     expected+=['--wait-for-engine','--renew-once','--logical-project','marty-selfhost-synthetic']
     assert calls==[expected]
+
+
+def test_explicit_resume_flag_uses_same_retained_owner_without_renewal(tmp_path):
+    p,calls,config=invoke(tmp_path,wait=True,resume=True)
+    assert p.returncode==0,p.stderr
+    assert calls==[[str(legacy.ROOT/'scripts/selfhost_windows_recovery.py'),'--configuration',str(config),
+                    '--wait-for-engine','--resume-activation']]
+
+
+@pytest.mark.parametrize('options',[{'resume':True,'renew':True},{'resume':True,'check':True},
+                                  {'resume':True,'bad':'legacy'},{'resume':True,'bad':'no-config'}])
+def test_resume_wrapper_rejects_ambiguous_or_unmanaged_modes(tmp_path,options):
+    p,calls,_=invoke(tmp_path,**options)
+    assert p.returncode!=0 and not calls

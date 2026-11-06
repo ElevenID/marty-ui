@@ -974,6 +974,45 @@ def renew_once(config_path,logical_project):
         'production_admission':False,'automatic_lifecycle':False}
 
 
+def resume_activation(config_path, *, wait_for_engine=False):
+    """Explicit forward recovery; never replay an unfinished workload command."""
+    from selfhost_windows_model import immutable_binding
+    require(type(wait_for_engine) is bool)
+    with renewal.hold_private_input(Path(config_path)):
+        with _session(config_path) as (base, _base_raw, expected, _root, raw, stack):
+            require(not renewal.recovery_pending(base))
+            intents, records = _parse(raw, expected)
+            require(len(intents) == len(records)+1)
+            pending = intents[len(intents)]
+            require(pending['operation'] == 'activation')
+            path = Path(pending['config_path'])
+            raw_config = stack.enter_context(renewal.hold_private_input(path))
+            cfg = decode(raw_config)
+            require(digest(raw_config) == pending['config_file_sha256']
+                    and config_digest(cfg) == pending['config_sha256']
+                    and immutable_binding(binding(cfg)) == immutable_binding(expected))
+        # The activator obtains the same exclusive project lock and independently
+        # holds/admit-checks the pending journal. Never call it under _session.
+        with renewal.hold_private_input(path) as held:
+            require(held == raw_config)
+            if wait_for_engine:
+                from selfhost_windows_recovery import wait_for_engine as wait
+                wait(cfg['docker_host'], cfg['engine_id'])
+            try:
+                result = renewal.activate(cfg, resume=True)
+            except BaseException:
+                saved = renewal.read_private_bytes(Path(cfg['result']))
+                if saved and decode(saved).get('result') == 'rolled_back':
+                    complete(path, authority_file=cfg['native']['token_file'])
+                raise
+            require(result['result'] == 'activated')
+            selected = complete(path, authority_file=cfg['native']['token_file'])
+            require(selected['choice'] == 'new' and selected['decision'] == 'activated')
+            return {'schema': SCHEMA, 'project': cfg['project'], 'result': 'resumed-and-selected',
+                    'sequence': selected['sequence'], 'config_path': str(path),
+                    'production_admission': False, 'automatic_lifecycle': False}
+
+
 @contextmanager
 def _selected_inputs(config_path, *, terminal_guard_sha256=None):
     """Hold local selection and the project lock for a future recovery owner.

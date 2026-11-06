@@ -415,11 +415,13 @@ def main(argv=None):
     parser.add_argument('--check-only',action='store_true')
     parser.add_argument('--wait-for-engine',action='store_true')
     parser.add_argument('--renew-once',action='store_true')
+    parser.add_argument('--resume-activation',action='store_true')
     parser.add_argument('--logical-project')
     try:
         args=parser.parse_args(argv)
         selection.require(os.name=='nt')
         selection.require(bool(args.logical_project)==args.renew_once)
+        selection.require(not args.resume_activation or (not args.renew_once and not args.check_only))
         if args.renew_once:
             selection.require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',args.logical_project))
         with renewal.hold_private_input(Path(args.configuration)) as raw:
@@ -427,7 +429,9 @@ def main(argv=None):
             selection.require(set(config)=={'schema','selection_file'}
                 and config['schema']=='marty.windows-managed-recovery/v1')
             selection.require(isinstance(config['selection_file'],str) and Path(config['selection_file']).is_absolute())
-            if args.renew_once and not args.check_only:
+            if args.resume_activation:
+                result=selection.resume_activation(Path(config['selection_file']),wait_for_engine=args.wait_for_engine)
+            elif args.renew_once and not args.check_only:
                 if args.wait_for_engine:
                     with selection.selected_inputs(Path(config['selection_file'])) as lease:
                         wait_for_engine(lease.docker_host,lease.engine_id)
@@ -444,7 +448,7 @@ def main(argv=None):
                         output=lease.secrets_dir.parent/('windows-recovery-'+uuid.uuid4().hex)
                         output.mkdir()
                         result=lease.recover_existing(output,fresh_authority=True)
-            if not args.check_only and not args.renew_once:
+            if not args.check_only and not args.renew_once and not args.resume_activation:
                 result=selection.decode(renewal.read_private_bytes(output/'result.json'))
                 result['attempt_dir']=str(output)
                 selection.require(not renewal.recovery_pending({'project':lease.project,'current_secrets':str(lease.secrets_dir)}))

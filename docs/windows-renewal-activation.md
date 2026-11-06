@@ -2,9 +2,59 @@
 
 `scripts/selfhost_windows_renewal.py` implements an isolated candidate transaction
 using the existing Compose, rootless-migration, readiness and secret-mount owners.
-The POSIX activator's platform/project checks are unchanged. This is a library;
-there is no operator CLI, unattended task, production admission or reboot claim.
+The POSIX activator's platform/project checks are unchanged. This library is used
+by the existing managed recovery owner; explicit continuation is available through
+that owner. Production admission and reboot qualification remain separate.
 Signed release verification and publication/cutover approvals remain separate.
+
+## Explicit continuation after completed activation layers
+
+An interrupted registered activation can leave a completed prefix of dependency
+layers followed by untouched layers. It cannot be reconciled into a selected
+generation while the deployment still mixes generations. The managed owner can
+continue that operation explicitly:
+
+```powershell
+.\scripts\recover-marty-after-reboot.ps1 `
+  -RecoveryConfigurationFile $ManagedRecoveryConfiguration `
+  -ManagedPython $ManagedPython -ResumeActivation -WaitForEngine
+```
+
+The private managed configuration identifies the original selection anchor. The
+owner resolves the pending activation from its existing journal, rechecks its
+configuration and immutable binding, then obtains the exclusive project lock.
+This mode cannot be combined with renewal or configuration-only checks. Existing
+scheduled recovery and renewal actions do not enable it automatically.
+
+Every completed prefix layer must have its original valid started and completed
+receipts. All subsequent boundaries and every rollback boundary must be empty.
+A gap, a started command without a completion, an already complete operation, or
+any rollback boundary is refused. Healthy containers and diagnostic logs never
+substitute for a missing command boundary. Fully completed operations use the
+existing terminal reconciliation path instead.
+
+Before another write, the owner verifies original container IDs for untouched
+roles, changed IDs for completed roles, unchanged images and data mounts, and the
+preserved TLS initializer. Each role's actual configuration and secret mounts
+must match its recorded old or new generation. The complete project token-mount
+closure remains mandatory. Both held generations and the scoped authority must
+pass the existing signed native lifetime/custody checks. Fresh bracketed foreign
+storage qualification runs before each remaining command; unsafe context stops
+the operation without an automatic rollback.
+
+Completed layers, including migration jobs, are never replayed. Only the remaining
+layers are recreated with the existing bounded Compose owner. The original intent,
+diagnostics and completed receipts remain unchanged and held. Separate private
+`resume-<id>.intent.json`, `resume-<id>.new_log` and `resume-<id>.rollback_log` files
+retain each explicit continuation's evidence. A known workload failure can use
+the existing fully recorded rollback; a transport or boundary uncertainty preserves
+the pending operation. A subsequent continuation still refuses any unfinished
+command. No credential producer, initializer, image pull, release or routing
+operation is invoked by this mode.
+
+Selection advances only after all required boundaries, readiness, held-input exit
+checks and native selection proofs pass. An explicit continuation does not qualify
+automatic cadence, operator logon, engine restart, host reboot or production use.
 
 The managed candidate must have the complete declared service closure. Both KMS
 initializers remain absent and opt-in. Managed OpenBao, its unseal helper and the

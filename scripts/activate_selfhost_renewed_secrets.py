@@ -173,17 +173,38 @@ def secret_mounts(project: str, secret_root: Path, services: set[str],
 
 
 def checked_secret_mounts(inspected: object, project: str, secret_root: Path,
-                          services: set[str], model: dict, *, path_equal=None) -> int:
-    """Validate already-inspected containers; transport remains at the caller."""
+                          services: set[str], model: dict, *, path_equal=None,
+                          generation_bindings=None) -> int:
+    """Validate actual mounts with the full project/token closure intact.
+
+    Optional per-role bindings are for an admitted closed-prefix recovery owner;
+    that caller independently verifies both retained models and generations.
+    Transport and generation admission remain at the caller.
+    """
     same_path = path_equal if path_equal is not None else lambda a, b: a == b
     definitions = model.get("secrets")
     declared = model.get("services")
     if not isinstance(definitions, dict) or not isinstance(declared, dict):
         raise RuntimeError("owned Compose secret model is invalid")
+    if generation_bindings is not None and (
+        not isinstance(generation_bindings, dict) or set(generation_bindings) != services
+    ):
+        raise RuntimeError("owned generation bindings are incomplete")
     expected: dict[str, dict[str, str]] = {}
     names: set[str] = set()
     for service in services:
-        spec = declared.get(service)
+        bound_root, bound_definitions, bound_declared = secret_root, definitions, declared
+        if generation_bindings is not None:
+            binding = generation_bindings[service]
+            if (not isinstance(binding, tuple) or len(binding) != 2
+                    or not isinstance(binding[0], Path) or not binding[0].is_absolute()
+                    or binding[0].parent != secret_root.parent or not isinstance(binding[1], dict)):
+                raise RuntimeError("owned generation binding is invalid")
+            bound_root, bound_model = binding
+            bound_definitions, bound_declared = bound_model.get("secrets"), bound_model.get("services")
+            if not isinstance(bound_definitions, dict) or not isinstance(bound_declared, dict):
+                raise RuntimeError("owned generation model is invalid")
+        spec = bound_declared.get(service)
         if not isinstance(spec, dict) or not isinstance(spec.get("secrets", []), list):
             raise RuntimeError("owned Compose service secrets are invalid")
         targets: dict[str, str] = {}
@@ -194,14 +215,14 @@ def checked_secret_mounts(inspected: object, project: str, secret_root: Path,
                 source, target = reference.get("source"), reference.get("target")
             else:
                 raise RuntimeError("owned Compose service secret reference is invalid")
-            definition = definitions.get(source) if isinstance(source, str) else None
+            definition = bound_definitions.get(source) if isinstance(source, str) else None
             if (not isinstance(definition, dict) or not isinstance(target, str)
                     or not target.startswith("/run/secrets/")
                     or not target.removeprefix("/run/secrets/")
-                    or not same_path(definition.get("file"), str(secret_root / source))
+                    or not same_path(definition.get("file"), str(bound_root / source))
                     or target in targets):
                 raise RuntimeError("owned Compose secret binding is invalid")
-            targets[target] = str(secret_root / source)
+            targets[target] = str(bound_root / source)
             names.add(source)
         expected[service] = targets
     if (not isinstance(inspected, list) or len(inspected) != len(services)

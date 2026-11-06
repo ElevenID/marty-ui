@@ -10,12 +10,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
 import sys
 import threading
 import time
+import uuid
 from contextlib import ExitStack
 from pathlib import Path, PurePosixPath
 
@@ -845,13 +847,19 @@ def run_owned_mutation(arguments, timeout=240, *, stdin_bytes=None):
             raise error from None
 
 
-def recreate(docker, command, changing, services, model, log, progress=None):
+def recreate(docker, command, changing, services, model, log, progress=None, *, start_at=0):
     deadline = time.monotonic() + 600
     tail = b''
     uncertain = False
     ready = services - changing
+    layers = dependency_layers(model, services, changing)
+    require(type(start_at) is int and 0 <= start_at < len(layers))
+    require(not start_at or progress is not None, 'Resumption requires durable boundary recording')
     try:
-        for index, layer in enumerate(dependency_layers(model, services, changing)):
+        for index, layer in enumerate(layers):
+            if index < start_at:
+                ready |= set(layer)
+                continue
             require(time.monotonic() < deadline, 'Windows renewal phase deadline reached')
             if progress is not None:
                 progress('started', index, layer)
@@ -903,7 +911,47 @@ def recreate(docker, command, changing, services, model, log, progress=None):
             raise
 
 
-def activate(config):
+def closed_activation_prefix(config, layers, stack):
+    """Prove a nonempty, unfinished prefix; never infer a command from health."""
+    intent_raw = stack.enter_context(hold_private_input(Path(config['intent'])))
+    intent = json.loads(intent_raw)
+    require(set(intent) == {'schema', 'project', 'compose_sha256', 'current_env', 'renewed_env',
+                           'current_secrets', 'renewed_secrets', 'owned_before', 'data_mounts_before',
+                           'changing', 'layers', 'step_receipts', 'candidate_only'})
+    require(intent['schema'] == SCHEMA and intent['project'] == config['project']
+            and intent['candidate_only'] is True and intent['compose_sha256'] == config['compose_sha256'])
+    require(all(intent[key] == str(Path(config[key])) for key in
+                ('current_env', 'renewed_env', 'current_secrets', 'renewed_secrets')))
+    require(intent['layers'] == layers and intent['step_receipts'] == config['step_receipts']
+            and intent['changing'] == sorted(role for layer in layers for role in layer))
+    require(isinstance(intent['owned_before'], dict) and intent['owned_before']
+            and len(set(intent['owned_before'].values())) == len(intent['owned_before'])
+            and all(isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value)
+                    for value in intent['owned_before'].values()))
+    require(read_private_bytes(Path(config['result'])) == b'')
+    prefix = 0;gap = False
+    for index, (layer, step) in enumerate(zip(layers, config['step_receipts'])):
+        require(set(step) == {'new_started', 'new_completed', 'rollback_started', 'rollback_completed'})
+        require(not read_private_bytes(Path(step['rollback_started']))
+                and not read_private_bytes(Path(step['rollback_completed'])), 'Rollback boundary forbids forward resumption')
+        started = read_private_bytes(Path(step['new_started']))
+        completed = read_private_bytes(Path(step['new_completed']))
+        require(bool(started) == bool(completed), 'Unfinished command forbids resumption')
+        if not started:
+            gap = True;continue
+        require(not gap, 'Activation receipt gap forbids resumption')
+        for event, raw in [('started', started), ('completed', completed)]:
+            require(stack.enter_context(hold_private_input(Path(step['new_'+event]))) == raw)
+            receipt = json.loads(raw)
+            require(set(receipt) == {'roles', 'event', 'time'} and receipt['roles'] == layer
+                    and receipt['event'] == event and type(receipt['time']) in (int, float)
+                    and math.isfinite(receipt['time']) and receipt['time'] > 0)
+        prefix = index + 1
+    require(0 < prefix < len(layers), 'Only a closed partial prefix can be resumed')
+    return prefix, intent, hashlib.sha256(intent_raw).hexdigest()
+
+
+def activate(config, *, resume=False):
     """Run the candidate transaction with its existing verified native owner.
 
     Native authority/generation/orphan/certificate checks consume BOTH held byte
@@ -911,6 +959,7 @@ def activate(config):
     Runtime rollback qualification is required before exposing an operator CLI.
     """
     require(os.name == 'nt', 'Windows host required')
+    require(type(resume) is bool)
     config = json.loads(json.dumps(config))
     require(config['schema'] == SCHEMA and config['candidate_only'] is True)
     project = config['project']
@@ -933,7 +982,7 @@ def activate(config):
             before_env = stack.enter_context(hold_private_input(old_env))
             after_env = stack.enter_context(hold_private_input(new_env))
             require(env_body(before_env, current) == env_body(after_env, renewed))
-            require(all(read_private_bytes(p) == b'' for p in outputs.values()))
+            if not resume:require(all(read_private_bytes(p) == b'' for p in outputs.values()))
             docker = Docker(config['docker_host'], config['engine_id'])
             old = docker.compose(project, old_env, source);new = docker.compose(project, new_env, source)
             old_model = docker.json(old[len(docker.prefix):] + ['--profile', '*', 'config', '--format', 'json'])
@@ -942,7 +991,8 @@ def activate(config):
             old_bytes = stack.enter_context(hold_private_generation(current, names))
             new_bytes = stack.enter_context(hold_private_generation(renewed, names))
             checked_models(old_model, new_model, current, renewed, names)
-            from selfhost_windows_selection import activation_admission
+            from selfhost_windows_selection import activation_admission, directory
+            if resume:require(namespace_entry_exists(directory(config)), 'Registered activation required for resumption')
             stack.enter_context(activation_admission(config, old_bytes, new_bytes, before_env, after_env))
             baseline = docker.containers()
             owned = [x for x in baseline if _project(x) == project]
@@ -960,12 +1010,35 @@ def activate(config):
             all_paths = [*outputs.values(), *step_paths]
             require(len(set(all_paths)) == len(all_paths)
                     and all(p.parent == outputs['intent'].parent for p in step_paths))
-            require(all(read_private_bytes(p) == b'' for p in step_paths))
+            prefix = 0;original_intent = None;original_intent_sha = None
+            if resume:
+                prefix, original_intent, original_intent_sha = closed_activation_prefix(config, layers, stack)
+                prior_logs = {key: stack.enter_context(hold_private_input(outputs[key]))
+                              for key in ('new_log', 'rollback_log')}
+                completed_roles = {role for layer in layers[:prefix] for role in layer}
+                require(set(original_intent['owned_before']) == services)
+                require(all((item['Id'] != original_intent['owned_before'][_service(item)])
+                            if _service(item) in completed_roles else
+                            (item['Id'] == original_intent['owned_before'][_service(item)]) for item in owned),
+                        'Container identities differ from the closed prefix')
+                require(json.loads(json.dumps(data_mounts(owned))) == original_intent['data_mounts_before'],
+                        'Original activation data mounts or images changed')
+            else:
+                completed_roles = set()
+                require(all(read_private_bytes(p) == b'' for p in step_paths))
             old_hashes, new_hashes = docker.hashes(old), docker.hashes(new)
-            checked_live_configuration(owned, old_hashes, config['tls_init_receipt'])
+            expected_hashes = {role: new_hashes[role] if role in completed_roles else value
+                               for role, value in old_hashes.items()}
+            checked_live_configuration(owned, expected_hashes, config['tls_init_receipt'])
             require(windows_healthy(statuses(old, cwd=source.parent), services, old_model))
-            checked_secret_mounts(owned, project, current, services, old_model,
-                                  path_equal=windows_mount_path_equal)
+            if resume:
+                checked_secret_mounts(owned, project, current, services, old_model,
+                                      path_equal=windows_mount_path_equal,
+                                      generation_bindings={role: (renewed, new_model) if role in completed_roles
+                                                           else (current, old_model) for role in services})
+            else:
+                checked_secret_mounts(owned, project, current, services, old_model,
+                                      path_equal=windows_mount_path_equal)
             volumes = docker.volumes()
             witnesses = docker.native_witnesses(baseline, project, volumes, config['native']['helper_image'])
             disjoint_storage(baseline, project, volumes, witnesses)
@@ -981,7 +1054,25 @@ def activate(config):
             context = ForeignContext(docker, project, changing, baseline, volumes, config['native']['helper_image'])
             native_preflight(config['native'], project, old_bytes, new_bytes, docker.prefix)
             context.check(before_intent=True)
-            write_empty_private_file(outputs['intent'], json.dumps({
+            if resume:
+                # Original diagnostics and completed receipts remain held and
+                # unchanged. Each explicit recovery has separate owned evidence.
+                stack.enter_context(hold_storage_namespace(outputs['intent'].parent))
+                recovery = outputs['intent'].parent / ('resume-'+uuid.uuid4().hex)
+                recovery_intent = Path(str(recovery)+'.intent.json')
+                for phase in ('new_log', 'rollback_log'):
+                    outputs[phase] = Path(str(recovery)+'.'+phase)
+                    with outputs[phase].open('xb'):pass
+                with recovery_intent.open('xb'):pass
+                write_empty_private_file(recovery_intent, json.dumps({
+                    'schema': 'marty.windows-closed-prefix-resumption/v1',
+                    'original_intent_sha256': original_intent_sha, 'completed_layers': prefix,
+                    'config_value_sha256': hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest(),
+                    'prior_log_sha256': {key: hashlib.sha256(raw).hexdigest() for key, raw in prior_logs.items()},
+                    'owned_before_resumption': {str(_service(item)): item['Id'] for item in owned},
+                    'data_mounts_before': data_before, 'candidate_only': True})+'\n')
+                stack.enter_context(hold_private_input(recovery_intent))
+            else:write_empty_private_file(outputs['intent'], json.dumps({
                 'schema': SCHEMA, 'project': project, 'compose_sha256': config['compose_sha256'],
                 'current_env': str(old_env), 'renewed_env': str(new_env),
                 'current_secrets': str(current), 'renewed_secrets': str(renewed),
@@ -1008,7 +1099,10 @@ def activate(config):
                         write_empty_private_file(Path(steps[index][phase + '_' + event]),
                                                  json.dumps({'roles': layer, 'event': event, 'time': time.time()}) + '\n')
                     return record
-                recreate(docker, new, changing, services, new_model, outputs['new_log'], progress=progress('new'))
+                if resume:
+                    recreate(docker, new, changing, services, new_model, outputs['new_log'], progress=progress('new'), start_at=prefix)
+                else:
+                    recreate(docker, new, changing, services, new_model, outputs['new_log'], progress=progress('new'))
                 mounts = verify(new, renewed, new_model)
                 result = {'result': 'activated', 'secret_mounts': mounts}
             except UncertainComposeMutation:
@@ -1025,6 +1119,7 @@ def activate(config):
                           foreign_context_proofs=context.proofs,
                           foreign_context_proof_count=context.proof_count,
                           foreign_context_proof_sha256=context.proof_sha256)
+            if resume:result.update(resumed_completed_layers=prefix, original_intent_sha256=original_intent_sha)
         # Never publish success before all held-input exit checks have passed.
         write_empty_private_file(outputs['result'], json.dumps(result) + '\n')
     except Exception:
