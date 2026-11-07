@@ -197,6 +197,7 @@ def start(config, choice, values, record, raw, journal, stack):
     expected = selection.decode(raw['owner.json'])['binding']
     _intents, records = selection._parse(raw, expected)
     require(len(_intents) == len(records) and record == records[len(records)])
+    require(not selection._initial_current_record(record, records.get(1)))
     current_model = history(raw, expected, records)[1]
     observed = selection._inspect(config, choice, values, stack,
                                   expected_data=record['data_sha256'], require_ready=False)

@@ -144,6 +144,46 @@ def test_initial_current_can_select_first_real_replacement(monkeypatch):
             assert lease.secrets_dir == Path(next_cfg['renewed_secrets'])
 
 
+@pytest.mark.parametrize('reconcile', [False, True])
+def test_initial_replacement_rollback_retains_exact_origin_proof(monkeypatch, reconcile):
+    with fixture(monkeypatch, initial_current=True) as (_root, phase, tx, outcome, path, cfg):
+        calls = []
+        original_prove = selection._prove
+        def record_proof(*args, **kwargs):
+            calls.append(kwargs.get('initial_current', False))
+            return original_prove(*args, **kwargs)
+        monkeypatch.setattr(selection, '_prove', record_proof)
+        selection.adopt_current(path)
+        next_path, next_cfg = tx(2)
+        assert selection.prepare(next_path) == 2
+        phase['active'] = Path(cfg['current_secrets'])
+        if reconcile:
+            terminal_receipts(next_cfg, 'new')
+            terminal_receipts(next_cfg, 'rollback')
+        else:
+            outcome(next_cfg, 'rolled_back')
+        record = selection.complete(next_path, reconcile=reconcile)
+        assert record['choice'] == 'old'
+        assert calls[-1] is True
+        with selection.selected_inputs(next_path) as lease:
+            assert lease.check_current() == 'd'*64
+            assert calls[-1] is True
+        assert record['selected']['secrets_dir'] == cfg['current_secrets']
+
+
+def test_initial_origin_refuses_journal_and_product_successors_before_writes(monkeypatch):
+    with fixture(monkeypatch, initial_current=True) as (_root, _phase, _tx, _outcome, path, cfg):
+        selection.adopt_current(path)
+        before = sorted(p.name for p in selection.directory(cfg).iterdir())
+        with selection.selected_inputs(path) as lease:
+            with pytest.raises(ValueError):lease.continue_journal()
+            with pytest.raises(ValueError):lease.transition_product([], gh=None, cosign=None,
+                                                                     registry_config={})
+        assert sorted(p.name for p in selection.directory(cfg).iterdir()) == before
+        assert not selection.renewal.continuation_guard(cfg).exists()
+        assert not selection.renewal.product_transition_guard(cfg).exists()
+
+
 @pytest.mark.parametrize('output', ['intent', 'result', 'new_log', 'rollback_log', 'new_started'])
 def test_initial_current_refuses_stale_activation_output(monkeypatch, output):
     with fixture(monkeypatch, initial_current=True) as (_root, _phase, _tx, _outcome, path, cfg):
@@ -168,6 +208,14 @@ def test_initial_orphan_exception_requires_explicit_selected_origin(monkeypatch)
     assert calls == ['ordinary', 'initial']
     with pytest.raises(ValueError):
         selection._native_current(cfg, 'new', values, docker, None, initial_current=True)
+    origin = {'sequence': 1, 'decision': 'adopted-current',
+              'selected': {'secrets_dir': 'generation0', 'secrets_sha256': 'a'*64,
+                           'native_mirror': '/control/generation0'}}
+    later = {'sequence': 3, 'decision': 'rolled_back',
+             'selected': dict(origin['selected'])}
+    assert selection._initial_current_record(later, origin)
+    later['selected']['native_mirror'] = '/control/generation2'
+    assert not selection._initial_current_record(later, origin)
 
 
 def test_adopt_and_status_select_the_verified_new_inputs_with_empty_optionals(monkeypatch):

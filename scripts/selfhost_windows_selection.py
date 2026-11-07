@@ -340,8 +340,18 @@ def _inspect(config, choice, values, stack, *, expected_data=None, require_ready
             'cwd': Path(config['compose_file']).parent}
 
 
-def _initial_current_record(record):
-    return record['sequence'] == 1 and record['decision'] == 'adopted-current'
+def _initial_current_record(record, origin=None):
+    if record is None:
+        return False
+    if record.get('_initial_current_origin') is True:
+        return True
+    if record['sequence'] == 1 and record['decision'] == 'adopted-current':
+        return True
+    if origin is None or origin['sequence'] != 1 or origin['decision'] != 'adopted-current':
+        return False
+    selected, first = record['selected'], origin['selected']
+    return all(selected[key] == first[key]
+               for key in ('secrets_dir', 'secrets_sha256', 'native_mirror'))
 
 
 def _native_current(config, choice, values, docker, authority_file, *, initial_current=False):
@@ -464,7 +474,8 @@ def prepare(config_path, *, authority_file=None, staging_sha256=None):
             require(set(step) == {'new_started', 'new_completed', 'rollback_started', 'rollback_completed'})
             require(all(renewal.read_private_bytes(Path(p)) == b'' for p in step.values()))
         _prove(config, 'old', values, stack, expected_data=previous['data_sha256'],
-               authority_file=authority_file, initial_current=_initial_current_record(previous))
+               authority_file=authority_file,
+               initial_current=_initial_current_record(previous, records.get(1)))
         sequence = len(intents)+1
         intent = {'schema': SCHEMA, 'sequence': sequence,
                   'parent': digest(raw[f'{sequence-1:06}.selection.json']), 'config_path': str(Path(config_path)),
@@ -639,12 +650,18 @@ def complete(config_path, *, reconcile=False, authority_file=None):
             choice = 'new' if result['result'] == 'activated' else 'old'
             if sequence == 1:require(choice == 'new')
             decision = 'adopted' if sequence == 1 else result['result']
-            data_hash = _prove(config, choice, values, stack, expected_data=expected_data, authority_file=authority_file)
+            data_hash = _prove(config, choice, values, stack, expected_data=expected_data,
+                               authority_file=authority_file,
+                               initial_current=choice == 'old' and
+                                   _initial_current_record(previous, records.get(1)))
         else:
             require(reconcile)
             unstarted_checks = []
             choice = _reconciliation_choice(config, stack, unstarted_checks=unstarted_checks);decision = 'reconciled-'+choice
-            data_hash = _prove(config, choice, values, stack, expected_data=expected_data, authority_file=authority_file)
+            data_hash = _prove(config, choice, values, stack, expected_data=expected_data,
+                               authority_file=authority_file,
+                               initial_current=choice == 'old' and
+                                   _initial_current_record(previous, records.get(1)))
             for check in unstarted_checks:check()
         record = {'schema': SCHEMA, 'sequence': sequence, 'parent': intent['parent'],
                   'intent_sha256': digest(raw[f'{sequence:06}.intent.json']), 'decision': decision, 'choice': choice,
@@ -895,6 +912,8 @@ def reconcile_materialized(config_path):
         if CHECKPOINT in raw:accepted.append(checkpoint(raw)['generation_model'])
         require(model_binding(config) in accepted);config=effective_config(config,current_model)
         initial_current = record['sequence'] == 1 and record['decision'] == 'adopted-current'
+        if _initial_current_record(record, records.get(1)):
+            record = dict(record, _initial_current_origin=True)
         values,snapshots=_inputs(config,stack,initial_current=initial_current)
         require(snapshots==intent['inputs'])
         transition=stack.enter_context(renewal.hold_private_input(Path(config['intent'])))
@@ -1082,6 +1101,8 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
             require(digest(guard_raw) == terminal_guard_sha256)
         intents, records = _parse(raw, expected);require(len(intents) == len(records))
         sequence = len(records);intent = intents[sequence];record = records[sequence]
+        if _initial_current_record(record, records.get(1)):
+            record = dict(record, _initial_current_origin=True)
         cfg_raw = stack.enter_context(renewal.hold_private_input(Path(intent['config_path'])))
         cfg = decode(cfg_raw)
         from selfhost_windows_model import effective_config, history, immutable_binding, model_binding
@@ -1151,6 +1172,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
             with lease_lock:
                 require(active and not completion and not staging and not model_completion
                         and not continuation_started and not product_started and terminal_guard_sha256 is None)
+                require(not _initial_current_record(record))
                 continuation_started=True
                 from selfhost_windows_continuation import start
                 with ExitStack() as proof_stack:
@@ -1162,6 +1184,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
             with lease_lock:
                 require(active and not completion and not staging and not model_completion
                         and not continuation_started and not product_started and terminal_guard_sha256 is None)
+                require(not _initial_current_record(record))
                 product_started=True
                 from selfhost_windows_product_deploy import start
                 with ExitStack() as proof_stack:

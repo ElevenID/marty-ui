@@ -82,6 +82,7 @@ def start(config, choice, values, record, raw, source, assets, *, gh, cosign, re
     """
     require(os.name == 'nt' and not renewal.recovery_pending(config)
             and journal.INTENT not in raw and journal.DECISION not in raw)
+    require(not selection._initial_current_record(record))
     assets = Path(assets)
     require(assets.is_absolute())
     stack.enter_context(renewal.hold_storage_namespace(assets))
