@@ -428,7 +428,8 @@ if d['transition']:
 else:
  assert d['changed']==0 and mirrors['old']==mirrors['new'] and d['bytes']['old']==d['bytes']['new']
 body={'token':token,'old':roots['old'],'new':roots['new'],'minimum_ttl':d['minimum_ttl'],
-      'require_orphan_new':True,'require_orphan_old':False,'replacement':None,'retiring':False}
+      'require_orphan_new':not d.get('initial_current',False),'require_orphan_old':False,
+      'replacement':None,'retiring':False}
 for op in ['activation-tokens','activation-certificates']:assert native(op,body,True) is None
 print(json.dumps({'authority':True,'generation':d['transition'],'tokens':True,'certificates':True}))
 '''
@@ -446,13 +447,27 @@ def preflight_current(config, project, current, docker_prefix):
     return _preflight(config, project, current, current, docker_prefix, transition=False)
 
 
-def _preflight(config, project, old, new, docker_prefix, *, transition):
+def preflight_initial_current(config, project, current, docker_prefix):
+    """Read-only first-generation proof while initial root-descendant leaves exist.
+
+    This never admits a replacement or production lifecycle. Subsequent selected
+    generations use the ordinary orphan-required current proof.
+    """
+    config = dict(config)
+    config['renewed'] = config['current']
+    return _preflight(config, project, current, current, docker_prefix,
+                      transition=False, initial_current=True)
+
+
+def _preflight(config, project, old, new, docker_prefix, *, transition,
+               initial_current=False):
     def require(value):
         if not value:
             raise ValueError('Windows native renewal preflight refused')
     require(set(old) == set(new) and 0 < len(old) <= 512)
     require(all(re.fullmatch(r'[a-z][a-z0-9_]{0,127}', name) for name in old))
     changed = sum(old[name] != new[name] for name in old)
+    require(type(initial_current) is bool and not (transition and initial_current))
     require(changed > 0 if transition else changed == 0)
     require(re.fullmatch(r'[0-9a-f]{64}', config['binary_sha256']))
     require(re.fullmatch(r'[0-9a-f]{40}', config['source_sha']))
@@ -473,7 +488,8 @@ def _preflight(config, project, old, new, docker_prefix, *, transition):
         with hold_private_input(Path(config['ca_file'])):
             request = {key: config[key] for key in ['binary_sha256', 'source_sha', 'release_tag',
                                                   'bao_addr', 'current', 'renewed', 'token_file', 'minimum_ttl']}
-            request.update(count=len(old), changed=changed, transition=transition, bytes={
+            request.update(count=len(old), changed=changed, transition=transition,
+                           initial_current=initial_current, bytes={
                 role: {name: base64.b64encode(raw).decode('ascii') for name, raw in values.items()}
                 for role, values in [('old', old), ('new', new)]})
             args = [*docker_prefix, 'run', '--rm', '--pull', 'never', '-i', '--read-only',

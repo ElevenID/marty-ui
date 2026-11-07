@@ -35,6 +35,7 @@ def test_native_transport_binds_mode_and_sends_held_bytes_only_on_pipe(monkeypat
         request = json.loads(stdin_bytes);calls.append(request)
         assert 'PUBLIC_OLD' not in ' '.join(args) and 'PUBLIC_NEW' not in ' '.join(args)
         assert timeout == 240 and request['transition'] is not current_only
+        assert request['initial_current'] is False
         assert request['bytes']['old']['leaf'] == base64.b64encode(b'PUBLIC_OLD').decode()
         if current_only:
             assert request['current'] == request['renewed'] == '/control/current'
@@ -51,6 +52,23 @@ def test_native_transport_binds_mode_and_sends_held_bytes_only_on_pipe(monkeypat
     assert cfg['renewed'] == '/control/new'  # Current proof never rewrites caller configuration.
 
 
+def test_initial_current_transport_is_read_only_and_explicit(monkeypatch):
+    cfg = config();requests = []
+    @contextmanager
+    def held(*_a, **_k):yield b'PUBLIC_BINARY'
+    def run(args, *, stdin_bytes, timeout):
+        request = json.loads(stdin_bytes);requests.append(request)
+        assert request['transition'] is False and request['initial_current'] is True
+        assert request['current'] == request['renewed'] == '/control/current'
+        assert request['bytes']['old'] == request['bytes']['new']
+        return subprocess.CompletedProcess(args, 0, json.dumps({'authority': True,
+            'generation': False, 'tokens': True, 'certificates': True}).encode(), b'')
+    monkeypatch.setattr(native, 'hold_private_input', held)
+    monkeypatch.setattr(renewal, 'run_owned_mutation', run)
+    native.preflight_initial_current(cfg, PROJECT, {'leaf': b'PUBLIC_OLD'}, ['SYNTHETIC_DOCKER'])
+    assert len(requests) == 1 and cfg['renewed'] == '/control/new'
+
+
 def test_transition_still_refuses_unchanged_generation_and_current_requires_hour(monkeypatch):
     monkeypatch.setattr(renewal, 'run_owned_mutation', lambda *_a, **_k: pytest.fail('Refusal happened after transport'))
     cfg = config()
@@ -59,9 +77,9 @@ def test_transition_still_refuses_unchanged_generation_and_current_requires_hour
     with pytest.raises(ValueError):native.preflight_current(cfg, PROJECT, {'leaf': b'X'}, [])
 
 
-@pytest.mark.parametrize('current_only', [False, True])
+@pytest.mark.parametrize('current_only,initial_current', [(False,False),(True,False),(True,True)])
 @pytest.mark.skipif(os.name != 'posix', reason='Fixed worker executes only in the Linux helper')
-def test_worker_current_or_transition_checks_use_frozen_snapshot_after_mirror_mutation(tmp_path, monkeypatch, capsys, current_only):
+def test_worker_current_or_transition_checks_use_frozen_snapshot_after_mirror_mutation(tmp_path, monkeypatch, capsys, current_only, initial_current):
     old = tmp_path/'old';new = old if current_only else tmp_path/'new';proof = tmp_path/'proof'
     old.mkdir();proof.mkdir()
     if new != old:new.mkdir()
@@ -73,6 +91,7 @@ def test_worker_current_or_transition_checks_use_frozen_snapshot_after_mirror_mu
             'release_tag': 'v1.2.3', 'current': str(old), 'renewed': str(new), 'token_file': str(token),
             'bao_addr': 'https://openbao:8200', 'minimum_ttl': 3600, 'count': 1,
             'changed': 0 if current_only else 1, 'transition': not current_only,
+            'initial_current': initial_current,
             'bytes': {'old': {'leaf': base64.b64encode(b'PUBLIC_OLD').decode()},
                       'new': {'leaf': base64.b64encode(b'PUBLIC_OLD' if current_only else b'PUBLIC_NEW').decode()}}}
     operations = []
@@ -85,6 +104,8 @@ def test_worker_current_or_transition_checks_use_frozen_snapshot_after_mirror_mu
             if new != old:(new/'leaf').write_bytes(b'PUBLIC_TAMPER_AFTER_COMPARISON')
             value = None
         else:
+            if operation in {'activation-tokens','activation-certificates'}:
+                assert body['require_orphan_new'] is not initial_current
             old_path = body.get('current', body.get('old'));new_path = body.get('candidate', body.get('new'))
             assert Path(old_path, 'leaf').read_bytes() == b'PUBLIC_OLD'
             assert Path(new_path, 'leaf').read_bytes() == (b'PUBLIC_OLD' if current_only else b'PUBLIC_NEW')
