@@ -256,7 +256,8 @@ def test_forward_publication_completes_only_derived_metadata_and_requires_fresh_
             (data['source']/journal.DECISION).write_bytes(selection.packed(journal.decision(
                 data['marker'], data['initial'], data['phase_hashes'])))
         original = selection._prove;calls = []
-        def prove(cfg, choice, values, stack, *, expected_data, authority_file):
+        def prove(cfg, choice, values, stack, *, expected_data, authority_file,
+                  initial_current=False):
             assert cfg == data['new_config'] and authority_file == '/control/product/token'
             calls.append(expected_data)
             return original(cfg, choice, values, stack, expected_data=expected_data, authority_file=authority_file)

@@ -107,7 +107,7 @@ def runtime(monkeypatch, fault=None, *, extended=False):
             if fault == 'native':raise ValueError('PUBLIC_NATIVE_REFUSAL')
             return session_dir+'/token'
         monkeypatch.setattr(native, 'reauthenticate', reauthenticate)
-        def current_native(_cfg, _choice, _values, _docker, authority):
+        def current_native(_cfg, _choice, _values, _docker, authority, **_kw):
             assert authority.startswith('/control/recovery-session-') and authority.endswith('/token')
             events.append('native-current')
             if fault == 'native-after' and mutation_layers:raise ValueError('PUBLIC_POST_NATIVE_REFUSAL')

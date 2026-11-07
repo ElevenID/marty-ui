@@ -82,6 +82,7 @@ def start(config, choice, values, record, raw, source, assets, *, gh, cosign, re
     """
     require(os.name == 'nt' and not renewal.recovery_pending(config)
             and journal.INTENT not in raw and journal.DECISION not in raw)
+    require(not selection._initial_current_record(record))
     assets = Path(assets)
     require(assets.is_absolute())
     stack.enter_context(renewal.hold_storage_namespace(assets))
@@ -182,7 +183,8 @@ def start(config, choice, values, record, raw, source, assets, *, gh, cosign, re
         if side == 'before':
             from selfhost_windows_renewal_native import reauthenticate
             require(reauthenticate(config['native'], config['project'], docker.prefix, authority.rsplit('/', 1)[0]) == authority)
-        selection._native_current(config, choice, values, docker, authority)
+        selection._native_current(config, choice, values, docker, authority,
+                                  initial_current=selection._initial_current_record(record))
         context.check()
         write('native-'+side+'.completed.json', selection.packed(dict(receipt, event='completed')))
     native('before')

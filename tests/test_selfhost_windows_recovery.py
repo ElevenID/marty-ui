@@ -18,9 +18,9 @@ from test_selfhost_windows_selection import fixture
 
 
 @contextmanager
-def candidate(monkeypatch, *, warm=False, fault=None):
-    with fixture(monkeypatch) as (root, _phase, tx, _outcome, path, cfg):
-        selection.adopt(path)
+def candidate(monkeypatch, *, warm=False, fault=None, initial_current=False):
+    with fixture(monkeypatch, initial_current=initial_current) as (root, _phase, tx, _outcome, path, cfg):
+        (selection.adopt_current if initial_current else selection.adopt)(path)
         model = selection.decode(Path(cfg['compose_file']).read_bytes())
         model['services']['gateway']['depends_on'] = {'postgres': {'condition': 'service_healthy'}}
         roles = {x['Service'] for x in states(model)}

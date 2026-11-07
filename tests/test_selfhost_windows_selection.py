@@ -8,6 +8,7 @@ import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,7 +20,7 @@ from test_selfhost_windows_renewal import PROJECT, model
 
 
 @contextmanager
-def fixture(monkeypatch):
+def fixture(monkeypatch, *, initial_current=False):
     if os.name != 'nt':pytest.skip('Actual private NTFS selection journal')
     with private_fixture() as (root, _):
         model_file = root/'compose.json'
@@ -31,13 +32,15 @@ def fixture(monkeypatch):
         def generation(number):
             p = root/('generation'+str(number));p.mkdir(exist_ok=True)
             for name in names:
-                value = b'' if name == 'smtp_password' else ('PUBLIC_SYNTHETIC_'+str(number)+'_'+name).encode()
+                generation_number = 0 if initial_current and number == 1 else number
+                value = b'' if name == 'smtp_password' else ('PUBLIC_SYNTHETIC_'+str(generation_number)+'_'+name).encode()
                 (p/name).write_bytes(value)
             env = root/('generation'+str(number)+'.env')
             env.write_text('SELFHOST_SECRET_DIR='+str(p)+'\nFIXED_SETTING=synthetic\n', encoding='utf-8')
             return p, env
         def transaction(number):
-            old, oldenv = generation(number-1) if number == 1 else (root/('generation'+str(number-1)), root/('generation'+str(number-1)+'.env'))
+            prior = 0 if initial_current and number == 2 else number-1
+            old, oldenv = generation(prior) if number == 1 else (root/('generation'+str(prior)), root/('generation'+str(prior)+'.env'))
             new, newenv = generation(number)
             outputs = root/('tx'+str(number));outputs.mkdir()
             cfg = {'schema': selection.renewal.SCHEMA, 'candidate_only': True, 'project': PROJECT,
@@ -49,8 +52,9 @@ def fixture(monkeypatch):
                     'release_tag': 'v1.2.3', 'helper_image': 'python@sha256:'+'2'*64,
                     'control_volume': PROJECT+'-renewal-control', 'network': PROJECT+'_default',
                     'bao_addr': 'https://openbao:8200', 'ca_file': 'PUBLIC_CA', 'minimum_ttl': 3600,
-                    'current': '/control/generation'+str(number-1), 'renewed': '/control/generation'+str(number),
+                    'current': '/control/generation'+str(prior), 'renewed': '/control/generation'+str(number),
                     'token_file': '/control/session/token'}}
+            if initial_current:cfg['initial_current'] = True
             for key in ['intent', 'result', 'new_log', 'rollback_log']:
                 p = outputs/key;p.write_bytes(b'');cfg[key] = str(p)
             cfg['step_receipts'] = [{}]
@@ -62,16 +66,156 @@ def fixture(monkeypatch):
             Path(cfg['result']).write_text(json.dumps({'schema': selection.renewal.SCHEMA,
                 'project': PROJECT, 'candidate_only': True, 'production_admission': False,
                 'automatic_lifecycle': False, 'result': result}), encoding='utf-8')
-        def prove(cfg, choice, _values, _stack, *, expected_data=None, authority_file=None):
+        def prove(cfg, choice, _values, _stack, *, expected_data=None, authority_file=None,
+                  initial_current=False):
             prefix = 'renewed' if choice == 'new' else 'current'
             selection.require(phase['both'] or Path(cfg[prefix+'_secrets']) == phase['active'])
             if expected_data is not None:selection.require(expected_data == phase['data'])
             return phase['data']
         monkeypatch.setattr(selection, '_prove', prove)
         (root/f'.{PROJECT}.renewal.lock').write_bytes(b'')
-        path, cfg = transaction(1);phase['active'] = Path(cfg['renewed_secrets']);outcome(cfg, 'activated')
-        Path(cfg['intent']).write_bytes(b'PUBLIC_SYNTHETIC_ORIGINAL_INTENT')
+        path, cfg = transaction(1)
+        phase['active'] = Path(cfg['current_secrets'] if initial_current else cfg['renewed_secrets'])
+        if not initial_current:
+            outcome(cfg, 'activated')
+            Path(cfg['intent']).write_bytes(b'PUBLIC_SYNTHETIC_ORIGINAL_INTENT')
         yield root, phase, transaction, outcome, path, cfg
+
+
+def test_initial_current_adoption_uses_real_current_proof_without_transition(monkeypatch):
+    with fixture(monkeypatch, initial_current=True) as (_root, _phase, _tx, _outcome, path, cfg):
+        with pytest.raises(ValueError):selection.adopt(path)
+        record = selection.adopt_current(path)
+        assert record['choice'] == 'old' and record['decision'] == 'adopted-current'
+        assert record['result_sha256'] == selection.digest(b'')
+        assert record['transition_intent_sha256'] == selection.digest(b'')
+        assert selection.status(path)['state'] == 'selected'
+        with selection.selected_inputs(path) as lease:
+            assert lease.secrets_dir == Path(cfg['current_secrets'])
+            assert lease.check_current() == 'd'*64
+        with pytest.raises(ValueError):selection.adopt_current(path)
+
+
+def test_initial_current_pending_intent_completes_only_after_reproof(monkeypatch):
+    with fixture(monkeypatch, initial_current=True) as (root, _phase, _tx, _outcome, path, cfg):
+        original = selection._append
+        def interrupt(directory, raw, name, value, stack):
+            if name == '000001.selection.json':raise RuntimeError('synthetic interrupted write')
+            return original(directory, raw, name, value, stack)
+        monkeypatch.setattr(selection, '_append', interrupt)
+        with pytest.raises(RuntimeError):selection.adopt_current(path)
+        monkeypatch.setattr(selection, '_append', original)
+        assert selection.status(path)['state'] == 'pending-reconciliation'
+        record = selection.complete(path)
+        assert record['decision'] == 'adopted-current' and record['choice'] == 'old'
+        assert sorted(p.name for p in selection.directory(cfg).iterdir()) == [
+            '000001.intent.json','000001.selection.json','owner.json']
+
+
+def test_initial_current_pending_intent_rejects_late_transition_write(monkeypatch):
+    with fixture(monkeypatch, initial_current=True) as (_root, _phase, _tx, _outcome, path, cfg):
+        original_append = selection._append
+        def interrupt(directory, raw, name, value, stack):
+            if name == '000001.selection.json':raise RuntimeError('synthetic interrupted write')
+            return original_append(directory, raw, name, value, stack)
+        monkeypatch.setattr(selection, '_append', interrupt)
+        with pytest.raises(RuntimeError):selection.adopt_current(path)
+        monkeypatch.setattr(selection, '_append', original_append)
+        original_prove = selection._prove
+        def tamper(*args, **kwargs):
+            Path(cfg['intent']).write_bytes(b'PUBLIC_LATE_TRANSITION')
+            return original_prove(*args, **kwargs)
+        monkeypatch.setattr(selection, '_prove', tamper)
+        with pytest.raises(ValueError):selection.complete(path)
+        assert not (selection.directory(cfg)/'000001.selection.json').exists()
+
+
+def test_initial_current_can_select_first_real_replacement(monkeypatch):
+    with fixture(monkeypatch, initial_current=True) as (_root, phase, tx, outcome, path, _cfg):
+        selection.adopt_current(path)
+        next_path, next_cfg = tx(2)
+        assert selection.prepare(next_path) == 2
+        phase['active'] = Path(next_cfg['renewed_secrets'])
+        outcome(next_cfg, 'activated')
+        record = selection.complete(next_path)
+        assert record['decision'] == 'activated' and record['choice'] == 'new'
+        assert selection.status(path)['state'] == 'selected'
+        with selection.selected_inputs(next_path) as lease:
+            assert lease.secrets_dir == Path(next_cfg['renewed_secrets'])
+
+
+@pytest.mark.parametrize('reconcile', [False, True])
+def test_initial_replacement_rollback_retains_exact_origin_proof(monkeypatch, reconcile):
+    with fixture(monkeypatch, initial_current=True) as (_root, phase, tx, outcome, path, cfg):
+        calls = []
+        original_prove = selection._prove
+        def record_proof(*args, **kwargs):
+            calls.append(kwargs.get('initial_current', False))
+            return original_prove(*args, **kwargs)
+        monkeypatch.setattr(selection, '_prove', record_proof)
+        selection.adopt_current(path)
+        next_path, next_cfg = tx(2)
+        assert selection.prepare(next_path) == 2
+        phase['active'] = Path(cfg['current_secrets'])
+        if reconcile:
+            terminal_receipts(next_cfg, 'new')
+            terminal_receipts(next_cfg, 'rollback')
+        else:
+            outcome(next_cfg, 'rolled_back')
+        record = selection.complete(next_path, reconcile=reconcile)
+        assert record['choice'] == 'old'
+        assert calls[-1] is True
+        with selection.selected_inputs(next_path) as lease:
+            assert lease.check_current() == 'd'*64
+            assert calls[-1] is True
+        assert record['selected']['secrets_dir'] == cfg['current_secrets']
+
+
+def test_initial_origin_refuses_journal_and_product_successors_before_writes(monkeypatch):
+    with fixture(monkeypatch, initial_current=True) as (_root, _phase, _tx, _outcome, path, cfg):
+        selection.adopt_current(path)
+        before = sorted(p.name for p in selection.directory(cfg).iterdir())
+        with selection.selected_inputs(path) as lease:
+            with pytest.raises(ValueError):lease.continue_journal()
+            with pytest.raises(ValueError):lease.transition_product([], gh=None, cosign=None,
+                                                                     registry_config={})
+        assert sorted(p.name for p in selection.directory(cfg).iterdir()) == before
+        assert not selection.renewal.continuation_guard(cfg).exists()
+        assert not selection.renewal.product_transition_guard(cfg).exists()
+
+
+@pytest.mark.parametrize('output', ['intent', 'result', 'new_log', 'rollback_log', 'new_started'])
+def test_initial_current_refuses_stale_activation_output(monkeypatch, output):
+    with fixture(monkeypatch, initial_current=True) as (_root, _phase, _tx, _outcome, path, cfg):
+        target = cfg['step_receipts'][0][output] if output == 'new_started' else cfg[output]
+        Path(target).write_bytes(b'PUBLIC_STALE_OUTPUT')
+        with pytest.raises(ValueError):selection.adopt_current(path)
+
+
+def test_initial_orphan_exception_requires_explicit_selected_origin(monkeypatch):
+    import selfhost_windows_renewal_native as native
+    calls = []
+    monkeypatch.setattr(selection, 'preflight_current',
+                        lambda *_args: calls.append('ordinary'))
+    monkeypatch.setattr(native, 'preflight_initial_current',
+                        lambda *_args: calls.append('initial'))
+    cfg = {'initial_current': True, 'project': PROJECT,
+           'native': {'current': '/control/old', 'renewed': '/control/new'}}
+    values = {'old': {'leaf': b'PUBLIC_OLD'}, 'new': {'leaf': b'PUBLIC_NEW'}}
+    docker = SimpleNamespace(prefix=['SYNTHETIC_DOCKER'])
+    selection._native_current(cfg, 'old', values, docker, None)
+    selection._native_current(cfg, 'old', values, docker, None, initial_current=True)
+    assert calls == ['ordinary', 'initial']
+    with pytest.raises(ValueError):
+        selection._native_current(cfg, 'new', values, docker, None, initial_current=True)
+    origin = {'sequence': 1, 'decision': 'adopted-current',
+              'selected': {'secrets_dir': 'generation0', 'secrets_sha256': 'a'*64,
+                           'native_mirror': '/control/generation0'}}
+    later = {'sequence': 3, 'decision': 'rolled_back',
+             'selected': dict(origin['selected'])}
+    assert selection._initial_current_record(later, origin)
+    later['selected']['native_mirror'] = '/control/generation2'
+    assert not selection._initial_current_record(later, origin)
 
 
 def test_adopt_and_status_select_the_verified_new_inputs_with_empty_optionals(monkeypatch):

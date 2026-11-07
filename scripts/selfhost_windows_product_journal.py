@@ -296,7 +296,8 @@ def finish(config_path, marker, phases, *, authority_file):
                 require(snapshots == selection.decode(initial['000001.intent.json'])['inputs'])
                 choice = records[len(records)]['choice']
                 require(selection._prove(new_config, choice, values, stack,
-                    expected_data=marker['data_after_sha256'], authority_file=authority_file) == marker['data_after_sha256'])
+                    expected_data=marker['data_after_sha256'], authority_file=authority_file,
+                    initial_current=selection._initial_current_record(records[len(records)])) == marker['data_after_sha256'])
                 # Delayed publication must not reuse an earlier compatibility
                 # observation after a database/provider change.
                 import selfhost_windows_product_probe as probe

@@ -1,4 +1,5 @@
 """Real private NTFS staging guard and registered handoff; native/Docker mocked."""
+import json
 import sys
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
@@ -14,8 +15,17 @@ from test_selfhost_windows_recovery import candidate
 
 
 @contextmanager
-def staged_candidate(monkeypatch,*,fault=None):
-    with candidate(monkeypatch,warm=True) as (root,path,cfg,_out,events,_items,_observed,_tx):
+def staged_candidate(monkeypatch,*,fault=None,initial_current=False,rolled_back=False):
+    with candidate(monkeypatch,warm=True,initial_current=initial_current) as (root,path,cfg,_out,events,_items,_observed,tx):
+        if rolled_back:
+            assert initial_current
+            path,cfg = tx(2)
+            assert selection.prepare(path) == 2
+            Path(cfg['result']).write_text(json.dumps({'schema': selection.renewal.SCHEMA,
+                'project': cfg['project'], 'candidate_only': True,
+                'production_admission': False, 'automatic_lifecycle': False,
+                'result': 'rolled_back'}), encoding='utf-8')
+            assert selection.complete(path)['decision'] == 'rolled_back'
         output=root/('windows-renewal-'+'a'*32);output.mkdir()
         def reauthenticate(_cfg,_project,_prefix,session):
             events.append('authority')
@@ -40,6 +50,17 @@ def staged_candidate(monkeypatch,*,fault=None):
         monkeypatch.setattr(native,'preflight',lambda *_a:None)
         monkeypatch.setattr(selection.renewal,'native_preflight',lambda *_a:None)
         yield root,path,cfg,output,events
+
+
+def test_staging_after_initial_replacement_rollback_uses_initial_origin(monkeypatch):
+    with staged_candidate(monkeypatch, initial_current=True, rolled_back=True) as (_root,path,cfg,output,events):
+        with selection.selected_inputs(path) as lease:
+            assert lease.check_current() == 'd'*64
+            result = lease.stage_renewal(output, 'marty-selfhost-synthetic')
+        assert events.count('produce') == 1
+        assert selection.prepare(Path(result['next_config']),
+                                 staging_sha256=result['guard_sha256']) == 3
+        assert selection.status(path)['state'] == 'pending-reconciliation'
 
 
 def test_stage_result_waits_for_exit_and_guard_transfers_to_pending_selection(monkeypatch):
