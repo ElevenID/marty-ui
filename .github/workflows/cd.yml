@@ -856,19 +856,20 @@ jobs:
 
   official-interoperability:
     name: Collect seven official candidate lanes
-    needs: [resolve-transaction, prepare-official-candidate]
+    needs: [resolve-transaction, prepare-official-candidate, build-operator-catalog]
     permissions:
+      actions: read
       contents: read
       packages: read
       attestations: read
-    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@b71078cb18998014765bcfe6850b75714d852794
+    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@32869a7d667732148e0ba5ffa22f3fac42fbdedc
     with:
       lane: all
       collect_only: true
       candidate_artifact: stack-release-official-candidate-${{ github.run_id }}
       candidate_manifest_sha256: ${{ needs.prepare-official-candidate.outputs.manifest_sha256 }}
       candidate_tag: ${{ needs.resolve-transaction.outputs.tag }}
-      harness_revision: b71078cb18998014765bcfe6850b75714d852794
+      harness_revision: 32869a7d667732148e0ba5ffa22f3fac42fbdedc
 
   official-gate-evidence:
     timeout-minutes: 30
@@ -880,7 +881,7 @@ jobs:
     env:
       PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
-      HARNESS_SHA: b71078cb18998014765bcfe6850b75714d852794
+      HARNESS_SHA: 32869a7d667732148e0ba5ffa22f3fac42fbdedc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
