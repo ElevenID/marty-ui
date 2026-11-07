@@ -171,7 +171,7 @@ async fn data_integrity_credential_fields_cannot_bypass_registry_controls() {
         "public_jwk": registry_response(&key)["did_document"]["verificationMethod"][0]["publicKeyJwk"]
     });
     let context = CredentialVerificationContext {
-        resolved_issuer_public_jwk: None,
+        resolved_issuer_key: None,
         format: DetectedCredentialFormat::W3cVcdmDi,
         token: signed,
         nonce: None,
@@ -296,7 +296,7 @@ async fn exercise_registry(key: &SigningKey, signed: Value, format: DetectedCred
         let kernel =
             ResolvingCredentialKernel::new(Arc::new(NoPublic)).with_registry(Arc::new(registry));
         let context = CredentialVerificationContext {
-            resolved_issuer_public_jwk: None,
+            resolved_issuer_key: None,
             format,
             token: signed.clone(),
             nonce: None,
@@ -330,10 +330,40 @@ async fn exercise_registry(key: &SigningKey, signed: Value, format: DetectedCred
                 );
             } else {
                 assert_eq!(evidence.claims.get("role"), Some(&json!("member")));
+                let authenticated = evidence.authenticated_issuer.as_ref().unwrap();
+                assert_eq!(authenticated.issuer_id, DID);
+                assert_eq!(authenticated.key_id.as_deref(), Some(KID));
+                assert_eq!(
+                    authenticated.provenance.source,
+                    "organization_signing_registry"
+                );
+                assert_eq!(
+                    authenticated.provenance.issuer_organization_id.as_deref(),
+                    Some("org-1")
+                );
+                assert_eq!(
+                    authenticated.provenance.organization_id,
+                    Some(context.trust_profile.as_ref().unwrap().organization_id)
+                );
+                assert_eq!(
+                    authenticated.provenance.trust_profile_id,
+                    Some(context.trust_profile.as_ref().unwrap().id)
+                );
+                assert_eq!(
+                    authenticated
+                        .provenance
+                        .content_sha256
+                        .as_ref()
+                        .unwrap()
+                        .len(),
+                    64
+                );
+                assert!(authenticated.provenance.retrieved_at.is_some());
             }
         } else {
             assert!(evidence.claims.is_empty(), "{case}");
             assert!(evidence.issuer_id.is_none(), "{case}");
+            assert!(evidence.authenticated_issuer.is_none(), "{case}");
         }
     }
 }
@@ -423,7 +453,7 @@ async fn ob3_wrappers_apply_registry_controls_to_the_credential_the_native_verif
                 relationship["public_jwk"] = unrelated.clone();
             }
             let context = CredentialVerificationContext {
-                resolved_issuer_public_jwk: None,
+                resolved_issuer_key: None,
                 format: DetectedCredentialFormat::OpenbadgeV3,
                 token: token.clone(),
                 nonce: None,
@@ -508,7 +538,7 @@ async fn retired_assertion_wrapper_is_rejected_before_scoped_registry_lookup() {
     let issuer = fixture["credential"]["issuer"].as_str().unwrap();
     let method = fixture["governed_method"]["id"].as_str().unwrap();
     let mut context = CredentialVerificationContext {
-        resolved_issuer_public_jwk: None,
+        resolved_issuer_key: None,
         format: DetectedCredentialFormat::OpenbadgeV3,
         token: fixture["credential"].clone(),
         nonce: None,

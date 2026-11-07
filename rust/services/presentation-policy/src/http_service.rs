@@ -76,6 +76,7 @@ pub trait PresentationVerificationOrchestrator: Send + Sync {
 pub struct VerifiedPolicyMaterial {
     pub(crate) policy_facts: Value,
     pub(crate) authenticated_outer_jti: Option<String>,
+    pub(crate) authenticated_issuer: Option<crate::AuthenticatedIssuerEvidence>,
 }
 
 impl VerifiedPolicyMaterial {
@@ -83,6 +84,7 @@ impl VerifiedPolicyMaterial {
         Self {
             policy_facts,
             authenticated_outer_jti: None,
+            authenticated_issuer: None,
         }
     }
 
@@ -92,6 +94,10 @@ impl VerifiedPolicyMaterial {
 
     pub fn authenticated_outer_jti(&self) -> Option<&str> {
         self.authenticated_outer_jti.as_deref()
+    }
+
+    pub fn authenticated_issuer(&self) -> Option<&crate::AuthenticatedIssuerEvidence> {
+        self.authenticated_issuer.as_ref()
     }
 }
 
@@ -555,6 +561,7 @@ fn evaluate_verified_material_for_policy(
     let VerifiedPolicyMaterial {
         mut policy_facts,
         authenticated_outer_jti,
+        authenticated_issuer,
     } = material;
     let object = policy_facts
         .as_object_mut()
@@ -573,6 +580,7 @@ fn evaluate_verified_material_for_policy(
         &policy_facts,
         authentication_diagnostic.as_ref(),
         authenticated_outer_jti.as_deref(),
+        authenticated_issuer.as_ref(),
     ))
 }
 
@@ -1121,6 +1129,7 @@ fn project_evaluation(
     verified: &Value,
     diagnostic: Option<&Value>,
     authenticated_outer_jti: Option<&str>,
+    authenticated_issuer: Option<&crate::AuthenticatedIssuerEvidence>,
 ) -> Value {
     let errors = native["errors"].as_array().cloned().unwrap_or_default();
     let error_codes = errors
@@ -1152,6 +1161,12 @@ fn project_evaluation(
                 .filter(|id| !id.is_empty() && id.len() <= 2048 && !id.chars().any(char::is_control))
                 .filter(|id| signature_valid == Some(true)
                     && evidence.and_then(|credential| credential["credential_id"].as_str()) == Some(*id));
+            let issuer_authentication = authenticated_issuer.filter(|issuer| {
+                signature_valid == Some(true)
+                    && issuer.satisfies_contract()
+                    && evidence.and_then(|credential| credential["issuer_id"].as_str())
+                        == Some(issuer.issuer_id.as_str())
+            });
             let status_checked = evidence.map(|credential| {
                 credential["revocation_checked_at_epoch_seconds"].as_u64().is_some()
             });
@@ -1160,6 +1175,7 @@ fn project_evaluation(
                 "credential_template_id": result["credential_template_id"],
                 "satisfied": result["satisfied"],
                 "issuer_did": result["issuer_id"],
+                "authenticated_issuer": issuer_authentication,
                 "issuer_name": Value::Null,
                 "claim_results": result["claim_results"],
                 "authenticated_disclosures": authenticated_mdoc_disclosures(verified, result),
@@ -1518,6 +1534,7 @@ mod error_code_projection_tests {
                 &json!({"credentials": [evidence]}),
                 None,
                 None,
+                None,
             );
             let result = &projected["credential_results"][0];
             assert_eq!(result["revocation_checked"], !timestamp.is_null());
@@ -1539,6 +1556,7 @@ mod error_code_projection_tests {
                 &json!({"credentials": credentials}),
                 None,
                 None,
+                None,
             );
             let result = &projected["credential_results"][0];
             for key in [
@@ -1553,6 +1571,86 @@ mod error_code_projection_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn authenticated_issuer_requires_a_verified_unique_matching_credential() {
+        let issuer = crate::AuthenticatedIssuerEvidence {
+            issuer_id: "did:web:issuer.example".into(),
+            key_id: Some("did:web:issuer.example#assertion".into()),
+            algorithm: "EdDSA".into(),
+            provenance: crate::IssuerKeyProvenance {
+                mechanism: crate::IssuerKeyMechanism::DidAssertionMethod,
+                trust_profile_id: None,
+                organization_id: None,
+                issuer_organization_id: None,
+                source: "configured_public_resolver".into(),
+                retrieved_at: Some("2026-11-07T12:00:00Z".into()),
+                content_sha256: Some("a".repeat(64)),
+            },
+        };
+        let request: EvaluatePresentationRequest = serde_json::from_value(json!({
+            "vp_token": {}, "context": {"authenticated_issuer":issuer}
+        }))
+        .unwrap();
+        let native = json!({"decision":"allow", "credential_results":[{
+            "credential_template_id":"template-1", "issuer_id":issuer.issuer_id,
+            "satisfied":true, "errors":[]
+        }]});
+        let credential = json!({
+            "credential_template_ids":["template-1"], "issuer_id":issuer.issuer_id,
+            "signature_verified":true,
+        });
+        let projection =
+            |credentials: Value, authenticated: Option<&crate::AuthenticatedIssuerEvidence>| {
+                project_evaluation(
+                    native.clone(),
+                    &request,
+                    &json!({"credentials":credentials}),
+                    None,
+                    None,
+                    authenticated,
+                )
+            };
+        let projected: crate::AuthenticatedIssuerEvidence = serde_json::from_value(
+            projection(json!([credential]), Some(&issuer))["credential_results"][0]
+                ["authenticated_issuer"]
+                .clone(),
+        )
+        .unwrap();
+        assert_eq!(projected, issuer);
+        assert!(
+            projection(json!([credential]), None)["credential_results"][0]
+                .get("authenticated_issuer")
+                .is_none()
+        );
+        let mut invalid = credential.clone();
+        invalid["signature_verified"] = json!(false);
+        for credentials in [
+            json!([]),
+            json!([invalid]),
+            json!([credential.clone(), credential.clone()]),
+        ] {
+            assert!(
+                projection(credentials, Some(&issuer))["credential_results"][0]
+                    .get("authenticated_issuer")
+                    .is_none()
+            );
+        }
+        let mut malformed = issuer.clone();
+        malformed.provenance.content_sha256 = Some("not-a-digest".into());
+        assert!(
+            projection(json!([credential]), Some(&malformed))["credential_results"][0]
+                .get("authenticated_issuer")
+                .is_none()
+        );
+        let mut other = issuer;
+        other.issuer_id = "did:web:other.example".into();
+        assert!(
+            projection(json!([credential]), Some(&other))["credential_results"][0]
+                .get("authenticated_issuer")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1575,6 +1673,7 @@ mod error_code_projection_tests {
                 &json!({"credentials": credentials}),
                 None,
                 authenticated,
+                None,
             )
         };
         assert_eq!(

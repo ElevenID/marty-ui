@@ -50,12 +50,86 @@ pub struct CredentialStatusEvidence {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedIssuerKey {
+    /// The authority which authorized this key, before signature verification.
+    pub issuer_id: String,
+    pub public_jwk: Value,
+    pub provenance: IssuerKeyProvenance,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum IssuerKeyMechanism {
+    DidAssertionMethod,
+    TrustProfileKey,
+}
+
+/// Verifier-owned origin of a selected public key. This alone is not evidence
+/// that a credential was signed by the issuer; the kernel adds authentication.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IssuerKeyProvenance {
+    pub mechanism: IssuerKeyMechanism,
+    pub trust_profile_id: Option<Uuid>,
+    pub organization_id: Option<Uuid>,
+    pub issuer_organization_id: Option<String>,
+    pub source: String,
+    pub retrieved_at: Option<String>,
+    pub content_sha256: Option<String>,
+}
+
+/// Published only after the signature and exact issuer-to-key binding pass.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticatedIssuerEvidence {
+    pub issuer_id: String,
+    pub key_id: Option<String>,
+    pub algorithm: String,
+    pub provenance: IssuerKeyProvenance,
+}
+
+impl AuthenticatedIssuerEvidence {
+    /// Bounds for the canonical protocol response, independent of trust
+    /// acceptance or the algorithms supported by a credential verifier.
+    pub(crate) fn satisfies_contract(&self) -> bool {
+        let bounded = |value: &str, maximum: usize| {
+            !value.is_empty() && value.chars().take(maximum + 1).count() <= maximum
+        };
+        bounded(&self.issuer_id, 2048)
+            && self.key_id.as_deref().is_none_or(|v| bounded(v, 2048))
+            && bounded(&self.algorithm, 64)
+            && bounded(&self.provenance.source, 256)
+            && self
+                .provenance
+                .issuer_organization_id
+                .as_deref()
+                .is_none_or(|v| bounded(v, 128))
+            && self.provenance.retrieved_at.as_deref().is_none_or(|v| {
+                // The producer uses a conservative calendar timestamp profile:
+                // T/t separators, nonzero years and seconds below 60. Chrono
+                // additionally accepts space separators, year zero and leap seconds.
+                v.is_ascii()
+                    && v.len() <= 64
+                    && matches!(v.as_bytes().get(10), Some(&b'T' | &b't'))
+                    && v.get(..4) != Some("0000")
+                    && v.get(17..19) != Some("60")
+                    && chrono::DateTime::parse_from_rfc3339(v).is_ok()
+            })
+            && self.provenance.content_sha256.as_deref().is_none_or(|v| {
+                v.len() == 64
+                    && v.bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct CredentialVerificationContext {
     /// Derived from the saved policy, never from caller-supplied context.
     /// A verified presentation need not carry a credential for this obligation.
     pub presentation_only: bool,
     /// Verifier-owned assertion key, separate from trust acceptance. Never copied from request context.
-    pub resolved_issuer_public_jwk: Option<Value>,
+    pub resolved_issuer_key: Option<ResolvedIssuerKey>,
     pub format: DetectedCredentialFormat,
     pub token: Value,
     pub nonce: Option<String>,
@@ -79,6 +153,7 @@ pub struct CredentialVerificationEvidence {
     pub credential_status_ids: Vec<String>,
     pub claims: Map<String, Value>,
     pub issuer_id: Option<String>,
+    pub authenticated_issuer: Option<AuthenticatedIssuerEvidence>,
     pub issued_at_epoch_seconds: Option<u64>,
     pub algorithm: Option<String>,
     pub validity_checked: bool,
@@ -224,7 +299,7 @@ impl VerifiedFactsOrchestrator {
 
         let context = CredentialVerificationContext {
             presentation_only,
-            resolved_issuer_public_jwk: None,
+            resolved_issuer_key: None,
             format,
             token: request.vp_token.clone(),
             nonce: (requires_bound_presentation && challenge_required)
@@ -246,11 +321,19 @@ impl VerifiedFactsOrchestrator {
         if !evidence.verified {
             evidence.claims.clear();
             evidence.issuer_id = None;
+            evidence.authenticated_issuer = None;
         }
 
-        let issuer_id = evidence
-            .issuer_id
-            .as_deref()
+        let authenticated_issuer = if evidence.verified && !presentation_only {
+            evidence.authenticated_issuer.clone()
+        } else {
+            None
+        };
+
+        let issuer_id = authenticated_issuer
+            .as_ref()
+            .map(|issuer| issuer.issuer_id.as_str())
+            .or(evidence.issuer_id.as_deref())
             .filter(|issuer| !issuer.trim().is_empty())
             .unwrap_or("unknown")
             .to_string();
@@ -382,6 +465,7 @@ impl VerifiedFactsOrchestrator {
         Ok(VerifiedPolicyMaterial {
             policy_facts: facts,
             authenticated_outer_jti,
+            authenticated_issuer,
         })
     }
 }
