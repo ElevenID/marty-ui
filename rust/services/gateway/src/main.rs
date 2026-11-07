@@ -1,4 +1,4 @@
-use std::{error::Error, ffi::OsStr, fs, io::Write, sync::Arc, time::Duration};
+use std::{cell::Cell, error::Error, ffi::OsStr, fs, io::Write, sync::Arc, time::Duration};
 
 use marty_gateway::{
     authorization::OrganizationMembershipProvider,
@@ -18,9 +18,9 @@ use marty_gateway::{
     transport::ReqwestUpstream,
 };
 use marty_signing_grant::{configuration::GrantAuthority, SigningOrigin};
-use mmf_platform::{GatewayProxy, KeylessGrpcTransportOptions, ProxyConfig};
+use mmf_platform::{GatewayProxy, KeylessGrpcTransportOptions, PlatformError, ProxyConfig};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -93,13 +93,44 @@ async fn main() -> Result<(), Box<dyn Error>> {
     })
     .await?;
     let auth_channel = if let Some(tls) = &config.auth_grpc_client_tls {
-        tls.identity
-            .grpc_channel_connected(
-                &config.auth_grpc_target,
-                &tls.ca_certificate,
-                KeylessGrpcTransportOptions::default(),
-            )
-            .await?
+        // Keep eager peer verification, but allow Auth/OpenBao to recover within
+        // the existing Kubernetes startup-probe budget instead of crash-looping.
+        let started = tokio::time::Instant::now();
+        let attempts = Cell::new(0_u32);
+        let channel = marty_service_runtime::startup::retry_startup_dependency(
+            Duration::from_secs(300),
+            Duration::from_secs(2),
+            || {
+                attempts.set(attempts.get() + 1);
+                tls.identity.grpc_channel_connected(
+                    &config.auth_grpc_target,
+                    &tls.ca_certificate,
+                    KeylessGrpcTransportOptions::default(),
+                )
+            },
+            |error| {
+                let retryable = matches!(error, PlatformError::ProviderUnavailable(_));
+                if retryable {
+                    // Dependency URLs, credentials and provider error details
+                    // must not enter startup diagnostics.
+                    warn!(
+                        dependency = "auth-mtls",
+                        attempt = attempts.get(),
+                        elapsed_seconds = started.elapsed().as_secs(),
+                        "Gateway startup dependency unavailable; retrying within deadline"
+                    );
+                }
+                retryable
+            },
+        )
+        .await?;
+        info!(
+            dependency = "auth-mtls",
+            attempts = attempts.get(),
+            elapsed_seconds = started.elapsed().as_secs(),
+            "Gateway startup dependency verified"
+        );
+        channel
     } else {
         grpc_channel(&config, &config.auth_grpc_target, None)?
     };

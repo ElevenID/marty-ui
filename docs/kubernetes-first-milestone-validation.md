@@ -1,14 +1,19 @@
-# First Kubernetes development trial — 2026-11-05
+# Kubernetes development trial history
 
-## Result
+The corrected November 7 runtime passed application acceptance and same-node
+reboot/readback, then the trial was stopped. The earlier failed trial and its
+corrections remain recorded below; the latest qualification has its own dated
+section: [November 7 qualification](#corrected-runtime-qualification--2026-11-07-utc).
+
+## Initial trial result — 2026-11-05
 
 The standard infrastructure path passed its live bootstrap and same-node reboot
 checks. **Application acceptance is blocked on a corrected signed runtime.**
 The tested nightly panics when several services construct verified Redis TLS
 clients with both Rustls providers enabled. The source correction and its
 regression test are included in [PR #1809](https://github.com/ElevenID/marty-ui/pull/1809).
-This report does not claim a successful application login, credential issuance,
-complete gateway readiness, or consumer-installer qualification.
+That initial trial did not establish successful application login, credential
+issuance, complete gateway readiness, or consumer-installer qualification.
 
 ## Exact tested inputs
 
@@ -109,7 +114,7 @@ returns promptly and attempts only the first Secret. The local real-client
 check took approximately 1.7 seconds; it does not establish the cause of the
 slower CI run. The new checkpoint must still pass protected-source CI.
 
-## Remaining acceptance sequence
+## Acceptance sequence recorded after the initial trial
 
 1. The runtime correction completed the normal protected-source CI and merged
    in PR #1809 as `9cd6028da879a34b305bb643203e4a462f55f036`.
@@ -165,3 +170,52 @@ These checks establish the source corrections; they do not establish
 successful live application acceptance. The next trial still requires the
 corrected signed runtime and the complete acceptance/reboot/readback sequence
 above.
+
+## Corrected-runtime qualification — 2026-11-07 UTC
+
+A fresh, bounded AWS development trial used the same standard K3s, Helm,
+cert-manager and official OpenBao architecture described above, on 2 vCPU and
+8 GiB RAM. No bootstrap, Helm installation or issuance was replayed to recover
+from an uncertain result. Existing retained trials remained stopped.
+
+| Input | Qualified value |
+| --- | --- |
+| Runtime release | `v1.1.273-nightly.20261107.42388503575` |
+| Runtime and chart source | `ca58b8bec939f5b26bebecd849edf55b5c4af5ae` |
+| Source tree | `6626f922e99f8a83ddbf31af4e2b7caf6fd6baca`; checkout remained clean |
+| Producer | Nightly run `42388528098`, attempt `1` |
+| Fixed shutdown deadline | `2026-11-07 18:26:33 UTC`; unchanged across reboot |
+
+The complete 15-file artifact set passed the existing signature, provenance
+and image-binding verification. Installation used the authenticated immutable
+images and ordinary chart configuration, including verified Redis TLS and
+the actual HTTPS origin with its non-default port.
+
+| Check | Observed result |
+| --- | --- |
+| Installation | All 20 Deployments and three StatefulSets became Ready; migration and Keycloak configuration Jobs completed. |
+| Application acceptance | Passed at `16:57:59 UTC`: real operator UI login, normal issuer/template configuration, one native issuance, OID4VCI redemption, signature/holder-binding verification and persisted transaction/credential readback. |
+| Before reboot | Full native readiness and identity evidence passed at `17:01:40 UTC`. |
+| Actual reboot | Changed host and Node boot IDs established a real reboot. OpenBao automatically unsealed with the same cluster ID; all four PVC/PV identities and bindings were retained. |
+| First recovery observation | The 360-second Deployment readiness wait failed; its failure receipt was retained at `17:10:51 UTC`. Gateway and UI were not Ready; the other 21 required workloads and both Jobs were ready/complete. |
+| Subsequent recovery | Gateway and UI Ready conditions transitioned at `17:10:54 UTC`. A separate full check passed at `17:13:54 UTC`, without changing runtime, configuration, storage or credentials. |
+| Resume | Passed at `17:15:29 UTC`, verifying the same retained credential hash/signature and the same persisted issuance transaction and active credential. No new credential was issued. |
+| External HTTPS | An independent operator browser reached the empty sign-in form with normal certificate validation before and after reboot. Authenticated journeys were exercised separately by the on-node runner. |
+| Other recovery evidence | All three certificates were Ready and unexpired; the original shutdown timer remained active. Kubernetes Secret encryption remained enabled, and the sampled post-reboot OOM-kill counter was zero. |
+| Shutdown | Final AWS readback at `17:27:14 UTC` confirmed the fresh and preceding failed-trial instances stopped, before the fixed deadline. Encrypted storage and private recovery state were retained. |
+
+The first recovery failure was real and remains part of this result. Gateway's
+last unsuccessful start ran from `17:07:49` to `17:07:55 UTC` and exited with
+code 1. Its next start was at `17:10:47 UTC`, before the later Ready transition.
+The process exits and restart backoff require a startup correction; widening an
+observer's timeout alone would not address them.
+
+This trial predates the subsequent bounded retry for gateway's eager Auth mTLS
+startup. It does **not** qualify that new retry on AWS or establish a recovery
+time guarantee. The trial establishes one successful application journey and
+retention across a reboot of the same single node. It does not establish high
+availability, node replacement, backup restoration, load capacity, credential
+renewal or consumer-installer release admission. The eight-hour workload and
+two-hour migration credential limits remain unchanged. Public receipts and
+allowlisted status evidence were preserved separately from credentials, seal
+material, kubeconfig contents and raw logs.
