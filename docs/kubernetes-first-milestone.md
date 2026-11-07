@@ -175,6 +175,29 @@ credentials through Kubernetes Secrets. The initial application operator has a
 separate generated password in the `marty-operator` Secret. It does not reuse
 Keycloak's bootstrap administrator password.
 
+The private state retains the original producer identity needed for later
+credential lifecycle work. Before OpenBao initialization,
+`initialize-requested.json` records the namespace UID, producer nonce and exact
+workload policy project. The nonce is independently generated; the bootstrap
+UUID cannot reconstruct it. Keep this record even when a later step fails.
+
+After credential publication and producer cleanup succeed,
+`bootstrap-complete.json` includes a `credentialLifecycle` object with schema
+`marty.kubernetes-credential-lifecycle/v1`. It binds that same producer identity
+to the namespace UID and the surrounding receipt's OpenBao cluster ID. Bootstrap
+checks the namespace and cluster identities before and after credential
+provisioning and withholds completion if either changes.
+
+The lifecycle object also records the requested policies, TTL and token options
+for all 13 ordinary application/migration token inputs: twelve eight-hour
+requests and the separate two-hour migration request. These settings come from
+the same specification that issues the tokens. They are requested settings,
+not observed expiration times or proof that a workload has loaded a token.
+Native workload TLS and Keycloak outputs remain separate from this inventory.
+The receipt contains no token values, token hashes, accessors or passwords.
+It preserves initial identity and configuration; it does not authorize replay,
+install renewal, or make runtime credential replacement available.
+
 If bootstrap stops, retain its namespace and private state and diagnose the
 reported step. Do not rerun initialization with a new output path against the
 same store. Reconcile the existing attempt or deliberately start a new isolated

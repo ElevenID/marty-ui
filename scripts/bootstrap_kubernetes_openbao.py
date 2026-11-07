@@ -42,6 +42,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROFILE = ROOT / "deploy/helm/openbao/values-k3s-dev.yaml"
 UPSTREAM = ROOT / "deploy/helm/openbao/upstream.json"
 NAMESPACE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,255}\Z")
 KEYCLOAK_FILES = {
     "keycloak_signing_kms_token", "keycloak_master_rs256_cert", "keycloak_11id_rs256_cert",
     "keycloak_master_cookie_token", "keycloak_master_ciba_token",
@@ -216,7 +217,65 @@ def take_tls_outputs(payload: bytes, output: Path) -> None:
     require(observed == expected, "TLS producer output is incomplete")
 
 
-def prepare_namespace(transport: Transport, bootstrap_id: str) -> None:
+def namespace_identity(transport: Transport) -> dict[str, str]:
+    observed = json.loads(transport.kubectl("namespace identity", "get", "namespace",
+                                            transport.namespace, "-o", "json"))
+    metadata = observed.get("metadata") if isinstance(observed, dict) else None
+    require(isinstance(metadata, dict) and metadata.get("name") == transport.namespace,
+            "Kubernetes namespace identity differs")
+    uid = metadata.get("uid")
+    require(isinstance(uid, str) and IDENTIFIER.fullmatch(uid) is not None,
+            "Kubernetes namespace UID is missing or invalid")
+    return {"name": transport.namespace, "uid": uid}
+
+
+def openbao_cluster_identity(transport: Transport) -> str:
+    observed = json.loads(transport.execute("openbao-0", ["bao", "status", "-format=json"]))
+    require(isinstance(observed, dict) and observed.get("initialized") is True
+            and observed.get("sealed") is False and observed.get("type") == "static"
+            and observed.get("storage_type") == "raft", "OpenBao identity status differs")
+    cluster_id = observed.get("cluster_id")
+    require(isinstance(cluster_id, str) and IDENTIFIER.fullmatch(cluster_id) is not None,
+            "OpenBao cluster ID is missing or invalid")
+    return cluster_id
+
+
+def ordinary_token_requests() -> list[dict]:
+    """The closed ordinary-token request inventory, excluding native TLS/Keycloak outputs.
+
+    These are requested settings, not observed expiry or live lookup results.
+    The same entries drive issuance and the successful bootstrap receipt.
+    """
+    return [{"input": name, "requestedPolicies": list(policies),
+             "requestedTtl": "2h" if name == "OPENBAO_BOOTSTRAP_TOKEN" else "8h",
+             "requestedRenewable": False, "requestedOrphan": True,
+             "requestedNoDefaultPolicy": True}
+            for name, policies in TOKEN_POLICIES.items()]
+
+
+def provision_application_tokens(transport: Transport, root_token: str,
+                                 credential_dir: Path, files: dict[str, Path]) -> list[dict]:
+    requests = ordinary_token_requests()
+    for request in requests:
+        name = request["input"]
+        command = ["bao", "token", "create"]
+        for field, flag in (("requestedNoDefaultPolicy", "-no-default-policy"),
+                            ("requestedOrphan", "-orphan")):
+            if request[field]:
+                command.append(flag)
+        command += ["-ttl=" + request["requestedTtl"],
+                    "-renewable=" + str(request["requestedRenewable"]).lower(), "-field=token",
+                    *["-policy=" + policy for policy in request["requestedPolicies"]]]
+        token = root_command(transport, root_token, command).strip()
+        require(20 <= len(token) <= 1024 and b"\n" not in token and b"\r" not in token
+                and token != root_token.encode(), "OpenBao scoped token output differs")
+        path = credential_dir / name.lower()
+        write_new(path, token)
+        files[name] = path
+    return requests
+
+
+def prepare_namespace(transport: Transport, bootstrap_id: str) -> dict[str, str]:
     found = transport.kubectl("namespace inspection", "get", "namespace",
                               transport.namespace, "--ignore-not-found", "-o", "json")
     if found.strip():
@@ -236,17 +295,17 @@ def prepare_namespace(transport: Transport, bootstrap_id: str) -> None:
             "metadata": {"name": transport.namespace,
                 "labels": {"app.kubernetes.io/part-of": "marty-development",
                            "marty.elevenid.com/bootstrap-id": bootstrap_id}}})
-    namespace = json.loads(transport.kubectl("namespace identity", "get", "namespace",
-                                             transport.namespace, "-o", "json"))
-    write_new(transport.state / "namespace.json", encoded({
-        "name": transport.namespace, "uid": namespace["metadata"]["uid"],
-        "bootstrapId": bootstrap_id,
-    }))
+    namespace = namespace_identity(transport)
+    write_new(transport.state / "namespace.json", encoded({**namespace, "bootstrapId": bootstrap_id}))
+    return namespace
 
 
 def provision_workload_identity(transport: Transport, *, image: str, operator: Path,
-                               root_token: str, ca: bytes, nonce: str,
+                               root_token: str, ca: bytes, nonce: str, workload_project: str,
                                files: dict[str, Path], pull_secrets: list[str]) -> None:
+    require(re.fullmatch(r"[0-9a-f]{12}", nonce) is not None
+            and workload_project == "marty-selfhost-disposable-k8s-" + nonce,
+            "native producer identity differs from the retained bootstrap project")
     pod = "marty-kms-bootstrap-" + nonce
     # A bounded disposable transport pod runs the existing native producers.
     # No authority is present in its spec; private inputs arrive over exec stdin.
@@ -281,7 +340,7 @@ def provision_workload_identity(transport: Transport, *, image: str, operator: P
         transport.execute(pod, ["env",
             "MARTY_TLS_BOOTSTRAP_PROFILE=selfhost-disposable",
             "MARTY_SELFHOST_DISPOSABLE_OPENBAO=1",
-            "MARTY_SELFHOST_PROJECT=marty-selfhost-disposable-k8s-" + nonce,
+            "MARTY_SELFHOST_PROJECT=" + workload_project,
             "BAO_ADDR=https://openbao:8200", "BAO_CACERT=/tmp/ca.crt",
             "BAO_ROOT_TOKEN_FILE=/tmp/root.token", "SELFHOST_TLS_OUTPUT_DIR=/tmp/workload-tls",
             "/usr/local/bin/marty-passport-tls-bootstrap"], timeout=600)
@@ -388,7 +447,8 @@ def bootstrap(args: argparse.Namespace) -> None:
     transport = Transport(state, state / "kubeconfig", args.namespace, kubectl)
     bootstrap_id = str(uuid.uuid4())
     nonce = secrets.token_hex(6)
-    prepare_namespace(transport, bootstrap_id)
+    workload_project = "marty-selfhost-disposable-k8s-" + nonce
+    namespace = prepare_namespace(transport, bootstrap_id)
     seal = secrets.token_bytes(32)
     write_new(state / "static.key", seal, 0o400)
     transport.create({"apiVersion": "v1", "kind": "Secret",
@@ -416,6 +476,8 @@ def bootstrap(args: argparse.Namespace) -> None:
             "OpenBao must be fresh and use the selected static seal")
     write_new(state / "initialize-requested.json", encoded({
         "bootstrapId": bootstrap_id, "namespace": args.namespace,
+        "namespaceUid": namespace["uid"], "producerNonce": nonce,
+        "workloadProject": workload_project,
         "operation": "bao operator init", "recoveryShares": 1, "recoveryThreshold": 1,
     }))
     initialized = transport.execute("openbao-0", [
@@ -431,6 +493,7 @@ def bootstrap(args: argparse.Namespace) -> None:
             "native OpenBao initialization output differs")
     transport.kubectl("unsealed OpenBao readiness", "wait", "--for=condition=Ready",
                       "pod/openbao-0", "--timeout=180s", timeout=210)
+    openbao_cluster_id = openbao_cluster_identity(transport)
     ca = transport.execute("openbao-0", ["cat", "/bao/data/tls/ca.crt"])
     require(b"BEGIN CERTIFICATE" in ca and b"PRIVATE KEY" not in ca, "OpenBao public CA is invalid")
     credential_dir = state / "credentials"
@@ -442,16 +505,7 @@ def bootstrap(args: argparse.Namespace) -> None:
     transport.upload("openbao-0", init_script, init_script_bytes)
     root_command(transport, root_token, ["env", "DIDCOMM_KMS_PLUGIN_REQUIRED=true",
                                        "/bin/sh", init_script], timeout=600)
-    for name, policies in TOKEN_POLICIES.items():
-        command = ["bao", "token", "create", "-no-default-policy", "-orphan",
-                   "-ttl=2h" if name == "OPENBAO_BOOTSTRAP_TOKEN" else "-ttl=8h",
-                   "-renewable=false", "-field=token", *["-policy=" + policy for policy in policies]]
-        token = root_command(transport, root_token, command).strip()
-        require(20 <= len(token) <= 1024 and b"\n" not in token and token != root_token.encode(),
-                "OpenBao scoped token output differs")
-        path = credential_dir / name.lower()
-        write_new(path, token)
-        files[name] = path
+    token_requests = provision_application_tokens(transport, root_token, credential_dir, files)
     for name in SCALAR_CREDENTIALS:
         path = credential_dir / name.lower()
         write_new(path, ("Aa1!" + secrets.token_hex(24) if name == "KEYCLOAK_ADMIN_PASSWORD"
@@ -462,19 +516,24 @@ def bootstrap(args: argparse.Namespace) -> None:
     files["MARTY_ORG_ADMIN_PASSWORD"] = operator_password
     provision_workload_identity(transport, image=values["images"]["services"],
         operator=operator, root_token=root_token, ca=ca, nonce=nonce,
-        files=files, pull_secrets=args.image_pull_secret)
+        workload_project=workload_project, files=files, pull_secrets=args.image_pull_secret)
     publish_credentials(transport, operator, files)
-    observed = json.loads(transport.execute("openbao-0", ["bao", "status", "-format=json"]))
-    require(observed.get("initialized") is True and observed.get("sealed") is False
-            and observed.get("type") == "static" and observed.get("storage_type") == "raft",
-            "OpenBao final status differs")
+    require(namespace_identity(transport) == namespace,
+            "Kubernetes namespace changed during bootstrap; completion withheld")
+    require(openbao_cluster_identity(transport) == openbao_cluster_id,
+            "OpenBao cluster changed during bootstrap; completion withheld")
     write_new(state / "bootstrap-complete.json", encoded({
         "bootstrapId": bootstrap_id, "namespace": args.namespace,
-        "openbaoClusterId": observed.get("cluster_id"), "openbaoChart": upstream["version"],
+        "openbaoClusterId": openbao_cluster_id, "openbaoChart": upstream["version"],
         "runtimeSourceSha": args.runtime_source_sha, "chartSourceSha": args.chart_source_sha,
         "openbaoImage": values["images"]["openbao_didcomm"],
         "status": "openbao-and-application-credentials-ready",
         "credentialLifetimeHours": 8, "migrationBootstrapLifetimeHours": 2,
+        "credentialLifecycle": {
+            "schema": "marty.kubernetes-credential-lifecycle/v1",
+            "namespaceUid": namespace["uid"], "producerNonce": nonce,
+            "workloadProject": workload_project, "ordinaryTokens": token_requests,
+        },
     }))
     print("OpenBao is initialized and unsealed; application credentials are installed.")
     print("Keep the private state directory. Finish first-install migrations within two hours.")
