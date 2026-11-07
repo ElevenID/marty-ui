@@ -8,6 +8,7 @@ import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -65,7 +66,8 @@ def fixture(monkeypatch, *, initial_current=False):
             Path(cfg['result']).write_text(json.dumps({'schema': selection.renewal.SCHEMA,
                 'project': PROJECT, 'candidate_only': True, 'production_admission': False,
                 'automatic_lifecycle': False, 'result': result}), encoding='utf-8')
-        def prove(cfg, choice, _values, _stack, *, expected_data=None, authority_file=None):
+        def prove(cfg, choice, _values, _stack, *, expected_data=None, authority_file=None,
+                  initial_current=False):
             prefix = 'renewed' if choice == 'new' else 'current'
             selection.require(phase['both'] or Path(cfg[prefix+'_secrets']) == phase['active'])
             if expected_data is not None:selection.require(expected_data == phase['data'])
@@ -110,6 +112,24 @@ def test_initial_current_pending_intent_completes_only_after_reproof(monkeypatch
             '000001.intent.json','000001.selection.json','owner.json']
 
 
+def test_initial_current_pending_intent_rejects_late_transition_write(monkeypatch):
+    with fixture(monkeypatch, initial_current=True) as (_root, _phase, _tx, _outcome, path, cfg):
+        original_append = selection._append
+        def interrupt(directory, raw, name, value, stack):
+            if name == '000001.selection.json':raise RuntimeError('synthetic interrupted write')
+            return original_append(directory, raw, name, value, stack)
+        monkeypatch.setattr(selection, '_append', interrupt)
+        with pytest.raises(RuntimeError):selection.adopt_current(path)
+        monkeypatch.setattr(selection, '_append', original_append)
+        original_prove = selection._prove
+        def tamper(*args, **kwargs):
+            Path(cfg['intent']).write_bytes(b'PUBLIC_LATE_TRANSITION')
+            return original_prove(*args, **kwargs)
+        monkeypatch.setattr(selection, '_prove', tamper)
+        with pytest.raises(ValueError):selection.complete(path)
+        assert not (selection.directory(cfg)/'000001.selection.json').exists()
+
+
 def test_initial_current_can_select_first_real_replacement(monkeypatch):
     with fixture(monkeypatch, initial_current=True) as (_root, phase, tx, outcome, path, _cfg):
         selection.adopt_current(path)
@@ -122,6 +142,32 @@ def test_initial_current_can_select_first_real_replacement(monkeypatch):
         assert selection.status(path)['state'] == 'selected'
         with selection.selected_inputs(next_path) as lease:
             assert lease.secrets_dir == Path(next_cfg['renewed_secrets'])
+
+
+@pytest.mark.parametrize('output', ['intent', 'result', 'new_log', 'rollback_log', 'new_started'])
+def test_initial_current_refuses_stale_activation_output(monkeypatch, output):
+    with fixture(monkeypatch, initial_current=True) as (_root, _phase, _tx, _outcome, path, cfg):
+        target = cfg['step_receipts'][0][output] if output == 'new_started' else cfg[output]
+        Path(target).write_bytes(b'PUBLIC_STALE_OUTPUT')
+        with pytest.raises(ValueError):selection.adopt_current(path)
+
+
+def test_initial_orphan_exception_requires_explicit_selected_origin(monkeypatch):
+    import selfhost_windows_renewal_native as native
+    calls = []
+    monkeypatch.setattr(selection, 'preflight_current',
+                        lambda *_args: calls.append('ordinary'))
+    monkeypatch.setattr(native, 'preflight_initial_current',
+                        lambda *_args: calls.append('initial'))
+    cfg = {'initial_current': True, 'project': PROJECT,
+           'native': {'current': '/control/old', 'renewed': '/control/new'}}
+    values = {'old': {'leaf': b'PUBLIC_OLD'}, 'new': {'leaf': b'PUBLIC_NEW'}}
+    docker = SimpleNamespace(prefix=['SYNTHETIC_DOCKER'])
+    selection._native_current(cfg, 'old', values, docker, None)
+    selection._native_current(cfg, 'old', values, docker, None, initial_current=True)
+    assert calls == ['ordinary', 'initial']
+    with pytest.raises(ValueError):
+        selection._native_current(cfg, 'new', values, docker, None, initial_current=True)
 
 
 def test_adopt_and_status_select_the_verified_new_inputs_with_empty_optionals(monkeypatch):

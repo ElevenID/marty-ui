@@ -230,11 +230,15 @@ def repair(config, choice, values, record, generation_intent, raw, journal, new_
     boundary('authority', 'started')
     require(reauthenticate(config['native'], config['project'], docker.prefix, authority.rsplit('/', 1)[0]) == authority)
     boundary('authority', 'completed')
-    require(selection._prove(config, choice, values, stack, expected_data=record['data_sha256'], authority_file=authority) == record['data_sha256'])
+    require(selection._prove(config, choice, values, stack, expected_data=record['data_sha256'],
+                             authority_file=authority,
+                             initial_current=selection._initial_current_record(record)) == record['data_sha256'])
     changed_config = effective_config(config, intent['new'])
     def verify(cfg):
         require(renewal.observations(docker.containers(), config['project'], {'applicant'}) == protected)
-        require(selection._prove(cfg, choice, values, stack, expected_data=record['data_sha256'], authority_file=authority) == record['data_sha256'])
+        require(selection._prove(cfg, choice, values, stack, expected_data=record['data_sha256'],
+                                 authority_file=authority,
+                                 initial_current=selection._initial_current_record(record)) == record['data_sha256'])
         require(renewal.observations(docker.containers(), config['project'], {'applicant'}) == protected)
     def apply(phase, cmd, model):
         renewal.recreate(docker, cmd, {'applicant'}, services, model, root/(phase+'.log'),

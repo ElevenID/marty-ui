@@ -178,7 +178,10 @@ def _parse(raw, expected, *, allow_pending_model=False):
                 require(isinstance(record['decision'], str) and record['decision'] in decisions)
                 require((record['decision'] in {'adopted', 'activated', 'reconciled-new'}) == (record['choice'] == 'new'))
                 require((number == 1) == (record['decision'] in {'adopted', 'adopted-current'}))
-                if record['decision'] == 'adopted-current':require(number == 1 and record['choice'] == 'old')
+                if record['decision'] == 'adopted-current':
+                    require(number == 1 and record['choice'] == 'old'
+                            and record['result_sha256'] == digest(b'')
+                            and record['transition_intent_sha256'] == digest(b''))
                 if number == 1 and expected.get('initial_current'):
                     require(record['decision'] == 'adopted-current')
             require(record['result_sha256'] is not None or record['decision'].startswith('reconciled-') or number == 1 and carry)
@@ -337,21 +340,28 @@ def _inspect(config, choice, values, stack, *, expected_data=None, require_ready
             'cwd': Path(config['compose_file']).parent}
 
 
-def _native_current(config, choice, values, docker, authority_file):
+def _initial_current_record(record):
+    return record['sequence'] == 1 and record['decision'] == 'adopted-current'
+
+
+def _native_current(config, choice, values, docker, authority_file, *, initial_current=False):
     native = dict(config['native']);native['current'] = native['renewed'] if choice == 'new' else native['current']
     if authority_file is not None:native['token_file'] = authority_file
-    if config.get('initial_current') is True and choice == 'old':
+    require(not initial_current or (config.get('initial_current') is True and choice == 'old'))
+    if initial_current:
         from selfhost_windows_renewal_native import preflight_initial_current
         preflight_initial_current(native, config['project'], values[choice], docker.prefix)
     else:
         preflight_current(native, config['project'], values[choice], docker.prefix)
 
 
-def _prove(config, choice, values, stack, *, expected_data=None, authority_file=None):
+def _prove(config, choice, values, stack, *, expected_data=None, authority_file=None,
+           initial_current=False):
     """Full readiness plus signed native current-custody/lifetime admission."""
     observed = _inspect(config, choice, values, stack, expected_data=expected_data)
     docker = observed['docker']
-    _native_current(config, choice, values, docker, authority_file)
+    _native_current(config, choice, values, docker, authority_file,
+                    initial_current=initial_current)
     observed['context'].check(before_intent=True)
     return observed['data_sha256']
 
@@ -395,10 +405,9 @@ def adopt_current(config_path, *, authority_file=None):
         require(config.get('initial_current') is True and not renewal.recovery_pending(config))
         require(not raw or set(raw) == {'owner.json'} and decode(raw['owner.json']) == {'schema': SCHEMA, 'binding': expected})
         values, snapshots = _inputs(config, stack, initial_current=True)
-        transition = stack.enter_context(renewal.hold_private_input(Path(config['intent'])))
-        result = stack.enter_context(renewal.hold_private_input(Path(config['result'])))
-        require(not transition and not result)
-        data_hash = _prove(config, 'old', values, stack, authority_file=authority_file)
+        transition, result = _empty_initial_activation(config, stack)
+        data_hash = _prove(config, 'old', values, stack, authority_file=authority_file,
+                           initial_current=True)
         if not raw:_append(root, raw, 'owner.json', {'schema': SCHEMA, 'binding': expected}, stack)
         intent = {'schema': SCHEMA, 'sequence': 1, 'parent': None, 'config_path': str(Path(config_path)),
                   'config_file_sha256': digest(raw_config), 'config_sha256': config_digest(config),
@@ -411,6 +420,17 @@ def adopt_current(config_path, *, authority_file=None):
         _append(root, raw, '000001.selection.json', record, stack)
         _parse(raw, expected)
     return record
+
+
+def _empty_initial_activation(config, stack):
+    """Hold every activation output empty through initial-current proof."""
+    paths = [config[key] for key in ('intent', 'result', 'new_log', 'rollback_log')]
+    for step in config['step_receipts']:
+        require(set(step) == {'new_started', 'new_completed', 'rollback_started', 'rollback_completed'})
+        paths.extend(step.values())
+    held = [stack.enter_context(renewal.hold_private_input(Path(path))) for path in paths]
+    require(all(not raw for raw in held))
+    return held[0], held[1]
 
 
 def prepare(config_path, *, authority_file=None, staging_sha256=None):
@@ -443,7 +463,8 @@ def prepare(config_path, *, authority_file=None, staging_sha256=None):
         for step in config['step_receipts']:
             require(set(step) == {'new_started', 'new_completed', 'rollback_started', 'rollback_completed'})
             require(all(renewal.read_private_bytes(Path(p)) == b'' for p in step.values()))
-        _prove(config, 'old', values, stack, expected_data=previous['data_sha256'], authority_file=authority_file)
+        _prove(config, 'old', values, stack, expected_data=previous['data_sha256'],
+               authority_file=authority_file, initial_current=_initial_current_record(previous))
         sequence = len(intents)+1
         intent = {'schema': SCHEMA, 'sequence': sequence,
                   'parent': digest(raw[f'{sequence-1:06}.selection.json']), 'config_path': str(Path(config_path)),
@@ -603,10 +624,13 @@ def complete(config_path, *, reconcile=False, authority_file=None):
             require(digest(result_raw) == intent['result_before_sha256']
                     and (not result_raw if initial_current else bool(result_raw)))
         if initial_current:
-            require(not reconcile and not renewal.read_private_bytes(Path(config['intent'])))
+            require(not reconcile)
+            transition_raw, checked_result = _empty_initial_activation(config, stack)
+            require(checked_result == result_raw)
             choice = 'old';decision = 'adopted-current'
             data_hash = _prove(config, choice, values, stack,
-                               expected_data=expected_data, authority_file=authority_file)
+                               expected_data=expected_data, authority_file=authority_file,
+                               initial_current=True)
         elif result_raw:
             result = decode(result_raw)
             require(result['schema'] == renewal.SCHEMA and result['project'] == config['project']
@@ -626,7 +650,8 @@ def complete(config_path, *, reconcile=False, authority_file=None):
                   'intent_sha256': digest(raw[f'{sequence:06}.intent.json']), 'decision': decision, 'choice': choice,
                   'selected': snapshots[choice], 'data_sha256': data_hash,
                   'result_sha256': digest(result_raw) if result_raw or initial_current else None,
-                  'transition_intent_sha256': digest(renewal.read_private_bytes(Path(config['intent'])))}
+                  'transition_intent_sha256': digest(transition_raw if initial_current else
+                      renewal.read_private_bytes(Path(config['intent'])))}
         _append(root, raw, f'{sequence:06}.selection.json', record, stack)
         _parse(raw, expected)
     return record
@@ -737,7 +762,8 @@ def _stage(config,choice,values,record,root,logical_project,stack):
     require(reauthenticate(config['native'],config['project'],docker.prefix,authority.rsplit('/',1)[0])==authority)
     checkpoint('authority','completed',{})
     checkpoint('current','started',{})
-    require(_prove(config,choice,values,stack,expected_data=record['data_sha256'],authority_file=authority)==record['data_sha256'])
+    require(_prove(config,choice,values,stack,expected_data=record['data_sha256'],
+                   authority_file=authority,initial_current=_initial_current_record(record))==record['data_sha256'])
     observed['context'].check(before_intent=True)
     checkpoint('current','completed',{})
     renewed=produce_generation(next_config,values[choice],logical_project,cycle_id,stage['services_image'],checkpoint)
@@ -746,7 +772,8 @@ def _stage(config,choice,values,record,root,logical_project,stack):
     for name,value in renewed.items():_new_private(secrets/name,value)
     held=stack.enter_context(renewal.hold_private_generation(secrets,sorted(renewed)));require(held==renewed)
     preflight(next_config['native'],config['project'],values[choice],held,docker.prefix)
-    require(_prove(config,choice,values,stack,expected_data=record['data_sha256'],authority_file=authority)==record['data_sha256'])
+    require(_prove(config,choice,values,stack,expected_data=record['data_sha256'],
+                   authority_file=authority,initial_current=_initial_current_record(record))==record['data_sha256'])
     items=observed['context'].check(before_intent=True)
     checkpoint('materialize','completed',{})
     receipts={name:renewal.read_private_bytes(root/name) for name in names}
@@ -867,7 +894,9 @@ def reconcile_materialized(config_path):
         _models,current_model,accepted=history(raw,expected,records)
         if CHECKPOINT in raw:accepted.append(checkpoint(raw)['generation_model'])
         require(model_binding(config) in accepted);config=effective_config(config,current_model)
-        values,snapshots=_inputs(config,stack);require(snapshots==intent['inputs'])
+        initial_current = record['sequence'] == 1 and record['decision'] == 'adopted-current'
+        values,snapshots=_inputs(config,stack,initial_current=initial_current)
+        require(snapshots==intent['inputs'])
         transition=stack.enter_context(renewal.hold_private_input(Path(config['intent'])))
         previous_result=stack.enter_context(renewal.hold_private_input(Path(config['result'])))
         require(digest(transition)==record['transition_intent_sha256'])
@@ -917,7 +946,8 @@ def reconcile_materialized(config_path):
         new=stack.enter_context(renewal.hold_private_generation(Path(next_config['renewed_secrets']),sorted(values[record['choice']])))
         docker=observed['docker']
         _retired_stage_helpers(docker.containers(),helpers,cycle)
-        _native_current(config,record['choice'],values,docker,stage['authority_file'])
+        _native_current(config,record['choice'],values,docker,stage['authority_file'],
+                        initial_current=_initial_current_record(record))
         preflight(next_config['native'],config['project'],values[record['choice']],new,docker.prefix)
         _retired_stage_helpers(observed['context'].check(before_intent=True),helpers,cycle)
         completed=packed({'phase':'materialize','event':'completed','metadata':{}})
@@ -1075,7 +1105,9 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
             with lease_lock:
                 require(active and not model_completion and not continuation_started and not product_started)
                 with ExitStack() as proof_stack:
-                    return _prove(cfg, choice, values, proof_stack, expected_data=record['data_sha256'], authority_file=authority_file)
+                    return _prove(cfg, choice, values, proof_stack,
+                                  expected_data=record['data_sha256'], authority_file=authority_file,
+                                  initial_current=_initial_current_record(record))
         def check_configuration():
             with lease_lock:
                 require(active and not model_completion and not continuation_started and not product_started)

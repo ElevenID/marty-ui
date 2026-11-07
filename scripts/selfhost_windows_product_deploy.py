@@ -182,7 +182,8 @@ def start(config, choice, values, record, raw, source, assets, *, gh, cosign, re
         if side == 'before':
             from selfhost_windows_renewal_native import reauthenticate
             require(reauthenticate(config['native'], config['project'], docker.prefix, authority.rsplit('/', 1)[0]) == authority)
-        selection._native_current(config, choice, values, docker, authority)
+        selection._native_current(config, choice, values, docker, authority,
+                                  initial_current=selection._initial_current_record(record))
         context.check()
         write('native-'+side+'.completed.json', selection.packed(dict(receipt, event='completed')))
     native('before')

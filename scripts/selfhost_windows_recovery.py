@@ -204,14 +204,16 @@ def start_existing(config, choice, values, record, output_dir, stack, *, authori
                 if session_dir is not None:
                     from selfhost_windows_renewal_native import reauthenticate
                     authority_file=reauthenticate(config['native'],project,docker.prefix,session_dir)
-                selection._native_current(config, choice, values, docker, authority_file)
+                selection._native_current(config, choice, values, docker, authority_file,
+                                          initial_current=selection._initial_current_record(record))
                 selection.require(time.monotonic() < deadline)
             _unchanged(observed, docker.containers(), started)
             renewal.write_empty_private_file(root/f'{index:03}.completed.json', selection.packed(receipt).decode())
             stack.enter_context(renewal.hold_private_input(root/f'{index:03}.completed.json'))
             selection.require(time.monotonic() < deadline)
         selection.require(selection._prove(config, choice, values, stack,
-                          expected_data=record['data_sha256'], authority_file=authority_file) == record['data_sha256'])
+                          expected_data=record['data_sha256'], authority_file=authority_file,
+                          initial_current=selection._initial_current_record(record)) == record['data_sha256'])
         selection.require(time.monotonic() < deadline)
         _unchanged(observed, docker.containers(), started)
         selection.require(time.monotonic() < deadline)

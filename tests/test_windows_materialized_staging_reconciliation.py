@@ -12,8 +12,8 @@ import selfhost_windows_renewal_native as native
 
 
 @contextmanager
-def materialized(monkeypatch):
-    with staged_candidate(monkeypatch) as case:
+def materialized(monkeypatch, *, initial_current=False):
+    with staged_candidate(monkeypatch, initial_current=initial_current) as case:
         _root,path,cfg,output,events=case
         def refuse(*_args):raise ValueError('PUBLIC_ADMISSION_REFUSAL')
         monkeypatch.setattr(native,'preflight',refuse)
@@ -39,6 +39,17 @@ def test_reconcile_materialized_never_replays_producer_or_clears_guard(monkeypat
             if name not in ('materialize.completed.json','result.json','publication.pending.json'):
                 assert (output/name).read_bytes()==raw
         assert selection.prepare(Path(result['next_config']),staging_sha256=result['guard_sha256'])==2
+
+
+def test_initial_current_materialized_first_replacement_reconciles_without_replay(monkeypatch):
+    with materialized(monkeypatch, initial_current=True) as (_root,path,cfg,output,events):
+        before = events.count('produce')
+        result = selection.reconcile_materialized(path)
+        assert events.count('produce') == before
+        assert result['changed_files'] > 0
+        assert selection.prepare(Path(result['next_config']),
+                                 staging_sha256=result['guard_sha256']) == 2
+        assert selection.status(path)['state'] == 'pending-reconciliation'
 
 
 @pytest.mark.parametrize('fault',['authority','prepare','tls','keycloak','export','missing-boundary'])

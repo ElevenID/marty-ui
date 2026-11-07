@@ -19,7 +19,7 @@ def test_current_native_admission_allows_only_independent_foreign_activity(monke
     observed = {'docker': docker, 'context': context, 'data_sha256': 'd'*64}
     monkeypatch.setattr(selection, '_inspect', lambda *_a, **_kw: observed)
     admitted = []
-    def current(config, choice, values, supplied_docker, authority):
+    def current(config, choice, values, supplied_docker, authority, **_kw):
         assert config['project'] == PROJECT and choice == 'old' and supplied_docker is docker
         assert values == {'old': {}} and authority == 'PUBLIC_SCOPED_AUTHORITY'
         admitted.append(True)
@@ -47,7 +47,7 @@ def test_foreign_qualification_never_substitutes_for_native_admission(monkeypatc
     docker, context = foreign_context()
     monkeypatch.setattr(selection, '_inspect', lambda *_a, **_kw:
                         {'docker': docker, 'context': context, 'data_sha256': 'd'*64})
-    def refuse(*_):raise ValueError('PUBLIC_NATIVE_REFUSAL')
+    def refuse(*_, **_kw):raise ValueError('PUBLIC_NATIVE_REFUSAL')
     monkeypatch.setattr(selection, '_native_current', refuse)
     with ExitStack() as stack, pytest.raises(ValueError, match='PUBLIC_NATIVE_REFUSAL'):
         selection._prove({'project': PROJECT}, 'old', {'old': {}}, stack)
@@ -94,7 +94,7 @@ def test_helper_appearing_during_native_reproof_still_blocks_reconciliation(monk
         helper['Mounts'] = []
         if identity == 'name':helper['Name'] = '/'+cfg['project']+'-renew-prepare-'+'a'*32
         elif identity == 'label':helper['Config']['Labels']['marty.windows.renewal'] = 'a'*32
-        def native_with_new_helper(*_):
+        def native_with_new_helper(*_, **_kw):
             monkeypatch.setattr(docker, 'containers', lambda: [*containers(), helper])
         monkeypatch.setattr(selection, '_native_current', native_with_new_helper)
         before = list(events)

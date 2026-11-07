@@ -14,8 +14,8 @@ from test_selfhost_windows_recovery import candidate
 
 
 @contextmanager
-def staged_candidate(monkeypatch,*,fault=None):
-    with candidate(monkeypatch,warm=True) as (root,path,cfg,_out,events,_items,_observed,_tx):
+def staged_candidate(monkeypatch,*,fault=None,initial_current=False):
+    with candidate(monkeypatch,warm=True,initial_current=initial_current) as (root,path,cfg,_out,events,_items,_observed,_tx):
         output=root/('windows-renewal-'+'a'*32);output.mkdir()
         def reauthenticate(_cfg,_project,_prefix,session):
             events.append('authority')
