@@ -122,7 +122,7 @@ and MMF revision remain unchanged.
 
 | Dependency | Reviewed revision |
 | --- | --- |
-| Marty Core | `2f7770c856410ba0dd34ca1542f55187f535cd1c` |
+| Marty Core | `daffc484f3d67c4efebcc5f485200c7edc559f23` |
 | SSI and verification-only ECDSA patch | `63a9bcce3daf6f45d1e38e43cf687738bb02cb53` |
 | SD-JWT | `fbe1e1b2c4bf0d62b0fdf0f47f265ffdaaae1ff2` |
 | isomdl 0.4.0 | `fc3aaa2628cd106d4f36f50c957d7f33211f8a5e` |
