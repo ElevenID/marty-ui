@@ -104,6 +104,22 @@ pub async fn build_flow_presentation_request(
     presentation_policy_id: &str,
     organization_id: &str,
 ) -> Result<PresentationRequestArtifacts, FlowPresentationRequestError> {
+    if providers.credential_template.is_none() {
+        return Err(FlowProviderError::Unavailable {
+            provider: "credential_template",
+        }
+        .into());
+    }
+    let resolved =
+        resolve_flow_presentation_policy(providers, presentation_policy_id, organization_id)
+            .await?;
+    build_resolved_flow_presentation_request(providers, &resolved).await
+}
+
+pub(crate) async fn build_resolved_flow_presentation_request(
+    providers: &FlowProviderRegistry,
+    resolved: &ResolvedPresentationPolicy,
+) -> Result<PresentationRequestArtifacts, FlowPresentationRequestError> {
     let template_provider =
         providers
             .credential_template
@@ -111,9 +127,6 @@ pub async fn build_flow_presentation_request(
             .ok_or(FlowProviderError::Unavailable {
                 provider: "credential_template",
             })?;
-    let resolved =
-        resolve_flow_presentation_policy(providers, presentation_policy_id, organization_id)
-            .await?;
     let mut requirements = Vec::with_capacity(resolved.requirements.len());
     for (index, (requirement, template)) in resolved.requirements.iter().enumerate() {
         let object = requirement.as_object().ok_or_else(|| {
@@ -146,7 +159,9 @@ pub async fn build_flow_presentation_request(
                 .collect(),
         });
     }
-    let wallet_formats = template_provider.wallet_formats(organization_id).await?;
+    let wallet_formats = template_provider
+        .wallet_formats(&resolved.policy.organization_id)
+        .await?;
     build_presentation_request(PresentationRequestBuildInput {
         id: Uuid::new_v4().to_string(),
         requirements,
@@ -174,7 +189,7 @@ fn validate_template(
     Ok(())
 }
 
-fn requested_claims(
+pub(crate) fn requested_claims(
     value: Option<&Value>,
     requirement_index: usize,
 ) -> Result<Vec<RequestedClaimInput>, FlowPresentationRequestError> {

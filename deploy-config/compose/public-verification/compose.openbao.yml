@@ -1,0 +1,21 @@
+# Opt-in only, after compatible migration, governed configuration and approval.
+# This file does not provision keys, mint authority, change images or publish UI.
+services:
+  flow:
+    environment:
+      MARTY_SIGNING_GRANT_PROVIDER: openbao-transit
+      FLOW_PUBLIC_VERIFICATION_CONFIG_FILE: /run/marty/public-verification.json
+      FLOW_DEMO_HOLDER_SIGN_GRANT_MINT_TOKEN_FILE: /run/secrets/sign_grant_mint_flow_demo_holder_token
+    volumes:
+      - type: bind
+        source: ${MARTY_PUBLIC_VERIFICATION_CONFIG_PATH:?absolute operator-owned public verification JSON file required}
+        target: /run/marty/public-verification.json
+        read_only: true
+        bind:
+          create_host_path: false
+    secrets:
+      - sign_grant_mint_flow_demo_holder_token
+
+secrets:
+  sign_grant_mint_flow_demo_holder_token:
+    file: ${MARTY_PUBLIC_VERIFICATION_HOLDER_MINT_TOKEN_FILE:?absolute dedicated OpenBao demo-holder mint token file required}

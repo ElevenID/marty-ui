@@ -10,6 +10,7 @@ import { Box, Typography, Button, Card, CardContent, Grid, List, ListItem, ListI
 
 import {
   DISABLE_PUBLIC_PRICING_BUTTONS,
+  SHOW_PUBLIC_CTA,
   SHOW_PUBLIC_PRICING_BUTTONS,
 } from '@ui-public-config';
 import { SEOHead, softwareApplicationSchema } from '../seo';
@@ -349,6 +350,7 @@ function VerifiableCredentialApiPage() {
             : 'Explore the API and documentation, then discuss the commercial scope your organization needs.'}
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
+          {SHOW_PUBLIC_CTA && <Button variant="contained" size="large" onClick={() => navigate('/verify')} sx={{ bgcolor: 'white', color: 'primary.main' }}>Start Verifying</Button>}
           {SHOW_PUBLIC_PRICING_BUTTONS && (
             <FutureFeatureButton
               variant="contained"

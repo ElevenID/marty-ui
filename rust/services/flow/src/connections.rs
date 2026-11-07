@@ -119,14 +119,27 @@ async fn connect_providers(
             config.sign_grant_mint_token_file.clone(),
         )
         .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?;
-    let signing = Arc::new(
-        HttpSigningProvider::new(
-            &config.signing_keys_url,
-            required_secret(&config.signing_keys_api_key, "signing keys API key")?,
-            required_secret(&config.issuer_sign_key, "issuer signing API key")?,
-        )?
-        .with_grant_minter(grant_minter),
-    );
+    let mut signing = HttpSigningProvider::new(
+        &config.signing_keys_url,
+        required_secret(&config.signing_keys_api_key, "signing keys API key")?,
+        required_secret(&config.issuer_sign_key, "issuer signing API key")?,
+    )?
+    .with_grant_minter(grant_minter);
+    if config
+        .public_verification
+        .as_ref()
+        .is_some_and(crate::PublicVerificationOptions::demo_holder_enabled)
+    {
+        let minter = grant_authority
+            .minter(
+                SigningOrigin::FlowDemoHolder,
+                config.sign_grant_bao_addr.as_deref(),
+                config.demo_holder_sign_grant_mint_token_file.clone(),
+            )
+            .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?;
+        signing = signing.with_demo_holder_grant_minter(minter);
+    }
+    let signing = Arc::new(signing);
     signing.health_check().await?;
     runtime.mark_healthy(FlowDependency::SigningKeys)?;
 

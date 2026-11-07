@@ -71,6 +71,8 @@ pub enum FlowVerificationSubmissionError {
     Record(#[from] FlowRecordError),
     #[error("FLOW.VERIFICATION_SUBMISSION_INVALID_STATE")]
     InvalidState,
+    #[error(transparent)]
+    Definition(#[from] crate::DefinedVerificationError),
     #[error("FLOW.VERIFICATION_SUBMISSION_INVALID_CONTEXT: {0}")]
     InvalidContext(&'static str),
     #[error("FLOW.VERIFICATION_SUBMISSION_STATE_MISMATCH")]
@@ -185,6 +187,8 @@ pub async fn prepare_verification_submission(
         return Err(FlowVerificationSubmissionError::InvalidState);
     }
     let expected_status = instance.status;
+    let expected_policy_digest =
+        crate::defined_verification::validate_defined_submission(providers, &instance).await?;
     let context = instance
         .context
         .as_object()
@@ -212,8 +216,23 @@ pub async fn prepare_verification_submission(
     let raw_vp_token = input.vp_token;
     let oid4vp_transport =
         evaluation_transport(context, presentation_submission.as_ref(), &raw_vp_token)?;
+    if context.contains_key(crate::public_verification_session::PUBLIC_SESSION)
+        && oid4vp_transport
+            .as_ref()
+            .is_none_or(|transport| transport.query_kind != QueryKind::Dcql)
+    {
+        return Err(FlowVerificationSubmissionError::InvalidContext(
+            "public_verification_query_binding",
+        ));
+    }
     let vp_token = select_vp_token(&raw_vp_token);
     let mut evaluation_context = BTreeMap::new();
+    if let Some(digest) = expected_policy_digest {
+        evaluation_context.insert(
+            crate::defined_verification::EXPECTED_POLICY_DIGEST.into(),
+            json!(digest),
+        );
+    }
     if context
         .get("oid4vp_verifier_context")
         .and_then(Value::as_bool)
@@ -409,6 +428,7 @@ pub async fn prepare_verification_submission(
         "warnings": warnings,
         "submission_digest": submission_digest
     }));
+    crate::record_defined_verification_progress(&mut instance, true, now)?;
     record_verification_result_message(&mut instance, &policy_id, options, now)?;
     instance.kernel()?;
     let callback = build_callback(&instance, &policy_id, options, now)?;

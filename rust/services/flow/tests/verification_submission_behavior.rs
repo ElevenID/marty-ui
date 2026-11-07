@@ -29,6 +29,7 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            configuration_digest: String::new(),
             id: policy_id.into(),
             organization_id: "org-1".into(),
             status: "active".into(),

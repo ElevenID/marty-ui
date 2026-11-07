@@ -32,6 +32,7 @@ impl Environment {
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct FlowServiceConfig {
+    pub public_verification: Option<crate::PublicVerificationOptions>,
     pub environment: Environment,
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
@@ -66,6 +67,7 @@ pub struct FlowServiceConfig {
     pub issuer_sign_key: Option<String>,
     pub sign_grant_bao_addr: Option<String>,
     pub sign_grant_mint_token_file: Option<PathBuf>,
+    pub demo_holder_sign_grant_mint_token_file: Option<PathBuf>,
     pub issuance_url: String,
     pub issuance_native_url: String,
     pub issuance_api_key: Option<String>,
@@ -174,6 +176,10 @@ impl fmt::Debug for FlowServiceConfig {
                 "sign_grant_mint_token_file",
                 &self.sign_grant_mint_token_file,
             )
+            .field(
+                "demo_holder_sign_grant_mint_token_configured",
+                &self.demo_holder_sign_grant_mint_token_file.is_some(),
+            )
             .field("issuance_url", &self.issuance_url)
             .field("issuance_native_url", &self.issuance_native_url)
             .field("issuance_api_key", &redacted(&self.issuance_api_key))
@@ -250,6 +256,21 @@ impl FlowServiceConfig {
     ) -> Result<Self, FlowConfigError> {
         let values = values.into_iter().collect::<BTreeMap<_, _>>();
         let environment = parse_environment(value(&values, "ENVIRONMENT").unwrap_or("production"))?;
+        let public_verification = value(&values, "FLOW_PUBLIC_VERIFICATION_CONFIG_FILE")
+            .map(|path| {
+                let name = "FLOW_PUBLIC_VERIFICATION_CONFIG_FILE";
+                let size = fs::metadata(path)
+                    .map_err(|_| FlowConfigError::File { name })?
+                    .len();
+                if size > 65_536 {
+                    return Err(invalid(name));
+                }
+                let contents =
+                    fs::read_to_string(path).map_err(|_| FlowConfigError::File { name })?;
+                crate::PublicVerificationOptions::from_json(&contents, !environment.is_deployed())
+                    .map_err(|_| invalid(name))
+            })
+            .transpose()?;
         let http_addr = listener_address(
             &values,
             "FLOW_HTTP_ADDR",
@@ -567,6 +588,7 @@ impl FlowServiceConfig {
         }
 
         Ok(Self {
+            public_verification,
             environment,
             http_addr,
             grpc_addr,
@@ -601,6 +623,11 @@ impl FlowServiceConfig {
             issuer_sign_key,
             sign_grant_bao_addr,
             sign_grant_mint_token_file,
+            demo_holder_sign_grant_mint_token_file: value(
+                &values,
+                "FLOW_DEMO_HOLDER_SIGN_GRANT_MINT_TOKEN_FILE",
+            )
+            .map(PathBuf::from),
             issuance_url,
             issuance_native_url,
             issuance_api_key,

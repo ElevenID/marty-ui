@@ -7,6 +7,7 @@ pub const MANAGED_KEY_PREFIXES: &[&str] = &[
     "oid4vp-verifier-",
     "cred-holder-",
     "cred-presenter-",
+    "demo-holder-",
 ];
 
 /// Preserve raw organization bytes and the standard key suffix exactly.
@@ -30,6 +31,7 @@ pub fn managed_key_prefix_for_purpose(purpose: &str) -> Option<&'static str> {
         "oid4vp_request_signing" => Some("oid4vp-verifier-"),
         "holder_binding" => Some("cred-holder-"),
         "presentation_signing" => Some("cred-presenter-"),
+        "demo_holder_binding" => Some("demo-holder-"),
         _ => None,
     }
 }
@@ -86,6 +88,7 @@ mod tests {
             ("oid4vp_request_signing", "oid4vp-verifier-"),
             ("holder_binding", "cred-holder-"),
             ("presentation_signing", "cred-presenter-"),
+            ("demo_holder_binding", "demo-holder-"),
         ] {
             assert_eq!(managed_key_prefix_for_purpose(purpose), Some(prefix));
         }

@@ -464,6 +464,7 @@ pub struct HttpSigningProvider {
     issuer_signing: BoundedHttpClient,
     envelopes: BoundedHttpClient,
     grant_minter: Option<Arc<dyn GrantMinting>>,
+    demo_holder_grant_minter: Option<Arc<dyn GrantMinting>>,
 }
 
 impl HttpSigningProvider {
@@ -500,11 +501,19 @@ impl HttpSigningProvider {
             )?,
             envelopes,
             grant_minter: None,
+            demo_holder_grant_minter: None,
         })
     }
 
     pub fn with_grant_minter(mut self, grant_minter: GrantMinter) -> Self {
         self.grant_minter = Some(Arc::new(grant_minter));
+        self
+    }
+
+    /// Separate, optional authority for the synthetic example holder. The
+    /// ordinary verifier-request minter is never used as its fallback.
+    pub fn with_demo_holder_grant_minter(mut self, grant_minter: GrantMinter) -> Self {
+        self.demo_holder_grant_minter = Some(Arc::new(grant_minter));
         self
     }
 
@@ -549,12 +558,22 @@ impl SigningIdentityProvider for HttpSigningProvider {
     }
 
     async fn sign(&self, request: &SigningRequest) -> Result<SigningResult, FlowProviderError> {
-        let minter = self
-            .grant_minter
-            .as_ref()
-            .ok_or(FlowProviderError::Unavailable {
-                provider: "signing_identity",
-            })?;
+        let (origin, minter) = if request.key_purpose == "demo_holder_binding" {
+            if request.algorithm != "ES256"
+                || !matches!(request.credential_format.as_str(), "dc+sd-jwt")
+            {
+                return Err(invalid_config("demo_holder_signing"));
+            }
+            (
+                SigningOrigin::FlowDemoHolder,
+                &self.demo_holder_grant_minter,
+            )
+        } else {
+            (SigningOrigin::FlowWalletRequest, &self.grant_minter)
+        };
+        let minter = minter.as_ref().ok_or(FlowProviderError::Unavailable {
+            provider: "signing_identity",
+        })?;
         let payload = URL_SAFE_NO_PAD
             .decode(&request.payload_b64url)
             .map_err(|_| invalid_config("signing_identity"))?;
@@ -563,7 +582,7 @@ impl SigningIdentityProvider for HttpSigningProvider {
         }
         let grant = minter
             .mint(&GrantBinding {
-                origin: SigningOrigin::FlowWalletRequest,
+                origin,
                 operation_id: &request.operation_id,
                 organization_id: &request.organization_id,
                 route: "/internal/compat/issuer-dids/sign",
@@ -1347,6 +1366,30 @@ mod tests {
                 "payload_b64": "cGF5bG9hZA",
             })
         );
+        let mut demo = request.clone();
+        demo.issuer_did = "did:web:example.test:demo-holder".into();
+        demo.verification_method_id = format!("{}#key-1", demo.issuer_did);
+        demo.signing_key_reference = "managed-demo-holder-key".into();
+        demo.key_purpose = "demo_holder_binding".into();
+        demo.credential_format = "dc+sd-jwt".into();
+        assert!(provider.sign(&demo).await.is_err());
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "normal verifier minter must not be reused"
+        );
+        provider.demo_holder_grant_minter = Some(Arc::new(ContractGrantMinter));
+        provider.sign(&demo).await.unwrap();
+        let (headers, _, body) = captured.lock().unwrap().take().unwrap();
+        let grant = marty_signing_grant::GrantEnvelope::from_header_value(
+            headers.get(HEADER_NAME).unwrap().to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(grant.claims.origin, SigningOrigin::FlowDemoHolder);
+        assert_eq!(grant.claims.key_purpose, "demo_holder_binding");
+        assert_eq!(body["credential_format"], "dc+sd-jwt");
+        demo.credential_format = "oauth-authz-req+jwt".into();
+        assert!(provider.sign(&demo).await.is_err());
+        assert!(captured.lock().unwrap().is_none());
         server.abort();
     }
 

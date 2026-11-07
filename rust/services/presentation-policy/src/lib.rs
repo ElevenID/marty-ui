@@ -10,6 +10,7 @@ pub mod native_kernel;
 pub mod persistence;
 pub mod postgres;
 pub mod runtime;
+mod sd_jwt_query_binding;
 pub mod verification;
 
 pub use application::{
@@ -22,10 +23,10 @@ pub use config::{
 };
 pub use control_plane::NativePresentationControlPlane;
 pub use domain::{
-    evaluate_verified_facts_json, normalize_credential_format, AlternativeRequirement,
-    ClaimConstraint, ConstraintType, CredentialRequirement, DisplayMetadata, FreshnessPolicy,
-    HolderBinding, IssuerConstraints, PolicyDomainError, PolicyStatus, PresentationPolicy,
-    RequestPurpose, RequestedClaim,
+    evaluate_verified_facts_json, normalize_credential_format, policy_configuration_digest,
+    AlternativeRequirement, ClaimConstraint, ConstraintType, CredentialRequirement,
+    DisplayMetadata, FreshnessPolicy, HolderBinding, IssuerConstraints, PolicyDomainError,
+    PolicyStatus, PresentationPolicy, RequestPurpose, RequestedClaim,
 };
 pub use grpc_security::PresentationGrpcSecurity;
 pub use grpc_service::PresentationPolicyGrpcService;

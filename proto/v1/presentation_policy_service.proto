@@ -154,6 +154,8 @@ message PolicyResponse {
   int32 version = 10;
   string created_at = 11;
   string updated_at = 12;
+  // Opaque digest of the complete configuration read by the policy owner.
+  string configuration_digest = 13;
 }
 
 message EvaluatePresentationRequest {
@@ -164,6 +166,8 @@ message EvaluatePresentationRequest {
   string trust_profile_id = 5;     // optional override
   string context_json = 6;        // JSON-encoded extra context
   Oid4vpEvaluationTransport oid4vp_transport = 7; // optional, unverified metadata
+  // Optional precondition; evaluated against the same policy used for verification.
+  string expected_configuration_digest = 8;
 }
 
 // Producer-owned query plus structure-preserving untrusted wallet submission. Presence and
@@ -193,6 +197,8 @@ message PolicyEvaluationResponse {
   string evaluation_timestamp = 12;
   string nonce = 13;
   string authentication_diagnostic_json = 14; // Optional server-owned request-bound diagnostic; never credential authority
+  // Echo of the configuration actually evaluated, for callers using the precondition.
+  string configuration_digest = 15;
 }
 
 message HealthCheckRequest {}

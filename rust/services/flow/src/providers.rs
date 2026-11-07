@@ -104,6 +104,8 @@ fn default_wallet_scheme() -> String {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PresentationPolicyReference {
+    #[serde(default)]
+    pub configuration_digest: String,
     pub id: String,
     pub organization_id: String,
     pub status: String,
@@ -367,6 +369,14 @@ pub trait CredentialTemplateProvider: Send + Sync {
 
 #[async_trait]
 pub trait PresentationPolicyProvider: Send + Sync {
+    /// Defined public sessions require a complete owner-produced configuration
+    /// binding. Legacy providers cannot opt in using the partial policy view.
+    async fn configuration_digest(&self, _policy_id: &str) -> Result<String, FlowProviderError> {
+        Err(FlowProviderError::Unavailable {
+            provider: "presentation_policy_admission",
+        })
+    }
+
     async fn get_policy(
         &self,
         policy_id: &str,

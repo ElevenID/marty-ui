@@ -320,6 +320,20 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
         manifest = tomllib.loads((package / "Cargo.toml").read_text(encoding="utf-8"))
         assert manifest["package"]["autotests"] is False
         expected_targets = {target}
+        if directory == "flow-acceptance":
+            # Remote multi-owner signing belongs to the existing contracts
+            # probe, never the narrow published-schema Flow execution lane.
+            expected_targets.add("public_demo_signing_live_kms")
+            remote = next(step for step in workflow["jobs"]["test-rust-services"]["steps"]
+                          if step.get("name") ==
+                          "Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao")
+            assert remote["if"] == "matrix.lane == 'contracts'"
+            assert not remote.get("continue-on-error", False)
+            assert remote["run"] == "python3 scripts/probe_signing_keys_openbao_policy.py --grant-verifier"
+            probe = (ROOT / "scripts/public_demo_grant_probe.py").read_text(encoding="utf-8")
+            assert '"marty-flow-acceptance"' in probe
+            assert '"public_demo_signing_live_kms"' in probe
+            assert 'ADMISSION_CASE if admission' in probe
         if directory == "selfhost-acceptance":
             # Source-built custody has a separate contracts-lane owner; it must
             # not enter the narrow published-image execution/selection path.

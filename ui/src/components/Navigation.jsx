@@ -134,7 +134,7 @@ function Navigation() {
             variant="contained"
             size="small"
             component={Link}
-            to={publicEntryHref('/developers')}
+            to={publicEntryHref('/verify')}
             sx={{
               ml: 2,
               whiteSpace: 'nowrap',

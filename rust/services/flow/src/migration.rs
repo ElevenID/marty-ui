@@ -29,6 +29,11 @@ pub async fn migrate_flow_schema(pool: &PgPool) -> Result<(), FlowMigrationError
     ))
     .execute(&mut *transaction)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0004_public_verification_retention.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
     validate_connection(&mut transaction).await?;
     transaction.commit().await?;
     Ok(())
@@ -55,6 +60,13 @@ async fn validate_connection(
     .await?;
     if version.as_deref() != Some(MIGRATION_VERSION) {
         return Err(incompatible("Rust migration head is missing"));
+    }
+    let retention_version: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM flow_service.rust_schema_versions WHERE version='rust_flow_public_retention_0001')")
+        .fetch_one(&mut *connection).await?;
+    if !retention_version {
+        return Err(incompatible(
+            "Public verification retention migration is missing",
+        ));
     }
     let seed: Option<String> = sqlx::query_scalar(
         "SELECT version FROM flow_service.rust_seed_versions \
@@ -98,6 +110,9 @@ async fn validate_connection(
         ("flow_instances", "state_history"),
         ("flow_instance_artifacts", "credential_offer_uris"),
         ("flow_callback_outbox", "lease_token"),
+        ("public_verification_receipts", "instance_id"),
+        ("public_verification_receipts", "payload_delete_after"),
+        ("public_verification_receipts", "receipt_delete_after"),
         ("flow_application_event_receipts", "payload_sha256"),
         ("physical_start_intents", "request_hash"),
         ("physical_start_intents", "definition_snapshot"),
@@ -152,6 +167,7 @@ async fn validate_connection(
     }
     for (table, key) in [
         ("flow_service.flow_nonce_consumptions", "nonce_digest"),
+        ("flow_service.public_verification_receipts", "instance_id"),
         (
             "flow_service.physical_start_intents",
             "organization_id, key_hash",

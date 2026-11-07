@@ -930,6 +930,12 @@ fn verify_sd_jwt(
     Ok(CredentialVerificationEvidence {
         verified: true,
         credential_id: credential_id.clone(),
+        authenticated_sd_jwt_vct: claims.get("vct").and_then(Value::as_str).map(str::to_owned),
+        authenticated_sd_jwt_type: token
+            .split('.')
+            .next()
+            .and_then(decode_jwt_object)
+            .and_then(|header| header.get("typ").and_then(Value::as_str).map(str::to_owned)),
         credential_status_ids: credential_id.into_iter().collect(),
         claims: disclosed,
         issuer_id: issuer,

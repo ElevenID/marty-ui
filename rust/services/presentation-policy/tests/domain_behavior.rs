@@ -187,3 +187,45 @@ fn lifecycle_is_lossless_and_invalid_transitions_fail_closed() {
         None::<BTreeMap<String, f64>>
     );
 }
+
+#[test]
+fn configuration_digest_binds_rule_values_and_all_policy_authorities() {
+    let original = marty_presentation_policy::built_in_presentation_policies().remove(1);
+    let digest = marty_presentation_policy::policy_configuration_digest(&original).unwrap();
+    assert_eq!(digest.len(), 71);
+    for variant in 0..7 {
+        let mut changed = original.clone();
+        match variant {
+            0 => changed.version += 1,
+            1 => changed.credential_requirements[0].requested_claims[0]
+                .constraints
+                .push(marty_presentation_policy::ClaimConstraint {
+                    id: Uuid::new_v4(),
+                    claim_name: "email".into(),
+                    constraint_type: marty_presentation_policy::ConstraintType::Equals,
+                    value: Some(serde_json::json!("different@example.test")),
+                    description: None,
+                }),
+            2 => changed.trust_profile_id = Some(Uuid::new_v4()),
+            3 => {
+                changed.credential_requirements[0].credential_template_id =
+                    "different-template".into()
+            }
+            4 => changed.credential_requirements[0].max_age_seconds = Some(1),
+            5 => {
+                changed.display_metadata.purpose_description =
+                    Some("Changed request purpose".into())
+            }
+            _ => changed.holder_binding.required = !changed.holder_binding.required,
+        }
+        assert_ne!(
+            marty_presentation_policy::policy_configuration_digest(&changed).unwrap(),
+            digest,
+            "variant {variant}"
+        );
+    }
+    assert_eq!(
+        marty_presentation_policy::policy_configuration_digest(&original).unwrap(),
+        digest
+    );
+}

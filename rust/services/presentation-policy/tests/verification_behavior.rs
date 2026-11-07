@@ -214,6 +214,7 @@ async fn retired_ob2_never_produces_verified_policy_material() {
     )
     .unwrap();
     let mut request = marty_presentation_policy::EvaluatePresentationRequest {
+        expected_configuration_digest: None,
         vp_token: json!({"credential": assertion, "document_store": fixture["document_store"]}),
         trust_profile_id: None,
         nonce: None,
@@ -280,6 +281,7 @@ async fn native_evidence_projects_to_the_language_neutral_verified_facts_contrac
     )
     .unwrap();
     let request = marty_presentation_policy::EvaluatePresentationRequest {
+        expected_configuration_digest: None,
         vp_token: vector["vp_token"].clone(),
         trust_profile_id: Some(REQUEST_PROFILE_ID.to_string()),
         nonce: Some("nonce-1".into()),
@@ -345,6 +347,7 @@ async fn malformed_presentations_are_denied_without_invoking_any_format_kernel()
     )
     .unwrap();
     let request = marty_presentation_policy::EvaluatePresentationRequest {
+        expected_configuration_digest: None,
         vp_token: Value::String("not-a-credential".into()),
         trust_profile_id: None,
         nonce: None,
@@ -382,6 +385,7 @@ async fn unavailable_trust_backend_fails_closed_before_cryptographic_verificatio
     });
     let orchestrator = VerifiedFactsOrchestrator::new(kernel.clone(), trust, status).unwrap();
     let request = marty_presentation_policy::EvaluatePresentationRequest {
+        expected_configuration_digest: None,
         vp_token: fixture["valid_data_integrity"]["vp_token"].clone(),
         trust_profile_id: None,
         nonce: None,
@@ -413,6 +417,7 @@ async fn cross_tenant_trust_profile_evidence_is_rejected_before_kernel_use() {
     });
     let orchestrator = VerifiedFactsOrchestrator::new(kernel.clone(), trust, status).unwrap();
     let request = marty_presentation_policy::EvaluatePresentationRequest {
+        expected_configuration_digest: None,
         vp_token: fixture["valid_data_integrity"]["vp_token"].clone(),
         trust_profile_id: None,
         nonce: None,
@@ -464,6 +469,7 @@ async fn only_authenticated_internal_oid4vp_context_can_project_replay_evidence(
         )
         .unwrap();
         let request = marty_presentation_policy::EvaluatePresentationRequest {
+            expected_configuration_digest: None,
             vp_token: vector["vp_token"].clone(),
             trust_profile_id: None,
             nonce: Some("nonce-1".into()),
@@ -556,6 +562,7 @@ async fn cedar_authorization_uses_only_complete_verified_evidence_and_denies_wea
         )
         .unwrap();
         let request = marty_presentation_policy::EvaluatePresentationRequest {
+            expected_configuration_digest: None,
             vp_token: vector["vp_token"].clone(),
             trust_profile_id: None,
             nonce: None,
@@ -614,6 +621,7 @@ async fn presentation_only_verification_bypasses_credential_trust_status_and_ced
     let mut presentation_policy = policy();
     presentation_policy.credential_requirements.clear();
     let request = marty_presentation_policy::EvaluatePresentationRequest {
+        expected_configuration_digest: None,
         vp_token: vector["vp_token"].clone(),
         trust_profile_id: Some(REQUEST_PROFILE_ID.to_string()),
         nonce: Some("nonce-1".into()),
@@ -703,6 +711,7 @@ async fn mdoc_issuer_relationship_does_not_prove_credential_non_revocation() {
         revocation_grace_seconds: None,
     });
     let request = marty_presentation_policy::EvaluatePresentationRequest {
+        expected_configuration_digest: None,
         vp_token: Value::String("\\x010203".into()),
         trust_profile_id: None,
         nonce: Some("nonce-1".into()),
@@ -820,6 +829,7 @@ async fn resolved_foreign_signature_does_not_establish_policy_trust() {
         let mut policy = policy();
         policy.credential_requirements[0].credential_payload_format = "openbadge-v3".into();
         let mut request = marty_presentation_policy::EvaluatePresentationRequest {
+            expected_configuration_digest: None,
             vp_token: fixture["token"].clone(),
             trust_profile_id: None,
             nonce: None,

@@ -128,7 +128,7 @@ const QUICK_START_PATHS = [
     description: 'Validate credentials from wallets, partner issuers, and digital IDs without repeated document review.',
     details: ['retail age verification', 'workforce access', 'travel checkpoints'],
     cta: 'Start Verifying Credentials',
-    path: '/product#verification-api',
+    path: '/verify',
     icon: <VerifiedUserIcon sx={{ fontSize: 36, color: 'primary.main' }} />,
   },
   {
@@ -808,12 +808,12 @@ function LandingPageContent({ isLoading = false }) {
               <Box sx={{ display: 'flex', gap: 2, justifyContent: { xs: 'center', lg: 'flex-start' }, flexWrap: 'wrap' }}>
                 {SHOW_PUBLIC_CTA && <Button
                   component={Link}
-                  to={publicEntryHref('/developers')}
+                  to={publicEntryHref('/verify')}
                   onClick={() => handleLandingCtaClick({
                     section: 'hero',
                     ctaId: 'start_verifying',
                     ctaLabel: t('valueProposition.primaryCTA', VALUE_PROPOSITION.primaryCTA),
-                    destinationPath: '/developers',
+                    destinationPath: '/verify',
                   })}
                   variant="contained"
                   size="large"
@@ -1881,12 +1881,12 @@ function LandingPageContent({ isLoading = false }) {
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
           {SHOW_PUBLIC_CTA && <Button
             component={Link}
-            to={publicEntryHref('/developers')}
+            to={publicEntryHref('/verify')}
             onClick={() => handleLandingCtaClick({
               section: 'footer',
               ctaId: 'start_verifying',
               ctaLabel: t('valueProposition.primaryCTA', VALUE_PROPOSITION.primaryCTA),
-              destinationPath: '/developers',
+              destinationPath: '/verify',
             })}
             variant="contained"
             size="large"

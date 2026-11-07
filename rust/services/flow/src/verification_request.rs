@@ -63,6 +63,8 @@ pub enum FlowVerificationRequestError {
     Record(#[from] FlowRecordError),
     #[error("FLOW.VERIFICATION_REQUEST_INVALID_STATE")]
     InvalidState,
+    #[error(transparent)]
+    Definition(#[from] crate::DefinedVerificationError),
     #[error("FLOW.VERIFICATION_REQUEST_UNSIGNED_TRANSPORT")]
     UnsignedTransport,
     #[error("FLOW.VERIFICATION_REQUEST_METHOD_NOT_ALLOWED")]
@@ -97,6 +99,14 @@ pub async fn prepare_verification_request(
         .context
         .as_object()
         .ok_or(FlowVerificationRequestError::InvalidContext)?;
+    if context.contains_key(crate::public_verification_session::PUBLIC_SESSION)
+        && options.compatibility != RequestObjectCompatibility::Standard
+    {
+        return Err(FlowRequestObjectError::UnsupportedProfile(
+            "Public verification requires standard OID4VP/DCQL",
+        )
+        .into());
+    }
     if context.get("request_transport").and_then(Value::as_str) == Some("url_query") {
         return Err(FlowVerificationRequestError::UnsignedTransport);
     }
@@ -126,6 +136,10 @@ pub async fn prepare_verification_request(
                 .await?,
         )
     };
+    if let Some(artifacts) = artifacts.as_ref() {
+        crate::defined_verification::validate_defined_request(&instance, artifacts)?;
+    }
+    crate::defined_verification::validate_defined_configuration(providers, &instance).await?;
     let mut request_options = options.request_object.clone();
     request_options.wallet_nonce = options.wallet_nonce.clone();
     request_options.compatibility = options.compatibility;
@@ -144,6 +158,8 @@ pub async fn prepare_verification_request(
         now,
     )
     .await?;
+    let mut built = built;
+    crate::record_defined_verification_progress(&mut built.instance, false, now)?;
     Ok(PreparedVerificationRequest::Ready(built))
 }
 

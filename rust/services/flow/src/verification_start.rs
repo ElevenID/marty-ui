@@ -132,6 +132,27 @@ pub async fn prepare_profiled_verification_start(
     options: &VerificationStartOptions,
     context: VerificationStartContext<'_>,
 ) -> Result<PreparedVerificationStart, FlowVerificationStartError> {
+    prepare_profiled_verification_start_with_id(
+        providers,
+        callback_destinations,
+        request,
+        options,
+        context,
+        Uuid::new_v4(),
+    )
+    .await
+}
+
+/// Only trusted admission adapters may choose an idempotent instance ID. It is
+/// installed before constructing the protocol audience and request URI.
+pub(crate) async fn prepare_profiled_verification_start_with_id(
+    providers: &FlowProviderRegistry,
+    callback_destinations: &WebhookDestinationRegistry,
+    request: StartVerificationFlowRequest,
+    options: &VerificationStartOptions,
+    context: VerificationStartContext<'_>,
+    instance_id: Uuid,
+) -> Result<PreparedVerificationStart, FlowVerificationStartError> {
     let VerificationStartContext {
         public_base_url,
         allow_http_loopback,
@@ -194,7 +215,7 @@ pub async fn prepare_profiled_verification_start(
     };
 
     let nonce = URL_SAFE_NO_PAD.encode(random::<[u8; 32]>());
-    let instance_id = Uuid::new_v4().to_string();
+    let instance_id = instance_id.to_string();
     let flow_definition_id = Uuid::new_v4().to_string();
     let expires_at = now
         .checked_add_signed(Duration::minutes(i64::from(request.expiry_minutes)))
@@ -237,6 +258,15 @@ pub async fn prepare_profiled_verification_start(
         serde_json::to_value(&identity).map_err(|_| FlowVerificationStartError::Serialization)?,
     );
     context.insert("request_uri".into(), json!(request_uri));
+    if let Some(presentation) = presentation.as_ref() {
+        context.insert(
+            crate::defined_verification::REQUEST_DIGEST.into(),
+            json!(
+                crate::defined_verification::verification_request_digest(presentation)
+                    .map_err(|_| FlowVerificationStartError::Serialization)?
+            ),
+        );
+    }
     if is_siop {
         context.insert("response_type".into(), json!("id_token"));
     } else {

@@ -77,6 +77,10 @@ rust/crates/canvas-acceptance/tests/support/resolved_kubernetes_runtime.rs
 rust/crates/canvas-acceptance/tests/support/resolved_runtime.rs
 rust/crates/canvas-acceptance/tests/support/runtime_failure_diagnostics.rs
 rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs
+rust/crates/flow-acceptance/tests/public_demo_signing_live_kms.rs
+rust/crates/flow-acceptance/tests/support/public_demo_browser.rs
+rust/crates/flow-acceptance/tests/support/public_demo_canonical.rs
+rust/crates/flow-acceptance/tests/support/public_demo_gateway.rs
 rust/crates/flow-acceptance/tests/support/didcomm_flow_grpc_admission.rs
 rust/crates/flow-acceptance/tests/support/flow_admission.rs
 rust/crates/flow-acceptance/tests/support/flow_legacy_physical_http.rs

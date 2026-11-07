@@ -5817,7 +5817,7 @@ def _assert_signing_keys_fixture_dependency(
     )
 
 
-def test_service_dev_dependencies_only_allow_registered_didcomm_signing_edge() -> (
+def test_service_dev_dependencies_only_allow_registered_integration_fixtures() -> (
     None
 ):
     rust = ROOT / "rust"
@@ -5835,10 +5835,36 @@ def test_service_dev_dependencies_only_allow_registered_didcomm_signing_edge() -
         for dependency in _dev_dependency_packages(document, workspace_dependencies)
         if dependency in service_packages
     }
-    assert edges == {("marty-issuance-service", "marty-signing-keys")}, (
-        "Only the shared registered DIDComm fixture may add a service test edge: "
+    # The public demo fixture links the actual policy owner instead of a verdict
+    # stub. Both exceptions are exact test-only edges; no general service graph
+    # expansion or runtime/build dependency is permitted.
+    assert edges == {
+        ("marty-issuance-service", "marty-signing-keys"),
+        ("marty-flow", "marty-presentation-policy"),
+    }, (
+        "Only registered DIDComm and public verification fixtures may add service test edges: "
         f"{sorted(edges)}"
     )
+    flow = documents[rust / "services/flow/Cargo.toml"]
+    _assert_flow_policy_fixture_dependency(flow, workspace_dependencies)
+
+
+def _assert_flow_policy_fixture_dependency(manifest, workspace_dependencies):
+    assert manifest["dev-dependencies"]["marty-presentation-policy"] == {"path": "../presentation-policy"}
+    assert "marty-presentation-policy" not in _dependency_packages(
+        manifest, workspace_dependencies,
+        ("dependencies", "build-dependencies", "build_dependencies"),
+    )
+
+
+@pytest.mark.parametrize("section", ["dependencies", "build-dependencies"])
+def test_registered_flow_policy_fixture_cannot_leak_to_runtime_or_build(section):
+    manifest = {
+        "dev-dependencies": {"marty-presentation-policy": {"path": "../presentation-policy"}},
+        section: {"policy_alias": {"package": "marty-presentation-policy", "path": "../presentation-policy"}},
+    }
+    with pytest.raises(AssertionError):
+        _assert_flow_policy_fixture_dependency(manifest, {})
 
 
 def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> None:

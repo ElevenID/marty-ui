@@ -1,3 +1,6 @@
+#[path = "postgres_public_retention.rs"]
+mod public_retention;
+
 use chrono::{DateTime, Duration, Utc};
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_messaging::Message;
@@ -491,7 +494,7 @@ impl PostgresFlowRepository {
         instance: &FlowInstanceRecord,
         artifact: Option<&FlowArtifactRecord>,
     ) -> Result<bool, RepositoryError> {
-        self.save_started_instance_with_intent(instance, artifact, None)
+        self.save_started_instance_with_intent(instance, artifact, None, None)
             .await
     }
 
@@ -504,7 +507,23 @@ impl PostgresFlowRepository {
         if !valid_sha256(key_hash) {
             return Err(RepositoryError::InvalidReplayDigest);
         }
-        self.save_started_instance_with_intent(instance, None, Some((key_hash, claim_token)))
+        self.save_started_instance_with_intent(instance, None, Some((key_hash, claim_token)), None)
+            .await
+    }
+
+    pub async fn save_public_verification_start(
+        &self,
+        instance: &FlowInstanceRecord,
+        limits: crate::PublicVerificationLimits,
+    ) -> Result<bool, RepositoryError> {
+        if instance
+            .context
+            .get(crate::public_verification_session::PUBLIC_SESSION)
+            .is_none()
+        {
+            return Err(record("public_verification_session"));
+        }
+        self.save_started_instance_with_intent(instance, None, None, Some(limits))
             .await
     }
 
@@ -513,6 +532,7 @@ impl PostgresFlowRepository {
         instance: &FlowInstanceRecord,
         artifact: Option<&FlowArtifactRecord>,
         physical_intent: Option<(&str, Uuid)>,
+        public_limits: Option<crate::PublicVerificationLimits>,
     ) -> Result<bool, RepositoryError> {
         validate_instance_record(instance)?;
         if let Some(artifact) = artifact {
@@ -522,6 +542,50 @@ impl PostgresFlowRepository {
             }
         }
         let mut transaction = self.pool.begin().await.map_err(storage)?;
+        if let Some(limits) = public_limits {
+            // Serialize quota check and insertion across every service replica.
+            // The lock is tenant-wide, never derived from visitor input.
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind(format!(
+                    "marty:public-verification:{}",
+                    instance.organization_id
+                ))
+                .execute(&mut *transaction)
+                .await
+                .map_err(storage)?;
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM flow_service.flow_instances WHERE id=$1) OR \
+                 EXISTS(SELECT 1 FROM flow_service.public_verification_receipts WHERE instance_id=$1)",
+            )
+            .bind(&instance.id)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(storage)?;
+            if exists {
+                transaction.rollback().await.map_err(storage)?;
+                return Ok(false);
+            }
+            let (minute, day): (i64, i64) = sqlx::query_as(
+                "SELECT COUNT(*) FILTER (WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '1 minute'), \
+                 COUNT(*) FILTER (WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '1 day') \
+                 FROM flow_service.public_verification_receipts WHERE organization_id=$1 \
+                 AND created_at > CURRENT_TIMESTAMP - INTERVAL '1 day'"
+            ).bind(&instance.organization_id).fetch_one(&mut *transaction).await.map_err(storage)?;
+            let active: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM flow_service.flow_instances AS instance \
+                 JOIN flow_service.public_verification_receipts AS receipt ON receipt.instance_id=instance.id \
+                 AND receipt.organization_id=instance.organization_id WHERE receipt.organization_id=$1 \
+                 AND instance.status NOT IN ('completed','failed','cancelled','expired') \
+                 AND instance.expires_at > CURRENT_TIMESTAMP"
+            ).bind(&instance.organization_id).fetch_one(&mut *transaction).await.map_err(storage)?;
+            if minute >= i64::from(limits.starts_per_minute())
+                || day >= i64::from(limits.starts_per_day())
+                || active >= i64::from(limits.maximum_active())
+            {
+                transaction.rollback().await.map_err(storage)?;
+                return Err(RepositoryError::PublicVerificationCapacityExceeded);
+            }
+        }
         let inserted = sqlx::query(
             "INSERT INTO flow_service.flow_instances (id, flow_definition_id, organization_id, \
              status, current_step_id, context, step_history, state_history, subject_id, subject_type, \
@@ -555,6 +619,22 @@ impl PostgresFlowRepository {
         if inserted.rows_affected() != 1 {
             transaction.rollback().await.map_err(storage)?;
             return Ok(false);
+        }
+        if public_limits.is_some() {
+            let payload_delete_after = instance
+                .expires_at
+                .and_then(|expiry| {
+                    expiry.checked_add_signed(Duration::seconds(
+                        crate::public_verification_session::RESULT_ACCESS_SECONDS,
+                    ))
+                })
+                .ok_or_else(|| record("public_verification_retention_deadline"))?;
+            sqlx::query("INSERT INTO flow_service.public_verification_receipts \
+                (instance_id,organization_id,created_at,payload_delete_after,receipt_delete_after) \
+                VALUES ($1,$2,CURRENT_TIMESTAMP,$3,CURRENT_TIMESTAMP + $4::integer * INTERVAL '24 hours')")
+                .bind(&instance.id).bind(&instance.organization_id).bind(payload_delete_after)
+                .bind(i32::try_from(crate::PUBLIC_VERIFICATION_RECEIPT_DAYS).map_err(number_storage)?)
+                .execute(&mut *transaction).await.map_err(storage)?;
         }
         if let Some(artifact) = artifact {
             let inserted = sqlx::query(

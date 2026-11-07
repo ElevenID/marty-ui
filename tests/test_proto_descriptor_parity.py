@@ -49,6 +49,13 @@ def test_public_field_numbers_remain_wire_compatible():
     assert auth["authentication_time_unix"] == 4
     policy = fields("presentation_policy_service.proto", "EvaluatePresentationRequest")
     assert policy["oid4vp_transport"] == 7
+    assert policy["expected_configuration_digest"] == 8
+    assert fields("presentation_policy_service.proto", "PolicyResponse")[
+        "configuration_digest"
+    ] == 13
+    assert fields("presentation_policy_service.proto", "PolicyEvaluationResponse")[
+        "configuration_digest"
+    ] == 15
     transport = fields("presentation_policy_service.proto", "Oid4vpEvaluationTransport")
     assert transport["vp_token_raw"] == 5
     assert transport["verifier_client_id"] == 6

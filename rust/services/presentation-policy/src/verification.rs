@@ -74,6 +74,10 @@ pub struct CredentialVerificationEvidence {
     pub mdoc_authentication_diagnostic:
         Option<marty_oid4vp_contract::MdocAuthenticationDiagnosticV1>,
     pub credential_id: Option<String>,
+    /// Read only from the authenticated SD-JWT issuer payload/header. Neither
+    /// a policy template ID nor wallet/context metadata establishes these.
+    pub authenticated_sd_jwt_vct: Option<String>,
+    pub authenticated_sd_jwt_type: Option<String>,
     /// Comes only from the signed outer `jti` of a valid VC-JWT.
     pub authenticated_outer_jti: Option<String>,
     pub credential_status_ids: Vec<String>,
@@ -237,6 +241,7 @@ impl VerifiedFactsOrchestrator {
             trust_profile: trust_profile.clone(),
         };
         let mut evidence = self.kernel.verify(&context).await?;
+        crate::sd_jwt_query_binding::bind_sd_jwt_query(format, request, &mut evidence);
         apply_trusted_oid4vp_context(policy, request, &mut evidence);
         let authenticated_outer_jti = if evidence.verified && !presentation_only {
             evidence.authenticated_outer_jti.clone()

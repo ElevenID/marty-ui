@@ -32,6 +32,7 @@ const NONCE_TTL_SECONDS: u64 = 900;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FlowHttpVerificationOptions {
+    pub public_verification: Option<crate::PublicVerificationOptions>,
     pub callback_destinations: WebhookDestinationRegistry,
     pub callback_secret: Option<String>,
     pub request_object: RequestObjectOptions,
@@ -47,6 +48,7 @@ pub struct FlowHttpVerificationOptions {
 impl Default for FlowHttpVerificationOptions {
     fn default() -> Self {
         Self {
+            public_verification: None,
             callback_destinations: WebhookDestinationRegistry::default(),
             callback_secret: None,
             request_object: RequestObjectOptions::default(),
@@ -65,6 +67,7 @@ impl FlowHttpVerificationOptions {
     #[must_use]
     pub fn from_config(config: &crate::FlowServiceConfig) -> Self {
         Self {
+            public_verification: config.public_verification.clone(),
             callback_destinations: config.callback_destinations.clone(),
             callback_secret: config.webhook_secret.clone(),
             request_object: config.request_object_options(),
@@ -291,6 +294,7 @@ async fn retrieve_request_object(
     wallet_nonce: Option<String>,
 ) -> Result<Response, FlowHttpError> {
     let current = required_instance(state, instance_id).await?;
+    crate::public_verification_session::require_wallet_session(&current)?;
     let expected_status = current.status;
     let expected_updated_at = current.updated_at;
     let now = Utc::now().max(expected_updated_at + Duration::microseconds(1));
@@ -380,6 +384,7 @@ async fn submit_direct_post(
     Form(form): Form<DirectPostForm>,
 ) -> Result<Json<Value>, FlowHttpError> {
     let instance = required_instance(&state, &instance_id).await?;
+    crate::public_verification_session::require_wallet_session(&instance)?;
     let (input, instance) = direct_post_input(&state, instance, form).await?;
     let result = evaluate_submission(&state, instance, input, false).await?;
     if result.decision.as_deref() != Some("allow") || result.result.as_deref() != Some("passed") {
@@ -473,6 +478,7 @@ async fn submit_dc_api(
         ));
     }
     let mut instance = required_instance(&state, &instance_id).await?;
+    crate::public_verification_session::require_wallet_session(&instance)?;
     let mut data = Value::Object(request.data.into_iter().collect());
     let mut response_mode = None;
     if let Some(response) = data
@@ -549,7 +555,7 @@ async fn submit_dc_api(
     )))
 }
 
-async fn evaluate_submission(
+pub(crate) async fn evaluate_submission(
     state: &FlowHttpState,
     instance: crate::FlowInstanceRecord,
     input: VerificationSubmissionInput,
@@ -852,10 +858,34 @@ impl From<FlowVerificationStartError> for FlowHttpError {
     }
 }
 
+impl From<crate::DefinedVerificationError> for FlowHttpError {
+    fn from(error: crate::DefinedVerificationError) -> Self {
+        match error {
+            crate::DefinedVerificationError::Start(error) => error.into(),
+            crate::DefinedVerificationError::ConfigurationChanged => Self::new(
+                StatusCode::CONFLICT,
+                "verification_configuration_changed",
+                "Verification requirements changed; start a new session",
+            ),
+            crate::DefinedVerificationError::InvalidSnapshot => Self::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_stored_flow_state",
+                "Stored verification configuration is invalid",
+            ),
+            _ => Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "verification_definition_unavailable",
+                "The configured verification flow is unavailable",
+            ),
+        }
+    }
+}
+
 impl From<FlowVerificationRequestError> for FlowHttpError {
     fn from(error: FlowVerificationRequestError) -> Self {
         match error {
             FlowVerificationRequestError::Provider(error) => error.into(),
+            FlowVerificationRequestError::Definition(error) => error.into(),
             FlowVerificationRequestError::MethodNotAllowed => Self::new(
                 StatusCode::METHOD_NOT_ALLOWED,
                 "verification_request_method_not_allowed",
@@ -880,6 +910,7 @@ impl From<FlowVerificationSubmissionError> for FlowHttpError {
     fn from(error: FlowVerificationSubmissionError) -> Self {
         match error {
             FlowVerificationSubmissionError::Provider(error) => error.into(),
+            FlowVerificationSubmissionError::Definition(error) => error.into(),
             FlowVerificationSubmissionError::Record(_)
             | FlowVerificationSubmissionError::InvalidContext(_) => Self::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -993,5 +1024,43 @@ mod tests {
         assert_eq!(response["request_uri"], response["siop_uri"]);
         assert!(response.get("flow_definition_id").is_none());
         assert!(response.get("status").is_none());
+    }
+}
+
+#[cfg(test)]
+mod definition_admission_error_tests {
+    use super::*;
+    #[tokio::test]
+    async fn definition_admission_failures_preserve_restart_and_dependency_semantics() {
+        let changed: FlowHttpError = FlowVerificationRequestError::Definition(
+            crate::DefinedVerificationError::ConfigurationChanged,
+        )
+        .into();
+        let response = changed.into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "verification_configuration_changed");
+        let unavailable: FlowHttpError =
+            FlowVerificationSubmissionError::Definition(crate::DefinedVerificationError::Start(
+                FlowVerificationStartError::Provider(crate::FlowProviderError::Unavailable {
+                    provider: "presentation_policy_admission",
+                }),
+            ))
+            .into();
+        assert_eq!(
+            unavailable.into_response().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let malformed: FlowHttpError = FlowVerificationRequestError::Definition(
+            crate::DefinedVerificationError::InvalidSnapshot,
+        )
+        .into();
+        assert_eq!(
+            malformed.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }

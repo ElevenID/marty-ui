@@ -170,6 +170,7 @@ pub fn flow_read_router(state: FlowHttpState) -> Router {
         )
         .merge(flow_application_routes())
         .merge(flow_verification_routes())
+        .merge(crate::http_public_verification::flow_public_verification_routes())
         .with_state(state)
 }
 

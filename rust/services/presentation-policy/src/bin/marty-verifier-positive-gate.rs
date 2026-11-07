@@ -310,6 +310,7 @@ async fn execute(input: GateInput) -> Result<Value, String> {
         .validate()
         .map_err(|_| "runtime gate policy rejected")?;
     let request = EvaluatePresentationRequest {
+        expected_configuration_digest: None,
         vp_token: Value::String(presentation),
         trust_profile_id: Some(trust_profile_id.to_string()),
         nonce: Some(NONCE.into()),
