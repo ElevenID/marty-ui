@@ -7,17 +7,29 @@ import sys
 import tomllib
 from pathlib import Path
 
-CORE_REVISION = "9b6d14942a14ea005aabe91d815b27ae8ba3fae1"
+CORE_REVISION = "2f7770c856410ba0dd34ca1542f55187f535cd1c"
 CORE_REF = CORE_REVISION
 CORE_SOURCE = (
     "git+https://github.com/ElevenID/marty-core"
     f"?rev={CORE_REF}#{CORE_REVISION}"
 )
-ISOMDL_REVISION = "1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f"
+ISOMDL_REVISION = "fc3aaa2628cd106d4f36f50c957d7f33211f8a5e"
 ISOMDL_SOURCE = (
     "git+https://github.com/ElevenID/isomdl-elevenid"
     f"?rev={ISOMDL_REVISION}#{ISOMDL_REVISION}"
 )
+SSI_REVISION = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53"
+SSI_SOURCE = f"git+https://github.com/ElevenID/ssi-elevenid?rev={SSI_REVISION}#{SSI_REVISION}"
+LINKED_DATA_REVISION = "6f86efc1579033e14ff2ad7d115ca0857e16a67f"
+LINKED_DATA_SOURCE = (
+    f"git+https://github.com/ElevenID/ssi-elevenid?rev={LINKED_DATA_REVISION}#{LINKED_DATA_REVISION}"
+)
+SD_JWT_REVISION = "fbe1e1b2c4bf0d62b0fdf0f47f265ffdaaae1ff2"
+SD_JWT_SOURCE = f"git+https://github.com/ElevenID/sd-jwt-rust?rev={SD_JWT_REVISION}#{SD_JWT_REVISION}"
+SSI_COMPANION_PACKAGES = {
+    "ssi", "ecdsa", "linked-data", "linked-data-derive",
+    "did-ethr", "did-ion", "did-jwk", "did-method-key", "did-pkh", "did-tz", "did-web",
+}
 CORE_CRATES = {
     "marty-canonical-digest",
     "marty-crypto",
@@ -37,6 +49,38 @@ KMS_ONLY_CRATES = {
 }
 PROBE_CORE_CRATES = CORE_CRATES - {"marty-iso18013", "marty-status"}
 FORBIDDEN_FEATURES = {"default", "local-key-operations", "test-fixtures"}
+
+
+def check_fork_sources(packages: list[dict]) -> None:
+    isomdl = [package for package in packages if package["name"] == "isomdl"]
+    if (
+        len(isomdl) != 1
+        or isomdl[0]["version"] != "0.4.0"
+        or isomdl[0].get("source") != ISOMDL_SOURCE
+    ):
+        raise ValueError("Expected one reviewed isomdl 0.4.0 package")
+
+    sd_jwt = [package for package in packages if package["name"] == "sd-jwt-rs"]
+    if (
+        len(sd_jwt) != 1
+        or sd_jwt[0]["version"] != "0.8.0"
+        or sd_jwt[0].get("source") != SD_JWT_SOURCE
+    ):
+        raise ValueError("Expected one reviewed sd-jwt-rs 0.8.0 package")
+
+    for package in packages:
+        name = package["name"]
+        governed_name = name.startswith("ssi-") or name in SSI_COMPANION_PACKAGES
+        fork_source = "github.com/ElevenID/ssi-elevenid" in (package.get("source") or "")
+        if not (governed_name or fork_source):
+            continue
+        expected_source = (
+            LINKED_DATA_SOURCE
+            if name in {"linked-data", "linked-data-derive"}
+            else SSI_SOURCE
+        )
+        if package.get("source") != expected_source:
+            raise ValueError(f"{name} is not pinned to the reviewed SSI graph")
 
 
 def check(metadata: dict) -> None:
@@ -61,13 +105,8 @@ def check(metadata: dict) -> None:
         if name in KMS_ONLY_CRATES and "kms-only" not in features:
             raise ValueError(f"{name} is missing the kms-only feature")
 
+    check_fork_sources(metadata["packages"])
     isomdl = [package for package in metadata["packages"] if package["name"] == "isomdl"]
-    if (
-        len(isomdl) != 1
-        or isomdl[0]["version"] != "0.3.0"
-        or isomdl[0]["source"] != ISOMDL_SOURCE
-    ):
-        raise ValueError("Expected one reviewed isomdl 0.3.0 package")
     features = set(nodes[isomdl[0]["id"]]["features"])
     if features & {"default", "issuer-local-signing"}:
         raise ValueError("isomdl enables local issuer signing")
@@ -95,6 +134,7 @@ def check_standalone_probe_lock(path: Path) -> None:
         raise ValueError("Standalone feature probe Core package graph changed")
     if any(package["source"] != CORE_SOURCE for package in core):
         raise ValueError("Standalone feature probe is not pinned to reviewed Core")
+    check_fork_sources(packages)
 
 
 if __name__ == "__main__":

@@ -227,6 +227,100 @@ containers. Native issuance starts after the organization and credential
 template services have seeded their initial data. The selected graph retains
 the gateway's full readiness dependencies and uses native issuance exclusively.
 
+## Startup and native recovery checks
+
+Gateway initializes its Auth mTLS client before opening its HTTP listener.
+The new source candidate retries failures classified as `ProviderUnavailable` within a
+**300-second total deadline**, including time spent in attempts, with a
+two-second delay between attempts. Invalid configuration and other error
+classes fail immediately; exhausting the deadline fails startup. TLS trust,
+identity checks and the full gateway readiness dependency set are unchanged.
+MMF also classifies some persistent peer TLS failures as `ProviderUnavailable`;
+those attempts remain unsuccessful unless the same verification actually passes.
+
+The chart's gateway startup probe checks local `/health`, with a ten-second
+period and 60 failures allowed: approximately ten minutes per container start.
+It delays liveness checks while the process initializes, but cannot prevent a
+process from exiting itself. Increasing that probe budget cannot fix an early
+application exit and the resulting Kubernetes restart backoff. Once started,
+gateway readiness remains `/health/ready`; UI startup/liveness use local
+`/edge-healthz`, while UI readiness follows the gateway's `/health/ready`.
+
+The [November 7 trial](kubernetes-first-milestone-validation.md#corrected-runtime-qualification--2026-11-07-utc)
+qualified the preceding signed runtime. The bounded Auth startup retry still
+requires qualification in a new authenticated runtime; it has not been tested
+on AWS by that trial.
+
+Use native observations after a restart. On the single K3s node, select the
+existing kubeconfig and context, then run the following bounded check. It
+targets the default one-replica profile and the first Helm revision's Jobs;
+select the actual Job names after an upgrade. Reserve the entire observation
+window within the trial's original shutdown deadline.
+
+```bash
+(
+set -eu
+: "${KUBECONFIG:?Select the existing kubeconfig}"
+: "${CONTEXT:?Select the existing Kubernetes context}"
+export KUBECONFIG CONTEXT
+export NAMESPACE=marty-dev
+EXPECTED_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)
+test -n "$EXPECTED_BOOT_ID"
+export EXPECTED_BOOT_ID
+date -u '+Native readiness started: %Y-%m-%dT%H:%M:%SZ'
+status=0
+timeout --signal=TERM --kill-after=10s 10m bash -eu <<'READINESS' || status=$?
+k() { kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" --namespace "$NAMESPACE" "$@"; }
+k wait "--for=jsonpath={.status.nodeInfo.bootID}=$EXPECTED_BOOT_ID" \
+  nodes --all --timeout=120s
+k wait --for=condition=Ready nodes --all --timeout=60s
+k wait --for=condition=Available deployments --all --timeout=360s
+k wait '--for=jsonpath={.status.readyReplicas}=1' statefulsets --all --timeout=120s
+k wait --for=condition=Complete job/marty-migrate-1 job/marty-keycloak-1 --timeout=60s
+k wait --for=condition=Ready certificates --all --timeout=60s
+READINESS
+date -u '+Native readiness finished: %Y-%m-%dT%H:%M:%SZ'
+printf 'Native readiness check exit status: %s\n' "$status"
+exit "$status"
+)
+```
+
+Each native wait has its own limit; the outer timeout bounds the whole check
+to ten minutes plus at most ten seconds for forced termination. A nonzero
+status is a failed observation, including a timeout, and must be retained.
+Do not convert it to success because a later check passes. Record the later
+Ready condition transition and successful observation separately. Do not wait
+for all Pods to be Ready: completed Job Pods are correctly not Ready. OpenBao
+uses `OnDelete`, so its readiness check does not use `rollout status`.
+
+In a separate read-only observation, these projections retain workload and
+restart evidence without dumping environment values, Secret data or event
+messages. Keep the original wait's exit status and timestamp with the output.
+
+```sh
+(
+set -eu
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n marty-dev --request-timeout=10s \
+  get deployments,statefulsets \
+  -o 'custom-columns=KIND:.kind,NAME:.metadata.name,GEN:.metadata.generation,OBSERVED:.status.observedGeneration,WANTED:.spec.replicas,READY:.status.readyReplicas,UPDATED:.status.updatedReplicas'
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n marty-dev --request-timeout=10s get pods \
+  -o 'custom-columns=NAME:.metadata.name,PHASE:.status.phase,CONTAINERS:.status.containerStatuses[*].name,READY:.status.containerStatuses[*].ready,RESTARTS:.status.containerStatuses[*].restartCount,WAITING:.status.containerStatuses[*].state.waiting.reason,LAST_EXIT:.status.containerStatuses[*].lastState.terminated.exitCode'
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n marty-dev --request-timeout=10s get events \
+  -o 'custom-columns=TYPE:.type,REASON:.reason,KIND:.involvedObject.kind,NAME:.involvedObject.name,COUNT:.count,FIRST:.firstTimestamp,LAST:.lastTimestamp'
+)
+```
+
+Check the expected workload membership, current observed generations and
+desired/ready/updated replica counts. For the unmodified profile, require all
+20 Deployments and three StatefulSets, plus both completed Jobs. A successful
+wait alone does not prove reboot persistence: compare host and Node boot IDs,
+the [public OpenBao status](../deploy/helm/openbao/README.md#restart-and-recovery-checks),
+PVC UIDs, bound PV names and UIDs, and PV claim references against the before
+record. Require the same OpenBao cluster, initialized and unsealed, Ready and
+unexpired certificates, and the unchanged active shutdown timer. Complete the
+acceptance driver's resume phase against the retained credential without new
+issuance. Keep credentials and raw diagnostic logs in private operator custody.
+
 ## Acceptance and limits
 
 Helm lint and rendered manifests establish packaging behavior only. Qualify the
@@ -245,9 +339,11 @@ actual isolated installation with all of the following evidence:
 The current native development workload identities last **eight hours**. The
 migration-only bootstrap token lasts **two hours**. This milestone does not
 install unattended application identity renewal; cert-manager renews the public
-ingress certificate separately. Extending the application lifetime requires the
-existing native renewal operation to be integrated and qualified. Do not extend
-credentials or disable their checks to hide expiration.
+ingress certificate separately. The scoped tokens are **nonrenewable**. Keeping
+the application running requires a future replacement-credential workflow using
+the existing native producers, with activation qualified separately. This
+startup change adds no renewal workflow. Do not extend credentials or disable
+their checks to hide expiration.
 
 Reboot testing here establishes recovery on the same single node. It does not
 establish high availability, node replacement, backup restoration, multi-node

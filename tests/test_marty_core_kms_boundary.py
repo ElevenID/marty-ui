@@ -28,10 +28,18 @@ def reviewed_graph() -> dict:
         {
             "id": "isomdl",
             "name": "isomdl",
-            "version": "0.3.0",
+            "version": "0.4.0",
             "source": guard.ISOMDL_SOURCE,
         }
     )
+    packages.extend([
+        {"id": "sd-jwt-rs", "name": "sd-jwt-rs", "version": "0.8.0", "source": guard.SD_JWT_SOURCE},
+        {"id": "ssi-json-ld", "name": "ssi-json-ld", "version": "0.3.3", "source": guard.SSI_SOURCE},
+        {"id": "ecdsa", "name": "ecdsa", "version": "0.17.0", "source": guard.SSI_SOURCE},
+        {"id": "did-web", "name": "did-web", "version": "0.5.1", "source": guard.SSI_SOURCE},
+        {"id": "linked-data", "name": "linked-data", "version": "0.1.2", "source": guard.LINKED_DATA_SOURCE},
+        {"id": "linked-data-derive", "name": "linked-data-derive", "version": "0.1.2", "source": guard.LINKED_DATA_SOURCE},
+    ])
     nodes = [
         {
             "id": package["id"],
@@ -58,6 +66,43 @@ def test_standalone_probe_uses_reviewed_core_head(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="not pinned to reviewed Core"):
         guard.check_standalone_probe_lock(stale)
+
+
+@pytest.mark.parametrize("source", [guard.SD_JWT_SOURCE, guard.SSI_SOURCE, guard.LINKED_DATA_SOURCE, guard.ISOMDL_SOURCE])
+def test_standalone_probe_rejects_unreviewed_fork_sources(tmp_path: Path, source: str) -> None:
+    lock = SCRIPT.parents[2] / ".github/feature-regression/rust-probe/Cargo.lock"
+    stale = tmp_path / "Cargo.lock"
+    original = lock.read_text(encoding="utf-8")
+    assert source in original
+    stale.write_text(
+        original.replace(source, "registry+https://github.com/rust-lang/crates.io-index", 1),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="reviewed"):
+        guard.check_standalone_probe_lock(stale)
+
+
+@pytest.mark.parametrize("name", ["sd-jwt-rs", "ssi-json-ld", "ecdsa", "did-web", "linked-data", "linked-data-derive"])
+@pytest.mark.parametrize("source", [
+    "registry+https://github.com/rust-lang/crates.io-index",
+    "git+https://github.com/spruceid/ssi?rev=unreviewed#unreviewed",
+    None,
+])
+def test_registry_upstream_or_path_substitution_fails(name: str, source: str | None) -> None:
+    graph = reviewed_graph()
+    package = next(package for package in graph["packages"] if package["name"] == name)
+    package["source"] = source
+    with pytest.raises(ValueError, match="reviewed"):
+        guard.check(graph)
+
+
+def test_duplicate_sd_jwt_implementations_fail() -> None:
+    graph = reviewed_graph()
+    duplicate = next(package.copy() for package in graph["packages"] if package["name"] == "sd-jwt-rs")
+    duplicate["id"] = "second-sd-jwt-rs"
+    graph["packages"].append(duplicate)
+    with pytest.raises(ValueError, match="one reviewed sd-jwt-rs"):
+        guard.check(graph)
 
 
 @pytest.mark.parametrize("feature", sorted(guard.FORBIDDEN_FEATURES))
