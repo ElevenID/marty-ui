@@ -61,6 +61,11 @@ or stale mirror is not evidence of conformance.
 
 ## Compatibility policy
 
+Historical note: the temporary OB2 exception described below was retired in the
+November 2026 clean cut to OB3. See the current
+[verification and migration boundary](rust-migrations/presentation-open-badges-key-provenance.md).
+This dated report records the earlier policy, not an active compatibility grant.
+
 Marty is pre-1.0 and generally supports the latest protocol behavior without a
 legacy compatibility promise. Open Badges 2 is the one explicit short-lived
 exception: it remains available while tracked by

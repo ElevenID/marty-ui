@@ -137,3 +137,11 @@ The website build and crawler commands live in the `Website Surface` job and can
 also be run locally after the verified released UI dependencies are installed.
 Docker-dependent qualification remains necessary for actual compiler-container
 and Nginx execution; source-policy tests do not stand in for those runs.
+
+
+An acknowledged child may initially expose a default display title while active.
+The coordinator observes only that exact run until its input-derived title is
+available or the original stage deadline expires. Completed child evidence must
+match the expected title; source, repository, workflow, event, attempt, creation
+window and required-job validation remain mandatory. A title mismatch never
+causes a replacement dispatch or an alternate child search.

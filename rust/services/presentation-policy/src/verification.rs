@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, sync::Arc};
 use async_trait::async_trait;
 use chrono::Utc;
 use marty_verification::credential_format::{detect_credential_format, DetectedCredentialFormat};
+use marty_verification::open_badges::is_retired_ob2;
 use mmf_security::{CredentialVerificationAuthorizationFacts, CredentialVerificationPolicyEngine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -12,6 +13,9 @@ use crate::{
     EvaluatePresentationRequest, PresentationPolicy, PresentationVerificationError,
     PresentationVerificationOrchestrator, VerifiedPolicyMaterial,
 };
+
+pub(crate) const OB2_RETIRED: &str =
+    "Open Badges 2.0 is retired; request a newly issued Open Badges 3.0 credential";
 
 pub(crate) const MDOC_AUTHENTICATION_DIAGNOSTIC: &str = "mdoc_authentication_diagnostic";
 
@@ -174,10 +178,17 @@ impl VerifiedFactsOrchestrator {
         let token = canonical_token(&request.vp_token)?;
         let format = detect_credential_format(&token);
         if format == DetectedCredentialFormat::Unknown {
+            let reason = if is_retired_ob2(&request.vp_token)
+                || request.vp_token.get("assertion").is_some()
+            {
+                OB2_RETIRED
+            } else {
+                "Unsupported or malformed credential presentation"
+            };
             return Ok(VerifiedPolicyMaterial::facts_only(rejected_facts(
                 policy,
                 "unknown",
-                "Unsupported or malformed credential presentation",
+                reason,
                 (self.clock)(),
                 policy.trust_profile_id.is_none() && request.trust_profile_id.is_none(),
             )));
@@ -466,7 +477,6 @@ fn cedar_credential_format(format: DetectedCredentialFormat) -> &'static str {
         DetectedCredentialFormat::W3cVcdmDi => "W3C_VCDM_V2_DI",
         DetectedCredentialFormat::SdJwt => "SD_JWT_VC",
         DetectedCredentialFormat::Mdoc => "MDOC",
-        DetectedCredentialFormat::OpenbadgeV2 => "OPEN_BADGES_V2",
         DetectedCredentialFormat::OpenbadgeV3 => "OPEN_BADGES_V3",
         DetectedCredentialFormat::Unknown => "UNKNOWN",
     }

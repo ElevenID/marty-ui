@@ -690,7 +690,7 @@ pub(crate) fn credential_snapshot<'a>(
         .collect::<String>();
     if !matches!(
         normalized.as_str(),
-        "openbadge" | "openbadgev2" | "openbadgev3" | "openbadgecredential"
+        "openbadge" | "openbadgev3" | "openbadgecredential"
     ) || trimmed_json_text(snapshot.get("credential_payload_format")).is_empty()
         || trimmed_json_text(snapshot.get("revocation_profile_id")).is_empty()
         || !trimmed_json_text(snapshot.get("issuer_did")).starts_with("did:")
@@ -1593,6 +1593,18 @@ mod tests {
             ),
             Ok(())
         );
+    }
+
+    #[test]
+    fn retired_ob2_snapshot_cannot_reach_signing_with_prior_readiness() {
+        let mut state = snapshot();
+        for kind in ["OpenBadgeV2", "open_badge_v2", "OPEN-BADGE-V2"] {
+            state.binding["credential_template_snapshot"]["credential_type"] = json!(kind);
+            assert_eq!(
+                evaluate_canvas_guard_snapshot(&transaction(), &issuer(), &state, &config(), now()),
+                Err("canvas_credential_template_snapshot_invalid")
+            );
+        }
     }
 
     #[test]

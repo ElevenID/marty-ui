@@ -153,7 +153,7 @@ class PipelineTests(unittest.TestCase):
         from scripts import build_selfhost_image_lock as image_lock
 
         plan = pipeline.configuration("both", "", "full", "false")
-        self.assertEqual(plan["external_images"], (ROOT / "release/external-images.json").read_text())
+        self.assertEqual(plan["external_images"], (ROOT / "release/external-images.json").read_bytes().decode("utf-8"))
         pins = json.loads(plan["external_images"])
         self.assertEqual(set(pins), {"edge", "postgres", "redis"})
         base = ROOT / "docker-compose.selfhost.prod.yml"
@@ -241,6 +241,51 @@ class PipelineTests(unittest.TestCase):
         self.github.add(number, pipeline.PUBLISHER, event=event, title=title, jobs=["intake", "publish"])
         self.github.publisher_ids.append(number)
 
+    def test_acknowledged_child_waits_for_active_title_convergence(self) -> None:
+        driver = self.driver("stable-publish")
+        self.publisher(event="workflow_dispatch", title="default workflow title")
+        child = self.github.runs[70]
+        child.update(status="queued", conclusion=None)
+        sleeps = []
+        def advance(seconds):
+            sleeps.append(seconds)
+            child.update(status="completed", conclusion="success", display_title="Publish stable candidate 60")
+        driver.sleep = advance
+        run = driver.wait(70, pipeline.PUBLISHER, {"intake", "publish"},
+                          title="Publish stable candidate 60")
+        self.assertEqual(run["id"], 70)
+        self.assertEqual(len(sleeps), 1)
+        self.assertEqual(self.github.posts, [])
+
+    def test_wrong_terminal_title_stops_without_wait_or_dispatch(self) -> None:
+        driver = self.driver("stable-publish")
+        self.publisher(event="workflow_dispatch", title="Publish stable candidate 61")
+        driver.sleep = mock.Mock(side_effect=AssertionError("must not wait"))
+        with self.assertRaises(pipeline.PipelineError) as caught:
+            driver.wait(70, pipeline.PUBLISHER, {"intake", "publish"},
+                        title="Publish stable candidate 60")
+        self.assertEqual(caught.exception.code, "child_title_mismatch")
+        self.assertEqual(self.github.posts, [])
+
+    def test_pending_title_does_not_extend_deadline_or_relax_child_identity(self) -> None:
+        for mutation in (None, "head_sha", "run_attempt", "path", "event"):
+            with self.subTest(mutation=mutation):
+                driver = self.driver("stable-publish", name=f"title-{mutation}.json")
+                self.publisher(event="workflow_dispatch", title="default workflow title")
+                child = self.github.runs[70]
+                child.update(status="in_progress", conclusion=None)
+                if mutation is not None:
+                    child[mutation] = 2 if mutation == "run_attempt" else "foreign"
+                clock = [driver.deadline - timedelta(seconds=1)]
+                driver.now = lambda: clock[0]
+                driver.sleep = lambda seconds: clock.__setitem__(0, clock[0] + timedelta(seconds=seconds))
+                expected = "stage_deadline_exceeded" if mutation is None else "child_identity_mismatch"
+                with self.assertRaises(pipeline.PipelineError) as caught:
+                    driver.wait(70, pipeline.PUBLISHER, {"intake", "publish"},
+                                title="Publish stable candidate 60")
+                self.assertEqual(caught.exception.code, expected)
+                self.assertEqual(self.github.posts, [])
+
     def test_automatic_publisher_is_observed_without_any_second_dispatch(self) -> None:
         self.publisher()
         driver = self.driver("stable-publish")
@@ -254,153 +299,6 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.github.posts, [("repos/ElevenID/marty-ui/actions/workflows/publish-stable-candidate.yml/dispatches",
                                              {"ref": "main", "inputs": {"candidate_run_id": "60"}})])
         self.assertEqual(driver.record["steps"][0]["run_id"], 200)
-
-    def test_acknowledged_active_publisher_title_can_settle_without_a_second_dispatch(self) -> None:
-        driver = self.driver("stable-publish")
-        deadline = driver.deadline
-        clock = [self.github.created]
-        driver.now = lambda: clock[0]
-        self.github.after_post = lambda run: run.update(
-            status="queued", conclusion=None, display_title="Publish stable candidate")
-
-        def settle(seconds):
-            saved = json.loads((self.root / "journal.json").read_bytes())
-            self.assertEqual(saved["steps"][0]["outcome"], "dispatch_confirmed")
-            self.assertEqual(saved["steps"][0]["run_id"], 200)
-            self.assertEqual(len(self.github.posts), 1)
-            self.assertNotIn("repos/ElevenID/marty-ui/actions/runs/200/attempts/1/jobs", self.github.reads)
-            clock[0] += timedelta(seconds=seconds)
-            self.github.runs[200].update(display_title="Publish stable candidate 60",
-                                         status="completed", conclusion="success")
-
-        driver.sleep = settle
-        self.assertEqual(driver.execute(ci_run_id=50, stable_run_id=60), {"publisher_run_id": 200})
-        self.assertEqual(len(self.github.posts), 1)
-        self.assertEqual(self.github.posts[0][1], {"ref": "main", "inputs": {"candidate_run_id": "60"}})
-        self.assertEqual(sum("/workflows/publish-stable-candidate.yml/runs?" in p for p in self.github.reads), 1)
-        self.assertEqual(driver.record["steps"][0]["outcome"], "success")
-        self.assertEqual(driver.deadline, deadline)
-
-    def test_persistent_active_publisher_title_refuses_after_bounded_reads_without_replay(self) -> None:
-        driver = self.driver("stable-publish")
-        clock = [self.github.created]
-        driver.now = lambda: clock[0]
-        self.github.after_post = lambda run: run.update(
-            status="in_progress", conclusion=None, display_title="Publish stable candidate 61")
-        driver.sleep = lambda seconds: clock.__setitem__(0, clock[0] + timedelta(seconds=seconds))
-        with self.assertRaises(pipeline.PipelineError) as caught:
-            driver.execute(ci_run_id=50, stable_run_id=60)
-        self.assertEqual(caught.exception.code, "child_title_mismatch")
-        self.assertEqual((clock[0] - self.github.created).total_seconds(), 30)
-        self.assertEqual(len(self.github.posts), 1)
-        self.assertEqual(driver.record["steps"][0]["outcome"], "dispatch_confirmed")
-        self.assertEqual(driver.record["steps"][0]["run_id"], 200)
-        self.assertNotIn("repos/ElevenID/marty-ui/actions/runs/200/attempts/1/jobs", self.github.reads)
-
-    def test_slow_metadata_response_cannot_settle_title_after_deadline(self) -> None:
-        driver = self.driver("stable-publish")
-        deadline = driver.deadline
-        clock = [self.github.created]
-        driver.now = lambda: clock[0]
-        self.github.after_post = lambda run: run.update(status="queued", conclusion=None, display_title=None)
-        driver.sleep = lambda seconds: clock.__setitem__(0, clock[0] + timedelta(seconds=seconds))
-        original = self.github.json
-        metadata_reads = []
-
-        def slow_metadata(path):
-            if path == "repos/ElevenID/marty-ui/actions/runs/200":
-                metadata_reads.append(clock[0])
-                if len(metadata_reads) == 2:
-                    clock[0] += timedelta(seconds=20)
-                    self.github.runs[200].update(display_title="Publish stable candidate 60",
-                                                 status="completed", conclusion="success")
-            return original(path)
-
-        self.github.json = slow_metadata
-        with self.assertRaises(pipeline.PipelineError) as caught:
-            driver.execute(ci_run_id=50, stable_run_id=60)
-        self.assertEqual(caught.exception.code, "child_title_mismatch")
-        self.assertEqual([(value - self.github.created).total_seconds() for value in metadata_reads], [0, 15])
-        self.assertEqual((clock[0] - self.github.created).total_seconds(), 35)
-        self.assertEqual(len(self.github.posts), 1)
-        self.assertEqual(driver.deadline, deadline)
-        self.assertNotIn("repos/ElevenID/marty-ui/actions/runs/200/attempts/1/jobs", self.github.reads)
-        saved = json.loads((self.root / "journal.json").read_bytes())
-        self.assertEqual(saved["steps"][0]["outcome"], "dispatch_confirmed")
-        self.assertEqual(saved["steps"][0]["run_id"], 200)
-
-    def test_terminal_foreign_publisher_title_refuses_without_settling(self) -> None:
-        driver = self.driver("stable-publish")
-        self.github.after_post = lambda run: run.update(display_title="Publish stable candidate 61")
-        driver.sleep = mock.Mock(side_effect=AssertionError("terminal title must not be retried"))
-        with self.assertRaises(pipeline.PipelineError) as caught:
-            driver.execute(ci_run_id=50, stable_run_id=60)
-        self.assertEqual(caught.exception.code, "child_title_mismatch")
-        driver.sleep.assert_not_called()
-        self.assertEqual(len(self.github.posts), 1)
-
-    def test_title_settling_never_defers_other_child_identity_checks(self) -> None:
-        cases = (({"head_sha": "b" * 40}, "child_identity_mismatch"),
-                 ({"run_attempt": 2}, "child_identity_mismatch"),
-                 ({"event": "workflow_run"}, "child_identity_mismatch"),
-                 ({"path": pipeline.WEB}, "child_identity_mismatch"),
-                 ({"head_branch": "foreign"}, "child_identity_mismatch"),
-                 ({"repository": {"id": 1, "full_name": pipeline.transport.REPOSITORY}}, "child_identity_mismatch"),
-                 ({"created_at": (self.github.created - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")},
-                  "child_outside_stage_window"))
-        for index, (changes, code) in enumerate(cases):
-            with self.subTest(changes=changes):
-                self.github.posts.clear()
-                driver = self.driver("stable-publish", name=f"title-identity-{index}.json")
-                self.github.after_post = lambda run: run.update(
-                    status="queued", conclusion=None, display_title=None, **changes)
-                driver.sleep = mock.Mock(side_effect=AssertionError("identity mismatch must not be retried"))
-                with self.assertRaises(pipeline.PipelineError) as caught:
-                    driver.execute(ci_run_id=50, stable_run_id=60)
-                self.assertEqual(caught.exception.code, code)
-                driver.sleep.assert_not_called()
-                self.assertEqual(len(self.github.posts), 1)
-
-    def test_publisher_title_is_strict_after_it_has_been_observed(self) -> None:
-        driver = self.driver("stable-publish")
-        self.github.after_post = lambda run: run.update(status="queued", conclusion=None)
-
-        def change_title(_seconds):
-            self.github.runs[200]["display_title"] = "Publish stable candidate 61"
-
-        driver.sleep = mock.Mock(side_effect=change_title)
-        with self.assertRaises(pipeline.PipelineError) as caught:
-            driver.execute(ci_run_id=50, stable_run_id=60)
-        self.assertEqual(caught.exception.code, "child_title_mismatch")
-        self.assertEqual(driver.sleep.call_count, 1)
-        self.assertEqual(len(self.github.posts), 1)
-
-    def test_title_settling_does_not_extend_the_stage_deadline(self) -> None:
-        driver = self.driver("stable-publish")
-        clock = [self.github.created]
-        driver.now = lambda: clock[0]
-        driver.deadline = clock[0] + timedelta(seconds=5)
-        deadline = driver.deadline
-        self.github.after_post = lambda run: run.update(status="queued", conclusion=None, display_title=None)
-        driver.sleep = lambda seconds: clock.__setitem__(0, clock[0] + timedelta(seconds=seconds))
-        with self.assertRaises(pipeline.PipelineError) as caught:
-            driver.execute(ci_run_id=50, stable_run_id=60)
-        self.assertEqual(caught.exception.code, "stage_deadline_exceeded")
-        self.assertEqual(clock[0], deadline)
-        self.assertEqual(driver.deadline, deadline)
-        self.assertEqual(len(self.github.posts), 1)
-
-    def test_retained_publisher_wait_does_not_get_a_title_grace_period(self) -> None:
-        self.publisher()
-        self.github.runs[70].update(status="queued", conclusion=None, display_title=None)
-        driver = self.driver("stable-publish")
-        driver.sleep = mock.Mock(side_effect=AssertionError("retained title must be exact"))
-        with self.assertRaises(pipeline.PipelineError) as caught:
-            driver.wait(70, pipeline.PUBLISHER, {"intake", "publish"}, event="workflow_run",
-                        title="Publish stable candidate 60")
-        self.assertEqual(caught.exception.code, "child_title_mismatch")
-        driver.sleep.assert_not_called()
-        self.assertEqual(self.github.posts, [])
 
     def test_publisher_dispatch_never_substitutes_a_late_automatic_run(self) -> None:
         self.github.after_post = lambda _run: self.publisher()

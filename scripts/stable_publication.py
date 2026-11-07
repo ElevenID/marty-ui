@@ -300,6 +300,7 @@ class Publisher:
         h.require(type(value) is dict and h.positive(value.get("id")) and value["id"] == self.release_id
                   and value.get("tag_name") == self.candidate["tag"]
                   and value.get("target_commitish") == self.candidate["source_sha"]
+                  and value.get("name") == self.candidate["tag"]
                   and type(value.get("draft")) is bool and value.get("prerelease") is False,
                   "release coordinate or identity changed")
         h.require(not owned or value.get("body") == self.body, "authenticated release ownership changed")
@@ -343,11 +344,10 @@ class Publisher:
             h.require(current["draft"] is True and current.get("body") in {None, ""}
                       and current.get("assets") == [], "new draft changed before ownership attachment")
             self.guard()
-            # Keep the admitted coordinates explicit: an omitted tag_name can
-            # turn a draft ownership update into an untagged release.
             status, _ = self.github.response(f"repos/{h.REPOSITORY}/releases/{self.release_id}", method="PATCH", payload={
                 "tag_name": self.candidate["tag"], "target_commitish": self.candidate["source_sha"],
-                "body": body, "draft": True, "prerelease": False, "make_latest": "false"})
+                "name": self.candidate["tag"], "body": body, "draft": True,
+                "prerelease": False, "make_latest": "false"})
             h.require(status == 200, "ownership attachment failed; do not claim an unknown draft")
             self.body = body
             current = self.release(fresh=True)
@@ -382,9 +382,11 @@ class Publisher:
             h.require(c.load_candidate(self.directory, now=self.clock()) == (self.candidate, self.request, self.admission),
                       "candidate custody changed before final publication")
             self.guard()
-            status, _ = self.github.response(f"repos/{h.REPOSITORY}/releases/{self.release_id}", method="PATCH", payload={
+            status, _ = self.github.response(f"repos/{h.REPOSITORY}/releases/{self.release_id}",
+                                              method="PATCH", payload={
                 "tag_name": self.candidate["tag"], "target_commitish": self.candidate["source_sha"],
-                "draft": False, "prerelease": False, "make_latest": "true"})
+                "name": self.candidate["tag"], "body": self.body, "draft": False,
+                "prerelease": False, "make_latest": "true"})
             h.require(status == 200, "publication outcome is unknown; use a fresh admitted retry")
         current = self.release(fresh=True)
         h.require(current["draft"] is False, "release was not published")

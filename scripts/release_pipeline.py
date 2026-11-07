@@ -47,7 +47,6 @@ DISPATCH = {
                           "application_run_attempt", "expected_source_sha"}, {"compose"}),
 }
 ACTIVE = {"queued", "in_progress", "waiting", "pending", "requested"}
-TITLE_SETTLE_SECONDS = 30
 IMAGE = re.compile(r"[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}\Z")
 STOP_MESSAGES = {
     "invalid_image_pins": "Stable release requires bounded external image pins",
@@ -93,7 +92,7 @@ OPERATIONS = {
     "validate_context", "validate_checkout", "load_configuration", "source_preflight",
     "read_pipeline_run", "create_stage_journal", "execute_stage", "write_stage_outputs",
     "check_deadline", "check_protected_main", "read_child_run", "validate_child_run",
-    "read_child_jobs", "validate_child_jobs", "wait_child", "prepare_dispatch",
+    "read_child_jobs", "validate_child_jobs", "validate_child_title", "wait_child", "prepare_dispatch",
     "record_dispatch_intent", "dispatch_workflow", "record_dispatch_response",
     "validate_dispatch_response", "record_dispatch_acknowledgment", "record_child_success",
     "find_stable_publisher", "record_stable_publisher", "finalize_stage",
@@ -306,25 +305,19 @@ class Pipeline:
         return ready
 
     def wait(self, run_id: int, workflow: str, jobs: set[str], *, event: str = "workflow_dispatch",
-             title: str | None = None, settle_title: bool = False) -> dict:
+             title: str | None = None) -> dict:
         self.child_run_id = run_id if transport.positive(run_id) else None
-        title_deadline = (min(self.deadline, self.now() + timedelta(seconds=TITLE_SETTLE_SECONDS))
-                          if settle_title and title is not None else None)
         while True:
             self.current()
-            run = self.run(run_id, workflow, event=event, title=None if title_deadline is not None else title)
-            if title_deadline is not None:
-                # A slow read cannot turn an expired grace period into acceptance.
-                require(self.now() < title_deadline, "child_title_mismatch")
-                # Only the just-acknowledged child may briefly lack its rendered
-                # run title. All other identity checks above remain immediate.
-                if run.get("display_title") != title:
-                    require(self.now() < title_deadline and run.get("status") in ACTIVE
-                            and run.get("conclusion") is None, "child_title_mismatch")
-                    self.operation = "wait_child"
-                    self.sleep(min(15.0, max(0.0, (title_deadline - self.now()).total_seconds())))
-                    continue
-                title_deadline = None  # Once observed, the exact title must not drift.
+            run = self.run(run_id, workflow, event=event)
+            self.operation = "validate_child_title"
+            # Newly acknowledged runs may expose their default title before the
+            # input-derived run-name. Follow only this exact child while active;
+            # completed evidence must have the expected title. The existing
+            # stage deadline and every source/invocation check still apply.
+            title_ready = title is None or run.get("display_title") == title
+            require(title_ready or (run.get("status") in ACTIVE and run.get("conclusion") is None),
+                    "child_title_mismatch")
             self.operation = "wait_child"
             if run.get("status") == "completed":
                 require(run.get("conclusion") == "success", "child_workflow_failed")
@@ -373,7 +366,7 @@ class Pipeline:
         print(transport.encoded({"event": "child_dispatch_confirmed", "stage": self.phase,
                                  "step": name, "workflow": workflow, "run_id": run_id,
                                  "run_attempt": 1}).decode(), end="", flush=True)
-        self.wait(run_id, workflow, jobs, title=title, settle_title=True)
+        self.wait(run_id, workflow, jobs, title=title)
         step["outcome"] = "success"
         self.operation = "record_child_success"
         self.persist()

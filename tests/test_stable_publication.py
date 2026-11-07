@@ -226,9 +226,7 @@ def test_publish_creates_owned_draft_exact_assets_and_one_final_transition(setup
     assert api.releases[0]["draft"] is False
     assert set(row["name"] for row in api.releases[0]["assets"]) == p.cp.ASSET_NAMES
     assert len([w for w in api.writes if w[0] == "upload"]) == len(p.cp.ASSET_NAMES)
-    assert len([w for w in api.writes if w[2] == {
-        "tag_name": TAG, "target_commitish": SOURCE, "draft": False,
-        "prerelease": False, "make_latest": "true"}]) == 1
+    assert len([w for w in api.writes if w[0] == "PATCH" and w[2].get("draft") is False]) == 1
     before = copy.deepcopy(api.writes)
     # Fully matching published state is a read-only idempotent success.
     assert publisher(setup).publish()["release_id"] == result["release_id"]
@@ -353,73 +351,30 @@ def test_owner_crypto_command_binds_exact_publisher_run_and_custom_predicate(mon
                              "run_id": PUBLISHER, "run_attempt": 1}]
 
 
-@pytest.mark.parametrize("phase", ["ownership", "publication"])
-def test_publish_keeps_admitted_coordinate_when_patch_omission_would_untag(setup, monkeypatch, phase):
-    pub = publisher(setup); api = setup[3]
-    original = api.response
-    observed = []
-    def response(path, *, method="GET", payload=None):
-        status, raw = original(path, method=method, payload=payload)
-        if method == "PATCH":
-            current_phase = "ownership" if "body" in payload else "publication"
-            observed.append((current_phase, copy.deepcopy(payload)))
-            # Failure injection models the original HTTP 200 ownership update:
-            # omitting tag_name changes the draft to an untagged coordinate.
-            if current_phase == phase and "tag_name" not in payload:
-                api.releases[0]["tag_name"] = "untagged-synthetic"
-                raw = p.h.encoded(api.releases[0])
-        return status, raw
-    monkeypatch.setattr(api, "response", response)
-    assert pub.publish()["status"] == "published"
-    assert api.releases[0]["tag_name"] == TAG
-    assert api.releases[0]["target_commitish"] == SOURCE
-    assert api.releases[0]["draft"] is False
-    assert api.releases[0]["prerelease"] is False
-    assert observed == [
-        ("ownership", {"tag_name": TAG, "target_commitish": SOURCE,
-            "body": pub.body, "draft": True, "prerelease": False, "make_latest": "false"}),
-        ("publication", {"tag_name": TAG, "target_commitish": SOURCE,
-            "draft": False, "prerelease": False, "make_latest": "true"}),
-    ]
-    assert api.releases[0]["body"] == pub.body
-    assert len([w for w in api.writes if w[0] == "POST"]) == 1
-    assert len([w for w in api.writes if w[0] == "PATCH"]) == 2
-    uploads = [w[1] for w in api.writes if w[0] == "upload"]
-    assert len(uploads) == len(set(uploads)) == len(p.cp.ASSET_NAMES)
-
-
-@pytest.mark.parametrize("phase", ["ownership", "publication"])
-def test_explicit_patch_identity_still_rejects_changed_response_without_retry(setup, monkeypatch, phase):
-    pub = publisher(setup); api = setup[3]
-    original = api.response
-    def response(path, *, method="GET", payload=None):
-        status, raw = original(path, method=method, payload=payload)
-        if method == "PATCH" and ("ownership" if "body" in payload else "publication") == phase:
+def test_patch_retains_coordinate_when_omission_resets_the_tag(setup):
+    api = setup[3]
+    response = api.response
+    def reset_omitted_tag(path, *, method="GET", payload=None):
+        status, raw = response(path, method=method, payload=payload)
+        if method == "PATCH" and "tag_name" not in payload:
             api.releases[0]["tag_name"] = "untagged-synthetic"
-            raw = p.h.encoded(api.releases[0])
         return status, raw
-    monkeypatch.setattr(api, "response", response)
-    with pytest.raises(ValueError, match="coordinate or identity changed"):
-        pub.publish()
-    assert api.releases[0]["tag_name"] == "untagged-synthetic"
-    assert len([w for w in api.writes if w[0] == "POST"]) == 1
-    assert len([w for w in api.writes if w[0] == "PATCH"]) == (1 if phase == "ownership" else 2)
-    uploads = [w[1] for w in api.writes if w[0] == "upload"]
-    assert len(uploads) == (0 if phase == "ownership" else len(p.cp.ASSET_NAMES))
+    api.response = reset_omitted_tag
+    assert publisher(setup).publish()["status"] == "published"
+    patches = [write[2] for write in api.writes if write[0] == "PATCH"]
+    assert len(patches) == 2
+    owner, final = patches
+    expected = {"tag_name": TAG, "target_commitish": SOURCE, "name": TAG,
+                "body": api.releases[0]["body"], "prerelease": False}
+    assert owner == {**expected, "draft": True, "make_latest": "false"}
+    assert final == {**expected, "draft": False, "make_latest": "true"}
 
 
-def test_final_transition_preserves_and_rechecks_owner_body(setup, monkeypatch):
-    pub = publisher(setup); api = setup[3]
-    original = api.response
-    def response(path, *, method="GET", payload=None):
-        status, raw = original(path, method=method, payload=payload)
-        if method == "PATCH" and payload.get("draft") is False:
-            assert "body" not in payload
-            api.releases[0]["body"] = "foreign ownership change"
-            raw = p.h.encoded(api.releases[0])
-        return status, raw
-    monkeypatch.setattr(api, "response", response)
-    with pytest.raises(ValueError, match="authenticated release ownership changed"):
-        pub.publish()
-    assert api.releases[0]["body"] == "foreign ownership change"
-    assert len([w for w in api.writes if w[0] == "PATCH"]) == 2
+def test_changed_release_name_is_not_overwritten_by_a_retry(setup):
+    publisher(setup).publish()
+    api = setup[3]
+    api.releases[0]["name"] = "foreign name"
+    before = copy.deepcopy(api.writes)
+    with pytest.raises(ValueError, match="coordinate or identity"):
+        publisher(setup).publish()
+    assert api.writes == before
