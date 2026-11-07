@@ -744,7 +744,7 @@ impl marty_issuer_key_resolution::IssuerKeyResolver for ForeignPublicKeyResolver
             verification_keys: self.keys.clone(),
             source: "test-resolver".into(),
             retrieved_at: "2026-01-01T00:00:00Z".into(),
-            content_sha256: "test".into(),
+            content_sha256: "a".repeat(64),
         })
     }
 }
@@ -882,7 +882,19 @@ async fn foreign_key_resolution_rejects_tampering_private_and_ambiguous_keys() {
         ));
         let context = CredentialVerificationContext {
             presentation_only: false,
-            resolved_issuer_public_jwk: Some(key.clone()),
+            resolved_issuer_key: Some(marty_presentation_policy::ResolvedIssuerKey {
+                issuer_id: fixture["issuer"].as_str().unwrap().into(),
+                public_jwk: key.clone(),
+                provenance: marty_presentation_policy::IssuerKeyProvenance {
+                    mechanism: marty_presentation_policy::IssuerKeyMechanism::TrustProfileKey,
+                    trust_profile_id: None,
+                    organization_id: None,
+                    issuer_organization_id: None,
+                    source: "caller-supplied-must-be-cleared".into(),
+                    retrieved_at: None,
+                    content_sha256: None,
+                },
+            }),
             format: DetectedCredentialFormat::OpenbadgeV3,
             token: fixture["token"].clone(),
             nonce: None,
@@ -907,7 +919,7 @@ async fn foreign_key_resolution_rejects_tampering_private_and_ambiguous_keys() {
     );
     let context = CredentialVerificationContext {
         presentation_only: false,
-        resolved_issuer_public_jwk: None,
+        resolved_issuer_key: None,
         format: DetectedCredentialFormat::OpenbadgeV3,
         token: json!(token),
         nonce: None,
@@ -938,7 +950,7 @@ async fn existing_governed_key_remains_authoritative_without_resolution() {
         serde_json::from_str(include_str!("fixtures/foreign_ob3_jwt.json")).unwrap();
     let context = CredentialVerificationContext {
         presentation_only: false,
-        resolved_issuer_public_jwk: None,
+        resolved_issuer_key: None,
         format: DetectedCredentialFormat::OpenbadgeV3,
         token: fixture["token"].clone(),
         nonce: None,
@@ -955,4 +967,49 @@ async fn existing_governed_key_remains_authoritative_without_resolution() {
     let kernel =
         marty_presentation_policy::ResolvingCredentialKernel::new(Arc::new(MustNotResolve));
     assert!(kernel.verify(&context).await.unwrap().verified);
+}
+
+#[tokio::test]
+async fn explicit_profile_key_authority_cannot_downgrade_to_public_discovery() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/foreign_ob3_jwt.json")).unwrap();
+    let issuer = fixture["issuer"].as_str().unwrap();
+    let mut mismatched_key = fixture["public_jwk"].clone();
+    mismatched_key["kid"] = json!(format!("{issuer}#different-pinned-key"));
+    let relationship = json!({
+        "issuer_id":issuer, "relationship_status":"TRUSTED", "compliance_status":"COMPLIANT",
+        "verification_keys":[mismatched_key]
+    });
+    for profile in [
+        json!({"status":"ACTIVE", "issuer_relationships":[relationship]}),
+        json!({"status":"ACTIVE", "system_issuer_overrides":{issuer:{"public_jwk":mismatched_key}}}),
+        json!({"status":"ACTIVE", "system_issuer_overrides":{issuer:{"public_jwk":mismatched_key}},
+            "issuer_relationships":[{"issuer_id":issuer,"relationship_status":"TRUSTED",
+                "compliance_status":"COMPLIANT","verification_keys":[fixture["public_jwk"]]}]}),
+        json!({"status":"ACTIVE", "issuer_relationships":[relationship.clone(), relationship]}),
+    ] {
+        let context = CredentialVerificationContext {
+            presentation_only: false,
+            resolved_issuer_key: None,
+            format: DetectedCredentialFormat::OpenbadgeV3,
+            token: fixture["token"].clone(),
+            nonce: None,
+            audience: None,
+            verifier_context: serde_json::Map::new(),
+            trust_profile: Some(ResolvedTrustProfile {
+                id: POLICY_PROFILE_ID,
+                organization_id: ORGANIZATION_ID,
+                document: profile,
+            }),
+        };
+        let kernel =
+            marty_presentation_policy::ResolvingCredentialKernel::new(Arc::new(MustNotResolve));
+        let rejected = kernel.verify(&context).await.unwrap();
+        assert!(!rejected.verified);
+        assert!(rejected.claims.is_empty() && rejected.authenticated_issuer.is_none());
+        assert_eq!(
+            rejected.failure_reason.as_deref(),
+            Some("Trust Profile does not authorize this issuer signing key")
+        );
+    }
 }

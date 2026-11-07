@@ -12,8 +12,9 @@ use sha2::{Digest, Sha256};
 
 use crate::verification::OB2_RETIRED;
 use crate::{
-    CredentialStatusEvidence, CredentialVerificationContext, CredentialVerificationEvidence,
-    CredentialVerificationKernel, PresentationVerificationError,
+    AuthenticatedIssuerEvidence, CredentialStatusEvidence, CredentialVerificationContext,
+    CredentialVerificationEvidence, CredentialVerificationKernel, IssuerKeyMechanism,
+    IssuerKeyProvenance, PresentationVerificationError, ResolvedIssuerKey,
 };
 
 type JsonObject = Map<String, Value>;
@@ -111,7 +112,7 @@ impl ResolvingCredentialKernel {
                 let key = self
                     .resolve_source_key(sources[0], issuer, method, "JSON_LD", &algorithm)
                     .await?;
-                let entry = json!({"id":method,"controller":issuer,"public_jwk":key});
+                let entry = json!({"id":method,"controller":issuer,"public_jwk":key.public_jwk});
                 if let Some(existing) = resolved_methods
                     .iter()
                     .find(|entry: &&Value| entry.get("id").and_then(Value::as_str) == Some(method))
@@ -153,7 +154,7 @@ impl ResolvingCredentialKernel {
         method: &str,
         format: &str,
         algorithm: &str,
-    ) -> Result<Value, &'static str> {
+    ) -> Result<ResolvedIssuerKey, &'static str> {
         let organization_id = match source.get("organization_id") {
             Some(Value::String(value)) => Some(value.clone()),
             Some(_) => return Err("Invalid issuer organization scope"),
@@ -220,7 +221,7 @@ impl ResolvingCredentialKernel {
         .map_err(|_| "Issuer DID trust resolution failed")?;
         let mut keys = material
             .verification_keys
-            .into_iter()
+            .iter()
             .filter(|key| key.get("kid").and_then(Value::as_str) == Some(method));
         let key = keys
             .next()
@@ -228,7 +229,12 @@ impl ResolvingCredentialKernel {
         if keys.next().is_some() {
             return Err("Issuer DID signing method is not authorized");
         }
-        Ok(key)
+        Ok(resolved_did_key(
+            issuer,
+            key.clone(),
+            &material,
+            request.organization_id,
+        ))
     }
     pub fn new(
         resolver: std::sync::Arc<dyn marty_issuer_key_resolution::IssuerKeyResolver>,
@@ -267,7 +273,7 @@ impl CredentialVerificationKernel for ResolvingCredentialKernel {
         let mut resolved = context.clone();
         // The public request map cannot supply this field. Clear even caller
         // hints so this adapter only admits its own bounded resolver result.
-        resolved.resolved_issuer_public_jwk = None;
+        resolved.resolved_issuer_key = None;
         if context.token.is_object()
             && matches!(
                 context.format,
@@ -319,18 +325,26 @@ impl CredentialVerificationKernel for ResolvingCredentialKernel {
                         } else {
                             "VC_JWT"
                         };
-                        let key = match self
+                        let mut key = match self
                             .resolve_source_key(sources[0], &issuer, &kid, format, &algorithm)
                             .await
                         {
                             Ok(key) => key,
                             Err(reason) => return Ok(rejected(reason)),
                         };
-                        resolved.resolved_issuer_public_jwk = Some(key);
+                        bind_key_profile(&mut key, &resolved);
+                        resolved.resolved_issuer_key = Some(key);
                         return RustCredentialKernel.verify(&resolved).await;
                     }
                 }
-                if governed_public_jwk(context, token).is_none() {
+                if governed_issuer_key(context, token).is_none() {
+                    if let Some((issuer, _)) = jwt_selector(token) {
+                        if has_profile_key_authority(context, &issuer) {
+                            return Ok(rejected(
+                                "Trust Profile does not authorize this issuer signing key",
+                            ));
+                        }
+                    }
                     if let Some((issuer, Some(kid))) = jwt_selector(token) {
                         if issuer.starts_with("did:web:") && kid.starts_with(&format!("{issuer}#"))
                         {
@@ -344,7 +358,14 @@ impl CredentialVerificationKernel for ResolvingCredentialKernel {
                                     .filter(|key| key.as_object().is_some_and(public_jwk))
                                     .collect();
                                 if matches.len() == 1 {
-                                    resolved.resolved_issuer_public_jwk = Some(matches[0].clone());
+                                    let mut key = resolved_did_key(
+                                        &issuer,
+                                        matches[0].clone(),
+                                        &material,
+                                        None,
+                                    );
+                                    bind_key_profile(&mut key, &resolved);
+                                    resolved.resolved_issuer_key = Some(key);
                                 }
                             }
                         }
@@ -687,12 +708,12 @@ async fn verify_vc_jwt(
 ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
     let token = token_string(&context.token)?;
     let mut request = json!({"token": token});
-    if let Some(public_jwk) = context
-        .resolved_issuer_public_jwk
+    let issuer_key = context
+        .resolved_issuer_key
         .clone()
-        .or_else(|| governed_public_jwk(context, token))
-    {
-        request["issuer_public_jwk"] = public_jwk;
+        .or_else(|| governed_issuer_key(context, token));
+    if let Some(key) = &issuer_key {
+        request["issuer_public_jwk"] = key.public_jwk.clone();
     }
     let raw = if open_badge_v3 {
         marty_verification::vcdm::verify_open_badge_v3_jwt_json_async(&request.to_string()).await
@@ -719,12 +740,31 @@ async fn verify_vc_jwt(
         .get("vc")
         .and_then(Value::as_object)
         .ok_or_else(|| invalid_native("VC-JWT verifier omitted the credential object"))?;
+    let authenticated = if let Some(key) = &issuer_key {
+        let Some(issuer) = authenticated_issuer(
+            context,
+            key,
+            result.get("issuer").and_then(Value::as_str),
+            jwt_algorithm(token),
+        ) else {
+            return Ok(rejected(
+                "Verified issuer authority or provenance is invalid",
+            ));
+        };
+        Some(issuer)
+    } else {
+        None
+    };
     let mut evidence = credential_evidence(
         credential,
-        result.get("issuer").and_then(Value::as_str),
+        authenticated
+            .as_ref()
+            .map(|issuer| issuer.issuer_id.as_str())
+            .or_else(|| result.get("issuer").and_then(Value::as_str)),
         false,
         1,
     );
+    evidence.authenticated_issuer = authenticated;
     bind_authenticated_jwt_credential_id(&mut evidence, claims);
     evidence.algorithm = jwt_algorithm(token);
     evidence.validity_checked = true;
@@ -877,10 +917,10 @@ fn verify_sd_jwt(
     context: &CredentialVerificationContext,
 ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
     let token = token_string(&context.token)?;
-    let Some(public_jwk) = context
-        .resolved_issuer_public_jwk
+    let Some(issuer_key) = context
+        .resolved_issuer_key
         .clone()
-        .or_else(|| governed_public_jwk(context, token))
+        .or_else(|| governed_issuer_key(context, token))
     else {
         return Ok(rejected(
             "No governed issuer public JWK is available for SD-JWT",
@@ -888,7 +928,7 @@ fn verify_sd_jwt(
     };
     let verified = marty_oid4vci::formats::sd_jwt::verify_sd_jwt(
         token,
-        &public_jwk.to_string(),
+        &issuer_key.public_jwk.to_string(),
         context.audience.clone(),
         context.nonce.clone(),
     );
@@ -896,6 +936,16 @@ fn verify_sd_jwt(
         Ok(Value::Object(claims)) => claims,
         Ok(_) => return Err(invalid_native("SD-JWT verifier returned non-object claims")),
         Err(_) => return Ok(rejected("SD-JWT verification rejected the credential")),
+    };
+    let Some(authenticated) = authenticated_issuer(
+        context,
+        &issuer_key,
+        claims.get("iss").and_then(Value::as_str),
+        jwt_algorithm(token),
+    ) else {
+        return Ok(rejected(
+            "Verified issuer authority or provenance is invalid",
+        ));
     };
     let credential = claims
         .get("vc")
@@ -912,7 +962,6 @@ fn verify_sd_jwt(
                 .cloned()
         })
         .unwrap_or_else(|| claims.clone());
-    let issuer = claims.get("iss").and_then(Value::as_str).map(str::to_owned);
     let credential_id = claims
         .get("jti")
         .and_then(Value::as_str)
@@ -932,7 +981,8 @@ fn verify_sd_jwt(
         credential_id: credential_id.clone(),
         credential_status_ids: credential_id.into_iter().collect(),
         claims: disclosed,
-        issuer_id: issuer,
+        issuer_id: Some(authenticated.issuer_id.clone()),
+        authenticated_issuer: Some(authenticated),
         issued_at_epoch_seconds: issued_at,
         algorithm: jwt_algorithm(token),
         validity_checked: true,
@@ -1196,10 +1246,10 @@ fn trust_value<'a>(context: &'a CredentialVerificationContext, key: &str) -> Opt
         .and_then(|profile| profile.document.get(key))
 }
 
-fn governed_public_jwk(context: &CredentialVerificationContext, token: &str) -> Option<Value> {
-    if let Some(jwk) = trust_value(context, "issuer_public_jwk").and_then(Value::as_object) {
-        return public_jwk(jwk).then(|| Value::Object(jwk.clone()));
-    }
+fn governed_issuer_key(
+    context: &CredentialVerificationContext,
+    token: &str,
+) -> Option<ResolvedIssuerKey> {
     let profile = context.trust_profile.as_ref()?.document.as_object()?;
     if profile
         .get("status")
@@ -1209,22 +1259,26 @@ fn governed_public_jwk(context: &CredentialVerificationContext, token: &str) -> 
         return None;
     }
     let (issuer, kid) = jwt_selector(token)?;
-    let normalized_issuer = normalize_issuer(&issuer);
 
-    let overrides = profile
+    if let Some(value) = profile
         .get("system_issuer_overrides")
         .and_then(Value::as_object)
-        .into_iter()
-        .flat_map(|values| values.iter())
-        .filter(|(identifier, _)| normalize_issuer(identifier) == normalized_issuer)
-        .filter_map(|(_, value)| value.get("public_jwk").and_then(Value::as_object))
-        .filter(|jwk| public_jwk(jwk) && kid_matches(jwk, kid.as_deref()))
-        .collect::<Vec<_>>();
-    if overrides.len() == 1 {
-        return Some(Value::Object(overrides[0].clone()));
-    }
-    if !overrides.is_empty() {
-        return None;
+        .and_then(|overrides| overrides.get(&issuer))
+        .and_then(|entry| entry.get("public_jwk"))
+    {
+        // An explicit override remains the authority even when its key is
+        // invalid or does not match the presented kid. Neither a relationship
+        // key nor public discovery may replace a failed configured override.
+        let jwk = value.as_object()?;
+        if !public_jwk(jwk) || !kid_matches(jwk, kid.as_deref()) {
+            return None;
+        }
+        return Some(profile_issuer_key(
+            context,
+            issuer,
+            Value::Object(jwk.clone()),
+            "trust_profile_system_override",
+        ));
     }
 
     let relationships = profile
@@ -1237,7 +1291,7 @@ fn governed_public_jwk(context: &CredentialVerificationContext, token: &str) -> 
             relationship
                 .get("issuer_id")
                 .and_then(Value::as_str)
-                .is_some_and(|value| normalize_issuer(value) == normalized_issuer)
+                .is_some_and(|value| value == issuer)
                 && relationship
                     .get("relationship_status")
                     .and_then(Value::as_str)
@@ -1277,7 +1331,114 @@ fn governed_public_jwk(context: &CredentialVerificationContext, token: &str) -> 
     } else {
         return None;
     };
-    Some(Value::Object(selected.clone()))
+    Some(profile_issuer_key(
+        context,
+        issuer,
+        Value::Object(selected.clone()),
+        "trust_profile_issuer_relationship",
+    ))
+}
+
+fn has_profile_key_authority(context: &CredentialVerificationContext, issuer: &str) -> bool {
+    let Some(profile) = context.trust_profile.as_ref() else {
+        return false;
+    };
+    profile
+        .document
+        .get("system_issuer_overrides")
+        .and_then(Value::as_object)
+        .and_then(|overrides| overrides.get(issuer))
+        .is_some_and(|entry| entry.get("public_jwk").is_some())
+        || profile
+            .document
+            .get("issuer_relationships")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|entry| {
+                entry.get("issuer_id").and_then(Value::as_str) == Some(issuer)
+                    && entry.get("verification_keys").is_some()
+            })
+}
+
+fn profile_issuer_key(
+    context: &CredentialVerificationContext,
+    issuer_id: String,
+    public_jwk: Value,
+    source: &str,
+) -> ResolvedIssuerKey {
+    let mut key = ResolvedIssuerKey {
+        issuer_id,
+        public_jwk,
+        provenance: IssuerKeyProvenance {
+            mechanism: IssuerKeyMechanism::TrustProfileKey,
+            trust_profile_id: None,
+            organization_id: None,
+            issuer_organization_id: None,
+            source: source.into(),
+            retrieved_at: None,
+            content_sha256: None,
+        },
+    };
+    bind_key_profile(&mut key, context);
+    key
+}
+
+fn resolved_did_key(
+    issuer_id: &str,
+    public_jwk: Value,
+    material: &marty_issuer_key_resolution::IssuerKeyResolution,
+    issuer_organization_id: Option<String>,
+) -> ResolvedIssuerKey {
+    ResolvedIssuerKey {
+        issuer_id: issuer_id.into(),
+        public_jwk,
+        provenance: IssuerKeyProvenance {
+            mechanism: IssuerKeyMechanism::DidAssertionMethod,
+            trust_profile_id: None,
+            organization_id: None,
+            issuer_organization_id,
+            source: material.source.clone(),
+            retrieved_at: Some(material.retrieved_at.clone()),
+            content_sha256: Some(material.content_sha256.clone()),
+        },
+    }
+}
+
+fn bind_key_profile(key: &mut ResolvedIssuerKey, context: &CredentialVerificationContext) {
+    key.provenance.trust_profile_id = context.trust_profile.as_ref().map(|profile| profile.id);
+    key.provenance.organization_id = context
+        .trust_profile
+        .as_ref()
+        .map(|profile| profile.organization_id);
+}
+
+fn authenticated_issuer(
+    context: &CredentialVerificationContext,
+    key: &ResolvedIssuerKey,
+    verified_issuer: Option<&str>,
+    algorithm: Option<String>,
+) -> Option<AuthenticatedIssuerEvidence> {
+    // The signed claim must name the authority that selected the key. A valid
+    // signature under a governed key does not authenticate an arbitrary iss.
+    if verified_issuer != Some(key.issuer_id.as_str())
+        || key.provenance.trust_profile_id != context.trust_profile.as_ref().map(|p| p.id)
+        || key.provenance.organization_id
+            != context.trust_profile.as_ref().map(|p| p.organization_id)
+    {
+        return None;
+    }
+    let evidence = AuthenticatedIssuerEvidence {
+        issuer_id: key.issuer_id.clone(),
+        key_id: key
+            .public_jwk
+            .get("kid")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        algorithm: algorithm?,
+        provenance: key.provenance.clone(),
+    };
+    evidence.satisfies_contract().then_some(evidence)
 }
 
 fn jwt_selector(token: &str) -> Option<(String, Option<String>)> {
@@ -1289,8 +1450,8 @@ fn jwt_selector(token: &str) -> Option<(String, Option<String>)> {
     if parts.next().is_some() {
         return None;
     }
-    let issuer = payload.get("iss")?.as_str()?.trim();
-    if issuer.is_empty() {
+    let issuer = payload.get("iss")?.as_str()?;
+    if issuer.is_empty() || issuer != issuer.trim() {
         return None;
     }
     let kid = header
@@ -1350,10 +1511,6 @@ fn public_jwk(jwk: &Map<String, Value>) -> bool {
 
 fn kid_matches(jwk: &Map<String, Value>, expected: Option<&str>) -> bool {
     expected.is_none_or(|expected| jwk.get("kid").and_then(Value::as_str) == Some(expected))
-}
-
-fn normalize_issuer(value: &str) -> String {
-    value.trim().trim_end_matches('/').to_ascii_lowercase()
 }
 
 fn token_string(token: &Value) -> Result<&str, PresentationVerificationError> {
@@ -1454,7 +1611,7 @@ mod tests {
     fn context(document: Value) -> CredentialVerificationContext {
         CredentialVerificationContext {
             presentation_only: false,
-            resolved_issuer_public_jwk: None,
+            resolved_issuer_key: None,
             format: DetectedCredentialFormat::SdJwt,
             token: Value::Null,
             nonce: None,
@@ -1518,22 +1675,22 @@ mod tests {
         let issuer = fixture["issuer_id"].as_str().unwrap();
         let kid = format!("{issuer}#key-1");
         let token = compact_jwt(issuer, &kid);
-        let selected = governed_public_jwk(&context(profile.clone()), &token).unwrap();
-        assert_eq!(selected["kid"], kid);
-        assert!(selected.get("d").is_none());
+        let selected = governed_issuer_key(&context(profile.clone()), &token).unwrap();
+        assert_eq!(selected.public_jwk["kid"], kid);
+        assert!(selected.public_jwk.get("d").is_none());
 
         let mut unnamed = profile.clone();
         unnamed["issuer_relationships"][0]["verification_keys"][0]
             .as_object_mut()
             .unwrap()
             .remove("kid");
-        assert!(governed_public_jwk(&context(unnamed.clone()), &token).is_some());
+        assert!(governed_issuer_key(&context(unnamed.clone()), &token).is_some());
         let second_key = unnamed["issuer_relationships"][0]["verification_keys"][0].clone();
         unnamed["issuer_relationships"][0]["verification_keys"]
             .as_array_mut()
             .unwrap()
             .push(second_key);
-        assert!(governed_public_jwk(&context(unnamed), &token).is_none());
+        assert!(governed_issuer_key(&context(unnamed), &token).is_none());
 
         let mut ambiguous = profile.clone();
         let relationship = ambiguous["issuer_relationships"][0].clone();
@@ -1541,11 +1698,236 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .push(relationship);
-        assert!(governed_public_jwk(&context(ambiguous), &token).is_none());
+        assert!(governed_issuer_key(&context(ambiguous), &token).is_none());
 
         let mut private = profile;
         private["issuer_relationships"][0]["verification_keys"][0]["d"] = json!("secret");
-        assert!(governed_public_jwk(&context(private), &token).is_none());
+        assert!(governed_issuer_key(&context(private), &token).is_none());
+    }
+
+    #[test]
+    fn governed_key_selection_preserves_issuer_identity_and_rejects_unscoped_keys() {
+        let issuer = "did:web:issuer.example:Org:Acme";
+        let kid = format!("{issuer}#key");
+        let key = json!({"kty":"OKP", "crv":"Ed25519", "x":"public", "kid":kid});
+        let profile = json!({
+            "status":"active",
+            "issuer_relationships":[{
+                "issuer_id":issuer, "relationship_status":"TRUSTED",
+                "compliance_status":"COMPLIANT", "verification_keys":[key]
+            }]
+        });
+        let selected =
+            governed_issuer_key(&context(profile.clone()), &compact_jwt(issuer, &kid)).unwrap();
+        assert_eq!(selected.issuer_id, issuer);
+        assert_eq!(
+            selected.provenance.trust_profile_id,
+            Some(Uuid::from_u128(1))
+        );
+        assert_eq!(
+            selected.provenance.organization_id,
+            Some(Uuid::from_u128(2))
+        );
+        for other in [
+            "did:web:issuer.example:org:acme",
+            "did:web:issuer.example:Org:Acme/",
+            " did:web:issuer.example:Org:Acme",
+        ] {
+            assert!(
+                governed_issuer_key(&context(profile.clone()), &compact_jwt(other, &kid)).is_none()
+            );
+        }
+        let unscoped = json!({"status":"active", "issuer_public_jwk":key});
+        assert!(governed_issuer_key(&context(unscoped), &compact_jwt(issuer, &kid)).is_none());
+
+        let url = "https://issuer.example/Org/Acme";
+        let override_profile =
+            json!({"status":"active", "system_issuer_overrides": {url: {"public_jwk":key}}});
+        assert!(
+            governed_issuer_key(&context(override_profile.clone()), &compact_jwt(url, &kid))
+                .is_some()
+        );
+        for other in [
+            "https://issuer.example/org/acme",
+            "https://issuer.example/Org/Acme/",
+        ] {
+            assert!(governed_issuer_key(
+                &context(override_profile.clone()),
+                &compact_jwt(other, &kid)
+            )
+            .is_none());
+        }
+    }
+
+    #[test]
+    fn authenticated_issuer_contract_counts_unicode_scalars_and_bounds_provenance() {
+        let context = context(json!({"status":"active"}));
+        let maximal = json!({
+            "issuer_id":"界".repeat(2048),
+            "key_id":"🔑".repeat(2048),
+            "algorithm":"A".repeat(64),
+            "provenance":{
+                "mechanism":"DID_ASSERTION_METHOD",
+                "trust_profile_id":Uuid::from_u128(1),
+                "organization_id":Uuid::from_u128(2),
+                "issuer_organization_id":"組".repeat(128),
+                "source":"源".repeat(256),
+                "retrieved_at":format!("2026-11-07T12:00:00.{}Z", "0".repeat(43)),
+                "content_sha256":"a".repeat(64)
+            }
+        });
+        let authenticate = |value: Value| {
+            let evidence: AuthenticatedIssuerEvidence = serde_json::from_value(value).unwrap();
+            let key = ResolvedIssuerKey {
+                issuer_id: evidence.issuer_id.clone(),
+                public_jwk: json!({"kid":evidence.key_id}),
+                provenance: evidence.provenance,
+            };
+            authenticated_issuer(
+                &context,
+                &key,
+                Some(&evidence.issuer_id),
+                Some(evidence.algorithm),
+            )
+        };
+        // JSON Schema maxLength counts Unicode scalar values, not UTF-8 bytes.
+        assert!(authenticate(maximal.clone()).is_some());
+        for (pointer, bound) in [
+            ("/issuer_id", 2048),
+            ("/key_id", 2048),
+            ("/algorithm", 64),
+            ("/provenance/source", 256),
+            ("/provenance/issuer_organization_id", 128),
+        ] {
+            for length in [0, bound + 1] {
+                let mut invalid = maximal.clone();
+                *invalid.pointer_mut(pointer).unwrap() = json!("界".repeat(length));
+                assert!(authenticate(invalid).is_none(), "{pointer} length {length}");
+            }
+        }
+        for (pointer, invalid_value) in [
+            ("/provenance/retrieved_at", "2026-11-07 12:00:00Z".into()),
+            ("/provenance/retrieved_at", "2026-02-30T12:00:00Z".into()),
+            ("/provenance/retrieved_at", "2026-11-07T12:00:00".into()),
+            ("/provenance/retrieved_at", "2026-11-07T12:00:00Z\n".into()),
+            ("/provenance/retrieved_at", "0000-11-07T12:00:00Z".into()),
+            ("/provenance/retrieved_at", "2016-12-31T23:59:60Z".into()),
+            (
+                "/provenance/retrieved_at",
+                format!("2026-11-07T12:00:00.{}Z", "0".repeat(44)),
+            ),
+            ("/provenance/content_sha256", "a".repeat(63)),
+            ("/provenance/content_sha256", "a".repeat(65)),
+            ("/provenance/content_sha256", "A".repeat(64)),
+            (
+                "/provenance/content_sha256",
+                format!("{}\n", "a".repeat(63)),
+            ),
+        ] {
+            let mut invalid = maximal.clone();
+            *invalid.pointer_mut(pointer).unwrap() = json!(invalid_value);
+            assert!(authenticate(invalid).is_none(), "{pointer}={invalid_value}");
+        }
+        let mut optional = maximal;
+        for pointer in [
+            "/key_id",
+            "/provenance/issuer_organization_id",
+            "/provenance/retrieved_at",
+            "/provenance/content_sha256",
+        ] {
+            *optional.pointer_mut(pointer).unwrap() = Value::Null;
+        }
+        assert!(authenticate(optional).is_some());
+    }
+
+    #[test]
+    fn sd_jwt_authenticates_the_selected_issuer_and_retains_scoped_provenance() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let signer = SigningKey::from_bytes(&[27; 32]);
+        let issuer = "did:web:issuer.example:Org:Acme";
+        let kid = format!("{issuer}#assertion");
+        let public_key = json!({
+            "kty":"OKP", "crv":"Ed25519", "kid":kid,
+            "x":URL_SAFE_NO_PAD.encode(signer.verifying_key().to_bytes())
+        });
+        let signed = |claim_issuer: &str| {
+            let header = URL_SAFE_NO_PAD
+                .encode(json!({"alg":"EdDSA", "typ":"vc+sd-jwt", "kid":kid}).to_string());
+            let payload = URL_SAFE_NO_PAD.encode(
+                json!({
+                    "iss":claim_issuer, "iat":chrono::Utc::now().timestamp()-60,
+                    "exp":chrono::Utc::now().timestamp()+3600,
+                    "vct":"urn:example:member", "_sd_alg":"sha-256", "_sd":[], "role":"member"
+                })
+                .to_string(),
+            );
+            let input = format!("{header}.{payload}");
+            format!(
+                "{input}.{}~",
+                URL_SAFE_NO_PAD.encode(signer.sign(input.as_bytes()).to_bytes())
+            )
+        };
+        let mut context = context(json!({"status":"active"}));
+        let mut selected = resolved_did_key(
+            issuer,
+            public_key,
+            &marty_issuer_key_resolution::IssuerKeyResolution {
+                verification_keys: vec![],
+                source: "organization_signing_registry".into(),
+                retrieved_at: "2026-11-07T12:00:00Z".into(),
+                content_sha256: "a".repeat(64),
+            },
+            Some("issuer-org".into()),
+        );
+        bind_key_profile(&mut selected, &context);
+        context.resolved_issuer_key = Some(selected.clone());
+        context.token = json!(signed(issuer));
+        let evidence = verify_sd_jwt(&context).unwrap();
+        assert!(evidence.verified, "{:?}", evidence.failure_reason);
+        let authentication = evidence.authenticated_issuer.unwrap();
+        assert_eq!(evidence.issuer_id.as_deref(), Some(issuer));
+        assert_eq!(authentication.issuer_id, issuer);
+        assert_eq!(authentication.key_id.as_deref(), Some(kid.as_str()));
+        assert_eq!(authentication.algorithm, "EdDSA");
+        assert_eq!(authentication.provenance, selected.provenance);
+
+        // The signature remains valid under the same key. Its authority is
+        // unchanged even when a different issuer claim is signed.
+        context.token = json!(signed("did:web:another-issuer.example"));
+        let rejected = verify_sd_jwt(&context).unwrap();
+        assert!(!rejected.verified);
+        assert!(rejected.claims.is_empty() && rejected.issuer_id.is_none());
+        assert!(rejected.authenticated_issuer.is_none());
+
+        context.token = json!(signed(issuer));
+        for wrong_tenant in [false, true] {
+            let mut foreign = selected.clone();
+            if wrong_tenant {
+                foreign.provenance.organization_id = Some(Uuid::from_u128(9));
+            } else {
+                foreign.provenance.trust_profile_id = Some(Uuid::from_u128(9));
+            }
+            context.resolved_issuer_key = Some(foreign);
+            let rejected = verify_sd_jwt(&context).unwrap();
+            assert!(!rejected.verified);
+            assert!(rejected.authenticated_issuer.is_none());
+        }
+
+        // The signed credential is unchanged. Malformed resolver provenance
+        // must not produce verified claims or a nonconforming response object.
+        for malformed in ["source", "timestamp", "digest"] {
+            let mut invalid = selected.clone();
+            match malformed {
+                "source" => invalid.provenance.source.clear(),
+                "timestamp" => invalid.provenance.retrieved_at = Some("yesterday".into()),
+                _ => invalid.provenance.content_sha256 = Some("unknown".into()),
+            }
+            context.resolved_issuer_key = Some(invalid);
+            let rejected = verify_sd_jwt(&context).unwrap();
+            assert!(!rejected.verified, "{malformed}");
+            assert!(rejected.claims.is_empty() && rejected.issuer_id.is_none());
+            assert!(rejected.authenticated_issuer.is_none());
+        }
     }
 
     #[test]
