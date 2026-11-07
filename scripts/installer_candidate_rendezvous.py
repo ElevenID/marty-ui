@@ -22,6 +22,10 @@ from installer_candidate_authorize import read_record, write_exclusive
 
 REPO = "/repos/ElevenID/marty-ui"
 MAX_BYTES = 65536
+# A published nightly release includes up to 100 asset metadata entries. Keep
+# this allowance confined to the exact read-only release-by-tag endpoint;
+# records, grants, uploads and every other API response retain MAX_BYTES.
+MAX_PUBLISHED_RELEASE_METADATA_BYTES = 128 * 1024
 RECEIPT = "installer-controller-consumption.json"
 SCHEMA = "elevenid.installer-candidate-rendezvous/v1"
 RESERVE = 120
@@ -39,8 +43,8 @@ def controller_id(value):
     return value
 
 
-def json_bytes(raw):
-    release.require(len(raw) <= MAX_BYTES, "transport response exceeds bound")
+def _json_bytes(raw, maximum):
+    release.require(len(raw) <= maximum, "transport response exceeds bound")
     def pairs(items):
         result = {}
         for key, value in items:
@@ -48,6 +52,10 @@ def json_bytes(raw):
             result[key] = value
         return result
     return json.loads(raw, object_pairs_hook=pairs)
+
+
+def json_bytes(raw):
+    return _json_bytes(raw, MAX_BYTES)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -95,12 +103,13 @@ class Client:
             raise ValueError("GitHub transport request failed") from None
 
     def request(self, method, path, body=None):
+        published_tag = re.fullmatch(re.escape(REPO) + r"/releases/tags/(v[0-9A-Za-z._%-]{1,127})", path)
         run = re.fullmatch(re.escape(REPO) + r"/actions/runs/([1-9][0-9]{0,15})", path)
         artifacts = re.fullmatch(re.escape(REPO) + r"/actions/runs/([1-9][0-9]{0,15})/artifacts\?per_page=100", path)
         artifact = re.fullmatch(re.escape(REPO) + r"/actions/artifacts/([1-9][0-9]{0,15})", path)
         tag_ref = re.fullmatch(re.escape(REPO) + r"/git/ref/tags/(v[0-9A-Za-z._%-]{1,127})", path)
         tag_object = re.fullmatch(re.escape(REPO) + r"/git/tags/([0-9a-f]{40})", path)
-        if run or artifacts or artifact or tag_ref or tag_object:
+        if run or artifacts or artifact or tag_ref or tag_object or published_tag:
             if run or artifacts or artifact:
                 positive_id(int((run or artifacts or artifact).group(1)))
             release.require(method == "GET" and body is None, "Actions observation is read-only")
@@ -108,7 +117,10 @@ class Client:
             release.require(path.startswith(REPO + "/releases") and not any(c in path for c in "#\r\n"),
                             "invalid transport API path")
         data = None if body is None else release.encode(body)
-        return json_bytes(self._read("https://api.github.com" + path, method=method, body=data))
+        maximum = MAX_PUBLISHED_RELEASE_METADATA_BYTES if published_tag else MAX_BYTES
+        response = self._read("https://api.github.com" + path, method=method,
+                              body=data, maximum=maximum)
+        return _json_bytes(response, maximum)
 
     def download(self, asset_id, size):
         positive_id(asset_id)
