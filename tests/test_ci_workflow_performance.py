@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -2009,13 +2010,19 @@ def test_independent_rust_lanes_remain_required_without_transferring_builds() ->
     )
 
 
-def _assert_gone_or_zombie_process(pid: str) -> None:
-    try:
-        observed = Path(f"/proc/{pid}/stat").read_text()
-    except (FileNotFoundError, ProcessLookupError):
-        # Linux can remove a task after procfs open succeeds but before read.
-        return
-    assert observed.rsplit(") ", 1)[1].startswith("Z ")
+def _assert_gone_or_zombie_process(pid: str, *, wait_seconds: float = 0) -> None:
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            observed = Path(f"/proc/{pid}/stat").read_text()
+        except (FileNotFoundError, ProcessLookupError):
+            # Linux can remove a task after procfs open succeeds but before read.
+            return
+        if observed.rsplit(") ", 1)[1].startswith("Z "):
+            return
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"timed-out worker {pid} survived its exit grace period")
+        time.sleep(0.02)
 
 
 @pytest.mark.parametrize("error", [FileNotFoundError, ProcessLookupError])
@@ -2038,6 +2045,18 @@ def test_native_operator_timeout_rejects_surviving_process(monkeypatch, state) -
 def test_native_operator_timeout_accepts_unreaped_zombie(monkeypatch) -> None:
     monkeypatch.setattr(Path, "read_text", lambda _: "123 (cargo worker) Z 1 2 3")
     _assert_gone_or_zombie_process("123")
+
+
+def test_native_operator_timeout_accepts_worker_settling_after_timeout(monkeypatch) -> None:
+    states = iter(("R", "Z"))
+    monkeypatch.setattr(Path, "read_text", lambda _: f"123 (cargo worker) {next(states)} 1 2 3")
+    _assert_gone_or_zombie_process("123", wait_seconds=0.2)
+
+
+def test_native_operator_timeout_rejects_survivor_after_grace(monkeypatch) -> None:
+    monkeypatch.setattr(Path, "read_text", lambda _: "123 (cargo worker) R 1 2 3")
+    with pytest.raises(AssertionError, match="survived its exit grace period"):
+        _assert_gone_or_zombie_process("123", wait_seconds=0.04)
 
 
 def test_native_operator_timeout_preserves_unavailable_procfs_failure(monkeypatch) -> None:
@@ -2187,7 +2206,7 @@ exec "$TEST_REAL_TIMEOUT" --kill-after=1s 5s "$@"
     if scenario == "timeout":
         assert len(pids.read_text(encoding="utf-8").splitlines()) == 2
         for pid in pids.read_text(encoding="utf-8").splitlines():
-            _assert_gone_or_zombie_process(pid)
+            _assert_gone_or_zombie_process(pid, wait_seconds=1)
 
 
 def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
