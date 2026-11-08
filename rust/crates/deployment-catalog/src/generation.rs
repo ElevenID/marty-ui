@@ -1,4 +1,4 @@
-//! Immutable KMS-only secret generations. Never activates a generation.
+//! Immutable credential generations. Never activates a generation.
 use crate::{
     operator::{Result, REFUSAL},
     operator_files::{finish_generation, generation_file, generation_output, private_directory},
@@ -12,6 +12,7 @@ use std::{
 };
 const CA: &str = "workload_identity_ca_cert";
 const METADATA: &str = "selfhost-tls-kms-roles.json";
+const FILE_MODES: &[u32] = &[0o400, 0o440, 0o444, 0o600, 0o640, 0o644];
 type Files = BTreeMap<String, PathBuf>;
 type Payloads = BTreeMap<String, (Vec<u8>, u32)>;
 
@@ -206,10 +207,21 @@ fn write(
     ca_overlap: bool,
     ca_retire: bool,
 ) -> Result<usize> {
+    write_verified(values, output, || {
+        verify(current, output, ca_overlap, ca_retire).map(|_| ())
+    })
+}
+
+/// Both generation profiles share exclusive writes and cleanup of only their own files.
+fn write_verified(
+    values: &Payloads,
+    output: &Path,
+    verify_output: impl FnOnce() -> Result<()>,
+) -> Result<usize> {
     let mut created = Vec::new();
     let result = (|| {
         for (name, (value, mode)) in values {
-            if ![0o400, 0o440, 0o444, 0o600, 0o640, 0o644].contains(mode) {
+            if !FILE_MODES.contains(mode) {
                 return Err("active secret file has unsupported mode");
             }
             let destination = output.join(name);
@@ -217,7 +229,7 @@ fn write(
             created.push(destination);
             finish_generation(&mut file, value, *mode)?;
         }
-        verify(current, output, ca_overlap, ca_retire)?;
+        verify_output()?;
         Ok(values.len())
     })();
     if result.is_err() {
@@ -232,6 +244,163 @@ fn write(
         }
     }
     result
+}
+
+fn application_inventory() -> (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>) {
+    let ordinary = crate::application_tokens::specifications()
+        .into_iter()
+        .map(|spec| spec.file)
+        .collect::<BTreeSet<_>>();
+    let runtime = crate::application_tokens::runtime_specs()
+        .into_iter()
+        .map(|spec| spec.file)
+        .collect::<BTreeSet<_>>();
+    let (tls, keycloak, mut tokens) = inventories();
+    let mut required = tls.union(&keycloak).cloned().collect::<BTreeSet<_>>();
+    required.extend(ordinary.iter().cloned());
+    tokens.extend(ordinary);
+    (required, runtime, tokens)
+}
+
+/// Existing writers may add one line ending; it cannot make an old token new.
+fn normalized_token(value: &[u8]) -> Result<&[u8]> {
+    let value = value.strip_suffix(b"\n").unwrap_or(value);
+    if !(20..=1024).contains(&value.len()) || !value.iter().all(u8::is_ascii_graphic) {
+        return Err("application generation contains an invalid token");
+    }
+    Ok(value)
+}
+
+fn application_current_tokens<'a>(
+    current: &'a Payloads,
+    tokens: &BTreeSet<String>,
+) -> Result<BTreeSet<&'a [u8]>> {
+    if current.values().any(|(_, mode)| !FILE_MODES.contains(mode)) {
+        return Err("application generation file mode changed or is unsupported");
+    }
+    tokens
+        .iter()
+        .map(|name| normalized_token(&current.get(name).ok_or(REFUSAL)?.0))
+        .collect()
+}
+
+fn application_payloads(
+    current: &Payloads,
+    candidate: &Payloads,
+    runtime: &BTreeSet<String>,
+    tokens: &BTreeSet<String>,
+) -> Result<()> {
+    if current.keys().ne(candidate.keys()) {
+        return Err("application generation file inventory changed");
+    }
+    let previous_tokens = application_current_tokens(current, tokens)?;
+    let mut replacements = BTreeSet::new();
+    for (name, (before, mode)) in current {
+        let (after, new_mode) = candidate.get(name).ok_or(REFUSAL)?;
+        if mode != new_mode {
+            return Err("application generation file mode changed or is unsupported");
+        }
+        if runtime.contains(name) {
+            let token = normalized_token(after)?;
+            if previous_tokens.contains(token) || !replacements.insert(token) {
+                return Err("application generation reuses a token");
+            }
+        } else if before != after {
+            return Err("application generation changed a preserved input");
+        }
+    }
+    Ok(())
+}
+
+fn application_current_payloads(
+    files: &Files,
+    required: &BTreeSet<String>,
+    tokens: &BTreeSet<String>,
+) -> Result<Payloads> {
+    if !required.iter().all(|name| files.contains_key(name)) {
+        return Err("active generation lacks a required credential input");
+    }
+    let values = payloads(files, required)?;
+    application_current_tokens(&values, tokens)?;
+    Ok(values)
+}
+
+/// Read-only full-generation preflight before replacement authority is exercised.
+pub fn check_application(current: &Path) -> Result<usize> {
+    let current = directory(current, false)?;
+    let (required, _, tokens) = application_inventory();
+    let values = application_current_payloads(&entries(&current)?, &required, &tokens)?;
+    Ok(values.len())
+}
+
+/// Verify a complete application-token candidate without touching the active generation.
+/// Authorization of the minted tokens and live activation remain separate operations.
+pub fn verify_application(current: &Path, candidate: &Path) -> Result<(usize, usize)> {
+    let current = directory(current, false)?;
+    let candidate = directory(candidate, false)?;
+    if current == candidate || owner(&candidate)? != own_uid()? {
+        return Err("application generation directories are invalid");
+    }
+    let old = entries(&current)?;
+    let new = entries(&candidate)?;
+    let (required, runtime, tokens) = application_inventory();
+    if old.keys().ne(new.keys()) {
+        return Err("application generation file inventory changed");
+    }
+    let old = application_current_payloads(&old, &required, &tokens)?;
+    let new = payloads(&new, &required)?;
+    application_payloads(&old, &new, &runtime, &tokens)?;
+    Ok((old.len(), runtime.len()))
+}
+
+fn verify_application_snapshot(
+    current: &Path,
+    candidate: &Path,
+    before: &Payloads,
+    required: &BTreeSet<String>,
+) -> Result<()> {
+    verify_application(current, candidate)?;
+    if payloads(&entries(current)?, required)? != *before {
+        return Err("active generation changed during application staging");
+    }
+    Ok(())
+}
+
+/// Overlay only the closed application-token inventory, retaining minted inputs on failure.
+pub fn stage_application(current: &Path, replacements: &Path, output: &Path) -> Result<usize> {
+    let roots = [
+        directory(current, false)?,
+        directory(replacements, false)?,
+        directory(output, true)?,
+    ];
+    if roots.iter().collect::<BTreeSet<_>>().len() != 3 {
+        return Err("application generation directories must be distinct");
+    }
+    let [current, replacements, output] = &roots;
+    let uid = own_uid()?;
+    if owner(output)? != uid || ![uid, owner(current)?].contains(&owner(replacements)?) {
+        return Err("application generation directory has an unexpected owner");
+    }
+    let active = entries(current)?;
+    let replacement_files = entries(replacements)?;
+    let (required, runtime, tokens) = application_inventory();
+    if replacement_files.keys().cloned().collect::<BTreeSet<_>>() != runtime {
+        return Err("application replacement inventory differs from fixed runtime tokens");
+    }
+    let before = application_current_payloads(&active, &required, &tokens)?;
+    let mut values = before.clone();
+    for (name, path) in &replacement_files {
+        let (value, mode) = read(path, false)?;
+        if ![0o400, 0o600].contains(&mode) {
+            return Err("application replacement token must be owner-private");
+        }
+        let active_mode = values.get(name).ok_or(REFUSAL)?.1;
+        values.insert(name.clone(), (value, active_mode));
+    }
+    application_payloads(&before, &values, &runtime, &tokens)?;
+    write_verified(&values, output, || {
+        verify_application_snapshot(current, output, &before, &required)
+    })
 }
 fn metadata(path: &Path) -> Result<()> {
     // Deserialize duplicate fields as errors rather than silently taking the last.
@@ -362,6 +531,16 @@ pub fn operation(context: &Value) -> Result<Value> {
     let path = |name: &str| context[name].as_str().map(Path::new).ok_or(REFUSAL);
     let flag = |name: &str| context[name].as_bool().ok_or(REFUSAL);
     match context["operation"].as_str().ok_or(REFUSAL)? {
+        "application-check" => Ok(json!(check_application(path("current")?)?)),
+        "application-verify" => Ok(json!(verify_application(
+            path("current")?,
+            path("candidate")?
+        )?)),
+        "application-stage" => Ok(json!(stage_application(
+            path("current")?,
+            path("replacements")?,
+            path("output")?
+        )?)),
         "verify" => Ok(json!(verify(
             path("current")?,
             path("candidate")?,
@@ -462,5 +641,522 @@ mod tests {
         let name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
         assert!(read(&fifo, false).is_err());
+    }
+
+    struct ApplicationFixture {
+        root: tempfile::TempDir,
+        current: PathBuf,
+        replacements: PathBuf,
+        output: PathBuf,
+    }
+
+    fn private_test_directory(parent: &Path, name: &str) -> PathBuf {
+        let path = parent.join(name);
+        fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+
+    fn put(root: &Path, name: &str, value: &[u8], mode: u32) {
+        let path = root.join(name);
+        if let Ok(info) = fs::symlink_metadata(&path) {
+            assert!(info.file_type().is_file());
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        fs::write(&path, value).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    fn snapshot(root: &Path) -> Payloads {
+        payloads(&entries(root).unwrap(), &BTreeSet::new()).unwrap()
+    }
+
+    fn application_fixture() -> ApplicationFixture {
+        let root = tempfile::tempdir().unwrap();
+        let current = private_test_directory(root.path(), "current");
+        let replacements = private_test_directory(root.path(), "inputs");
+        let output = private_test_directory(root.path(), "candidate");
+        let (required, runtime, tokens) = application_inventory();
+        assert_eq!(required.len(), 53);
+        assert_eq!(runtime.len(), 11);
+        assert_eq!(tokens.len(), 34);
+        for (index, name) in required.iter().enumerate() {
+            let (value, mode) = if tokens.contains(name) {
+                (format!("synthetic-active-token-{name}"), 0o600)
+            } else {
+                (
+                    format!("synthetic-public-certificate-{name}\n"),
+                    FILE_MODES[index % FILE_MODES.len()],
+                )
+            };
+            put(&current, name, value.as_bytes(), mode);
+        }
+        let first = runtime.first().unwrap();
+        fs::set_permissions(current.join(first), fs::Permissions::from_mode(0o400)).unwrap();
+        put(
+            &current,
+            "postgres_password",
+            b"synthetic-fixed-database-password",
+            0o600,
+        );
+        put(&current, "optional_static", b"", 0o640);
+        for (index, name) in runtime.iter().enumerate() {
+            let ending = if index % 2 == 0 { "\n" } else { "" };
+            let value = format!("synthetic-new-token-{name}{ending}");
+            let mode = if index % 2 == 0 { 0o600 } else { 0o400 };
+            put(&replacements, name, value.as_bytes(), mode);
+        }
+        ApplicationFixture {
+            root,
+            current,
+            replacements,
+            output,
+        }
+    }
+
+    fn assert_no_candidate(fixture: &ApplicationFixture) {
+        let error = stage_application(&fixture.current, &fixture.replacements, &fixture.output)
+            .unwrap_err();
+        assert!(!error.contains("synthetic"));
+        assert_eq!(fs::read_dir(&fixture.output).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn application_check_refuses_invalid_current_without_mutating_inputs() {
+        let fixture = application_fixture();
+        let before = snapshot(&fixture.current);
+        let minted = snapshot(&fixture.replacements);
+        let (required, _, tokens) = application_inventory();
+        assert_eq!(
+            operation(&json!({
+                "operation": "application-check",
+                "current": fixture.current.to_str().unwrap(),
+            }))
+            .unwrap(),
+            json!(before.len())
+        );
+        for name in &required {
+            fs::remove_file(fixture.current.join(name)).unwrap();
+            assert!(check_application(&fixture.current).is_err());
+            put(&fixture.current, name, &before[name].0, before[name].1);
+        }
+        for name in &tokens {
+            put(&fixture.current, name, b"invalid-old-token", before[name].1);
+            let invalid = snapshot(&fixture.current);
+            assert!(check_application(&fixture.current).is_err());
+            assert_eq!(snapshot(&fixture.current), invalid);
+            put(&fixture.current, name, &before[name].0, before[name].1);
+        }
+        let first = tokens.first().unwrap();
+        fs::set_permissions(
+            fixture.current.join(first),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert!(check_application(&fixture.current).is_err());
+        assert_eq!(
+            fs::metadata(fixture.current.join(first))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o700,
+        );
+        fs::set_permissions(
+            fixture.current.join(first),
+            fs::Permissions::from_mode(before[first].1),
+        )
+        .unwrap();
+        put(
+            &fixture.current,
+            "unexpected_private_key",
+            b"-----BEGIN PRIVATE KEY-----",
+            0o600,
+        );
+        assert!(check_application(&fixture.current).is_err());
+        assert_eq!(
+            fs::read(fixture.current.join("unexpected_private_key")).unwrap(),
+            b"-----BEGIN PRIVATE KEY-----",
+        );
+        fs::remove_file(fixture.current.join("unexpected_private_key")).unwrap();
+        assert_eq!(check_application(&fixture.current).unwrap(), before.len());
+        assert_eq!(snapshot(&fixture.current), before);
+        assert_eq!(snapshot(&fixture.replacements), minted);
+        assert_eq!(fs::read_dir(&fixture.output).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn application_stage_preserves_every_other_input_and_exposes_fixed_operations() {
+        let fixture = application_fixture();
+        let before = snapshot(&fixture.current);
+        let minted = snapshot(&fixture.replacements);
+        let (_, runtime, _) = application_inventory();
+        assert_eq!(
+            operation(&json!({
+                "operation": "application-stage",
+                "current": fixture.current.to_str().unwrap(),
+                "replacements": fixture.replacements.to_str().unwrap(),
+                "output": fixture.output.to_str().unwrap(),
+            }))
+            .unwrap(),
+            json!(before.len())
+        );
+        let candidate = snapshot(&fixture.output);
+        assert!(before.keys().eq(candidate.keys()));
+        for (name, (value, mode)) in &candidate {
+            assert_eq!(*mode, before[name].1);
+            if runtime.contains(name) {
+                assert_eq!(value, &minted[name].0);
+                assert_ne!(normalized_token(value), normalized_token(&before[name].0));
+            } else {
+                assert_eq!(value, &before[name].0);
+            }
+        }
+        assert_eq!(
+            operation(&json!({
+                "operation": "application-verify",
+                "current": fixture.current.to_str().unwrap(),
+                "candidate": fixture.output.to_str().unwrap(),
+            }))
+            .unwrap(),
+            json!([before.len(), 11])
+        );
+        assert!(verify(&fixture.current, &fixture.output, false, false).is_err());
+        assert!(
+            stage_application(&fixture.current, &fixture.replacements, &fixture.output,).is_err()
+        );
+        assert_eq!(snapshot(&fixture.current), before);
+        assert_eq!(snapshot(&fixture.replacements), minted);
+        assert_eq!(snapshot(&fixture.output), candidate);
+    }
+
+    #[test]
+    fn application_stage_rejects_each_missing_required_file_and_extra_minted_inputs() {
+        let fixture = application_fixture();
+        let before = snapshot(&fixture.current);
+        let minted = snapshot(&fixture.replacements);
+        let (required, runtime, _) = application_inventory();
+        for name in &required {
+            fs::remove_file(fixture.current.join(name)).unwrap();
+            assert_no_candidate(&fixture);
+            let (value, mode) = &before[name];
+            put(&fixture.current, name, value, *mode);
+        }
+        for name in &runtime {
+            fs::remove_file(fixture.replacements.join(name)).unwrap();
+            assert_no_candidate(&fixture);
+            let (value, mode) = &minted[name];
+            put(&fixture.replacements, name, value, *mode);
+        }
+        for name in [
+            "unexpected_token",
+            "openbao_bootstrap_token",
+            "openbao_service_token",
+        ] {
+            put(
+                &fixture.replacements,
+                name,
+                b"synthetic-unexpected-token",
+                0o600,
+            );
+            assert_no_candidate(&fixture);
+            assert_eq!(
+                fs::read(fixture.replacements.join(name)).unwrap(),
+                b"synthetic-unexpected-token",
+            );
+            fs::remove_file(fixture.replacements.join(name)).unwrap();
+        }
+        assert_eq!(snapshot(&fixture.current), before);
+        assert_eq!(snapshot(&fixture.replacements), minted);
+    }
+
+    #[test]
+    fn application_verify_refuses_inventory_mode_and_preserved_file_drift() {
+        let fixture = application_fixture();
+        let before = snapshot(&fixture.current);
+        stage_application(&fixture.current, &fixture.replacements, &fixture.output).unwrap();
+        let candidate = snapshot(&fixture.output);
+        let (_, runtime, _) = application_inventory();
+        for (name, (value, mode)) in &candidate {
+            fs::remove_file(fixture.output.join(name)).unwrap();
+            assert!(verify_application(&fixture.current, &fixture.output).is_err());
+            put(&fixture.output, name, value, *mode);
+            let changed_mode = if *mode == 0o400 { 0o600 } else { 0o400 };
+            fs::set_permissions(
+                fixture.output.join(name),
+                fs::Permissions::from_mode(changed_mode),
+            )
+            .unwrap();
+            assert!(verify_application(&fixture.current, &fixture.output).is_err());
+            fs::set_permissions(fixture.output.join(name), fs::Permissions::from_mode(*mode))
+                .unwrap();
+            if !runtime.contains(name) {
+                let mut changed = value.clone();
+                changed.push(b'x');
+                put(&fixture.output, name, &changed, *mode);
+                assert!(verify_application(&fixture.current, &fixture.output).is_err());
+                put(&fixture.output, name, value, *mode);
+            }
+        }
+        put(&fixture.output, "unexpected_file", b"operator-note", 0o600);
+        assert!(verify_application(&fixture.current, &fixture.output).is_err());
+        fs::remove_file(fixture.output.join("unexpected_file")).unwrap();
+        assert_eq!(
+            verify_application(&fixture.current, &fixture.output).unwrap(),
+            (before.len(), 11),
+        );
+        assert_eq!(snapshot(&fixture.current), before);
+        assert_eq!(snapshot(&fixture.output), candidate);
+    }
+
+    #[test]
+    fn application_stage_rejects_shared_old_and_malformed_tokens_without_writes() {
+        let fixture = application_fixture();
+        let before = snapshot(&fixture.current);
+        let minted = snapshot(&fixture.replacements);
+        let (_, runtime, tokens) = application_inventory();
+        let first = runtime.first().unwrap();
+        for name in &tokens {
+            let mut reused = normalized_token(&before[name].0).unwrap().to_vec();
+            reused.push(b'\n');
+            put(&fixture.replacements, first, &reused, 0o600);
+            assert_no_candidate(&fixture);
+            assert_eq!(fs::read(fixture.replacements.join(first)).unwrap(), reused);
+        }
+        put(
+            &fixture.replacements,
+            first,
+            &minted[first].0,
+            minted[first].1,
+        );
+        for name in &runtime {
+            let mut unchanged = normalized_token(&before[name].0).unwrap().to_vec();
+            unchanged.push(b'\n');
+            put(&fixture.replacements, name, &unchanged, 0o600);
+            assert_no_candidate(&fixture);
+            put(&fixture.replacements, name, &minted[name].0, minted[name].1);
+        }
+        let second = runtime.iter().nth(1).unwrap();
+        put(
+            &fixture.replacements,
+            second,
+            normalized_token(&minted[first].0).unwrap(),
+            0o600,
+        );
+        assert_no_candidate(&fixture);
+        put(
+            &fixture.replacements,
+            second,
+            &minted[second].0,
+            minted[second].1,
+        );
+        for invalid in [
+            vec![],
+            vec![b'a'; 19],
+            vec![b'a'; 1025],
+            vec![b'a'; 65537],
+            b"synthetic-token with-space".to_vec(),
+            b"synthetic-token\twith-tab".to_vec(),
+            b"synthetic-token\nwith-line".to_vec(),
+            b"synthetic-token-ending\r\n".to_vec(),
+            b"synthetic-token-ending\n\n".to_vec(),
+            b"synthetic-token-with-\0nul".to_vec(),
+            b"synthetic-token-with-\xffbyte".to_vec(),
+            b"synthetic PRIVATE KEY value".to_vec(),
+        ] {
+            put(&fixture.replacements, first, &invalid, 0o600);
+            assert_no_candidate(&fixture);
+            assert_eq!(fs::read(fixture.replacements.join(first)).unwrap(), invalid);
+        }
+        put(
+            &fixture.replacements,
+            first,
+            &minted[first].0,
+            minted[first].1,
+        );
+        assert_eq!(snapshot(&fixture.current), before);
+        assert_eq!(snapshot(&fixture.replacements), minted);
+    }
+
+    #[test]
+    fn application_stage_refuses_nonprivate_or_aliased_directories_and_token_files() {
+        let fixture = application_fixture();
+        let before = snapshot(&fixture.current);
+        let minted = snapshot(&fixture.replacements);
+        let (_, runtime, _) = application_inventory();
+        let first = runtime.first().unwrap();
+        for mode in [0o444, 0o640, 0o644, 0o700] {
+            fs::set_permissions(
+                fixture.replacements.join(first),
+                fs::Permissions::from_mode(mode),
+            )
+            .unwrap();
+            assert_no_candidate(&fixture);
+        }
+        fs::set_permissions(
+            fixture.replacements.join(first),
+            fs::Permissions::from_mode(minted[first].1),
+        )
+        .unwrap();
+        fs::set_permissions(
+            fixture.current.join(first),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert_no_candidate(&fixture);
+        fs::set_permissions(
+            fixture.current.join(first),
+            fs::Permissions::from_mode(before[first].1),
+        )
+        .unwrap();
+        for root in [&fixture.current, &fixture.replacements, &fixture.output] {
+            fs::set_permissions(root, fs::Permissions::from_mode(0o755)).unwrap();
+            assert_no_candidate(&fixture);
+            fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        assert!(stage_application(&fixture.current, &fixture.current, &fixture.output).is_err());
+        assert!(
+            stage_application(&fixture.current, &fixture.replacements, &fixture.current,).is_err()
+        );
+        assert!(stage_application(
+            &fixture.current,
+            &fixture.replacements,
+            &fixture.replacements,
+        )
+        .is_err());
+        assert!(stage_application(
+            Path::new("relative-generation"),
+            &fixture.replacements,
+            &fixture.output,
+        )
+        .is_err());
+        let alias = fixture.root.path().join("inputs-alias");
+        symlink(&fixture.replacements, &alias).unwrap();
+        assert!(stage_application(&fixture.current, &alias, &fixture.output).is_err());
+        put(&fixture.output, "operator-note", b"keep-existing", 0o600);
+        assert!(
+            stage_application(&fixture.current, &fixture.replacements, &fixture.output,).is_err()
+        );
+        assert_eq!(snapshot(&fixture.output).len(), 1);
+        assert_eq!(
+            fs::read(fixture.output.join("operator-note")).unwrap(),
+            b"keep-existing",
+        );
+        assert_eq!(snapshot(&fixture.current), before);
+        assert_eq!(snapshot(&fixture.replacements), minted);
+    }
+
+    #[test]
+    fn application_stage_and_verify_refuse_symlinks_and_nonregular_entries() {
+        let fixture = application_fixture();
+        let before = snapshot(&fixture.current);
+        let minted = snapshot(&fixture.replacements);
+        let (_, runtime, _) = application_inventory();
+        let first = runtime.first().unwrap();
+        let input = fixture.replacements.join(first);
+        let active = fixture.current.join(first);
+        fs::remove_file(&input).unwrap();
+        symlink(&active, &input).unwrap();
+        assert_no_candidate(&fixture);
+        assert!(fs::symlink_metadata(&input)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read(&active).unwrap(), before[first].0);
+        fs::remove_file(&input).unwrap();
+        let name = std::ffi::CString::new(input.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert_no_candidate(&fixture);
+        fs::remove_file(&input).unwrap();
+        fs::create_dir(&input).unwrap();
+        assert_no_candidate(&fixture);
+        fs::remove_dir(&input).unwrap();
+        put(
+            &fixture.replacements,
+            first,
+            &minted[first].0,
+            minted[first].1,
+        );
+        fs::remove_file(&active).unwrap();
+        symlink(&input, &active).unwrap();
+        assert_no_candidate(&fixture);
+        fs::remove_file(&active).unwrap();
+        put(&fixture.current, first, &before[first].0, before[first].1);
+        stage_application(&fixture.current, &fixture.replacements, &fixture.output).unwrap();
+        let candidate_file = fixture.output.join(first);
+        fs::remove_file(&candidate_file).unwrap();
+        symlink(&active, &candidate_file).unwrap();
+        assert!(verify_application(&fixture.current, &fixture.output).is_err());
+        assert!(fs::symlink_metadata(&candidate_file)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(snapshot(&fixture.current), before);
+        assert_eq!(snapshot(&fixture.replacements), minted);
+    }
+
+    #[test]
+    fn application_candidate_write_failures_clean_only_created_files() {
+        let fixture = application_fixture();
+        let before = snapshot(&fixture.current);
+        let minted = snapshot(&fixture.replacements);
+        stage_application(&fixture.current, &fixture.replacements, &fixture.output).unwrap();
+        let values = snapshot(&fixture.output);
+        let failure_output = private_test_directory(fixture.root.path(), "write-failure");
+        put(&failure_output, "operator-note", b"keep-existing", 0o600);
+        let collision = values.keys().nth(values.len() / 2).unwrap();
+        put(&failure_output, collision, b"keep-collision", 0o600);
+        let preexisting = snapshot(&failure_output);
+        assert!(write_verified(&values, &failure_output, || {
+            verify_application(&fixture.current, &failure_output).map(|_| ())
+        })
+        .is_err());
+        assert_eq!(snapshot(&failure_output), preexisting);
+        fs::remove_file(failure_output.join(collision)).unwrap();
+        let preexisting = snapshot(&failure_output);
+        assert!(write_verified(&values, &failure_output, || {
+            verify_application(&fixture.current, &failure_output).map(|_| ())
+        })
+        .is_err());
+        assert_eq!(snapshot(&failure_output), preexisting);
+        assert_eq!(snapshot(&fixture.current), before);
+        assert_eq!(snapshot(&fixture.replacements), minted);
+        assert_eq!(snapshot(&fixture.output), values);
+    }
+
+    #[test]
+    fn application_candidate_validation_detects_source_drift_after_snapshot() {
+        let fixture = application_fixture();
+        let before = snapshot(&fixture.current);
+        let minted = snapshot(&fixture.replacements);
+        let (required, runtime, _) = application_inventory();
+        stage_application(&fixture.current, &fixture.replacements, &fixture.output).unwrap();
+        let values = snapshot(&fixture.output);
+        let first = runtime.first().unwrap();
+        put(
+            &fixture.current,
+            first,
+            b"synthetic-concurrently-changed-active-token",
+            before[first].1,
+        );
+        assert!(verify_application(&fixture.current, &fixture.output).is_ok());
+        assert!(
+            verify_application_snapshot(&fixture.current, &fixture.output, &before, &required,)
+                .is_err()
+        );
+        let failure_output = private_test_directory(fixture.root.path(), "source-drift");
+        assert!(write_verified(&values, &failure_output, || {
+            verify_application_snapshot(&fixture.current, &failure_output, &before, &required)
+        })
+        .is_err());
+        assert_eq!(fs::read_dir(&failure_output).unwrap().count(), 0);
+        assert_eq!(snapshot(&fixture.replacements), minted);
+        assert_eq!(snapshot(&fixture.output), values);
+        put(&fixture.current, first, &before[first].0, before[first].1);
+        assert_eq!(
+            verify_application(&fixture.current, &fixture.output).unwrap(),
+            (before.len(), 11),
+        );
+        assert_eq!(snapshot(&fixture.current), before);
     }
 }

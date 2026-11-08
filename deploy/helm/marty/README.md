@@ -274,6 +274,14 @@ configuration overrides belong in the string-valued `config` map; credentials
 belong in Secrets. Do not change schema, namespace, provider or key identity
 under an existing data set without a reviewed migration.
 
+The development bootstrap's application AppRole and native generation commands
+prepare ordinary-token replacement candidates in private operator state. A
+staged candidate does not update this chart's Secrets or restart workloads.
+Use the [Kubernetes lifecycle guide](../../../docs/kubernetes-first-milestone.md#stage-ordinary-application-credentials)
+for the fixed 11-input replacement scope, retained identity and recovery
+boundary. TLS and Keycloak renewal, coordinated activation and live upgrade
+qualification remain separate requirements.
+
 Before claiming milestone acceptance, test a fresh isolated install, exact
 image IDs, HTTPS and OIDC readiness, existing issuance/verification/wallet demo
 journeys, and a full node reboot with persistent state and OpenBao unsealed.

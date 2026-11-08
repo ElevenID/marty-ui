@@ -17,6 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = "synthetic-existing-shared-token-$literal;not-a-command"
+METADATA_COMMANDS = ("kubernetes-secrets-contract", "kubernetes-application-token-contract")
 FUNCTIONS = (
     "catalog_required_secret_envs",
     "is_placeholder_secret",
@@ -97,10 +98,14 @@ fn main() {
     return binary, kubectl
 
 
-def test_native_publication_contract_is_compiled_and_needs_no_inputs_repo_or_cluster(native_tools, tmp_path):
+@pytest.mark.parametrize("command", METADATA_COMMANDS)
+def test_native_publication_contract_is_compiled_and_needs_no_inputs_repo_or_cluster(
+    native_tools, tmp_path, command,
+):
     misleading = tmp_path / "deploy-config/catalog"
     misleading.mkdir(parents=True)
     (misleading / "kubernetes-secrets.json").write_text('{"required":[],"secrets":[]}')
+    (misleading / "kubernetes-application-tokens.json").write_text('{"tokens":[]}')
     environment = {
         "PATH": str(native_tools[1].parent), "TEST_ROOT": str(tmp_path),
         "MARTY_REPO_ROOT": str(tmp_path), "KUBECONFIG": str(tmp_path / "absent-kubeconfig"),
@@ -108,19 +113,24 @@ def test_native_publication_contract_is_compiled_and_needs_no_inputs_repo_or_clu
         # conflicting source; metadata must not inspect either source.
         "POSTGRES_PASSWORD": "PRIVATE_METADATA_CREDENTIAL_CANARY",
         "POSTGRES_PASSWORD_FILE": str(tmp_path / "absent-private-input"),
+        "SIGNING_KEYS_OPENBAO_TOKEN": "PRIVATE_APPLICATION_CREDENTIAL_CANARY",
+        "SIGNING_KEYS_OPENBAO_TOKEN_FILE": str(tmp_path / "absent-application-input"),
     }
     if os.name == "nt":
         environment["SystemRoot"] = os.environ["SystemRoot"]
     result = subprocess.run(
-        [str(native_tools[0]), "kubernetes-secrets-contract"], cwd=tmp_path,
+        [str(native_tools[0]), command], cwd=tmp_path,
         env=environment, input="PRIVATE_STDIN_CANARY", capture_output=True, text=True, timeout=10,
     )
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
-    assert json.loads(result.stdout) == {
-        "schema": "marty.kubernetes-secret-publication/v1",
-        "catalog": json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes()),
-    }
+    expected = (
+        {"schema": "marty.kubernetes-secret-publication/v1",
+         "catalog": json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())}
+        if command == "kubernetes-secrets-contract"
+        else json.loads((ROOT / "deploy-config/catalog/kubernetes-application-tokens.json").read_bytes())
+    )
+    assert json.loads(result.stdout) == expected
     assert "PRIVATE_" not in result.stdout
     assert not (tmp_path / "native-manifest.json").exists()
 
@@ -128,39 +138,41 @@ def test_native_publication_contract_is_compiled_and_needs_no_inputs_repo_or_clu
 @pytest.mark.parametrize("arguments", [
     ["unexpected"], ["--repo-root", "/invalid"], ["--help", "unexpected"],
 ])
+@pytest.mark.parametrize("command", METADATA_COMMANDS)
 def test_native_publication_contract_rejects_extra_parameters_without_catalog_or_cluster(
-    native_tools, tmp_path, arguments,
+    native_tools, tmp_path, arguments, command,
 ):
     environment = {"PATH": str(native_tools[1].parent), "TEST_ROOT": str(tmp_path),
                    "MARTY_REPO_ROOT": str(tmp_path / "absent-repo")}
     if os.name == "nt":
         environment["SystemRoot"] = os.environ["SystemRoot"]
     result = subprocess.run(
-        [str(native_tools[0]), "kubernetes-secrets-contract", *arguments],
+        [str(native_tools[0]), command, *arguments],
         cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=10,
     )
     assert result.returncode != 0
     assert result.stdout == ""
-    assert "usage: marty-deploy kubernetes-secrets-contract" in result.stderr
+    assert f"usage: marty-deploy {command}" in result.stderr
     assert not (tmp_path / "native-manifest.json").exists()
 
 
 @pytest.mark.parametrize("prefix", [["--repo-root", "/invalid"], ["--repo-root=/invalid"]])
 @pytest.mark.parametrize("suffix", [[], ["--help"]])
+@pytest.mark.parametrize("command", METADATA_COMMANDS)
 def test_native_publication_contract_rejects_repository_prefix_before_help_or_catalog(
-    native_tools, tmp_path, prefix, suffix,
+    native_tools, tmp_path, prefix, suffix, command,
 ):
     environment = {"PATH": str(native_tools[1].parent), "TEST_ROOT": str(tmp_path),
                    "MARTY_REPO_ROOT": str(tmp_path / "absent-repo")}
     if os.name == "nt":
         environment["SystemRoot"] = os.environ["SystemRoot"]
     result = subprocess.run(
-        [str(native_tools[0]), *prefix, "kubernetes-secrets-contract", *suffix],
+        [str(native_tools[0]), *prefix, command, *suffix],
         cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=10,
     )
     assert result.returncode != 0
     assert result.stdout == ""
-    assert "usage: marty-deploy kubernetes-secrets-contract" in result.stderr
+    assert f"usage: marty-deploy {command}" in result.stderr
     assert "/invalid" not in result.stderr
     assert not (tmp_path / "native-manifest.json").exists()
 
