@@ -11,9 +11,9 @@ every issuance, wallet, or credential lifecycle journey.
 The companion [live reload guide](../kubernetes-ui-live-reload.md) describes the
 repeatable, opt-in development configuration. Source changes were applied to the
 running development checkout and the affected controls were exercised again.
-The development instance's private address, account identifiers, credentials,
-resource identifiers, receipts, and infrastructure observations are excluded from
-this public report.
+Private infrastructure addresses and account/resource identifiers, credentials,
+and operational receipts are excluded from this public report. Screenshots show
+only synthetic development-account labels.
 
 ## Product fixes and browser verification
 
@@ -39,6 +39,44 @@ selection. Saved active policies remain usable without a flow; complete catalog
 loading prevents later active policies from being hidden by a first page of drafts.
 Loading, failure, retry, and missing prerequisites remain distinct.
 
+## Follow-up crawl
+
+A second authenticated pass continued through the applicant catalog, profile,
+wallet choices, identity view, organization setup, Team, API Keys, and Webhooks.
+The fixes below are included in the same review batch. Browser observations are
+distinguished from cases verified with controlled asynchronous test responses.
+
+| Area | Defect and correction | Verification |
+| --- | --- | --- |
+| Console mode switch | Clearing the selected organization before the router transition let the previous org route redirect Applicant mode to org setup. Mode, selection, and navigation now share one React transition | Reproduced in the browser and in a composed provider/guard test with a suspended destination. Browser retest reached Catalog; switching back reached Dashboard. Tests also cover failed preference persistence |
+| Organization setup | Existing members were told to join an organization and that this was necessary to access applicant credentials | Conditional copy now distinguishes choosing an existing console membership from obtaining console access; creation guidance respects the feature flag. Six locales updated and tested |
+| Profile settings | Notification switches did not persist, Save Settings implied unrelated settings were saved, and fallback profile data could be submitted after a load failure | Unsupported switches replaced by an availability explanation; Save profile is inside the profile panel. Load failures block saving and offer Retry. Browser saved a temporary development-account display name, confirmed persistence after reload, then restored the original name |
+| Wallet choices | Choices lacked accessible names and did not explain their browser-local persistence | Associated checkbox labels, wrapping content, distinct load failure/Retry, and accurate automatic-save copy. Browser verified the labels and guidance; keyboard and failure cases are regression-tested |
+| Credential catalog | A genuinely empty catalog told users to adjust filters; loading and failed requests showed a false zero count | Separate unavailable, filtered, loading, and error states; Clear filters preserves Canvas scope, and Retry reloads in place. Browser verified the empty catalog, labeled controls, and phone layout |
+| Catalog request scope | Late initial-organization or former-account requests could replace a newer Canvas catalog or application badges | Separate request generations and layout cleanup reject stale success, error, and completion results. Deferred tests cover Canvas transitions, account switches, and current requests still loading |
+| Applicant shortcuts and credential actions | Apply opened the identity view, and several credential actions had no implemented operation | Apply now opens Catalog; identity links use the registered route. Removed inert presentation/download/renewal controls while retaining Details and real Claim. Source and regression tests cover populated credential states |
+| Integration permissions | API key and webhook controls did not consistently check the exact action grant | Create/revoke and create/edit/delete/test use their native grants. Paired callback creation needs its own grant and rechecks it before the second request. One-time created secrets remain available through same-account permission refresh. Deferred permission tests cover these boundaries |
+| Integration dialogs | Old organization/account operations and clipboard results could update replacement dialogs; failed actions lacked recoverable feedback | Account/org isolation, dialog generations, pending submission guards, inline errors, Retry, and accurate no-secret creation completion. Browser opened and canceled the forms; controlled tests cover writes, failures, permission loss, and delayed responses |
+| Team and confirmations | Role pickers were not properly keyboard accessible; stale role/removal/revocation completions could affect a replacement organization; rejected confirmations could disappear | Native labeled role checkboxes, scoped completion guards, and retryable shared confirmation errors. Browser toggled an invitation role with Space and canceled without sending; deferred tests cover the mutation lifecycle |
+| Native account identity | Permission state keyed legacy identity aliases while the native user response provides `user_id` | Native identity now takes precedence; account changes withdraw old grants immediately and reject late permission responses. Regression-tested |
+
+Development checker fixes remove four ESLint errors without weakening input
+validation. Independent exhaustive comparisons over all 65,536 UTF-16
+code units confirmed that the three affected control-character rejection sets
+remain identical.
+
+### Browser evidence
+
+The profile page now separates the working profile save from unsupported
+notification preferences and browser-local wallet choices:
+
+![Updated profile settings](images/ux-followup-settings.jpg)
+
+The phone catalog has labeled controls and an accurate empty state. Its page
+content fits the viewport without horizontal overflow:
+
+![Updated catalog at phone width](images/ux-followup-catalog-mobile.jpg)
+
 ## Organization scope and asynchronous behavior
 
 The invitation and verification workflows now reject stale organization data.
@@ -63,21 +101,51 @@ The public organization-creation flag now reaches the UI explicitly, matching th
 backend setting. The development memory limit accommodates the existing code
 checkers; checks were not disabled to obtain a working development page.
 
+The follow-up reproduced an out-of-memory termination at the previous 2 GiB
+development-container limit during an in-process configuration reload. A process
+snapshot then confirmed a native TypeScript watcher leak: two watchers remained
+after one reload, each using roughly 1 GiB. Forced termination of the checker's
+worker skipped the cleanup that owned its native child.
+
+A version- and digest-checked installation patch now waits for checker startup,
+stops and reaps its exact owned child, acknowledges cleanup, and then terminates
+the worker. Both TypeScript and ESLint stay enabled; cleanup failures are logged.
+The development-only 4 GiB limit on an 8 GiB node also accommodates Vite's
+temporary overlap while preparing the replacement server.
+
+After replacing the development pod to install the patch and clear the earlier
+processes, the full AWS application had one native watcher. Two successive
+configuration reloads each replaced that watcher and returned to exactly one.
+Both checkers reported again after each reload, with zero TypeScript/ESLint
+errors, 148 existing ESLint warnings, and no container restart or OOM termination.
+A browser tab left on a transient gateway timeout during this rollout/reload
+exercise recovered on reload; the signed-in identity view and catalog navigation
+then worked. This verifies recovery and watcher cleanup, not uninterrupted
+availability while replacing the development pod.
+
 ## Validation and review
 
-- Final combined UI run: **203 tests passed across 15 files**.
+- Final combined UI run: **437 tests passed across 32 files**.
 - Production TypeScript build check passed.
-- Scoped production ESLint passed with zero errors and three existing unused-variable warnings.
-- **33 Helm tests and 4 development-origin tests passed**.
+- Full UI ESLint passed with **zero errors and 148 existing warnings**.
+- **33 Helm tests and 22 Node tests passed**: 9 development-origin/routing contracts and 13 checker-cleanup regressions.
 - Independent default rendering compared 56 resources; only the intended UI public feature-flag environment entry differed.
 - Both independent reviewers cleared the complete batch after their findings were corrected.
-- The final production/deployment files on the development node matched the local review copy by digest.
+- All 34 changed production/deployment files in the follow-up matched the local review copy on the development node by digest.
 - Authenticated hot reload, corrected navigation, environment persistence, settings Cancel, dialogs, desktop layout, and phone layout were checked in the browser.
 
 The combined test run includes the composed dashboard, parent verification page,
-and catalog loader. Separate reviewer reruns overlap this count and are not
+catalog loader, console-mode transitions, account/organization changes, and
+permission-sensitive forms. Separate reviewer reruns overlap this count and are not
 additional unique tests. A timing-dependent Team test now waits for the router's
 committed pathname while retaining its permission and no-invitation assertions.
+
+The checker integration regression retains actual TypeScript and ESLint error
+diagnostics through three real Vite restarts, requires one replacement native
+watcher after each, and requires zero after closing the server. It also checks
+that an unrelated child survives. The Linux fixture uses tmpfs because native
+TypeScript's fanotify cannot watch this executor's overlay filesystem; production
+watch settings are unchanged. The focused suite is included in CI.
 
 ## Verification limits
 

@@ -12,6 +12,21 @@ The overlay is for editing and browser exploration; it does not certify a
 release artifact. Check the AWS account's current Free Tier eligibility and
 retain the development node's agreed automatic stop time.
 
+Use a node with at least 8 GiB of memory. The development container has a 4 GiB
+memory limit for Vite and its existing TypeScript/ESLint checkers, including the
+temporary overlap while Vite prepares a replacement configuration. A 2 GiB limit
+was exceeded during an observed reload, causing a container restart and a
+temporary gateway error. Monitor the node's available memory when running
+additional workloads.
+
+The postinstall hook also applies a version- and digest-checked lifecycle repair
+to `vite-plugin-checker` 0.14.5. Its original forced worker termination left the
+native TypeScript 7 watcher running after configuration reloads. The repair waits
+for startup, stops and reaps that worker's own native child, then acknowledges
+cleanup before terminating the worker. TypeScript and ESLint remain enabled.
+Unknown dependency versions or contents stop installation for review; revisit
+this patch when upgrading the checker. Cleanup failures are logged explicitly.
+
 ## Enable
 
 Put the working checkout on the K3s node, for example `/opt/marty-ux`. Its `ui/`
@@ -90,8 +105,9 @@ the source watcher, proxy WebSocket, React refresh and authenticated route
 together. Keep the final diff free of temporary labels.
 
 Changes to `ui/src/` and styles refresh directly. Vite restarts for its own
-configuration changes. After changing `package.json` or `package-lock.json`,
-restart this deployment so the init container installs the new dependencies:
+configuration changes. After changing `package.json`, `package-lock.json`, or a
+postinstall patch, restart this deployment so the init container installs and
+patches fresh dependencies. This also clears any watchers from an older install:
 
 ```sh
 kubectl -n "$MARTY_DEV_NAMESPACE" rollout restart deployment/ui

@@ -285,6 +285,14 @@
 		}
 	},
 	"org": {
+		"setup": {
+			"chooseTitle": "Choisir une organisation",
+			"chooseDescription": "Sélectionnez une organisation pour ouvrir sa console.",
+			"accessTitle": "Accès à la console de l’organisation",
+			"accessDescriptionWithCreate": "Rejoignez ou créez une organisation avec un accès à la console pour continuer.",
+			"accessDescription": "Rejoignez une organisation avec un accès à la console pour continuer.",
+			"noMembershipsTitle": "Aucune adhésion avec accès à la console pour le moment"
+		},
 		"team": {
 			"title": "Équipe",
 			"subtitle": "Gérez les membres, rôles et invitations"

@@ -4,7 +4,7 @@
  * Integration surface for external callbacks and audit forwarding.
  */
 
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Alert,
@@ -46,6 +46,8 @@ import EditIcon from '@mui/icons-material/Edit';
 import { ResourcePage } from '../../common';
 import ConfirmDeleteDialog from '../../common/ConfirmDeleteDialog';
 import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useAuth } from '../../../hooks/useAuth';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import {
   createWebhookConfiguration as createWebhook,
@@ -127,15 +129,22 @@ async function copyToClipboard(text) {
   textArea.style.left = '-9999px';
   document.body.appendChild(textArea);
   textArea.select();
-  const copied = document.execCommand('copy');
-  document.body.removeChild(textArea);
-  return copied;
+  try {
+    return document.execCommand('copy');
+  } finally {
+    textArea.remove();
+  }
 }
 
-function WebhooksPage() {
+function WebhooksContent({ organizationId }) {
   const { t } = useTranslation('console');
-  const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId;
+  const { can, isLoading: permissionsLoading } = usePermissions();
+  const canCreateWebhook = !permissionsLoading && can('webhook', 'create');
+  const canEditWebhook = !permissionsLoading && can('webhook', 'edit');
+  const canDeleteWebhook = !permissionsLoading && can('webhook', 'delete');
+  const canTestWebhook = !permissionsLoading && can('webhook', 'test');
+  const active = useRef(false);
+  const dialogGeneration = useRef(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingWebhook, setEditingWebhook] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -143,15 +152,29 @@ function WebhooksPage() {
   const [dialogError, setDialogError] = useState('');
   const [copiedMessage, setCopiedMessage] = useState('');
   const [createdSecret, setCreatedSecret] = useState('');
+  const [webhookCreated, setWebhookCreated] = useState(false);
+  const [testingWebhookId, setTestingWebhookId] = useState(null);
+  const [actionError, setActionError] = useState('');
   const [formState, setFormState] = useState({
     name: '',
     url: '',
     description: '',
     eventTypes: [...ASYNC_GATEWAY_EVENT_PRESET],
   });
+  const canSaveWebhook = editingWebhook ? canEditWebhook : canCreateWebhook;
+
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!canDeleteWebhook) setPendingDelete(null);
+  }, [canDeleteWebhook]);
 
   const { data, loading, error, reload } = useAsyncData(
     async () => {
+      if (!organizationId) return { webhooks: [], eventCatalog: [] };
       const [webhooks, eventCatalog] = await Promise.all([
         listWebhooks(organizationId),
         getAvailableEventTypes(),
@@ -167,12 +190,17 @@ function WebhooksPage() {
 
   const webhooks = data?.webhooks || [];
   const eventCatalog = data?.eventCatalog || [];
+  const summaryPending = !organizationId || loading;
 
   const resetDialog = () => {
+    if (saving) return;
+    dialogGeneration.current += 1;
     setDialogOpen(false);
     setEditingWebhook(null);
     setDialogError('');
+    setCopiedMessage('');
     setCreatedSecret('');
+    setWebhookCreated(false);
     setFormState({
       name: '',
       url: '',
@@ -182,9 +210,13 @@ function WebhooksPage() {
   };
 
   const openCreateDialog = () => {
+    if (!canCreateWebhook) return;
+    dialogGeneration.current += 1;
     setEditingWebhook(null);
     setCreatedSecret('');
+    setWebhookCreated(false);
     setDialogError('');
+    setCopiedMessage('');
     setFormState({
       name: '',
       url: '',
@@ -195,9 +227,13 @@ function WebhooksPage() {
   };
 
   const openEditDialog = (webhook) => {
+    if (!canEditWebhook) return;
+    dialogGeneration.current += 1;
     setEditingWebhook(webhook);
     setCreatedSecret('');
+    setWebhookCreated(false);
     setDialogError('');
+    setCopiedMessage('');
     setFormState({
       name: webhook.name,
       url: webhook.url,
@@ -224,6 +260,7 @@ function WebhooksPage() {
   };
 
   const handleSave = async () => {
+    if (saving || webhookCreated || !canSaveWebhook) return;
     if (!organizationId) {
       setDialogError('No active organization selected.');
       return;
@@ -254,7 +291,7 @@ function WebhooksPage() {
           url: formState.url.trim(),
           description: formState.description.trim(),
           eventTypes: formState.eventTypes,
-          enabled: true,
+          enabled: editingWebhook.enabled,
         });
       } else {
         const created = await createWebhook(organizationId, {
@@ -263,43 +300,67 @@ function WebhooksPage() {
           description: formState.description.trim(),
           eventTypes: formState.eventTypes,
         });
+        if (!active.current) return;
         setCreatedSecret(created?.signing_secret || created?.secret || '');
+        setWebhookCreated(true);
       }
 
+      if (!active.current) return;
       await reload();
 
-      if (editingWebhook) {
+      if (active.current && editingWebhook) {
         resetDialog();
       }
     } catch (saveError) {
-      setDialogError(saveError instanceof Error ? saveError.message : String(saveError));
+      if (active.current) setDialogError(saveError instanceof Error ? saveError.message : String(saveError));
     } finally {
-      setSaving(false);
+      if (active.current) setSaving(false);
     }
   };
 
   const handleDelete = async () => {
-    if (!pendingDelete) {
+    if (!organizationId || !pendingDelete || !canDeleteWebhook) {
       return;
     }
 
     await deleteWebhook(organizationId, pendingDelete.id);
+    if (!active.current) return;
     setPendingDelete(null);
     await reload();
   };
 
   const handleTest = async (webhookId) => {
-    await testWebhook(organizationId, webhookId);
-    setCopiedMessage('Test delivery requested. Check the receiver for the signed callback.');
+    if (!organizationId || testingWebhookId || !canTestWebhook) return;
+    setTestingWebhookId(webhookId);
+    setActionError('');
+    setCopiedMessage('');
+    try {
+      await testWebhook(organizationId, webhookId);
+      if (active.current) setCopiedMessage('Test delivery requested. Check the receiver for the signed callback.');
+    } catch (testError) {
+      if (active.current) {
+        setActionError(testError instanceof Error ? testError.message : 'The test delivery could not be requested. Please try again.');
+      }
+    } finally {
+      if (active.current) setTestingWebhookId(null);
+    }
   };
 
   const handleCopySecret = async () => {
-    const copied = await copyToClipboard(createdSecret);
-    setCopiedMessage(copied ? 'Webhook secret copied to clipboard.' : 'Unable to copy webhook secret.');
+    const generation = dialogGeneration.current;
+    let copied = false;
+    try {
+      copied = await copyToClipboard(createdSecret);
+    } catch {
+      // Clipboard denial is recoverable; leave the visible secret available.
+    }
+    if (active.current && dialogGeneration.current === generation) {
+      setCopiedMessage(copied ? 'Webhook secret copied to clipboard.' : 'Unable to copy webhook secret.');
+    }
   };
 
-  const applicationEnabledCount = webhooks.filter((webhook) => webhook.eventTypes.some((eventType) => eventType.startsWith('application.') || eventType.startsWith('applicant.'))).length;
-  const asyncEnabledCount = webhooks.filter((webhook) => webhook.eventTypes.some((eventType) => ASYNC_GATEWAY_EVENT_PRESET.includes(eventType))).length;
+  const applicationEnabledCount = webhooks.filter((webhook) => webhook.enabled && webhook.eventTypes.some((eventType) => eventType.startsWith('application.') || eventType.startsWith('applicant.'))).length;
+  const asyncEnabledCount = webhooks.filter((webhook) => webhook.enabled && webhook.eventTypes.some((eventType) => ASYNC_GATEWAY_EVENT_PRESET.includes(eventType))).length;
 
   return (
     <>
@@ -309,60 +370,63 @@ function WebhooksPage() {
         tabs={getOrgTabs(t)}
         breadcrumbs={getBreadcrumbs(t)}
         actions={
-          <Button variant="contained" startIcon={<AddIcon />} onClick={openCreateDialog}>
+          <Button variant="contained" startIcon={<AddIcon />} disabled={!organizationId || loading || Boolean(error) || !canCreateWebhook} onClick={openCreateDialog}>
             {t('org.webhooks.addWebhook', 'Add Webhook')}
           </Button>
         }
       >
         <Stack spacing={3}>
+          {!organizationId && <Alert severity="info">Select an organization to manage webhooks.</Alert>}
           <Alert severity="info">
             Webhooks are the outbound integration channel for external workflow systems, audit platforms, and SIEM tooling.
             Pair them with API keys when a partner system needs both synchronous gateway access and asynchronous event delivery.
           </Alert>
 
-          {copiedMessage && (
-            <Alert severity="success" onClose={() => setCopiedMessage('')}>
+          {copiedMessage && !dialogOpen && (
+            <Alert severity={copiedMessage.startsWith('Unable') ? 'warning' : 'success'} onClose={() => setCopiedMessage('')}>
               {copiedMessage}
             </Alert>
           )}
 
+          {actionError && <Alert severity="error" onClose={() => setActionError('')}>{actionError}</Alert>}
+
           <Grid container spacing={2}>
-            <Grid item xs={12} md={4}>
-              <Card variant="outlined">
+            <Grid size={{ xs: 12, md: 4 }}>
+              <Card variant="outlined" sx={{ height: '100%' }}>
                 <CardContent>
                   <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
                     <SyncAltIcon color="primary" fontSize="small" />
                     <Typography variant="subtitle2">Async callback endpoints</Typography>
                   </Stack>
-                  <Typography variant="h4">{asyncEnabledCount}</Typography>
+                  <Typography variant="h4">{summaryPending ? '—' : error ? 'Unavailable' : asyncEnabledCount}</Typography>
                   <Typography variant="body2" color="text.secondary">
                     Endpoints receiving issuance, verification, and application state changes.
                   </Typography>
                 </CardContent>
               </Card>
             </Grid>
-            <Grid item xs={12} md={4}>
-              <Card variant="outlined">
+            <Grid size={{ xs: 12, md: 4 }}>
+              <Card variant="outlined" sx={{ height: '100%' }}>
                 <CardContent>
                   <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
                     <SecurityIcon color="primary" fontSize="small" />
                     <Typography variant="subtitle2">Application integrations</Typography>
                   </Stack>
-                  <Typography variant="h4">{applicationEnabledCount}</Typography>
+                  <Typography variant="h4">{summaryPending ? '—' : error ? 'Unavailable' : applicationEnabledCount}</Typography>
                   <Typography variant="body2" color="text.secondary">
                     Endpoints receiving supported application and applicant lifecycle events.
                   </Typography>
                 </CardContent>
               </Card>
             </Grid>
-            <Grid item xs={12} md={4}>
-              <Card variant="outlined">
+            <Grid size={{ xs: 12, md: 4 }}>
+              <Card variant="outlined" sx={{ height: '100%' }}>
                 <CardContent>
                   <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
                     <AddIcon color="primary" fontSize="small" />
                     <Typography variant="subtitle2">Total webhooks</Typography>
                   </Stack>
-                  <Typography variant="h4">{webhooks.length}</Typography>
+                  <Typography variant="h4">{summaryPending ? '—' : error ? 'Unavailable' : webhooks.length}</Typography>
                   <Typography variant="body2" color="text.secondary">
                     Active and inactive endpoints configured for this organization.
                   </Typography>
@@ -372,12 +436,12 @@ function WebhooksPage() {
           </Grid>
 
           {error && (
-            <Alert severity="error">{error?.message || String(error)}</Alert>
+            <Alert severity="error" action={<Button color="inherit" onClick={reload}>Retry</Button>}>{error?.message || String(error)}</Alert>
           )}
 
           {loading ? (
             <LinearProgress />
-          ) : (
+          ) : !error && organizationId ? (
             <TableContainer component={Paper}>
               <Table>
                 <TableHead>
@@ -431,19 +495,25 @@ function WebhooksPage() {
                         </TableCell>
                         <TableCell align="right">
                           <Tooltip title="Send test callback">
-                            <IconButton size="small" onClick={() => handleTest(webhook.id)}>
-                              <PlayArrowIcon fontSize="small" />
-                            </IconButton>
+                            <span>
+                              <IconButton size="small" aria-label={testingWebhookId === webhook.id ? 'Requesting test callback' : 'Send test callback'} disabled={Boolean(testingWebhookId) || !canTestWebhook} onClick={() => handleTest(webhook.id)}>
+                                <PlayArrowIcon fontSize="small" />
+                              </IconButton>
+                            </span>
                           </Tooltip>
                           <Tooltip title="Edit webhook">
-                            <IconButton size="small" onClick={() => openEditDialog(webhook)}>
-                              <EditIcon fontSize="small" />
-                            </IconButton>
+                            <span>
+                              <IconButton size="small" aria-label="Edit webhook" disabled={!canEditWebhook} onClick={() => openEditDialog(webhook)}>
+                                <EditIcon fontSize="small" />
+                              </IconButton>
+                            </span>
                           </Tooltip>
                           <Tooltip title="Delete webhook">
-                            <IconButton size="small" color="error" aria-label="Delete webhook" onClick={() => setPendingDelete(webhook)}>
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
+                            <span>
+                              <IconButton size="small" color="error" aria-label="Delete webhook" disabled={!canDeleteWebhook} onClick={() => { if (canDeleteWebhook) setPendingDelete(webhook); }}>
+                                <DeleteIcon fontSize="small" />
+                              </IconButton>
+                            </span>
                           </Tooltip>
                         </TableCell>
                       </TableRow>
@@ -452,127 +522,143 @@ function WebhooksPage() {
                 </TableBody>
               </Table>
             </TableContainer>
-          )}
+          ) : null}
         </Stack>
       </ResourcePage>
       <Dialog open={dialogOpen} onClose={saving ? undefined : resetDialog} maxWidth="md" fullWidth>
-        <DialogTitle>{editingWebhook ? 'Edit webhook' : 'Add webhook'}</DialogTitle>
+        <DialogTitle>{webhookCreated ? 'Webhook created' : editingWebhook ? 'Edit webhook' : 'Add webhook'}</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={3} sx={{ pt: 1 }}>
             {dialogError && <Alert severity="error">{dialogError}</Alert>}
+            {copiedMessage && (
+              <Alert severity={copiedMessage.startsWith('Unable') ? 'warning' : 'success'} onClose={() => setCopiedMessage('')}>
+                {copiedMessage}
+              </Alert>
+            )}
 
-            <TextField
-              autoFocus
-              label="Webhook name"
-              placeholder="Northstar admissions callback"
-              value={formState.name}
-              onChange={(event) => setFormState((prev) => ({ ...prev, name: event.target.value }))}
-              fullWidth
-              helperText="A recognizable name for this external receiver."
-            />
-
-            <TextField
-              label="Webhook URL"
-              placeholder="https://partner.example.com/marty/events"
-              value={formState.url}
-              onChange={(event) => setFormState((prev) => ({ ...prev, url: event.target.value }))}
-              fullWidth
-              helperText="Signed POST requests will be delivered to this endpoint."
-            />
-
-            <TextField
-              label="Description"
-              placeholder="Production audit sink"
-              value={formState.description}
-              onChange={(event) => setFormState((prev) => ({ ...prev, description: event.target.value }))}
-              fullWidth
-            />
-
-            <Box>
-              <Typography variant="subtitle2" gutterBottom>
-                Quick presets
-              </Typography>
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-                <Button variant="outlined" onClick={() => applyPreset(ASYNC_GATEWAY_EVENT_PRESET)}>
-                  Gateway async callbacks
-                </Button>
-                <Button variant="outlined" onClick={() => applyPreset(APPLICATION_PRESET)}>
-                  Application lifecycle
-                </Button>
-              </Stack>
-            </Box>
-
-            <Box>
-              <Typography variant="subtitle2" gutterBottom>
-                Event subscriptions
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                Select from the event types supported by the public webhook API.
-              </Typography>
-              <FormGroup>
-                {eventCatalog.map((category) => (
-                  <Box key={category.name} sx={{ mb: 2 }}>
-                    <Typography variant="subtitle2" sx={{ mb: 0.5 }}>{category.name}</Typography>
-                    {category.events.map((eventType) => (
-                      <FormControlLabel
-                        key={eventType.type}
-                        control={
-                          <Checkbox
-                            checked={formState.eventTypes.includes(eventType.type)}
-                            onChange={() => toggleEventType(eventType.type)}
-                          />
-                        }
-                        label={
-                          <Box>
-                            <Typography variant="body2">{eventType.type}</Typography>
-                            <Typography variant="caption" color="text.secondary">{eventType.description}</Typography>
-                          </Box>
-                        }
-                      />
-                    ))}
-                  </Box>
-                ))}
-              </FormGroup>
-            </Box>
-
-            {createdSecret && (
-              <Alert severity="success">
-                <Typography variant="subtitle2" gutterBottom>
-                  Webhook secret
-                </Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                  Save this now so the receiving system can verify callback signatures.
-                </Typography>
+            {!webhookCreated && (
+              <Stack component="fieldset" disabled={saving || !canSaveWebhook} aria-label="Webhook settings" spacing={3} sx={{ p: 0, m: 0, border: 0, minWidth: 0 }}>
+                {!canSaveWebhook && <Alert severity="info">{permissionsLoading ? 'Checking your permissions…' : `You do not have permission to ${editingWebhook ? 'edit' : 'create'} webhooks in this organization.`}</Alert>}
                 <TextField
+                  autoFocus
+                  label="Webhook name"
+                  placeholder="Northstar admissions callback"
+                  value={formState.name}
+                  onChange={(event) => setFormState((prev) => ({ ...prev, name: event.target.value }))}
                   fullWidth
-                  value={createdSecret}
-                  slotProps={{
-                    input: {
-                      readOnly: true,
-                      endAdornment: (
-                        <IconButton onClick={handleCopySecret}>
-                          <ContentCopyIcon />
-                        </IconButton>
-                      ),
-                      sx: { fontFamily: 'monospace' },
-                    }
-                  }}
+                  helperText="A recognizable name for this external receiver."
                 />
+
+                <TextField
+                  label="Webhook URL"
+                  placeholder="https://partner.example.com/marty/events"
+                  value={formState.url}
+                  onChange={(event) => setFormState((prev) => ({ ...prev, url: event.target.value }))}
+                  fullWidth
+                  helperText="Signed POST requests will be delivered to this endpoint."
+                />
+
+                <TextField
+                  label="Description"
+                  placeholder="Production audit sink"
+                  value={formState.description}
+                  onChange={(event) => setFormState((prev) => ({ ...prev, description: event.target.value }))}
+                  fullWidth
+                />
+
+                <Box>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Quick presets
+                  </Typography>
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                    <Button variant="outlined" onClick={() => applyPreset(ASYNC_GATEWAY_EVENT_PRESET)}>
+                      Gateway async callbacks
+                    </Button>
+                    <Button variant="outlined" onClick={() => applyPreset(APPLICATION_PRESET)}>
+                      Application lifecycle
+                    </Button>
+                  </Stack>
+                </Box>
+
+                <Box>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Event subscriptions
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                    Select from the event types supported by the public webhook API.
+                  </Typography>
+                  <FormGroup>
+                    {eventCatalog.map((category) => (
+                      <Box key={category.name} sx={{ mb: 2 }}>
+                        <Typography variant="subtitle2" sx={{ mb: 0.5 }}>{category.name}</Typography>
+                        {category.events.map((eventType) => (
+                          <FormControlLabel
+                            key={eventType.type}
+                            control={
+                              <Checkbox
+                                checked={formState.eventTypes.includes(eventType.type)}
+                                onChange={() => toggleEventType(eventType.type)}
+                              />
+                            }
+                            label={
+                              <Box>
+                                <Typography variant="body2">{eventType.type}</Typography>
+                                <Typography variant="caption" color="text.secondary">{eventType.description}</Typography>
+                              </Box>
+                            }
+                          />
+                        ))}
+                      </Box>
+                    ))}
+                  </FormGroup>
+                </Box>
+              </Stack>
+            )}
+
+            {webhookCreated && (
+              <Alert severity="success">
+                Webhook created successfully.
+                {createdSecret ? (
+                  <>
+                    <Typography variant="subtitle2" gutterBottom>
+                      Webhook secret
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                      Save this now so the receiving system can verify callback signatures.
+                    </Typography>
+                    <TextField
+                      fullWidth
+                      label="Webhook secret"
+                      value={createdSecret}
+                      slotProps={{
+                        input: {
+                          readOnly: true,
+                          endAdornment: (
+                            <IconButton aria-label="Copy webhook secret" onClick={handleCopySecret}>
+                              <ContentCopyIcon />
+                            </IconButton>
+                          ),
+                          sx: { fontFamily: 'monospace' },
+                        }
+                      }}
+                    />
+                  </>
+                ) : <Typography variant="body2">No signing secret was returned.</Typography>}
               </Alert>
             )}
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={resetDialog}>{createdSecret ? 'Close' : 'Cancel'}</Button>
-          {!createdSecret && (
-            <Button variant="contained" onClick={handleSave} disabled={saving}>
+          <Button onClick={resetDialog} disabled={saving}>{webhookCreated ? 'Close' : 'Cancel'}</Button>
+          {!webhookCreated && (
+            <Button variant="contained" onClick={handleSave} disabled={saving || !canSaveWebhook}>
               {saving ? 'Saving…' : editingWebhook ? 'Update webhook' : 'Create webhook'}
             </Button>
           )}
         </DialogActions>
       </Dialog>
       <ConfirmDeleteDialog
-        open={Boolean(pendingDelete)}
+        open={Boolean(pendingDelete) && canDeleteWebhook}
         onClose={() => setPendingDelete(null)}
         onConfirm={handleDelete}
         title="Delete Webhook"
@@ -587,4 +673,9 @@ function WebhooksPage() {
   );
 }
 
-export default WebhooksPage;
+export default function WebhooksPage() {
+  const { activeOrgId } = useConsole();
+  const { user, isAuthenticated } = useAuth();
+  const principalId = isAuthenticated ? user?.user_id || user?.sub || user?.id || 'unknown-user' : 'signed-out';
+  return <WebhooksContent key={`${activeOrgId || 'no-organization'}:${principalId}`} organizationId={activeOrgId} />;
+}

@@ -90,6 +90,46 @@ impl CredentialManagementRepository for PostgresCredentialManagementRepository {
         .transpose()
     }
 
+    async fn get_managed_sd_jwt_status(
+        &self,
+        organization_id: &str,
+        credential_id: &str,
+    ) -> Result<
+        Option<crate::managed_status::ManagedSdJwtStatusRecord>,
+        CredentialManagementPortError,
+    > {
+        sqlx::query(
+            "SELECT id, organization_id, credential_template_id, issuer_did,
+                    credential_jwt, status, revoked, status_updated_at, issued_at,
+                    expires_at, statement_timestamp() AS observed_at
+             FROM issuance_service.issued_credentials
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(organization_id)
+        .bind(credential_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(port_error)?
+        .map(|row| {
+            Ok(crate::managed_status::ManagedSdJwtStatusRecord {
+                id: row.try_get("id").map_err(port_error)?,
+                organization_id: row.try_get("organization_id").map_err(port_error)?,
+                credential_template_id: row
+                    .try_get("credential_template_id")
+                    .map_err(port_error)?,
+                issuer_did: row.try_get("issuer_did").map_err(port_error)?,
+                credential_jwt: row.try_get("credential_jwt").map_err(port_error)?,
+                status: managed_status(&row)?,
+                revoked: row.try_get("revoked").map_err(port_error)?,
+                status_updated_at: row.try_get("status_updated_at").map_err(port_error)?,
+                issued_at: row.try_get("issued_at").map_err(port_error)?,
+                expires_at: row.try_get("expires_at").map_err(port_error)?,
+                observed_at: row.try_get("observed_at").map_err(port_error)?,
+            })
+        })
+        .transpose()
+    }
+
     async fn persist(
         &self,
         credential: &ManagedCredential,
@@ -211,20 +251,7 @@ impl CredentialManagementRepository for PostgresCredentialManagementRepository {
 fn managed_credential(
     row: &sqlx::postgres::PgRow,
 ) -> Result<ManagedCredential, CredentialManagementPortError> {
-    let status = match row
-        .try_get::<String, _>("status")
-        .map_err(port_error)?
-        .as_str()
-    {
-        "active" => ManagedCredentialStatus::Active,
-        "suspended" => ManagedCredentialStatus::Suspended,
-        "revoked" => ManagedCredentialStatus::Revoked,
-        value => {
-            return Err(CredentialManagementPortError(format!(
-                "Credential has unsupported status {value}"
-            )))
-        }
-    };
+    let status = managed_status(row)?;
     let entries = row
         .try_get::<Value, _>("status_list_entries")
         .map_err(port_error)?
@@ -247,6 +274,23 @@ fn managed_credential(
         revocation_profile_id: row.try_get("revocation_profile_id").map_err(port_error)?,
         status_list_entries: entries,
     })
+}
+
+fn managed_status(
+    row: &sqlx::postgres::PgRow,
+) -> Result<ManagedCredentialStatus, CredentialManagementPortError> {
+    match row
+        .try_get::<String, _>("status")
+        .map_err(port_error)?
+        .as_str()
+    {
+        "active" => Ok(ManagedCredentialStatus::Active),
+        "suspended" => Ok(ManagedCredentialStatus::Suspended),
+        "revoked" => Ok(ManagedCredentialStatus::Revoked),
+        value => Err(CredentialManagementPortError(format!(
+            "Credential has unsupported status {value}"
+        ))),
+    }
 }
 
 fn port_error(error: impl std::fmt::Display) -> CredentialManagementPortError {

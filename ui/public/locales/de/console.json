@@ -285,6 +285,14 @@
 		}
 	},
 	"org": {
+		"setup": {
+			"chooseTitle": "Organisation auswählen",
+			"chooseDescription": "Wählen Sie eine Organisation aus, um deren Konsole zu öffnen.",
+			"accessTitle": "Zugriff auf die Organisationskonsole",
+			"accessDescriptionWithCreate": "Treten Sie einer Organisation mit Konsolenzugriff bei oder erstellen Sie eine, um fortzufahren.",
+			"accessDescription": "Treten Sie einer Organisation mit Konsolenzugriff bei, um fortzufahren.",
+			"noMembershipsTitle": "Noch keine Mitgliedschaften mit Konsolenzugriff"
+		},
 		"team": {
 			"title": "Team",
 			"subtitle": "Teammitglieder, Rollen und Einladungen verwalten"

@@ -2228,6 +2228,14 @@
     }
   },
   "org": {
+    "setup": {
+      "chooseTitle": "Choose an Organization",
+      "chooseDescription": "Select an organization to open its organization console.",
+      "accessTitle": "Organization Console Access",
+      "accessDescriptionWithCreate": "Join or create an organization with console access to continue.",
+      "accessDescription": "Join an organization with console access to continue.",
+      "noMembershipsTitle": "No Console Memberships Yet"
+    },
     "title": "Organization",
     "settings": {
       "title": "Organization Settings",

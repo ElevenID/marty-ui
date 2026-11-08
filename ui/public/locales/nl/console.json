@@ -63,5 +63,15 @@
     "discoveryRequired": "Organisaties met een open lidmaatschap of lidmaatschap na goedkeuring zijn altijd vindbaar via de openbare organisatiezoekfunctie.",
     "discoveryPublic": "Deze organisatie kan in openbare zoekresultaten voor organisaties verschijnen.",
     "discoveryPrivate": "Deze organisatie verschijnt niet in openbare zoekresultaten voor organisaties."
+  },
+  "org": {
+    "setup": {
+      "chooseTitle": "Kies een organisatie",
+      "chooseDescription": "Selecteer een organisatie om de organisatieconsole te openen.",
+      "accessTitle": "Toegang tot de organisatieconsole",
+      "accessDescriptionWithCreate": "Word lid van een organisatie met consoletoegang of maak er een aan om verder te gaan.",
+      "accessDescription": "Word lid van een organisatie met consoletoegang om verder te gaan.",
+      "noMembershipsTitle": "Nog geen lidmaatschappen met consoletoegang"
+    }
   }
 }

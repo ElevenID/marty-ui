@@ -23,6 +23,7 @@ http.workspace = true
 marty-flow = { path = "../flow" }
 marty-didcomm = { workspace = true, features = ["did_jwk", "did_key", "did_web"] }
 marty-oid4vci.workspace = true
+marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-verification.workspace = true
 mmf-core.workspace = true
 mmf-platform.workspace = true

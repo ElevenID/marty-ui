@@ -285,6 +285,14 @@
 		}
 	},
 	"org": {
+		"setup": {
+			"chooseTitle": "組織を選択",
+			"chooseDescription": "組織を選択して、その組織のコンソールを開きます。",
+			"accessTitle": "組織コンソールへのアクセス",
+			"accessDescriptionWithCreate": "続行するには、コンソールにアクセスできる組織に参加するか、組織を作成してください。",
+			"accessDescription": "続行するには、コンソールにアクセスできる組織に参加してください。",
+			"noMembershipsTitle": "コンソールにアクセスできる組織への所属はまだありません"
+		},
 		"team": {
 			"title": "チーム",
 			"subtitle": "メンバー、ロール、招待を管理"

@@ -118,7 +118,7 @@ spec:
               memory: 256Mi
             limits:
               cpu: 1000m
-              memory: 2048Mi
+              memory: 4096Mi
           startupProbe:
             exec:
               command: [node, -e, "fetch('http://127.0.0.1:3000/@vite/client').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]

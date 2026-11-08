@@ -65,12 +65,21 @@ Flow also receives the existing signer's public CA in its trust bundle and
 calls the signer's HTTPS listener directly at `https://signing-keys:8018/internal`.
 This keeps its startup health check independent of gateway readiness.
 
-Two notification Secrets supplement the older Kubernetes catalog:
+The native Kubernetes catalog publishes both Notification TLS Secrets:
 
 | Secret name (configurable) | Required keys | Existing bootstrap outputs |
 | --- | --- | --- |
 | `notification-workload-tls` | `tls.crt`, `ca.crt` | `NOTIFICATION_WORKLOAD_SERVER_CERT`, `MARTY_WORKLOAD_IDENTITY_CA_CERT` |
 | `notification-tls-kms` | `token`, `ca.crt` | `NOTIFICATION_TLS_KMS_TOKEN`, `OPENBAO_TLS_CA_CERT` |
+
+The development bootstrap requires an authenticated native operator whose
+`kubernetes-secrets-contract` output matches the checkout's exact compiled
+publication contract (`marty.kubernetes-secret-publication/v1`). It checks this
+before cluster access and uses the native publisher for these Secrets along
+with the other catalog entries. Older operators without this contract are
+refused before initialization. The bootstrap publishes default catalog names;
+chart `existingSecrets` overrides still require the caller to provision the
+corresponding names and keys.
 
 An additional `marty-operator` Secret (also configurable through
 `existingSecrets`) has a `password` key for the initial organization

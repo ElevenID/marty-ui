@@ -171,8 +171,6 @@ def test_existing_secret_renames_cover_env_and_volumes(tmp_path: Path) -> None:
     keys.update({
         "marty-redis-tls": {"tls.crt", "tls.key", "ca.crt"},
         "marty-operator": {"password"},
-        "notification-workload-tls": {"tls.crt", "ca.crt"},
-        "notification-tls-kms": {"token", "ca.crt"},
     })
     for obj in walk(rendered):
         if "secretKeyRef" in obj:
@@ -448,7 +446,7 @@ def test_development_ui_keeps_backend_tls_routes_and_public_ports_unchanged(tmp_
     node = pod["containers"][1]
     assert node["command"] == ["npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", "3000", "--strictPort"]
     assert node["resources"]["requests"]["memory"] == "256Mi"
-    assert node["resources"]["limits"]["memory"] == "2048Mi"
+    assert node["resources"]["limits"]["memory"] == "4096Mi"
     assert pod["initContainers"][0]["resources"]["requests"]["memory"] == "256Mi"
     assert pod["initContainers"][0]["resources"]["limits"]["memory"] == "1536Mi"
     assert "ports" not in node

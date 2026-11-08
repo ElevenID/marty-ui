@@ -43,6 +43,8 @@ PROFILE = ROOT / "deploy/helm/openbao/values-k3s-dev.yaml"
 UPSTREAM = ROOT / "deploy/helm/openbao/upstream.json"
 NAMESPACE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,255}\Z")
+PUBLICATION_SCHEMA = "marty.kubernetes-secret-publication/v1"
+PUBLICATION_CONTRACT_LIMIT = 128 * 1024
 KEYCLOAK_FILES = {
     "keycloak_signing_kms_token", "keycloak_master_rs256_cert", "keycloak_11id_rs256_cert",
     "keycloak_master_cookie_token", "keycloak_master_ciba_token",
@@ -199,6 +201,48 @@ def authenticated_bootstrap_inputs(assets: Path, identity: dict) -> tuple[bytes,
     return operator, init_script
 
 
+def publication_contract(operator: Path) -> dict:
+    """Check the authenticated binary's compiled publisher before cluster access.
+
+    The dynamic catalog read by --repo-root cannot establish what destinations
+    an older binary actually publishes. This command needs no repository,
+    credentials, or Kubernetes access and exposes only compiled public metadata.
+    """
+    try:
+        result = subprocess.run([str(operator), "kubernetes-secrets-contract"],
+            stdin=subprocess.DEVNULL, capture_output=True, check=False, timeout=10, env={})
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise BootstrapError("signed operator Kubernetes publication contract is unavailable; "
+                             "select a compatible signed runtime") from error
+    require(result.returncode == 0,
+            "signed operator does not provide the required Kubernetes publication contract; "
+            "select a compatible signed runtime")
+    require(0 < len(result.stdout) <= PUBLICATION_CONTRACT_LIMIT,
+            "signed operator Kubernetes publication contract is empty or oversized")
+
+    def unique_members(pairs: list[tuple[str, object]]) -> dict:
+        members: dict = {}
+        for key, value in pairs:
+            if key in members:
+                raise ValueError("duplicate publication contract member")
+            members[key] = value
+        return members
+
+    try:
+        observed = json.loads(result.stdout, object_pairs_hook=unique_members)
+        expected = {"schema": PUBLICATION_SCHEMA, "catalog": json.loads(
+            (ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())}
+        # Canonical bytes preserve JSON types (in particular true versus 1).
+        # Exact mappings, required inputs, optional destinations and templates
+        # must agree; Secret counts or input names alone are not capabilities.
+        matches = encoded(observed) == encoded(expected)
+    except (ValueError, UnicodeError, RecursionError) as error:
+        raise BootstrapError("signed operator Kubernetes publication contract is malformed") from error
+    require(matches, "signed operator Kubernetes publication contract differs from this installer; "
+            "select a compatible signed runtime")
+    return observed
+
+
 def take_tls_outputs(payload: bytes, output: Path) -> None:
     expected = set(SELFHOST_TLS_FILES) | {"selfhost-tls-kms-roles.json"}
     require(len(payload) <= 2 * 1024 * 1024, "TLS output archive is oversized")
@@ -275,7 +319,7 @@ def provision_application_tokens(transport: Transport, root_token: str,
     return requests
 
 
-def prepare_namespace(transport: Transport, bootstrap_id: str) -> dict[str, str]:
+def prepare_namespace(transport: Transport, bootstrap_id: str, publication: dict) -> dict[str, str]:
     found = transport.kubectl("namespace inspection", "get", "namespace",
                               transport.namespace, "--ignore-not-found", "-o", "json")
     if found.strip():
@@ -283,9 +327,8 @@ def prepare_namespace(transport: Transport, bootstrap_id: str) -> dict[str, str]
             "namespace workload inspection", "get",
             "deployments,statefulsets,jobs,pods,persistentvolumeclaims", "-o", "json"))
         require(not workloads["items"], "namespace must have no existing workloads or PVCs")
-        catalog = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())
-        destinations = {entry["name"] for entry in catalog["secrets"]} | {
-            "marty-openbao-seal", "notification-workload-tls", "notification-tls-kms", "marty-operator",
+        destinations = {entry["name"] for entry in publication["catalog"]["secrets"]} | {
+            "marty-openbao-seal", "marty-operator",
         }
         existing = transport.kubectl("namespace Secret inspection", "get", "secret",
                                     *sorted(destinations), "--ignore-not-found", "-o", "name")
@@ -389,23 +432,10 @@ def publish_credentials(transport: Transport, operator: Path, files: dict[str, P
     transport.run("native Kubernetes credential publication",
         [str(operator), "--repo-root", str(ROOT), "kubernetes-secrets",
          "kubernetes-production", transport.namespace], env=environment)
-    # Two current notification identities and the initial operator login are
-    # absent from the older native Kubernetes catalog. Use kubectl's ordinary
-    # file inputs rather than another template/Secret renderer.
-    additions = {
-        "notification-workload-tls": {
-            "tls.crt": files["NOTIFICATION_WORKLOAD_SERVER_CERT"],
-            "ca.crt": files["MARTY_WORKLOAD_IDENTITY_CA_CERT"],
-        },
-        "notification-tls-kms": {
-            "ca.crt": files["OPENBAO_TLS_CA_CERT"],
-            "token": files["NOTIFICATION_TLS_KMS_TOKEN"],
-        },
-        "marty-operator": {"password": files["MARTY_ORG_ADMIN_PASSWORD"]},
-    }
-    for name, members in additions.items():
-        transport.kubectl("application credential publication", "create", "secret", "generic",
-                          name, *[f"--from-file={key}={path}" for key, path in members.items()])
+    # The initial organization login remains bootstrap-owned. Workload and
+    # OpenBao credentials, including Notification TLS, have one native owner.
+    transport.kubectl("application credential publication", "create", "secret", "generic",
+                      "marty-operator", f"--from-file=password={files['MARTY_ORG_ADMIN_PASSWORD']}")
 
 
 def bootstrap(args: argparse.Namespace) -> None:
@@ -432,6 +462,8 @@ def bootstrap(args: argparse.Namespace) -> None:
     require(identity.returncode == 0
             and identity.stdout.strip().decode() == args.runtime_source_sha + ":" + args.release_tag,
             "signed operator build identity differs")
+    publication = publication_contract(operator)
+    write_new(state / "kubernetes-secret-publication.json", encoded(publication))
     upstream = json.loads(UPSTREAM.read_bytes())
     require(args.chart_package.is_file()
             and hashlib.sha256(args.chart_package.read_bytes()).hexdigest() == upstream["sha256"],
@@ -448,7 +480,7 @@ def bootstrap(args: argparse.Namespace) -> None:
     bootstrap_id = str(uuid.uuid4())
     nonce = secrets.token_hex(6)
     workload_project = "marty-selfhost-disposable-k8s-" + nonce
-    namespace = prepare_namespace(transport, bootstrap_id)
+    namespace = prepare_namespace(transport, bootstrap_id, publication)
     seal = secrets.token_bytes(32)
     write_new(state / "static.key", seal, 0o400)
     transport.create({"apiVersion": "v1", "kind": "Secret",
@@ -529,6 +561,7 @@ def bootstrap(args: argparse.Namespace) -> None:
         "openbaoImage": values["images"]["openbao_didcomm"],
         "status": "openbao-and-application-credentials-ready",
         "credentialLifetimeHours": 8, "migrationBootstrapLifetimeHours": 2,
+        "credentialPublication": publication,
         "credentialLifecycle": {
             "schema": "marty.kubernetes-credential-lifecycle/v1",
             "namespaceUid": namespace["uid"], "producerNonce": nonce,

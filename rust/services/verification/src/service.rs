@@ -239,22 +239,36 @@ impl VerificationService {
         let mut session = transition.session.ok_or_else(coordination)?;
         let token = transition.token.ok_or_else(coordination)?;
         let policy_id = session.presentation_policy_id.clone().unwrap_or_default();
-        let evaluation = self
-            .providers
-            .evaluation
-            .evaluate(&PresentationEvaluationRequest {
-                policy_id,
-                organization_id: session.organization_id.clone(),
-                principal_id: session.evaluation_principal_id.clone(),
-                presentation: vp_token.into(),
-                nonce: session.nonce.clone(),
-                audience: String::new(),
-                oid4vp_transport: None,
-                context: [("session_id".into(), json!(session_id))]
-                    .into_iter()
-                    .collect(),
-            })
-            .await;
+        let evaluation = async {
+            // Standalone sessions bind the current policy at evaluation. Only
+            // Flow provides the request-start frozen policy/query contract.
+            let policy = self.policy_reference(&policy_id).await?;
+            if policy.id != policy_id
+                || policy.organization_id != session.organization_id
+                || !policy.status.eq_ignore_ascii_case("active")
+            {
+                return Err(VerificationError::Conflict(
+                    "Presentation policy reference is invalid".into(),
+                ));
+            }
+            self.providers
+                .evaluation
+                .evaluate(&PresentationEvaluationRequest {
+                    policy_id,
+                    expected_policy_revision: policy.policy_revision,
+                    organization_id: session.organization_id.clone(),
+                    principal_id: session.evaluation_principal_id.clone(),
+                    presentation: vp_token.into(),
+                    nonce: session.nonce.clone(),
+                    audience: String::new(),
+                    oid4vp_transport: None,
+                    context: [("session_id".into(), json!(session_id))]
+                        .into_iter()
+                        .collect(),
+                })
+                .await
+        }
+        .await;
         match evaluation {
             Ok(result) => apply_evaluation(&mut session, &result),
             Err(_) => {
@@ -343,6 +357,7 @@ impl VerificationService {
             .evaluation
             .evaluate(&PresentationEvaluationRequest {
                 policy_id: body.presentation_policy_id,
+                expected_policy_revision: policy.policy_revision,
                 organization_id: policy.organization_id,
                 principal_id: principal.user_id.clone(),
                 presentation: body.vp_token,

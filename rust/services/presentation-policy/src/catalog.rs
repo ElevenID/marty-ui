@@ -232,6 +232,7 @@ fn policy(
 ) -> PresentationPolicy {
     let created_at = timestamp(created_at);
     PresentationPolicy {
+        prerequisite_evidence_profile: None,
         id: id.parse().expect("catalog policy UUID"),
         organization_id,
         name: name.into(),

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router';
 import {
@@ -13,6 +13,7 @@ import {
   DialogTitle,
   Divider,
   FormControl,
+  FormControlLabel,
   IconButton,
   InputLabel,
   ListItemIcon,
@@ -20,7 +21,6 @@ import {
   Menu,
   MenuItem,
   Paper,
-  Select,
   Table,
   TableBody,
   TableCell,
@@ -136,8 +136,17 @@ function TeamPage() {
   const effectiveOrgId = activeOrgId;
   const currentOrgId = useRef(effectiveOrgId);
   currentOrgId.current = effectiveOrgId;
+  const currentRoleDialog = useRef(null);
+  const active = useRef(false);
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
   const isMartyOrg = effectiveOrgId === MARTY_ORG_ID;
   const canInvite = !permissionsLoading && hasPermission('team', 'invite');
+  const canManage = !permissionsLoading && !isMartyOrg && hasPermission('team', 'manage');
+  currentRoleDialog.current = roleDialog.isOpen && canManage
+    && roleDialog.data?.organizationId === effectiveOrgId ? roleDialog.data : null;
 
   const { data: teamData, loading: dataLoading, error, reload: loadData } = useAsyncData(async () => {
     if (!effectiveOrgId) throw new Error('Organization context unavailable');
@@ -158,6 +167,7 @@ function TeamPage() {
   const teamReady = Boolean(effectiveOrgId && currentTeam && !loading && !error);
   const inviteRequested = searchParams.get('invite') === '1';
   const { open: openInvite, close: closeInvite } = inviteDialog;
+  const { close: closeRole } = roleDialog;
 
   useEffect(() => {
     if (!inviteRequested || !teamReady || permissionsLoading) return;
@@ -171,13 +181,9 @@ function TeamPage() {
     if (inviteDialog.isOpen && (!canInvite || inviteDialog.data !== effectiveOrgId)) closeInvite();
   }, [inviteDialog.isOpen, inviteDialog.data, effectiveOrgId, canInvite, closeInvite]);
 
-  const requireOrgId = () => {
-    if (!effectiveOrgId) {
-      throw new Error('Organization context unavailable');
-    }
-
-    return effectiveOrgId;
-  };
+  useEffect(() => {
+    if (roleDialog.isOpen && (!canManage || roleDialog.data?.organizationId !== effectiveOrgId)) closeRole();
+  }, [roleDialog.isOpen, roleDialog.data, effectiveOrgId, canManage, closeRole]);
 
   const defaultInviteRoleIds = useMemo(() => {
     const explicitDefaults = availableRoles
@@ -211,43 +217,62 @@ function TeamPage() {
   };
 
   const handleChangeRole = async (memberId, roleIds) => {
+    const dialogContext = roleDialog.data;
+    if (!roleDialog.isOpen || !canManage || !teamReady || dialogContext?.organizationId !== effectiveOrgId
+      || dialogContext?.member?.id !== memberId) return;
+    const updatedOrgId = effectiveOrgId;
+    const applies = () => active.current && currentOrgId.current === updatedOrgId
+      && currentRoleDialog.current === dialogContext;
     try {
-      await setMemberRoles(requireOrgId(), memberId, roleIds);
+      await setMemberRoles(updatedOrgId, memberId, roleIds);
+      if (!applies()) return;
       showNotification?.(t('org.team.dialog.changeRole.success'), 'success');
       roleDialog.close();
       await refreshPermissions();
+      if (!active.current || currentOrgId.current !== updatedOrgId) return;
       await loadData();
     } catch (err) {
+      if (!applies()) return;
       console.error('Failed to update roles:', err);
-      showNotification?.(t('org.team.dialog.changeRole.error'), 'error');
+      throw err;
     }
   };
 
   const handleRemoveMember = async (memberId, memberEmail) => {
+    if (!canManage || !teamReady) return;
+    const removedOrgId = effectiveOrgId;
+    const applies = () => active.current && currentOrgId.current === removedOrgId;
     if (!confirm(t('org.team.members.actions.confirmRemove', { email: memberEmail }))) {
       return;
     }
 
     try {
-      await teamApi.removeMember(requireOrgId(), memberId);
+      await teamApi.removeMember(removedOrgId, memberId);
+      if (!applies()) return;
       showNotification?.(t('org.team.dialog.removeSuccess'), 'success');
       await loadData();
     } catch (err) {
+      if (!applies()) return;
       console.error('Failed to remove member:', err);
       showNotification?.(t('org.team.dialog.removeError'), 'error');
     }
   };
 
-  const handleRevokeInvite = async (memberId, email) => {
+  const handleRevokeInvite = async (memberId) => {
+    if (!canManage || !teamReady) return;
+    const revokedOrgId = effectiveOrgId;
+    const applies = () => active.current && currentOrgId.current === revokedOrgId;
     if (!confirm(t('org.team.invites.actions.confirmRevoke'))) {
       return;
     }
 
     try {
-      await teamApi.removeMember(requireOrgId(), memberId);
+      await teamApi.removeMember(revokedOrgId, memberId);
+      if (!applies()) return;
       showNotification?.(t('org.team.dialog.revokeSuccess'), 'success');
       await loadData();
     } catch (err) {
+      if (!applies()) return;
       console.error('Failed to revoke invite:', err);
       showNotification?.(t('org.team.dialog.revokeError'), 'error');
     }
@@ -323,9 +348,9 @@ function TeamPage() {
                             : '-'}
                         </TableCell>
                         <TableCell align="right">
-                          {!member.is_owner && hasPermission('team', 'manage') && !isMartyOrg && (
+                          {!member.is_owner && canManage && teamReady && (
                             <MemberActionsMenu
-                              onChangeRole={() => roleDialog.open(member)}
+                              onChangeRole={() => roleDialog.open({ member, organizationId: effectiveOrgId })}
                               onRemove={() => handleRemoveMember(member.id, member.email || getDisplayName(member))}
                             />
                           )}
@@ -374,7 +399,7 @@ function TeamPage() {
                           {hasPermission('team', 'manage') && !isMartyOrg && (
                             <IconButton
                               size="small"
-                              onClick={() => handleRevokeInvite(invite.id, invite.email || getDisplayName(invite))}
+                              onClick={() => handleRevokeInvite(invite.id)}
                               title={t('org.team.invites.actions.revoke')}
                             >
                               <CancelIcon fontSize="small" />
@@ -401,8 +426,9 @@ function TeamPage() {
       />
 
       <ChangeRoleDialog
-        open={roleDialog.isOpen}
-        member={roleDialog.data}
+        key={`${effectiveOrgId}:${roleDialog.data?.member?.id || ''}:${roleDialog.isOpen}`}
+        open={roleDialog.isOpen && roleDialog.data?.organizationId === effectiveOrgId && canManage && teamReady}
+        member={roleDialog.data?.member}
         availableRoles={availableRoles}
         onClose={roleDialog.close}
         onChangeRole={handleChangeRole}
@@ -419,7 +445,7 @@ function MemberActionsMenu({ onChangeRole, onRemove }) {
 
   return (
     <>
-      <IconButton size="small" onClick={(event) => setAnchorEl(event.currentTarget)}>
+      <IconButton size="small" aria-label={t('org.team.members.tableHeaders.actions')} onClick={(event) => setAnchorEl(event.currentTarget)}>
         <MoreVertIcon />
       </IconButton>
       <Menu anchorEl={anchorEl} open={open} onClose={() => setAnchorEl(null)}>
@@ -449,6 +475,51 @@ function MemberActionsMenu({ onChangeRole, onRemove }) {
         </MenuItem>
       </Menu>
     </>
+  );
+}
+
+function RoleSelection({ availableRoles, selectedRoleIds, onToggle, disabled = false, showSystem = false }) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      {availableRoles.map((role) => (
+        <Paper
+          key={role.id}
+          variant="outlined"
+          sx={{
+            p: 1.5,
+            border: selectedRoleIds.includes(role.id) ? 2 : 1,
+            borderColor: selectedRoleIds.includes(role.id) ? 'primary.main' : 'divider',
+            '&:hover': { bgcolor: disabled ? undefined : 'action.hover' },
+          }}
+        >
+          <FormControlLabel
+            disabled={disabled}
+            sx={{ m: 0, width: '100%', alignItems: 'flex-start' }}
+            control={(
+              <Checkbox
+                checked={selectedRoleIds.includes(role.id)}
+                onChange={() => onToggle(role.id)}
+                size="small"
+                slotProps={{ input: { 'aria-label': role.display_name || role.name } }}
+              />
+            )}
+            label={(
+              <Box component="span" sx={{ pt: 0.5, display: 'block' }}>
+                <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Chip component="span" label={role.display_name || role.name} size="small" color={getRoleColor(role.name)} />
+                  {showSystem && role.is_system && <Chip component="span" label="System" size="small" variant="outlined" />}
+                </Box>
+                {role.description && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                    {role.description}
+                  </Typography>
+                )}
+              </Box>
+            )}
+          />
+        </Paper>
+      ))}
+    </Box>
   );
 }
 
@@ -499,35 +570,8 @@ function InviteMemberDialog({ open, availableRoles, defaultRoleIds, onClose, onI
         />
         <FormControl fullWidth margin="normal">
           <InputLabel shrink>{t('org.team.dialog.invite.roleLabel')}</InputLabel>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 2 }}>
-            {availableRoles.map((role) => (
-              <Paper
-                key={role.id}
-                variant="outlined"
-                sx={{
-                  p: 1.5,
-                  cursor: 'pointer',
-                  border: selectedRoleIds.includes(role.id) ? 2 : 1,
-                  borderColor: selectedRoleIds.includes(role.id) ? 'primary.main' : 'divider',
-                  '&:hover': { bgcolor: 'action.hover' },
-                }}
-                onClick={() => handleToggleRole(role.id)}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Checkbox checked={selectedRoleIds.includes(role.id)} size="small" tabIndex={-1} />
-                  <Chip
-                    label={role.display_name || role.name}
-                    size="small"
-                    color={getRoleColor(role.name)}
-                  />
-                </Box>
-                {role.description && (
-                  <Typography variant="caption" color="text.secondary" sx={{ ml: 5 }}>
-                    {role.description}
-                  </Typography>
-                )}
-              </Paper>
-            ))}
+          <Box sx={{ mt: 2 }}>
+            <RoleSelection availableRoles={availableRoles} selectedRoleIds={selectedRoleIds} onToggle={handleToggleRole} />
           </Box>
         </FormControl>
       </DialogContent>
@@ -548,6 +592,8 @@ function InviteMemberDialog({ open, availableRoles, defaultRoleIds, onClose, onI
 
 function ChangeRoleDialog({ open, member, availableRoles = [], onClose, onChangeRole, t }) {
   const [selectedRoleIds, setSelectedRoleIds] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     if (!member) {
@@ -566,16 +612,24 @@ function ChangeRoleDialog({ open, member, availableRoles = [], onClose, onChange
     ));
   };
 
-  const handleSubmit = () => {
-    if (!member || selectedRoleIds.length === 0) {
+  const handleSubmit = async () => {
+    if (!member || selectedRoleIds.length === 0 || saving) {
       return;
     }
 
-    onChangeRole(member.id, selectedRoleIds);
+    setSaving(true);
+    setError('');
+    try {
+      await onChangeRole(member.id, selectedRoleIds);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : t('org.team.dialog.changeRole.error'));
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+    <Dialog open={open} onClose={saving ? undefined : onClose} maxWidth="sm" fullWidth>
       <DialogTitle>{t('org.team.dialog.changeRole.title')}</DialogTitle>
       <DialogContent>
         <Alert severity="warning" sx={{ mb: 2 }}>
@@ -584,46 +638,15 @@ function ChangeRoleDialog({ open, member, availableRoles = [], onClose, onChange
         <Typography variant="body2" sx={{ mb: 2 }}>
           {t('org.team.dialog.changeRole.changingFor', { email: member?.email })}
         </Typography>
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {availableRoles.map((role) => (
-            <Paper
-              key={role.id}
-              variant="outlined"
-              sx={{
-                p: 1.5,
-                cursor: 'pointer',
-                border: selectedRoleIds.includes(role.id) ? 2 : 1,
-                borderColor: selectedRoleIds.includes(role.id) ? 'primary.main' : 'divider',
-                '&:hover': { bgcolor: 'action.hover' },
-              }}
-              onClick={() => handleToggleRole(role.id)}
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Checkbox checked={selectedRoleIds.includes(role.id)} size="small" tabIndex={-1} />
-                <Chip
-                  label={role.display_name || role.name}
-                  size="small"
-                  color={getRoleColor(role.name)}
-                />
-                {role.is_system && (
-                  <Chip label="System" size="small" variant="outlined" />
-                )}
-              </Box>
-              {role.description && (
-                <Typography variant="caption" color="text.secondary" sx={{ ml: 5 }}>
-                  {role.description}
-                </Typography>
-              )}
-            </Paper>
-          ))}
-        </Box>
+        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+        <RoleSelection availableRoles={availableRoles} selectedRoleIds={selectedRoleIds} onToggle={handleToggleRole} disabled={saving} showSystem />
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>{t('actions.cancel', { ns: 'common' })}</Button>
+        <Button onClick={onClose} disabled={saving}>{t('actions.cancel', { ns: 'common' })}</Button>
         <Button
           onClick={handleSubmit}
           variant="contained"
-          disabled={selectedRoleIds.length === 0}
+          disabled={saving || selectedRoleIds.length === 0}
         >
           {t('org.team.dialog.changeRole.update')}
         </Button>

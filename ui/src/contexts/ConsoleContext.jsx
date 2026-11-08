@@ -11,7 +11,7 @@
  * - membershipsLoaded: boolean - whether memberships have been fetched
  */
 
-import { createContext, useState, useEffect, useCallback, useContext, useMemo } from 'react';
+import { createContext, startTransition, useState, useEffect, useCallback, useContext, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { getPreferences, updatePreferences } from '../services/preferencesApi';
 import { getMyOrganizations } from '../services/organizationsApi';
@@ -311,17 +311,19 @@ export function ConsoleProvider({ children }) {
       memberships,
     });
 
-    // Optimistically update UI
-    setModeState(nextState.mode);
-    setActiveOrgIdState(nextState.activeOrgId);
-
     if (nextState.activeOrgId) {
       window.localStorage.setItem('activeOrgId', nextState.activeOrgId);
     } else {
       window.localStorage.removeItem('activeOrgId');
     }
 
-    transitionTo(nextState.destination);
+    // Match the router's transition so the old org route never sees a cleared
+    // selection before the applicant destination is ready.
+    startTransition(() => {
+      setModeState(nextState.mode);
+      setActiveOrgIdState(nextState.activeOrgId);
+      transitionTo(nextState.destination);
+    });
 
     try {
       await updatePreferences(nextState.persistence);
