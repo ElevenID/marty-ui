@@ -621,7 +621,7 @@ async fn template_verification_type(
         "credential_type": template.credential_type,
         "vct": if template.vct.is_empty() { Value::Null } else { json!(template.vct) },
         "doctype": template.doctype,
-        "status": template.status.as_str(),
+        "status": template.status.as_str().to_ascii_uppercase(),
     })))
 }
 

@@ -1975,7 +1975,7 @@ mod tests {
                 URL_SAFE_NO_PAD.encode(signer.sign(input.as_bytes()).to_bytes())
             )
         };
-        let mut context = context(json!({"status":"active"}));
+        let mut context = context(json!({"status":"active", "allowed_algorithms":["EdDSA"]}));
         let mut selected = resolved_did_key(
             issuer,
             public_key,

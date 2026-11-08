@@ -1532,10 +1532,12 @@ mod error_code_projection_tests {
         let request: EvaluatePresentationRequest =
             serde_json::from_value(json!({"vp_token": {}})).unwrap();
         let native = json!({"decision": "allow", "credential_results": [{
+            "requirement_id":"requirement-1", "credential_id":"urn:uuid:signed-1",
             "credential_template_id": "template-1", "issuer_id": "issuer-1",
             "satisfied": true, "errors": []
         }]});
         let credential = json!({
+            "credential_id":"urn:uuid:signed-1",
             "credential_template_ids": ["template-1"], "issuer_id": "issuer-1",
             "signature_verified": true, "trust_profile_verified": true,
             "revocation_checked_at_epoch_seconds": null, "not_revoked": null
@@ -1553,7 +1555,7 @@ mod error_code_projection_tests {
             let projected = project_evaluation(
                 native.clone(),
                 &request,
-                &json!({"credentials": [evidence]}),
+                &json!({"policy":{"credential_requirements":[{"id":"requirement-1"}]}, "credentials": [evidence]}),
                 None,
                 None,
                 None,
@@ -1575,7 +1577,7 @@ mod error_code_projection_tests {
             let projected = project_evaluation(
                 native.clone(),
                 &request,
-                &json!({"credentials": credentials}),
+                &json!({"policy":{"credential_requirements":[{"id":"requirement-1"}]}, "credentials": credentials}),
                 None,
                 None,
                 None,
@@ -1616,10 +1618,12 @@ mod error_code_projection_tests {
         }))
         .unwrap();
         let native = json!({"decision":"allow", "credential_results":[{
+            "requirement_id":"requirement-1", "credential_id":"urn:uuid:signed-1",
             "credential_template_id":"template-1", "issuer_id":issuer.issuer_id,
             "satisfied":true, "errors":[]
         }]});
         let credential = json!({
+            "credential_id":"urn:uuid:signed-1",
             "credential_template_ids":["template-1"], "issuer_id":issuer.issuer_id,
             "signature_verified":true,
         });
@@ -1628,7 +1632,7 @@ mod error_code_projection_tests {
                 project_evaluation(
                     native.clone(),
                     &request,
-                    &json!({"credentials":credentials}),
+                    &json!({"policy":{"credential_requirements":[{"id":"requirement-1"}]}, "credentials":credentials}),
                     None,
                     None,
                     authenticated,
@@ -1681,6 +1685,7 @@ mod error_code_projection_tests {
             serde_json::from_value(json!({"vp_token": {}, "context": {"credential_id": "forged"}}))
                 .unwrap();
         let native = json!({"decision": "allow", "credential_results": [{
+            "requirement_id":"requirement-1", "credential_id":"urn:uuid:signed-1",
             "credential_template_id": "template-1", "issuer_id": "issuer-1",
             "satisfied": true, "errors": []
         }]});
@@ -1692,7 +1697,7 @@ mod error_code_projection_tests {
             project_evaluation(
                 native.clone(),
                 &request,
-                &json!({"credentials": credentials}),
+                &json!({"policy":{"credential_requirements":[{"id":"requirement-1"}]}, "credentials": credentials}),
                 None,
                 authenticated,
                 None,

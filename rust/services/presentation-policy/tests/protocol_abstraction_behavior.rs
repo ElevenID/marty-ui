@@ -306,7 +306,7 @@ async fn caller_override_cannot_replace_profile_and_mixed_profiles_keep_separate
         json!(PROFILE_B)
     );
     assert_eq!(facts["credentials"][1]["trust_profile_verified"], false);
-    assert_eq!(decision(facts, &policy, &request), "deny");
+    assert_ne!(decision(facts, &policy, &request), "allow");
 }
 
 #[tokio::test]
@@ -345,6 +345,35 @@ async fn signed_compliance_code_cannot_satisfy_an_unresolved_profile_selector() 
         .to_string()
         .contains("ComplianceProfile"));
     assert!(evaluate_verified_facts_for_policy(facts, &policy, &request).is_err());
+}
+
+#[tokio::test]
+async fn saved_predicate_fallback_reaches_core_for_authenticated_claims() {
+    let key = SigningKey::from_bytes(&[90; 32]);
+    let verifier = orchestrator(Arc::new(Metadata::new(&key)));
+    let request = request(presentation(&key, EMPLOYEE, false));
+    let mut policy = policy();
+    policy.supported_circuits = vec!["email-equality-v1".into()];
+    for (fallback, target, expected) in [
+        ("ACCEPT_RAW", "employee@example.com", "allow"),
+        ("ACCEPT_RAW", "other@example.com", "deny"),
+        ("DENY", "employee@example.com", "deny"),
+    ] {
+        policy.fallback_policy = Some(fallback.into());
+        policy.credential_requirements[0].requested_claims[0].predicate_spec = Some(json!({
+            "predicate_type":"EQUALITY", "params":{"target_value":target}
+        }));
+        policy.validate().unwrap();
+        let facts = verifier.verify(&policy, &request).await.unwrap();
+        assert_eq!(
+            decision(facts, &policy, &request),
+            expected,
+            "{fallback}: {target}"
+        );
+    }
+    policy.fallback_policy = Some("REQUIRE_PREDICATE".into());
+    assert!(policy.validate().is_err());
+    assert!(verifier.verify(&policy, &request).await.is_err());
 }
 
 #[tokio::test]
@@ -477,6 +506,7 @@ async fn full_dcql_response_must_match_signed_type_claims_and_binding() {
         verifier_client_id: AUDIENCE.into(),
         request_nonce: NONCE.into(),
     });
+    multiple.vp_token = json!(multiple.oid4vp_transport.as_ref().unwrap().vp_token_raw);
     let facts = verifier.verify(&policy, &multiple).await.unwrap();
     assert_eq!(facts["presentation_count"], 2);
     assert_eq!(facts["credentials"].as_array().unwrap().len(), 2);

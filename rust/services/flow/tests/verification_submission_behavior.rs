@@ -570,7 +570,7 @@ async fn language_neutral_allow_contract_scrubs_evidence_and_builds_atomic_outpu
     );
 
     let (providers, seen) = providers(Ok(allowed()));
-    let raw = json!({"member_query": ["header.payload.signature"]}).to_string();
+    let raw = json!({"member": ["header.payload.signature"]}).to_string();
     let PreparedVerificationSubmission::Final(finalization) = prepare_verification_submission(
         &providers,
         instance(true),

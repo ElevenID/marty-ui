@@ -661,6 +661,24 @@ async fn verification_type_projection_requires_service_auth_and_exact_tenant() {
             );
         }
     }
+    let activated = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/v1/credential-templates/{id}/activate"),
+            json!({}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(activated.status(), StatusCode::OK);
+    let mut req = request("GET", &path, json!({}), false);
+    req.headers_mut()
+        .insert("x-service-token", TOKEN.parse().unwrap());
+    assert_eq!(
+        json_body(app.clone().oneshot(req).await.unwrap()).await["status"],
+        "ACTIVE"
+    );
     let mut req = request(
         "GET",
         &format!(

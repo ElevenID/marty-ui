@@ -329,6 +329,21 @@ impl VerifiedFactsOrchestrator {
                 })
             })
             .transpose()?;
+        if let (Some(response), Some(transport)) = (&associated, request.oid4vp_transport.as_ref())
+        {
+            // Check the original input before expanding it into per-item
+            // requests, preserving the native producer's selection fence.
+            let selected = if response.presentation_count == 1 {
+                response.tokens[0].token.as_str()
+            } else {
+                transport.vp_token_raw.as_str()
+            };
+            if canonical_token(&request.vp_token)? != selected {
+                return Err(failed(
+                    "OID4VP selected presentation does not match the complete response",
+                ));
+            }
+        }
         if associated.is_none()
             && request.trusted_internal_context
             && request.context.get("oid4vp_verifier_context") == Some(&Value::Bool(true))
