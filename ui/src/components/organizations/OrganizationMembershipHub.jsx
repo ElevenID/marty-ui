@@ -74,7 +74,7 @@ function getRoleBadges(roles, hasOrgConsoleAccess) {
   }
 
   return (
-    <Stack direction="row" spacing={1} justifyContent="flex-end" flexWrap="wrap">
+    <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
       {roles.map((role) => {
         const roleName = typeof role === 'string' ? role : role?.name;
         const roleLabel = typeof role === 'string' ? role : role?.display_name || role?.name;
@@ -86,6 +86,7 @@ function getRoleBadges(roles, hasOrgConsoleAccess) {
             label={roleLabel || 'Role'}
             color={roleColors[roleName] || 'default'}
             size="small"
+            sx={{ maxWidth: '100%' }}
           />
         );
       })}
@@ -176,7 +177,7 @@ function OrganizationMembershipHub({
               const hasOrgConsoleAccess = membershipHasOrgConsoleAccess(organization);
 
               return (
-                <Grid item xs={12} sm={6} md={embedded ? 6 : 4} key={organization.id || organizationName}>
+                <Grid size={{ xs: 12, sm: 6, md: embedded ? 6 : 4 }} key={organization.id || organizationName}>
                   <Card
                     sx={{
                       height: '100%',
@@ -194,12 +195,12 @@ function OrganizationMembershipHub({
                     <CardContent sx={{ flexGrow: 1 }}>
                       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 2 }}>
                         <BusinessIcon color="action" sx={{ mt: 0.5 }} />
-                        <Box sx={{ flexGrow: 1 }}>
-                          <Typography variant="h6" gutterBottom>
+                        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                          <Typography variant="h6" gutterBottom sx={{ overflowWrap: 'anywhere' }}>
                             {organizationName}
                           </Typography>
                           {organization.description && (
-                            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                            <Typography variant="body2" color="text.secondary" sx={{ mb: 1, overflowWrap: 'anywhere' }}>
                               {organization.description}
                             </Typography>
                           )}
@@ -208,29 +209,42 @@ function OrganizationMembershipHub({
 
                       <Divider sx={{ my: 2 }} />
 
-                      <Stack spacing={1.5}>
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <Typography variant="caption" color="text.secondary">
-                            Role:
-                          </Typography>
+                      <Box
+                        component="dl"
+                        sx={{
+                          m: 0,
+                          display: 'grid',
+                          gridTemplateColumns: 'max-content minmax(0, 1fr)',
+                          columnGap: 1,
+                          rowGap: 1.5,
+                          alignItems: 'center',
+                        }}
+                      >
+                        <Typography component="dt" variant="caption" color="text.secondary">
+                          Role:
+                        </Typography>
+                        <Box component="dd" sx={{ m: 0 }}>
                           {getRoleBadges(roles, hasOrgConsoleAccess)}
                         </Box>
 
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <Typography variant="caption" color="text.secondary">
-                            Status:
-                          </Typography>
+                        <Typography component="dt" variant="caption" color="text.secondary">
+                          Status:
+                        </Typography>
+                        <Box component="dd" sx={{ m: 0 }}>
                           {getStatusBadge(status)}
                         </Box>
 
                         {joinedAt && (
-                          <Box>
-                            <Typography variant="caption" color="text.secondary">
-                              Joined: {new Date(joinedAt).toLocaleDateString()}
+                          <>
+                            <Typography component="dt" variant="caption" color="text.secondary">
+                              Joined:
                             </Typography>
-                          </Box>
+                            <Typography component="dd" variant="caption" color="text.secondary" sx={{ m: 0 }}>
+                              {new Date(joinedAt).toLocaleDateString()}
+                            </Typography>
+                          </>
                         )}
-                      </Stack>
+                      </Box>
 
                       {organization.org_type && (
                         <Box sx={{ mt: 2 }}>
