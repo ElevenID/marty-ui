@@ -59,6 +59,7 @@ distinguished from cases verified with controlled asynchronous test responses.
 | Integration dialogs | Old organization/account operations and clipboard results could update replacement dialogs; failed actions lacked recoverable feedback | Account/org isolation, dialog generations, pending submission guards, inline errors, Retry, and accurate no-secret creation completion. Browser opened and canceled the forms; controlled tests cover writes, failures, permission loss, and delayed responses |
 | Team and confirmations | Role pickers were not properly keyboard accessible; stale role/removal/revocation completions could affect a replacement organization; rejected confirmations could disappear | Native labeled role checkboxes, scoped completion guards, and retryable shared confirmation errors. Browser toggled an invitation role with Space and canceled without sending; deferred tests cover the mutation lifecycle |
 | Native account identity | Permission state keyed legacy identity aliases while the native user response provides `user_id` | Native identity now takes precedence; account changes withdraw old grants immediately and reject late permission responses. Regression-tested |
+| Sidebar accessibility | Desktop collapse and expand buttons appeared without an accessible name in the browser | Added explicit names and expansion state, confirmed by source inspection; existing navigation tests pass. This last change was not replayed on AWS after the browser connection ended |
 
 Development checker fixes remove four ESLint errors without weakening input
 validation. Independent exhaustive comparisons over all 65,536 UTF-16
@@ -126,12 +127,13 @@ availability while replacing the development pod.
 ## Validation and review
 
 - Final combined UI run: **437 tests passed across 32 files**.
+- The existing **6 sidebar navigation tests passed** after the final accessible-name correction.
 - Production TypeScript build check passed.
 - Full UI ESLint passed with **zero errors and 148 existing warnings**.
 - **33 Helm tests and 22 Node tests passed**: 9 development-origin/routing contracts and 13 checker-cleanup regressions.
 - Independent default rendering compared 56 resources; only the intended UI public feature-flag environment entry differed.
 - Both independent reviewers cleared the complete batch after their findings were corrected.
-- All 34 changed production/deployment files in the follow-up matched the local review copy on the development node by digest.
+- The 34 production/deployment files deployed during the follow-up matched the local review copy on the development node by digest.
 - Authenticated hot reload, corrected navigation, environment persistence, settings Cancel, dialogs, desktop layout, and phone layout were checked in the browser.
 
 The combined test run includes the composed dashboard, parent verification page,
