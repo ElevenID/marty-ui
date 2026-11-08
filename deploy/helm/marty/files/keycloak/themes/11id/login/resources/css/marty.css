@@ -294,24 +294,30 @@ label,
 }
 
 .kc-password-toggle-wrap {
-  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
 }
 
 #kc-form-wrapper .kc-password-toggle-input {
-  padding-right: 44px;
+  flex: 1;
+  min-width: 0;
+  width: 0;
 }
 
 .kc-password-toggle-btn {
-  position: absolute;
-  top: 50%;
-  right: 12px;
-  transform: translateY(-50%);
+  /* Leave the input's trailing edge available to password-manager controls. */
+  flex: 0 0 36px;
+  min-height: 36px;
   border: 0;
   background: transparent;
   color: rgba(0, 0, 0, 0.6);
   cursor: pointer;
-  padding: 4px;
-  line-height: 0;
+  padding: 8px;
+  margin: 0;
+  font-size: 16px;
+  line-height: 1;
 }
 
 .kc-password-toggle-btn:hover {
