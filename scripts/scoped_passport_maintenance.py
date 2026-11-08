@@ -8,12 +8,12 @@ consume a durable private intent, and authenticate every actual observation.
 from __future__ import annotations
 from copy import deepcopy
 import re
-from scoped_native_runtime import RUNTIME_ROLES, read_ref, require, selected_sources
+from scoped_native_runtime import RUNTIME_ROLES, D12_CURRENT_RUNTIME_ROLES, read_ref, require, runtime_roles, selected_sources
 
 
-def exact_roles(observed):
+def exact_roles(observed, profile=None):
     rows = observed["roles"]
-    require(len(rows) == 22 and {row["role"] for row in rows} == RUNTIME_ROLES, "EXACT_22_ROLE_SET_REQUIRED")
+    require(len(rows) == 22 and {row["role"] for row in rows} == runtime_roles(profile), "EXACT_22_ROLE_SET_REQUIRED")
     require(len({row["containerId"] for row in rows}) == 22 and all(re.fullmatch(r"[a-f0-9]{64}", row["containerId"]) for row in rows),
             "UNIQUE_BOUND_CONTAINER_IDS_REQUIRED")
     return {row["role"]: row for row in rows}
@@ -37,25 +37,26 @@ def _stop_contract(role, row, bound):
 
 
 PROJECTS = frozenset(("elevenid-beta", "elevenid-beta-ui"))
-ROLE_PROJECTS = {role: "elevenid-beta-ui" if role == "ui-prod" else "elevenid-beta" for role in RUNTIME_ROLES}
+ROLE_PROJECTS = {role: "elevenid-beta-ui" if role == "ui-prod" else "elevenid-beta"
+                 for role in RUNTIME_ROLES | D12_CURRENT_RUNTIME_ROLES}
 
 
-def _restore_order(models, rows, reviewed_cross_edges):
+def _restore_order(models, rows, reviewed_cross_edges, cohort):
     require(set(models) == PROJECTS, "EXACT_TWO_COMPOSE_PROJECTS_REQUIRED")
-    dependencies = {role: set() for role in RUNTIME_ROLES}
+    dependencies = {role: set() for role in cohort}
     for project, model in models.items():
         require(model.get("name") == project, "COMPOSE_PROJECT_NAME_CHANGED")
-        for role in set(model["services"]) & RUNTIME_ROLES:
+        for role in set(model["services"]) & cohort:
             require(rows[role].get("project") == ROLE_PROJECTS[role] == project, "COMPOSE_ROLE_PROJECT_MISASSOCIATED")
-    for role in RUNTIME_ROLES:
+    for role in cohort:
         project = rows[role].get("project")
         require(project == ROLE_PROJECTS[role] and role in models[project]["services"], "BASELINE_ROLE_PROJECT_MISSING")
         dep = models[project]["services"][role].get("depends_on", {})
         require(isinstance(dep, (dict, list)), "UNKNOWN_COMPOSE_DEPENDENCY_SHAPE")
         for name in dep:
             if name not in models[project]["services"]:
-                require(name in RUNTIME_ROLES and (role, name) in reviewed_cross_edges, "UNREVIEWED_CROSS_PROJECT_DEPENDENCY")
-            if name in RUNTIME_ROLES:
+                require(name in cohort and (role, name) in reviewed_cross_edges, "UNREVIEWED_CROSS_PROJECT_DEPENDENCY")
+            if name in cohort:
                 if ROLE_PROJECTS[name] != project:
                     require((role, name) in reviewed_cross_edges, "UNREVIEWED_CROSS_PROJECT_DEPENDENCY")
                 dependencies[role].add(name)
@@ -63,18 +64,18 @@ def _restore_order(models, rows, reviewed_cross_edges):
         dependencies[role].add(dependency)
     order = []
     while len(order) != 22:
-        ready = sorted(role for role in RUNTIME_ROLES - set(order) if dependencies[role].issubset(order))
+        ready = sorted(role for role in cohort - set(order) if dependencies[role].issubset(order))
         require(ready, "MAINTENANCE_DEPENDENCY_CYCLE_REQUIRES_REVIEW")
         order.extend(ready)
     return order
 
 
-def _reviewed_cross_edges(plan):
+def _reviewed_cross_edges(plan, cohort):
     import json
     edges = set()
     for edge in plan.get("reviewedCrossProjectDependencies", []):
         role, dependency = edge["fromRole"], edge["toRole"]
-        require(role in RUNTIME_ROLES and dependency in RUNTIME_ROLES and ROLE_PROJECTS[role] != ROLE_PROJECTS[dependency],
+        require(role in cohort and dependency in cohort and ROLE_PROJECTS[role] != ROLE_PROJECTS[dependency],
                 "CROSS_PROJECT_EDGE_SCOPE_CHANGED")
         expected = {"schema": "marty.reviewed-cross-project-dependency/v1", "fromRole": role, "toRole": dependency,
                     "fromProject": ROLE_PROJECTS[role], "toProject": ROLE_PROJECTS[dependency]}
@@ -87,9 +88,11 @@ def _reviewed_cross_edges(plan):
 def preview(plan, before, compose_models):
     selected_sources(plan, plan.get("rolloutProfile"))
     from scoped_beta_binary_overlay import overlay_roles
-    selected = overlay_roles(plan.get("rolloutProfile"))
-    rows = exact_roles(before)
-    require(set(plan["stopContracts"]) == RUNTIME_ROLES, "ALL_22_STOP_CONTRACTS_REQUIRED")
+    profile = plan.get("rolloutProfile")
+    selected = overlay_roles(profile)
+    cohort = runtime_roles(profile)
+    rows = exact_roles(before, profile)
+    require(set(plan["stopContracts"]) == cohort, "ALL_22_STOP_CONTRACTS_REQUIRED")
     for row in rows.values():
         require(row.get("running") is True and row.get("paused") is False and type(row.get("hostPid")) is int
                 and row["hostPid"] > 0, "RUNNING_UNPAUSED_BASELINE_REQUIRED")
@@ -98,7 +101,7 @@ def preview(plan, before, compose_models):
     for project, bound in plan["composeModels"].items():
         frozen = json.loads(read_ref(bound).read_bytes())
         require(frozen == compose_models[project], "FROZEN_COMPOSE_MODEL_CHANGED:" + project)
-    restore = _restore_order(compose_models, rows, _reviewed_cross_edges(plan))
+    restore = _restore_order(compose_models, rows, _reviewed_cross_edges(plan, cohort), cohort)
     # Fence public ingress first, then reverse dependency order. All22 must be
     # terminal before any privileged SQL, not merely the selected replacement roles.
     order = ["gateway", *[role for role in reversed(restore) if role != "gateway"]]
@@ -111,7 +114,7 @@ def preview(plan, before, compose_models):
             "noOom": True, "requirePidZero": True})
     return {"schema": "marty.passport-maintenance-preview/v1", "state": "PREVIEW_ONLY_NOT_QUIESCED",
         "allStopRoles": order, "composeProjects": sorted(PROJECTS), "stopSteps": stops, "restoreOrder": restore,
-        "additionalUnselectedRestartRoles": sorted(RUNTIME_ROLES - set(selected)),
+        "additionalUnselectedRestartRoles": sorted(cohort - set(selected)),
         "existingLocksRequired": ["beta_operation_lock", "canonical_recording_lock_without_nested_acquire"],
         "durableOneShotIntentRequiredBeforeFirstStop": True,
         "phaseGates": ["actual22_and_retained_D12_D05_readonly_baseline", "all22_owned_stops_terminal_pid0_noOom",
@@ -123,9 +126,10 @@ def preview(plan, before, compose_models):
         "releaseQualified": False, "recordingQualified": False}
 
 
-def validate_quiescent(before, stopped, outcomes):
-    original, current = exact_roles(before), exact_roles(stopped)
-    require(set(outcomes) == RUNTIME_ROLES, "ALL_STOP_OUTCOMES_REQUIRED")
+def validate_quiescent(before, stopped, outcomes, profile=None):
+    cohort = runtime_roles(profile)
+    original, current = exact_roles(before, profile), exact_roles(stopped, profile)
+    require(set(outcomes) == cohort, "ALL_STOP_OUTCOMES_REQUIRED")
     for role, prior in original.items():
         row, outcome = current[role], outcomes[role]
         require(row["containerId"] == prior["containerId"] and row["imageId"] == prior["imageId"]
@@ -141,16 +145,17 @@ def validate_quiescent(before, stopped, outcomes):
             "noApplyAuthority": True}
 
 
-def restore_commands(before, current, outcomes, restore_order):
+def restore_commands(before, current, outcomes, restore_order, profile=None):
     """Return owned start pass only after every prior command is terminal.
 
     A timeout, unresolved paused state or missing generation blocks this path;
     Root must first authorize a separate exact reconciliation, never blind start.
     """
-    original, now = exact_roles(before), exact_roles(current)
-    require(set(outcomes) == RUNTIME_ROLES and all(outcomes[r].get("terminal") is True for r in RUNTIME_ROLES),
+    cohort = runtime_roles(profile)
+    original, now = exact_roles(before, profile), exact_roles(current, profile)
+    require(set(outcomes) == cohort and all(outcomes[r].get("terminal") is True for r in cohort),
             "UNRESOLVED_STOP_REFUSES_AUTOMATIC_RESTORE")
-    require(len(restore_order) == 22 and set(restore_order) == RUNTIME_ROLES, "FROZEN_RESTORE_ORDER_REQUIRED")
+    require(len(restore_order) == 22 and set(restore_order) == cohort, "FROZEN_RESTORE_ORDER_REQUIRED")
     result = []
     for role in restore_order:
         prior = original[role]

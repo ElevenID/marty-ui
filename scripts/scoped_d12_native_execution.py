@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from scoped_native_runtime import daemon_source, durable_barrier, read_ref, require, selected_sources, sha, started_later
+from scoped_native_runtime import D12_CURRENT_RUNTIME_ROLES, daemon_source, durable_barrier, read_ref, require, selected_sources, sha, started_later
 from scoped_native_profiles import D12_PASSPORT_CURRENT
 from scoped_passport_successor import CURRENT_PROFILE, select_current_binaries
 from scoped_native_database import D12CurrentDatabasePhase
@@ -86,9 +86,9 @@ class D12CurrentExecution:
     def inspect_all22(self):
         # The functional Docker observer requires running PID 1. During a
         # maintenance stop/create window use the host's exact inspect reader.
-        rows = [self.g["inspect_role"](role) for role in sorted(maintenance.RUNTIME_ROLES)]
+        rows = [self.g["inspect_role"](role) for role in sorted(D12_CURRENT_RUNTIME_ROLES)]
         snapshot = {"roles": rows}
-        maintenance.exact_roles(snapshot)
+        maintenance.exact_roles(snapshot, CURRENT_PROFILE)
         return snapshot
 
     def preflight(self):
@@ -136,7 +136,7 @@ class D12CurrentExecution:
                   for name, bound in plan["composeModels"].items()}
         preview = maintenance.preview(plan, before, models)
         require(preview["noApplyAuthority"] is True and preview["allStopRoles"]
-                and set(preview["allStopRoles"]) == maintenance.RUNTIME_ROLES,
+                and set(preview["allStopRoles"]) == D12_CURRENT_RUNTIME_ROLES,
                 "D12_ALL22_MAINTENANCE_REQUIRED")
         base = models["elevenid-beta"]
         require(g["compose_model"](i["composeArguments"], None) == base,
@@ -174,7 +174,7 @@ class D12CurrentExecution:
             self.state["steps"].append("STOP_" + role)
             self.record("STOP_TERMINAL")
         stopped = self.inspect_all22()
-        maintenance.validate_quiescent(before, stopped, outcomes)
+        maintenance.validate_quiescent(before, stopped, outcomes, CURRENT_PROFILE)
         quiescence = g["save"]("d12-all22-quiescent.private.json", stopped)
         # This actual receipt cannot exist before the 22 stop outcomes. Keep
         # the frozen caller input immutable and pass a derived phase input to
@@ -200,8 +200,8 @@ class D12CurrentExecution:
         self.command(database, "CREATE_SELECTED", recreate)
         self.record("CREATE_INSPECTION_PENDING", pendingStep="INSPECT_CREATED")
         created = self.inspect_all22()
-        old_rows = maintenance.exact_roles(before)
-        new_rows = maintenance.exact_roles(created)
+        old_rows = maintenance.exact_roles(before, CURRENT_PROFILE)
+        new_rows = maintenance.exact_roles(created, CURRENT_PROFILE)
         for role in self.roles:
             old, new = old_rows[role], new_rows[role]
             require(new["containerId"] != old["containerId"] and new["state"] == "created"
@@ -218,8 +218,8 @@ class D12CurrentExecution:
                     and daemon_source(mounts[target]["source"])
                     == daemon_source(database.selection["binaries"][role]["path"]),
                     "D12_CREATED_EXECUTABLE_BIND_CHANGED:" + role)
-        for role in maintenance.RUNTIME_ROLES - set(self.roles):
-            require(new_rows[role] == maintenance.exact_roles(stopped)[role],
+        for role in D12_CURRENT_RUNTIME_ROLES - set(self.roles):
+            require(new_rows[role] == maintenance.exact_roles(stopped, CURRENT_PROFILE)[role],
                     "D12_UNSELECTED_CREATE_CHANGED:" + role)
         created_ref = g["save"]("d12-created.private.json", {"runId": i["runId"], "roles": created["roles"]})
         self.record("SELECTED_CREATED", pendingStep=None, created=created_ref)
@@ -245,7 +245,7 @@ class D12CurrentExecution:
             self.state["steps"].append("START_" + role)
             self.record("START_OBSERVED", pendingStep=None, pendingContainerId=None,
                         startAcks=dict(start_acks))
-        require(set(start_acks) == maintenance.RUNTIME_ROLES, "D12_ALL22_START_ACKS_REQUIRED")
+        require(set(start_acks) == D12_CURRENT_RUNTIME_ROLES, "D12_ALL22_START_ACKS_REQUIRED")
         acks_ref = g["save"]("d12-start-acks.private.json", {"runId": i["runId"], "acks": start_acks})
         self.record("ALL22_STARTS_OBSERVED", startAcksRef=acks_ref)
         require(g["wait_all22_healthy"](120) is True, "D12_ALL22_HEALTH_DEADLINE_REQUIRED")
@@ -254,7 +254,7 @@ class D12CurrentExecution:
                     "created": created_ref, "startAcks": acks_ref,
                     "runId": i["runId"], "engineId": database.engine_id})
         proof = overlay.validate_runtime_after(before, after, database.selection["binaries"],
-                   maintenance.RUNTIME_ROLES - set(self.roles), CURRENT_PROFILE)
+                   D12_CURRENT_RUNTIME_ROLES - set(self.roles), CURRENT_PROFILE)
         require(g["database_snapshot"]()["databaseIdentity"] == database.identity,
                 "D12_DATABASE_POSTFLIGHT_REQUIRED")
         result = {"schema": "marty.d12-current-native-functional/v1", "runId": i["runId"],
