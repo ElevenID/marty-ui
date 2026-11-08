@@ -929,28 +929,14 @@ fn build_callback(
         .as_ref()
         .and_then(Value::as_object)
         .ok_or(FlowVerificationSubmissionError::Serialization)?;
-    let credential_results = result
-        .get("credential_results")
-        .cloned()
-        .unwrap_or_else(|| json!([]));
-    let policy_revision = result
-        .get("policy_revision")
-        .ok_or(FlowVerificationSubmissionError::Serialization)?;
-    let mut payload = json!({
-        "flow_instance_id": instance.id,
-        "result": result.get("evaluation_result"),
-        "decision": result.get("decision"),
-        "decision_reason": result.get("decision_reason"),
-        "verified_claims": result.get("verified_claims"),
-        "presentation_policy_id": policy_id,
-        "policy_revision": policy_revision,
-        "completed_at": instance.completed_at.map(|value| value.to_rfc3339()),
-        "evidence_digest": payload_digest(&json!({"credential_results": credential_results}))
-            .map_err(|_| FlowVerificationSubmissionError::Serialization)?
-    });
-    let decision_digest =
-        payload_digest(&payload).map_err(|_| FlowVerificationSubmissionError::Serialization)?;
-    payload["decision_digest"] = json!(decision_digest);
+    let payload = marty_oid4vp_contract::build_verification_callback_payload(
+        &instance.id,
+        policy_id,
+        instance.completed_at.map(|value| value.to_rfc3339()),
+        result,
+        payload_digest,
+    )
+    .map_err(|_| FlowVerificationSubmissionError::Serialization)?;
     let created_at_ms = u64::try_from(now.timestamp_millis())
         .map_err(|_| FlowVerificationSubmissionError::InvalidClock)?;
     CallbackEvent::new_with_retention(

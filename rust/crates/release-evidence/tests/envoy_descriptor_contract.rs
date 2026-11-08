@@ -78,10 +78,11 @@ struct Http {
 fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_siblings() {
     // Reviewed policy transport, credential-template schema, additive auth_time,
     // PolicyEvaluationResponse authentication_diagnostic_json field 14, and
-    // optional per-offer lifetime at InitiateIssuanceRequest field 13.
+    // optional per-offer lifetime at InitiateIssuanceRequest field 13, and the
+    // additive saved-policy revision request/response fields.
     assert_eq!(
         format!("{:x}", Sha256::digest(DESCRIPTOR)),
-        "f3f6a0c03d724bff696cb39948cabfa5f181099315f2a314ca504b0c7bc73611"
+        "5a840b04889d82a6afbaa157c53eec8c31bcb0b1cf9ec2ae310588f50d5c543a"
     );
     let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
     let files: Vec<_> = set

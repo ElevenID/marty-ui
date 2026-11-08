@@ -43,7 +43,6 @@ uuid.workspace = true
 url.workspace = true
 
 [dev-dependencies]
-marty-flow = { path = "../flow" }
 serde_json.workspace = true
 tower.workspace = true
 

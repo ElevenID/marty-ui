@@ -1,23 +1,12 @@
-//! Actual Flow callback production and Auth callback authentication, with a
-//! synthetic policy port isolating this transport contract from wallet crypto.
-use std::{collections::BTreeMap, sync::Arc};
-
-use async_trait::async_trait;
-use chrono::{Duration, TimeZone, Utc};
+//! Flow's shared production callback builder and Auth's independent callback
+//! authentication, without introducing a dependency between service crates.
+use chrono::{TimeZone, Utc};
 use marty_auth::{
     verify_credential_callback, CredentialCallbackHeaders, CredentialVerifiedPayload,
 };
-use marty_flow::{
-    prepare_verification_submission, FlowInstanceRecord, FlowProviderError, FlowProviderRegistry,
-    PreparedVerificationSubmission, PresentationEvaluationRequest, PresentationEvaluationResult,
-    PresentationPolicyProvider, PresentationPolicyReference, VerificationSubmissionInput,
-    VerificationSubmissionOptions, CALLBACK_MAX_ATTEMPTS, CALLBACK_RETENTION_SECONDS,
-};
-use mmf_push::{payload_digest, sign_event, WebhookDestinationRegistry};
+use marty_oid4vp_contract::{build_verification_callback_payload, FrozenPolicyIdentity};
+use mmf_push::{canonical_event_bytes, payload_digest, sign_event};
 use serde_json::{json, Value};
-
-#[path = "../../flow/tests/support/presentation_snapshot.rs"]
-mod presentation_snapshot;
 
 const SECRET: &str = "test-flow-webhook-secret-at-least-32-bytes";
 
@@ -25,103 +14,31 @@ fn now() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap()
 }
 
-struct Policy;
-
-#[async_trait]
-impl PresentationPolicyProvider for Policy {
-    async fn get_policy(&self, _: &str) -> Result<PresentationPolicyReference, FlowProviderError> {
-        unreachable!("submission uses the frozen policy")
-    }
-
-    async fn evaluate(
-        &self,
-        request: &PresentationEvaluationRequest,
-    ) -> Result<PresentationEvaluationResult, FlowProviderError> {
-        assert_eq!(
-            request.expected_policy_revision,
-            presentation_snapshot::revision("policy-1")
-        );
-        Ok(PresentationEvaluationResult {
-            policy_revision: request.expected_policy_revision.clone(),
-            result: "passed".into(),
-            decision: "allow".into(),
-            decision_reason: Some("requirements satisfied".into()),
-            verified_claims: BTreeMap::from([("email".into(), json!("member@example.com"))]),
-            credential_results: vec![json!({"signature_valid": true})],
-            authentication_diagnostic: None,
-            error_codes: Vec::new(),
-            warnings: Vec::new(),
-        })
+fn policy_revision() -> FrozenPolicyIdentity {
+    FrozenPolicyIdentity {
+        id: "policy-1".into(),
+        version: 1,
+        content_digest: format!("sha256:{}", "a".repeat(64)),
     }
 }
 
-async fn flow_callback() -> Value {
-    let mut instance = FlowInstanceRecord {
-        id: "flow-1".into(),
-        flow_definition_id: "__verification__".into(),
-        organization_id: "org-1".into(),
-        status: serde_json::from_value(json!("awaiting_wallet")).unwrap(),
-        current_step_id: None,
-        context: json!({
-            "flow_type": "verification",
-            "nonce": "owned-callback-nonce-with-32-bytes-1234567890",
-            "presentation_policy_id": "policy-1",
-            "_marty_verification_principal_id": "member-1",
-            "oid4vp_verifier_context": true,
-            "oid4vp_client_id": "did:web:verifier.example",
-            "verification_audience": "did:web:verifier.example",
-            "callback_url": "https://callbacks.example/result"
-        }),
-        step_history: Vec::new(),
-        state_history: Vec::new(),
-        subject_id: None,
-        subject_type: "holder".into(),
-        external_reference: None,
-        application_flow_key_hash: None,
-        started_at: Some(now()),
-        completed_at: None,
-        expires_at: Some(now() + Duration::minutes(15)),
-        result: None,
-        error: None,
-        created_at: now(),
-        updated_at: now(),
-    };
-    presentation_snapshot::freeze_default(&mut instance);
-    presentation_snapshot::emit_query(
-        &mut instance,
-        "dcql_query",
-        json!({"credentials": [{"id": "member"}]}),
-    );
-    let PreparedVerificationSubmission::Final(prepared) = prepare_verification_submission(
-        &FlowProviderRegistry {
-            presentation_policy: Some(Arc::new(Policy)),
-            ..Default::default()
-        },
-        instance,
-        VerificationSubmissionInput {
-            vp_token: "header.payload.signature".into(),
-            presentation_submission: None,
-            state: None,
-            audience_override: None,
-        },
-        &VerificationSubmissionOptions {
-            callback_destinations: WebhookDestinationRegistry::parse(
-                "org-1|https://callbacks.example/result",
-            )
-            .unwrap(),
-            callback_secret: Some(SECRET.into()),
-            verifier_sender_id: "did:web:verifier.example".into(),
-            nonce_ttl_seconds: 900,
-            callback_retention_seconds: CALLBACK_RETENTION_SECONDS,
-            callback_max_attempts: CALLBACK_MAX_ATTEMPTS,
-        },
-        now(),
+fn flow_callback() -> Value {
+    let terminal_result = json!({
+        "evaluation_result": "passed",
+        "decision": "allow",
+        "decision_reason": "requirements satisfied",
+        "verified_claims": {"email": "member@example.com"},
+        "credential_results": [{"signature_valid": true}],
+        "policy_revision": policy_revision(),
+    });
+    build_verification_callback_payload(
+        "flow-1",
+        "policy-1",
+        Some(now().to_rfc3339()),
+        terminal_result.as_object().unwrap(),
+        payload_digest,
     )
-    .await
-    .unwrap() else {
-        panic!("Flow callback must be prepared")
-    };
-    prepared.callback.unwrap().payload
+    .unwrap()
 }
 
 fn sign(value: &Value) -> CredentialCallbackHeaders {
@@ -148,16 +65,13 @@ fn refresh_decision_digest(value: &mut Value) {
     value["decision_digest"] = json!(payload_digest(value).unwrap());
 }
 
-#[tokio::test]
-async fn serialized_flow_callback_is_accepted_and_revision_tampering_is_rejected() {
-    let produced = flow_callback().await;
+#[test]
+fn serialized_flow_callback_is_accepted_and_revision_tampering_is_rejected() {
+    let produced = flow_callback();
     let payload: CredentialVerifiedPayload =
         serde_json::from_slice(&serde_json::to_vec(&produced).unwrap()).unwrap();
     assert_eq!(serde_json::to_value(&payload).unwrap(), produced);
-    assert_eq!(
-        payload.policy_revision,
-        Some(presentation_snapshot::revision("policy-1"))
-    );
+    assert_eq!(payload.policy_revision, Some(policy_revision()));
     let headers = sign(&produced);
     verify_credential_callback(&payload, &headers, SECRET, now(), 300).unwrap();
     for mutation in 0..3 {
@@ -198,12 +112,34 @@ async fn serialized_flow_callback_is_accepted_and_revision_tampering_is_rejected
     }
 }
 
-#[tokio::test]
-async fn queued_legacy_callback_without_revision_preserves_its_canonical_signature() {
-    let mut legacy = flow_callback().await;
+#[test]
+fn queued_legacy_callback_without_revision_preserves_its_canonical_signature() {
+    let mut legacy = flow_callback();
     legacy.as_object_mut().unwrap().remove("policy_revision");
     refresh_decision_digest(&mut legacy);
     let headers = sign(&legacy);
+    // Frozen pre-revision wire bytes: retaining a queued callback must preserve
+    // its canonical event, evidence/decision digests and HMAC exactly.
+    let expected = concat!(
+        r#"{"audience":"marty-auth-service","event":"flow.verification_completed","event_id":"flow-1","payload":{"completed_at":"2026-08-20T12:00:00+00:00","decision":"allow","decision_digest":"#,
+        r#""a3d56771192221d2882130a019b9d237bb3823f762a89431fa29b30d94008450","decision_reason":"requirements satisfied","evidence_digest":"#,
+        r#""351f0ffdabeedb31aee1547edf5af54de8bd68d6042ecc2d4da7da4364a04a09","flow_instance_id":"flow-1","presentation_policy_id":"policy-1","result":"passed","verified_claims":{"email":"member@example.com"}},"timestamp":"2026-08-20T12:00:00+00:00"}"#,
+    );
+    assert_eq!(
+        canonical_event_bytes(
+            &headers.audience,
+            &headers.event,
+            &headers.event_id,
+            &headers.timestamp,
+            &legacy,
+        )
+        .unwrap(),
+        expected.as_bytes(),
+    );
+    assert_eq!(
+        headers.signature,
+        "sha256=fcf88650504ceed3473ba0239095d61b33bdb95d4aa20d952e594e965a0035a2",
+    );
     let payload: CredentialVerifiedPayload = serde_json::from_value(legacy.clone()).unwrap();
     assert!(payload.policy_revision.is_none());
     assert_eq!(serde_json::to_value(&payload).unwrap(), legacy);
