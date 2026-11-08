@@ -7,6 +7,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scoped_native_runtime import D12_CURRENT_RUNTIME_ROLES, RUNTIME_ROLES, ref, runtime_roles
 from scoped_native_profiles import D12_PASSPORT_CURRENT
 from scoped_d12_native_execution import D12CurrentExecution

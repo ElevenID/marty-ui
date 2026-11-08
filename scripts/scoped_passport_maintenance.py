@@ -217,22 +217,27 @@ def restore_commands(before, current, outcomes, restore_order, profile=None):
             "noRecreateResetPruneOrMigration": True, "noApplyAuthority": True}
 
 
-def with_observed_state(binding, inspections):
-    """Project only allowlisted Docker State metadata; never Env or arguments."""
+def observed_role_state(bound, actual):
+    """Project one exact owned inspection with the shared mount and State checks."""
     allowed = {"role", "binary", "source", "sha256", "kind", "imageId", "project", "containerId", "health",
                "startedAt", "hostPid", "executablePath", "processExecutableSha256", "binaryMounts", "effectiveUid", "configuredRuntimeUid", "effectiveGid", "configuredRuntimeGid"}
-    rows = [{key: deepcopy(value) for key, value in row.items() if key in allowed} for row in binding["roles"]]
+    row = {key: deepcopy(value) for key, value in bound.items() if key in allowed}
+    require(actual["Id"] == row["containerId"], "BASELINE_IDENTITY_CHANGED")
+    require(actual["Image"] == row["imageId"], "BASELINE_IMAGE_CHANGED")
+    for mount in row["binaryMounts"]:
+        matches = [item for item in actual["Mounts"] if item["Destination"] == mount["destination"]]
+        require(len(matches) == 1 and matches[0]["Type"] == mount["type"] and matches[0]["Source"] == mount["source"]
+                and matches[0]["RW"] == mount["writable"], "OBSERVED_EXECUTABLE_MOUNT_CHANGED")
+    state = actual["State"]
+    row.update(startedAt=state["StartedAt"], health=state.get("Health", {}).get("Status"), running=state["Running"], paused=state["Paused"], hostPid=state["Pid"], state=state["Status"],
+               containerExitCode=state["ExitCode"], oomKilled=state.get("OOMKilled", False))
+    return row
+
+
+def with_observed_state(binding, inspections):
+    """Project only allowlisted Docker State metadata; never Env or arguments."""
     by_id = {item["Id"]: item for item in inspections}
     require(len(by_id) == len(inspections) == 22, "EXACT_22_INSPECTIONS_REQUIRED")
-    for row in rows:
-        actual = by_id[row["containerId"]]
-        require(actual["Image"] == row["imageId"], "BASELINE_IMAGE_CHANGED")
-        for mount in row["binaryMounts"]:
-            matches = [item for item in actual["Mounts"] if item["Destination"] == mount["destination"]]
-            require(len(matches) == 1 and matches[0]["Type"] == mount["type"] and matches[0]["Source"] == mount["source"]
-                    and matches[0]["RW"] == mount["writable"], "OBSERVED_EXECUTABLE_MOUNT_CHANGED")
-        state = actual["State"]
-        row.update(startedAt=state["StartedAt"], health=state.get("Health", {}).get("Status"), running=state["Running"], paused=state["Paused"], hostPid=state["Pid"], state=state["Status"],
-                   containerExitCode=state["ExitCode"], oomKilled=state.get("OOMKilled", False))
+    rows = [observed_role_state(bound, by_id[bound["containerId"]]) for bound in binding["roles"]]
     return {"scope": "D12_STATE_PROJECTION_ONLY", "roles": rows, "sourceFactsBoundToPriorReceiptNotNewElfProbe": True,
             "releaseQualified": False, "recordingQualified": False}

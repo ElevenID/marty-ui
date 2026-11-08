@@ -15,7 +15,7 @@ mod issuance_process;
 
 use issuance_process::{
     bounded_http_client, isolated_smoke_command, reserve_port, smoke_command,
-    wait_for_health_with_client, ChildGuard,
+    terminal_startup_failure, wait_for_health_with_client, ChildGuard,
 };
 
 #[path = "support/canvas_worker_logging_contract.rs"]
@@ -230,27 +230,39 @@ async fn executable_serves_health_readiness_and_version() {
     let Some(database_url) = smoke_database_url() else {
         return;
     };
-    // Keep both reservations alive while selecting ports: releasing HTTP first
-    // lets the OS hand its port back for gRPC in this same process.
-    let (http_reservation, port) = reserve_port();
-    let (grpc_reservation, grpc_port) = reserve_port();
-    assert_ne!(port, grpc_port);
-    let mut command = smoke_command(port, grpc_port);
-    drop(http_reservation);
-    drop(grpc_reservation);
-    let _child = ChildGuard(
+    // Startup validates or migrates only the dedicated *_test database before
+    // binding. A released ephemeral port can be claimed during that interval.
+    // Keep all service assertions below; repeat only a terminal bind collision.
+    let mut retries = 0;
+    let (_child, port, grpc_port, health) = loop {
+        let (http_reservation, port) = reserve_port();
+        let (grpc_reservation, grpc_port) = reserve_port();
+        assert_ne!(port, grpc_port);
+        let mut stderr = tempfile::tempfile().expect("owned smoke stderr");
+        let mut command = smoke_command(port, grpc_port);
         command
             .env("DATABASE_URL", &database_url)
             .env(
                 "GRPC_SERVICE_TOKEN",
                 "executable-smoke-service-token-at-least-32-bytes",
             )
-            .spawn()
-            .expect("start issuance candidate"),
-    );
+            .stderr(stderr.try_clone().expect("clone owned smoke stderr"));
+        drop(http_reservation);
+        drop(grpc_reservation);
+        let mut child = ChildGuard(command.spawn().expect("start issuance candidate"));
+        let health = wait_for_health(port).await;
+        if let Some(failure) = terminal_startup_failure(&mut child.0, &mut stderr) {
+            if retries == 0 && failure.bind_collision {
+                retries += 1;
+                drop(child);
+                continue;
+            }
+            eprintln!("Issuance smoke startup failed: {}", failure.diagnostic);
+        }
+        break (child, port, grpc_port, health);
+    };
     let client = reqwest::Client::new();
     let base = format!("http://127.0.0.1:{port}");
-    let health = wait_for_health(port).await;
     let ready = client
         .get(format!("{base}/ready"))
         .send()

@@ -2,6 +2,7 @@
 //! Callers own any database and provider fixtures, and supply their explicit
 //! synthetic configuration to the isolated command before spawning it.
 use std::{
+    io::{Read, Seek},
     net::TcpListener,
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -26,6 +27,72 @@ pub(super) fn reserve_port() -> (TcpListener, u16) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("reserve port");
     let port = listener.local_addr().expect("reserved address").port();
     (listener, port)
+}
+
+/// A released ephemeral port may be claimed before the child reaches bind.
+/// Keep a bounded diagnostic from a terminal child; callers retry only the
+/// classified collision and report every other failure as before.
+pub(super) struct TerminalStartupFailure {
+    pub(super) bind_collision: bool,
+    pub(super) diagnostic: String,
+}
+
+pub(super) fn terminal_startup_failure(
+    child: &mut Child,
+    stderr: &mut std::fs::File,
+) -> Option<TerminalStartupFailure> {
+    let status = child.try_wait().ok().flatten()?;
+    if status.success() {
+        return None;
+    }
+    let diagnostic = bounded_startup_diagnostic(stderr).ok()?;
+    Some(TerminalStartupFailure {
+        bind_collision: retryable_listener_bind_failure(true, &diagnostic),
+        diagnostic,
+    })
+}
+
+fn bounded_startup_diagnostic(stderr: &mut (impl Read + Seek)) -> std::io::Result<String> {
+    let length = stderr.seek(std::io::SeekFrom::End(0))?;
+    stderr.seek(std::io::SeekFrom::Start(length.saturating_sub(16 * 1024)))?;
+    let mut bytes = Vec::new();
+    stderr.take(16 * 1024).read_to_end(&mut bytes)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn retryable_listener_bind_failure(terminal_failure: bool, diagnostic: &str) -> bool {
+    terminal_failure && diagnostic.contains("kind: AddrInUse")
+}
+
+#[cfg(test)]
+mod listener_bind_collision_tests {
+    use super::{bounded_startup_diagnostic, retryable_listener_bind_failure};
+    use std::io::Cursor;
+
+    #[test]
+    fn retries_only_terminal_addr_in_use() {
+        let bind = "Error: Os { code: 98, kind: AddrInUse, message: \"Address already in use\" }";
+        assert!(retryable_listener_bind_failure(true, bind));
+        assert!(!retryable_listener_bind_failure(false, bind));
+        assert!(!retryable_listener_bind_failure(
+            true,
+            "Error: database migration failed"
+        ));
+        assert!(!retryable_listener_bind_failure(
+            true,
+            "timed out waiting for readiness"
+        ));
+    }
+
+    #[test]
+    fn retains_bounded_tail_for_non_bind_failure() {
+        let mut bytes = vec![b'x'; 17 * 1024];
+        bytes.extend_from_slice(b"Error: database migration failed");
+        let diagnostic = bounded_startup_diagnostic(&mut Cursor::new(bytes)).unwrap();
+        assert!(diagnostic.len() <= 16 * 1024);
+        assert!(diagnostic.ends_with("Error: database migration failed"));
+        assert!(!retryable_listener_bind_failure(true, &diagnostic));
+    }
 }
 
 /// Cargo only exposes a package's binary path to that package's integration

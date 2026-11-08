@@ -26,7 +26,7 @@ MANDATORY = frozenset("scripts/" + name for name in (
     "scoped_native_runtime.py", "scoped_native_profiles.py",
     "scoped_passport_successor.py", "scoped_passport_maintenance.py",
     "scoped_beta_binary_overlay.py", "scoped_d12_native_execution.py",
-    "scoped_d12_native_host.py"))
+    "scoped_d12_native_host.py", "scoped_d12_native_effect_host.py"))
 
 PROJECTS = ("elevenid-beta", "elevenid-beta-ui")
 
@@ -132,12 +132,15 @@ class D12ReadOnlyHost:
         if args == ["info", "--format", "{{.ID}}"]:
             return self._docker(args)
         ids = {row["containerId"] for row in self.before.values()}
-        require(isinstance(args, list) and len(args) == 23 and args[0] == "inspect"
-                and len(set(args[1:])) == 22 and set(args[1:]) == ids,
+        full = isinstance(args, list) and len(args) == 23 and args[0] == "inspect" \
+            and len(set(args[1:])) == 22 and set(args[1:]) == ids
+        one = isinstance(args, list) and len(args) == 2 and args[0] == "inspect" and args[1] in ids
+        require(full or one,
                 "D12_READONLY_DOCKER_COMMAND_REQUIRED")
         return self._docker(args)
 
     def observe22(self):
+        self._recheck_source()
         engine = self.docker_read(["info", "--format", "{{.ID}}"])
         if isinstance(engine, bytes):
             engine = engine.decode("utf-8", "strict")
@@ -167,9 +170,23 @@ class D12ReadOnlyHost:
 
     def inspect_role(self, role):
         require(role in self.before, "D12_UNOWNED_ROLE_REFUSED")
-        return next(row for row in self.observe22()["roles"] if row["role"] == role)
+        self._recheck_source()
+        engine = self.docker_read(["info", "--format", "{{.ID}}"])
+        if isinstance(engine, bytes):
+            engine = engine.decode("utf-8", "strict")
+        require(isinstance(engine, str) and engine.strip() == self.engine_id, "D12_ENGINE_CHANGED")
+        bound = self.before[role]
+        actual = _json(self.docker_read(["inspect", bound["containerId"]]))
+        require(isinstance(actual, list) and len(actual) == 1, "D12_SINGLE_ROLE_INSPECT_REQUIRED")
+        row = actual[0]
+        labels = row.get("Config", {}).get("Labels", {})
+        require(row.get("Id") == bound["containerId"] and row.get("Image") == bound["imageId"]
+                and labels.get("com.docker.compose.project") == bound["project"]
+                and labels.get("com.docker.compose.service") == role,
+                "D12_ROLE_IDENTITY_CHANGED:" + role)
+        return maintenance.observed_role_state(bound, row)
 
-    def _recheck_render_inputs(self, project):
+    def _recheck_source(self):
         read_ref(self._source_closure_ref)
         read_ref(self._host_ref)
         for name, row in self._source_files.items():
@@ -177,6 +194,9 @@ class D12ReadOnlyHost:
             require(file.stat().st_size == row["bytes"]
                     and read_ref({"path": str(file), "sha256": row["sha256"]}) == file,
                     "D12_SOURCE_CHANGED_BEFORE_RENDER:" + name)
+
+    def _recheck_render_inputs(self, project):
+        self._recheck_source()
         for value, bound in self._compose_sources[project].items():
             require(read_ref(bound).resolve() == Path(value).resolve(),
                     "D12_COMPOSE_SOURCE_CHANGED_BEFORE_RENDER")
@@ -211,4 +231,5 @@ class D12ReadOnlyHost:
         # 28-role Env/capability/resource proof remains a separate prerequisite.
         # No effect command, authority, lock or DB binding is provided here.
         return {"dispatch_enabled": False, "observe22": self.observe22,
-                "inspect_role": self.inspect_role, "compose_model": self.compose_model}
+                "inspect_all22": self.observe22, "inspect_role": self.inspect_role,
+                "compose_model": self.compose_model}

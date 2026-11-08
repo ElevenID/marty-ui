@@ -81,13 +81,19 @@ class D12CurrentExecution:
                     pendingArgv=["docker", "--context", "desktop-linux", *args[1:]])
         result = database.command(args)
         self.record("EFFECT_ACKNOWLEDGED", pendingStep=None, pendingArgv=None, acknowledgedStep=step)
+        if "effect_acknowledged" in self.g:
+            self.g["effect_acknowledged"](step, self.state)
         return result
 
     def inspect_all22(self):
         # The functional Docker observer requires running PID 1. During a
-        # maintenance stop/create window use the host's exact inspect reader.
-        rows = [self.g["inspect_role"](role) for role in sorted(D12_CURRENT_RUNTIME_ROLES)]
-        snapshot = {"roles": rows}
+        # maintenance stop/create window use a fresh exact-22 batch when the
+        # reviewed host provides one. The historical individual reader stays
+        # available for existing callers and tests.
+        if "inspect_all22" in self.g:
+            snapshot = self.g["inspect_all22"]()
+        else:
+            snapshot = {"roles": [self.g["inspect_role"](role) for role in sorted(D12_CURRENT_RUNTIME_ROLES)]}
         maintenance.exact_roles(snapshot, CURRENT_PROFILE)
         return snapshot
 

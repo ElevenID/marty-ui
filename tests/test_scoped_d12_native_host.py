@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from scoped_native_runtime import D12_CURRENT_RUNTIME_ROLES, ref
-from scoped_d12_native_host import D12ReadOnlyHost, ORIGIN
+from scoped_d12_native_host import D12ReadOnlyHost, MANDATORY, ORIGIN
 
 ENGINE = "3dbbbe66-1c98-4e0c-b0a6-f927c05e7341"
 
@@ -35,9 +35,9 @@ def fixture(tmp_path):
         sources[project], planned[project] = {str(compose): ref(compose)}, ref(frozen)
     revision, tree = "1" * 40, "2" * 40
     files = {}
-    for file in (source_root / "scripts").glob("*.py"):
+    for name in sorted(MANDATORY):
+        file = source_root / name
         raw = file.read_bytes()
-        name = "scripts/" + file.name
         files[name] = {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw),
                        "gitBlob": hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()}
     closure = tmp_path / "closure.json"
@@ -75,7 +75,8 @@ def fixture(tmp_path):
     calls = []
     def docker(argv):
         calls.append(("docker", argv))
-        return ENGINE if argv[0] == "info" else json.dumps(inspections)
+        return ENGINE if argv[0] == "info" else json.dumps(
+            [row for row in inspections if row["Id"] in argv[1:]])
     def compose(argv):
         calls.append(("compose", argv))
         return json.dumps(models[argv[3]])
