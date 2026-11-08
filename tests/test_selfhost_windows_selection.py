@@ -6,7 +6,7 @@ transport and snapshot controls. No Docker or application data is used here.
 import json
 import os
 import sys
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,6 +17,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import selfhost_windows_selection as selection
 from test_selfhost_windows_inputs import private_fixture
 from test_selfhost_windows_renewal import PROJECT, model
+
+
+def test_staging_rejects_logical_project_unusable_by_signed_tls_helper(tmp_path):
+    current = tmp_path/'current'
+    current.mkdir()
+    output = tmp_path/('windows-renewal-'+'a'*32)
+    output.mkdir()
+    config = {'project': PROJECT, 'current_secrets': str(current)}
+    with ExitStack() as stack, pytest.raises(ValueError):
+        selection._stage(config, 'old', {}, {'sequence': 1}, output,
+                         'marty-production-v274', stack)
+    assert not list(output.iterdir())
+    assert not (tmp_path/f'.{PROJECT}.renewal-staging.json').exists()
 
 
 @contextmanager
