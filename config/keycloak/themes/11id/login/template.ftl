@@ -84,47 +84,45 @@
         }
 
         function attachPasswordToggle(input) {
-            if (!input || input.dataset.kcToggleReady === 'true') {
+            if (!input || input.dataset.kcToggleReady === 'true' || input.hidden || input.disabled) {
+                return;
+            }
+
+            // Keycloak keeps a hidden current-password helper on update forms.
+            // Do not create a visible control for it or for a hidden ancestor.
+            var visibility = window.getComputedStyle(input).visibility;
+            if (!input.getClientRects().length || visibility === 'hidden' || visibility === 'collapse') {
+                return;
+            }
+
+            // Inherited Keycloak forms can already provide their own toggle.
+            var nativeToggle = input.parentNode.querySelector('[data-password-toggle]');
+            if (nativeToggle && nativeToggle.getAttribute('aria-controls') === input.id) {
                 return;
             }
 
             var wrapper = document.createElement('div');
             wrapper.className = 'kc-password-toggle-wrap';
-            wrapper.style.position = 'relative';
-            wrapper.style.display = 'block';
-            wrapper.style.width = '100%';
 
             input.parentNode.insertBefore(wrapper, input);
             wrapper.appendChild(input);
 
             input.classList.add('kc-password-toggle-input');
-            input.style.paddingRight = '44px';
 
             var toggle = document.createElement('button');
             toggle.type = 'button';
             toggle.className = 'kc-password-toggle-btn';
             toggle.setAttribute('aria-label', 'Show password');
+            toggle.setAttribute('aria-controls', input.id);
+            toggle.setAttribute('aria-pressed', 'false');
             toggle.innerHTML = createEyeIcon();
-            toggle.style.position = 'absolute';
-            toggle.style.top = '50%';
-            toggle.style.right = '12px';
-            toggle.style.transform = 'translateY(-50%)';
-            toggle.style.border = '0';
-            toggle.style.background = 'transparent';
-            toggle.style.padding = '4px';
-            toggle.style.margin = '0';
-            toggle.style.cursor = 'pointer';
-            toggle.style.zIndex = '2';
-            toggle.style.fontSize = '16px';
-            toggle.style.lineHeight = '1';
-            toggle.style.color = 'rgba(0, 0, 0, 0.65)';
 
             toggle.addEventListener('click', function () {
                 var showing = input.type === 'text';
                 input.type = showing ? 'password' : 'text';
                 toggle.classList.toggle('is-visible', !showing);
                 toggle.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
-                toggle.style.color = showing ? 'rgba(0, 0, 0, 0.65)' : '#1976d2';
+                toggle.setAttribute('aria-pressed', String(!showing));
             });
 
             wrapper.appendChild(toggle);
