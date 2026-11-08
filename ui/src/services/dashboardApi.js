@@ -49,6 +49,18 @@ function requireDashboardFields(response, sourceName, requiredFields) {
   return response;
 }
 
+function requireOrganizationEnvironment(response) {
+  requireDashboardFields(response, 'Organization environment', ['environment']);
+  if (response.environment !== null
+    && !['development', 'staging', 'production'].includes(response.environment)) {
+    const error = new Error('Organization environment returned an invalid environment value.');
+    error.code = 'DASHBOARD_PAYLOAD_INVALID';
+    error.status = 502;
+    throw error;
+  }
+  return response;
+}
+
 /**
  * Get team snapshot data for dashboard
  * @param {string} organizationId - Organization ID
@@ -117,16 +129,14 @@ export async function getCriticalEvents(organizationId) {
 /**
  * Get organization environment setting
  * @param {string} organizationId - Organization ID
- * @returns {Promise<string>} Environment ('development', 'staging', 'production')
+ * @returns {Promise<string|null>} Environment ('development', 'staging', 'production'), or null when not configured
  */
 export async function getOrganizationEnvironment(organizationId) {
   const orgId = requireOrganizationId(organizationId, 'loading organization environment');
-  const response = requireDashboardFields(
-    await getDashboard(`${BASE_PATH}/${encodeURIComponent(orgId)}/environment`),
-    'Organization environment',
-    ['environment']
+  const response = requireOrganizationEnvironment(
+    await getDashboard(`${BASE_PATH}/${encodeURIComponent(orgId)}/environment`)
   );
-  return response.environment || null;
+  return response.environment;
 }
 
 /**
@@ -138,7 +148,9 @@ export async function getOrganizationEnvironment(organizationId) {
 export async function updateOrganizationEnvironment(organizationId, environment) {
   const orgId = requireOrganizationId(organizationId, 'updating organization environment');
   try {
-    return await patch(`${BASE_PATH}/${encodeURIComponent(orgId)}/environment`, { environment });
+    return requireOrganizationEnvironment(
+      await patch(`${BASE_PATH}/${encodeURIComponent(orgId)}/environment`, { environment })
+    );
   } catch (error) {
     logDashboardError('Failed to update organization environment:', error);
     throw error;

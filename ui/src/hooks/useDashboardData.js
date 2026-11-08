@@ -11,7 +11,7 @@
  * - Environment setting
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { listTrustProfiles, listCredentialTemplates, listPresentationPolicies, listRevocationProfiles } from '../services/presentationPolicyApi';
 import { listDeploymentProfiles } from '../services/deploymentProfilesApi';
 import { listFlows } from '../services/flowsApi';
@@ -30,7 +30,6 @@ import {
   getOrganizationEnvironment,
   getOrganizationLifecycle,
 } from '../services/dashboardApi';
-import { useAuth } from './useAuth';
 import { useConsole } from '../contexts/ConsoleContext';
 
 const SHOULD_LOG_DASHBOARD_HOOK_DIAGNOSTICS = import.meta.env.DEV && import.meta.env.MODE !== 'test';
@@ -72,9 +71,10 @@ function createEmptyDashboardData() {
  * @returns {Object} Dashboard data and loading state
  */
 export function useDashboardData() {
-  const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
   const organizationId = activeOrgId;
+  const scope = useMemo(() => ({ organizationId }), [organizationId]);
+  const [dataScope, setDataScope] = useState(null);
   const [data, setData] = useState(() => createEmptyDashboardData());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -85,8 +85,9 @@ export function useDashboardData() {
   };
 
   useEffect(() => {
+    setDataScope(scope);
+    setData(createEmptyDashboardData());
     if (!organizationId) {
-      setData(createEmptyDashboardData());
       setError('organization_id is required');
       setLoading(false);
       return;
@@ -229,7 +230,13 @@ export function useDashboardData() {
       controller.abort();
       clearInterval(healthInterval);
     };
-  }, [organizationId, refetchTrigger]);
+  }, [organizationId, refetchTrigger, scope]);
 
-  return { data, loading, error, refetch };
+  const scopeCurrent = dataScope === scope;
+  return {
+    data: scopeCurrent ? data : createEmptyDashboardData(),
+    loading: Boolean(organizationId) && (!scopeCurrent || loading),
+    error: scopeCurrent ? error : null,
+    refetch,
+  };
 }
