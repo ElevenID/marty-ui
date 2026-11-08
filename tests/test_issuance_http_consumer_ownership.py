@@ -70,7 +70,10 @@ def test_source_wiring_prefers_native_with_production_legacy_fallback():
         in flow_connections
     )
     assert applicant_http.count('.header("x-organization-id"') >= 2
-    assert '.header("x-organization-id", organization_id.to_string())' in policy_control
+    assert (
+        'headers.insert("x-organization-id".into(), organization_id.to_string());'
+        in policy_control
+    )
     assert '"organization_id".into(),' in flow_http
     assert 'format!("v1/passport/applications/{application_id}/{suffix}")' in flow_http
 

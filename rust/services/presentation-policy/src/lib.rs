@@ -42,9 +42,10 @@ pub use postgres::{
 };
 pub use runtime::{PresentationPolicyDependency, PresentationPolicyRuntime};
 pub use verification::{
-    CredentialStatusEvidence, CredentialStatusResolver, CredentialVerificationContext,
-    CredentialVerificationEvidence, CredentialVerificationKernel, IssuerTrustEvidence,
-    PresentationTrustResolver, ResolvedTrustProfile, VerifiedFactsOrchestrator,
+    AuthenticatedIssuerEvidence, CredentialStatusEvidence, CredentialStatusResolver,
+    CredentialVerificationContext, CredentialVerificationEvidence, CredentialVerificationKernel,
+    IssuerKeyMechanism, IssuerKeyProvenance, IssuerTrustEvidence, PresentationTrustResolver,
+    ResolvedIssuerKey, ResolvedTrustProfile, VerifiedFactsOrchestrator,
 };
 
 pub mod presentation_policy_proto {
