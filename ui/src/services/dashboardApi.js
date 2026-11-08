@@ -89,6 +89,14 @@ export async function getTeamSnapshot(organizationId) {
  */
 export async function getRuntimeStatus(organizationId) {
   const orgId = requireOrganizationId(organizationId, 'loading runtime status');
+  const requiredFlags = [
+    'can_issue',
+    'can_verify',
+    'issuer_keys_valid',
+    'issuer_active',
+    'deployment_active',
+    'policy_reachable',
+  ];
   const response = requireDashboardFields(
     await getWithRetryConfig(
       `${BASE_PATH}/${encodeURIComponent(orgId)}/runtime/status`,
@@ -96,22 +104,23 @@ export async function getRuntimeStatus(organizationId) {
       { maxRetries: 1 },
     ),
     'Runtime status',
-    [
-      'can_issue',
-      'can_verify',
-      'issuer_keys_valid',
-      'issuer_active',
-      'deployment_active',
-      'policy_reachable',
-    ]
+    requiredFlags
   );
+  const invalidFlags = requiredFlags.filter((field) => typeof response[field] !== 'boolean');
+  if (invalidFlags.length > 0) {
+    const error = new Error(`Runtime status returned invalid boolean fields: ${invalidFlags.join(', ')}.`);
+    error.code = 'DASHBOARD_PAYLOAD_INVALID';
+    error.status = 502;
+    error.messageId = null;
+    throw error;
+  }
   return {
-    canIssue: Boolean(response.can_issue),
-    canVerify: Boolean(response.can_verify),
-    issuerKeysValid: Boolean(response.issuer_keys_valid),
-    issuerActive: Boolean(response.issuer_active),
-    deploymentActive: Boolean(response.deployment_active),
-    policyReachable: Boolean(response.policy_reachable),
+    canIssue: response.can_issue,
+    canVerify: response.can_verify,
+    issuerKeysValid: response.issuer_keys_valid,
+    issuerActive: response.issuer_active,
+    deploymentActive: response.deployment_active,
+    policyReachable: response.policy_reachable,
     lastIssuance: response.last_issuance_timestamp || null,
     lastVerification: response.last_verification_timestamp || null,
   };

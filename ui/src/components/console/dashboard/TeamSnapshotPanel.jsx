@@ -33,6 +33,7 @@ import PeopleIcon from '@mui/icons-material/People';
 import EmailIcon from '@mui/icons-material/Email';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import DashboardErrorAlert from './DashboardErrorAlert';
+import { usePermissions } from '../../../hooks/usePermissions';
 
 /**
  * Role badge configuration factory
@@ -86,6 +87,8 @@ function RoleCard({ role, count }) {
  */
 export function TeamSnapshotPanel({ teamData, error = null, onRetry }) {
   const { t } = useTranslation('console');
+  const { can, isLoading: permissionsLoading } = usePermissions();
+  const canInvite = !permissionsLoading && can('team', 'invite');
   
   const {
     members = [],
@@ -118,15 +121,15 @@ export function TeamSnapshotPanel({ teamData, error = null, onRetry }) {
           </Box>
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button
+          {canInvite && <Button
             component={Link}
-            to="/console/org/team/invite"
+            to="/console/org/team?invite=1"
             variant="contained"
             startIcon={<PersonAddIcon />}
             size="small"
           >
             {t('dashboard.team.invite')}
-          </Button>
+          </Button>}
           <Button
             component={Link}
             to="/console/org/team"
@@ -150,13 +153,13 @@ export function TeamSnapshotPanel({ teamData, error = null, onRetry }) {
 
       {!error && (
       <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={4}>
+        <Grid size={{ xs: 12, sm: 4 }}>
           <RoleCard role="admin" count={adminCount} />
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid size={{ xs: 12, sm: 4 }}>
           <RoleCard role="developer" count={developerCount} />
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid size={{ xs: 12, sm: 4 }}>
           <RoleCard role="operator" count={operatorCount} />
         </Grid>
       </Grid>
@@ -207,14 +210,14 @@ export function TeamSnapshotPanel({ teamData, error = null, onRetry }) {
           <Typography variant="body2" color="text.secondary" paragraph>
             {t('dashboard.team.noMembersYet')}
           </Typography>
-          <Button
+          {canInvite && <Button
             component={Link}
-            to="/console/org/team/invite"
+            to="/console/org/team?invite=1"
             variant="contained"
             startIcon={<PersonAddIcon />}
           >
             {t('dashboard.team.inviteTeamMember')}
-          </Button>
+          </Button>}
         </Box>
       )}
     </Paper>

@@ -1,7 +1,44 @@
 {
 	"dashboard": {
 		"title": "Tableau de bord",
-		"welcome": "Bon retour"
+		"welcome": "Bon retour",
+		"criticalEvents": {
+			"noCriticalEvents": "Aucun événement critique n'a été signalé au cours des dernières 24 heures."
+		},
+		"runtimeReadiness": {
+			"issuance": {
+				"noDeployments": "Aucun déploiement actif",
+				"deploymentsReason": "Un profil de déploiement actif est requis avant de pouvoir émettre des identifiants.",
+				"configureDeployment": "Configurer le déploiement",
+				"notReady": "L'émission d'identifiants n'est pas prête",
+				"readinessReason": "Vérifiez le flux d'émission et ses ressources requises avant d'émettre des identifiants.",
+				"reviewFlows": "Vérifier les flux d'émission",
+				"operational": "L'émission d'identifiants est prête",
+				"issuerConfigurationRequired": "La configuration de l'émetteur doit être vérifiée",
+				"issuerConfigurationReason": "Vérifiez l'identité de l'émetteur et le DID d'émetteur référencé par le modèle d'identifiant actif avant d'émettre des identifiants."
+			},
+			"verification": {
+				"notReady": "La vérification des identifiants n'est pas prête",
+				"readinessReason": "Vérifiez la configuration de vérification avant de démarrer une session.",
+				"reviewSetup": "Vérifier la configuration de vérification",
+				"operational": "La vérification des identifiants est prête",
+				"policyUnreachable": "Aucune politique de présentation active",
+				"policyReason": "Au moins une politique de présentation active est requise pour vérifier des identifiants."
+			},
+			"issuerConfiguration": {
+				"title": "Configuration de l'émetteur",
+				"configured": "Configuré",
+				"notConfigured": "Non configuré",
+				"configuredDetail": "Un modèle d'identifiant actif fait référence à un DID d'émetteur.",
+				"notConfiguredDetail": "Aucun modèle d'identifiant actif ne fait référence à un DID d'émetteur.",
+				"reason": "Les modèles d'identifiants nécessitent un DID d'émetteur avant de pouvoir être utilisés pour l'émission.",
+				"manage": "Gérer les identités des émetteurs"
+			}
+		},
+		"systemStatus": {
+			"issuanceService": "Service d'émission",
+			"notReported": "Ce service n'a pas été signalé lors de la dernière vérification de disponibilité."
+		}
 	},
 	"flows": {
 		"title": "Flux",
@@ -36,7 +73,8 @@
 			"console": "Console",
 			"flows": "Flux",
 			"flowInstances": "Instances de flux"
-		}
+		},
+		"flowDefinition": "Définition de flux"
 	},
 	"deploy": {
 		"title": "Déploiement",
@@ -247,6 +285,14 @@
 		}
 	},
 	"org": {
+		"setup": {
+			"chooseTitle": "Choisir une organisation",
+			"chooseDescription": "Sélectionnez une organisation pour ouvrir sa console.",
+			"accessTitle": "Accès à la console de l’organisation",
+			"accessDescriptionWithCreate": "Rejoignez ou créez une organisation avec un accès à la console pour continuer.",
+			"accessDescription": "Rejoignez une organisation avec un accès à la console pour continuer.",
+			"noMembershipsTitle": "Aucune adhésion avec accès à la console pour le moment"
+		},
 		"team": {
 			"title": "Équipe",
 			"subtitle": "Gérez les membres, rôles et invitations"
@@ -272,5 +318,15 @@
 				"saveSuccess": "Valeurs par défaut enregistrées avec succès"
 			}
 		}
+	},
+	"policies": {
+		"verificationSessions": "Sessions de vérification"
+	},
+	"organizationCreation": {
+		"createAction": "Créer une organisation",
+		"emptyDescription": "Vous ne faites encore partie d’aucune organisation. Créez une organisation, découvrez des organisations publiques ou rejoignez-en une à l’aide d’un code.",
+		"discoveryRequired": "Les organisations proposant une adhésion ouverte ou soumise à approbation sont toujours visibles dans la recherche publique d’organisations.",
+		"discoveryPublic": "Cette organisation peut apparaître dans la recherche publique d’organisations.",
+		"discoveryPrivate": "Cette organisation n’apparaît pas dans la recherche publique d’organisations."
 	}
 }

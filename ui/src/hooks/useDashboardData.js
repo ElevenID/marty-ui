@@ -23,6 +23,7 @@ import { listComplianceProfiles } from '../services/complianceProfilesApi';
 import { loadScopedCatalog } from '../services/loadScopedCatalog';
 import { getPhysicalDocumentCapabilities } from '../services/physicalDocumentsApi';
 import { listPublicIssuerIdentities } from '../services/issuerIdentitiesApi';
+import { getSystemHealth } from '../services/healthApi';
 import { 
   getTeamSnapshot, 
   getRuntimeStatus, 
@@ -137,7 +138,7 @@ export function useDashboardData() {
           catalog(listFlows),
           listPublicIssuerIdentities({ organization_id: organizationId }),
           listApiKeys(organizationId),
-          fetch('/health').then((r) => (r.ok ? r.json() : { status: 'error' })),
+          getSystemHealth({ signal: controller.signal }),
           getTeamSnapshot(organizationId),
           getRuntimeStatus(organizationId),
           getCriticalEvents(organizationId),
@@ -215,8 +216,7 @@ export function useDashboardData() {
     // Poll system health every 60 seconds
     const healthInterval = setInterval(async () => {
       try {
-        const healthRes = await fetch('/health');
-        const healthData = healthRes.ok ? await healthRes.json() : { status: 'error' };
+        const healthData = await getSystemHealth({ signal: controller.signal });
         if (mounted) {
           setData((prev) => ({ ...prev, systemHealth: healthData }));
         }

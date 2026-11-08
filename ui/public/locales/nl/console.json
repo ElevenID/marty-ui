@@ -11,5 +11,67 @@
         }
       }
     }
+  },
+  "flows": {
+    "flowDefinition": "Flowdefinitie"
+  },
+  "policies": {
+    "verificationSessions": "Verificatiesessies"
+  },
+  "dashboard": {
+    "criticalEvents": {
+      "noCriticalEvents": "Er zijn de afgelopen 24 uur geen kritieke gebeurtenissen gemeld."
+    },
+    "runtimeReadiness": {
+      "issuance": {
+        "noDeployments": "Geen actieve implementaties",
+        "deploymentsReason": "Voor het uitgeven van digitale bewijzen is een actief implementatieprofiel nodig.",
+        "configureDeployment": "Implementatie configureren",
+        "notReady": "Uitgifte van digitale bewijzen is niet gereed",
+        "readinessReason": "Controleer de uitgifteflow en de vereiste resources voordat u digitale bewijzen uitgeeft.",
+        "reviewFlows": "Uitgifteflows bekijken",
+        "operational": "Uitgifte van digitale bewijzen is gereed",
+        "issuerConfigurationRequired": "Uitgeverconfiguratie moet worden gecontroleerd",
+        "issuerConfigurationReason": "Controleer de uitgeveridentiteit en de uitgever-DID waarnaar het actieve sjabloon voor digitale bewijzen verwijst voordat u digitale bewijzen uitgeeft."
+      },
+      "verification": {
+        "notReady": "Verificatie van digitale bewijzen is niet gereed",
+        "readinessReason": "Controleer de verificatieconfiguratie voordat u een sessie start.",
+        "reviewSetup": "Verificatie-instellingen bekijken",
+        "operational": "Verificatie van digitale bewijzen is gereed",
+        "policyUnreachable": "Geen actieve presentatiebeleidsregels",
+        "policyReason": "Er is minstens één actieve presentatiebeleidsregel nodig om digitale bewijzen te verifiëren."
+      },
+      "issuerConfiguration": {
+        "title": "Uitgeverconfiguratie",
+        "configured": "Geconfigureerd",
+        "notConfigured": "Niet geconfigureerd",
+        "configuredDetail": "Een actief sjabloon voor digitale bewijzen verwijst naar een uitgever-DID.",
+        "notConfiguredDetail": "Geen actief sjabloon voor digitale bewijzen verwijst naar een uitgever-DID.",
+        "reason": "Sjablonen voor digitale bewijzen hebben een uitgever-DID nodig voordat ze voor uitgifte kunnen worden gebruikt.",
+        "manage": "Uitgeveridentiteiten beheren"
+      }
+    },
+    "systemStatus": {
+      "issuanceService": "Uitgiftedienst",
+      "notReported": "Deze dienst werd niet gerapporteerd bij de laatste gereedheidscontrole."
+    }
+  },
+  "organizationCreation": {
+    "createAction": "Organisatie maken",
+    "emptyDescription": "Je bent nog geen lid van een organisatie. Maak een organisatie, ontdek openbare organisaties of word lid met een code.",
+    "discoveryRequired": "Organisaties met een open lidmaatschap of lidmaatschap na goedkeuring zijn altijd vindbaar via de openbare organisatiezoekfunctie.",
+    "discoveryPublic": "Deze organisatie kan in openbare zoekresultaten voor organisaties verschijnen.",
+    "discoveryPrivate": "Deze organisatie verschijnt niet in openbare zoekresultaten voor organisaties."
+  },
+  "org": {
+    "setup": {
+      "chooseTitle": "Kies een organisatie",
+      "chooseDescription": "Selecteer een organisatie om de organisatieconsole te openen.",
+      "accessTitle": "Toegang tot de organisatieconsole",
+      "accessDescriptionWithCreate": "Word lid van een organisatie met consoletoegang of maak er een aan om verder te gaan.",
+      "accessDescription": "Word lid van een organisatie met consoletoegang om verder te gaan.",
+      "noMembershipsTitle": "Nog geen lidmaatschappen met consoletoegang"
+    }
   }
 }

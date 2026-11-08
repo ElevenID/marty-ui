@@ -1,7 +1,44 @@
 {
 	"dashboard": {
 		"title": "ダッシュボード",
-		"welcome": "お帰りなさい"
+		"welcome": "お帰りなさい",
+		"criticalEvents": {
+			"noCriticalEvents": "過去24時間に重大なイベントは報告されていません。"
+		},
+		"runtimeReadiness": {
+			"issuance": {
+				"noDeployments": "有効なデプロイメントがありません",
+				"deploymentsReason": "資格情報を発行するには、有効なデプロイメントプロファイルが必要です。",
+				"configureDeployment": "デプロイメントを設定",
+				"notReady": "資格情報の発行準備ができていません",
+				"readinessReason": "発行フローと必要なリソースを確認してから、資格情報を発行してください。",
+				"reviewFlows": "発行フローを確認",
+				"operational": "資格情報の発行準備ができています",
+				"issuerConfigurationRequired": "発行者設定の確認が必要です",
+				"issuerConfigurationReason": "資格情報を発行する前に、発行者の識別情報と、有効な資格情報テンプレートが参照する発行者DIDを確認してください。"
+			},
+			"verification": {
+				"notReady": "資格情報の検証準備ができていません",
+				"readinessReason": "セッションを開始する前に、検証設定を確認してください。",
+				"reviewSetup": "検証設定を確認",
+				"operational": "資格情報の検証準備ができています",
+				"policyUnreachable": "有効な提示ポリシーがありません",
+				"policyReason": "資格情報を検証するには、少なくとも1つの有効な提示ポリシーが必要です。"
+			},
+			"issuerConfiguration": {
+				"title": "発行者設定",
+				"configured": "設定済み",
+				"notConfigured": "未設定",
+				"configuredDetail": "有効な資格情報テンプレートが発行者DIDを参照しています。",
+				"notConfiguredDetail": "発行者DIDを参照する有効な資格情報テンプレートがありません。",
+				"reason": "資格情報テンプレートを発行に使用するには、発行者DIDが必要です。",
+				"manage": "発行者の識別情報を管理"
+			}
+		},
+		"systemStatus": {
+			"issuanceService": "発行サービス",
+			"notReported": "直近の準備状況チェックで、このサービスは報告されませんでした。"
+		}
 	},
 	"flows": {
 		"title": "フロー",
@@ -36,7 +73,8 @@
 			"console": "コンソール",
 			"flows": "フロー",
 			"flowInstances": "フローインスタンス"
-		}
+		},
+		"flowDefinition": "フロー定義"
 	},
 	"deploy": {
 		"title": "デプロイ",
@@ -247,6 +285,14 @@
 		}
 	},
 	"org": {
+		"setup": {
+			"chooseTitle": "組織を選択",
+			"chooseDescription": "組織を選択して、その組織のコンソールを開きます。",
+			"accessTitle": "組織コンソールへのアクセス",
+			"accessDescriptionWithCreate": "続行するには、コンソールにアクセスできる組織に参加するか、組織を作成してください。",
+			"accessDescription": "続行するには、コンソールにアクセスできる組織に参加してください。",
+			"noMembershipsTitle": "コンソールにアクセスできる組織への所属はまだありません"
+		},
 		"team": {
 			"title": "チーム",
 			"subtitle": "メンバー、ロール、招待を管理"
@@ -272,5 +318,15 @@
 				"saveSuccess": "組織の既定値を保存しました"
 			}
 		}
+	},
+	"policies": {
+		"verificationSessions": "検証セッション"
+	},
+	"organizationCreation": {
+		"createAction": "組織を作成",
+		"emptyDescription": "まだどの組織にも所属していません。組織を作成するか、公開されている組織を探すか、コードを使って組織に参加してください。",
+		"discoveryRequired": "自由参加または承認制の組織は、公開の組織検索で常に見つけることができます。",
+		"discoveryPublic": "この組織は公開の組織検索に表示される場合があります。",
+		"discoveryPrivate": "この組織は公開の組織検索に表示されません。"
 	}
 }

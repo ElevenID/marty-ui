@@ -102,7 +102,7 @@ export function ApplicantStatsCard() {
       </Box>
 
       <Grid container spacing={3}>
-        <Grid item xs={12} sm={4}>
+        <Grid size={{ xs: 12, sm: 4 }}>
           <StatItem
             icon={PersonAddIcon}
             label={t('dashboard.applicantStats.pendingReview')}
@@ -110,7 +110,7 @@ export function ApplicantStatsCard() {
             color="warning"
           />
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid size={{ xs: 12, sm: 4 }}>
           <StatItem
             icon={CheckCircleIcon}
             label={t('dashboard.applicantStats.approved')}
@@ -118,7 +118,7 @@ export function ApplicantStatsCard() {
             color="success"
           />
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid size={{ xs: 12, sm: 4 }}>
           <StatItem
             icon={BadgeIcon}
             label={t('dashboard.applicantStats.readyToIssue')}

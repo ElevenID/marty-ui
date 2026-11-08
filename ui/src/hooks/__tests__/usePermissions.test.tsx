@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { usePermissions } from '../usePermissions';
 
 const { auth, consoleState, getMyPermissions } = vi.hoisted(() => ({
-  auth: { isAuthenticated: true, user: { sub: 'alice' } },
+  auth: { isAuthenticated: true, user: { sub: 'alice' } as { user_id?: string; sub?: string; id?: string } },
   consoleState: { activeOrgId: 'org-a', memberships: [{ id: 'org-a' }, { id: 'org-b' }], membershipsLoaded: true, mode: 'org' },
   getMyPermissions: vi.fn(),
 }));
@@ -56,6 +56,34 @@ describe('organization-scoped permissions', () => {
     await act(async () => { old.resolve(grants); });
     expect(result.current.can('signing-key', 'view')).toBe(false);
     expect(getMyPermissions).toHaveBeenCalledTimes(2);
+  });
+  it('withdraws grants when the native user_id changes within the same organization', async () => {
+    auth.user = { user_id: 'alice-native', sub: 'legacy-subject' };
+    const { result, rerender } = renderHook(() => usePermissions());
+    await waitFor(() => expect(result.current.can('signing-key', 'create')).toBe(true));
+    const pending = deferred(); getMyPermissions.mockReturnValueOnce(pending.promise);
+    auth.user = { user_id: 'bob-native', sub: 'legacy-subject' }; rerender();
+    expect(result.current.can('signing-key', 'create')).toBe(false);
+    expect(result.current.roles).toEqual([]);
+    expect(result.current.isLoading).toBe(true);
+    expect(getMyPermissions).toHaveBeenCalledTimes(2);
+    await act(async () => { pending.resolve(denied); });
+    expect(result.current.can('signing-key', 'create')).toBe(false);
+  });
+  it('ignores late grants from a prior native account while its replacement is loading', async () => {
+    auth.user = { user_id: 'alice-native' };
+    const old = deferred(), current = deferred();
+    getMyPermissions.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+    const { result, rerender } = renderHook(() => usePermissions());
+    auth.user = { user_id: 'bob-native' }; rerender();
+    expect(getMyPermissions).toHaveBeenCalledTimes(2);
+    await act(async () => { old.resolve(grants); });
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.roles).toEqual([]);
+    expect(result.current.can('signing-key', 'create')).toBe(false);
+    await act(async () => { current.resolve(denied); });
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.can('signing-key', 'view')).toBe(false);
   });
   it('fails closed on logout and reloads grants after login', async () => {
     const { result, rerender } = renderHook(() => usePermissions());
