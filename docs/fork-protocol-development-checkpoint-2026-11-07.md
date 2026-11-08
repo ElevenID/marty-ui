@@ -137,20 +137,25 @@ database instance are a pending CI gate, not a database test pass. Both PRs
 require two independent source audits and retain any unresolved activation
 conditions in their descriptions.
 
-## Publication handoff
+## Publication handoff and continuation
 
 - Authenticator PR 57 is updated at `cfaab632dfe9ee8fbb7221a9c5090a6185e85c0d`
-  and remains draft. Its published Flutter Test workflow has passed; remaining
-  hosted checks are tracked on the PR.
-- W05 is committed locally on `work/w05-atomic-signing-authorization`, including
-  main's `22d398a` update and the reviewed source implementation `6eb4214`.
-  The complete code and validation checkpoint was committed as `9194bc9` before
-  this handoff note. The working branch retains the final documentation state.
-- Automatic approval review blocked publication of the issuance-service source
-  batch to the public `ElevenID/marty-ui` repository. The destination was verified
-  as the checkout's existing origin with push permission, but the review still
-  required explicit user authorization for publishing this source batch.
-  **No W05 branch or pull request has been created remotely.**
-- The next publication action, once approved, is to upload the reviewed changes,
-  create that branch and open a draft PR. The actual PostgreSQL CI result remains
-  a required gate before merge; no protected merge or release rule is waived.
+  and remains draft under its documented external activation gates. All seven
+  hosted workflows passed, including 280 Flutter tests, three acceptance tests,
+  58 native tests, and unchanged regenerated bindings. Four existing Flutter
+  tests are skipped; the scheduled-only scorecard check is also skipped on PRs.
+- The user explicitly approved publishing the W05 batch and continuing
+  development. The reviewed source is now published on
+  `work/w05-atomic-signing-authorization` at
+  `67f864ef4a5495eee25d7177b460d901dfc98c9e`, based on main `22d398a`.
+  The restored source tree was checked against every reviewed file hash before
+  publication; its tree is `e06e5cb730d180d0476ed814952557f8a1e56bf5`.
+- The earlier automatic publication-review pause is resolved by that explicit
+  approval. The branch is intended for a draft PR; actual PostgreSQL execution
+  remains a required CI gate before merge. Protected merge and release rules
+  continue to apply.
+- The next development slice binds the saved policy revision and exact generated
+  presentation request to the live Flow verification session and evaluator
+  response. It reuses the existing OID4VP contract and canonical digest owner.
+  Authenticated subject/key evidence and issuance-owned single-use continuation
+  remain subsequent work; a passed decision alone cannot authorize issuance.
