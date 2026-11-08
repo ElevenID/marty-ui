@@ -79,7 +79,6 @@ TEST_LEAVES = {
 }
 OID4VP_TEST_TARGETS = (
     "contract_vectors.rs",
-    "policy_revision.rs",
     "transport_metadata.rs",
 )
 OID4VP_TEST_ROOT = "rust/crates/oid4vp-contract/tests/"
@@ -458,16 +457,12 @@ def test_oid4vp_auto_test_targets_stay_out_of_production_rust_contexts() -> None
     transport = (ROOT / (OID4VP_TEST_ROOT + "transport_metadata.rs")).read_text(
         encoding="utf-8"
     )
-    policy_revision = (ROOT / (OID4VP_TEST_ROOT + "policy_revision.rs")).read_text(
-        encoding="utf-8"
-    )
     expected_corpus_include = 'include_str!(\n        "../../../../contracts/oid4vp-authenticated-contract-v1.json"\n    )'
     assert vectors.count(expected_corpus_include) == 1
     assert vectors.count("include_str!") == 1
-    for source in (vectors, policy_revision, transport):
+    for source in (vectors, transport):
         assert not re.search(r"#\[path\s*=|\binclude(?:_bytes)?!", source)
-    for source in (policy_revision, transport):
-        assert "include_str!" not in source
+    assert "include_str!" not in transport
 
     assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
     for ignore_path in set(DOCKER_CONTEXTS.values()):

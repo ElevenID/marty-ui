@@ -1,21 +1,22 @@
 use base64::{engine::general_purpose, Engine as _};
 use marty_oid4vp_contract::{
-    digest_audience, digest_frozen_request, digest_nonce, digest_query_document, digest_replay_key,
-    digest_response_item, digest_wallet_submission, AuthenticatedDecisionAction,
-    AuthenticatedResult, CredentialStatusMode, CredentialStatusState, EvidenceCheckOutcome,
-    EvidenceProcessingStatus, FrozenAlternativeRequirementGroup, FrozenOid4vpRequestV1,
-    Oid4vpContractError, Oid4vpEvidenceProjectionV1, PresentationDescriptor,
-    PresentationSubmission, QueryKind, VpToken, WalletSubmissionV1, AUDIENCE_DIGEST_DOMAIN,
-    FROZEN_REQUEST_DIGEST_DOMAIN, MAX_CLAIMS_PER_CREDENTIAL, MAX_CLAIM_VALUE_BYTES, MAX_CODE_BYTES,
-    MAX_CREDENTIALS, MAX_DESCRIPTOR_DEPTH, MAX_EVIDENCE_LIST_ITEMS, MAX_EVIDENCE_PROJECTION_BYTES,
-    MAX_FROZEN_REQUEST_BYTES, MAX_IDENTIFIER_BYTES, MAX_JSON_DEPTH,
-    MAX_PRIVACY_BASE64_DECODE_LAYERS, MAX_PRIVACY_FRAGMENT_BYTES, MAX_PRIVACY_FRAGMENT_PARTS,
-    MAX_PRIVACY_NORMALIZATION_STATES, MAX_PRIVACY_NORMALIZATION_STEPS,
-    MAX_PRIVACY_NORMALIZED_BYTES, MAX_PRIVACY_PERCENT_DECODE_LAYERS, MAX_QUERY_DOCUMENT_BYTES,
-    MAX_QUERY_REQUIREMENTS, MAX_REQUEST_LIFETIME_SECONDS, MAX_STATUS_VALIDITY_SECONDS, MAX_TOKENS,
-    MAX_TOKEN_BYTES, MAX_WALLET_SUBMISSION_BYTES, MIN_NONCE_BYTES, MIN_TOKEN_BYTES,
-    NONCE_DIGEST_DOMAIN, QUERY_DOCUMENT_DIGEST_DOMAIN, REPLAY_KEY_DIGEST_DOMAIN,
-    REQUIRED_OID4VP_CHECKS, RESPONSE_ITEM_DIGEST_DOMAIN, WALLET_SUBMISSION_DIGEST_DOMAIN,
+    digest_audience, digest_frozen_request, digest_nonce, digest_policy_snapshot,
+    digest_query_document, digest_replay_key, digest_response_item, digest_wallet_submission,
+    AuthenticatedDecisionAction, AuthenticatedResult, CredentialStatusMode, CredentialStatusState,
+    EvidenceCheckOutcome, EvidenceProcessingStatus, FrozenAlternativeRequirementGroup,
+    FrozenOid4vpRequestV1, FrozenPolicyIdentity, Oid4vpContractError, Oid4vpEvidenceProjectionV1,
+    PresentationDescriptor, PresentationSubmission, QueryKind, VpToken, WalletSubmissionV1,
+    AUDIENCE_DIGEST_DOMAIN, FROZEN_REQUEST_DIGEST_DOMAIN, MAX_CLAIMS_PER_CREDENTIAL,
+    MAX_CLAIM_VALUE_BYTES, MAX_CODE_BYTES, MAX_CREDENTIALS, MAX_DESCRIPTOR_DEPTH,
+    MAX_EVIDENCE_LIST_ITEMS, MAX_EVIDENCE_PROJECTION_BYTES, MAX_FROZEN_REQUEST_BYTES,
+    MAX_IDENTIFIER_BYTES, MAX_JSON_DEPTH, MAX_PRIVACY_BASE64_DECODE_LAYERS,
+    MAX_PRIVACY_FRAGMENT_BYTES, MAX_PRIVACY_FRAGMENT_PARTS, MAX_PRIVACY_NORMALIZATION_STATES,
+    MAX_PRIVACY_NORMALIZATION_STEPS, MAX_PRIVACY_NORMALIZED_BYTES,
+    MAX_PRIVACY_PERCENT_DECODE_LAYERS, MAX_QUERY_DOCUMENT_BYTES, MAX_QUERY_REQUIREMENTS,
+    MAX_REQUEST_LIFETIME_SECONDS, MAX_STATUS_VALIDITY_SECONDS, MAX_TOKENS, MAX_TOKEN_BYTES,
+    MAX_WALLET_SUBMISSION_BYTES, MIN_NONCE_BYTES, MIN_TOKEN_BYTES, NONCE_DIGEST_DOMAIN,
+    QUERY_DOCUMENT_DIGEST_DOMAIN, REPLAY_KEY_DIGEST_DOMAIN, REQUIRED_OID4VP_CHECKS,
+    RESPONSE_ITEM_DIGEST_DOMAIN, WALLET_SUBMISSION_DIGEST_DOMAIN,
 };
 use serde_json::{json, Value};
 
@@ -1639,4 +1640,58 @@ fn make_presentation_exchange(
             path_nested: None,
         }],
     });
+}
+
+#[test]
+fn policy_snapshot_digest_is_canonical_and_domain_separated() {
+    let left = json!({"organization_id": "org", "policy": {"id": "policy", "version": 1}});
+    let right: serde_json::Value =
+        serde_json::from_str(r#"{"policy":{"version":1,"id":"policy"},"organization_id":"org"}"#)
+            .unwrap();
+    assert_eq!(
+        digest_policy_snapshot(&left).unwrap(),
+        digest_policy_snapshot(&right).unwrap()
+    );
+    assert_ne!(
+        digest_policy_snapshot(&left).unwrap(),
+        digest_query_document(&left).unwrap()
+    );
+}
+
+#[test]
+fn policy_identity_requires_bounded_id_positive_version_and_canonical_digest() {
+    let valid = FrozenPolicyIdentity {
+        id: "policy-1".into(),
+        version: 1,
+        content_digest: digest_policy_snapshot(&json!({"policy": "saved"})).unwrap(),
+    };
+    valid.validate().unwrap();
+    for invalid in [
+        FrozenPolicyIdentity {
+            id: String::new(),
+            ..valid.clone()
+        },
+        FrozenPolicyIdentity {
+            id: "policy\nspoof".into(),
+            ..valid.clone()
+        },
+        FrozenPolicyIdentity {
+            id: "x".repeat(256),
+            ..valid.clone()
+        },
+        FrozenPolicyIdentity {
+            version: 0,
+            ..valid.clone()
+        },
+        FrozenPolicyIdentity {
+            content_digest: "0".repeat(64),
+            ..valid.clone()
+        },
+        FrozenPolicyIdentity {
+            content_digest: format!("sha256:{}", "A".repeat(64)),
+            ..valid.clone()
+        },
+    ] {
+        assert!(invalid.validate().is_err());
+    }
 }

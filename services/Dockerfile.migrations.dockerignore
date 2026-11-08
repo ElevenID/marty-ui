@@ -45,7 +45,6 @@ rust/services/issuance/src/signing_http_projection_tests.rs
 rust/services/issuance/src/signing_http_response_tests.rs
 rust/services/issuance/src/token_rate_limit_http_tests.rs
 rust/crates/oid4vp-contract/tests/contract_vectors.rs
-rust/crates/oid4vp-contract/tests/policy_revision.rs
 rust/crates/oid4vp-contract/tests/transport_metadata.rs
 rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs
 rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs

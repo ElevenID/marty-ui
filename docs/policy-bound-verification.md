@@ -136,10 +136,24 @@ The checked-in Envoy descriptor is regenerated with the pinned compiler in
 `requirements-proto.txt`. Descriptor parity and field-number checks cover the
 new revision message and the additive request/response fields.
 
+The two shared policy-reference checks live in the existing `contract_vectors`
+integration target. That target already runs in the ordinary contracts lane and
+uses the reviewed Docker build contexts. The organization's pinned source audit
+also checks the exact migrations context; adding a separate test file initially
+required a context change that it rejected. Consolidating the assertions into
+the existing target preserves their execution and the reviewed context.
+
 Two independent source audits passed after correcting the DC API comparison
 snapshot, stale-policy error propagation, callback digest binding and Auth
 consumer compatibility. They also checked the descriptor and exact-path CI
-registration changes. The PR records the exact local and hosted results.
+ownership requirements. The implementation passed 942 selected Rust library and
+behavior tests, with 15 explicitly ignored cases, and a locked build of all
+seven affected package groups. The strict workspace/all-target Clippy run passed
+on CI's pinned Rust 1.95.0. Two descriptor checks and 38 context/CI-policy
+regression checks also passed. After consolidation, all five selected
+`contract_vectors policy_` cases passed, including both moved tests, and the
+exact pinned repository audit passed. The PR records the exact local and
+hosted results.
 PostgreSQL tests require
 the existing disposable CI databases; compiling them or returning early with
 no database environment variable does not count as executing their assertions.

@@ -149,6 +149,14 @@ locked build of the admission, signing and PostgreSQL contract executables, and
 13 passing behavioral tests. Actual PostgreSQL execution remains pending the
 existing hosted CI database gate.
 
+The policy/request binding continuation also passed two independent source
+audits, 942 selected Rust library/behavior tests (15 explicitly ignored), a
+locked build across the seven affected package groups, and strict
+workspace/all-target Clippy on the CI-pinned Rust 1.95.0. Descriptor and focused
+CI-context checks passed. The shared revision assertions use the existing
+contract test target to retain the reviewed migrations build context. Hosted
+results and the final published head are tracked in PR 1845.
+
 The signing-boundary PR must distinguish behavioral test results from actual
 PostgreSQL execution. Local environment restrictions that prevent a supported
 database instance are a pending CI gate, not a database test pass. Both PRs
