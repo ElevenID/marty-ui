@@ -1,47 +1,22 @@
-/**
- * Organization Settings Page
- * 
- * Organization profile and configuration.
- */
-
-import { useState, useEffect } from 'react';
+/** Organization profile and admission settings for the selected organization. */
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Box,
-  Paper,
-  Typography,
-  TextField,
-  Button,
-  Grid,
-  Alert,
-  LinearProgress,
-  Avatar,
-  Card,
-  CardContent,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  Chip,
-  FormHelperText,
-  Switch,
-  FormControlLabel,
+  Alert, Avatar, Box, Button, Card, CardContent, FormControl,
+  FormControlLabel, FormHelperText, Grid, InputLabel, LinearProgress,
+  MenuItem, Paper, Select, Switch, TextField, Typography,
 } from '@mui/material';
+import BusinessIcon from '@mui/icons-material/Business';
 import EditIcon from '@mui/icons-material/Edit';
 import SaveIcon from '@mui/icons-material/Save';
-import BusinessIcon from '@mui/icons-material/Business';
-import AddIcon from '@mui/icons-material/Add';
 
 import { ResourcePage } from '../../common';
-import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
-import OrgDefaultsSection from './OrgDefaultsSection';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { loadOrgSettings, saveOrgSettings } from '../../../application/orgSettings';
-import { listRoles } from '../../../services/rbacApi';
+import { isValidOrganizationName } from '../../../application/orgSettings/orgSettingsFlow';
+import OrgDefaultsSection from './OrgDefaultsSection';
 
-/**
- * Get organization tabs with translations
- */
 const getOrgTabs = (t) => [
   { label: t('org.tabs.organization'), path: '/console/org/settings' },
   { label: t('org.tabs.team'), path: '/console/org/team' },
@@ -49,128 +24,96 @@ const getOrgTabs = (t) => [
   { label: t('org.tabs.webhooks'), path: '/console/org/webhooks' },
 ];
 
-/**
- * Get breadcrumbs with translations
- */
 const getBreadcrumbs = (t) => [
   { label: t('org.breadcrumbs.console'), path: '/console' },
   { label: t('org.breadcrumbs.org'), path: '/console/org' },
   { label: t('org.breadcrumbs.organization'), path: '/console/org/settings' },
 ];
 
-function OrganizationSettingsPage() {
+function OrganizationSettingsForm({ organizationId, organizationName }) {
   const { t } = useTranslation('console');
-  const { organizationId, organizationName } = useAuth();
-  const { activeOrgId } = useConsole();
-  const effectiveOrgId = activeOrgId;
+  const { can } = usePermissions();
+  const canEdit = can('organization', 'edit');
+  const [org, setOrg] = useState(null);
+  const [savedOrg, setSavedOrg] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [availableRoles, setAvailableRoles] = useState([]);
-  const [roleLoadError, setRoleLoadError] = useState(null);
-  const [org, setOrg] = useState({
-    name: '',
-    displayName: '',
-    description: '',
-    website: '',
-    contactEmail: '',
-    address: '',
-    country: '',
-    // Email domain settings
-    isDiscoverable: false,
-    membershipMode: 'invite_only',
-    allowedEmailDomains: [],
-    domainJoinPolicy: 'approval',
-    defaultRole: 'applicant',
-    // Device security settings
-    requireDeviceRegistration: false,
-    allowPushNotifications: true,
-    deviceRegistrationPrompt: 'first_action',
-  });
-  const [newDomain, setNewDomain] = useState('');
+  const [retry, setRetry] = useState(0);
+  const generation = useRef(0);
+  const savePending = useRef(false);
 
   useEffect(() => {
-    const loadOrg = async () => {
-      try {
-        setRoleLoadError(null);
-        const [{ org: loaded, error: loadError }, rolesResult] = await Promise.all([
-          loadOrgSettings({ organizationName }),
-          effectiveOrgId
-            ? listRoles(effectiveOrgId).then(
-                (rolesResponse) => ({ status: 'fulfilled', value: rolesResponse }),
-                (rolesError) => ({ status: 'rejected', reason: rolesError }),
-              )
-            : Promise.resolve({ status: 'fulfilled', value: [] }),
-        ]);
-        if (loadError) throw new Error(loadError);
-        const rolesResponse = rolesResult.status === 'fulfilled' ? rolesResult.value : [];
-        const roles = (rolesResponse?.roles || rolesResponse || []).filter((role) => role.name !== 'owner');
-        setAvailableRoles(roles);
-        if (rolesResult.status === 'rejected') {
-          setRoleLoadError(rolesResult.reason);
-        }
-        setOrg(loaded);
-      } catch (err) {
-        setError(t('org.settings.errorLoading'));
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadOrg();
-  }, [effectiveOrgId, organizationName, t]);
+    const request = ++generation.current;
+    const current = () => generation.current === request;
+    setLoading(true);
+    setOrg(null);
+    setSavedOrg(null);
+    setError(null);
+    setSuccess(false);
+    setEditMode(false);
+    setSaving(false);
+    savePending.current = false;
 
-  const handleSave = async () => {
+    if (!organizationId) {
+      setLoading(false);
+    } else {
+      loadOrgSettings({ organizationId }).then(({ org: loaded, error: loadError }) => {
+        if (!current()) return;
+        setOrg(loaded);
+        setSavedOrg(loaded);
+        setError(loadError);
+        setLoading(false);
+      });
+    }
+    return () => { generation.current += 1; };
+  }, [organizationId, retry]);
+
+  const handleSave = async (event) => {
+    event.preventDefault();
+    if (!organizationId || !savedOrg || loading || !canEdit || !editMode || !formValid || savePending.current) return;
+    const request = generation.current;
+    savePending.current = true;
     setSaving(true);
     setError(null);
-    try {
-      const { error: saveError } = await saveOrgSettings({ org });
-      if (saveError) throw new Error(saveError);
+    setSuccess(false);
+    const { org: updated, error: saveError } = await saveOrgSettings({ organizationId, org, originalOrg: savedOrg });
+    if (generation.current !== request) return;
+    savePending.current = false;
+    setSaving(false);
+    if (saveError) {
+      setError(saveError);
+    } else {
+      setOrg(updated);
+      setSavedOrg(updated);
       setSuccess(true);
       setEditMode(false);
-      setTimeout(() => setSuccess(false), 3000);
-    } catch (err) {
-      setError(err.message || t('org.settings.errorSaving'));
-      console.error(err);
-    } finally {
-      setSaving(false);
     }
   };
 
-  const handleChange = (field) => (event) => {
-    setOrg((prev) => ({ ...prev, [field]: event.target.value }));
-  };
-  
-  const handleAddDomain = () => {
-    if (newDomain.trim() && !org.allowedEmailDomains.includes(newDomain.trim().toLowerCase())) {
-      setOrg(prev => ({
-        ...prev,
-        allowedEmailDomains: [...prev.allowedEmailDomains, newDomain.trim().toLowerCase()],
-      }));
-      setNewDomain('');
-    }
-  };
-  
-  const handleRemoveDomain = (domain) => {
-    setOrg(prev => ({
-      ...prev,
-      allowedEmailDomains: prev.allowedEmailDomains.filter(d => d !== domain),
-    }));
+  const handleChange = (field, value) => {
+    setSuccess(false);
+    setOrg((previous) => ({ ...previous, [field]: value }));
   };
 
-  if (loading) {
-    return (
-      <ResourcePage
-        title={t('org.title')}
-        tabs={getOrgTabs(t)}
-        breadcrumbs={getBreadcrumbs(t)}
-      >
-        <LinearProgress />
-      </ResourcePage>
-    );
-  }
+  const editable = editMode && canEdit && !saving;
+  const invalidAdmission = org?.joinMechanism === 'open' && org?.visibility !== 'PUBLIC';
+  const nameChanged = org && savedOrg && org.name.trim() !== savedOrg.name.trim();
+  const invalidName = nameChanged && !isValidOrganizationName(org.name.trim());
+  const formValid = Boolean(org?.name.trim() && org?.displayName.trim() && !invalidAdmission && !invalidName);
+  const formId = 'organization-settings-profile';
+  const textField = (field, label, options = {}) => (
+    <TextField
+      fullWidth
+      label={label}
+      value={org[field]}
+      onChange={(event) => handleChange(field, event.target.value)}
+      disabled={!editable}
+      {...options}
+    />
+  );
 
   return (
     <ResourcePage
@@ -178,17 +121,22 @@ function OrganizationSettingsPage() {
       description={t('org.settings.description')}
       tabs={getOrgTabs(t)}
       breadcrumbs={getBreadcrumbs(t)}
-      actions={
+      actions={org && !loading && canEdit ? (
         editMode ? (
           <Box sx={{ display: 'flex', gap: 1 }}>
-            <Button variant="outlined" onClick={() => setEditMode(false)}>
+            <Button
+              variant="outlined"
+              disabled={saving}
+              onClick={() => { setOrg(savedOrg); setEditMode(false); setError(null); }}
+            >
               {t('actions.cancel', { ns: 'common' })}
             </Button>
             <Button
               variant="contained"
               startIcon={<SaveIcon />}
-              onClick={handleSave}
-              disabled={saving}
+              type="submit"
+              form={formId}
+              disabled={saving || !formValid}
             >
               {saving ? t('org.settings.saving') : t('org.settings.saveChanges')}
             </Button>
@@ -197,318 +145,172 @@ function OrganizationSettingsPage() {
           <Button
             variant="outlined"
             startIcon={<EditIcon />}
-            onClick={() => setEditMode(true)}
+            onClick={() => { setEditMode(true); setSuccess(false); }}
           >
             {t('org.settings.editMode')}
           </Button>
         )
-      }
+      ) : null}
     >
+      {loading && <LinearProgress aria-label={t('org.settings.loading', 'Loading organization details')} />}
+      {!organizationId && (
+        <Alert severity="info">{t('org.settings.organizationRequired', 'Select an organization to view its settings.')}</Alert>
+      )}
       {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+        <Alert
+          severity="error"
+          sx={{ mb: 3 }}
+          action={!org && organizationId ? (
+            <Button color="inherit" onClick={() => setRetry((value) => value + 1)}>
+              {t('actions.retry', { ns: 'common', defaultValue: 'Retry' })}
+            </Button>
+          ) : undefined}
+        >
+          {!org && organizationId ? `${t('org.settings.errorLoading')}: ${error}` : error}
         </Alert>
       )}
-
       {success && (
-        <Alert severity="success" sx={{ mb: 3 }}>
+        <Alert severity="success" sx={{ mb: 3 }} onClose={() => setSuccess(false)}>
           {t('org.settings.successMessage')}
         </Alert>
       )}
-      {roleLoadError && (
-        <Alert severity="warning" sx={{ mb: 3 }}>
-          {roleLoadError?.message || t('org.settings.membership.rolesLoadFailed', 'Organization roles could not be loaded. Default role settings are unavailable until this is retried.')}
-        </Alert>
+
+      {organizationId && (
+        <Card sx={{ mb: 3 }}>
+          <CardContent>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Avatar sx={{ width: 64, height: 64, bgcolor: 'primary.main' }}>
+                <BusinessIcon sx={{ fontSize: 32 }} />
+              </Avatar>
+              <Box>
+                <Typography variant="h5">{savedOrg?.displayName || organizationName}</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {t('org.settings.organizationId')}: {organizationId}
+                </Typography>
+              </Box>
+            </Box>
+          </CardContent>
+        </Card>
       )}
 
-      {/* Organization Header */}
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Avatar sx={{ width: 64, height: 64, bgcolor: 'primary.main' }}>
-              <BusinessIcon sx={{ fontSize: 32 }} />
-            </Avatar>
-            <Box>
-              <Typography variant="h5">{org.displayName}</Typography>
-              <Typography variant="body2" color="text.secondary">
-                {t('org.settings.organizationId')}: {organizationId || 'org-12345'}
+      {org && !loading && (
+        <>
+          <Box component="form" id={formId} onSubmit={handleSave}>
+            <Paper sx={{ p: 3, mb: 3 }}>
+              <Typography variant="h6" gutterBottom>{t('org.settings.profile.title')}</Typography>
+              <Grid container spacing={3}>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  {textField('name', t('org.settings.profile.name'), {
+                    required: true,
+                    error: Boolean(invalidName),
+                    helperText: editMode ? t('org.settings.profile.nameHelp', 'Use 2–64 lowercase letters, numbers, or hyphens. Start and end with a letter or number.') : undefined,
+                    slotProps: { htmlInput: { minLength: 2, maxLength: 64 } },
+                  })}
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  {textField('displayName', t('org.settings.profile.displayName'), { required: true, slotProps: { htmlInput: { maxLength: 128 } } })}
+                </Grid>
+                <Grid size={12}>
+                  {textField('description', t('org.settings.profile.description'), { multiline: true, rows: 2, slotProps: { htmlInput: { maxLength: 1024 } } })}
+                </Grid>
+              </Grid>
+            </Paper>
+
+            <Paper sx={{ p: 3, mb: 3 }}>
+              <Typography variant="h6" gutterBottom>{t('org.settings.profile.contactInfo')}</Typography>
+              <Grid container spacing={3}>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  {textField('website', t('org.settings.profile.website'), { type: 'url' })}
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  {textField('contactEmail', t('org.settings.profile.contactEmail'), { type: 'email' })}
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  {textField('contactPhone', t('org.settings.profile.contactPhone', 'Contact Phone'), { type: 'tel', slotProps: { htmlInput: { maxLength: 50 } } })}
+                </Grid>
+              </Grid>
+            </Paper>
+
+            <Paper sx={{ p: 3, mb: 3 }}>
+              <Typography variant="h6" gutterBottom>{t('org.settings.admission.title', 'Organization Membership')}</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                {t('org.settings.admission.description', 'Choose who can find your organization and how new members join.')}
               </Typography>
-            </Box>
+              <Grid container spacing={3}>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <FormControl fullWidth disabled={!editable}>
+                    <InputLabel id="org-visibility-label">{t('org.settings.admission.visibility', 'Visibility')}</InputLabel>
+                    <Select
+                      labelId="org-visibility-label"
+                      id="org-visibility"
+                      label={t('org.settings.admission.visibility', 'Visibility')}
+                      value={org.visibility}
+                      onChange={(event) => handleChange('visibility', event.target.value)}
+                    >
+                      <MenuItem value="PRIVATE">{t('org.settings.admission.private', 'Private')}</MenuItem>
+                      <MenuItem value="PUBLIC">{t('org.settings.admission.public', 'Public')}</MenuItem>
+                    </Select>
+                    <FormHelperText>{t('org.settings.admission.visibilityHelp', 'Public organizations appear in the organization directory.')}</FormHelperText>
+                  </FormControl>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <FormControl fullWidth disabled={!editable}>
+                    <InputLabel id="org-join-method-label">{t('org.settings.admission.joinMethod', 'Join Method')}</InputLabel>
+                    <Select
+                      labelId="org-join-method-label"
+                      id="org-join-method"
+                      label={t('org.settings.admission.joinMethod', 'Join Method')}
+                      value={org.joinMechanism}
+                      onChange={(event) => handleChange('joinMechanism', event.target.value)}
+                    >
+                      <MenuItem value="invite">{t('org.settings.admission.invite', 'Invitation')}</MenuItem>
+                      <MenuItem value="code" disabled>{t('org.settings.admission.code', 'Join code (existing configuration only)')}</MenuItem>
+                      <MenuItem value="open">{t('org.settings.admission.open', 'Open enrollment')}</MenuItem>
+                      <MenuItem value="domain" disabled>{t('org.settings.admission.domain', 'Email domain (unavailable)')}</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid size={12}>
+                  <FormControlLabel
+                    control={(
+                      <Switch
+                        checked={org.requiresApproval}
+                        disabled={!editable}
+                        onChange={(event) => handleChange('requiresApproval', event.target.checked)}
+                      />
+                    )}
+                    label={t('org.settings.admission.requiresApproval', 'Require approval for join requests')}
+                  />
+                </Grid>
+              </Grid>
+              {invalidAdmission && (
+                <Alert severity="warning" sx={{ mt: 2 }}>
+                  {t('org.settings.admission.openRequiresPublic', 'Open enrollment requires public visibility. Choose public visibility or another join method.')}
+                </Alert>
+              )}
+            </Paper>
           </Box>
-        </CardContent>
-      </Card>
-
-      {/* Basic Information */}
-      <Paper sx={{ p: 3, mb: 3 }}>
-        <Typography variant="h6" gutterBottom>
-          {t('org.settings.profile.title')}
-        </Typography>
-        <Grid container spacing={3}>
-          <Grid item xs={12} sm={6}>
-            <TextField
-              fullWidth
-              label={t('org.settings.profile.name')}
-              value={org.name}
-              onChange={handleChange('name')}
-              disabled={!editMode}
-            />
-          </Grid>
-          <Grid item xs={12} sm={6}>
-            <TextField
-              fullWidth
-              label={t('org.settings.profile.displayName')}
-              value={org.displayName}
-              onChange={handleChange('displayName')}
-              disabled={!editMode}
-            />
-          </Grid>
-          <Grid item xs={12}>
-            <TextField
-              fullWidth
-              label={t('org.settings.profile.description')}
-              value={org.description}
-              onChange={handleChange('description')}
-              disabled={!editMode}
-              multiline
-              rows={2}
-            />
-          </Grid>
-        </Grid>
-      </Paper>
-
-      {/* Contact Information */}
-      <Paper sx={{ p: 3, mb: 3 }}>
-        <Typography variant="h6" gutterBottom>
-          {t('org.settings.profile.contactInfo')}
-        </Typography>
-        <Grid container spacing={3}>
-          <Grid item xs={12} sm={6}>
-            <TextField
-              fullWidth
-              label={t('org.settings.profile.website')}
-              value={org.website}
-              onChange={handleChange('website')}
-              disabled={!editMode}
-            />
-          </Grid>
-          <Grid item xs={12} sm={6}>
-            <TextField
-              fullWidth
-              label={t('org.settings.profile.contactEmail')}
-              value={org.contactEmail}
-              onChange={handleChange('contactEmail')}
-              disabled={!editMode}
-            />
-          </Grid>
-          <Grid item xs={12} sm={8}>
-            <TextField
-              fullWidth
-              label={t('org.settings.profile.address')}
-              value={org.address}
-              onChange={handleChange('address')}
-              disabled={!editMode}
-            />
-          </Grid>
-          <Grid item xs={12} sm={4}>
-            <TextField
-              fullWidth
-              label={t('org.settings.profile.country')}
-              value={org.country}
-              onChange={handleChange('country')}
-              disabled={!editMode}
-            />
-          </Grid>
-        </Grid>
-      </Paper>
-
-      {/* Organization Defaults */}
-      <OrgDefaultsSection />
-
-      {/* Danger Zone */}
-      <Paper sx={{ p: 3, mb: 3 }}>        <Typography variant="h6" gutterBottom>
-          {t('org.settings.membership.title')}
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          {t('org.settings.membership.description')}
-        </Typography>
-        
-        <Grid container spacing={3}>
-          <Grid item xs={12}>
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={org.isDiscoverable}
-                  onChange={(e) => setOrg(prev => ({ ...prev, isDiscoverable: e.target.checked }))}
-                  disabled={!editMode}
-                />
-              }
-              label={t('org.settings.membership.discoverable')}
-            />
-            <FormHelperText>
-              {t('org.settings.membership.discoverableHelp')}
-            </FormHelperText>
-          </Grid>
-          
-          <Grid item xs={12}>
-            <Typography variant="subtitle2" gutterBottom>
-              {t('org.settings.membership.domains')}
-            </Typography>
-            <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-              {org.allowedEmailDomains.map((domain) => (
-                <Chip
-                  key={domain}
-                  label={domain}
-                  onDelete={editMode ? () => handleRemoveDomain(domain) : undefined}
-                  color="primary"
-                  variant="outlined"
-                />
-              ))}
-            </Box>
-            {editMode && (
-              <Box sx={{ display: 'flex', gap: 1 }}>
-                <TextField
-                  size="small"
-                  placeholder={t('org.settings.membership.domainPlaceholder')}
-                  value={newDomain}
-                  onChange={(e) => setNewDomain(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && handleAddDomain()}
-                  fullWidth
-                />
-                <Button
-                  variant="outlined"
-                  startIcon={<AddIcon />}
-                  onClick={handleAddDomain}
-                  disabled={!newDomain.trim()}
-                >
-                  {t('org.settings.membership.addDomain')}
-                </Button>
-              </Box>
-            )}
-            <FormHelperText>
-              {t('org.settings.membership.domainsHelp')}
-            </FormHelperText>
-          </Grid>
-          
-          <Grid item xs={12} sm={6}>
-            <FormControl fullWidth disabled={!editMode}>
-              <InputLabel>{t('org.settings.membership.joinPolicy')}</InputLabel>
-              <Select
-                value={org.domainJoinPolicy}
-                label={t('org.settings.membership.joinPolicy')}
-                onChange={(e) => setOrg(prev => ({ ...prev, domainJoinPolicy: e.target.value }))}
-              >
-                <MenuItem value="auto">{t('org.settings.membership.modes.auto')}</MenuItem>
-                <MenuItem value="approval">{t('org.settings.membership.modes.approval')}</MenuItem>
-                <MenuItem value="closed">{t('org.settings.membership.modes.closed')}</MenuItem>
-              </Select>
-              <FormHelperText>
-                {org.domainJoinPolicy === 'auto' && t('org.settings.membership.joinPolicies.auto')}
-                {org.domainJoinPolicy === 'approval' && t('org.settings.membership.joinPolicies.approval')}
-                {org.domainJoinPolicy === 'closed' && t('org.settings.membership.joinPolicies.closed')}
-              </FormHelperText>
-            </FormControl>
-          </Grid>
-          
-          <Grid item xs={12} sm={6}>
-            <FormControl fullWidth disabled={!editMode || Boolean(roleLoadError)}>
-              <InputLabel>{t('org.settings.membership.defaultRole')}</InputLabel>
-              <Select
-                value={org.defaultRole}
-                label={t('org.settings.membership.defaultRole')}
-                onChange={(e) => setOrg(prev => ({ ...prev, defaultRole: e.target.value }))}
-              >
-                {availableRoles.map((role) => (
-                  <MenuItem key={role.id} value={role.name}>
-                    {role.display_name || role.name}
-                  </MenuItem>
-                ))}
-              </Select>
-              <FormHelperText>
-                {t('org.settings.membership.defaultRoleHelp')}
-              </FormHelperText>
-            </FormControl>
-          </Grid>
-        </Grid>
-      </Paper>
-
-      {/* Device Security Settings */}
-      <Paper sx={{ p: 3, mb: 3 }}>
-        <Typography variant="h6" gutterBottom>
-          {t('org.settings.devices.title')}
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          {t('org.settings.devices.description')}
-        </Typography>
-        
-        <Grid container spacing={3}>
-          <Grid item xs={12}>
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={org.requireDeviceRegistration}
-                  onChange={(e) => setOrg(prev => ({ ...prev, requireDeviceRegistration: e.target.checked }))}
-                  disabled={!editMode}
-                />
-              }
-              label={t('org.settings.devices.requireRegistration')}
-            />
-            <Typography variant="caption" display="block" color="text.secondary" sx={{ ml: 4 }}>
-              {t('org.settings.devices.requireRegistrationHelp')}
-            </Typography>
-          </Grid>
-          
-          <Grid item xs={12}>
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={org.allowPushNotifications}
-                  onChange={(e) => setOrg(prev => ({ ...prev, allowPushNotifications: e.target.checked }))}
-                  disabled={!editMode}
-                />
-              }
-              label={t('org.settings.devices.allowPushNotifications')}
-            />
-            <Typography variant="caption" display="block" color="text.secondary" sx={{ ml: 4 }}>
-              {t('org.settings.devices.pushNotificationsHelp')}
-            </Typography>
-          </Grid>
-          
-          <Grid item xs={12} sm={6}>
-            <FormControl fullWidth disabled={!editMode}>
-              <InputLabel>{t('org.settings.devices.registrationPrompt')}</InputLabel>
-              <Select
-                value={org.deviceRegistrationPrompt}
-                label={t('org.settings.devices.registrationPrompt')}
-                onChange={(e) => setOrg(prev => ({ ...prev, deviceRegistrationPrompt: e.target.value }))}
-              >
-                <MenuItem value="onboarding">{t('org.settings.devices.prompts.onboarding')}</MenuItem>
-                <MenuItem value="first_action">{t('org.settings.devices.prompts.firstAction')}</MenuItem>
-                <MenuItem value="never">{t('org.settings.devices.prompts.never')}</MenuItem>
-              </Select>
-              <FormHelperText>
-                {org.deviceRegistrationPrompt === 'onboarding' && t('org.settings.devices.promptHelp.onboarding')}
-                {org.deviceRegistrationPrompt === 'first_action' && t('org.settings.devices.promptHelp.firstAction')}
-                {org.deviceRegistrationPrompt === 'never' && t('org.settings.devices.promptHelp.never')}
-              </FormHelperText>
-            </FormControl>
-          </Grid>
-        </Grid>
-      </Paper>
-
-      {/* Danger Zone */}
-      <Paper sx={{ p: 3, border: 1, borderColor: 'error.main' }}>
-        <Typography variant="h6" color="error" gutterBottom>
-          {t('org.settings.danger.title')}
-        </Typography>
-        <Typography variant="body2" color="text.secondary" paragraph>
-          {t('org.settings.danger.description')}
-        </Typography>
-        <Button variant="outlined" color="error" disabled>
-          {t('org.settings.danger.deleteOrganization')}
-        </Button>
-      </Paper>
+          <OrgDefaultsSection />
+          <Paper sx={{ p: 3, border: 1, borderColor: 'error.main' }}>
+            <Typography variant="h6" color="error" gutterBottom>{t('org.settings.danger.title')}</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{t('org.settings.danger.description')}</Typography>
+            <Button variant="outlined" color="error" disabled>{t('org.settings.danger.deleteOrganization')}</Button>
+          </Paper>
+        </>
+      )}
     </ResourcePage>
   );
 }
 
-export default OrganizationSettingsPage;
+export default function OrganizationSettingsPage() {
+  const { activeOrgId, memberships = [] } = useConsole();
+  const membership = memberships.find((item) => item.id === activeOrgId);
+  // A new organization gets a fresh draft; pending work from the old form is discarded.
+  return (
+    <OrganizationSettingsForm
+      key={activeOrgId || 'no-organization'}
+      organizationId={activeOrgId}
+      organizationName={membership?.display_name || membership?.name || ''}
+    />
+  );
+}

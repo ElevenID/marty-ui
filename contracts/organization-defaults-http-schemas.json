@@ -1,0 +1,37 @@
+{
+  "runtime__organization_default_reference": {
+    "anyOf": [
+      {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255,
+        "not": { "enum": [".", ".."] },
+        "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f/\\\\?#%]+$",
+        "description": "Identifier of an active resource belonging to the selected organization and readable by the caller."
+      },
+      { "type": "null" }
+    ]
+  },
+  "runtime__organization_defaults_patch": {
+    "type": "object",
+    "additionalProperties": false,
+    "minProperties": 1,
+    "description": "Supply one or more defaults. Omitted properties preserve existing values; null explicitly clears a default. All references are validated before any changes are saved.",
+    "properties": {
+      "default_trust_profile_id": { "$ref": "#/components/schemas/runtime__organization_default_reference" },
+      "default_policy_id": { "$ref": "#/components/schemas/runtime__organization_default_reference" },
+      "default_template_id": { "$ref": "#/components/schemas/runtime__organization_default_reference" }
+    }
+  },
+  "runtime__organization_defaults": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["default_trust_profile_id", "default_policy_id", "default_template_id"],
+    "description": "Saved defaults for the selected organization. Unset defaults are null. A saved reference can become unavailable after it is set; creation forms must check current resource eligibility before applying it.",
+    "properties": {
+      "default_trust_profile_id": { "$ref": "#/components/schemas/runtime__organization_default_reference" },
+      "default_policy_id": { "$ref": "#/components/schemas/runtime__organization_default_reference" },
+      "default_template_id": { "$ref": "#/components/schemas/runtime__organization_default_reference" }
+    }
+  }
+}

@@ -591,6 +591,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "policy-set",
         ),
         rule(
+            r"^/v1/organizations/[a-f0-9\-]{36}/defaults$",
+            &[("GET", "organization:view"), ("PATCH", "organization:edit")],
+            "organization",
+        ),
+        rule(
             r"^/v1/organizations/[a-f0-9\-]{36}/lifecycle$",
             &[("GET", "organization:view")],
             "organization",

@@ -39,6 +39,8 @@ use marty_signing_grant::{
 };
 #[cfg(test)]
 use marty_signing_grant::{GrantBinding, GrantError, SigningOrigin};
+#[path = "runtime_organization_defaults.rs"]
+mod organization_defaults;
 #[path = "runtime_signing_ceremony.rs"]
 mod signing_ceremony;
 #[path = "runtime_signing_compatibility.rs"]
@@ -1206,6 +1208,9 @@ async fn proxy_handler(
                 .is_some_and(|tail| !tail.is_empty() && !tail.contains('/')))
     {
         return flow_definition_write_handler(state, request).await;
+    }
+    if organization_defaults::organization_id(request.uri().path()).is_some() {
+        return organization_defaults::handler(state, request).await;
     }
     if organization_composition_route(request.uri().path()).is_some() {
         return organization_composition_handler(state, request).await;
@@ -4173,6 +4178,7 @@ mod tests {
         );
     }
     include!("../tests/support/template_issuer_options_behavior.rs");
+    include!("../tests/support/organization_defaults_behavior.rs");
     use marty_signing_grant::{GrantClaims, GrantEnvelope};
     use std::{
         collections::BTreeSet,

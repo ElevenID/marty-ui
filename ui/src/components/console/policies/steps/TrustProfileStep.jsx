@@ -6,7 +6,7 @@ import { loadScopedCatalog } from '../../../../services/loadScopedCatalog';
  * If none exist, shows a message with a redirect to Trust Profile management.
  */
 
-import { useState, useLayoutEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -28,6 +28,8 @@ import { useTranslation } from 'react-i18next';
 
 import { listTrustProfiles } from '../../../../services/presentationPolicyApi';
 import { useConsole } from '../../../../contexts/ConsoleContext';
+import { useOrganizationDefaults } from '../../../../hooks/useOrganizationDefaults';
+import { findOrganizationDefault } from '../../organizationDefaultSelection';
 
 const FRAMEWORK_LABELS = {
   icao: { key: 'icao', icon: '✈️' },
@@ -46,10 +48,15 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
   const { activeOrgId } = useConsole();
+  const { defaults, loading: defaultsLoading } = useOrganizationDefaults(activeOrgId);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [trustProfiles, setTrustProfiles] = useState([]);
+  const [catalogOrganizationId, setCatalogOrganizationId] = useState(null);
   const generation = useRef(0);
+  const initialized = useRef(false);
+
+  useLayoutEffect(() => { initialized.current = false; }, [activeOrgId]);
 
   const fetchTrustProfiles = useCallback(async () => {
     const request = ++generation.current;
@@ -66,11 +73,7 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
       if (request !== generation.current) return;
       const profiles = response.filter((profile) => profile.organization_id === activeOrgId && String(profile.status).toUpperCase() === 'ACTIVE');
       setTrustProfiles(profiles);
-
-      // Auto-select if only one profile exists
-      if (profiles.length === 1 && !selectedTrustProfile) {
-        onSelectTrustProfile(profiles[0]);
-      }
+      setCatalogOrganizationId(activeOrgId);
     } catch (err) {
       if (request !== generation.current) return;
       logTrustProfileStepError('Failed to fetch trust profiles:', err);
@@ -79,18 +82,31 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
     } finally {
       if (request === generation.current) setLoading(false);
     }
-  }, [activeOrgId, selectedTrustProfile, onSelectTrustProfile, t]);
+  }, [activeOrgId, t]);
 
   useLayoutEffect(() => {
     fetchTrustProfiles();
     return () => { generation.current += 1; };
   }, [fetchTrustProfiles]);
 
+  useEffect(() => {
+    if (loading || error || catalogOrganizationId !== activeOrgId) return;
+    if (selectedTrustProfile) initialized.current = true;
+    if (initialized.current || defaultsLoading) return;
+    const preferredTrust = findOrganizationDefault(trustProfiles, defaults?.default_trust_profile_id, activeOrgId);
+    const profile = preferredTrust || (!defaults?.default_trust_profile_id && trustProfiles.length === 1 ? trustProfiles[0] : null);
+    if (profile) {
+      initialized.current = true;
+      onSelectTrustProfile(profile);
+    }
+  }, [activeOrgId, catalogOrganizationId, defaults, defaultsLoading, error, loading, onSelectTrustProfile, selectedTrustProfile, trustProfiles]);
+
   const handleGoToTrustProfiles = () => {
     navigate('/console/org/trust/profiles/new');
   };
 
   const handleSelectProfile = (profile) => {
+    initialized.current = true;
     onSelectTrustProfile(profile);
   };
 

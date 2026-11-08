@@ -27,6 +27,7 @@ async function selectIssuer(user: ReturnType<typeof renderWithRouter>['user'], v
 beforeEach(() => {
   scope.activeOrgId = 'org-a';
   server.use(
+    http.get('*/v1/organizations/:organizationId/defaults', () => HttpResponse.json({})),
     http.get('*/v1/trust-profiles', ({ request }) => HttpResponse.json([{ id: 'trust-1', organization_id: new URL(request.url).searchParams.get('organization_id'), name: 'Trust One', status: 'active' }])),
     http.get('*/v1/compliance-profiles', () => HttpResponse.json([
       { id: 'compliance-sd', name: 'SD Profile', is_system: true, status: 'ACTIVE', credential_format: 'SD_JWT_VC', discoverable: true },

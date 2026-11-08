@@ -33,6 +33,7 @@ import { useConsole } from '../../../contexts/ConsoleContext';
 
 import { useWizard } from '../../../hooks/useWizard';
 import { useAuth } from '../../../hooks/useAuth';
+import { applyAutomaticTemplateConfig, automaticTemplateMatchesTrust, clearAutomaticTemplateConfig } from './policyTemplateDefaults';
 import {
   TrustProfileStep,
   TemplateSelectionStep,
@@ -156,11 +157,11 @@ const PresentationPolicyWizard = () => {
 
   // Handle template selection - pre-populate config
   const handleTemplateSelect = (template) => {
-    const updates = { selectedTemplate: template };
+    const baseConfig = clearAutomaticTemplateConfig(wizard.data.policyConfig, wizard.data.selectedTemplate);
+    const updates = { selectedTemplate: template, policyConfig: baseConfig };
     
     if (template && template.config) {
-      updates.policyConfig = {
-        ...wizard.data.policyConfig,
+      const generatedConfig = {
         name: template.name,
         description: template.description,
         purpose: `Verify ${template.name}`,
@@ -171,8 +172,26 @@ const PresentationPolicyWizard = () => {
           template_id: template.id,
         },
       };
+      if (template._organizationDefault) {
+        updates.policyConfig = applyAutomaticTemplateConfig(baseConfig, generatedConfig, INITIAL_DATA.policyConfig);
+        updates.selectedTemplate = { ...template, _organizationDefault: {
+          ...template._organizationDefault, previousConfig: baseConfig, generatedConfig,
+        } };
+      } else {
+        updates.policyConfig = { ...baseConfig, ...generatedConfig };
+      }
     }
     
+    wizard.updateData(updates);
+  };
+
+  const handleTrustProfileSelect = (profile) => {
+    const updates = { selectedTrustProfile: profile };
+    if (wizard.data.selectedTemplate?._organizationDefault
+      && !automaticTemplateMatchesTrust(wizard.data.selectedTemplate, profile, activeOrgId)) {
+      updates.selectedTemplate = null;
+      updates.policyConfig = clearAutomaticTemplateConfig(wizard.data.policyConfig, wizard.data.selectedTemplate);
+    }
     wizard.updateData(updates);
   };
 
@@ -183,7 +202,7 @@ const PresentationPolicyWizard = () => {
         return (
           <TrustProfileStep
             selectedTrustProfile={wizard.data.selectedTrustProfile}
-            onSelectTrustProfile={(profile) => wizard.updateData({ selectedTrustProfile: profile })}
+            onSelectTrustProfile={handleTrustProfileSelect}
           />
         );
       case 1:

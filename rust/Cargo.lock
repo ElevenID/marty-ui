@@ -4874,6 +4874,7 @@ dependencies = [
  "libc",
  "marty-api-key-policy",
  "marty-key-material-policy",
+ "marty-service-contracts",
  "marty-service-runtime",
  "mmf-core",
  "mmf-data",
