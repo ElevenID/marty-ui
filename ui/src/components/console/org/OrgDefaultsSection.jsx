@@ -73,8 +73,8 @@ function DefaultResourceSelect({ label, value, options, disabled, onChange, none
 
   return (
     <FormControl fullWidth disabled={disabled}>
-      <InputLabel id={`${inputId}-label`}>{label}</InputLabel>
-      <Select id={inputId} labelId={`${inputId}-label`} label={label} value={value} onChange={onChange}>
+      <InputLabel id={`${inputId}-label`} shrink>{label}</InputLabel>
+      <Select id={inputId} labelId={`${inputId}-label`} label={label} value={value} onChange={onChange} displayEmpty>
         <MenuItem value=""><em>{noneLabel}</em></MenuItem>
         {unavailable && <MenuItem value={value} disabled>{unavailableLabel}</MenuItem>}
         {options.map(option => (
@@ -99,6 +99,7 @@ function OrganizationDefaultsForm({ organizationId }) {
   const { can } = usePermissions();
   const canEdit = can('organization', 'edit');
   const requestGeneration = useRef(0);
+  const savePending = useRef(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [loading, setLoading] = useState(Boolean(organizationId));
   const [loaded, setLoaded] = useState(false);
@@ -109,6 +110,7 @@ function OrganizationDefaultsForm({ organizationId }) {
 
   // Defaults state
   const [defaults, setDefaults] = useState(EMPTY_DEFAULTS);
+  const [savedDefaults, setSavedDefaults] = useState(EMPTY_DEFAULTS);
 
   // Available resources
   const [trustProfiles, setTrustProfiles] = useState([]);
@@ -122,6 +124,7 @@ function OrganizationDefaultsForm({ organizationId }) {
   const hasUnavailableDefault = resources.some(({ field, options }) => (
     defaults[field] && !options.some(option => option.id === defaults[field])
   ));
+  const hasChanges = Object.keys(EMPTY_DEFAULTS).some(field => defaults[field] !== savedDefaults[field]);
 
   useEffect(() => {
     const generation = ++requestGeneration.current;
@@ -133,8 +136,10 @@ function OrganizationDefaultsForm({ organizationId }) {
     setLoadError(false);
     setSaveError(false);
     setSaving(false);
+    savePending.current = false;
     setSuccess(false);
     setDefaults(EMPTY_DEFAULTS);
+    setSavedDefaults(EMPTY_DEFAULTS);
     setTrustProfiles([]);
     setPolicies([]);
     setTemplates([]);
@@ -153,7 +158,9 @@ function OrganizationDefaultsForm({ organizationId }) {
 
         if (!isCurrentRequest()) return;
 
-        setDefaults(normalizeDefaults(defaultsData));
+        const initialDefaults = normalizeDefaults(defaultsData);
+        setDefaults(initialDefaults);
+        setSavedDefaults(initialDefaults);
         setTrustProfiles(profilesData.filter(isActiveResource));
         setPolicies(policiesData.filter(isActiveResource));
         setTemplates(templatesData.filter(isActiveResource));
@@ -181,32 +188,40 @@ function OrganizationDefaultsForm({ organizationId }) {
   }, [success]);
 
   const handleSave = async () => {
-    if (!organizationId || !loaded || loading || saving || !canEdit || hasUnavailableDefault) return;
+    if (!organizationId || !loaded || loading || savePending.current || !canEdit || hasUnavailableDefault || !hasChanges) return;
 
     const generation = requestGeneration.current;
     const isCurrentRequest = () => requestGeneration.current === generation;
+    savePending.current = true;
     setSaving(true);
     setSaveError(false);
     setSuccess(false);
 
     try {
-      await updateOrganizationDefaults(organizationId, {
-        default_trust_profile_id: defaults.default_trust_profile_id || null,
-        default_policy_id: defaults.default_policy_id || null,
-        default_template_id: defaults.default_template_id || null,
-      });
-      if (isCurrentRequest()) setSuccess(true);
+      const patch = Object.fromEntries(Object.keys(EMPTY_DEFAULTS)
+        .filter(field => defaults[field] !== savedDefaults[field])
+        .map(field => [field, defaults[field] || null]));
+      const updated = normalizeDefaults(await updateOrganizationDefaults(organizationId, patch));
+      if (isCurrentRequest()) {
+        setDefaults(updated);
+        setSavedDefaults(updated);
+        setSuccess(true);
+      }
     } catch (err) {
       if (!isCurrentRequest()) return;
       logOrgDefaultsError('Failed to save org defaults:', err);
       setSaveError(true);
     } finally {
-      if (isCurrentRequest()) setSaving(false);
+      if (isCurrentRequest()) {
+        savePending.current = false;
+        setSaving(false);
+      }
     }
   };
 
   const handleChange = (field, value) => {
     if (!loaded || loading || saving || !canEdit) return;
+    setSuccess(false);
     setDefaults(prev => ({
       ...prev,
       [field]: value,
@@ -293,7 +308,7 @@ function OrganizationDefaultsForm({ organizationId }) {
                 variant="contained"
                 startIcon={saving ? <CircularProgress size={16} /> : <SaveIcon />}
                 onClick={handleSave}
-                disabled={saving || hasUnavailableDefault}
+                disabled={saving || hasUnavailableDefault || !hasChanges}
               >
                 {saving ? t('org.defaultsSection.actions.saving') : t('org.defaultsSection.actions.save')}
               </Button>

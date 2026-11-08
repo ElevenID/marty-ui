@@ -80,7 +80,7 @@ describe('OrgDefaultsSection', () => {
     scope.activeOrgId = 'org-a';
     mockCan.mockReturnValue(true);
     mockGetDefaults.mockImplementation(async organizationId => defaultsFor(organizationId));
-    mockUpdateDefaults.mockImplementation(async (_organizationId, defaults) => defaults);
+    mockUpdateDefaults.mockImplementation(async (organizationId, patch) => ({ ...defaultsFor(organizationId), ...patch }));
     mockListTrustProfiles.mockImplementation(async ({ organization_id }) => catalogFor(organization_id, 'trust'));
     mockListPolicies.mockImplementation(async ({ organization_id }) => catalogFor(organization_id, 'policy'));
     // The native credential-template API uses uppercase lifecycle status.
@@ -108,7 +108,6 @@ describe('OrgDefaultsSection', () => {
     expect(mockUpdateDefaults).toHaveBeenCalledWith('org-a', {
       default_trust_profile_id: null,
       default_policy_id: null,
-      default_template_id: 'org-a-template',
     });
     expect(await screen.findByText(saveSuccess)).toBeInTheDocument();
   });
@@ -125,6 +124,43 @@ describe('OrgDefaultsSection', () => {
     }
   });
 
+  it('preserves concurrent changes to untouched defaults and reconciles the saved response', async () => {
+    const empty = { default_trust_profile_id: null, default_policy_id: null, default_template_id: null };
+    mockGetDefaults.mockResolvedValueOnce(empty);
+    let stored = { ...empty, default_trust_profile_id: 'org-a-trust-other' };
+    mockUpdateDefaults.mockImplementation(async (_organizationId, patch) => {
+      stored = { ...stored, ...patch };
+      return stored;
+    });
+    const { user } = render(<OrgDefaultsSection />);
+    await screen.findByRole('combobox', { name: policyLabel });
+    expect(screen.getByRole('button', { name: 'Save Defaults' })).toBeDisabled();
+    await user.click(screen.getByRole('combobox', { name: policyLabel }));
+    await user.click(screen.getByRole('option', { name: 'org-a other policy' }));
+    await user.click(screen.getByRole('button', { name: 'Save Defaults' }));
+    expect(await screen.findByText(saveSuccess)).toBeInTheDocument();
+    expect(mockUpdateDefaults).toHaveBeenCalledWith('org-a', { default_policy_id: 'org-a-policy-other' });
+    expect(screen.getByRole('combobox', { name: trustLabel })).toHaveTextContent('org-a other trust');
+    expect(screen.getByRole('button', { name: 'Save Defaults' })).toBeDisabled();
+    await user.click(screen.getByRole('combobox', { name: templateLabel }));
+    await user.click(screen.getByRole('option', { name: 'org-a other template' }));
+    await user.click(screen.getByRole('button', { name: 'Save Defaults' }));
+    await screen.findByText(saveSuccess);
+    expect(mockUpdateDefaults).toHaveBeenLastCalledWith('org-a', { default_template_id: 'org-a-template-other' });
+    expect(stored).toEqual({ default_trust_profile_id: 'org-a-trust-other', default_policy_id: 'org-a-policy-other', default_template_id: 'org-a-template-other' });
+  });
+
+  it('does not report success for an incomplete saved response', async () => {
+    mockUpdateDefaults.mockResolvedValueOnce({ default_trust_profile_id: null });
+    const { user } = render(<OrgDefaultsSection />);
+    await user.click(await screen.findByRole('combobox', { name: trustLabel }));
+    await user.click(screen.getByRole('option', { name: noneLabel }));
+    await user.click(screen.getByRole('button', { name: 'Save Defaults' }));
+    expect(await screen.findByText(saveError)).toBeInTheDocument();
+    expect(screen.queryByText(saveSuccess)).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: trustLabel })).toHaveTextContent(noneLabel);
+  });
+
   it.each(['defaults', 'catalog'])('requires a successful %s load before editing and supports retry', async failedRequest => {
     const request = failedRequest === 'defaults' ? mockGetDefaults : mockListPolicies;
     request.mockRejectedValueOnce(new Error('Service unavailable'));
@@ -138,8 +174,10 @@ describe('OrgDefaultsSection', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('combobox', { name: trustLabel })).toHaveTextContent('org-a trust');
     expect(screen.queryByText(loadError)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('combobox', { name: policyLabel }));
+    await user.click(screen.getByRole('option', { name: 'org-a other policy' }));
     await user.click(screen.getByRole('button', { name: 'Save Defaults' }));
-    expect(mockUpdateDefaults).toHaveBeenCalledWith('org-a', defaultsFor('org-a'));
+    expect(mockUpdateDefaults).toHaveBeenCalledWith('org-a', { default_policy_id: 'org-a-policy-other' });
   });
 
   it('rejects incomplete defaults instead of treating missing fields as empty selections', async () => {
@@ -189,8 +227,10 @@ describe('OrgDefaultsSection', () => {
     }
 
     expect(screen.getByRole('combobox', { name: trustLabel })).toHaveTextContent('org-b trust');
+    await view.user.click(screen.getByRole('combobox', { name: trustLabel }));
+    await view.user.click(screen.getByRole('option', { name: 'org-b other trust' }));
     await view.user.click(screen.getByRole('button', { name: 'Save Defaults' }));
-    expect(mockUpdateDefaults).toHaveBeenCalledWith('org-b', defaultsFor('org-b'));
+    expect(mockUpdateDefaults).toHaveBeenCalledWith('org-b', { default_trust_profile_id: 'org-b-trust-other' });
   });
 
   it('discards unsaved defaults when switching to an organization whose load fails', async () => {
@@ -215,13 +255,17 @@ describe('OrgDefaultsSection', () => {
       organizationId === 'org-a' ? previousSave.promise : currentSave.promise
     ));
     const view = render(<OrgDefaultsSection />);
-    await view.user.click(await screen.findByRole('button', { name: 'Save Defaults' }));
-    expect(mockUpdateDefaults).toHaveBeenCalledWith('org-a', defaultsFor('org-a'));
+    await view.user.click(await screen.findByRole('combobox', { name: trustLabel }));
+    await view.user.click(screen.getByRole('option', { name: 'org-a other trust' }));
+    await view.user.click(screen.getByRole('button', { name: 'Save Defaults' }));
+    expect(mockUpdateDefaults).toHaveBeenCalledWith('org-a', { default_trust_profile_id: 'org-a-trust-other' });
 
     scope.activeOrgId = 'org-b';
     view.rerender(<OrgDefaultsSection />);
-    await view.user.click(await screen.findByRole('button', { name: 'Save Defaults' }));
-    expect(mockUpdateDefaults).toHaveBeenLastCalledWith('org-b', defaultsFor('org-b'));
+    await view.user.click(await screen.findByRole('combobox', { name: trustLabel }));
+    await view.user.click(screen.getByRole('option', { name: 'org-b other trust' }));
+    await view.user.click(screen.getByRole('button', { name: 'Save Defaults' }));
+    expect(mockUpdateDefaults).toHaveBeenLastCalledWith('org-b', { default_trust_profile_id: 'org-b-trust-other' });
 
     await act(async () => {
       if (outcome === 'success') previousSave.resolve(defaultsFor('org-a'));
@@ -233,7 +277,7 @@ describe('OrgDefaultsSection', () => {
 
     await act(async () => currentSave.resolve(defaultsFor('org-b')));
     expect(await screen.findByText(saveSuccess)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save Defaults' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save Defaults' })).toBeDisabled();
   });
 
   it('retains selected values when a save fails and retries the same scoped data', async () => {
@@ -251,7 +295,7 @@ describe('OrgDefaultsSection', () => {
     expect(screen.queryByText(saveError)).not.toBeInTheDocument();
     expect(mockUpdateDefaults).toHaveBeenCalledTimes(2);
     expect(mockUpdateDefaults).toHaveBeenLastCalledWith('org-a', {
-      ...defaultsFor('org-a'), default_trust_profile_id: 'org-a-trust-other',
+      default_trust_profile_id: 'org-a-trust-other',
     });
     expect(mockGetDefaults).toHaveBeenCalledTimes(1);
   });
@@ -283,7 +327,7 @@ describe('OrgDefaultsSection', () => {
     expect(screen.getByRole('button', { name: 'Save Defaults' })).toBeEnabled();
     await user.click(screen.getByRole('button', { name: 'Save Defaults' }));
     await waitFor(() => expect(mockUpdateDefaults).toHaveBeenCalledWith('org-a', {
-      ...defaultsFor('org-a'), default_trust_profile_id: null,
+      default_trust_profile_id: null,
     }));
   });
 });
