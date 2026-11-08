@@ -23,11 +23,23 @@ fi
 realm="${KEYCLOAK_REALM:-11id}"
 kcadm="${KCADM_PATH:-/opt/keycloak/bin/kcadm.sh}"
 
-find_user_id() {
+find_user_ids() {
     local email="$1"
-    local payload
-    payload="$(${kcadm} get users -r "${realm}" -q "email=${email}" --fields id,email 2>/dev/null || true)"
-    echo "${payload}" | tr -d '\n' | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+    local payload row user_id found_email
+    if ! payload="$("${kcadm}" get users -r "${realm}" -q "email=${email}" -q exact=true --fields id,email --format csv --noquotes)"; then
+        echo "[ERROR] Keycloak demo-user lookup failed for ${email}" >&2
+        return 1
+    fi
+    [[ -z "${payload}" ]] && return 0
+    while IFS= read -r row; do
+        user_id="${row%%,*}"
+        found_email="${row#*,}"
+        if [[ "${row}" != *,* || ! "${user_id}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ || "${found_email}" != "${email}" ]]; then
+            echo "[ERROR] Unexpected Keycloak demo-user lookup result for ${email}" >&2
+            return 1
+        fi
+        printf '%s\n' "${user_id}"
+    done <<< "${payload}"
 }
 
 for email in \
@@ -40,11 +52,11 @@ for email in \
     carlos.garcia@marty.demo \
     verifier@marty.demo
 do
-    user_id="$(find_user_id "${email}")"
-    if [[ -n "${user_id}" ]]; then
+    user_ids="$(find_user_ids "${email}")"
+    for user_id in ${user_ids}; do
         echo "[INFO] Removing demo Keycloak user ${email}"
         "${kcadm}" delete "users/${user_id}" -r "${realm}"
-    fi
+    done
 done
 
 echo "[INFO] Keycloak self-host production cleanup complete"
