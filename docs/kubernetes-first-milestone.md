@@ -17,6 +17,7 @@ qualification or admit a release to the consumer installation channel.
 | Database, Redis and applicant storage | StatefulSets/PVCs and a single-writer applicant Deployment |
 | Migration and Keycloak configuration | Kubernetes Jobs and the existing application commands |
 | Workload signing keys, certificates and scoped tokens | Existing native Marty producers and the OpenBao CLI |
+| Application credential publication | Existing native Secret publisher and ordinary `kubectl apply` |
 | Release verification | Existing inventory validation, pinned `gh` and `cosign` verifiers |
 | Trial shutdown | A systemd timer with an absolute UTC deadline |
 
@@ -163,6 +164,26 @@ kubeconfig and context, a dedicated namespace, the authenticated artifact set,
 the two pinned verifiers, Helm, and the pinned chart archive. The bootstrap
 performs the full shared verification again before writing to the cluster.
 
+The authenticated `marty-deploy` must support the read-only
+`kubernetes-secrets-contract` command. Before selecting the Kubernetes context
+or creating any resource, bootstrap compares its compiled publication contract
+with this checkout's `deploy-config/catalog/kubernetes-secrets.json`. Schema
+`marty.kubernetes-secret-publication/v1` contains the compiled required inputs,
+Secret names, keys and input mappings used by the native publisher. It contains
+no credential values and requires no repository, kubeconfig or credentials:
+
+```sh
+/absolute/path/to/authenticated/marty-deploy kubernetes-secrets-contract
+```
+
+An unsupported command, malformed contract or different mapping stops bootstrap
+before cluster access. Select a compatible signed runtime to proceed. The
+operator's dynamic `--repo-root` input catalog cannot establish what an older
+binary publishes, and bootstrap does not infer support from a release tag,
+Secret count or existing cluster resources. Runtime and chart source commits
+may still differ when their publication contracts agree. The metadata command
+does not replace the signed inventory and build-identity verification above.
+
 The output contains `marty-images.json` and `openbao-images.json`. The Marty
 output preserves the signed `ui-selfhost` image and the signed PostgreSQL/Redis
 references. Runtime source and chart source are recorded separately. The
@@ -174,6 +195,21 @@ receive public certificates, scoped KMS credentials, and distinct service
 credentials through Kubernetes Secrets. The initial application operator has a
 separate generated password in the `marty-operator` Secret. It does not reuse
 Keycloak's bootstrap administrator password.
+
+The native publisher owns both `notification-workload-tls` and
+`notification-tls-kms` in the same catalog as the other workload credentials.
+Bootstrap creates only the separate initial `marty-operator` login afterward.
+The supported bootstrap uses the catalog's default Secret names; Helm's
+`existingSecrets` overrides require separately provisioned matching Secrets.
+
+`kubernetes-secret-publication.json` retains the checked, nonsecret compiled
+contract before cluster access. Successful `bootstrap-complete.json` includes
+the same contract as `credentialPublication`. This records publisher capability
+and ownership, not Kubernetes resource versions, token expiration or proof that
+an application has loaded its credentials. All native inputs are validated
+before publication, but sequential Secret applies are not an atomic operation.
+If an apply or the later operator-login creation fails, earlier Secrets may
+already exist; bootstrap withholds completion and preserves the attempt.
 
 The private state retains the original producer identity needed for later
 credential lifecycle work. Before OpenBao initialization,
