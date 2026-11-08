@@ -114,7 +114,7 @@ def _produce_generation(config,current,logical_project,cycle_id,services_image,c
     require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',project))
     require(re.fullmatch(r'[a-z0-9./_-]+@sha256:[0-9a-f]{64}',native['helper_image']))
     require(re.fullmatch(r'[0-9a-f]{32}',cycle_id))
-    require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',logical_project))
+    require(re.fullmatch(r'marty-selfhost-[a-z0-9][a-z0-9-]{0,59}',logical_project))
     root='/control/windows-renewal-'+cycle_id
     require(native['renewed']==root+'/generation' and native['token_file']=='/control/recovery-session-'+cycle_id+'/token')
     require(native['control_volume']==project+'-renewal-control' and native['network']==project+'_default'

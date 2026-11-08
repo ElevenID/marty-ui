@@ -731,7 +731,9 @@ def _stage(config,choice,values,record,root,logical_project,stack):
     parent=Path(config['current_secrets']).parent;root=Path(root)
     require(root.parent==parent and re.fullmatch(r'windows-renewal-[0-9a-f]{32}',root.name))
     require(not renewal.recovery_pending(config) and not list(root.iterdir()))
-    require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',logical_project))
+    # The signed selfhost-renew TLS helper requires this prefix before it can
+    # provision any credentials. Refuse incompatible input before journaling.
+    require(re.fullmatch(r'marty-selfhost-[a-z0-9][a-z0-9-]{0,59}',logical_project))
     stack.enter_context(renewal.hold_storage_namespace(root))
     with _held_private_input(root,directory=True):pass
     observed=_inspect(config,choice,values,stack,expected_data=record['data_sha256'])
