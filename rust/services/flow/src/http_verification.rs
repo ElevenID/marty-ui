@@ -587,6 +587,13 @@ async fn evaluate_submission(
     match prepared {
         PreparedVerificationSubmission::Final(mut finalization) => {
             finalization.expected_instance = expected_instance;
+            if finalization.receipt_input.is_some() {
+                finalization.receipt_input = Some(
+                    crate::verification_receipt::PreparedVerificationReceipt::prepare(
+                        &finalization,
+                    )?,
+                );
+            }
             commit_verification(state, &finalization, permit_terminal_replay).await
         }
         PreparedVerificationSubmission::Retryable(response) => Ok(response),
@@ -621,8 +628,14 @@ async fn commit_verification(
     finalization: &PreparedVerificationFinalization,
     permit_terminal_replay: bool,
 ) -> Result<crate::VerificationResultResponse, FlowHttpError> {
-    let response = finalization.instance.verification_projection()?;
-    if !state
+    let response = if finalization.receipt_input.is_some() {
+        state
+            .repository
+            .finalize_verification_with_receipt(finalization)
+            .await?
+            .map(|committed| committed.instance().verification_projection())
+            .transpose()?
+    } else if state
         .repository
         .finalize_verification(
             &finalization.instance,
@@ -633,29 +646,34 @@ async fn commit_verification(
         )
         .await?
     {
-        let current = required_instance(state, &finalization.instance.id).await?;
-        let same_digest = current
-            .result
-            .as_ref()
-            .and_then(|result| result.get("submission_digest"))
-            .and_then(Value::as_str)
-            .is_some_and(|digest| constant_time_equal(digest, &finalization.submission_digest));
-        if same_digest && permit_terminal_replay {
-            return Ok(current.verification_projection()?);
-        }
-        if same_digest {
-            return Err(already_processed());
-        }
-        if matches!(
-            current.status,
-            marty_verification::flow::FlowInstanceStatus::AwaitingWallet
-                | marty_verification::flow::FlowInstanceStatus::InProgress
-        ) {
-            return Err(verification_request_changed());
-        }
-        return Err(replay_conflict());
+        Some(finalization.instance.verification_projection()?)
+    } else {
+        None
+    };
+    if let Some(response) = response {
+        return Ok(response);
     }
-    Ok(response)
+    let current = required_instance(state, &finalization.instance.id).await?;
+    let same_digest = current
+        .result
+        .as_ref()
+        .and_then(|result| result.get("submission_digest"))
+        .and_then(Value::as_str)
+        .is_some_and(|digest| constant_time_equal(digest, &finalization.submission_digest));
+    if same_digest && permit_terminal_replay {
+        return Ok(current.verification_projection()?);
+    }
+    if same_digest {
+        return Err(already_processed());
+    }
+    if matches!(
+        current.status,
+        marty_verification::flow::FlowInstanceStatus::AwaitingWallet
+            | marty_verification::flow::FlowInstanceStatus::InProgress
+    ) {
+        return Err(verification_request_changed());
+    }
+    Err(replay_conflict())
 }
 
 async fn submit_siop(

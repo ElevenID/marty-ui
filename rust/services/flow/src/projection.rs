@@ -264,6 +264,9 @@ pub struct VerificationResultResponse {
     pub decision_reason: Option<String>,
     pub verified_claims: Value,
     pub credential_results: Vec<Value>,
+    /// Untrusted wire projection of Flow's persisted finalization receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_receipt: Option<marty_oid4vp_contract::FlowVerificationReceiptV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_presentation_attempt: Option<marty_oid4vp_contract::RejectedPresentationAttemptV1>,
     pub error_codes: Vec<String>,
@@ -302,6 +305,12 @@ pub fn project_verification_result(
         .map(public_context)
         .filter(Value::is_object)
         .unwrap_or_else(|| Value::Object(Map::new()));
+    let verification_receipt = stored_verification_receipt(input)?;
+    let evaluation_timestamp = optional_result_string(result, "evaluation_timestamp")?
+        .or_else(|| input.completed_at.clone());
+    if let Some(timestamp) = &evaluation_timestamp {
+        validate_timestamp(timestamp, "verification.evaluation_timestamp")?;
+    }
     Ok(VerificationResultResponse {
         instance_id: input.id.clone(),
         status: public_status(input.status).into(),
@@ -311,11 +320,57 @@ pub fn project_verification_result(
             .or_else(|| input.error.clone()),
         verified_claims,
         credential_results: public_object_array(result, "credential_results"),
+        verification_receipt,
         last_presentation_attempt: last_presentation_attempt(input),
         error_codes: public_string_array(result, "error_codes"),
         warnings: public_string_array(result, "warnings"),
-        evaluation_timestamp: input.completed_at.clone(),
+        evaluation_timestamp,
     })
+}
+
+fn stored_verification_receipt(
+    input: &InstanceProjectionInput,
+) -> Result<Option<marty_oid4vp_contract::FlowVerificationReceiptV1>, FlowProjectionError> {
+    use marty_oid4vp_contract::{FlowVerificationReceiptV1, VERIFICATION_RECEIPT};
+    let Some(result) = input.result.as_ref() else {
+        return Ok(None);
+    };
+    let Some(value) = result.get(VERIFICATION_RECEIPT) else {
+        return Ok(None);
+    };
+    let receipt: FlowVerificationReceiptV1 =
+        serde_json::from_value(value.clone()).map_err(|_| invalid("verification_receipt"))?;
+    let mut basis = result.clone();
+    basis
+        .as_object_mut()
+        .ok_or_else(|| invalid("verification_receipt"))?
+        .remove(VERIFICATION_RECEIPT);
+    receipt
+        .validate()
+        .map_err(|_| invalid("verification_receipt"))?;
+    receipt
+        .validate_result(&basis)
+        .map_err(|_| invalid("verification_receipt"))?;
+    let policy_time = basis["evaluation_timestamp"]
+        .as_str()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.timestamp_micros());
+    if !matches!(
+        input.status,
+        FlowInstanceStatus::Completed | FlowInstanceStatus::Failed
+    ) || receipt.organization_id != input.organization_id
+        || receipt.flow_instance_id != input.id
+        || input.context["presentation_policy_id"].as_str() != Some(receipt.policy.id.as_str())
+        || policy_time != Some(receipt.policy_evaluated_at_epoch_micros)
+        || input.context["nonce"]
+            .as_str()
+            .map(|nonce| crate::verification_submission::sha256_hex(nonce.as_bytes()))
+            .as_deref()
+            != Some(receipt.nonce_digest.as_str())
+    {
+        return Err(invalid("verification_receipt"));
+    }
+    Ok(Some(receipt))
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

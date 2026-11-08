@@ -44,6 +44,7 @@ pub struct PreparedVerificationFinalization {
     pub replay_expires_at_ms: u64,
     pub callback: Option<Message>,
     pub submission_digest: String,
+    pub(crate) receipt_input: Option<crate::verification_receipt::PreparedVerificationReceipt>,
 }
 
 #[derive(Clone, Debug)]
@@ -449,6 +450,16 @@ pub async fn prepare_verification_submission(
         "warnings": warnings,
         "submission_digest": submission_digest
     }));
+    if let Some(timestamp) = evaluation.evaluation_timestamp.as_deref() {
+        let timestamp = crate::verification_receipt::canonical_policy_timestamp(timestamp)
+            .map_err(|_| FlowVerificationSubmissionError::InvalidClock)?;
+        instance.result.as_mut().expect("result was assigned")["evaluation_timestamp"] =
+            json!(timestamp);
+    } else if frozen.credential_authority.is_some() {
+        return Err(FlowVerificationSubmissionError::InvalidContext(
+            "policy_evaluation_timestamp",
+        ));
+    }
     record_verification_result_message(&mut instance, &policy_id, options, now)?;
     instance.kernel()?;
     let callback = build_callback(&instance, &policy_id, options, now)?;
@@ -464,15 +475,25 @@ pub async fn prepare_verification_submission(
         );
     let replay_expires_at_ms = u64::try_from(replay_expires_at.timestamp_millis())
         .map_err(|_| FlowVerificationSubmissionError::InvalidClock)?;
+    let mut finalization = PreparedVerificationFinalization {
+        instance,
+        expected_instance,
+        nonce_digest: sha256_hex(nonce.as_bytes()),
+        replay_expires_at_ms,
+        callback,
+        submission_digest,
+        receipt_input: None,
+    };
+    if evaluation.evaluation_timestamp.is_some() {
+        finalization.receipt_input = Some(
+            crate::verification_receipt::PreparedVerificationReceipt::prepare(&finalization)
+                .map_err(|_| {
+                    FlowVerificationSubmissionError::InvalidContext("verification_receipt")
+                })?,
+        );
+    }
     Ok(PreparedVerificationSubmission::Final(Box::new(
-        PreparedVerificationFinalization {
-            instance,
-            expected_instance,
-            nonce_digest: sha256_hex(nonce.as_bytes()),
-            replay_expires_at_ms,
-            callback,
-            submission_digest,
-        },
+        finalization,
     )))
 }
 
@@ -761,6 +782,7 @@ fn retryable_response(
         decision_reason: Some(reason.into()),
         verified_claims: json!({}),
         credential_results: Vec::new(),
+        verification_receipt: None,
         last_presentation_attempt: None,
         error_codes: Vec::new(),
         warnings: Vec::new(),
@@ -839,6 +861,11 @@ fn record_verification_result_message(
         .get("nonce")
         .cloned()
         .unwrap_or(Value::Null);
+    let evaluated_at = result
+        .get("evaluation_timestamp")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| now.to_rfc3339());
     let message = json!({
         "mip_version": "0.3.1",
         "message_type": "VerificationResult",
@@ -861,7 +888,7 @@ fn record_verification_result_message(
             "trust_chain_valid": trust_valid,
             "revocation_checked": revocation_checked,
             "revocation_status": match not_revoked { Some(true) => "VALID", Some(false) => "REVOKED", None => "UNKNOWN" },
-            "evaluated_at": now.to_rfc3339(),
+            "evaluated_at": evaluated_at,
             "verifier_nonce": instance.context.get("nonce").and_then(Value::as_str).unwrap_or_default()
         },
         "signature": null
@@ -995,6 +1022,7 @@ mod tests {
     #[test]
     fn authentication_failure_diagnostic_excludes_claims_tokens_and_warning_text() {
         let evaluation = PresentationEvaluationResult {
+            evaluation_timestamp: None,
             policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity {
                 id: "policy-1".into(),
                 version: 1,

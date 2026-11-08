@@ -11,8 +11,16 @@ The native query record remains partial. The opt-in managed profile now adds
 Trust Profile-owned issuer/type authorization and Issuance-owned lifecycle
 observations, bound to that native record. Neither record is
 `AuthenticatedOid4vpEvidenceV1`, asserts durable replay consumption, or grants
-issuance authority. Durable replay evidence and an issuance-owned continuation
-remain required before the prerequisite-to-issuance workflow is complete.
+issuance authority. Canonical replay composition and an issuance-owned
+continuation remain required before the prerequisite-to-issuance workflow is
+complete.
+
+[Flow verification receipts](flow-verification-receipts.md) now provide a
+separate postcommit persistence record for the frozen request, submission,
+terminal result and nonce consumption. This does not promote either native
+record to canonical evidence or establish policy freshness at commit. Canonical
+composition, authenticated owner-channel provenance and an issuance-owned
+continuation remain required.
 
 ## Supported profile
 
@@ -223,8 +231,10 @@ An observation deadline is a freshness bound, not a promise that trust or status
 cannot change after the read. No cross-service atomic lock is claimed. Flow's
 existing finalization still commits nonce consumption, original request context,
 result and callback together after evaluation. Its precommit replay flag is not
-a durable consumption receipt. Converting that commit into canonical replay
-evidence, and then into an issuance-owned continuation, remains separate work.
+a durable consumption receipt. The separate Flow receipt is constructed inside
+that transaction and exposed only after successful commit. Composing it into
+canonical replay evidence, and then an issuance-owned continuation, remains
+separate work.
 
 ## Review and regression coverage
 
@@ -275,7 +285,7 @@ separate gate from compilation and tests that return early without a database.
 ## Next implementation boundary
 
 Complete the canonical evidence producer with authenticated owner-channel
-provenance and a durable replay receipt for this selected profile. Policy
+provenance and the separately persisted Flow replay receipt. Policy
 observation time and Flow commit time must remain distinct; do not label a
 precommit timestamp as nonce consumption. Then bind
 that evidence to one tenant, issuing template and exact dataset through an
