@@ -106,6 +106,7 @@ pub mod installer_trust;
 pub mod installer_uninstall;
 pub mod installer_validation;
 pub mod installer_verify;
+pub mod kubernetes_application;
 pub mod kubernetes_secrets;
 pub mod passport_model;
 

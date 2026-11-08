@@ -294,8 +294,37 @@ fn kubernetes_application_metadata(params: &[String]) -> Result<String, String> 
     }
 }
 
+fn kubernetes_activation_usage_error() -> String {
+    usage_error(
+        &command_usage("kubernetes-application-activation-contract"),
+        "marty-deploy kubernetes-application-activation-contract",
+        "this command accepts no arguments except -h or --help",
+    )
+}
+
+fn kubernetes_activation_metadata(params: &[String]) -> Result<String, String> {
+    match params {
+        [] => serde_json::to_string(
+            &marty_deployment_catalog::kubernetes_application::activation_metadata(),
+        )
+        .map(|metadata| format!("{metadata}\n"))
+        .map_err(|_| "cannot encode compiled activation metadata".to_owned()),
+        [help] if help == "--help" || help == "-h" => {
+            Ok(frozen_help("kubernetes-application-activation-contract"))
+        }
+        _ => Err(kubernetes_activation_usage_error()),
+    }
+}
+
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|arg| arg == "kubernetes-application-activation-contract")
+    {
+        print!("{}", kubernetes_activation_metadata(&args[1..])?);
+        return Ok(());
+    }
     if args
         .first()
         .is_some_and(|arg| arg == "kubernetes-application-token-contract")
@@ -841,7 +870,7 @@ fn run() -> Result<(), String> {
                 serde_json::to_writer(&mut output, &value).map_err(|_| refusal)?;
                 output.flush().map_err(|_| refusal)
             }
-            Some("application-token-stage") if args.len() == 5 => {
+            Some("application-token-stage" | "application-token-verify") if args.len() == 5 => {
                 use marty_deployment_catalog::application_authority;
                 use std::{io::IsTerminal, path::Path, time::Duration};
                 if std::io::stdout().is_terminal() {
@@ -866,15 +895,41 @@ fn run() -> Result<(), String> {
                     .enable_all()
                     .build()
                     .map_err(|_| REFUSAL)?
-                    .block_on(application_authority::stage(
-                        &bao,
-                        Path::new(&args[4]),
-                        &context,
-                    ))?;
+                    .block_on(async {
+                        if args[1] == "application-token-verify" {
+                            application_authority::verify_candidate(
+                                &bao,
+                                Path::new(&args[4]),
+                                &context,
+                            )
+                            .await
+                        } else {
+                            application_authority::stage(&bao, Path::new(&args[4]), &context).await
+                        }
+                    })?;
                 let mut output = std::io::stdout().lock();
                 serde_json::to_writer(&mut output, &value)
                     .map_err(|_| application_authority::RECOVERY)?;
                 output.flush().map_err(|_| application_authority::RECOVERY)
+            }
+            Some("kubernetes-application-publication") if args.len() == 2 => {
+                use std::io::IsTerminal;
+                if std::io::stdout().is_terminal() {
+                    return Err(REFUSAL.into());
+                }
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let value = marty_deployment_catalog::kubernetes_application::operation(&context)?;
+                let mut output = std::io::stdout().lock();
+                serde_json::to_writer(&mut output, &value).map_err(|_| REFUSAL)?;
+                output.flush().map_err(|_| REFUSAL)
             }
             Some("generation") if args.len() == 2 => {
                 use marty_deployment_catalog::generation;
@@ -1230,6 +1285,9 @@ fn run() -> Result<(), String> {
     }
     if command == "kubernetes-application-token-contract" {
         return Err(kubernetes_application_usage_error());
+    }
+    if command == "kubernetes-application-activation-contract" {
+        return Err(kubernetes_activation_usage_error());
     }
     let params = &args[1..];
     if params.iter().any(|arg| arg == "--help" || arg == "-h") {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import base64
 import os
 from pathlib import Path
 import re
@@ -17,7 +18,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = "synthetic-existing-shared-token-$literal;not-a-command"
-METADATA_COMMANDS = ("kubernetes-secrets-contract", "kubernetes-application-token-contract")
+METADATA_COMMANDS = ("kubernetes-secrets-contract", "kubernetes-application-token-contract",
+                     "kubernetes-application-activation-contract")
 FUNCTIONS = (
     "catalog_required_secret_envs",
     "is_placeholder_secret",
@@ -130,6 +132,17 @@ def test_native_publication_contract_is_compiled_and_needs_no_inputs_repo_or_clu
         if command == "kubernetes-secrets-contract"
         else json.loads((ROOT / "deploy-config/catalog/kubernetes-application-tokens.json").read_bytes())
     )
+    if command == "kubernetes-application-activation-contract":
+        application = json.loads((ROOT / "deploy-config/catalog/kubernetes-application-tokens.json").read_bytes())
+        expected = {
+            "schema": "marty.kubernetes-application-activation/v1",
+            "destination": "marty-secrets",
+            "activationAnnotation": "marty.elevenid.com/application-activation",
+            "minimumTtlSeconds": 1800,
+            "inputs": sorted(({"input": entry["input"], "file": entry["file"], "key": entry["input"]}
+                              for entry in application["tokens"] if entry["replacementRole"] is not None),
+                             key=lambda entry: entry["input"]),
+        }
     assert json.loads(result.stdout) == expected
     assert "PRIVATE_" not in result.stdout
     assert not (tmp_path / "native-manifest.json").exists()
@@ -174,6 +187,129 @@ def test_native_publication_contract_rejects_repository_prefix_before_help_or_ca
     assert result.stdout == ""
     assert f"usage: marty-deploy {command}" in result.stderr
     assert "/invalid" not in result.stderr
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+@pytest.fixture
+def application_publication(tmp_path):
+    if os.name != "posix":
+        pytest.skip("Private application activation uses POSIX operator custody")
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import bootstrap_kubernetes_openbao as bootstrap
+
+    tmp_path.chmod(0o700)
+    current, candidate = tmp_path / "current", tmp_path / "candidate"
+    current.mkdir(mode=0o700)
+    candidate.mkdir(mode=0o700)
+    application = json.loads((ROOT / "deploy-config/catalog/kubernetes-application-tokens.json").read_bytes())
+    replacements = {entry["file"]: entry["input"] for entry in application["tokens"]
+                    if entry["replacementRole"] is not None}
+    names = set(bootstrap.SELFHOST_TLS_FILES) | bootstrap.KEYCLOAK_FILES | set(bootstrap.TOKEN_FILES.values())
+    before, after = {}, {}
+    for name in names:
+        before[name] = ("PRIVATE_CURRENT_CANARY_" + name).encode()
+        after[name] = (("PRIVATE_CANDIDATE_CANARY_" + name).encode()
+                       if name in replacements else before[name])
+        for directory, payload in ((current, before[name]), (candidate, after[name])):
+            (directory / name).write_bytes(payload)
+            (directory / name).chmod(0o600)
+    secret = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+              "metadata": {"name": "marty-secrets", "namespace": "marty-test",
+                           "uid": "69c5c551-e49f-43c7-a4d5-83d0e385b225", "resourceVersion": "41",
+                           "annotations": {"example.test/preserve": "original"}},
+              "data": {key: base64.b64encode(before[name]).decode()
+                       for name, key in replacements.items()}}
+    secret["data"]["TOKEN_HMAC_KEY"] = base64.b64encode(b"PRIVATE_PRESERVED_HMAC_CANARY").decode()
+    source = tmp_path / "before.json"
+    source.write_text(json.dumps(secret))
+    source.chmod(0o600)
+    request = {"operation": "prepare", "namespace": "marty-test", "current": str(current),
+               "candidate": str(candidate), "observed": str(source), "output": str(tmp_path / "patch.json"),
+               "activationId": "0123456789abcdef0123456789abcdef"}
+    return request, secret, before, after, replacements
+
+
+def native_application_publication(native_tools, tmp_path, request):
+    return subprocess.run(
+        [str(native_tools[0]), "operator", "kubernetes-application-publication"],
+        input=json.dumps(request), text=True, capture_output=True, timeout=20,
+        cwd=tmp_path, env={"PATH": str(native_tools[1].parent), "TEST_ROOT": str(tmp_path)},
+    )
+
+
+def test_native_application_patch_and_observation_keep_payloads_private(
+    native_tools, tmp_path, application_publication,
+):
+    request, secret, before, after, replacements = application_publication
+    result = native_application_publication(native_tools, tmp_path, request)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"ready": True, "secret": "marty-secrets", "count": 11}
+    assert "PRIVATE_" not in result.stdout + result.stderr
+    patch_path = Path(request["output"])
+    assert patch_path.stat().st_mode & 0o7777 == 0o600
+    patch = json.loads(patch_path.read_text())
+    assert patch[:2] == [
+        {"op": "test", "path": "/metadata/uid", "value": secret["metadata"]["uid"]},
+        {"op": "test", "path": "/metadata/resourceVersion", "value": "41"},
+    ]
+    assert len(patch) == 14
+    applied = json.loads(json.dumps(secret))
+    for name, key in replacements.items():
+        applied["data"][key] = base64.b64encode(after[name]).decode()
+    applied["metadata"]["resourceVersion"] = "42"
+    applied["metadata"]["annotations"]["marty.elevenid.com/application-activation"] = request["activationId"]
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps(applied))
+    result_path.chmod(0o600)
+    verify = {key: value for key, value in request.items() if key != "output"}
+    verify.update(operation="verify", result=str(result_path))
+    result = native_application_publication(native_tools, tmp_path, verify)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["state"] == "candidate"
+    assert "PRIVATE_" not in result.stdout + result.stderr
+    for path, expected in ((Path(request["current"]), before), (Path(request["candidate"]), after)):
+        assert {file.name: file.read_bytes() for file in path.iterdir()} == expected
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+@pytest.mark.parametrize("drift", ["uid", "version", "preserved-key", "marker"])
+def test_native_application_outcome_refuses_conflicting_or_foreign_writers(
+    native_tools, tmp_path, application_publication, drift,
+):
+    request, secret, _, after, replacements = application_publication
+    observed = json.loads(json.dumps(secret))
+    for name, key in replacements.items():
+        observed["data"][key] = base64.b64encode(after[name]).decode()
+    observed["metadata"]["resourceVersion"] = "42"
+    observed["metadata"]["annotations"]["marty.elevenid.com/application-activation"] = request["activationId"]
+    if drift == "uid":
+        observed["metadata"]["uid"] = "2949fcec-a21a-41d1-a774-e833c93c1f57"
+    elif drift == "version":
+        observed["metadata"]["resourceVersion"] = "41"
+    elif drift == "preserved-key":
+        observed["data"]["TOKEN_HMAC_KEY"] = base64.b64encode(b"PRIVATE_FOREIGN_WRITER_CANARY").decode()
+    else:
+        observed["metadata"]["annotations"]["marty.elevenid.com/application-activation"] = "a" * 32
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps(observed))
+    result_path.chmod(0o600)
+    verify = {key: value for key, value in request.items() if key != "output"}
+    verify.update(operation="verify", result=str(result_path))
+    result = native_application_publication(native_tools, tmp_path, verify)
+    assert result.returncode != 0
+    assert "PRIVATE_" not in result.stdout + result.stderr
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+def test_native_application_patch_refuses_incomplete_generation_before_output(
+    native_tools, tmp_path, application_publication,
+):
+    request, _, _, _, _ = application_publication
+    (Path(request["candidate"]) / "keycloak_signing_kms_token").unlink()
+    result = native_application_publication(native_tools, tmp_path, request)
+    assert result.returncode != 0
+    assert "PRIVATE_" not in result.stdout + result.stderr
+    assert not Path(request["output"]).exists()
     assert not (tmp_path / "native-manifest.json").exists()
 
 

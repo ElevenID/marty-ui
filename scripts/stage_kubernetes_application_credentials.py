@@ -27,6 +27,7 @@ import subprocess
 import tarfile
 
 import bootstrap_kubernetes_openbao as bootstrap
+import kubernetes_application_state as application_state
 
 
 FILE_MODES = {0o400, 0o440, 0o444, 0o600, 0o640, 0o644}
@@ -161,11 +162,12 @@ def validate_native_evidence(payload: bytes, runtime_files: set[str], *, complet
 
 def stage(args: argparse.Namespace) -> None:
     bootstrap.require(os.name == "posix", "this development transport requires Linux")
+    with application_state.locked(args.state_dir) as held:
+        _stage_locked(args, held)
+
+
+def _stage_locked(args: argparse.Namespace, held: application_state.LockedState) -> None:
     existing_private_directory(args.state_dir)
-    bootstrap.require(not args.operation_dir.is_relative_to(args.state_dir / "credentials")
-                      and not args.operation_dir.is_relative_to(args.state_dir / "application-identity"),
-                      "operation directory overlaps retained credential inputs")
-    bootstrap.private_directory(args.operation_dir)
     state, operation = args.state_dir, args.operation_dir
     complete = record(state / "bootstrap-complete.json")
     retained_images = record(state / "marty-images.json")
@@ -184,6 +186,13 @@ def stage(args: argparse.Namespace) -> None:
         "namespace": complete["namespace"], "namespaceUid": lifecycle["namespaceUid"],
         "openbaoClusterId": complete["openbaoClusterId"], "workloadProject": lifecycle["workloadProject"],
     }, "retained bootstrap application binding differs")
+    selected = held.current(binding)
+    current = selected.directory
+    bootstrap.require(not operation.is_relative_to(current)
+                      and not operation.is_relative_to(state / "credentials")
+                      and not operation.is_relative_to(state / "application-identity"),
+                      "operation directory overlaps retained credential inputs")
+    bootstrap.private_directory(operation)
     bootstrap.require(complete["runtimeSourceSha"] == args.runtime_source_sha
                       and complete["chartSourceSha"] == args.chart_source_sha,
                       "explicit runtime or chart identity differs from original bootstrap")
@@ -214,7 +223,6 @@ def stage(args: argparse.Namespace) -> None:
     bootstrap.require(bootstrap.encoded(complete["credentialPublication"]) == bootstrap.encoded(publication)
                       and bootstrap.encoded(complete["applicationTokenContract"]) == bootstrap.encoded(application),
                       "original bootstrap compiled contracts differ")
-    current = state / "credentials"
     snapshot = current_snapshot(current)
     bootstrap.require("openbao_tls_ca_cert" in snapshot, "original OpenBao trust is unavailable")
     identity_path = state / "application-identity"
@@ -278,6 +286,7 @@ def stage(args: argparse.Namespace) -> None:
             "operation": "application-check", "current": REMOTE_CURRENT,
         }, pod=pod), len(snapshot))
         bootstrap.check_application_binding(transport, binding)
+        held.require_current(binding, expected=selected)
         native_outcome_uncertain = True
         raw = transport.execute(pod, [REMOTE_OPERATOR, "operator", "application-token-stage",
             "https://openbao:8200", "/tmp/ca.crt", REMOTE_IDENTITY], data=bootstrap.encoded({
@@ -343,6 +352,7 @@ def stage(args: argparse.Namespace) -> None:
         if failures:
             raise bootstrap.BootstrapError("; ".join(failures)
                 + "; authority may exist; preserve the private attempt and do not replay")
+    held.require_current(binding, expected=selected)
     bootstrap.write_new(operation / "application-stage-complete.json", bootstrap.encoded({
         "schema": "marty.kubernetes-application-stage-completion/v1", "binding": binding,
         "runtime": values["release"], "candidateDirectory": "candidate",

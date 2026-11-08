@@ -11,6 +11,8 @@ on:
       - 'scripts/prepare_kubernetes_helm_values.py'
       - 'scripts/bootstrap_kubernetes_openbao.py'
       - 'scripts/stage_kubernetes_application_credentials.py'
+      - 'scripts/activate_kubernetes_application_credentials.py'
+      - 'scripts/kubernetes_application_state.py'
       - 'scripts/installer_*.py'
       - 'scripts/verify_installer_provenance.py'
       - 'scripts/build_selfhost_image_lock.py'
@@ -26,6 +28,8 @@ on:
       - 'tests/test_prepare_kubernetes_helm_values.py'
       - 'tests/test_bootstrap_kubernetes_openbao.py'
       - 'tests/test_stage_kubernetes_application_credentials.py'
+      - 'tests/test_activate_kubernetes_application_credentials.py'
+      - 'tests/test_kubernetes_application_state.py'
       - 'tests/scripts/run-kubernetes-acceptance.cjs'
       - 'tests/scripts/run-kubernetes-acceptance.test.cjs'
       - 'contracts/gateway-routes.json'
@@ -80,4 +84,6 @@ jobs:
             tests/test_marty_helm_chart.py \
             tests/test_prepare_kubernetes_helm_values.py \
             tests/test_bootstrap_kubernetes_openbao.py \
-            tests/test_stage_kubernetes_application_credentials.py
+            tests/test_stage_kubernetes_application_credentials.py \
+            tests/test_activate_kubernetes_application_credentials.py \
+            tests/test_kubernetes_application_state.py

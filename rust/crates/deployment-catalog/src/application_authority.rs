@@ -18,9 +18,11 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 pub const RECOVERY: &str = "Application token staging requires operator recovery";
+pub const MINIMUM_ACTIVATION_TTL: u64 = 1800;
 pub(crate) const MOUNT: &str = "selfhost-application";
 pub(crate) const ROLE: &str = "application-renewer";
 pub(crate) const POLICY: &str = "selfhost-application-renewal";
@@ -58,6 +60,15 @@ struct Login {
 #[serde(deny_unknown_fields)]
 struct Staging {
     current: PathBuf,
+    output: PathBuf,
+    binding: Binding,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Verification {
+    current: PathBuf,
+    candidate: PathBuf,
     output: PathBuf,
     binding: Binding,
 }
@@ -1053,6 +1064,173 @@ async fn stage_with(api: &impl Api, identity: &Path, context: Staging) -> Result
     mutation.map_err(|_| RECOVERY)
 }
 
+type GenerationSnapshot = BTreeMap<String, (Vec<u8>, u32)>;
+
+fn generation_snapshot(directory: &Path) -> Result<GenerationSnapshot> {
+    let files = crate::generation::entries(directory)?;
+    if files.is_empty() || files.len() > 256 {
+        return Err(REFUSAL);
+    }
+    let mut total = 0usize;
+    files
+        .into_iter()
+        .map(|(name, path)| {
+            let value = generation_file(&path, true)?;
+            total = total.checked_add(value.0.len()).ok_or(REFUSAL)?;
+            if total > 8 * 1024 * 1024 {
+                return Err(REFUSAL);
+            }
+            Ok((name, value))
+        })
+        .collect()
+}
+
+fn candidate_unchanged(
+    current: &Path,
+    candidate: &Path,
+    before: &GenerationSnapshot,
+    staged: &GenerationSnapshot,
+) -> Result<()> {
+    crate::generation::verify_application(current, candidate)?;
+    if generation_snapshot(current)? != *before || generation_snapshot(candidate)? != *staged {
+        return Err(REFUSAL);
+    }
+    Ok(())
+}
+
+fn candidate_lifetime(deadline: Instant, now: Instant) -> Result<()> {
+    if deadline
+        .checked_duration_since(now)
+        .is_none_or(|remaining| remaining < Duration::from_secs(MINIMUM_ACTIVATION_TTL))
+    {
+        return Err(REFUSAL);
+    }
+    Ok(())
+}
+
+/// Freshly prove an existing candidate using the retained non-root AppRole.
+/// This creates only a bounded operator session, never a replacement leaf token.
+/// The proof is current when returned; its retained receipt is not reusable authority.
+pub async fn verify_candidate(
+    bao: &OpenBaoHttp,
+    identity: &Path,
+    context: &Value,
+) -> Result<Value> {
+    let context: Verification = serde_json::from_value(context.clone()).map_err(|_| REFUSAL)?;
+    verify_candidate_with(&Http(bao), identity, context).await
+}
+
+async fn verify_candidate_with(
+    api: &impl Api,
+    identity: &Path,
+    context: Verification,
+) -> Result<Value> {
+    let identity = read_identity(identity, &context.binding)?;
+    let current = owned_directory(&context.current)?;
+    let candidate = owned_directory(&context.candidate)?;
+    let output = owned_directory(&context.output)?;
+    if [&identity.directory, &current, &candidate, &output]
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .len()
+        != 4
+        || fs::read_dir(&output).map_err(|_| REFUSAL)?.next().is_some()
+    {
+        return Err(REFUSAL);
+    }
+    // Reject incomplete, reused or changed generation material before creating
+    // any session. Snapshot both generations, including preserved extra files.
+    crate::generation::verify_application(&current, &candidate)?;
+    let before = generation_snapshot(&current)?;
+    let staged = generation_snapshot(&candidate)?;
+    let previous = current_tokens(&current, false)?;
+    let replacements = current_tokens(&candidate, false)?;
+    health(api, &context.binding).await?;
+    let specs = runtime_specs();
+    persist(
+        &output.join("attempt.json"),
+        &json!({
+            "schema":"marty.application-token-verification-attempt/v1",
+            "binding":context.binding,
+            "inputs":specs.iter().map(|spec| spec.file.as_str()).collect::<Vec<_>>(),
+            "minimumTtlSeconds":MINIMUM_ACTIVATION_TTL
+        }),
+        8192,
+    )?;
+    // A lost login response can leave an operator session alive. Capture and
+    // retain it exactly as staging does, and never replay this output directory.
+    let attempt: Result<Value> = async {
+        let authority = session(api, &identity, Some(&output.join("login-response.json"))).await?;
+        let proof: Result<Instant> = async {
+            prove_current(api, &authority, &previous).await?;
+            candidate_unchanged(&current, &candidate, &before, &staged)?;
+            health(api, &context.binding).await?;
+            let mut earliest = None;
+            for spec in &specs {
+                let value = replacements.get(&spec.file).ok_or(REFUSAL)?;
+                let path = format!(
+                    "auth/token/create/{}",
+                    spec.replacement_role.as_deref().ok_or(REFUSAL)?
+                );
+                let started = Instant::now();
+                let observed = api
+                    .request(
+                        Method::POST,
+                        "auth/token/lookup",
+                        Some(&json!({"token":value})),
+                        Some(&authority),
+                    )
+                    .await?;
+                if !no_names(&observed["warnings"]) {
+                    return Err(REFUSAL);
+                }
+                let remaining = metadata(
+                    &observed["data"],
+                    value,
+                    &spec.policies,
+                    spec.ttl_seconds,
+                    &[&path],
+                    Some(false),
+                    false,
+                )?;
+                // Starting the deadline before the lookup is conservative:
+                // network, remaining lookups and cleanup consume this budget.
+                let deadline = started
+                    .checked_add(Duration::from_secs(remaining))
+                    .ok_or(REFUSAL)?;
+                candidate_lifetime(deadline, Instant::now())?;
+                earliest = Some(earliest.map_or(deadline, |prior: Instant| prior.min(deadline)));
+            }
+            health(api, &context.binding).await?;
+            candidate_unchanged(&current, &candidate, &before, &staged)?;
+            earliest.ok_or(REFUSAL)
+        }
+        .await;
+        let cleanup = revoke(api, &authority).await;
+        let deadline = proof?;
+        cleanup?;
+        candidate_unchanged(&current, &candidate, &before, &staged)?;
+        candidate_lifetime(deadline, Instant::now())?;
+        persist(
+            &output.join("complete.json"),
+            &json!({
+                "schema":"marty.application-token-verification-completion/v1",
+                "binding":context.binding, "ready":true, "count":specs.len(),
+                "minimumTtlSeconds":MINIMUM_ACTIVATION_TTL,
+                "state":"candidate-tokens-verified"
+            }),
+            4096,
+        )?;
+        candidate_lifetime(deadline, Instant::now())?;
+        // No credential values, token hashes or session material cross stdout.
+        Ok(json!({
+            "ready":true,"count":specs.len(),"minimumTtlSeconds":MINIMUM_ACTIVATION_TTL
+        }))
+    }
+    .await;
+    attempt.map_err(|_| RECOVERY)
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -1199,6 +1377,31 @@ mod tests {
                 binding: binding(),
             }
         }
+
+        fn candidate(&self) -> PathBuf {
+            let candidate = self.current.with_file_name("candidate");
+            create_private_directory(&candidate).unwrap();
+            let runtime: BTreeSet<_> = runtime_specs().into_iter().map(|spec| spec.file).collect();
+            for (name, path) in crate::generation::entries(&self.current).unwrap() {
+                let (mut bytes, mode) = generation_file(&path, true).unwrap();
+                if runtime.contains(&name) {
+                    bytes = format!("{}\n", synthetic_token(&name, true)).into_bytes();
+                }
+                let destination = candidate.join(&name);
+                fs::write(&destination, bytes).unwrap();
+                fs::set_permissions(destination, fs::Permissions::from_mode(mode)).unwrap();
+            }
+            candidate
+        }
+
+        fn verification(&self) -> Verification {
+            Verification {
+                current: self.current.clone(),
+                candidate: self.current.with_file_name("candidate"),
+                output: self.operation.clone(),
+                binding: binding(),
+            }
+        }
     }
 
     struct State {
@@ -1282,6 +1485,14 @@ mod tests {
             if path == "auth/token/revoke-self" {
                 assert_eq!(authority, Some(OPERATOR));
                 state.revokes += 1;
+                if self.fault == "verification-completion-conflict" {
+                    write_private(
+                        &self.marker.with_file_name("complete.json"),
+                        "synthetic-preexisting-owner-record",
+                        1024,
+                    )
+                    .unwrap();
+                }
                 return if self.fault == "cleanup" {
                     Err(REFUSAL)
                 } else {
@@ -1320,6 +1531,34 @@ mod tests {
                 };
                 if self.fault == "current-bundle" && !state.issued.contains_key(value) {
                     data["policies"] = json!(["root"]);
+                }
+                if state.issued.contains_key(value)
+                    && value == synthetic_token(&runtime_specs()[self.at].file, true)
+                {
+                    match self.fault {
+                        "verification-request" => return Err(REFUSAL),
+                        "verification-warning" => {
+                            return Ok(json!({"data":data,"warnings":["synthetic-warning"]}));
+                        }
+                        "verification-drift" => {
+                            // Both generations still compare equal for this
+                            // preserved file; the retained snapshots must catch it.
+                            for root in [&self.current, &self.current.with_file_name("candidate")] {
+                                fs::write(root.join("workload_identity_ca_cert"), b"changed-ca\n")
+                                    .unwrap();
+                            }
+                        }
+                        "verification-candidate-drift" => {
+                            fs::write(
+                                self.current
+                                    .with_file_name("candidate")
+                                    .join(&runtime_specs()[self.at].file),
+                                b"synthetic-different-candidate-token\n",
+                            )
+                            .unwrap();
+                        }
+                        _ => (),
+                    }
                 }
                 return Ok(json!({"data":data}));
             }
@@ -1995,5 +2234,318 @@ mod tests {
         assert!(f.operation.join("complete.json").is_file());
         let state = api.state.lock().unwrap();
         assert_eq!((state.logins, state.mints, state.revokes), (1, 11, 1));
+    }
+
+    fn verification_api(f: &Fixture, fault: &'static str, at: usize) -> Fake {
+        let api = Fake::new(f, true, fault, at);
+        {
+            let mut state = api.state.lock().unwrap();
+            for spec in runtime_specs() {
+                let value = synthetic_token(&spec.file, true);
+                let path = format!("auth/token/create/{}", spec.replacement_role.unwrap());
+                state.issued.insert(
+                    value.clone(),
+                    lookup(&value, &spec.policies, spec.ttl_seconds, &path, false),
+                );
+            }
+        }
+        api
+    }
+
+    #[test]
+    fn candidate_lifetime_requires_a_complete_remaining_window_after_elapsed_work() {
+        let now = Instant::now();
+        let required = Duration::from_secs(MINIMUM_ACTIVATION_TTL);
+        candidate_lifetime(now + required, now).unwrap();
+        assert!(candidate_lifetime(now + required, now + Duration::from_nanos(1)).is_err());
+        assert!(candidate_lifetime(now, now).is_err());
+        assert!(candidate_lifetime(now, now + Duration::from_secs(1)).is_err());
+        // An initially acceptable result must age while later lookups run.
+        let deadline = now + required + Duration::from_secs(60);
+        candidate_lifetime(deadline, now + Duration::from_secs(60)).unwrap();
+        assert!(candidate_lifetime(deadline, now + Duration::from_secs(61)).is_err());
+    }
+
+    #[test]
+    fn candidate_verification_context_has_no_root_or_lifetime_override() {
+        let f = Fixture::new(true, true);
+        let context = json!({
+            "current":f.current,"candidate":f.current.with_file_name("candidate"),
+            "output":f.operation,"binding":binding()
+        });
+        serde_json::from_value::<Verification>(context.clone()).unwrap();
+        for field in [
+            "root_token",
+            "token",
+            "minimum_ttl",
+            "minimumTtlSeconds",
+            "activation",
+        ] {
+            let mut changed = context.clone();
+            changed[field] = json!(1);
+            assert!(
+                serde_json::from_value::<Verification>(changed).is_err(),
+                "{field}"
+            );
+        }
+        for field in ["current", "candidate", "output", "binding"] {
+            let mut changed = context.clone();
+            changed.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<Verification>(changed).is_err(),
+                "{field}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_verification_proves_all_existing_leaves_without_minting_or_public_secrets() {
+        let f = Fixture::new(true, true);
+        let candidate = f.candidate();
+        let before = generation_snapshot(&f.current).unwrap();
+        let staged = generation_snapshot(&candidate).unwrap();
+        let api = verification_api(&f, "", 0);
+        let value = verify_candidate_with(&api, &f.identity, f.verification())
+            .await
+            .unwrap();
+        assert_eq!(
+            value,
+            json!({"ready":true,"count":11,"minimumTtlSeconds":1800})
+        );
+        let complete: Value =
+            serde_json::from_str(&private_file(&f.operation.join("complete.json")).unwrap())
+                .unwrap();
+        assert_eq!(complete["state"], "candidate-tokens-verified");
+        assert_eq!(
+            complete["binding"],
+            serde_json::to_value(binding()).unwrap()
+        );
+        assert_eq!(complete["minimumTtlSeconds"], MINIMUM_ACTIVATION_TTL);
+        for public in [value.to_string(), complete.to_string()] {
+            for forbidden in ["synthetic", ROOT, OPERATOR, ROLE_ID, SECRET_ID, "sha256"] {
+                assert!(
+                    !public.contains(forbidden),
+                    "public result contains {forbidden}"
+                );
+            }
+        }
+        let files = crate::generation::entries(&f.operation).unwrap();
+        assert_eq!(
+            files.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["attempt.json", "login-response.json", "complete.json"])
+        );
+        for path in files.values() {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o7777,
+                0o600
+            );
+        }
+        assert_eq!(generation_snapshot(&f.current).unwrap(), before);
+        assert_eq!(generation_snapshot(&candidate).unwrap(), staged);
+        let state = api.state.lock().unwrap();
+        assert_eq!(
+            (state.logins, state.mints, state.revokes, state.mutations),
+            (1, 0, 1, 0)
+        );
+        assert_eq!(
+            state
+                .calls
+                .iter()
+                .filter(|(_, path)| path == "auth/token/lookup")
+                .count(),
+            22
+        );
+        assert!(!state
+            .calls
+            .iter()
+            .any(|(_, path)| path.starts_with("auth/token/create")));
+        assert_eq!(state.calls.last().unwrap().1, "auth/token/revoke-self");
+    }
+
+    #[tokio::test]
+    async fn candidate_verification_refuses_invalid_material_before_any_session_or_attempt() {
+        for fault in [
+            "missing-current",
+            "missing-candidate",
+            "preserved",
+            "reused",
+            "duplicate",
+            "same-directory",
+            "identity",
+            "identity-binding",
+            "output",
+            "symlink",
+        ] {
+            let f = Fixture::new(true, true);
+            let candidate = f.candidate();
+            let mut context = f.verification();
+            let specs = runtime_specs();
+            match fault {
+                "missing-current" => {
+                    fs::remove_file(f.current.join("workload_identity_ca_cert")).unwrap()
+                }
+                "missing-candidate" => fs::remove_file(candidate.join(&specs[0].file)).unwrap(),
+                "preserved" => {
+                    fs::write(candidate.join("workload_identity_ca_cert"), b"changed-ca\n").unwrap()
+                }
+                "reused" => fs::write(
+                    candidate.join(&specs[0].file),
+                    fs::read(f.current.join(&specs[0].file)).unwrap(),
+                )
+                .unwrap(),
+                "duplicate" => fs::write(
+                    candidate.join(&specs[1].file),
+                    fs::read(candidate.join(&specs[0].file)).unwrap(),
+                )
+                .unwrap(),
+                "same-directory" => context.candidate = f.current.clone(),
+                "identity" => fs::set_permissions(
+                    f.identity.join(SECRET_FILE),
+                    fs::Permissions::from_mode(0o644),
+                )
+                .unwrap(),
+                "identity-binding" => context.binding.namespace_uid = ROLE_ID.into(),
+                "output" => write_private(
+                    &f.operation.join("owner-note"),
+                    "synthetic-owner-note",
+                    1024,
+                )
+                .unwrap(),
+                "symlink" => {
+                    let alias = candidate.with_file_name("candidate-alias");
+                    std::os::unix::fs::symlink(&candidate, &alias).unwrap();
+                    context.candidate = alias;
+                }
+                _ => unreachable!(),
+            }
+            let api = verification_api(&f, "", 0);
+            let error = verify_candidate_with(&api, &f.identity, context)
+                .await
+                .unwrap_err();
+            assert_ne!(error, RECOVERY, "{fault}");
+            assert_eq!(api.state.lock().unwrap().calls.len(), 0, "{fault}");
+            assert!(!f.operation.join("attempt.json").exists(), "{fault}");
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_verification_rejects_each_stale_leaf_and_exact_scope_drift() {
+        for index in 0..runtime_specs().len() {
+            let f = Fixture::new(true, true);
+            f.candidate();
+            let api = verification_api(&f, "", 0);
+            let name = synthetic_token(&runtime_specs()[index].file, true);
+            api.state.lock().unwrap().issued.get_mut(&name).unwrap()["ttl"] = json!(1799);
+            assert_eq!(
+                verify_candidate_with(&api, &f.identity, f.verification()).await,
+                Err(RECOVERY),
+                "stale leaf {index}"
+            );
+            assert!(!f.operation.join("complete.json").exists());
+            let state = api.state.lock().unwrap();
+            assert_eq!((state.mints, state.revokes, state.mutations), (0, 1, 0));
+        }
+        for (field, bad) in [
+            ("ttl", json!(0)),
+            ("ttl", json!(28801)),
+            ("policies", json!(["credential-service"])),
+            (
+                "policies",
+                json!(["credential-service", "signing-keys-managed", "default"]),
+            ),
+            (
+                "policies",
+                json!([
+                    "credential-service",
+                    "signing-keys-managed",
+                    "signing-keys-managed"
+                ]),
+            ),
+            ("identity_policies", json!(["root"])),
+            ("path", json!("auth/token/create")),
+            ("path", json!("auth/token/create/foreign")),
+            ("explicit_max_ttl", json!(0)),
+            ("creation_ttl", json!(86400)),
+            ("renewable", json!(true)),
+            ("orphan", json!(false)),
+            ("num_uses", json!(1)),
+            ("period", json!(60)),
+            ("type", json!("batch")),
+            ("id", json!("synthetic-substituted-token")),
+        ] {
+            let f = Fixture::new(true, true);
+            f.candidate();
+            let api = verification_api(&f, "", 0);
+            let name = synthetic_token(&runtime_specs()[0].file, true);
+            api.state.lock().unwrap().issued.get_mut(&name).unwrap()[field] = bad;
+            assert_eq!(
+                verify_candidate_with(&api, &f.identity, f.verification()).await,
+                Err(RECOVERY),
+                "{field}"
+            );
+            assert!(!f.operation.join("complete.json").exists());
+            assert_eq!(api.state.lock().unwrap().mints, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_verification_preserves_uncertainty_and_refuses_replay() {
+        for fault in [
+            "login",
+            "policy",
+            "leaf-role",
+            "current-bundle",
+            "cleanup",
+            "verification-request",
+            "verification-warning",
+            "verification-drift",
+            "verification-candidate-drift",
+        ] {
+            let f = Fixture::new(true, true);
+            f.candidate();
+            let api = verification_api(&f, fault, 3);
+            assert_eq!(
+                verify_candidate_with(&api, &f.identity, f.verification()).await,
+                Err(RECOVERY),
+                "{fault}"
+            );
+            assert!(f.operation.join("attempt.json").is_file(), "{fault}");
+            assert!(f.operation.join("login-response.json").is_file(), "{fault}");
+            assert!(!f.operation.join("complete.json").exists(), "{fault}");
+            let calls = api.state.lock().unwrap().calls.len();
+            assert_eq!(
+                verify_candidate_with(&api, &f.identity, f.verification()).await,
+                Err(REFUSAL),
+                "{fault}"
+            );
+            let state = api.state.lock().unwrap();
+            assert_eq!(state.calls.len(), calls, "{fault}");
+            assert_eq!(
+                (state.logins, state.mints, state.mutations),
+                (1, 0, 0),
+                "{fault}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_verification_withholds_success_when_completion_cannot_be_retained() {
+        let f = Fixture::new(true, true);
+        f.candidate();
+        let api = verification_api(&f, "verification-completion-conflict", 0);
+        assert_eq!(
+            verify_candidate_with(&api, &f.identity, f.verification()).await,
+            Err(RECOVERY)
+        );
+        assert_eq!(
+            fs::read(f.operation.join("complete.json")).unwrap(),
+            b"synthetic-preexisting-owner-record\n"
+        );
+        assert!(f.operation.join("login-response.json").is_file());
+        let state = api.state.lock().unwrap();
+        assert_eq!(
+            (state.logins, state.mints, state.revokes, state.mutations),
+            (1, 0, 1, 0)
+        );
     }
 }

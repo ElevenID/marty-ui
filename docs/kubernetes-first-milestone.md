@@ -268,6 +268,10 @@ Keep the original signed artifact closure and pinned verifiers available.
 The adapter reauthenticates them and requires the same runtime and chart
 identities as the original bootstrap. It takes the namespace, kubeconfig,
 current credentials and application identity from that retained state.
+Staging holds the same private state-directory lock as activation and resolves
+the verified current-generation selector. Until the first activation, that
+selection is the original bootstrap credentials. A pending activation blocks
+fresh staging until the same attempt is reconciled.
 The current runtime tokens must still pass OpenBao lookup; stage before their
 expiry. Recovery after expiry is not implemented by this command.
 
@@ -314,8 +318,11 @@ adapter does not extend that deadline or treat retained pod memory as durable
 storage. Recover available evidence promptly and never replay uncertain
 enrollment or issuance.
 
-Live activation remains a separate step requiring Kubernetes resource-version
-preconditions, ordinary Secret updates and bounded rollout status checks.
+After application installation and successful migrations, use the explicit
+[application activation command](kubernetes-application-activation.md). It uses
+fresh native candidate proof, one UID/resourceVersion-conditioned ordinary
+Secret update, native Deployment rollouts and private credential-delivery checks
+before selecting the generation for the next staging cycle.
 Workload TLS and Keycloak renewal must also be connected before claiming
 operation beyond the original development credential lifetime. The ordinary
 token candidate alone does not extend those certificates or KMS tokens, install
@@ -486,10 +493,13 @@ The current native development workload identities last **eight hours**. The
 migration-only bootstrap token lasts **two hours**. This milestone does not
 install unattended application identity renewal; cert-manager renews the public
 ingress certificate separately. The scoped tokens are **nonrenewable**. Keeping
-the application running requires a future replacement-credential workflow using
-the existing native producers, with activation qualified separately. This
-startup change adds no renewal workflow. Do not extend credentials or disable
-their checks to hide expiration.
+the application running requires replacement credentials before expiration.
+The explicit ordinary-token staging and
+[activation commands](kubernetes-application-activation.md) reuse the existing
+native producer and Kubernetes APIs. They do not renew workload TLS or Keycloak
+credentials, recover expired identities, or install unattended scheduling. Their
+complete live application flow still requires the acceptance evidence above.
+Do not extend credentials or disable their checks to hide expiration.
 
 Reboot testing here establishes recovery on the same single node. It does not
 establish high availability, node replacement, backup restoration, multi-node
