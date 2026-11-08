@@ -926,16 +926,23 @@ fn verify_sd_jwt(
             "No governed issuer public JWK is available for SD-JWT",
         ));
     };
-    let verified = marty_oid4vci::formats::sd_jwt::verify_sd_jwt(
-        token,
-        &issuer_key.public_jwk.to_string(),
-        context.audience.clone(),
-        context.nonce.clone(),
-    );
-    let claims = match verified {
-        Ok(Value::Object(claims)) => claims,
-        Ok(_) => return Err(invalid_native("SD-JWT verifier returned non-object claims")),
-        Err(_) => return Ok(rejected("SD-JWT verification rejected the credential")),
+    let (claims, authenticated_sd_jwt_query) = if let Some(query) = &context.sd_jwt_dcql {
+        match query.verify(&issuer_key, token) {
+            Ok((claims, evidence)) => (claims, Some(evidence)),
+            Err(reason) => return Ok(rejected(reason)),
+        }
+    } else {
+        let verified = marty_oid4vci::formats::sd_jwt::verify_sd_jwt(
+            token,
+            &issuer_key.public_jwk.to_string(),
+            context.audience.clone(),
+            context.nonce.clone(),
+        );
+        match verified {
+            Ok(Value::Object(claims)) => (claims, None),
+            Ok(_) => return Err(invalid_native("SD-JWT verifier returned non-object claims")),
+            Err(_) => return Ok(rejected("SD-JWT verification rejected the credential")),
+        }
     };
     let Some(authenticated) = authenticated_issuer(
         context,
@@ -951,17 +958,21 @@ fn verify_sd_jwt(
         .get("vc")
         .and_then(Value::as_object)
         .or_else(|| claims.get("credential").and_then(Value::as_object));
-    let disclosed = credential
-        .and_then(|value| value.get("credentialSubject"))
-        .and_then(Value::as_object)
-        .cloned()
-        .or_else(|| {
-            claims
-                .get("credentialSubject")
-                .and_then(Value::as_object)
-                .cloned()
-        })
-        .unwrap_or_else(|| claims.clone());
+    let disclosed = if let Some(query) = &context.sd_jwt_dcql {
+        query.policy_claims(&claims)
+    } else {
+        credential
+            .and_then(|value| value.get("credentialSubject"))
+            .and_then(Value::as_object)
+            .cloned()
+            .or_else(|| {
+                claims
+                    .get("credentialSubject")
+                    .and_then(Value::as_object)
+                    .cloned()
+            })
+            .unwrap_or_else(|| claims.clone())
+    };
     let credential_id = claims
         .get("jti")
         .and_then(Value::as_str)
@@ -978,6 +989,7 @@ fn verify_sd_jwt(
     let bound = context.nonce.is_some() || context.audience.is_some();
     Ok(CredentialVerificationEvidence {
         verified: true,
+        authenticated_sd_jwt_query,
         credential_id: credential_id.clone(),
         credential_status_ids: credential_id.into_iter().collect(),
         claims: disclosed,
@@ -1611,6 +1623,7 @@ mod tests {
     fn context(document: Value) -> CredentialVerificationContext {
         CredentialVerificationContext {
             presentation_only: false,
+            sd_jwt_dcql: None,
             resolved_issuer_key: None,
             format: DetectedCredentialFormat::SdJwt,
             token: Value::Null,

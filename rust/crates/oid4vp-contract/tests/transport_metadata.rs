@@ -11,6 +11,7 @@ fn transport_is_bounded_and_never_promotes_wallet_metadata_to_evidence() {
         "legacy_extension": true
     });
     let transport = Oid4vpEvaluationTransportV1 {
+        credential_authority: None,
         query_kind: QueryKind::Dcql,
         query_digest: digest_query_document(&query).unwrap(),
         query_document: query,

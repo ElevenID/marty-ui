@@ -253,8 +253,42 @@ pub struct CredentialAuthorizationSession {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CredentialAccessTokenGrant {
     Transaction(Box<CredentialTransaction>),
+    LinkedTransaction {
+        transaction: Box<CredentialTransaction>,
+        authorization_session: CredentialAuthorizationSession,
+    },
     Authorization(CredentialAuthorizationSession),
     Missing,
+}
+
+/// The unchanged authority observed before selector resolution and proof verification.
+/// Repositories must revalidate it atomically with the transition to `signing`.
+pub struct CredentialSigningAuthorization<'a> {
+    pub transaction: &'a CredentialTransaction,
+    pub authorization_session: Option<&'a CredentialAuthorizationSession>,
+    pub access_token: &'a str,
+}
+
+impl std::fmt::Debug for CredentialSigningAuthorization<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CredentialSigningAuthorization")
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
+    }
+}
+
+/// A concurrent claim may change only issuance bookkeeping. Comparing the selected
+/// target also prevents recovery from returning a credential for a changed dataset.
+pub(crate) fn same_signing_target(
+    expected: &CredentialTransaction,
+    current: &CredentialTransaction,
+) -> bool {
+    let mut current = current.clone();
+    current.status = expected.status;
+    current.nonce = expected.nonce.clone();
+    current.reserved_credential_id = expected.reserved_credential_id.clone();
+    current == *expected
 }
 
 impl std::fmt::Debug for CredentialAuthorizationSession {
@@ -479,6 +513,7 @@ pub trait CredentialRepository: Send + Sync {
         &self,
         transaction: &CredentialTransaction,
         credential_id: &str,
+        authorization: &CredentialSigningAuthorization<'_>,
     ) -> Result<Option<CredentialTransaction>, CredentialIssuanceError>;
 
     async fn finalize(
@@ -641,9 +676,12 @@ impl CredentialIssuanceService {
         if transaction.status == CredentialTransactionStatus::Signing {
             return Err(CredentialIssuanceError::IssuanceInProgress);
         }
-        if transaction.status != CredentialTransactionStatus::Authorized {
+        if transaction.status != CredentialTransactionStatus::Authorized
+            || transaction.expires_at <= Utc::now()
+        {
             return Err(CredentialIssuanceError::InvalidTransactionState);
         }
+        let admitted_transaction = transaction.clone();
         validate_selection(request, &mut transaction, authorization_session.as_ref())?;
         let policy = format_policy(request, &transaction)?;
         let issuer = self
@@ -686,8 +724,18 @@ impl CredentialIssuanceService {
             .lifecycle
             .ensure_ready(&transaction, &issuer)
             .await?;
-        self.sign_and_finalize(transaction, policy, issuer, verified)
-            .await
+        self.sign_and_finalize(
+            transaction,
+            policy,
+            issuer,
+            verified,
+            CredentialSigningAuthorization {
+                transaction: &admitted_transaction,
+                authorization_session: authorization_session.as_ref(),
+                access_token,
+            },
+        )
+        .await
     }
 
     async fn transaction(
@@ -707,6 +755,10 @@ impl CredentialIssuanceService {
             .await?
         {
             CredentialAccessTokenGrant::Transaction(transaction) => Ok((*transaction, None)),
+            CredentialAccessTokenGrant::LinkedTransaction {
+                transaction,
+                authorization_session,
+            } => Ok((*transaction, Some(authorization_session))),
             CredentialAccessTokenGrant::Authorization(session) => {
                 let transaction = self
                     .ports
@@ -782,6 +834,7 @@ impl CredentialIssuanceService {
         policy: FormatPolicy,
         issuer: IssuerContext,
         proof: VerifiedCredentialProof,
+        authorization: CredentialSigningAuthorization<'_>,
     ) -> Result<CredentialIssuanceOutcome, CredentialIssuanceError> {
         if policy.kind == CredentialBuilderKind::Mdoc && proof.holder_jwk.is_none() {
             return Err(CredentialIssuanceError::MdocHolderKeyRequired);
@@ -790,10 +843,10 @@ impl CredentialIssuanceService {
         let Some(transaction) = self
             .ports
             .repository
-            .claim_for_signing(&transaction, &credential_id)
+            .claim_for_signing(&transaction, &credential_id, &authorization)
             .await?
         else {
-            return self.concurrent_response(&transaction.id, &policy).await;
+            return self.concurrent_response(&transaction, &policy).await;
         };
         let result = self
             .build_finalize_and_notify(&transaction, &credential_id, policy, issuer, proof)
@@ -810,14 +863,21 @@ impl CredentialIssuanceService {
 
     async fn concurrent_response(
         &self,
-        transaction_id: &str,
+        expected: &CredentialTransaction,
         policy: &FormatPolicy,
     ) -> Result<CredentialIssuanceOutcome, CredentialIssuanceError> {
+        let transaction_id = &expected.id;
         let current = self
             .ports
             .repository
             .transaction_by_id(transaction_id)
             .await?;
+        if !current
+            .as_ref()
+            .is_some_and(|current| same_signing_target(expected, current))
+        {
+            return Err(CredentialIssuanceError::InvalidTransactionState);
+        }
         let existing = self
             .ports
             .repository

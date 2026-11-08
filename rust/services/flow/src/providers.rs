@@ -44,6 +44,10 @@ pub enum FlowProviderError {
     },
     #[error("FLOW.PROVIDER_UNAVAILABLE: {provider}")]
     Unavailable { provider: &'static str },
+    #[error("FLOW.POLICY_REVISION_MISMATCH")]
+    PolicyRevisionMismatch,
+    #[error("FLOW.CREDENTIAL_AUTHORITY_CHANGED")]
+    CredentialAuthorityChanged,
     #[error("FLOW.PROVIDERS_MISSING: {0}")]
     Missing(String),
 }
@@ -107,6 +111,12 @@ pub struct PresentationPolicyReference {
     pub id: String,
     pub organization_id: String,
     pub status: String,
+    pub policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prerequisite_evidence_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_authority:
+        Option<marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1>,
     #[serde(default)]
     pub credential_requirements: Vec<Value>,
 }
@@ -115,6 +125,7 @@ pub struct PresentationPolicyReference {
 pub struct PresentationEvaluationRequest {
     pub policy_id: String,
     pub organization_id: String,
+    pub expected_policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity,
     pub principal_id: String,
     pub presentation: String,
     pub nonce: String,
@@ -128,6 +139,7 @@ pub struct PresentationEvaluationRequest {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PresentationEvaluationResult {
+    pub policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity,
     pub result: String,
     pub decision: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

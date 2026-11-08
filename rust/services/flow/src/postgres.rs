@@ -1040,7 +1040,7 @@ impl PostgresFlowRepository {
         instance: &FlowInstanceRecord,
         nonce_digest: &str,
         replay_expires_at_ms: u64,
-        expected_status: FlowInstanceStatus,
+        expected: &FlowInstanceRecord,
         callback: Option<&Message>,
     ) -> Result<bool, RepositoryError> {
         validate_instance_record(instance)?;
@@ -1048,9 +1048,12 @@ impl PostgresFlowRepository {
             return Err(RepositoryError::InvalidReplayDigest);
         }
         if !matches!(
-            expected_status,
+            expected.status,
             FlowInstanceStatus::AwaitingWallet | FlowInstanceStatus::InProgress
-        ) {
+        ) || instance.id != expected.id
+            || instance.organization_id != expected.organization_id
+            || instance.flow_definition_id != expected.flow_definition_id
+        {
             return Ok(false);
         }
         validate_callback(instance, callback)?;
@@ -1088,7 +1091,8 @@ impl PostgresFlowRepository {
              application_flow_key_hash=$9, started_at=$10, completed_at=$11, expires_at=$12, \
              result=$13, error=$14, updated_at=$15 \
              WHERE id=$16 AND status=$17 AND organization_id=$18 AND flow_definition_id=$19 \
-             AND (expires_at IS NULL OR expires_at >= clock_timestamp())",
+             AND (expires_at IS NULL OR expires_at >= clock_timestamp()) \
+             AND updated_at=$20 AND context::jsonb=$21::jsonb",
         )
         .bind(instance.status.to_string())
         .bind(&instance.current_step_id)
@@ -1106,9 +1110,11 @@ impl PostgresFlowRepository {
         .bind(&instance.error)
         .bind(instance.updated_at)
         .bind(&instance.id)
-        .bind(expected_status.to_string())
+        .bind(expected.status.to_string())
         .bind(&instance.organization_id)
         .bind(&instance.flow_definition_id)
+        .bind(expected.updated_at)
+        .bind(&expected.context)
         .execute(&mut *transaction)
         .await
         .map_err(storage)?;

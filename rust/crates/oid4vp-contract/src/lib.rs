@@ -6,12 +6,16 @@
 //! becomes [`AuthenticatedOid4vpEvidenceV1`]; promotion belongs to the future
 //! canonical Flow and presentation-policy producer adapter.
 
+mod callback;
 mod digest;
 pub mod haip_key;
+pub mod managed_status;
 mod rejection;
+pub mod trust_authority;
 mod types;
 mod validation;
 
+pub use callback::build_verification_callback_payload;
 pub use digest::*;
 pub use types::*;
 pub use validation::Oid4vpContractError;

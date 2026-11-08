@@ -147,6 +147,7 @@ fn signed_payload(claims: Value) -> (CredentialVerifiedPayload, CredentialCallba
         verified_claims: serde_json::from_value(claims).unwrap(),
         presentation_policy_id: "policy-1".into(),
         completed_at: now().to_rfc3339(),
+        policy_revision: None,
         evidence_digest: "a".repeat(64),
         decision_digest: String::new(),
     };
