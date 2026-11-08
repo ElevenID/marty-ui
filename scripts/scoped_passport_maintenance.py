@@ -19,8 +19,51 @@ def exact_roles(observed, profile=None):
     return {row["role"]: row for row in rows}
 
 
+def _ui_image_stop_contract(row, bound):
+    import json
+    role = "ui-prod"
+    require(row.get("binary") is None and row.get("sha256") is None
+            and row.get("kind") == "SIGNED_NIGHTLY_IMAGE"
+            and re.fullmatch(r"sha256:[a-f0-9]{64}", row.get("imageId", "")),
+            "UI_IMAGE_NOT_ELF_BOUND")
+    policy = json.loads(read_ref(bound).read_bytes())
+    require(policy.get("schema") == "marty.reviewed-graceful-image-stop/v1"
+            and policy.get("role") == role and policy.get("containerId") == row["containerId"]
+            and policy.get("imageId") == row["imageId"]
+            and policy.get("sourceRevision") == row["source"],
+            "EXACT_IMAGE_STOP_CONTRACT_REQUIRED")
+    require(policy.get("signal") == "SIGQUIT" and policy.get("allowedExitCodes") == [0]
+            and type(policy["allowedExitCodes"][0]) is int
+            and policy.get("noAutomaticSigkill") is True,
+            "SOURCE_BACKED_IMAGE_STOP_REQUIRED")
+    proof = json.loads(read_ref(policy["sourceProof"], 65536).read_bytes())
+    require(proof.get("schema") == "marty.graceful-shutdown-image-source-proof/v1"
+            and proof.get("role") == role and proof.get("sourceRevision") == row["source"]
+            and proof.get("imageId") == row["imageId"]
+            and proof.get("supportedSignals") == ["SIGQUIT"]
+            and proof.get("imageObservation") == policy.get("imageObservation")
+            and proof.get("stopExecuted") is False,
+            "GRACEFUL_IMAGE_SOURCE_PROOF_MISMATCH")
+    observed = json.loads(read_ref(policy["imageObservation"], 65536).read_bytes())
+    require(observed.get("schema") == "marty.ui-image-stop-observation/v1"
+            and observed.get("role") == role and observed.get("containerId") == row["containerId"]
+            and observed.get("imageId") == row["imageId"]
+            and observed.get("sourceRevision") == row["source"]
+            and observed.get("configuredStopSignal") == "SIGQUIT"
+            and observed.get("entrypoint") == "/docker-entrypoint.sh"
+            and observed.get("command") == ["nginx", "-g", "daemon off;"]
+            and observed.get("exitCode") == 0 and observed.get("runtimeWrites") is False
+            and observed.get("stopExecuted") is False,
+            "UI_IMAGE_STOP_OBSERVATION_CHANGED")
+    return policy
+
+
 def _stop_contract(role, row, bound):
     import json
+    if role == "ui-prod":
+        return _ui_image_stop_contract(row, bound)
+    require(isinstance(row.get("binary"), str) and re.fullmatch(r"[a-f0-9]{64}", row.get("sha256") or ""),
+            "ELF_STOP_CONTRACT_REQUIRES_BINARY")
     policy = json.loads(read_ref(bound).read_bytes())
     require(policy.get("schema") == "marty.reviewed-graceful-stop/v1" and policy.get("role") == role
             and policy.get("containerId") == row["containerId"] and policy.get("elfSha256") == row["sha256"]
