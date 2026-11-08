@@ -375,6 +375,43 @@ def test_canvas_public_url_overrides_preserve_other_generated_defaults(tmp_path:
     assert {name: config[name] for name in expected} == expected
 
 
+@pytest.mark.parametrize("development", [False, True])
+def test_ui_organization_creation_uses_the_backend_setting(tmp_path: Path, development: bool) -> None:
+    values = installation_values()
+    if development:
+        values["ui"] = {"development": {"enabled": True, "checkoutPath": "/opt/marty-ux"}}
+
+    checksums = {}
+    for choice in (None, "true", "false"):
+        values["config"] = {} if choice is None else {"ORGANIZATION_CREATION_ENABLED": choice}
+        documents = render(tmp_path, values)
+        config_maps = resources(documents, "ConfigMap")
+        deployments = resources(documents, "Deployment")
+        ui_template = deployments["ui"]["spec"]["template"]
+        ui = next(container for container in ui_template["spec"]["containers"] if container["name"] == "ui")
+        gateway = deployments["gateway"]["spec"]["template"]["spec"]["containers"][0]
+
+        # The startup hook receives this one public flag, not the server's full
+        # configuration or any credentials. The gateway reads the same source.
+        assert "envFrom" not in ui
+        assert ui["env"] == [{
+            "name": "ORGANIZATION_CREATION_ENABLED",
+            "valueFrom": {"configMapKeyRef": {
+                "name": "marty-config", "key": "ORGANIZATION_CREATION_ENABLED",
+            }},
+        }]
+        reference = ui["env"][0]["valueFrom"]["configMapKeyRef"]
+        assert {"configMapRef": {"name": reference["name"]}} in gateway["envFrom"]
+        assert all(entry["name"] != reference["key"] for entry in gateway["env"])
+        assert config_maps[reference["name"]]["data"][reference["key"]] == (choice or "false")
+        checksums[choice] = ui_template["metadata"]["annotations"]["checksum/config"]
+
+    # Changing the flag must restart nginx so its startup hook regenerates the
+    # served runtime-config.js, in both static and live-reload deployments.
+    assert checksums[None] == checksums["false"]
+    assert checksums["true"] != checksums["false"]
+
+
 @pytest.mark.parametrize("role", ["services", "ui", "migrations", "keycloak", "postgres", "redis"])
 def test_mutable_image_tags_are_rejected(tmp_path: Path, role: str) -> None:
     values = installation_values()
@@ -382,6 +419,98 @@ def test_mutable_image_tags_are_rejected(tmp_path: Path, role: str) -> None:
         values[role]["image"] = f"{role}:latest"
     else:
         values["images"][role] = f"ghcr.io/elevenid/marty-ui-oss/{role}:latest"
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "sha256" in result.stderr
+
+
+def test_development_ui_keeps_backend_tls_routes_and_public_ports_unchanged(tmp_path: Path) -> None:
+    values = installation_values()
+    values.update(publicHost="dev.example.test", publicOrigin="https://dev.example.test:8443")
+    normal = render(tmp_path, values)
+    values["ui"] = {"development": {"enabled": True, "checkoutPath": "/opt/marty-ux"}}
+    development = render(tmp_path, values)
+    normal_by_id = {(doc["kind"], doc["metadata"]["name"]): doc for doc in normal}
+    dev_by_id = {(doc["kind"], doc["metadata"]["name"]): doc for doc in development}
+    assert normal_by_id.keys() == dev_by_id.keys()
+    for identity in normal_by_id:
+        if identity not in {("Deployment", "ui"), ("ConfigMap", "nginx-prod-config")}:
+            assert normal_by_id[identity] == dev_by_id[identity], identity
+
+    pod = resources(development, "Deployment")["ui"]["spec"]["template"]["spec"]
+    ordinary_pod = resources(normal, "Deployment")["ui"]["spec"]["template"]["spec"]
+    assert ordinary_pod["containers"] == [pod["containers"][0]]
+    assert "initContainers" not in ordinary_pod
+    assert all("hostPath" not in volume for volume in ordinary_pod["volumes"])
+    assert pod["automountServiceAccountToken"] is False
+    node = pod["containers"][1]
+    assert node["command"] == ["npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", "3000", "--strictPort"]
+    assert node["resources"]["requests"]["memory"] == "256Mi"
+    assert node["resources"]["limits"]["memory"] == "2048Mi"
+    assert pod["initContainers"][0]["resources"]["requests"]["memory"] == "256Mi"
+    assert pod["initContainers"][0]["resources"]["limits"]["memory"] == "1536Mi"
+    assert "ports" not in node
+    assert node["readinessProbe"]["exec"]["command"][0] == "node"
+    for container in (pod["initContainers"][0], node):
+        assert "@sha256:" in container["image"]
+        assert "envFrom" not in container
+        assert container["securityContext"]["runAsNonRoot"] is True
+        assert container["securityContext"]["readOnlyRootFilesystem"] is True
+        env = {entry["name"]: entry["value"] for entry in container["env"]}
+        assert "HOME" not in env
+        assert env["NPM_CONFIG_CACHE"] == "/tmp/npm-cache"
+        assert env["VITE_API_URL"] == ""
+        assert env["VITE_DEV_PUBLIC_ORIGIN"] == values["publicOrigin"]
+        assert env["VITE_UI_VARIANT"] == "selfhost"
+        mounts = {mount["name"]: mount for mount in container["volumeMounts"]}
+        assert set(mounts) == {"ui-dev-source", "ui-dev-contracts", "ui-dev-dependencies", "ui-dev-tmp"}
+        assert mounts["ui-dev-source"]["readOnly"] is True
+        assert mounts["ui-dev-contracts"]["readOnly"] is True
+    host_paths = [volume["hostPath"] for volume in pod["volumes"] if "hostPath" in volume]
+    assert host_paths == [
+        {"path": "/opt/marty-ux/ui", "type": "Directory"},
+        {"path": "/opt/marty-ux/contracts", "type": "Directory"},
+    ]
+
+    def nginx_locations(documents):
+        nginx = resources(documents, "ConfigMap")["nginx-prod-config"]["data"]["default.conf"]
+        nginx = re.sub(r"(?m)^\s*#.*\n", "", nginx)
+        return {name.strip(): body.strip() for name, body in re.findall(
+            r"(?ms)^    location ([^\n{]+)\{(.*?)(?=^    location |^})", nginx,
+        )}
+
+    ordinary_locations = nginx_locations(normal)
+    dev_locations = nginx_locations(development)
+    ui_locations = {"/", "= /canvas/lti/experience"}
+    assert len(ordinary_locations) >= 15
+    for route in ordinary_locations.keys() - ui_locations:
+        assert ordinary_locations[route] == dev_locations[route], route
+    for route in ui_locations:
+        assert "proxy_pass http://127.0.0.1:3000;" in dev_locations[route]
+        assert "proxy_set_header Upgrade $http_upgrade;" in dev_locations[route]
+        assert "proxy_set_header Host $http_host;" in dev_locations[route]
+        assert "proxy_set_header X-Forwarded-Proto https;" in dev_locations[route]
+    assert "try_files $uri =404;" in dev_locations["= /runtime-config.js"]
+
+
+@pytest.mark.parametrize("checkout", ["", "/", "relative/path", "/opt/../root", "/opt/./repo", "/opt/repo/", "/opt//repo"])
+def test_development_ui_rejects_ambiguous_checkout_paths(tmp_path: Path, checkout: str) -> None:
+    values = installation_values()
+    values["ui"] = {"development": {"enabled": True, "checkoutPath": checkout}}
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "ui.development.checkoutPath" in result.stderr
+
+
+def test_development_ui_rejects_mutable_node_image(tmp_path: Path) -> None:
+    values = installation_values()
+    values["ui"] = {"development": {
+        "enabled": True, "checkoutPath": "/opt/marty-ux", "nodeImage": "node:24",
+    }}
     values_file = tmp_path / "installation.yaml"
     values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
     result = subprocess.run(helm_command(values_file), capture_output=True, text=True)

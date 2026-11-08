@@ -4,6 +4,8 @@ import { renderWithoutRouter, screen, waitFor } from '@test/utils';
 import type { ReactNode } from 'react';
 
 import ConsoleRoutes from './ConsoleRoutes';
+import { TeamSnapshotPanel } from '../../components/console/dashboard/TeamSnapshotPanel';
+import { SetupReadinessPanel } from '../../components/console/dashboard/SetupReadinessPanel';
 
 const { mockLogin, mockUseAuth, mockUseConsole, mockUsePermissions } = vi.hoisted(() => ({
   mockUsePermissions: vi.fn(),
@@ -25,6 +27,17 @@ vi.mock('../../contexts/ConsoleContext', () => ({
 
 vi.mock('../../services/api', () => ({
   get: vi.fn(),
+}));
+
+vi.mock('../../services/presentationPolicyApi', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../services/presentationPolicyApi')>(),
+  listPresentationPolicies: vi.fn().mockResolvedValue([]),
+  listCredentialTemplates: vi.fn().mockResolvedValue([]),
+  listTrustProfiles: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock('../../components/vendor/FlowManager', () => ({
+  default: () => <div data-testid="flow-manager" />,
 }));
 
 vi.mock('../../components/ProtectedRoute', () => {
@@ -73,7 +86,7 @@ vi.mock('../../components/organizations/CreateOrganizationPage', () => ({
   default: () => <div data-testid="create-organization-page" />,
 }));
 
-vi.mock('../../components/console', () => ({
+vi.mock('../../components/console', async () => ({
   ConsoleDashboard: () => <div data-testid="console-dashboard" />,
   TrustPage: () => <div data-testid="trust-page" />,
   TrustProfilesPage: () => <div data-testid="trust-profiles-page" />,
@@ -91,7 +104,7 @@ vi.mock('../../components/console', () => ({
   ApplicationTemplateDetailPage: () => <div data-testid="application-template-detail-page" />,
   CredentialTemplateWizard: () => <div data-testid="credential-template-wizard" />,
   PoliciesPage: () => <div data-testid="policies-page" />,
-  PresentationPoliciesPage: () => <div data-testid="presentation-policies-page" />,
+  PresentationPoliciesPage: (await import('../../components/console/policies/PresentationPoliciesPage')).default,
   ComplianceProfilePage: ({ mode = "view" }: { mode?: string }) => <div data-testid={`compliance-profile-${mode}`} />,
   ComplianceProfilesPage: () => <div data-testid="compliance-profiles-page" />,
   PresentationPolicyWizard: () => <div data-testid="presentation-policy-wizard" />,
@@ -107,7 +120,7 @@ vi.mock('../../components/console', () => ({
   KeyManagementServiceWizard: () => <div data-testid="key-management-service-wizard" />,
   IssuerIdentityWizard: () => <div data-testid="issuer-identity-wizard" />,
   FlowsPage: () => <div data-testid="flows-page" />,
-  FlowDefinitionsPage: () => <div data-testid="flow-definitions-page" />,
+  FlowDefinitionsPage: (await import('../../components/console/flows/FlowDefinitionsPage')).default,
   FlowInstancesPage: () => <div data-testid="flow-instances-page" />,
   FlowDefinitionWizard: () => <div data-testid="flow-definition-wizard" />,
   CustomFlowBuilder: () => <div data-testid="custom-flow-builder" />,
@@ -142,17 +155,93 @@ afterEach(() => {
 });
 
 function CurrentPath() {
-  return <span data-testid="current-path">{useLocation().pathname}</span>;
+  const { pathname, search } = useLocation();
+  return <span data-testid="current-path">{pathname}{search}</span>;
 }
 
-function renderConsoleRoutes(path: string) {
+function renderConsoleRoutes(path: string, navigation?: ReactNode) {
   return renderWithoutRouter(
     <MemoryRouter initialEntries={[path]}>
+      {navigation}
       <ConsoleRoutes />
       <CurrentPath />
     </MemoryRouter>
   );
 }
+
+describe('resource navigation through the console route table', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseAuth.mockReturnValue({ isAuthenticated: true, isLoading: false });
+    mockUseConsole.mockReturnValue({ mode: 'org', activeOrgId: 'org-1', memberships: [{ id: 'org-1' }], isLoading: false });
+    mockUsePermissions.mockReturnValue({ can: () => true, isLoading: false });
+  });
+
+  it('opens the operational instances page from the Flow Definitions tab', async () => {
+    const { user } = renderConsoleRoutes('/console/org/flows/definitions');
+
+    await user.click(screen.getByRole('tab', { name: 'Flow Instances' }));
+
+    expect(await screen.findByTestId('flow-instances-page')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/operate/flow-instances');
+    expect(screen.queryByTestId('console-dashboard')).not.toBeInTheDocument();
+  });
+
+  it('uses a translated singular resource label and opens the flow builder', async () => {
+    const { user } = renderConsoleRoutes('/console/org/flows/definitions');
+
+    await user.click(screen.getByRole('button', { name: 'Build Flow Definition' }));
+
+    expect(await screen.findByTestId('flow-definition-wizard')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/flows/definitions/new');
+  });
+
+  it('opens supported verification sessions from Presentation Policies', async () => {
+    const { user } = renderConsoleRoutes('/console/org/policies/presentation');
+
+    expect(screen.queryByRole('link', { name: 'Evaluate VP' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Start QR Verification' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('link', { name: 'Verification sessions' }));
+
+    expect(await screen.findByTestId('verification-sessions-page')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/operate/verify');
+    expect(screen.queryByTestId('flow-definition-wizard')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('console-dashboard')).not.toBeInTheDocument();
+  });
+
+  it('preserves invitation intent when the dashboard Team action opens Team', async () => {
+    const { user } = renderConsoleRoutes('/console/org', <TeamSnapshotPanel teamData={{
+      members: [{ id: 'member-1', email: 'operator@example.test' }],
+      roleDistribution: { admin: 1 },
+    }} />);
+
+    await user.click(screen.getByRole('link', { name: 'Invite' }));
+
+    expect(await screen.findByTestId('team-page')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/team?invite=1');
+    expect(screen.queryByTestId('console-dashboard')).not.toBeInTheDocument();
+  });
+
+  it('opens Revocation Profiles from the ready lifecycle row itself', async () => {
+    const { user } = renderConsoleRoutes('/console/org', <SetupReadinessPanel readiness={{
+      activeIntent: 'lifecycle',
+      intents: {
+        lifecycle: {
+          id: 'lifecycle',
+          label: 'Revoke or renew credentials',
+          order: ['revocation'],
+          steps: { revocation: { state: 'ready', message: '1 active Revocation Profile' } },
+        },
+      },
+    }} />);
+
+    await user.click(screen.getByRole('link', { name: /Revocation Profile Ready/ }));
+
+    expect(await screen.findByTestId('revocation-profiles-page')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/trust/revocation');
+    expect(screen.queryByTestId('console-dashboard')).not.toBeInTheDocument();
+  });
+});
 
 describe('ConsoleRoutes login routing', () => {
   beforeEach(() => {

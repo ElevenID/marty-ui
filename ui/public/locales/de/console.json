@@ -1,7 +1,44 @@
 {
 	"dashboard": {
 		"title": "Dashboard",
-		"welcome": "Willkommen zurück"
+		"welcome": "Willkommen zurück",
+		"criticalEvents": {
+			"noCriticalEvents": "In den letzten 24 Stunden wurden keine kritischen Ereignisse gemeldet."
+		},
+		"runtimeReadiness": {
+			"issuance": {
+				"noDeployments": "Keine aktiven Bereitstellungen",
+				"deploymentsReason": "Für die Ausstellung von Nachweisen ist ein aktives Bereitstellungsprofil erforderlich.",
+				"configureDeployment": "Bereitstellung konfigurieren",
+				"notReady": "Die Nachweisausstellung ist noch nicht bereit",
+				"readinessReason": "Prüfen Sie den Ausstellungsablauf und die erforderlichen Ressourcen, bevor Sie Nachweise ausstellen.",
+				"reviewFlows": "Ausstellungsabläufe prüfen",
+				"operational": "Die Nachweisausstellung ist bereit",
+				"issuerConfigurationRequired": "Ausstellerkonfiguration muss geprüft werden",
+				"issuerConfigurationReason": "Prüfen Sie vor der Ausstellung von Nachweisen die Ausstelleridentität und die Aussteller-DID, auf die die aktive Nachweisvorlage verweist."
+			},
+			"verification": {
+				"notReady": "Die Nachweisprüfung ist noch nicht bereit",
+				"readinessReason": "Prüfen Sie die Verifizierungskonfiguration, bevor Sie eine Sitzung starten.",
+				"reviewSetup": "Verifizierungseinrichtung prüfen",
+				"operational": "Die Nachweisprüfung ist bereit",
+				"policyUnreachable": "Keine aktiven Präsentationsrichtlinien",
+				"policyReason": "Für die Verifizierung von Nachweisen ist mindestens eine aktive Präsentationsrichtlinie erforderlich."
+			},
+			"issuerConfiguration": {
+				"title": "Ausstellerkonfiguration",
+				"configured": "Konfiguriert",
+				"notConfigured": "Nicht konfiguriert",
+				"configuredDetail": "Eine aktive Nachweisvorlage verweist auf eine Aussteller-DID.",
+				"notConfiguredDetail": "Keine aktive Nachweisvorlage verweist auf eine Aussteller-DID.",
+				"reason": "Nachweisvorlagen benötigen eine Aussteller-DID, bevor sie zur Ausstellung verwendet werden können.",
+				"manage": "Ausstelleridentitäten verwalten"
+			}
+		},
+		"systemStatus": {
+			"issuanceService": "Ausstellungsdienst",
+			"notReported": "Dieser Dienst wurde bei der letzten Bereitschaftsprüfung nicht gemeldet."
+		}
 	},
 	"flows": {
 		"title": "Abläufe",
@@ -36,7 +73,8 @@
 			"console": "Konsole",
 			"flows": "Abläufe",
 			"flowInstances": "Ablaufinstanzen"
-		}
+		},
+		"flowDefinition": "Ablaufdefinition"
 	},
 	"deploy": {
 		"title": "Bereitstellung",
@@ -272,5 +310,15 @@
 				"saveSuccess": "Organisationsstandards erfolgreich gespeichert"
 			}
 		}
+	},
+	"policies": {
+		"verificationSessions": "Verifizierungssitzungen"
+	},
+	"organizationCreation": {
+		"createAction": "Organisation erstellen",
+		"emptyDescription": "Sie sind noch kein Mitglied einer Organisation. Erstellen Sie eine Organisation, entdecken Sie öffentliche Organisationen oder treten Sie einer Organisation mit einem Code bei.",
+		"discoveryRequired": "Organisationen mit offener oder genehmigungspflichtiger Mitgliedschaft sind immer über die öffentliche Organisationssuche auffindbar.",
+		"discoveryPublic": "Diese Organisation kann in der öffentlichen Organisationssuche erscheinen.",
+		"discoveryPrivate": "Diese Organisation erscheint nicht in der öffentlichen Organisationssuche."
 	}
 }

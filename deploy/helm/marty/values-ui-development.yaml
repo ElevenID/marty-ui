@@ -1,0 +1,7 @@
+# Apply last, on a dedicated single-node development installation only.
+# Supply ui.development.checkoutPath with --set-string; the path must already
+# contain this repository's ui/ and contracts/ directories on the K3s node.
+# publicOrigin in the installation values is the existing HTTPS edge origin.
+ui:
+  development:
+    enabled: true

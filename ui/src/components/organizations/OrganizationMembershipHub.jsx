@@ -16,9 +16,13 @@ import BusinessIcon from '@mui/icons-material/Business';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import PendingIcon from '@mui/icons-material/Pending';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import AddIcon from '@mui/icons-material/Add';
 import { Link as RouterLink } from 'react-router';
+import { useTranslation } from 'react-i18next';
+import { ENABLE_ORGANIZATION_CREATION } from '@ui-public-config';
 
 import { membershipHasOrgConsoleAccess } from '../../application/session/authSession';
+import { isOrganizationCreationEnabled } from '../../utils/runtimeConfig';
 
 const DEFAULT_TITLE = 'My Organizations';
 const DEFAULT_DESCRIPTION = "Organizations you're a member of. Switch to an organization to access its console.";
@@ -109,6 +113,8 @@ function OrganizationMembershipHub({
   joinPath = '/organizations/join',
   dataTestId,
 }) {
+  const { t } = useTranslation('console');
+  const organizationCreationEnabled = isOrganizationCreationEnabled(ENABLE_ORGANIZATION_CREATION);
   const items = Array.isArray(organizations) ? organizations : [];
 
   if (loading) {
@@ -154,9 +160,16 @@ function OrganizationMembershipHub({
               No Organizations Yet
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-              You&apos;re not a member of any organizations. Discover organizations or join one with a join code.
+              {organizationCreationEnabled
+                ? t('organizationCreation.emptyDescription')
+                : "You're not a member of any organizations. Discover organizations or join one with a join code."}
             </Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center">
+              {organizationCreationEnabled && (
+                <Button component={RouterLink} to="/console/organizations/create" variant="outlined" startIcon={<AddIcon />}>
+                  {t('organizationCreation.createAction')}
+                </Button>
+              )}
               <Button component={RouterLink} to={discoverPath} variant="contained">
                 Discover Organizations
               </Button>
@@ -285,6 +298,11 @@ function OrganizationMembershipHub({
               {showManagePageLink && (
                 <Button component={RouterLink} to={managePath} variant="outlined">
                   View My Organizations
+                </Button>
+              )}
+              {organizationCreationEnabled && (
+                <Button component={RouterLink} to="/console/organizations/create" variant="outlined" startIcon={<AddIcon />}>
+                  {t('organizationCreation.createAction')}
                 </Button>
               )}
               <Button component={RouterLink} to={discoverPath} variant="outlined">

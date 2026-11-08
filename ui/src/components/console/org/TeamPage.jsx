@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router';
 import {
   Alert,
   Box,
@@ -43,8 +44,8 @@ import { TableSkeleton } from '../../common/skeletons';
 import EmptyState from '../../common/EmptyState';
 import ErrorState from '../../common/ErrorState';
 import { PermissionGate } from '../../common/PermissionGate';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useDialog } from '../../../hooks/useDialog';
-import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { usePermissions } from '../../../hooks/usePermissions';
@@ -125,21 +126,50 @@ function RoleChips({ roles = [] }) {
 
 function TeamPage() {
   const { t } = useTranslation('console');
+  const [searchParams, setSearchParams] = useSearchParams();
   const inviteDialog = useDialog();
   const roleDialog = useDialog();
-  const { organizationId } = useAuth();
   const { activeOrgId } = useConsole();
   const { showNotification } = useNotifications();
-  const { hasPermission, refresh: refreshPermissions } = usePermissions();
+  const { hasPermission, isLoading: permissionsLoading, refresh: refreshPermissions } = usePermissions();
 
   const effectiveOrgId = activeOrgId;
+  const currentOrgId = useRef(effectiveOrgId);
+  currentOrgId.current = effectiveOrgId;
   const isMartyOrg = effectiveOrgId === MARTY_ORG_ID;
+  const canInvite = !permissionsLoading && hasPermission('team', 'invite');
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [members, setMembers] = useState([]);
-  const [pendingInvites, setPendingInvites] = useState([]);
-  const [availableRoles, setAvailableRoles] = useState([]);
+  const { data: teamData, loading: dataLoading, error, reload: loadData } = useAsyncData(async () => {
+    if (!effectiveOrgId) throw new Error('Organization context unavailable');
+    const [memberData, rolesData] = await Promise.all([
+      teamApi.listMembers(effectiveOrgId),
+      listRoles(effectiveOrgId),
+    ]);
+    const membershipRecords = Array.isArray(memberData) ? memberData : (memberData?.members ?? []);
+    return {
+      organizationId: effectiveOrgId,
+      ...splitMemberships(membershipRecords),
+      availableRoles: rolesData?.roles || rolesData || [],
+    };
+  }, [effectiveOrgId]);
+  const currentTeam = teamData?.organizationId === effectiveOrgId ? teamData : null;
+  const loading = dataLoading || Boolean(effectiveOrgId && !currentTeam && !error);
+  const { activeMembers: members = [], pendingInvites = [], availableRoles = [] } = currentTeam || {};
+  const teamReady = Boolean(effectiveOrgId && currentTeam && !loading && !error);
+  const inviteRequested = searchParams.get('invite') === '1';
+  const { open: openInvite, close: closeInvite } = inviteDialog;
+
+  useEffect(() => {
+    if (!inviteRequested || !teamReady || permissionsLoading) return;
+    const remainingParams = new URLSearchParams(searchParams);
+    remainingParams.delete('invite');
+    setSearchParams(remainingParams, { replace: true });
+    if (canInvite) openInvite(effectiveOrgId);
+  }, [inviteRequested, teamReady, permissionsLoading, canInvite, effectiveOrgId, searchParams, setSearchParams, openInvite]);
+
+  useEffect(() => {
+    if (inviteDialog.isOpen && (!canInvite || inviteDialog.data !== effectiveOrgId)) closeInvite();
+  }, [inviteDialog.isOpen, inviteDialog.data, effectiveOrgId, canInvite, closeInvite]);
 
   const requireOrgId = () => {
     if (!effectiveOrgId) {
@@ -148,49 +178,6 @@ function TeamPage() {
 
     return effectiveOrgId;
   };
-
-  const loadData = async () => {
-    if (!effectiveOrgId) {
-      setMembers([]);
-      setPendingInvites([]);
-      setAvailableRoles([]);
-      setError(new Error('Organization context unavailable'));
-      setLoading(false);
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setError(null);
-
-      const [memberData, rolesData] = await Promise.all([
-        teamApi.listMembers(effectiveOrgId),
-        listRoles(effectiveOrgId),
-      ]);
-
-      const membershipRecords = Array.isArray(memberData)
-        ? memberData
-        : (memberData?.members ?? []);
-      const nextRoles = rolesData?.roles || rolesData || [];
-      const { activeMembers, pendingInvites: pendingMembers } = splitMemberships(membershipRecords);
-
-      setMembers(activeMembers);
-      setPendingInvites(pendingMembers);
-      setAvailableRoles(nextRoles);
-    } catch (err) {
-      console.error('Failed to load team data:', err);
-      setError(err);
-      setMembers([]);
-      setPendingInvites([]);
-      setAvailableRoles([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadData();
-  }, [effectiveOrgId]);
 
   const defaultInviteRoleIds = useMemo(() => {
     const explicitDefaults = availableRoles
@@ -205,15 +192,19 @@ function TeamPage() {
   }, [availableRoles]);
 
   const handleInvite = async (email, roleIds) => {
+    if (!canInvite || !teamReady || inviteDialog.data !== effectiveOrgId) return;
+    const invitedOrgId = effectiveOrgId;
     try {
-      await teamApi.inviteMember(requireOrgId(), {
+      await teamApi.inviteMember(invitedOrgId, {
         email,
         role_ids: roleIds,
       });
+      if (currentOrgId.current !== invitedOrgId) return;
       showNotification?.(t('org.team.dialog.invite.success'), 'success');
       inviteDialog.close();
       await loadData();
     } catch (err) {
+      if (currentOrgId.current !== invitedOrgId) return;
       console.error('Failed to invite member:', err);
       showNotification?.(t('org.team.dialog.invite.error'), 'error');
     }
@@ -275,8 +266,8 @@ function TeamPage() {
           <Button
             variant="contained"
             startIcon={<AddIcon />}
-            onClick={inviteDialog.open}
-            disabled={loading || Boolean(error)}
+            onClick={() => openInvite(effectiveOrgId)}
+            disabled={!canInvite || !teamReady}
             data-testid="org.team.invite.action"
           >
             {t('org.team.members.actions.invite')}
@@ -401,7 +392,7 @@ function TeamPage() {
       )}
 
       <InviteMemberDialog
-        open={inviteDialog.isOpen}
+        open={inviteDialog.isOpen && inviteDialog.data === effectiveOrgId && canInvite && teamReady}
         availableRoles={availableRoles}
         defaultRoleIds={defaultInviteRoleIds}
         onClose={inviteDialog.close}
