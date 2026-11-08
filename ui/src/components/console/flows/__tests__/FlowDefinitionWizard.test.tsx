@@ -5,6 +5,7 @@ import { http, HttpResponse } from 'msw';
 
 import { render } from '@test/utils';
 import { server } from '@test/mocks/server';
+import { mockDeploymentProfiles, mockTemplates } from '@test/mocks/fixtures';
 import FlowDefinitionWizard, { buildFlowPayload } from '../FlowDefinitionWizard';
 
 const mockNavigate = vi.fn();
@@ -19,7 +20,19 @@ vi.mock('../../../../contexts/ConsoleContext', () => ({
 }));
 
 describe('FlowDefinitionWizard', () => {
-  beforeEach(() => { vi.clearAllMocks(); route.search = ''; });
+  beforeEach(() => {
+    vi.clearAllMocks(); route.search = '';
+    server.use(
+      http.get('*/v1/organizations/:organizationId/defaults', () => HttpResponse.json({})),
+      http.get('*/v1/deployment-profiles', () => HttpResponse.json([
+        { ...mockDeploymentProfiles.valid, organization_id: 'org-1' },
+      ])),
+      http.get('*/v1/credential-templates', () => HttpResponse.json([
+        { ...mockTemplates.valid, organization_id: 'org-1', trust_profile_id: 'trust-1',
+          issuance_protocol: 'OID4VCI_PRE_AUTH', credential_payload_format: 'SD_JWT_VC' },
+      ])),
+    );
+  });
 
   it('carries a validated template link into standard-flow dependencies', async () => {
     route.search = 'templateId=linked-template';
@@ -124,6 +137,7 @@ describe('FlowDefinitionWizard', () => {
     expect(submittedPayload).not.toHaveProperty('preconditions');
     expect(submittedPayload).not.toHaveProperty('enabled');
     expect(submittedPayload).not.toHaveProperty('deployment_profile_id');
+    expect(submittedPayload).not.toHaveProperty('_organization_default_bindings');
   });
 
   it('buildFlowPayload binds both references for physical issuance', () => {

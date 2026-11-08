@@ -41,6 +41,7 @@ describe('CredentialTemplateWizard', () => {
     vi.clearAllMocks()
     mockOrgContext.activeOrgId = 'console-org'
     mockOrgContext.authOrganizationId = 'auth-org'
+    server.use(http.get('*/v1/organizations/:organizationId/defaults', () => HttpResponse.json({})))
   })
 
   describe('initial render', () => {
@@ -150,7 +151,7 @@ describe('CredentialTemplateWizard', () => {
   })
 
   describe('complete wizard flow', () => {
-    it.each(['digital', 'physical', 'stale'])('uses current API compatibility for the %s template journey', async (mode) => {
+    it.each(['digital', 'physical', 'stale', 'defaults'])('uses current API compatibility for the %s template journey', async (mode) => {
       let createdPayload: Record<string, unknown> | undefined
       let activationRequested = false
       let internalIssuerProfileFetches = 0
@@ -160,6 +161,9 @@ describe('CredentialTemplateWizard', () => {
       const protocol = physical ? 'PHYSICAL_DOCUMENT' : 'OID4VCI_PRE_AUTH'
 
       server.use(
+        http.get('*/v1/organizations/:organizationId/defaults', () => HttpResponse.json(
+          mode === 'defaults' ? { default_trust_profile_id: 'trust-1' } : {},
+        )),
         http.post('*/v1/credential-templates/issuer-options', async ({ request }) => {
           const body = await request.json() as Record<string, unknown>
           expect(body.organization_id).toBe('console-org')
@@ -181,8 +185,12 @@ describe('CredentialTemplateWizard', () => {
               id: 'trust-1',
               name: 'Production Trust',
               status: 'active',
+              organization_id: 'console-org',
+              supported_formats: [payloadFormat],
               trust_sources: [{ issuer_did: 'did:web:issuer.example.com' }],
             },
+            ...(mode === 'defaults' ? [{ id: 'trust-other', name: 'Other Trust', status: 'active',
+              organization_id: 'console-org', supported_formats: [payloadFormat] }] : []),
           ])
         }),
         http.get('*/v1/signing-keys/issuer-identities', ({ request }) => {
@@ -304,6 +312,7 @@ describe('CredentialTemplateWizard', () => {
         expect(createdPayload).not.toHaveProperty('activate_immediately')
         expect(createdPayload).not.toHaveProperty('supported_wallet_ids')
         expect(createdPayload).not.toHaveProperty('_issuer_selection')
+        expect(createdPayload).not.toHaveProperty('_organization_default_trust')
         expect(internalIssuerProfileFetches).toBe(0)
         expect(activationRequested).toBe(true)
         expect(screen.getByText(/now active/i)).toBeInTheDocument()
