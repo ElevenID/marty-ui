@@ -13,6 +13,7 @@ use mmf_platform::{
     OutboundHttpClient, OutboundHttpMethod, OutboundHttpRequest, ReqwestOutboundHttpClient,
 };
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use tonic::{
     metadata::AsciiMetadataValue,
     transport::{Channel, Endpoint},
@@ -26,7 +27,8 @@ use crate::{
         organization_service_client::OrganizationServiceClient, GetMemberRequest, MemberResponse,
     },
     CredentialStatusEvidence, CredentialStatusResolver, IssuerTrustEvidence, PolicyAuthorization,
-    PresentationTrustResolver, PresentationVerificationError, ResolvedTrustProfile,
+    PresentationTrustResolver, PresentationVerificationError, ResolvedCredentialTemplate,
+    ResolvedTrustProfile, ResolvedVerificationPolicy,
 };
 
 const SERVICE_TOKEN_HEADER: &str = "x-service-token";
@@ -40,6 +42,8 @@ pub struct NativePresentationControlPlane {
     service_token: Option<AsciiMetadataValue>,
     service_token_header: Option<Arc<str>>,
     trust_profile_url: Arc<str>,
+    credential_template_url: Option<Arc<str>>,
+    organization_url: Option<Arc<str>>,
     status_url_template: Arc<str>,
     issuance_api_key: Option<Arc<str>>,
     timeout: Duration,
@@ -149,10 +153,60 @@ impl NativePresentationControlPlane {
             service_token: service_token_metadata,
             service_token_header: service_token.map(Arc::<str>::from),
             trust_profile_url: Arc::from(trust_profile_url),
+            credential_template_url: None,
+            organization_url: None,
             status_url_template: Arc::from(status_url_template),
             issuance_api_key: issuance_api_key.map(Arc::<str>::from),
             timeout,
         })
+    }
+
+    pub fn with_verification_sources(
+        mut self,
+        credential_template_url: &str,
+        organization_url: &str,
+    ) -> Result<Self, PresentationVerificationError> {
+        self.credential_template_url = Some(Arc::from(service_url(
+            credential_template_url,
+            "credential-template",
+        )?));
+        self.organization_url = Some(Arc::from(service_url(organization_url, "organization")?));
+        Ok(self)
+    }
+
+    async fn verification_document(
+        &self,
+        url: String,
+    ) -> Result<Value, PresentationVerificationError> {
+        let token = self
+            .service_token_header
+            .as_ref()
+            .ok_or_else(|| failed("Verification metadata requires service authentication"))?;
+        let response = self
+            .http
+            .execute(OutboundHttpRequest {
+                method: OutboundHttpMethod::Get,
+                url,
+                headers: BTreeMap::from([
+                    ("accept".into(), "application/json".into()),
+                    (SERVICE_TOKEN_HEADER.into(), token.to_string()),
+                ]),
+                body: None,
+                maximum_response_bytes: MAX_TRUST_PROFILE_BYTES,
+            })
+            .await
+            .map_err(|_| PresentationVerificationError::Unavailable)?;
+        if response.status == 404 {
+            return Err(failed(
+                "Required verification metadata does not exist in this organization",
+            ));
+        }
+        if !(200..300).contains(&response.status) {
+            return Err(PresentationVerificationError::Unavailable);
+        }
+        response
+            .json_object("verification metadata")
+            .map_err(|_| failed("Verification metadata is malformed"))
     }
 
     fn grpc_request<T>(&self, body: T) -> Request<T> {
@@ -219,6 +273,102 @@ impl PolicyAuthorization for NativePresentationControlPlane {
 
 #[async_trait]
 impl PresentationTrustResolver for NativePresentationControlPlane {
+    async fn load_credential_template(
+        &self,
+        template_id: &str,
+        organization_id: Uuid,
+    ) -> Result<ResolvedCredentialTemplate, PresentationVerificationError> {
+        let base = self
+            .credential_template_url
+            .as_ref()
+            .ok_or_else(|| failed("Credential template source is not configured"))?;
+        if template_id.is_empty() || template_id.len() > 255 || matches!(template_id, "." | "..") {
+            return Err(failed("Credential template ID is invalid"));
+        }
+        let encoded: String =
+            url::form_urlencoded::byte_serialize(template_id.as_bytes()).collect();
+        let document = self.verification_document(format!("{base}/internal/v1/organizations/{organization_id}/credential-templates/{encoded}/verification-type")).await?;
+        let template: ResolvedCredentialTemplate = serde_json::from_value(document)
+            .map_err(|_| failed("Credential template metadata is invalid"))?;
+        if template.id != template_id || template.organization_id != organization_id {
+            return Err(failed(
+                "Credential template identity or organization mismatch",
+            ));
+        }
+        Ok(template)
+    }
+
+    async fn load_verification_policy(
+        &self,
+        policy_set_id: Uuid,
+        organization_id: Uuid,
+    ) -> Result<ResolvedVerificationPolicy, PresentationVerificationError> {
+        let base = self
+            .organization_url
+            .as_ref()
+            .ok_or_else(|| failed("Verification PolicySet source is not configured"))?;
+        let document = self
+            .verification_document(format!(
+                "{base}/internal/v1/organizations/{organization_id}/policy-sets/{policy_set_id}"
+            ))
+            .await?;
+        let object = document
+            .as_object()
+            .ok_or_else(|| failed("Verification PolicySet is invalid"))?;
+        if uuid_field(object, "id")? != policy_set_id
+            || uuid_field(object, "organization_id")? != organization_id
+            || object.get("status").and_then(Value::as_str) != Some("ACTIVE")
+            || object.get("policy_type").and_then(Value::as_str) != Some("CREDENTIAL_VERIFICATION")
+            || object.get("cedar_schema_version").and_then(Value::as_str) != Some("MIP/1.0")
+        {
+            return Err(failed("Verification PolicySet identity, organization, lifecycle, type, or schema mismatch"));
+        }
+        let policies = object
+            .get("cedar_policies")
+            .and_then(Value::as_array)
+            .filter(|values| !values.is_empty())
+            .ok_or_else(|| failed("Verification PolicySet has no policy documents"))?;
+        let mut identifiers = BTreeSet::new();
+        let mut sources = Vec::new();
+        for policy in policies {
+            let id = policy
+                .get("policy_id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| failed("Verification PolicySet document ID is invalid"))?;
+            if !identifiers.insert(id) {
+                return Err(failed(
+                    "Verification PolicySet has duplicate policy document IDs",
+                ));
+            }
+            let enabled = policy
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| failed("Verification PolicySet document state is invalid"))?;
+            if enabled {
+                let source = policy
+                    .get("cedar_text")
+                    .and_then(Value::as_str)
+                    .filter(|source| !source.trim().is_empty())
+                    .ok_or_else(|| {
+                        failed("Verification PolicySet contains an empty enabled policy")
+                    })?;
+                sources.push(source);
+            }
+        }
+        let cedar_policies = sources.join("\n");
+        let revision = format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(cedar_policies.as_bytes()))
+        );
+        Ok(ResolvedVerificationPolicy {
+            id: policy_set_id,
+            organization_id,
+            revision,
+            cedar_policies,
+        })
+    }
+
     async fn load_profile(
         &self,
         profile_id: Uuid,

@@ -613,6 +613,71 @@ async fn template_owner_projection_requires_service_authority_and_only_exposes_s
 }
 
 #[tokio::test]
+async fn verification_type_projection_requires_service_auth_and_exact_tenant() {
+    let app = router();
+    let created = json_body(
+        app.clone()
+            .oneshot(request(
+                "POST",
+                "/v1/credential-templates",
+                create_body(),
+                true,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+    let path =
+        format!("/internal/v1/organizations/org-1/credential-templates/{id}/verification-type");
+    for (configured, token, expected) in [
+        (false, Some(TOKEN), StatusCode::UNAUTHORIZED),
+        (true, None, StatusCode::UNAUTHORIZED),
+        (true, Some("invalid"), StatusCode::UNAUTHORIZED),
+        (true, Some(TOKEN), StatusCode::OK),
+    ] {
+        let mut req = request("GET", &path, json!({}), false);
+        req.headers_mut()
+            .insert("x-user-id", "untrusted-user".parse().unwrap());
+        req.headers_mut()
+            .insert("x-organization-id", "other-org".parse().unwrap());
+        if let Some(token) = token {
+            req.headers_mut()
+                .insert("x-service-token", token.parse().unwrap());
+        }
+        let response = if configured {
+            app.clone()
+        } else {
+            router_with_service_auth(false)
+        }
+        .oneshot(req)
+        .await
+        .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            assert_eq!(
+                json_body(response).await,
+                json!({"id":id,"organization_id":"org-1","credential_type":"EmployeeBadge","vct":"https://issuer.example/EmployeeBadge","doctype":null,"status":"DRAFT"})
+            );
+        }
+    }
+    let mut req = request(
+        "GET",
+        &format!(
+            "/internal/v1/organizations/other-org/credential-templates/{id}/verification-type"
+        ),
+        json!({}),
+        false,
+    );
+    req.headers_mut()
+        .insert("x-service-token", TOKEN.parse().unwrap());
+    assert_eq!(
+        app.oneshot(req).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
 async fn unsupported_schema_uri_is_rejected_instead_of_silently_discarded() {
     let mut body = create_body();
     body["schema_uri"] = json!("https://issuer.example/schema");

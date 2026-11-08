@@ -357,9 +357,12 @@ impl SdJwtDcqlRequest {
         Ok(Some(Self {
             organization_id: policy.organization_id.to_string(),
             policy: policy_revision(policy).map_err(|_| invalid())?,
-            selected_trust_profile_id: crate::verification::selected_trust_profile(
+            selected_trust_profile_id: crate::verification::effective_trust_profiles(
                 policy, request,
-            )?,
+            )?
+            .into_iter()
+            .next()
+            .flatten(),
             credential_template_id: requirement.credential_template_id.clone(),
             query_id: credential.id.clone(),
             query_digest: transport.query_digest.clone(),
@@ -415,6 +418,7 @@ impl SdJwtDcqlRequest {
         &self,
         key: &ResolvedIssuerKey,
         token: &str,
+        allowed_algorithms: &[SigningAlgorithm],
     ) -> Result<(Map<String, Value>, AuthenticatedSdJwtQueryEvidence), &'static str> {
         if digest_response_item(token, &self.query_id, "0").map_err(|_| PROFILE_ERROR)?
             != self.response_token_digest
@@ -422,10 +426,16 @@ impl SdJwtDcqlRequest {
             return Err(PROFILE_ERROR);
         }
         let issuer_algorithm = selected_algorithm(&key.public_jwk)?;
+        if !allowed_algorithms.contains(&issuer_algorithm) {
+            return Err("SD-JWT algorithm is not allowed by the Trust Profile");
+        }
         let policy = SdJwtVerificationPolicy {
             expected_issuer: key.issuer_id.clone(),
             issuer_algorithm,
-            holder_algorithms: vec![SigningAlgorithm::ES256, SigningAlgorithm::EdDSA],
+            holder_algorithms: [SigningAlgorithm::ES256, SigningAlgorithm::EdDSA]
+                .into_iter()
+                .filter(|algorithm| allowed_algorithms.contains(algorithm))
+                .collect(),
         };
         let verified = verify_sd_jwt_with_policy(
             token,

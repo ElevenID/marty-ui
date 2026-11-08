@@ -10,6 +10,7 @@ mod callback;
 mod digest;
 pub mod haip_key;
 mod rejection;
+mod response;
 mod types;
 mod validation;
 
@@ -19,3 +20,4 @@ pub use types::*;
 pub use validation::Oid4vpContractError;
 
 pub use rejection::*;
+pub use response::*;

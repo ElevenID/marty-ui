@@ -35,6 +35,8 @@ pub struct PresentationPolicyServiceConfig {
     pub organization_grpc_target: String,
     pub organization_grpc_ca_cert: Option<PathBuf>,
     pub trust_profile_url: String,
+    pub credential_template_url: String,
+    pub organization_url: String,
     pub credential_status_url_template: String,
     pub service_token: Option<String>,
     pub issuance_api_key: Option<String>,
@@ -120,6 +122,15 @@ impl PresentationPolicyServiceConfig {
             value(&values, "TRUST_PROFILE_SERVICE_URL").unwrap_or("http://trust-profile:8004"),
             "TRUST_PROFILE_SERVICE_URL",
         )?;
+        let credential_template_url = service_url(
+            value(&values, "CREDENTIAL_TEMPLATE_SERVICE_URL")
+                .unwrap_or("http://credential-template:8003"),
+            "CREDENTIAL_TEMPLATE_SERVICE_URL",
+        )?;
+        let organization_url = service_url(
+            value(&values, "ORGANIZATION_SERVICE_URL").unwrap_or("http://organization:8002"),
+            "ORGANIZATION_SERVICE_URL",
+        )?;
         let issuance_url = service_url(
             value(&values, "ISSUANCE_NATIVE_SERVICE_URL")
                 .or_else(|| value(&values, "ISSUANCE_SERVICE_URL"))
@@ -204,6 +215,8 @@ impl PresentationPolicyServiceConfig {
             organization_grpc_target,
             organization_grpc_ca_cert,
             trust_profile_url,
+            credential_template_url,
+            organization_url,
             credential_status_url_template,
             service_token,
             issuance_api_key,

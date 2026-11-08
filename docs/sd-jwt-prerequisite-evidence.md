@@ -60,9 +60,10 @@ verification with both expected nonce and audience. Only that call can produce
 The prepared request and authenticated record bind the organization, complete
 saved policy identity, template, query ID/digest, exact selected response-token
 digest, nonce, audience, VCT, selected claim names and observation time. They
-also retain the normalized effective trust-profile ID privately. The existing
-request override remains supported, but a cached native result or public
-projection under a different selected profile is rejected. Returned issuer
+also retain the effective trust-profile ID privately. The saved requirement's
+profile overrides the saved policy default; caller context cannot replace it.
+A cached native result or public projection under a different profile is
+rejected. Returned issuer
 provenance must match the actual profile and organization used for that
 evaluation. This does not freeze the profile's contents or establish that its
 issuer/type relationship is authorized by an issuance policy.

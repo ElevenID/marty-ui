@@ -21,6 +21,10 @@ use uuid::Uuid;
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
 fn router() -> axum::Router {
+    router_with_auth(true)
+}
+
+fn router_with_auth(configured: bool) -> axum::Router {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgresql://unused:unused@127.0.0.1:1/unused")
         .expect("lazy PostgreSQL URL");
@@ -34,11 +38,33 @@ fn router() -> axum::Router {
     organization_core_router(OrganizationHttpState {
         application: Arc::new(application),
         service_authenticator: Arc::new(
-            ServiceTokenAuthenticator::new(Some(TOKEN.into()), true).unwrap(),
+            ServiceTokenAuthenticator::new(configured.then(|| TOKEN.into()), configured).unwrap(),
         ),
         organization_creation_enabled: true,
         marty_organization_id: None,
     })
+}
+
+#[tokio::test]
+async fn internal_policy_source_requires_configured_service_authority_before_storage() {
+    for (configured, token) in [(false, Some(TOKEN)), (true, None), (true, Some("invalid"))] {
+        let mut request = Request::builder()
+            .uri(format!(
+                "/internal/v1/organizations/{}/policy-sets/{}",
+                Uuid::from_u128(1),
+                Uuid::from_u128(2)
+            ))
+            .header("x-user-id", "forwarded-user")
+            .header("x-organization-id", Uuid::from_u128(1).to_string());
+        if let Some(token) = token {
+            request = request.header("x-service-token", token);
+        }
+        let response = router_with_auth(configured)
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 }
 
 #[test]

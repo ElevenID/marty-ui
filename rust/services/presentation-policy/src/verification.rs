@@ -1,10 +1,16 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use chrono::Utc;
 use marty_verification::credential_format::{detect_credential_format, DetectedCredentialFormat};
 use marty_verification::open_badges::is_retired_ob2;
-use mmf_security::{CredentialVerificationAuthorizationFacts, CredentialVerificationPolicyEngine};
+use mmf_security::{
+    CedarConfig, CedarPolicyEngine, CredentialVerificationAuthorizationFacts,
+    CredentialVerificationPolicyEngine, CREDENTIAL_VERIFICATION_SCHEMA,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
@@ -28,6 +34,27 @@ pub struct ResolvedTrustProfile {
     /// The internal trust-profile document contains only public verification
     /// material and governed relationship/lifecycle evidence.
     pub document: Value,
+}
+
+/// Public type metadata read from the tenant's controlled template catalog.
+/// A request's template ID is never itself evidence of credential membership.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResolvedCredentialTemplate {
+    pub id: String,
+    pub organization_id: Uuid,
+    pub credential_type: String,
+    pub vct: Option<String>,
+    pub doctype: Option<String>,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedVerificationPolicy {
+    pub id: Uuid,
+    pub organization_id: Uuid,
+    pub revision: String,
+    pub cedar_policies: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -156,11 +183,18 @@ pub struct CredentialVerificationEvidence {
     /// Comes only from the signed outer `jti` of a valid VC-JWT.
     pub authenticated_outer_jti: Option<String>,
     pub credential_status_ids: Vec<String>,
+    /// Exact types authenticated by the format kernel: SD-JWT vct, mdoc
+    /// docType, or W3C type entries. Never taken from the request or policy.
+    pub credential_types: Vec<String>,
+    /// Internal authenticated document for exact frozen-query evaluation. It
+    /// is never included in the public policy or callback projection.
+    pub authenticated_document: Option<Value>,
     pub claims: Map<String, Value>,
     pub issuer_id: Option<String>,
     pub authenticated_issuer: Option<AuthenticatedIssuerEvidence>,
     pub issued_at_epoch_seconds: Option<u64>,
     pub algorithm: Option<String>,
+    pub holder_algorithm: Option<String>,
     pub validity_checked: bool,
     pub is_expired: Option<bool>,
     pub warnings: Vec<String>,
@@ -198,6 +232,26 @@ pub trait PresentationTrustResolver: Send + Sync {
         issuer_id: &str,
         format: DetectedCredentialFormat,
     ) -> Result<IssuerTrustEvidence, PresentationVerificationError>;
+
+    async fn load_credential_template(
+        &self,
+        _template_id: &str,
+        _organization_id: Uuid,
+    ) -> Result<ResolvedCredentialTemplate, PresentationVerificationError> {
+        Err(PresentationVerificationError::Failed(
+            "Credential template resolution is unavailable".into(),
+        ))
+    }
+
+    async fn load_verification_policy(
+        &self,
+        _policy_set_id: Uuid,
+        _organization_id: Uuid,
+    ) -> Result<ResolvedVerificationPolicy, PresentationVerificationError> {
+        Err(PresentationVerificationError::Failed(
+            "Linked credential verification PolicySet is unavailable".into(),
+        ))
+    }
 }
 
 #[async_trait]
@@ -218,7 +272,6 @@ pub struct VerifiedFactsOrchestrator {
     kernel: Arc<dyn CredentialVerificationKernel>,
     trust: Arc<dyn PresentationTrustResolver>,
     status: Arc<dyn CredentialStatusResolver>,
-    credential_authorization: CredentialVerificationPolicyEngine,
     clock: Arc<EpochClock>,
 }
 
@@ -241,11 +294,6 @@ impl VerifiedFactsOrchestrator {
             kernel,
             trust,
             status,
-            credential_authorization: CredentialVerificationPolicyEngine::new().map_err(|_| {
-                PresentationVerificationError::Failed(
-                    "PRESENTATION_POLICY.NATIVE_AUTHORIZATION_UNAVAILABLE".into(),
-                )
-            })?,
             clock,
         })
     }
@@ -254,6 +302,87 @@ impl VerifiedFactsOrchestrator {
         &self,
         policy: &PresentationPolicy,
         request: &EvaluatePresentationRequest,
+    ) -> Result<VerifiedPolicyMaterial, PresentationVerificationError> {
+        // Revalidate saved policies as well as new/activated ones. A signed
+        // compliance code cannot stand in for unresolved governance metadata.
+        crate::policy_contract::validate_policy(policy)
+            .map_err(|error| failed(&error.to_string()))?;
+        let profiles = effective_trust_profiles(policy, request)?;
+        let associated = request
+            .oid4vp_transport
+            .as_ref()
+            .map(|transport| {
+                if !request.trusted_internal_context
+                    || request.nonce.as_deref() != Some(transport.request_nonce.as_str())
+                    || request
+                        .audience
+                        .as_deref()
+                        .filter(|value| !value.is_empty())
+                        .is_some_and(|value| value != transport.verifier_client_id)
+                {
+                    return Err(failed(
+                        "OID4VP transport does not match the trusted verifier binding",
+                    ));
+                }
+                transport.associate_response().map_err(|_| {
+                    failed("OID4VP response does not completely match the frozen query")
+                })
+            })
+            .transpose()?;
+        if associated.is_none()
+            && request.trusted_internal_context
+            && request.context.get("oid4vp_verifier_context") == Some(&Value::Bool(true))
+        {
+            return Err(failed(
+                "OID4VP verification requires the complete frozen query and response",
+            ));
+        }
+        let items: Vec<_> = match &associated {
+            Some(response) => response
+                .tokens
+                .iter()
+                .map(|item| (Value::String(item.token.clone()), Some(item)))
+                .collect(),
+            None => vec![(request.vp_token.clone(), None)],
+        };
+        if items.len().saturating_mul(profiles.len()) > marty_oid4vp_contract::MAX_CREDENTIALS {
+            return Err(failed(
+                "OID4VP credential and Trust Profile combination exceeds the verification bound",
+            ));
+        }
+        let mut templates = BTreeMap::new();
+        let mut groups = Vec::new();
+        for (token, selection) in items {
+            let mut item_request = request.clone();
+            item_request.vp_token = token;
+            let mut group = Vec::new();
+            for profile_id in &profiles {
+                group.push(
+                    self.verified_item(
+                        policy,
+                        &item_request,
+                        *profile_id,
+                        selection,
+                        &mut templates,
+                    )
+                    .await?,
+                );
+            }
+            groups.push(group);
+        }
+        let presentation_count = associated
+            .as_ref()
+            .map(|response| response.presentation_count);
+        Ok(combine_verified_material(groups, presentation_count))
+    }
+
+    async fn verified_item(
+        &self,
+        policy: &PresentationPolicy,
+        request: &EvaluatePresentationRequest,
+        profile_id: Option<Uuid>,
+        selection: Option<&marty_oid4vp_contract::AssociatedResponseToken>,
+        templates: &mut BTreeMap<String, ResolvedCredentialTemplate>,
     ) -> Result<VerifiedPolicyMaterial, PresentationVerificationError> {
         let token = canonical_token(&request.vp_token)?;
         let format = detect_credential_format(&token);
@@ -277,11 +406,6 @@ impl VerifiedFactsOrchestrator {
         let sd_jwt_dcql =
             crate::SdJwtDcqlRequest::prepare(policy, request, format, (self.clock)())?;
         let presentation_only = is_presentation_only(policy);
-        let profile_id = if presentation_only {
-            None
-        } else {
-            selected_trust_profile(policy, request)?
-        };
         let trust_profile = match profile_id {
             Some(profile_id) => {
                 let profile = self
@@ -304,6 +428,7 @@ impl VerifiedFactsOrchestrator {
         let challenge_required = freshness_flag(policy, "challenge_required");
         let audience_required = freshness_flag(policy, "audience_binding_required");
 
+        let transport = request.oid4vp_transport.as_ref();
         let context = CredentialVerificationContext {
             sd_jwt_dcql: sd_jwt_dcql.clone(),
             presentation_only,
@@ -313,6 +438,7 @@ impl VerifiedFactsOrchestrator {
             nonce: sd_jwt_dcql
                 .as_ref()
                 .map(|query| query.nonce().to_owned())
+                .or_else(|| transport.map(|value| value.request_nonce.clone()))
                 .or_else(|| {
                     (requires_bound_presentation && challenge_required)
                         .then(|| request.nonce.clone())
@@ -321,6 +447,7 @@ impl VerifiedFactsOrchestrator {
             audience: sd_jwt_dcql
                 .as_ref()
                 .map(|query| query.audience().to_owned())
+                .or_else(|| transport.map(|value| value.verifier_client_id.clone()))
                 .or_else(|| {
                     (requires_bound_presentation && audience_required)
                         .then(|| request.audience.clone())
@@ -362,6 +489,25 @@ impl VerifiedFactsOrchestrator {
                 "PRESENTATION_POLICY.AUTHENTICATED_QUERY_EVIDENCE_MISMATCH".into(),
             ));
         }
+        // The opaque SD-JWT/DCQL producer owns its stricter singleton profile;
+        // other formats/queries use the shared authenticated-query adapter.
+        if sd_jwt_dcql.is_none() {
+            if let (Some(transport), Some(selection)) = (transport, selection) {
+                if !crate::response_association::matches_query(
+                    transport, selection, format, &evidence,
+                ) {
+                    evidence.verified = false;
+                    evidence.failure_reason = Some(
+                        "Authenticated credential does not satisfy its frozen OID4VP query".into(),
+                    );
+                    evidence.presentation_verified = false;
+                    evidence.holder_binding_verified = false;
+                    evidence.challenge_verified = false;
+                    evidence.audience_verified = false;
+                    evidence.replay_check_verified = false;
+                }
+            }
+        }
         apply_trusted_oid4vp_context(policy, request, &mut evidence);
         let authenticated_outer_jti = if evidence.verified && !presentation_only {
             evidence.authenticated_outer_jti.clone()
@@ -370,6 +516,8 @@ impl VerifiedFactsOrchestrator {
         };
         if !evidence.verified {
             evidence.claims.clear();
+            evidence.credential_types.clear();
+            evidence.authenticated_document = None;
             evidence.issuer_id = None;
             evidence.authenticated_issuer = None;
             evidence.authenticated_sd_jwt_query = None;
@@ -428,24 +576,31 @@ impl VerifiedFactsOrchestrator {
                 .await?;
         }
 
-        let evaluation_time = (self.clock)();
-        if let Some(query) = authenticated_sd_jwt_query.as_mut() {
-            query.revalidate_at(evaluation_time)?;
-        }
-
+        let matched_templates = if evidence.verified && !presentation_only {
+            self.matching_template_ids(policy, format, &evidence.credential_types, templates)
+                .await?
+        } else {
+            Vec::new()
+        };
         let external_authorization = if presentation_only {
             Value::Null
         } else {
-            credential_external_authorization(
-                &self.credential_authorization,
+            self.configured_authorization(
                 policy,
+                trust_profile.as_ref(),
                 format,
                 &evidence,
                 &trust,
                 &issuer_id,
-                evaluation_time,
             )
+            .await?
         };
+        // Include every metadata/policy await in the native proof's validity
+        // window; resolution must not extend the credential or holder proof.
+        let evaluation_time = (self.clock)();
+        if let Some(query) = authenticated_sd_jwt_query.as_mut() {
+            query.revalidate_at(evaluation_time)?;
+        }
         let mdoc_authentication_diagnostic =
             if !presentation_only && format == DetectedCredentialFormat::Mdoc {
                 evidence.mdoc_authentication_diagnostic.clone()
@@ -476,27 +631,22 @@ impl VerifiedFactsOrchestrator {
             .credential_id
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "presented-credential".into());
-        let templates = if sd_jwt_dcql.is_some() {
-            authenticated_sd_jwt_query
-                .as_ref()
-                .map(|evidence| vec![evidence.credential_template_id().to_owned()])
-                .unwrap_or_default()
-        } else {
-            credential_template_ids(policy)
-        };
         let credential_status = normalized_status(evidence.status.credential_status.as_deref());
         let credentials = if presentation_only {
             json!([])
         } else {
             json!([{
                 "credential_id": credential_id,
-                "credential_template_ids": templates,
+                "credential_template_ids": matched_templates,
+                "credential_types": evidence.credential_types,
                 "credential_format": format.as_str(),
                 "claims": claims,
                 "issuer_id": issuer_id,
                 "signature_verified": evidence.verified,
                 "signature_failure_reason": if evidence.verified { None } else { evidence.failure_reason },
                 "trust_profile_verified": trust.verified,
+                "trust_profile_id": trust_profile.as_ref().map(|profile| profile.id.to_string()),
+                "external_authorization": external_authorization,
                 "trust_failure_reason": trust.failure_reason,
                 "trust_level": trust.trust_level,
                 "compliance_statuses": normalized_upper(trust.compliance_statuses),
@@ -520,7 +670,7 @@ impl VerifiedFactsOrchestrator {
             "audience_verified": evidence.audience_verified,
             "replay_check_verified": evidence.replay_check_verified,
             "proof_epoch_seconds": evidence.proof_epoch_seconds,
-            "external_authorization": external_authorization,
+            "external_authorization": Value::Null,
             "presentation_count": evidence.presentation_count.or(Some(1)),
         });
         if let Some(diagnostic) = mdoc_authentication_diagnostic {
@@ -532,6 +682,110 @@ impl VerifiedFactsOrchestrator {
             authenticated_issuer,
             authenticated_sd_jwt_query,
         })
+    }
+
+    async fn matching_template_ids(
+        &self,
+        policy: &PresentationPolicy,
+        format: DetectedCredentialFormat,
+        credential_types: &[String],
+        templates: &mut BTreeMap<String, ResolvedCredentialTemplate>,
+    ) -> Result<Vec<String>, PresentationVerificationError> {
+        let mut matching = BTreeSet::new();
+        for requirement in requirements(policy) {
+            if crate::policy_contract::is_inline_requirement(policy, requirement) {
+                continue;
+            }
+            let id = &requirement.credential_template_id;
+            if !templates.contains_key(id) {
+                let template = self
+                    .trust
+                    .load_credential_template(id, policy.organization_id)
+                    .await?;
+                if &template.id != id
+                    || template.organization_id != policy.organization_id
+                    || !matches!(template.status.as_str(), "ACTIVE" | "DEPRECATED")
+                {
+                    return Err(failed(
+                        "Credential template identity, organization, or lifecycle mismatch",
+                    ));
+                }
+                templates.insert(id.clone(), template);
+            }
+            let template = &templates[id];
+            let expected = match format {
+                DetectedCredentialFormat::SdJwt => {
+                    template.vct.as_deref().unwrap_or(&template.credential_type)
+                }
+                DetectedCredentialFormat::Mdoc => template
+                    .doctype
+                    .as_deref()
+                    .unwrap_or(&template.credential_type),
+                _ => template.credential_type.as_str(),
+            };
+            if !expected.is_empty() && credential_types.iter().any(|actual| actual == expected) {
+                matching.insert(id.clone());
+            }
+        }
+        Ok(matching.into_iter().collect())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn configured_authorization(
+        &self,
+        policy: &PresentationPolicy,
+        profile: Option<&ResolvedTrustProfile>,
+        format: DetectedCredentialFormat,
+        evidence: &CredentialVerificationEvidence,
+        trust: &IssuerTrustEvidence,
+        issuer_id: &str,
+    ) -> Result<Value, PresentationVerificationError> {
+        let Some(link) = profile
+            .and_then(|profile| profile.document.get("verification_policy_set_id"))
+            .filter(|value| !value.is_null())
+        else {
+            return Ok(Value::Null);
+        };
+        let policy_set_id = link
+            .as_str()
+            .and_then(|id| Uuid::parse_str(id).ok())
+            .ok_or_else(|| failed("Linked verification PolicySet ID is invalid"))?;
+        let resolved = self
+            .trust
+            .load_verification_policy(policy_set_id, policy.organization_id)
+            .await?;
+        if resolved.id != policy_set_id
+            || resolved.organization_id != policy.organization_id
+            || resolved.revision.is_empty()
+            || resolved.cedar_policies.trim().is_empty()
+        {
+            return Err(failed(
+                "Linked verification PolicySet identity or content is invalid",
+            ));
+        }
+        let cedar = CedarPolicyEngine::from_human_schema(
+            &resolved.cedar_policies,
+            CREDENTIAL_VERIFICATION_SCHEMA,
+            CedarConfig::default(),
+        )
+        .map_err(|_| failed("Linked verification PolicySet could not be compiled"))?;
+        let authorizer = CredentialVerificationPolicyEngine::new(cedar);
+        let mut decision = credential_external_authorization(
+            &authorizer,
+            policy,
+            format,
+            evidence,
+            trust,
+            issuer_id,
+            (self.clock)(),
+        );
+        // Preserve the exact configured source identity with the decision,
+        // while retaining Core's existing authorization-facts contract.
+        let source = format!("policy-set:{}@{}", resolved.id, resolved.revision);
+        if let Some(reasons) = decision["reasons"].as_array_mut() {
+            reasons.insert(0, json!(source));
+        }
+        Ok(decision)
     }
 }
 
@@ -644,7 +898,7 @@ fn apply_trusted_oid4vp_context(
 ) {
     let trusted = request.trusted_internal_context
         && request.context.get("oid4vp_verifier_context") == Some(&Value::Bool(true));
-    if !trusted {
+    if !trusted || !evidence.verified {
         return;
     }
     if evidence.holder_binding_verified {
@@ -718,21 +972,121 @@ fn canonical_token(token: &Value) -> Result<String, PresentationVerificationErro
     }
 }
 
-pub(crate) fn selected_trust_profile(
+pub(crate) fn effective_trust_profiles(
     policy: &PresentationPolicy,
     request: &EvaluatePresentationRequest,
-) -> Result<Option<Uuid>, PresentationVerificationError> {
-    if let Some(value) = request.trust_profile_id.as_deref() {
-        return Uuid::parse_str(value).map(Some).map_err(|_| {
-            PresentationVerificationError::Failed("trust_profile_id must be a UUID".into())
+) -> Result<Vec<Option<Uuid>>, PresentationVerificationError> {
+    let mut profiles = requirements(policy)
+        .map(|requirement| requirement.trust_profile_id.or(policy.trust_profile_id))
+        .collect::<BTreeSet<_>>();
+    if profiles.is_empty() {
+        profiles.insert(if is_presentation_only(policy) {
+            None
+        } else {
+            policy.trust_profile_id
         });
     }
-    Ok(policy.trust_profile_id.or_else(|| {
+    if let Some(value) = request.trust_profile_id.as_deref() {
+        let requested =
+            Uuid::parse_str(value).map_err(|_| failed("trust_profile_id must be a UUID"))?;
+        if !profiles.contains(&Some(requested)) {
+            return Err(failed(
+                "Caller trust_profile_id cannot replace the saved policy's Trust Profile",
+            ));
+        }
+    }
+    Ok(profiles.into_iter().collect())
+}
+
+fn requirements(
+    policy: &PresentationPolicy,
+) -> impl Iterator<Item = &crate::CredentialRequirement> {
+    policy.credential_requirements.iter().chain(
         policy
-            .credential_requirements
+            .alternative_requirements
             .iter()
-            .find_map(|requirement| requirement.trust_profile_id)
-    }))
+            .flat_map(|alternative| alternative.credential_requirements.iter()),
+    )
+}
+
+fn combine_verified_material(
+    groups: Vec<Vec<VerifiedPolicyMaterial>>,
+    presentation_count: Option<usize>,
+) -> VerifiedPolicyMaterial {
+    if groups.len() == 1 && groups[0].len() == 1 {
+        let mut material = groups
+            .into_iter()
+            .next()
+            .expect("one group")
+            .into_iter()
+            .next()
+            .expect("one material");
+        if let Some(count) = presentation_count {
+            material.policy_facts["presentation_count"] = json!(count);
+        }
+        return material;
+    }
+    let mut facts = groups[0][0].policy_facts.clone();
+    let mut credentials = Vec::new();
+    for credential in groups.iter().flatten().flat_map(|material| {
+        material.policy_facts["credentials"]
+            .as_array()
+            .into_iter()
+            .flatten()
+    }) {
+        if !credentials.contains(credential) {
+            credentials.push(credential.clone());
+        }
+    }
+    facts["credentials"] = Value::Array(credentials);
+    for field in [
+        "presentation_verified",
+        "holder_binding_verified",
+        "challenge_verified",
+        "audience_verified",
+        "replay_check_verified",
+    ] {
+        facts[field] = json!(groups.iter().all(|group| group
+            .iter()
+            .any(|material| material.policy_facts[field] == true)));
+    }
+    for field in ["holder_binding_method", "proof_profile"] {
+        let values = groups
+            .iter()
+            .flatten()
+            .filter(|material| material.policy_facts["holder_binding_verified"] == true)
+            .filter_map(|material| material.policy_facts[field].as_str())
+            .collect::<BTreeSet<_>>();
+        facts[field] = if values.len() == 1 {
+            json!(values.first())
+        } else {
+            Value::Null
+        };
+    }
+    facts["proof_epoch_seconds"] = groups
+        .iter()
+        .flatten()
+        .filter_map(|material| material.policy_facts["proof_epoch_seconds"].as_u64())
+        .min()
+        .map_or(Value::Null, |value| json!(value));
+    facts["presentation_count"] = json!(presentation_count.unwrap_or(groups.len()));
+    let all_authenticated = groups.iter().all(|group| {
+        group.iter().any(|material| {
+            material.policy_facts["credentials"]
+                .as_array()
+                .is_some_and(|credentials| {
+                    credentials
+                        .iter()
+                        .any(|credential| credential["signature_verified"] == true)
+                })
+        })
+    });
+    if !all_authenticated {
+        facts["external_authorization"] = json!({"evaluated": false, "allowed": false, "reasons": [], "errors": ["Every OID4VP response item must authenticate and match its query"]});
+    }
+    // The legacy single-credential provenance projection cannot represent a
+    // multi-credential or multi-profile decision without choosing a candidate.
+    VerifiedPolicyMaterial::facts_only(facts)
 }
 
 fn freshness_flag(policy: &PresentationPolicy, name: &str) -> bool {
@@ -742,16 +1096,6 @@ fn freshness_flag(policy: &PresentationPolicy, name: &str) -> bool {
         .get(name)
         .copied()
         .unwrap_or(true)
-}
-
-fn credential_template_ids(policy: &PresentationPolicy) -> Vec<String> {
-    let mut values = BTreeSet::new();
-    for requirement in &policy.credential_requirements {
-        if !requirement.credential_template_id.is_empty() {
-            values.insert(requirement.credential_template_id.clone());
-        }
-    }
-    values.into_iter().collect()
 }
 
 fn normalized_upper(values: Vec<String>) -> Vec<String> {
@@ -786,7 +1130,7 @@ fn normalized_status(value: Option<&str>) -> Option<&'static str> {
 }
 
 fn rejected_facts(
-    policy: &PresentationPolicy,
+    _policy: &PresentationPolicy,
     format: &str,
     reason: &str,
     evaluation_time: u64,
@@ -795,13 +1139,15 @@ fn rejected_facts(
     json!({
         "credentials": [{
             "credential_id": "presented-credential",
-            "credential_template_ids": credential_template_ids(policy),
+            "credential_template_ids": [],
+            "credential_types": [],
             "credential_format": format,
             "claims": {},
             "issuer_id": "unknown",
             "signature_verified": false,
             "signature_failure_reason": reason,
             "trust_profile_verified": trust_profile_verified,
+            "trust_profile_id": Value::Null,
             "trust_failure_reason": Value::Null,
             "trust_level": Value::Null,
             "compliance_statuses": [],
@@ -828,4 +1174,8 @@ fn rejected_facts(
 
 fn system_epoch_seconds() -> u64 {
     u64::try_from(Utc::now().timestamp()).unwrap_or_default()
+}
+
+fn failed(message: &str) -> PresentationVerificationError {
+    PresentationVerificationError::Failed(message.into())
 }

@@ -8,8 +8,10 @@ pub mod grpc_service;
 pub mod http_service;
 pub mod native_kernel;
 pub mod persistence;
+mod policy_contract;
 pub mod policy_revision;
 pub mod postgres;
+mod response_association;
 pub mod runtime;
 mod sd_jwt_query;
 pub mod verification;
@@ -49,7 +51,8 @@ pub use verification::{
     AuthenticatedIssuerEvidence, CredentialStatusEvidence, CredentialStatusResolver,
     CredentialVerificationContext, CredentialVerificationEvidence, CredentialVerificationKernel,
     IssuerKeyMechanism, IssuerKeyProvenance, IssuerTrustEvidence, PresentationTrustResolver,
-    ResolvedIssuerKey, ResolvedTrustProfile, VerifiedFactsOrchestrator,
+    ResolvedCredentialTemplate, ResolvedIssuerKey, ResolvedTrustProfile,
+    ResolvedVerificationPolicy, VerifiedFactsOrchestrator,
 };
 
 pub mod presentation_policy_proto {
