@@ -64,6 +64,9 @@ class SSEService {
     this.eventSource = null;
     this.listeners = new Map(); // event_type -> Set of callbacks
     this.isConnected = false;
+    this.connectionRequested = false;
+    this.connectionGeneration = 0;
+    this.reconnectTimer = null;
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 5;
     this.reconnectDelay = 1000; // Start with 1 second
@@ -77,7 +80,7 @@ class SSEService {
    * @param {Array<string>} options.subscriptions - Optional event type filters
    */
   connect(options = {}) {
-    if (this.eventSource) {
+    if (this.connectionRequested) {
       logSseWarning('SSE already connected. Disconnect first to reconnect.');
       return;
     }
@@ -96,93 +99,120 @@ class SSEService {
 
     const sseUrl = `/v1/notifications/events/push${params.toString() ? '?' + params.toString() : ''}`;
 
+    this.connectionRequested = true;
+    this.reconnectAttempts = 0;
+    const generation = ++this.connectionGeneration;
     try {
-      this.eventSource = new EventSource(sseUrl);
-
-      this.eventSource.onopen = () => {
-        logSseDebug('SSE connection established');
-        this.isConnected = true;
-        this.reconnectAttempts = 0;
-        this.reconnectDelay = 1000;
-        
-        // Emit connection event
-        this._emit('connection', { status: 'connected' });
-      };
-
-      this.eventSource.onerror = (error) => {
-        logSseWarning('SSE connection error:', error);
-        this.isConnected = false;
-        
-        // Emit error event
-        this._emit('error', { error });
-
-        // Attempt reconnection with exponential backoff
-        if (this.reconnectAttempts < this.maxReconnectAttempts) {
-          this.reconnectAttempts++;
-          const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-          
-          logSseDebug(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
-          
-          setTimeout(() => {
-            this.disconnect();
-            this.connect(options);
-          }, delay);
-        } else {
-          logSseWarning('Max reconnection attempts reached. Manual reconnection required.');
-          this.disconnect();
-        }
-      };
-
-      // Listen for specific event types
-      Object.values(EVENT_TYPES).forEach((eventType) => {
-        this.eventSource.addEventListener(eventType, (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            logSseDebug(`SSE event received: ${eventType}`, data);
-            this._emit(eventType, data);
-          } catch (error) {
-            logSseError(`Failed to parse SSE event data for ${eventType}:`, error);
-          }
-        });
-      });
-
-      // Handle generic messages
-      this.eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          logSseDebug('SSE generic message received:', data);
-          
-          // Emit generic message event
-          this._emit('message', data);
-          
-          // Also emit by event type if present
-          if (data.type) {
-            this._emit(data.type, data);
-          }
-        } catch (error) {
-          logSseError('Failed to parse SSE message:', error);
-        }
-      };
-
+      this._openConnection(sseUrl, generation);
     } catch (error) {
+      this.disconnect();
       logSseError('Failed to create SSE connection:', error);
       throw error;
     }
+  }
+
+  _openConnection(sseUrl, generation) {
+    const source = new EventSource(sseUrl);
+    this.eventSource = source;
+    let openedAt = null;
+    const isCurrent = () => this.connectionRequested
+      && this.connectionGeneration === generation && this.eventSource === source;
+
+    source.onopen = () => {
+      if (!isCurrent()) return;
+      openedAt = Date.now();
+      logSseDebug('SSE connection established');
+      this.isConnected = true;
+      this._emit('connection', { status: 'connected' });
+    };
+
+    source.onerror = (error) => {
+      if (!isCurrent()) return;
+      // HTTP 200 can precede an upstream stream failure. Only a stable open
+      // connection resets the retry budget, not a brief open/error cycle.
+      if (openedAt !== null && Date.now() - openedAt >= 30000) {
+        this.reconnectAttempts = 0;
+      }
+      source.close(); // Stop EventSource's own retry loop before our backoff.
+      this.eventSource = null;
+      this.isConnected = false;
+      this._handleConnectionError(error, sseUrl, generation);
+    };
+
+    Object.values(EVENT_TYPES).forEach((eventType) => {
+      source.addEventListener(eventType, (event) => {
+        if (!isCurrent()) return;
+        try {
+          const data = JSON.parse(event.data);
+          logSseDebug(`SSE event received: ${eventType}`, data);
+          this._emit(eventType, data);
+        } catch (error) {
+          logSseError(`Failed to parse SSE event data for ${eventType}:`, error);
+        }
+      });
+    });
+
+    source.onmessage = (event) => {
+      if (!isCurrent()) return;
+      try {
+        const data = JSON.parse(event.data);
+        logSseDebug('SSE generic message received:', data);
+        this._emit('message', data);
+        if (data.type && isCurrent()) {
+          this._emit(data.type, data);
+        }
+      } catch (error) {
+        logSseError('Failed to parse SSE message:', error);
+      }
+    };
+  }
+
+  _handleConnectionError(error, sseUrl, generation) {
+    if (!this.connectionRequested || this.connectionGeneration !== generation) return;
+    logSseWarning('SSE connection error:', error);
+    this._emit('error', { error });
+    // A listener may have disconnected or switched the account/organization.
+    if (!this.connectionRequested || this.connectionGeneration !== generation) return;
+
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      logSseWarning('Max reconnection attempts reached. Manual reconnection required.');
+      this.disconnect();
+      return;
+    }
+    this.reconnectAttempts += 1;
+    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+    logSseDebug(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    const timer = setTimeout(() => {
+      if (!this.connectionRequested || this.connectionGeneration !== generation || this.reconnectTimer !== timer) return;
+      this.reconnectTimer = null;
+      try {
+        this._openConnection(sseUrl, generation);
+      } catch (nextError) {
+        this._handleConnectionError(nextError, sseUrl, generation);
+      }
+    }, delay);
+    this.reconnectTimer = timer;
   }
 
   /**
    * Disconnect from SSE endpoint
    */
   disconnect() {
+    const hadConnection = this.connectionRequested;
+    this.connectionRequested = false;
+    this.connectionGeneration += 1;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.eventSource) {
       this.eventSource.close();
       this.eventSource = null;
-      this.isConnected = false;
-      this.reconnectAttempts = 0;
-      
+    }
+    this.isConnected = false;
+    this.reconnectAttempts = 0;
+    if (hadConnection) {
       logSseDebug('SSE connection closed');
-      
-      // Emit disconnection event
       this._emit('connection', { status: 'disconnected' });
     }
   }

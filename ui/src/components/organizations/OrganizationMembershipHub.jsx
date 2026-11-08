@@ -78,7 +78,7 @@ function getRoleBadges(roles, hasOrgConsoleAccess) {
   }
 
   return (
-    <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+    <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
       {roles.map((role) => {
         const roleName = typeof role === 'string' ? role : role?.name;
         const roleLabel = typeof role === 'string' ? role : role?.display_name || role?.name;
@@ -138,7 +138,7 @@ function OrganizationMembershipHub({
       {(title || description) && (
         <Box sx={{ mb: 4 }}>
           {title && (
-            <Typography variant={embedded ? 'h6' : 'h4'} gutterBottom fontWeight={embedded ? 500 : 600}>
+            <Typography variant={embedded ? 'h6' : 'h4'} gutterBottom sx={{ fontWeight: embedded ? 500 : 600 }}>
               {title}
             </Typography>
           )}
@@ -164,7 +164,7 @@ function OrganizationMembershipHub({
                 ? t('organizationCreation.emptyDescription')
                 : "You're not a member of any organizations. Discover organizations or join one with a join code."}
             </Typography>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center">
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: 'center' }}>
               {organizationCreationEnabled && (
                 <Button component={RouterLink} to="/console/organizations/create" variant="outlined" startIcon={<AddIcon />}>
                   {t('organizationCreation.createAction')}
@@ -293,7 +293,7 @@ function OrganizationMembershipHub({
             <Stack
               direction={{ xs: 'column', sm: 'row' }}
               spacing={2}
-              justifyContent={embedded ? 'flex-start' : 'center'}
+              sx={{ justifyContent: embedded ? 'flex-start' : 'center' }}
             >
               {showManagePageLink && (
                 <Button component={RouterLink} to={managePath} variant="outlined">

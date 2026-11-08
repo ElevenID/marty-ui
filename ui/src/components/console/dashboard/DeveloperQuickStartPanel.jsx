@@ -45,7 +45,7 @@ function getDashboardMessageId(error) {
 /**
  * Developer Quick Start Panel Component
  */
-export function DeveloperQuickStartPanel() {
+export function DeveloperQuickStartPanel({ canViewApiKeys = false }) {
   const { t } = useTranslation('console');
   const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
@@ -155,7 +155,7 @@ export function DeveloperQuickStartPanel() {
           {t('dashboard.developerQuickStart.title')}
         </Typography>
       </Box>
-      <Typography variant="body2" color="text.secondary" paragraph>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         {t('dashboard.developerQuickStart.description')}
       </Typography>
       {/* Organization Reference */}
@@ -286,7 +286,7 @@ export function DeveloperQuickStartPanel() {
       </Box>
       {/* Action Buttons */}
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-        <Button
+        {canViewApiKeys && <Button
           variant="outlined"
           component={RouterLink}
           to="/console/org/deploy/api-keys"
@@ -294,7 +294,7 @@ export function DeveloperQuickStartPanel() {
           size="small"
         >
           {t('dashboard.developerQuickStart.manageApiKeys')}
-        </Button>
+        </Button>}
         <Button
           variant="outlined"
           component={RouterLink}

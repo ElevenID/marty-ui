@@ -19,6 +19,9 @@
     "verificationSessions": "Verificatiesessies"
   },
   "dashboard": {
+    "developerQuickStart": {
+      "loading": "Integratiemetadata laden..."
+    },
     "criticalEvents": {
       "noCriticalEvents": "Er zijn de afgelopen 24 uur geen kritieke gebeurtenissen gemeld."
     },

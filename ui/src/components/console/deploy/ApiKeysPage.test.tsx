@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { MemoryRouter } from 'react-router'
+import { http, HttpResponse } from 'msw'
 import { act, screen, waitFor, within } from '@testing-library/react'
 import { renderWithoutRouter, renderWithRouter } from '../../../test/utils'
+import { server } from '../../../test/mocks/server'
 import ApiKeysPage from './ApiKeysPage'
 
 const {
@@ -153,6 +155,38 @@ describe('ApiKeysPage', () => {
 
     expect(screen.getByText('https://partner.example.com/callbacks')).toBeInTheDocument()
     expect(screen.getByText('No scopes assigned')).toBeInTheDocument()
+    expect(screen.getByText('Active gateway keys').parentElement).toHaveStyle({ alignItems: 'center' })
+    expect(screen.getByText('Partner A')).toHaveStyle({ fontWeight: 600 })
+    expect(document.querySelector('[alignitems], [fontweight]')).toBeNull()
+  })
+
+  it('loads native callback events for the selected organization when the session default is only an applicant', async () => {
+    const actual = await vi.importActual<typeof import('../../../services/webhooksApi')>('../../../services/webhooksApi')
+    mockGetAvailableEventTypes.mockImplementation(actual.getAvailableEventTypes)
+    mockUseAuth.mockReturnValue({ isAuthenticated: true, user: { user_id: 'user-123' }, organizationId: 'org-applicant' })
+    const organizations: Array<string | null> = []
+    server.use(http.get('http://localhost:8000/v1/webhooks/event-types', ({ request }) => {
+      const organizationId = new URL(request.url).searchParams.get('organization_id')
+      organizations.push(organizationId)
+      return organizationId === 'org-123' || organizationId === 'org-456'
+        ? HttpResponse.json({ event_types: [organizationId === 'org-123' ? 'credential.offered' : 'application.approved'] })
+        : HttpResponse.json({ error: 'forbidden', error_description: 'Missing required permission: webhook:view' }, { status: 403 })
+    }))
+
+    const { user, rerender } = renderWithRouter(<ApiKeysPage />)
+    await user.click(await screen.findByRole('button', { name: createAction }))
+    expect(await screen.findByRole('checkbox', { name: 'credential offered' })).toBeInTheDocument()
+    expect(screen.queryByText(/Webhook event types could not be loaded/)).not.toBeInTheDocument()
+
+    mockUseConsole.mockReturnValue({ activeOrgId: 'org-456' })
+    rerender(<ApiKeysPage />)
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await user.click(await screen.findByRole('button', { name: createAction }))
+    expect(await screen.findByRole('checkbox', { name: 'application approved' })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'credential offered' })).not.toBeInTheDocument()
+    expect(organizations).toEqual(['org-123', 'org-456'])
+    expect(mockCreateApiKey).not.toHaveBeenCalled()
+    expect(mockCreateWebhook).not.toHaveBeenCalled()
   })
 
   it('shows callback status as unavailable when webhooks cannot be loaded', async () => {

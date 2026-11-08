@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, renderWithRouter, screen, waitFor, within } from '@test/utils'
+import { act, fireEvent, renderWithRouter, screen, waitFor, within } from '@test/utils'
 import { Route, Routes, useLocation } from 'react-router'
 import TeamPage from './TeamPage'
 import { TeamSnapshotPanel } from '../dashboard/TeamSnapshotPanel'
@@ -130,7 +130,8 @@ describe('TeamPage', () => {
 
     mockUseAuth.mockReturnValue({
       organizationId: 'auth-org',
-      user: { id: 'user_1', email: 'owner@example.com' },
+      isAuthenticated: true,
+      user: { user_id: 'user_1', id: 'legacy_user', email: 'owner@example.com' },
     })
     mockUseConsole.mockReturnValue({
       activeOrgId: 'console-org',
@@ -185,6 +186,81 @@ describe('TeamPage', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
+  })
+
+  it('uses the native session identity for the current member when owner membership omits profile fields', async () => {
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: true,
+      user: { user_id: 'user_1', name: 'UX Crawl', email: 'owner@example.com' },
+    })
+    mockListMembers.mockResolvedValue([{
+      id: 'owner-membership', organization_id: 'console-org', user_id: 'user_1',
+      status: 'active', is_owner: true, roles: [{ id: 'owner-role', name: 'owner', display_name: 'Owner' }],
+    }])
+
+    renderWithRouter(<TeamPage />)
+
+    const row = (await screen.findByText('UX Crawl')).closest('tr') as HTMLElement
+    expect(within(row).getByText('owner@example.com')).toBeInTheDocument()
+    expect(within(row).getByText('Owner')).toBeInTheDocument()
+    expect(within(row).queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.queryByText('user_1')).not.toBeInTheDocument()
+  })
+
+  it('preserves a current member name and email supplied by membership data', async () => {
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: true,
+      user: { user_id: 'user_1', name: 'Session Name', email: 'owner@example.com' },
+    })
+    mockListMembers.mockResolvedValue([{
+      id: 'member_1', user_id: 'user_1', name: 'Member Name', email: 'member@example.com',
+      status: 'active', roles: [],
+    }])
+
+    renderWithRouter(<TeamPage />)
+
+    const row = (await screen.findByText('Member Name')).closest('tr') as HTMLElement
+    expect(within(row).getByText('member@example.com')).toBeInTheDocument()
+    expect(screen.queryByText('Session Name')).not.toBeInTheDocument()
+    expect(screen.queryByText('owner@example.com')).not.toBeInTheDocument()
+  })
+
+  it.each(['legacy_user', 'other-user', undefined])('does not apply the session profile to a member with a different native user_id (%s)', async (userId) => {
+    mockListMembers.mockResolvedValue([{
+      id: 'user_1', user_id: userId, status: 'active', roles: [],
+    }])
+
+    renderWithRouter(<TeamPage />)
+
+    const row = (await screen.findByText(userId || 'user_1')).closest('tr') as HTMLElement
+    expect(within(row).getAllByRole('cell')[1]).toHaveTextContent(/^-$/)
+    expect(screen.queryByText('owner@example.com')).not.toBeInTheDocument()
+  })
+
+  it('updates the self-row fallback across native account changes without mutating membership records', async () => {
+    const members = [
+      { id: 'member_1', user_id: 'user_1', status: 'active', roles: [] },
+      { id: 'member_2', user_id: 'user_2', status: 'active', roles: [] },
+    ]
+    mockListMembers.mockResolvedValue(members)
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: true,
+      user: { user_id: 'user_1', name: 'First Owner', email: 'first@example.com' },
+    })
+    const { rerender } = renderWithRouter(<TeamPage />)
+    await screen.findByText('First Owner')
+
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: true,
+      user: { user_id: 'user_2', given_name: 'Second', family_name: 'Owner', email: 'second@example.com' },
+    })
+    rerender(<TeamPage />)
+
+    const currentRow = (await screen.findByText('Second Owner')).closest('tr') as HTMLElement
+    expect(within(currentRow).getByText('second@example.com')).toBeInTheDocument()
+    expect(screen.getByText('user_1')).toBeInTheDocument()
+    expect(screen.queryByText('First Owner')).not.toBeInTheDocument()
+    expect(screen.queryByText('first@example.com')).not.toBeInTheDocument()
   })
 
   it('uses the active console organization when inviting a member', async () => {
@@ -589,6 +665,151 @@ describe('TeamPage', () => {
     await act(async () => request.resolve({ ok: true }))
 
     expect(mockListMembers).toHaveBeenCalledExactlyOnceWith('console-org')
+    expect(mockShowNotification).not.toHaveBeenCalled()
+  })
+
+  it('blocks duplicate invitation submissions and dismissal while sending', async () => {
+    const request = deferred<unknown>()
+    mockInviteMember.mockReturnValueOnce(request.promise)
+    const { user } = renderWithRouter(<TeamPage />, { initialEntries: ['/console/org/team?invite=1'] })
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText('org.team.dialog.invite.emailLabel'), 'new.member@example.com')
+    const send = within(dialog).getByRole('button', { name: 'org.team.dialog.invite.send' })
+    await act(async () => {
+      fireEvent.click(send)
+      fireEvent.click(send)
+    })
+
+    expect(mockInviteMember).toHaveBeenCalledExactlyOnceWith('console-org', {
+      email: 'new.member@example.com', role_ids: ['role_viewer'],
+    })
+    expect(send).toBeDisabled()
+    expect(within(dialog).getByRole('button', { name: 'actions.cancel' })).toBeDisabled()
+    expect(within(dialog).getByLabelText('org.team.dialog.invite.emailLabel')).toBeDisabled()
+    expect(within(dialog).getByRole('checkbox', { name: 'Viewer' })).toBeDisabled()
+    await user.keyboard('{Escape}')
+    expect(screen.getByRole('dialog')).toBe(dialog)
+
+    await act(async () => request.resolve({ id: 'invite-new' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(mockShowNotification).toHaveBeenCalledExactlyOnceWith('org.team.dialog.invite.success', 'success')
+  })
+
+  it.each(['resolve', 'reject'] as const)('ignores an old invitation %s after permission refresh replaces its dialog', async (completion) => {
+    const request = deferred<unknown>()
+    mockInviteMember.mockReturnValueOnce(request.promise)
+    const { user, rerender } = renderWithRouter(<TeamPage />, { initialEntries: ['/console/org/team?invite=1'] })
+    const original = await screen.findByRole('dialog')
+    await user.type(within(original).getByLabelText('org.team.dialog.invite.emailLabel'), 'old.invitation@example.com')
+    await user.click(within(original).getByRole('button', { name: 'org.team.dialog.invite.send' }))
+
+    permissionState.isLoading = true
+    rerender(<TeamPage />)
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    permissionState.isLoading = false
+    rerender(<TeamPage />)
+    await user.click(screen.getByRole('button', { name: 'org.team.members.actions.invite' }))
+    const replacement = await screen.findByRole('dialog')
+    await user.type(within(replacement).getByLabelText('org.team.dialog.invite.emailLabel'), 'current.invitation@example.com')
+
+    await act(async () => {
+      if (completion === 'resolve') request.resolve({ id: 'old-invitation' })
+      else request.reject(new Error('Previous invitation failed'))
+    })
+
+    expect(screen.getByRole('dialog')).toBe(replacement)
+    expect(within(replacement).getByLabelText('org.team.dialog.invite.emailLabel')).toHaveValue('current.invitation@example.com')
+    expect(within(replacement).getByRole('button', { name: 'org.team.dialog.invite.send' })).toBeEnabled()
+    expect(screen.queryByText('Previous invitation failed')).not.toBeInTheDocument()
+    expect(mockShowNotification).not.toHaveBeenCalled()
+    expect(mockListMembers).toHaveBeenCalledExactlyOnceWith('console-org')
+    expect(mockListRoles).toHaveBeenCalledExactlyOnceWith('console-org')
+  })
+
+  it('keeps a failed invitation draft available for correction and retry', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockInviteMember.mockRejectedValueOnce(new Error('Invitation service is unavailable'))
+      .mockResolvedValueOnce({ id: 'retried-invitation' })
+    const { user } = renderWithRouter(<TeamPage />, { initialEntries: ['/console/org/team?invite=1'] })
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText('org.team.dialog.invite.emailLabel'), 'new.member@example.com')
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Operator' }))
+    await user.click(within(dialog).getByRole('button', { name: 'org.team.dialog.invite.send' }))
+
+    expect(await within(dialog).findByText('Invitation service is unavailable')).toBeInTheDocument()
+    expect(within(dialog).getByLabelText('org.team.dialog.invite.emailLabel')).toHaveValue('new.member@example.com')
+    expect(within(dialog).getByRole('checkbox', { name: 'Operator' })).toBeChecked()
+    expect(within(dialog).getByRole('checkbox', { name: 'Operator' })).toBeEnabled()
+    await user.click(within(dialog).getByRole('button', { name: 'org.team.dialog.invite.send' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(mockInviteMember).toHaveBeenCalledTimes(2)
+    expect(mockInviteMember).toHaveBeenLastCalledWith('console-org', {
+      email: 'new.member@example.com', role_ids: ['role_viewer', 'role_operator'],
+    })
+    expect(mockShowNotification).toHaveBeenCalledExactlyOnceWith('org.team.dialog.invite.success', 'success')
+  })
+
+  it.each(['resolve', 'reject'] as const)('discards an old invitation %s when the native account changes in the same organization', async (completion) => {
+    const request = deferred<unknown>()
+    const currentMembers = deferred<unknown>()
+    mockInviteMember.mockReturnValueOnce(request.promise)
+    const { user, rerender } = renderWithRouter(<TeamPage />, { initialEntries: ['/console/org/team?invite=1'] })
+    const original = await screen.findByRole('dialog')
+    await user.type(within(original).getByLabelText('org.team.dialog.invite.emailLabel'), 'previous.account@example.com')
+    await user.click(within(original).getByRole('button', { name: 'org.team.dialog.invite.send' }))
+
+    mockUseAuth.mockReturnValue({
+      organizationId: 'auth-org',
+      isAuthenticated: true,
+      user: { user_id: 'user_3', id: 'legacy_user', email: 'current.owner@example.com' },
+    })
+    mockListMembers.mockReturnValueOnce(currentMembers.promise)
+    rerender(<TeamPage />)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByText('alex@example.com')).not.toBeInTheDocument()
+    await act(async () => currentMembers.resolve([{
+      id: 'current_member', email: 'current@example.com', roles: [], status: 'active', is_owner: false,
+    }]))
+    expect((await screen.findAllByText('current@example.com')).length).toBeGreaterThan(0)
+    await user.click(screen.getByRole('button', { name: 'org.team.members.actions.invite' }))
+    const replacement = await screen.findByRole('dialog')
+    expect(within(replacement).getByLabelText('org.team.dialog.invite.emailLabel')).toHaveValue('')
+    await user.type(within(replacement).getByLabelText('org.team.dialog.invite.emailLabel'), 'current.invitation@example.com')
+
+    await act(async () => {
+      if (completion === 'resolve') request.resolve({ id: 'previous-invitation' })
+      else request.reject(new Error('Previous account invitation failed'))
+    })
+
+    expect(screen.getByRole('dialog')).toBe(replacement)
+    expect(within(replacement).getByLabelText('org.team.dialog.invite.emailLabel')).toHaveValue('current.invitation@example.com')
+    expect(within(replacement).getByRole('button', { name: 'org.team.dialog.invite.send' })).toBeEnabled()
+    expect(screen.queryByText('Previous account invitation failed')).not.toBeInTheDocument()
+    expect(mockShowNotification).not.toHaveBeenCalled()
+    expect(mockListMembers).toHaveBeenCalledTimes(2)
+    expect(mockListRoles).toHaveBeenCalledTimes(2)
+    expect(mockInviteMember).toHaveBeenCalledExactlyOnceWith('console-org', {
+      email: 'previous.account@example.com', role_ids: ['role_viewer'],
+    })
+  })
+
+  it.each(['resolve', 'reject'] as const)('does not reload or notify after a pending invitation %s outlives the page', async (completion) => {
+    const request = deferred<unknown>()
+    mockInviteMember.mockReturnValueOnce(request.promise)
+    const { user, unmount } = renderWithRouter(<TeamPage />, { initialEntries: ['/console/org/team?invite=1'] })
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText('org.team.dialog.invite.emailLabel'), 'new.member@example.com')
+    await user.click(within(dialog).getByRole('button', { name: 'org.team.dialog.invite.send' }))
+    unmount()
+
+    await act(async () => {
+      if (completion === 'resolve') request.resolve({ id: 'old-invitation' })
+      else request.reject(new Error('Previous invitation failed'))
+    })
+
+    expect(mockListMembers).toHaveBeenCalledExactlyOnceWith('console-org')
+    expect(mockListRoles).toHaveBeenCalledExactlyOnceWith('console-org')
     expect(mockShowNotification).not.toHaveBeenCalled()
   })
 })

@@ -5,8 +5,10 @@
  * pending membership requests from users who want to join the organization.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { useDialog } from '../../../hooks/useDialog';
 import { useNotifications } from '../../../hooks/useNotifications';
 import {
@@ -54,58 +56,88 @@ const getBreadcrumbs = (t) => [
   { label: t('org.breadcrumbs.membershipRequests'), path: '/console/org/membership-requests' },
 ];
 
+function requestErrorMessage(error, fallback) {
+  const message = typeof error?.message === 'string' ? error.message.trim() : '';
+  return message || fallback;
+}
+
 function MembershipRequestsPage() {
+  const { activeOrgId } = useConsole();
+  const { user, isAuthenticated } = useAuth();
+  const principalId = isAuthenticated ? user?.user_id || user?.sub || user?.id || 'unknown-user' : 'signed-out';
+  return <MembershipRequestsContent key={`${activeOrgId || 'no-organization'}:${principalId}`} organizationId={activeOrgId} isAuthenticated={isAuthenticated} />;
+}
+
+function MembershipRequestsContent({ organizationId, isAuthenticated }) {
   const { t } = useTranslation('console');
   const { showSuccess } = useNotifications();
   const rejectDialog = useDialog();
-  const { data, loading, error: loadError, reload, clearError } = useAsyncData(
-    async () => (await getPendingRequests()).requests || [],
+  const active = useRef(true);
+  const actionPending = useRef(false);
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+  const { data, loading, error: loadError, reload } = useAsyncData(
+    async () => {
+      if (!organizationId) throw new Error('Select an organization before loading membership requests.');
+      if (!isAuthenticated) throw new Error('Sign in before loading membership requests.');
+      const response = await getPendingRequests();
+      if (!Array.isArray(response?.requests)) throw new Error('Membership requests returned an invalid response.');
+      return response.requests;
+    },
     [],
   );
   const requests = data || [];
+  const loaded = Array.isArray(data) && !loading && !loadError;
   const [actionError, setActionError] = useState(null);
-  const error = actionError || loadError?.message;
   const [rejectionReason, setRejectionReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
-  const setError = (value) => {
-    clearError();
-    setActionError(value);
-  };
   const loadRequests = async () => {
     setActionError(null);
     await reload();
   };
 
   const handleApprove = async (request) => {
+    if (!loaded || actionPending.current) return;
+    actionPending.current = true;
     try {
       setActionLoading(true);
-      setError(null);
+      setActionError(null);
       const result = await approveMembershipRequest(request.id);
+      if (!active.current) return;
       showSuccess(result.message || t('org.membership.success.approved', { email: request.user_email }));
       await loadRequests();
     } catch (err) {
-      setError(err.message);
+      if (active.current) setActionError(requestErrorMessage(err, 'Failed to approve membership request'));
     } finally {
-      setActionLoading(false);
+      if (active.current) {
+        actionPending.current = false;
+        setActionLoading(false);
+      }
     }
   };
 
   const handleRejectClick = (request) => {
+    if (!loaded || actionPending.current) return;
+    setActionError(null);
     setRejectionReason('');
     rejectDialog.open(request);
   };
 
   const handleRejectConfirm = async () => {
-    if (!rejectDialog.data) return;
+    if (!rejectDialog.data || !loaded || actionPending.current) return;
+    actionPending.current = true;
 
     try {
       setActionLoading(true);
-      setError(null);
+      setActionError(null);
       
       const result = await rejectMembershipRequest(
         rejectDialog.data.id,
         rejectionReason.trim() || null
       );
+      if (!active.current) return;
       showSuccess(result.message || t('org.membership.success.rejected', { email: rejectDialog.data.user_email }));
       
       rejectDialog.close();
@@ -114,14 +146,19 @@ function MembershipRequestsPage() {
       // Refresh the list
       await loadRequests();
     } catch (err) {
-      setError(err.message);
+      if (active.current) setActionError(requestErrorMessage(err, 'Failed to reject membership request'));
     } finally {
-      setActionLoading(false);
+      if (active.current) {
+        actionPending.current = false;
+        setActionLoading(false);
+      }
     }
   };
 
   const handleRejectCancel = () => {
+    if (actionPending.current) return;
     rejectDialog.close();
+    setActionError(null);
     setRejectionReason('');
   };
 
@@ -147,28 +184,37 @@ function MembershipRequestsPage() {
       breadcrumbs={getBreadcrumbs(t)}
     >
       <Box sx={{ mb: 3 }}>
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
-            {error}
+        {loadError && (
+          <Alert severity="error" sx={{ mb: 2 }} action={
+            <Button color="inherit" size="small" onClick={loadRequests}>{t('actions.retry', { ns: 'common' })}</Button>
+          }>
+            {requestErrorMessage(loadError, 'Failed to load membership requests')}
+          </Alert>
+        )}
+        {actionError && !rejectDialog.isOpen && (
+          <Alert severity="error" sx={{ mb: 2 }} onClose={() => setActionError(null)}>
+            {actionError}
           </Alert>
         )}
 
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
           <Typography variant="h6">
-            {t('org.membership.pendingRequests', { count: requests.length })}
+            {loaded ? t('org.membership.pendingRequests', { count: requests.length }) : t('org.membership.title')}
           </Typography>
           <Tooltip title={t('org.membership.refresh')}>
-            <IconButton onClick={loadRequests} disabled={loading}>
-              <RefreshIcon />
-            </IconButton>
+            <span>
+              <IconButton aria-label={t('org.membership.refresh')} onClick={loadRequests} disabled={loading || actionLoading}>
+                <RefreshIcon />
+              </IconButton>
+            </span>
           </Tooltip>
         </Box>
 
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-            <CircularProgress />
+            <CircularProgress aria-label={t('common.loading', { ns: 'common' })} />
           </Box>
-        ) : requests.length === 0 ? (
+        ) : !loaded ? null : requests.length === 0 ? (
           <Paper sx={{ p: 6, textAlign: 'center', bgcolor: 'grey.50' }}>
             <PersonAddIcon sx={{ fontSize: 60, color: 'text.secondary', mb: 2 }} />
             <Typography variant="h6" gutterBottom>
@@ -205,7 +251,7 @@ function MembershipRequestsPage() {
                           {request.message}
                         </Typography>
                       ) : (
-                        <Typography variant="body2" color="text.secondary" fontStyle="italic">
+                        <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
                           {t('org.membership.noMessage')}
                         </Typography>
                       )}
@@ -259,6 +305,7 @@ function MembershipRequestsPage() {
       <Dialog open={rejectDialog.isOpen} onClose={handleRejectCancel} maxWidth="sm" fullWidth>
         <DialogTitle>{t('org.membership.dialog.title')}</DialogTitle>
         <DialogContent>
+          {actionError && <Alert severity="error" sx={{ mb: 2 }}>{actionError}</Alert>}
           <Typography variant="body2" sx={{ mb: 2 }}>
             {t('org.membership.dialog.message')}{' '}
             <strong>{rejectDialog.data?.user_email}</strong>?
@@ -268,6 +315,7 @@ function MembershipRequestsPage() {
             multiline
             rows={3}
             fullWidth
+            disabled={actionLoading}
             value={rejectionReason}
             onChange={(e) => setRejectionReason(e.target.value)}
             placeholder={t('org.membership.dialog.reasonPlaceholder')}

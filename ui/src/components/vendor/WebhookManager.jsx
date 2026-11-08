@@ -250,7 +250,7 @@ export default function WebhookManager() {
     try {
       const [webhookList, eventCatalog] = await Promise.all([
         listWebhooks(organizationId),
-        getAvailableEventTypes(),
+        getAvailableEventTypes(organizationId),
       ]);
       const localizedMetadata = new Map(getEventTypes(t).map((event) => [event.id, event]));
       setEventTypes(flattenWebhookEventCatalog(eventCatalog?.categories).map((event) => ({

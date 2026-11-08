@@ -131,6 +131,7 @@
     "developerQuickStart": {
       "title": "Developer Quick Start",
       "description": "Org-scoped integration details for API development",
+      "loading": "Loading integration metadata...",
       "organizationId": "Organization ID",
       "baseApiUrl": "Base API URL",
       "exampleRequest": "Example API Request (curl)",

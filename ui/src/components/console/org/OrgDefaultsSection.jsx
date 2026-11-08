@@ -241,7 +241,7 @@ function OrganizationDefaultsForm({ organizationId }) {
       <Typography variant="h6" gutterBottom>
         {t('org.defaultsSection.title')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" paragraph>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         {t('org.defaultsSection.description')}
       </Typography>
 

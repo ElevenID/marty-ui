@@ -42,6 +42,13 @@ server {
         return 200 "ok\n";
     }
     location = /.well-known/ai-plugin.json { try_files $uri =404; }
+    # The current gateway sends no idle heartbeats. Allow one quiet hour;
+    # indefinite idle streams require heartbeat frames from the gateway.
+    location = /v1/notifications/events/push {
+        proxy_pass http://gateway:8000;
+        proxy_read_timeout 3600s;
+        proxy_buffering off;
+    }
     location ~ ^/(api|auth|v1|\.well-known|credentials)/ {
         proxy_pass http://gateway:8000;
     }

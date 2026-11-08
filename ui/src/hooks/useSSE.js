@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import sseService from '../services/sseService';
 
 /**
@@ -8,32 +8,23 @@ import sseService from '../services/sseService';
  * unmounts (or when organizationId changes).
  *
  * @param {string|null} organizationId - Organization to subscribe to
- * @param {string|null} userId - Optional user filter
+ * @param {string|null} userId - Optional authenticated account scope
  * @param {string[]} [subscriptions] - Optional event type filters
  */
 export function useSSE(organizationId, userId = null, subscriptions = undefined) {
-  const connectedRef = useRef(false);
+  const subscriptionKey = JSON.stringify(subscriptions || []);
 
   useEffect(() => {
     if (!organizationId) return;
 
-    // Avoid duplicate connections
-    if (sseService.isActive()) return;
-
     sseService.connect({
       organizationId,
       userId,
-      subscriptions,
+      subscriptions: JSON.parse(subscriptionKey),
     });
-    connectedRef.current = true;
 
-    return () => {
-      if (connectedRef.current) {
-        sseService.disconnect();
-        connectedRef.current = false;
-      }
-    };
-  }, [organizationId, userId]);
+    return () => sseService.disconnect();
+  }, [organizationId, userId, subscriptionKey]);
 
   return { isConnected: sseService.isActive() };
 }

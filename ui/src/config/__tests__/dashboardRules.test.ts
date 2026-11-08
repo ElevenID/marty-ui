@@ -35,6 +35,36 @@ const readyTrustDependencies = {
 
 describe('dashboardRules', () => {
   describe('computeSetupReadiness', () => {
+    it.each([
+      ['verify', 'Blocked: no active verifier Trust Profile'],
+      ['issue', 'Blocked: no active Trust Profile'],
+    ])('shows one blocked prefix when %s flow readiness inherits a blocked prerequisite', (setupIntent, message) => {
+      const result = computeSetupReadiness({
+        ...readyTrustDependencies, setupIntent,
+        trustProfiles: [], templates: [], policies: [], deployments: [], flows: [], apiKeys: [],
+      })
+
+      expect(result.intents[setupIntent].steps.flow).toMatchObject({
+        state: ReadinessState.MISSING,
+        message,
+        dependencyBlocked: true,
+        action: null,
+        path: null,
+      })
+    })
+
+    it('adds a blocked prefix when the prerequisite message does not already have one', () => {
+      const result = computeSetupReadiness({
+        ...readyTrustDependencies,
+        setupIntent: 'verify',
+        trustProfiles: [{ id: 'trust-1', status: 'active' }],
+        templates: [], policies: [], deployments: [], flows: [], apiKeys: [],
+      })
+
+      expect(result.intents.verify.steps.flow.message).toBe('Blocked: No Presentation Policies configured')
+      expect(result.intents.verify.steps.flow.dependencyBlocked).toBe(true)
+    })
+
     it('blocks an empty native catalog even when lifecycle metadata names a profile', () => {
       const data = {
         ...readyTrustDependencies,

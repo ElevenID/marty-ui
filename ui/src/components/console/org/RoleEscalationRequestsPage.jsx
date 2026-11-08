@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Box,
   Paper,
@@ -24,7 +24,15 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import { useTranslation } from 'react-i18next';
 import ResourcePage from '../../common/ResourcePage';
 import { useDialog } from '../../../hooks/useDialog';
+import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { getPendingRoleRequests, approveRoleRequest, rejectRoleRequest } from '../../../services/rolesApi';
+
+function requestErrorMessage(error, fallback) {
+  const message = typeof error?.message === 'string' ? error.message.trim() : '';
+  return message || fallback;
+}
 
 /**
  * Role Escalation Requests Page
@@ -32,57 +40,85 @@ import { getPendingRoleRequests, approveRoleRequest, rejectRoleRequest } from '.
  * Admin interface for reviewing and approving/rejecting role escalation requests.
  */
 export default function RoleEscalationRequestsPage() {
+  const { activeOrgId } = useConsole();
+  const { user, isAuthenticated } = useAuth();
+  const principalId = isAuthenticated ? user?.user_id || user?.sub || user?.id || 'unknown-user' : 'signed-out';
+  return <RoleEscalationRequestsContent key={`${activeOrgId || 'no-organization'}:${principalId}`} organizationId={activeOrgId} isAuthenticated={isAuthenticated} />;
+}
+
+function RoleEscalationRequestsContent({ organizationId, isAuthenticated }) {
   const { t } = useTranslation('console');
-  const [requests, setRequests] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const active = useRef(true);
+  const actionPending = useRef(false);
+  const { data, loading, error: loadError, reload } = useAsyncData(async () => {
+    if (!organizationId) throw new Error('Select an organization before loading role requests.');
+    if (!isAuthenticated) throw new Error('Sign in before loading role requests.');
+    const response = await getPendingRoleRequests();
+    if (!Array.isArray(response?.requests)) throw new Error('Role requests returned an invalid response.');
+    return response.requests;
+  }, []);
+  const requests = data || [];
+  const loaded = Array.isArray(data) && !loading && !loadError;
+  const [actionError, setActionError] = useState(null);
   const rejectDialog = useDialog();
   const [rejectionReason, setRejectionReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
   useEffect(() => {
-    loadRequests();
+    active.current = true;
+    return () => { active.current = false; };
   }, []);
 
   const loadRequests = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const response = await getPendingRoleRequests();
-      setRequests(response.requests || []);
-    } catch (err) {
-      console.error('Failed to load role escalation requests:', err);
-      setError(err.message || 'Failed to load role escalation requests');
-    } finally {
-      setLoading(false);
-    }
+    setActionError(null);
+    await reload();
   };
 
   const handleApprove = async (request) => {
+    if (!loaded || actionPending.current) return;
+    actionPending.current = true;
     try {
       setActionLoading(true);
+      setActionError(null);
       await approveRoleRequest(request.id);
+      if (!active.current) return;
       await loadRequests(); // Refresh list
     } catch (err) {
-      console.error('Failed to approve role request:', err);
-      setError(err.message || 'Failed to approve role request');
+      if (active.current) setActionError(requestErrorMessage(err, 'Failed to approve role request'));
     } finally {
-      setActionLoading(false);
+      if (active.current) {
+        actionPending.current = false;
+        setActionLoading(false);
+      }
     }
   };
 
   const handleRejectConfirm = async () => {
+    if (!rejectDialog.data || !loaded || actionPending.current) return;
+    actionPending.current = true;
     try {
       setActionLoading(true);
+      setActionError(null);
       await rejectRoleRequest(rejectDialog.data.id, rejectionReason);
+      if (!active.current) return;
       rejectDialog.close();
       setRejectionReason('');
       await loadRequests();
     } catch (err) {
-      setError(err.message || 'Failed to reject role request');
+      if (active.current) setActionError(requestErrorMessage(err, 'Failed to reject role request'));
     } finally {
-      setActionLoading(false);
+      if (active.current) {
+        actionPending.current = false;
+        setActionLoading(false);
+      }
     }
+  };
+
+  const handleRejectCancel = () => {
+    if (actionPending.current) return;
+    rejectDialog.close();
+    setActionError(null);
+    setRejectionReason('');
   };
 
   const getRoleChipColor = (role) => {
@@ -109,15 +145,26 @@ export default function RoleEscalationRequestsPage() {
   return (
     <ResourcePage
       title={t('org.roleEscalation.title')}
-      subtitle={t('org.roleEscalation.subtitle')}
+      description={t('org.roleEscalation.subtitle')}
     >
-      {error && (
-        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
-          {error}
+      {loadError && (
+        <Alert severity="error" sx={{ mb: 2 }} action={
+          <Button color="inherit" size="small" onClick={loadRequests}>{t('actions.retry', { ns: 'common' })}</Button>
+        }>
+          {requestErrorMessage(loadError, 'Failed to load role escalation requests')}
+        </Alert>
+      )}
+      {actionError && !rejectDialog.isOpen && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setActionError(null)}>
+          {actionError}
         </Alert>
       )}
 
-      <TableContainer component={Paper}>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+        <Button onClick={loadRequests} disabled={loading || actionLoading}>{t('org.membership.refresh')}</Button>
+      </Box>
+
+      {(loading || loaded) && <TableContainer component={Paper}>
         <Table>
           <TableHead>
             <TableRow>
@@ -151,7 +198,7 @@ export default function RoleEscalationRequestsPage() {
                 <TableRow key={request.id}>
                   <TableCell>
                     <Box>
-                      <Typography variant="body2" fontWeight="medium">
+                      <Typography variant="body2" sx={{ fontWeight: 'medium' }}>
                         {request.user_email}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
@@ -199,6 +246,7 @@ export default function RoleEscalationRequestsPage() {
                         size="small"
                         onClick={() => handleApprove(request)}
                         disabled={actionLoading}
+                        aria-label={t('org.roleEscalation.actions.approve')}
                         title={t('org.roleEscalation.actions.approve')}
                       >
                         <CheckCircleIcon />
@@ -206,8 +254,9 @@ export default function RoleEscalationRequestsPage() {
                       <IconButton
                         color="error"
                         size="small"
-                        onClick={() => { setRejectionReason(''); rejectDialog.open(request); }}
+                        onClick={() => { setActionError(null); setRejectionReason(''); rejectDialog.open(request); }}
                         disabled={actionLoading}
+                        aria-label={t('org.roleEscalation.actions.reject')}
                         title={t('org.roleEscalation.actions.reject')}
                       >
                         <CancelIcon />
@@ -219,17 +268,18 @@ export default function RoleEscalationRequestsPage() {
             )}
           </TableBody>
         </Table>
-      </TableContainer>
+      </TableContainer>}
 
       {/* Reject Dialog */}
       <Dialog
         open={rejectDialog.isOpen}
-        onClose={() => !actionLoading && rejectDialog.close()}
+        onClose={handleRejectCancel}
         maxWidth="sm"
         fullWidth
       >
         <DialogTitle>{t('org.roleEscalation.dialog.title')}</DialogTitle>
         <DialogContent>
+          {actionError && <Alert severity="error" sx={{ mb: 2 }}>{actionError}</Alert>}
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             {t('org.roleEscalation.dialog.message')}{' '}
             <strong>{rejectDialog.data?.user_email}</strong> {t('org.roleEscalation.dialog.messageToBecome')}{' '}
@@ -240,13 +290,14 @@ export default function RoleEscalationRequestsPage() {
             multiline
             rows={3}
             fullWidth
+            disabled={actionLoading}
             value={rejectionReason}
             onChange={(e) => setRejectionReason(e.target.value)}
             placeholder={t('org.roleEscalation.dialog.reasonPlaceholder')}
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={rejectDialog.close} disabled={actionLoading}>
+          <Button onClick={handleRejectCancel} disabled={actionLoading}>
             {t('actions.cancel', { ns: 'common' })}
           </Button>
           <Button

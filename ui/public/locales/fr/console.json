@@ -1,5 +1,8 @@
 {
 	"dashboard": {
+		"developerQuickStart": {
+			"loading": "Chargement des métadonnées d’intégration..."
+		},
 		"title": "Tableau de bord",
 		"welcome": "Bon retour",
 		"criticalEvents": {

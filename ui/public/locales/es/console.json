@@ -1,5 +1,8 @@
 {
 	"dashboard": {
+		"developerQuickStart": {
+			"loading": "Cargando metadatos de integración..."
+		},
 		"title": "Panel",
 		"welcome": "Bienvenido de nuevo",
 		"criticalEvents": {

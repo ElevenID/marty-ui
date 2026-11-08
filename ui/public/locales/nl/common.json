@@ -65,6 +65,8 @@
   },
   "navigation": {
     "home": "Home",
+    "console": "Console",
+    "apiDocumentation": "API-documentatie",
     "product": "Product",
     "howItWorks": "Hoe het werkt",
     "whyVerifiableIdentity": "Waarom verifieerbare identiteit",

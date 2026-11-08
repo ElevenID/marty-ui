@@ -260,6 +260,26 @@ describe('ConsoleRoutes login routing', () => {
     });
   });
 
+  it('centers the console initialization state without forwarding layout props to the DOM', () => {
+    mockUseConsole.mockReturnValue({ isLoading: true });
+
+    renderConsoleRoutes('/console');
+
+    const loadingState = screen.getByRole('progressbar').parentElement;
+    expect(screen.getByText('Loading console...')).toBeVisible();
+    expect(loadingState).toHaveStyle({
+      display: 'flex',
+      'flex-direction': 'column',
+      'align-items': 'center',
+      'justify-content': 'center',
+      'min-height': `${window.innerHeight / 2}px`,
+    });
+    for (const attribute of ['display', 'flexDirection', 'alignItems', 'justifyContent', 'minHeight']) {
+      expect(loadingState).not.toHaveAttribute(attribute);
+    }
+    expect(mockLogin).not.toHaveBeenCalled();
+  });
+
   it('keeps login inside the console when public pages are disabled', async () => {
     (window as any).__MARTY_RUNTIME_CONFIG__ = { web: { enabled_sections: ['console'] } };
     renderConsoleRoutes('/console');

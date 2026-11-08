@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { MemoryRouter } from 'react-router'
-import { renderWithoutRouter, screen } from '../../test/utils'
+import { renderWithoutRouter, screen, waitFor } from '../../test/utils'
 import {
   ConsoleHeaderBar,
   getAccountAvatarInitial,
@@ -166,6 +166,70 @@ describe('ConsoleHeaderBar', () => {
     expect(screen.getByText('Maree')).toBeInTheDocument()
     expect(screen.queryByText('Marty Org')).not.toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: 'Settings' })).toHaveAttribute('href', '/console/org/settings')
+  })
+
+  it.each([
+    { menu: 'organization', width: '280px', overflow: 'hidden', action: 'Search & Join Organizations' },
+    { menu: 'account', width: '200px', overflow: 'visible', action: 'Settings' },
+  ])('applies $menu menu paper styles without leaking props and closes on selection', async ({ menu, width, overflow, action }) => {
+    const errorSpy = vi.spyOn(console, 'error')
+    try {
+      const { user } = renderWithoutRouter(
+        <MemoryRouter>
+          <ConsoleHeaderBar onMobileMenuToggle={vi.fn()} />
+        </MemoryRouter>
+      )
+
+      const trigger = menu === 'organization'
+        ? screen.getByRole('button', { name: 'MO' })
+        : screen.getByTestId('console-account-menu-button')
+      await user.click(trigger)
+
+      const paper = screen.getByRole('menu').closest('.MuiPaper-root')
+      expect(paper).toHaveStyle({ minWidth: width, overflow })
+      expect(paper).toHaveClass('MuiPaper-elevation0')
+      expect(document.querySelector('[paperprops]')).toBeNull()
+      expect(errorSpy.mock.calls.flat().join(' ')).not.toContain('PaperProps')
+
+      await user.click(screen.getByRole('menuitem', { name: action }))
+      await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument())
+      if (menu === 'organization') {
+        expect(mockNavigate).toHaveBeenCalledWith('/organizations/discover')
+      }
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it.each([
+    { mode: 'applicant', role: 'Reviewer', administrator: false, label: 'Applicant' },
+    { mode: 'org', role: 'Reviewer', administrator: false, label: 'Reviewer' },
+    { mode: 'org', role: null, administrator: false, label: 'Organization Console' },
+    { mode: 'applicant', role: null, administrator: true, label: 'Administrator' },
+  ])('labels the $mode account from its context and actual roles as $label', async ({ mode, role, administrator, label }) => {
+    Object.assign(mockAuthState, {
+      isAdministrator: administrator,
+      isVendor: true,
+      isApplicant: true,
+    })
+    Object.assign(mockConsoleState, {
+      mode,
+      memberships: [{
+        id: 'org-123',
+        display_name: 'Marty Org',
+        membership: { roles: role ? [{ name: 'reviewer', display_name: role }] : [] },
+      }],
+    })
+
+    const { user } = renderWithoutRouter(
+      <MemoryRouter>
+        <ConsoleHeaderBar onMobileMenuToggle={vi.fn()} />
+      </MemoryRouter>
+    )
+    await user.click(screen.getByTestId('console-account-menu-button'))
+
+    expect(screen.getByText(label)).toBeVisible()
+    expect(screen.queryByText('Vendor')).not.toBeInTheDocument()
   })
 
   it('uses the Canvas learner name when the LTI username is opaque', () => {

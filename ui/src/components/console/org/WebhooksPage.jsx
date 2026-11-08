@@ -177,7 +177,7 @@ function WebhooksContent({ organizationId }) {
       if (!organizationId) return { webhooks: [], eventCatalog: [] };
       const [webhooks, eventCatalog] = await Promise.all([
         listWebhooks(organizationId),
-        getAvailableEventTypes(),
+        getAvailableEventTypes(organizationId),
       ]);
 
       return {
@@ -394,7 +394,7 @@ function WebhooksContent({ organizationId }) {
             <Grid size={{ xs: 12, md: 4 }}>
               <Card variant="outlined" sx={{ height: '100%' }}>
                 <CardContent>
-                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
                     <SyncAltIcon color="primary" fontSize="small" />
                     <Typography variant="subtitle2">Async callback endpoints</Typography>
                   </Stack>
@@ -408,7 +408,7 @@ function WebhooksContent({ organizationId }) {
             <Grid size={{ xs: 12, md: 4 }}>
               <Card variant="outlined" sx={{ height: '100%' }}>
                 <CardContent>
-                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
                     <SecurityIcon color="primary" fontSize="small" />
                     <Typography variant="subtitle2">Application integrations</Typography>
                   </Stack>
@@ -422,7 +422,7 @@ function WebhooksContent({ organizationId }) {
             <Grid size={{ xs: 12, md: 4 }}>
               <Card variant="outlined" sx={{ height: '100%' }}>
                 <CardContent>
-                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
                     <AddIcon color="primary" fontSize="small" />
                     <Typography variant="subtitle2">Total webhooks</Typography>
                   </Stack>

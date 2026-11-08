@@ -73,7 +73,7 @@ function GuidedSetupBanner({ readiness, onDismiss }) {
         <Typography variant="subtitle1" fontWeight={600} gutterBottom>
           {isStarted ? t('dashboard.guidedSetupBanner.resumeSetup') : t('dashboard.guidedSetupBanner.getStarted')}
         </Typography>
-        <Typography variant="body2" paragraph>
+        <Typography variant="body2" sx={{ mb: 2 }}>
           {isStarted
             ? t('dashboard.guidedSetupBanner.resumeProgress', { completed: completedSteps, total: totalSteps })
             : t('dashboard.guidedSetupBanner.startDescription')}

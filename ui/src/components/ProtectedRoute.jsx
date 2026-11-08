@@ -19,11 +19,13 @@ import {
 function GuardLoadingState({ message }) {
   return (
     <Box
-      display="flex"
-      flexDirection="column"
-      alignItems="center"
-      justifyContent="center"
-      minHeight="50vh"
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '50vh',
+      }}
     >
       <CircularProgress size={48} />
       <Typography variant="body1" color="textSecondary" sx={{ mt: 2 }}>

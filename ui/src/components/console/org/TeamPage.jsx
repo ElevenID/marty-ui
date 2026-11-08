@@ -45,6 +45,7 @@ import EmptyState from '../../common/EmptyState';
 import ErrorState from '../../common/ErrorState';
 import { PermissionGate } from '../../common/PermissionGate';
 import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useAuth } from '../../../hooks/useAuth';
 import { useDialog } from '../../../hooks/useDialog';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useNotifications } from '../../../hooks/useNotifications';
@@ -90,6 +91,20 @@ function getDisplayName(member) {
   return member?.name || member?.email || member?.user_id || member?.id || 'Unknown member';
 }
 
+function memberForDisplay(member, currentUser) {
+  const principalId = currentUser?.user_id || currentUser?.sub || currentUser?.id;
+  if (!principalId || member?.user_id !== principalId) return member;
+  // Native owner memberships may omit profile fields. Use the known session
+  // identity only for this principal, without changing the membership record.
+  const name = currentUser.name?.trim()
+    || [currentUser.given_name, currentUser.family_name].map((part) => part?.trim()).filter(Boolean).join(' ');
+  return {
+    ...member,
+    name: member.name || name,
+    email: member.email || currentUser.email,
+  };
+}
+
 function splitMemberships(records) {
   const activeMembers = [];
   const pendingInvites = [];
@@ -124,19 +139,20 @@ function RoleChips({ roles = [] }) {
   );
 }
 
-function TeamPage() {
+function TeamContent({ organizationId, currentUser }) {
   const { t } = useTranslation('console');
   const [searchParams, setSearchParams] = useSearchParams();
   const inviteDialog = useDialog();
   const roleDialog = useDialog();
-  const { activeOrgId } = useConsole();
   const { showNotification } = useNotifications();
   const { hasPermission, isLoading: permissionsLoading, refresh: refreshPermissions } = usePermissions();
 
-  const effectiveOrgId = activeOrgId;
+  const effectiveOrgId = organizationId;
   const currentOrgId = useRef(effectiveOrgId);
   currentOrgId.current = effectiveOrgId;
   const currentRoleDialog = useRef(null);
+  const currentInviteDialog = useRef(null);
+  const inviteSequence = useRef(0);
   const active = useRef(false);
   useLayoutEffect(() => {
     active.current = true;
@@ -145,6 +161,8 @@ function TeamPage() {
   const isMartyOrg = effectiveOrgId === MARTY_ORG_ID;
   const canInvite = !permissionsLoading && hasPermission('team', 'invite');
   const canManage = !permissionsLoading && !isMartyOrg && hasPermission('team', 'manage');
+  currentInviteDialog.current = inviteDialog.isOpen && canInvite
+    && inviteDialog.data?.organizationId === effectiveOrgId ? inviteDialog.data : null;
   currentRoleDialog.current = roleDialog.isOpen && canManage
     && roleDialog.data?.organizationId === effectiveOrgId ? roleDialog.data : null;
 
@@ -163,7 +181,8 @@ function TeamPage() {
   }, [effectiveOrgId]);
   const currentTeam = teamData?.organizationId === effectiveOrgId ? teamData : null;
   const loading = dataLoading || Boolean(effectiveOrgId && !currentTeam && !error);
-  const { activeMembers: members = [], pendingInvites = [], availableRoles = [] } = currentTeam || {};
+  const { activeMembers: teamMembers = [], pendingInvites = [], availableRoles = [] } = currentTeam || {};
+  const members = teamMembers.map((member) => memberForDisplay(member, currentUser));
   const teamReady = Boolean(effectiveOrgId && currentTeam && !loading && !error);
   const inviteRequested = searchParams.get('invite') === '1';
   const { open: openInvite, close: closeInvite } = inviteDialog;
@@ -174,11 +193,11 @@ function TeamPage() {
     const remainingParams = new URLSearchParams(searchParams);
     remainingParams.delete('invite');
     setSearchParams(remainingParams, { replace: true });
-    if (canInvite) openInvite(effectiveOrgId);
+    if (canInvite) openInvite({ organizationId: effectiveOrgId, generation: ++inviteSequence.current });
   }, [inviteRequested, teamReady, permissionsLoading, canInvite, effectiveOrgId, searchParams, setSearchParams, openInvite]);
 
   useEffect(() => {
-    if (inviteDialog.isOpen && (!canInvite || inviteDialog.data !== effectiveOrgId)) closeInvite();
+    if (inviteDialog.isOpen && (!canInvite || inviteDialog.data?.organizationId !== effectiveOrgId)) closeInvite();
   }, [inviteDialog.isOpen, inviteDialog.data, effectiveOrgId, canInvite, closeInvite]);
 
   useEffect(() => {
@@ -198,21 +217,24 @@ function TeamPage() {
   }, [availableRoles]);
 
   const handleInvite = async (email, roleIds) => {
-    if (!canInvite || !teamReady || inviteDialog.data !== effectiveOrgId) return;
+    const dialogContext = inviteDialog.data;
+    if (!inviteDialog.isOpen || !canInvite || !teamReady || dialogContext?.organizationId !== effectiveOrgId) return;
     const invitedOrgId = effectiveOrgId;
+    const applies = () => active.current && currentOrgId.current === invitedOrgId
+      && currentInviteDialog.current === dialogContext;
     try {
       await teamApi.inviteMember(invitedOrgId, {
         email,
         role_ids: roleIds,
       });
-      if (currentOrgId.current !== invitedOrgId) return;
+      if (!applies()) return;
       showNotification?.(t('org.team.dialog.invite.success'), 'success');
       inviteDialog.close();
       await loadData();
     } catch (err) {
-      if (currentOrgId.current !== invitedOrgId) return;
+      if (!applies()) return;
       console.error('Failed to invite member:', err);
-      showNotification?.(t('org.team.dialog.invite.error'), 'error');
+      throw err;
     }
   };
 
@@ -291,7 +313,7 @@ function TeamPage() {
           <Button
             variant="contained"
             startIcon={<AddIcon />}
-            onClick={() => openInvite(effectiveOrgId)}
+            onClick={() => openInvite({ organizationId: effectiveOrgId, generation: ++inviteSequence.current })}
             disabled={!canInvite || !teamReady}
             data-testid="org.team.invite.action"
           >
@@ -417,7 +439,8 @@ function TeamPage() {
       )}
 
       <InviteMemberDialog
-        open={inviteDialog.isOpen && inviteDialog.data === effectiveOrgId && canInvite && teamReady}
+        key={`${effectiveOrgId}:${inviteDialog.data?.generation || 0}:${inviteDialog.isOpen}`}
+        open={inviteDialog.isOpen && inviteDialog.data?.organizationId === effectiveOrgId && canInvite && teamReady}
         availableRoles={availableRoles}
         defaultRoleIds={defaultInviteRoleIds}
         onClose={inviteDialog.close}
@@ -526,6 +549,15 @@ function RoleSelection({ availableRoles, selectedRoleIds, onToggle, disabled = f
 function InviteMemberDialog({ open, availableRoles, defaultRoleIds, onClose, onInvite, t }) {
   const [email, setEmail] = useState('');
   const [selectedRoleIds, setSelectedRoleIds] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const requestPending = useRef(false);
+  const active = useRef(false);
+
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
 
   useEffect(() => {
     if (!open) {
@@ -544,43 +576,57 @@ function InviteMemberDialog({ open, availableRoles, defaultRoleIds, onClose, onI
     ));
   };
 
-  const handleSubmit = () => {
-    if (!email || selectedRoleIds.length === 0) {
+  const handleSubmit = async () => {
+    if (!email.trim() || selectedRoleIds.length === 0 || requestPending.current) {
       return;
     }
 
-    onInvite(email, selectedRoleIds);
+    requestPending.current = true;
+    setSaving(true);
+    setError('');
+    try {
+      await onInvite(email.trim(), selectedRoleIds);
+    } catch (inviteError) {
+      if (active.current) {
+        setError(inviteError instanceof Error ? inviteError.message : t('org.team.dialog.invite.error'));
+      }
+    } finally {
+      requestPending.current = false;
+      if (active.current) setSaving(false);
+    }
   };
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+    <Dialog open={open} onClose={saving ? undefined : onClose} maxWidth="sm" fullWidth>
       <DialogTitle>{t('org.team.dialog.invite.title')}</DialogTitle>
       <DialogContent>
         <Alert severity="info" sx={{ mb: 2 }}>
           {t('org.team.dialog.invite.info')}
         </Alert>
+        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
         <TextField
           fullWidth
           label={t('org.team.dialog.invite.emailLabel')}
           type="email"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
+          disabled={saving}
           margin="normal"
           autoFocus
         />
         <FormControl fullWidth margin="normal">
           <InputLabel shrink>{t('org.team.dialog.invite.roleLabel')}</InputLabel>
           <Box sx={{ mt: 2 }}>
-            <RoleSelection availableRoles={availableRoles} selectedRoleIds={selectedRoleIds} onToggle={handleToggleRole} />
+            <RoleSelection availableRoles={availableRoles} selectedRoleIds={selectedRoleIds} onToggle={handleToggleRole} disabled={saving} />
           </Box>
         </FormControl>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>{t('actions.cancel', { ns: 'common' })}</Button>
+        <Button onClick={onClose} disabled={saving}>{t('actions.cancel', { ns: 'common' })}</Button>
         <Button
           onClick={handleSubmit}
           variant="contained"
-          disabled={!email || selectedRoleIds.length === 0}
+          disabled={saving || !email.trim() || selectedRoleIds.length === 0}
           startIcon={<SendIcon />}
         >
           {t('org.team.dialog.invite.send')}
@@ -655,4 +701,15 @@ function ChangeRoleDialog({ open, member, availableRoles = [], onClose, onChange
   );
 }
 
-export default TeamPage;
+export default function TeamPage() {
+  const { activeOrgId } = useConsole();
+  const { user, isAuthenticated } = useAuth();
+  const principalId = isAuthenticated ? user?.user_id || user?.sub || user?.id || 'unknown-user' : 'signed-out';
+  return (
+    <TeamContent
+      key={`${activeOrgId || 'no-organization'}:${principalId}`}
+      organizationId={activeOrgId}
+      currentUser={isAuthenticated ? user : null}
+    />
+  );
+}
