@@ -887,7 +887,7 @@ impl From<FlowVerificationRequestError> for FlowHttpError {
             FlowVerificationRequestError::RestartRequired => Self::new(
                 StatusCode::CONFLICT,
                 "verification_restart_required",
-                "Start a new verification request to bind its policy revision",
+                "Start a new verification request to bind its policy and credential authority revisions",
             ),
             FlowVerificationRequestError::MethodNotAllowed => Self::new(
                 StatusCode::METHOD_NOT_ALLOWED,

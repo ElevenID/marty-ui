@@ -39,7 +39,7 @@ registered; it should not be recreated as unfinished W01 work.
 
 | Work package | Current development | Completion boundary |
 | --- | --- | --- |
-| W05 — verified prerequisites before issuance | Atomic signing authority revalidation, frozen Flow requests, authoritative policy-revision checks and bounded native SD-JWT/DCQL query/subject/key evidence | Full authoritative trust/status/replay evidence and an issuance-owned continuation are still required |
+| W05 — verified prerequisites before issuance | Atomic signing authority revalidation, frozen Flow requests, native SD-JWT/DCQL query/subject/key evidence and an opt-in managed issuer/type/status authority profile | Full canonical owner-channel/replay evidence and an issuance-owned continuation are still required |
 | W14 — verified wallets | Reconcile existing [Authenticator PR 57](https://github.com/ElevenID/marty-authenticator/pull/57) with the merged fork foundation, current APIs and verified receipt/presentation contracts | Source integration and tests; external wallet activation and release qualification remain open |
 
 ### W05: current signing authorization boundary
@@ -88,6 +88,32 @@ It does not yet produce the full canonical trust/status/replay record. No
 result in this slice grants a single-use issuance continuation or locks a
 remote policy revision through credential signing.
 
+### W05: managed credential authority continuation
+
+The saved policy may now select `managed_sd_jwt_dcql_v1`. Its one explicit
+Trust Profile supplies a frozen public decision basis and a persisted owner
+revision. Exact per-relationship SD-JWT/VCT grants, governed keys and applicable
+profile/lifecycle controls are required. Unsupported configured authority is
+rejected rather than replaced. Flow retains the snapshot and refuses a
+different trust override or incompatible request mode; a changed owner
+revision requires a new verification request.
+
+After native issuer and holder verification, Policy derives exact owner requests
+from private authenticated fields. Trust Profile assesses the issuer, VCT,
+algorithm and actual issuer-key thumbprint. Issuance observes its own record by
+tenant, credential, issuer, template and exact issuer-JWS digest. Both responses
+must match the complete request and remain live after asynchronous work. A
+private native type associates these observations with the query; booleans,
+caller JSON and generic status IDs cannot substitute for it.
+
+This bounded profile is specifically for Issuance-managed SD-JWT records.
+External OCSP, CRL and status-list verification is outside it. Owner-response
+digests are correspondence checks, not signatures; deployment-trusted owner
+channels remain a material boundary. The full canonical evidence producer must
+still represent policy observation and durable Flow nonce-commit times
+separately, and establish the required owner-channel provenance. No issuance
+continuation or prerequisite activation is introduced by this increment.
+
 ### W14: current verified-wallet integration
 
 PR 57 keeps paired remote KMS holder signing and verified receipt storage,
@@ -118,8 +144,8 @@ of existing checked-in WASM artifacts does not qualify a new-fork build.
 
 1. Finish review and exact-commit gates for the signing boundary and wallet
    integration. Resolve failures; do not bypass protected merge or release rules.
-2. Complete the selected SD-JWT/DCQL native producer with authoritative
-   issuer/type trust, status and durable replay outcomes in the full canonical
+2. Complete the selected SD-JWT/DCQL native producer with authenticated owner
+   observations and durable replay outcomes in the full canonical
    evidence contract. Bind that evidence to the tenant, issuing template, exact
    dataset and saved policy reference through an issuance-owned single-use
    continuation and expiry. Revalidate and consume that authority at the
@@ -150,8 +176,8 @@ public artifact audit also passed within the artifact limits described above.
 
 The signing-boundary continuation has two independent source passes, a successful
 locked build of the admission, signing and PostgreSQL contract executables, and
-13 passing behavioral tests. Actual PostgreSQL execution remains pending the
-existing hosted CI database gate.
+13 passing behavioral tests. Its initially pending PostgreSQL gate subsequently
+passed in the published-head-associated hosted run recorded below.
 
 The policy/request binding continuation also passed two independent source
 audits, 942 selected Rust library/behavior tests (15 explicitly ignored), a
@@ -175,6 +201,31 @@ PostgreSQL execution. Local environment restrictions that prevent a supported
 database instance are a pending CI gate, not a database test pass. Both PRs
 require two independent source audits and retain any unresolved activation
 conditions in their descriptions.
+
+Hosted run [42451825654](https://github.com/ElevenID/marty-ui/actions/runs/42451825654),
+associated with published head `b00404281b4bc71aa55642062adcb6762ed15fb8`,
+completed with 27 successful jobs and one intentional installer-trial skip,
+including CI Gate. The PR workflow checked out GitHub's synthetic merge commit
+`e9e37fa18942f738bbd10f8c1404185058153e35`; these are PR-head-associated
+integration results, not a claim that execution used the raw head commit.
+Decoded logs confirm actual isolated-database execution: one retryable Flow
+HTTP rejection test, two dedicated Flow finalization tests (one separate fenced
+role case ignored), seven Issuance PostgreSQL tests including the signing
+authority races, and Canvas renewal binding/same-successor recovery. The
+release-contract job also passed. These results qualify the published baseline;
+the new managed-authority source and new SQL regressions need their own gates.
+
+The managed-authority increment passed two independent read-only source audits
+with no outstanding blocking findings. Its final local Rust selection passed
+282 unit/behavior/contract tests, plus two compile-fail tests proving the native
+evidence types cannot be deserialized. One existing disposable event-stream KMS
+case was explicitly ignored. Forty-six focused Python descriptor, dependency,
+Docker-context and native-owner checks passed. Strict workspace/all-target
+Clippy passed on pinned Rust 1.95.0, along with formatting and whitespace checks.
+The expanded Trust Profile migration/revision and Issuance credential
+PostgreSQL executables were built locked/offline; their new SQL assertions were
+not executed locally. Publication must obtain fresh hosted results for this
+source before merge. Fork revisions remain unchanged.
 
 ## Publication handoff and continuation
 

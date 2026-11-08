@@ -257,6 +257,7 @@ mod tests {
         submission: Option<Value>,
     ) -> Oid4vpEvaluationTransportV1 {
         Oid4vpEvaluationTransportV1 {
+            credential_authority: None,
             query_kind: kind,
             query_digest: digest_query_document(&query).unwrap(),
             query_document: query,

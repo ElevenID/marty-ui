@@ -192,6 +192,7 @@ impl CredentialStatusResolver for GateStatus {
 fn gate_policy(organization_id: Uuid, trust_profile_id: Uuid) -> PresentationPolicy {
     let now = Utc::now();
     PresentationPolicy {
+        prerequisite_evidence_profile: None,
         id: Uuid::from_u128(3),
         organization_id,
         name: "Exact image positive OID4VP gate".into(),
@@ -336,6 +337,7 @@ async fn execute(input: GateInput) -> Result<Value, String> {
         .map_err(|_| "runtime gate policy rejected")?;
     let query = json!({"id":"runtime-gate","input_descriptors":[{"id":"runtime-gate-template","format":{"dc+sd-jwt":{}},"constraints":{"fields":[{"path":["$.email"]},{"path":["$.vct"],"filter":{"type":"string","const":"RuntimeGateCredential"}}]}}]});
     let transport = marty_oid4vp_contract::Oid4vpEvaluationTransportV1 {
+        credential_authority: None,
         query_kind: marty_oid4vp_contract::QueryKind::PresentationExchange,
         query_digest: marty_oid4vp_contract::digest_query_document(&query)
             .map_err(|_| "runtime query rejected")?,

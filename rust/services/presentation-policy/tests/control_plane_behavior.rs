@@ -696,3 +696,382 @@ async fn credential_dot_segments_never_change_the_configured_status_route() {
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     server.abort();
 }
+
+mod managed_authority_http {
+    use super::*;
+    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+
+    use chrono::Utc;
+    use marty_oid4vp_contract::{
+        digest_domain_json,
+        managed_status::{
+            digest_managed_status_observation, ManagedCredentialStatusObservationV1,
+            ManagedCredentialStatusRequestV1, ManagedCredentialStatusState,
+            MANAGED_STATUS_AUTHORITY, MANAGED_STATUS_CONTRACT, MANAGED_STATUS_OBSERVATION_PATH,
+        },
+        trust_authority::{
+            credential_authority_basis_digest, credential_authority_snapshot_digest,
+            credential_trust_evaluation_digest, issuer_public_key_thumbprint,
+            CredentialAuthoritySnapshotV1, CredentialTrustEvaluationRequestV1,
+            CredentialTrustEvaluationResponseV1, CREDENTIAL_AUTHORITY_SNAPSHOT_CONTRACT,
+            CREDENTIAL_TRUST_EVALUATION_CONTRACT,
+        },
+        EvidenceCheckOutcome,
+    };
+    use serde_json::json;
+
+    const TOKEN: &str = "loopback-authority-service-token";
+    const API_KEY: &str = "loopback-issuance-management-key";
+
+    struct AuthorityFixture {
+        snapshot: CredentialAuthoritySnapshotV1,
+        selection: CredentialTrustEvaluationRequestV1,
+        status_request: ManagedCredentialStatusRequestV1,
+        // 0: exact; 1: revision conflict; 2: valid but crossed scope; 3: expired.
+        mode: AtomicU8,
+        reads: AtomicUsize,
+    }
+
+    impl AuthorityFixture {
+        fn new() -> Self {
+            let organization_id = Uuid::from_u128(101).to_string();
+            let profile_id = Uuid::from_u128(102).to_string();
+            let issuer_id = "https://issuer.example.test/Tenant-A";
+            let vct = "https://credentials.example.test/Employee";
+            let key = json!({"kty":"OKP","crv":"Ed25519","alg":"EdDSA","use":"sig",
+                "x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"});
+            let basis = serde_json::from_value(json!({
+                "id":profile_id,"organization_id":organization_id,"status":"active","compliance_status":"COMPLIANT",
+                "trust_purposes":["CREDENTIAL_ISSUER"],"supported_formats":["SD_JWT_VC"],"allowed_algorithms":["EdDSA"],
+                "allowed_issuers":null,"denied_issuers":[],"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z",
+                "policy_controls":{
+                    "validation_rules":{"min_key_size_rsa":2048,"min_key_size_ec":256,"require_key_usage":true,"max_chain_depth":5,"allow_self_signed":false},
+                    "time_policy":{"max_clock_skew_seconds":300,"credential_freshness_hours":null,"require_not_before":true,"require_expiration":true},
+                    "revocation_policy":{"check_mode":"HARD_FAIL","check_ocsp":false,"check_crl":false,"check_status_list":false,"offline_grace_period_hours":0,"cache_duration_hours":0},
+                    "trusted_assertion_formats":["JWT"],"unsupported_configuration_fields":[],
+                    "unsupported_configuration_digest":digest_domain_json("marty.trust-profile/unsupported-credential-authority-configuration/v1", &json!({})).unwrap()
+                },
+                "issuer_relationships":[{
+                    "relationship_id":Uuid::from_u128(103),"issuer_entity_id":Uuid::from_u128(104),"issuer_id":issuer_id,
+                    "issuer_organization_id":organization_id,"is_system_issuer":false,"relationship_status":"TRUSTED",
+                    "trust_level":80,"compliance_status":"COMPLIANT","accreditations":["example-accreditation"],
+                    "valid_from":"2026-01-01T00:00:00Z","valid_until":null,"revoked_at":null,"verification_keys":[key],
+                    "credential_authorizations":[{"format":"SD_JWT_VC","vct":vct}],
+                    "issuer_created_at":"2026-01-01T00:00:00Z","issuer_updated_at":"2026-01-01T00:00:00Z",
+                    "relationship_created_at":"2026-01-01T00:00:00Z","relationship_updated_at":"2026-01-01T00:00:00Z"
+                }]
+            })).unwrap();
+            let mut snapshot = CredentialAuthoritySnapshotV1 {
+                contract: CREDENTIAL_AUTHORITY_SNAPSHOT_CONTRACT.into(),
+                organization_id: organization_id.clone(),
+                profile: marty_oid4vp_contract::EvidenceProfileReference {
+                    id: profile_id,
+                    version: 7,
+                    content_digest: credential_authority_basis_digest(&basis).unwrap(),
+                },
+                basis,
+                response_digest: String::new(),
+            };
+            snapshot.response_digest = credential_authority_snapshot_digest(&snapshot).unwrap();
+            snapshot.validate().unwrap();
+            let selection = CredentialTrustEvaluationRequestV1 {
+                organization_id: organization_id.clone(),
+                expected_profile: snapshot.profile.clone(),
+                issuer_id: issuer_id.into(),
+                format: "SD_JWT_VC".into(),
+                vct: vct.into(),
+                issuer_algorithm: "EdDSA".into(),
+                issuer_key_thumbprint: issuer_public_key_thumbprint(&key).unwrap(),
+                request_binding_digest: format!("sha256:{}", "a".repeat(64)),
+            };
+            let status_request = ManagedCredentialStatusRequestV1 {
+                organization_id,
+                issuer_id: issuer_id.into(),
+                credential_id: "urn:uuid:managed-credential-1".into(),
+                credential_template_id: Uuid::from_u128(105).to_string(),
+                issuer_jwt_digest: format!("sha256:{}", "b".repeat(64)),
+                request_binding_digest: selection.request_binding_digest.clone(),
+                max_age_seconds: 60,
+            };
+            Self {
+                snapshot,
+                selection,
+                status_request,
+                mode: AtomicU8::new(0),
+                reads: AtomicUsize::new(0),
+            }
+        }
+
+        fn trust_response(&self) -> CredentialTrustEvaluationResponseV1 {
+            let request = &self.selection;
+            let checked = Utc::now().timestamp()
+                - if self.mode.load(Ordering::SeqCst) == 3 {
+                    120
+                } else {
+                    0
+                };
+            let mut response = CredentialTrustEvaluationResponseV1 {
+                contract: CREDENTIAL_TRUST_EVALUATION_CONTRACT.into(),
+                organization_id: request.organization_id.clone(),
+                profile: request.expected_profile.clone(),
+                issuer_id: request.issuer_id.clone(),
+                format: request.format.clone(),
+                vct: request.vct.clone(),
+                issuer_algorithm: request.issuer_algorithm.clone(),
+                issuer_key_thumbprint: request.issuer_key_thumbprint.clone(),
+                request_binding_digest: request.request_binding_digest.clone(),
+                outcome: EvidenceCheckOutcome::Passed,
+                reason_code: "TRUST_PROFILE.CREDENTIAL_AUTHORIZED".into(),
+                trust_level: Some(80),
+                compliance_statuses: vec!["COMPLIANT".into()],
+                accreditations: vec!["example-accreditation".into()],
+                checked_at_epoch_seconds: checked,
+                valid_until_epoch_seconds: checked + 60,
+                evidence_digest: String::new(),
+            };
+            if self.mode.load(Ordering::SeqCst) == 2 {
+                response.issuer_id = "https://issuer.example.test/tenant-a".into();
+            }
+            response.evidence_digest = credential_trust_evaluation_digest(&response).unwrap();
+            response.validate().unwrap();
+            response
+        }
+    }
+
+    fn request_headers(headers: &HeaderMap, fixture: &AuthorityFixture, trust: bool) {
+        assert_eq!(headers["accept"], "application/json");
+        assert_eq!(headers["content-type"], "application/json");
+        if trust {
+            assert_eq!(headers["x-service-token"], TOKEN);
+            assert!(!headers.contains_key("x-api-key"));
+            assert!(!headers.contains_key("x-organization-id"));
+        } else {
+            assert_eq!(headers["x-api-key"], API_KEY);
+            assert_eq!(
+                headers["x-organization-id"],
+                fixture.status_request.organization_id
+            );
+            assert!(!headers.contains_key("x-service-token"));
+        }
+        fixture.reads.fetch_add(1, Ordering::SeqCst);
+    }
+
+    async fn freeze(
+        State(fixture): State<Arc<AuthorityFixture>>,
+        Path(id): Path<String>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> Json<CredentialAuthoritySnapshotV1> {
+        request_headers(&headers, &fixture, true);
+        assert_eq!(id, fixture.snapshot.profile.id);
+        assert_eq!(
+            body,
+            json!({"organization_id":fixture.snapshot.organization_id})
+        );
+        let mut snapshot = fixture.snapshot.clone();
+        if fixture.mode.load(Ordering::SeqCst) == 2 {
+            snapshot.organization_id = Uuid::from_u128(999).to_string();
+            snapshot
+                .basis
+                .organization_id
+                .clone_from(&snapshot.organization_id);
+            snapshot.basis.issuer_relationships[0].issuer_organization_id =
+                Some(snapshot.organization_id.clone());
+            snapshot.profile.content_digest =
+                credential_authority_basis_digest(&snapshot.basis).unwrap();
+            snapshot.response_digest = credential_authority_snapshot_digest(&snapshot).unwrap();
+        }
+        snapshot.validate().unwrap();
+        Json(snapshot)
+    }
+
+    async fn assess(
+        State(fixture): State<Arc<AuthorityFixture>>,
+        Path(id): Path<String>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> Response {
+        request_headers(&headers, &fixture, true);
+        assert_eq!(id, fixture.selection.expected_profile.id);
+        assert_eq!(body, json!(fixture.selection));
+        if fixture.mode.load(Ordering::SeqCst) == 1 {
+            return StatusCode::CONFLICT.into_response();
+        }
+        Json(fixture.trust_response()).into_response()
+    }
+
+    async fn status(
+        State(fixture): State<Arc<AuthorityFixture>>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> Json<ManagedCredentialStatusObservationV1> {
+        request_headers(&headers, &fixture, false);
+        assert_eq!(body, json!(fixture.status_request));
+        let checked = Utc::now().timestamp()
+            - if fixture.mode.load(Ordering::SeqCst) == 3 {
+                120
+            } else {
+                0
+            };
+        let mut observation = ManagedCredentialStatusObservationV1 {
+            contract: MANAGED_STATUS_CONTRACT.into(),
+            authority: MANAGED_STATUS_AUTHORITY.into(),
+            request: fixture.status_request.clone(),
+            state: ManagedCredentialStatusState::Active,
+            status_updated_at_epoch_seconds: checked - 1,
+            checked_at_epoch_seconds: checked,
+            valid_until_epoch_seconds: checked + 60,
+            credential_expires_at_epoch_seconds: checked + 3600,
+            evidence_digest: String::new(),
+        };
+        if fixture.mode.load(Ordering::SeqCst) == 2 {
+            observation.request.credential_id = "urn:uuid:different-managed-credential".into();
+        }
+        observation.evidence_digest = digest_managed_status_observation(&observation).unwrap();
+        observation
+            .validate_for_request(&observation.request, checked)
+            .unwrap();
+        Json(observation)
+    }
+
+    async fn serve() -> (Arc<AuthorityFixture>, String, tokio::task::JoinHandle<()>) {
+        let fixture = Arc::new(AuthorityFixture::new());
+        let app = Router::new()
+            .route(
+                "/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot",
+                axum::routing::post(freeze),
+            )
+            .route(
+                "/internal/v1/trust-profiles/{profile_id}/credential-trust-evaluations",
+                axum::routing::post(assess),
+            )
+            .route(MANAGED_STATUS_OBSERVATION_PATH, axum::routing::post(status))
+            .with_state(fixture.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (fixture, base, server)
+    }
+
+    fn control(
+        base: &str,
+        token: Option<&str>,
+        api_key: Option<&str>,
+    ) -> NativePresentationControlPlane {
+        NativePresentationControlPlane::connect_lazy(
+            "http://127.0.0.1:9",
+            base,
+            &format!("{base}/v1/issuance/credentials/{{credential_id}}/status"),
+            token,
+            api_key,
+            Duration::from_secs(2),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn authority_posts_preserve_owner_routes_credentials_and_exact_scoped_bodies() {
+        let (fixture, base, server) = serve().await;
+        let client = control(&base, Some(TOKEN), Some(API_KEY));
+        let frozen = client
+            .freeze_credential_authority(
+                fixture.snapshot.organization_id.parse().unwrap(),
+                fixture.snapshot.profile.id.parse().unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(frozen, fixture.snapshot);
+        let trust = client
+            .evaluate_credential_authority(&fixture.selection)
+            .await
+            .unwrap();
+        assert_eq!(trust.outcome, EvidenceCheckOutcome::Passed);
+        assert_eq!(trust.profile, frozen.profile);
+        assert_eq!(trust.trust_level, Some(80));
+        assert_eq!(trust.accreditations, ["example-accreditation"]);
+        let observed = client
+            .observe_managed_status(&fixture.status_request)
+            .await
+            .unwrap();
+        assert_eq!(observed.request, fixture.status_request);
+        assert_eq!(observed.state, ManagedCredentialStatusState::Active);
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 3);
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn authority_posts_reject_conflicts_crossed_scope_expiry_and_missing_local_credentials() {
+        let (fixture, base, server) = serve().await;
+        let client = control(&base, Some(TOKEN), Some(API_KEY));
+        fixture.mode.store(1, Ordering::SeqCst);
+        assert!(matches!(
+            client
+                .evaluate_credential_authority(&fixture.selection)
+                .await,
+            Err(PresentationVerificationError::CredentialAuthorityChanged)
+        ));
+        fixture.mode.store(2, Ordering::SeqCst);
+        assert!(matches!(
+            client
+                .freeze_credential_authority(
+                    fixture.snapshot.organization_id.parse().unwrap(),
+                    fixture.snapshot.profile.id.parse().unwrap()
+                )
+                .await,
+            Err(PresentationVerificationError::Failed(_))
+        ));
+        assert!(matches!(
+            client
+                .evaluate_credential_authority(&fixture.selection)
+                .await,
+            Err(PresentationVerificationError::Failed(_))
+        ));
+        assert!(matches!(
+            client.observe_managed_status(&fixture.status_request).await,
+            Err(PresentationVerificationError::Failed(_))
+        ));
+        fixture.mode.store(3, Ordering::SeqCst);
+        assert!(matches!(
+            client
+                .evaluate_credential_authority(&fixture.selection)
+                .await,
+            Err(PresentationVerificationError::Failed(_))
+        ));
+        assert!(matches!(
+            client.observe_managed_status(&fixture.status_request).await,
+            Err(PresentationVerificationError::Failed(_))
+        ));
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 6);
+
+        let unconfigured = control(&base, None, None);
+        assert!(matches!(
+            unconfigured
+                .freeze_credential_authority(
+                    fixture.snapshot.organization_id.parse().unwrap(),
+                    fixture.snapshot.profile.id.parse().unwrap()
+                )
+                .await,
+            Err(PresentationVerificationError::Unavailable)
+        ));
+        assert!(matches!(
+            unconfigured
+                .evaluate_credential_authority(&fixture.selection)
+                .await,
+            Err(PresentationVerificationError::Unavailable)
+        ));
+        assert!(matches!(
+            unconfigured
+                .observe_managed_status(&fixture.status_request)
+                .await,
+            Err(PresentationVerificationError::Unavailable)
+        ));
+        assert_eq!(
+            fixture.reads.load(Ordering::SeqCst),
+            6,
+            "missing credentials must fail before owner reads"
+        );
+        server.abort();
+        let _ = server.await;
+    }
+}

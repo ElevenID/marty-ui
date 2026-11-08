@@ -324,6 +324,9 @@ pub async fn prepare_verification_submission(
         Err(FlowProviderError::PolicyRevisionMismatch) => {
             return Err(FlowVerificationSubmissionError::PolicyRevisionMismatch);
         }
+        Err(FlowProviderError::CredentialAuthorityChanged) => {
+            return Err(FlowVerificationSubmissionError::RestartRequired);
+        }
         Err(error) => {
             tracing::warn!(
                 flow_instance_id = %instance.id,
@@ -609,6 +612,7 @@ fn evaluation_transport(
         ));
     }
     let transport = Oid4vpEvaluationTransportV1 {
+        credential_authority: frozen.credential_authority.clone(),
         query_kind,
         query_document: query_document.clone(),
         query_digest: digest_query_document(query_document).map_err(|_| {

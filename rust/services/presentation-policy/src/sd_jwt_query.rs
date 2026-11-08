@@ -36,6 +36,8 @@ pub struct SdJwtDcqlRequest {
     organization_id: String,
     policy: FrozenPolicyIdentity,
     selected_trust_profile_id: Option<Uuid>,
+    expected_trust_profile: Option<marty_oid4vp_contract::EvidenceProfileReference>,
+    issuer_not_before_required: bool,
     credential_template_id: String,
     query_id: String,
     query_digest: String,
@@ -102,6 +104,14 @@ pub struct AuthenticatedSdJwtQueryEvidence {
     holder_proof_expires_at: Option<f64>,
     #[serde(skip)]
     selected_trust_profile_id: Option<Uuid>,
+    #[serde(skip)]
+    expected_trust_profile: Option<marty_oid4vp_contract::EvidenceProfileReference>,
+    #[serde(skip)]
+    issuer_key_thumbprint: String,
+    #[serde(skip)]
+    credential_id: Option<String>,
+    #[serde(skip)]
+    issuer_jwt_digest: String,
 }
 
 impl std::fmt::Debug for AuthenticatedSdJwtQueryEvidence {
@@ -115,6 +125,73 @@ impl std::fmt::Debug for AuthenticatedSdJwtQueryEvidence {
 }
 
 impl AuthenticatedSdJwtQueryEvidence {
+    /// Exact owner requests derive only from private, natively verified fields.
+    /// In particular, public kernel status IDs and caller context are not inputs.
+    pub(crate) fn authority_requests(
+        &self,
+    ) -> Result<
+        (
+            marty_oid4vp_contract::trust_authority::CredentialTrustEvaluationRequestV1,
+            marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1,
+        ),
+        PresentationVerificationError,
+    > {
+        let invalid = || {
+            PresentationVerificationError::Failed(
+                "PRESENTATION_POLICY.MANAGED_AUTHORITY_BINDING_INVALID".into(),
+            )
+        };
+        let profile = self.expected_trust_profile.as_ref().ok_or_else(invalid)?;
+        let request_binding_digest = digest_domain_json(
+            "marty.oid4vp/managed-credential-authority-request/v1",
+            &json!({
+                "organization_id": self.organization_id,
+                "policy": self.policy,
+                "trust_profile": profile,
+                "credential_template_id": self.credential_template_id,
+                "query_id": self.query_id,
+                "query_digest": self.query_digest,
+                "response_token_digest": self.response_token_digest,
+                "nonce_digest": self.nonce_digest,
+                "audience_digest": self.audience_digest,
+                "issuer_id": self.issuer_id,
+                "issuer_scoped_subject_digest": self.issuer_scoped_subject_digest,
+                "holder_key_thumbprint": self.holder_key_thumbprint,
+                "issuer_key_thumbprint": self.issuer_key_thumbprint,
+                "issuer_jwt_digest": self.issuer_jwt_digest,
+                "vct": self.vct,
+                "issuer_algorithm": self.issuer_algorithm,
+            }),
+        )
+        .map_err(|_| invalid())?;
+        let trust = marty_oid4vp_contract::trust_authority::CredentialTrustEvaluationRequestV1 {
+            organization_id: self.organization_id.clone(),
+            expected_profile: profile.clone(),
+            issuer_id: self.issuer_id.clone(),
+            format: "SD_JWT_VC".into(),
+            vct: self.vct.clone(),
+            issuer_algorithm: self.issuer_algorithm.clone(),
+            issuer_key_thumbprint: self.issuer_key_thumbprint.clone(),
+            request_binding_digest: request_binding_digest.clone(),
+        };
+        let status = marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1 {
+            organization_id: self.organization_id.clone(),
+            issuer_id: self.issuer_id.clone(),
+            credential_id: self.credential_id.clone().ok_or_else(invalid)?,
+            credential_template_id: self.credential_template_id.clone(),
+            issuer_jwt_digest: self.issuer_jwt_digest.clone(),
+            request_binding_digest,
+            max_age_seconds: marty_oid4vp_contract::managed_status::MAX_MANAGED_STATUS_AGE_SECONDS,
+        };
+        trust.validate().map_err(|_| invalid())?;
+        status.validate().map_err(|_| invalid())?;
+        Ok((trust, status))
+    }
+
+    pub(crate) fn checked_at_epoch_seconds(&self) -> u64 {
+        self.checked_at_epoch_seconds
+    }
+
     pub(crate) fn credential_template_id(&self) -> &str {
         &self.credential_template_id
     }
@@ -240,6 +317,14 @@ impl SdJwtDcqlRequest {
         format: DetectedCredentialFormat,
         checked_at_epoch_seconds: u64,
     ) -> Result<Option<Self>, PresentationVerificationError> {
+        if policy.prerequisite_evidence_profile.is_some()
+            && request
+                .oid4vp_transport
+                .as_ref()
+                .is_none_or(|transport| transport.query_kind != QueryKind::Dcql)
+        {
+            return Err(PresentationVerificationError::Failed(PROFILE_ERROR.into()));
+        }
         let Some(transport) = request.oid4vp_transport.as_ref() else {
             return Ok(None);
         };
@@ -259,16 +344,43 @@ impl SdJwtDcqlRequest {
                         .any(|credential| credential["format"] == "dc+sd-jwt")
                 });
         if !selected_profile {
+            if policy.prerequisite_evidence_profile.is_some() {
+                return Err(PresentationVerificationError::Failed(PROFILE_ERROR.into()));
+            }
             return Ok(None);
         }
         let invalid = || PresentationVerificationError::Failed(PROFILE_ERROR.into());
         transport.validate_transport().map_err(|_| invalid())?;
+        let expected_trust_profile = match (
+            &policy.prerequisite_evidence_profile,
+            &transport.credential_authority,
+        ) {
+            (Some(_), Some(authority)) => {
+                policy.validate().map_err(|_| invalid())?;
+                if authority.organization_id != policy.organization_id.to_string()
+                    || Uuid::parse_str(&authority.profile.id).ok() != policy.trust_profile_id
+                    || request
+                        .trust_profile_id
+                        .as_deref()
+                        .is_some_and(|id| Uuid::parse_str(id).ok() != policy.trust_profile_id)
+                {
+                    return Err(invalid());
+                }
+                Some(authority.profile.clone())
+            }
+            (None, None) => None,
+            _ => return Err(invalid()),
+        };
         // The first profile is the normal client-ID OID4VP binding. DC API has
         // a different origin-based audience and requires its own typed adapter.
         if format != DetectedCredentialFormat::SdJwt
             || !request.trusted_internal_context
             || request.nonce.as_deref() != Some(transport.request_nonce.as_str())
             || request.audience.as_deref() != Some(transport.verifier_client_id.as_str())
+            || transport
+                .verifier_client_id
+                .split_once(':')
+                .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("origin"))
             || transport.request_nonce.len() < MIN_NONCE_BYTES
             || transport.presentation_submission.is_some()
             || policy.status != PolicyStatus::Active
@@ -363,6 +475,16 @@ impl SdJwtDcqlRequest {
             .into_iter()
             .next()
             .flatten(),
+            expected_trust_profile,
+            issuer_not_before_required: transport.credential_authority.as_ref().is_some_and(
+                |authority| {
+                    authority
+                        .basis
+                        .policy_controls
+                        .time_policy
+                        .require_not_before
+                },
+            ),
             credential_template_id: requirement.credential_template_id.clone(),
             query_id: credential.id.clone(),
             query_digest: transport.query_digest.clone(),
@@ -388,6 +510,7 @@ impl SdJwtDcqlRequest {
         evidence.organization_id == self.organization_id
             && evidence.policy == self.policy
             && evidence.selected_trust_profile_id == self.selected_trust_profile_id
+            && evidence.expected_trust_profile == self.expected_trust_profile
             && evidence.credential_template_id == self.credential_template_id
             && evidence.query_id == self.query_id
             && evidence.query_digest == self.query_digest
@@ -510,6 +633,9 @@ impl SdJwtDcqlRequest {
             .get("exp")
             .and_then(Value::as_u64)
             .ok_or(PROFILE_ERROR)?;
+        if self.issuer_not_before_required && claims.get("nbf").and_then(Value::as_u64).is_none() {
+            return Err("SD-JWT trust policy requires a signed not-before time");
+        }
         if issued_at > self.checked_at_epoch_seconds
             || expires_at <= self.checked_at_epoch_seconds
             || expires_at <= issued_at
@@ -576,6 +702,17 @@ impl SdJwtDcqlRequest {
             holder_proof_not_before,
             holder_proof_expires_at,
             selected_trust_profile_id: self.selected_trust_profile_id,
+            expected_trust_profile: self.expected_trust_profile.clone(),
+            issuer_key_thumbprint: public_key_thumbprint(&key.public_jwk)?,
+            credential_id: claims
+                .get("jti")
+                .and_then(Value::as_str)
+                .filter(|value| bounded_text(value, MAX_IDENTIFIER_BYTES))
+                .map(str::to_owned),
+            issuer_jwt_digest: marty_oid4vp_contract::managed_status::digest_sd_jwt_issuer_jws(
+                token,
+            )
+            .map_err(|_| PROFILE_ERROR)?,
         };
         Ok((claims.clone(), evidence))
     }

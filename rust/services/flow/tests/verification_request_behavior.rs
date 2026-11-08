@@ -52,6 +52,8 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            prerequisite_evidence_profile: None,
+            credential_authority: None,
             policy_revision: presentation_snapshot::revision(policy_id),
             id: policy_id.into(),
             organization_id: "org-1".into(),
@@ -204,6 +206,56 @@ fn instance() -> FlowInstanceRecord {
     };
     presentation_snapshot::freeze_default(&mut instance);
     instance
+}
+
+#[tokio::test]
+async fn frozen_managed_authority_cannot_be_retrieved_under_lissi_or_dc_api() {
+    let signing = Arc::new(Signing::default());
+    let ports = providers(signing.clone());
+    let authority = presentation_snapshot::authority("org-1");
+    let mut managed = instance();
+    managed.context[presentation_snapshot::SNAPSHOT_KEY]["credential_authority"] = json!(authority);
+    for options in [
+        VerificationRequestRetrievalOptions {
+            compatibility: RequestObjectCompatibility::Lissi,
+            ..Default::default()
+        },
+        VerificationRequestRetrievalOptions {
+            transport: VerificationRequestTransport::DigitalCredentialsApi,
+            ..Default::default()
+        },
+    ] {
+        assert!(prepare_verification_request(
+            &ports,
+            managed.clone(),
+            "https://verifier.example",
+            &options,
+            now()
+        )
+        .await
+        .is_err());
+    }
+    assert_eq!(signing.resolutions.load(Ordering::SeqCst), 0);
+    let ready = prepare_verification_request(
+        &ports,
+        managed,
+        "https://verifier.example",
+        &Default::default(),
+        now(),
+    )
+    .await
+    .unwrap();
+    let PreparedVerificationRequest::Ready(ready) = ready else {
+        panic!("ready managed request")
+    };
+    assert_eq!(
+        ready.instance.context[presentation_snapshot::SNAPSHOT_KEY]["credential_authority"],
+        json!(authority)
+    );
+    assert!(
+        ready.instance.context["mip_messages"]["presentation_request"]["payload"]["dcql_query"]
+            .is_object()
+    );
 }
 
 #[tokio::test]

@@ -125,6 +125,15 @@ pub async fn prepare_verification_request(
                 }
                 _ => FlowVerificationRequestError::InvalidContext,
             })?;
+        if frozen.credential_authority.is_some()
+            && (options.compatibility != RequestObjectCompatibility::Standard
+                || options.transport == VerificationRequestTransport::DigitalCredentialsApi)
+        {
+            return Err(crate::FlowRequestObjectError::UnsupportedProfile(
+                "managed SD-JWT prerequisites require DCQL and a normal client ID",
+            )
+            .into());
+        }
         Some(frozen.artifacts())
     };
     let mut request_options = options.request_object.clone();

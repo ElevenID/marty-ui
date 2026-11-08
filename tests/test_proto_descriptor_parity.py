@@ -70,6 +70,20 @@ def test_public_field_numbers_remain_wire_compatible():
     assert transport["vp_token_raw"] == 5
     assert transport["verifier_client_id"] == 6
     assert transport["request_nonce"] == 7
+    assert transport["credential_authority_snapshot_json"] == 8
+    created = fields("presentation_policy_service.proto", "CreatePolicyRequest")
+    assert {name: created[name] for name in (
+        "prerequisite_evidence_profile", "trust_profile_id", "holder_binding_json", "freshness_json"
+    )} == {
+        "prerequisite_evidence_profile": 10,
+        "trust_profile_id": 11,
+        "holder_binding_json": 12,
+        "freshness_json": 13,
+    }
+    assert fields("presentation_policy_service.proto", "UpdatePolicyRequest")["prerequisite_evidence_profile"] == 5
+    returned = fields("presentation_policy_service.proto", "PolicyResponse")
+    assert returned["prerequisite_evidence_profile"] == 14
+    assert returned["credential_authority_snapshot_json"] == 15
     credential = fields("credential_template_service.proto", "CreateTemplateRequest")
     assert credential["compliance_profile_id"] == 22
     assert credential["derived_attributes"] == 26

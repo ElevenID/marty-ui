@@ -458,6 +458,7 @@ async fn full_dcql_response_must_match_signed_type_claims_and_binding() {
     let token = presentation(&key, EMPLOYEE, true);
     let query = json!({"credentials":[{"id":query_id,"format":"dc+sd-jwt","meta":{"vct_values":[EMPLOYEE]},"claims":[{"id":"email","path":["email"]}]}]});
     let transport = Oid4vpEvaluationTransportV1 {
+        credential_authority: None,
         query_kind: QueryKind::Dcql,
         query_digest: digest_query_document(&query).unwrap(),
         query_document: query,
@@ -491,6 +492,7 @@ async fn full_dcql_response_must_match_signed_type_claims_and_binding() {
         {"id":"second","format":{"dc+sd-jwt":{}},"constraints":{"fields":[{"path":["$.email"]}]}}
     ]});
     multiple.oid4vp_transport = Some(Oid4vpEvaluationTransportV1 {
+        credential_authority: None,
         query_kind: QueryKind::PresentationExchange,
         query_digest: digest_query_document(&query).unwrap(),
         query_document: query,

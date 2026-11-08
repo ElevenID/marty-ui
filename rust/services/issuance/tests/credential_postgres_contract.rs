@@ -45,6 +45,203 @@ use uuid::Uuid;
 static POSTGRES_CONTRACT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test]
+async fn managed_sd_jwt_status_reads_exact_tenant_artifact_and_current_lifecycle() {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use marty_issuance_service::{
+        credential_management::{
+            CredentialLifecycleEvent, CredentialLifecycleEventSink, CredentialManagementPortError,
+            CredentialManagementService, CredentialStatusPublisher, ManagedCredential,
+        },
+        managed_status::ManagedStatusError,
+    };
+    use marty_oid4vp_contract::managed_status::{
+        digest_sd_jwt_issuer_jws, ManagedCredentialStatusRequestV1, ManagedCredentialStatusState,
+    };
+    use std::sync::Arc;
+
+    struct NoWrites;
+    #[async_trait::async_trait]
+    impl CredentialStatusPublisher for NoWrites {
+        async fn publish(
+            &self,
+            _credential: &ManagedCredential,
+            _action: CredentialLifecycleAction,
+            _reason: Option<&str>,
+        ) -> Result<(), CredentialManagementPortError> {
+            panic!("status observation cannot publish a lifecycle change")
+        }
+    }
+    #[async_trait::async_trait]
+    impl CredentialLifecycleEventSink for NoWrites {
+        async fn emit(&self, _event: CredentialLifecycleEvent) {
+            panic!("status observation cannot emit a lifecycle mutation")
+        }
+    }
+
+    let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
+        return;
+    };
+    let _database_guard = POSTGRES_CONTRACT_LOCK.lock().await;
+    assert!(url::Url::parse(&database_url)
+        .unwrap()
+        .path()
+        .ends_with("_test"));
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    create_contract_schema(&pool).await;
+    let now = Utc::now();
+    let artifact =
+        format!(
+        "{}.{}.{}~",
+        URL_SAFE_NO_PAD.encode(br#"{"typ":"dc+sd-jwt","alg":"EdDSA"}"#),
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
+            "iss": "did:web:issuer.example", "jti": "owned-sd-jwt", "vct": "EmployeeCredential",
+            "iat": now.timestamp() - 10, "exp": now.timestamp() + 600,
+        })).unwrap()),
+        URL_SAFE_NO_PAD.encode([0_u8; 64]),
+    );
+    sqlx::query(
+        "INSERT INTO issuance_service.issued_credentials
+             (id, transaction_id, organization_id, credential_template_id, issuer_did,
+              credential_jwt, credential_hash, status, status_updated_at, revoked,
+              issued_at, expires_at, status_list_entries)
+         VALUES ('owned-sd-jwt', 'owned-transaction', 'org-managed', 'template-managed',
+                 'did:web:issuer.example', $1, 'full-issued-string-hash-is-not-the-artifact-digest',
+                 'active', $2, false, $3, $4, '[]'::jsonb)",
+    )
+    .bind(&artifact)
+    .bind(now - Duration::seconds(5))
+    .bind(now - Duration::seconds(10))
+    .bind(now + Duration::seconds(300))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let repository = PostgresCredentialManagementRepository::new(pool.clone());
+    assert!(repository
+        .get_managed_sd_jwt_status("foreign-org", "owned-sd-jwt")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(repository
+        .get_managed_sd_jwt_status("org-managed", "missing")
+        .await
+        .unwrap()
+        .is_none());
+    let before_read = Utc::now();
+    let snapshot = repository
+        .get_managed_sd_jwt_status("org-managed", "owned-sd-jwt")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.credential_jwt, artifact);
+    assert_eq!(snapshot.credential_template_id, "template-managed");
+    assert_eq!(
+        snapshot.issuer_did.as_deref(),
+        Some("did:web:issuer.example")
+    );
+    assert!(snapshot.observed_at >= before_read && snapshot.observed_at <= Utc::now());
+    let service = CredentialManagementService::new(
+        Arc::new(repository),
+        Arc::new(NoWrites),
+        Arc::new(NoWrites),
+    );
+    let request = ManagedCredentialStatusRequestV1 {
+        organization_id: "org-managed".into(),
+        issuer_id: "did:web:issuer.example".into(),
+        credential_id: "owned-sd-jwt".into(),
+        credential_template_id: "template-managed".into(),
+        issuer_jwt_digest: digest_sd_jwt_issuer_jws(&artifact).unwrap(),
+        request_binding_digest: format!("sha256:{}", "a".repeat(64)),
+        max_age_seconds: 30,
+    };
+    for (status, revoked, expected) in [
+        ("active", false, ManagedCredentialStatusState::Active),
+        ("suspended", false, ManagedCredentialStatusState::Suspended),
+        ("revoked", true, ManagedCredentialStatusState::Revoked),
+    ] {
+        sqlx::query(
+            "UPDATE issuance_service.issued_credentials
+             SET status = $1, revoked = $2, status_updated_at = clock_timestamp()
+             WHERE id = 'owned-sd-jwt'",
+        )
+        .bind(status)
+        .bind(revoked)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let observation = service.observe_sd_jwt_status(&request).await.unwrap();
+        assert_eq!(observation.state, expected);
+        assert_eq!(
+            observation.credential_expires_at_epoch_seconds,
+            (now + Duration::seconds(300)).timestamp()
+        );
+        observation
+            .validate_for_request(&request, Utc::now().timestamp())
+            .unwrap();
+    }
+    for field in [
+        "organization_id",
+        "credential_id",
+        "issuer_id",
+        "credential_template_id",
+        "issuer_jwt_digest",
+    ] {
+        let mut value = serde_json::to_value(&request).unwrap();
+        value[field] = json!(if field == "issuer_jwt_digest" {
+            format!("sha256:{}", "b".repeat(64))
+        } else {
+            "foreign-value".into()
+        });
+        let different = serde_json::from_value(value).unwrap();
+        let expected = if matches!(field, "organization_id" | "credential_id") {
+            ManagedStatusError::NotFound
+        } else {
+            ManagedStatusError::UnsupportedRecord
+        };
+        assert_eq!(
+            service.observe_sd_jwt_status(&different).await,
+            Err(expected),
+            "{field}"
+        );
+    }
+    sqlx::query(
+        "UPDATE issuance_service.issued_credentials
+         SET status = 'active', revoked = false, expires_at = clock_timestamp()
+         WHERE id = 'owned-sd-jwt'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        service.observe_sd_jwt_status(&request).await,
+        Err(ManagedStatusError::UnsupportedRecord)
+    );
+    sqlx::query("UPDATE issuance_service.issued_credentials SET expires_at = NULL WHERE id = 'owned-sd-jwt'")
+        .execute(&pool).await.unwrap();
+    assert_eq!(
+        service.observe_sd_jwt_status(&request).await,
+        Err(ManagedStatusError::UnsupportedRecord)
+    );
+    sqlx::query(
+        "UPDATE issuance_service.issued_credentials
+         SET expires_at = clock_timestamp() + interval '5 minutes', credential_jwt = 'malformed'
+         WHERE id = 'owned-sd-jwt'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        service.observe_sd_jwt_status(&request).await,
+        Err(ManagedStatusError::UnsupportedRecord)
+    );
+    drop_contract_schema(&pool).await;
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn tenant_discovery_queries_current_status_and_tenant_boundaries() {
     let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
         return;

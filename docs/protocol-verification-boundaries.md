@@ -58,6 +58,15 @@ documents and records a source digest with the candidate authorization result.
 Unavailable, mismatched, empty, or invalid linked policy source fails closed.
 There is no implicit business-policy preset when no PolicySet is linked.
 
+The foundation's opt-in `managed_sd_jwt_dcql_v1` profile freezes the exact
+trust-owner revision and verifies a credential-specific Issuance status
+observation. Its authenticated owner evidence does not grant catalog template
+membership: the signed VCT must still match the resolved template. Credential,
+holder-proof, and owner-observation deadlines are checked after metadata and
+policy resolution. This bounded managed profile rejects a linked verification
+PolicySet as unsupported at the trust owner; ordinary profile evaluation uses
+the configured Cedar path above. Neither path ignores a configured policy.
+
 A non-null `PresentationPolicy.compliance_profile_id` is currently unsupported
 and is rejected at creation/activation and evaluation, including previously
 saved policies. A signed `_compliance_code` is a credential claim; it cannot

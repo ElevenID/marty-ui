@@ -1278,6 +1278,9 @@ fn provider_status(error: FlowProviderError) -> Status {
         FlowProviderError::PolicyRevisionMismatch => Status::failed_precondition(
             "Presentation policy revision changed; start a new verification request",
         ),
+        FlowProviderError::CredentialAuthorityChanged => Status::failed_precondition(
+            "Credential authority changed; start a new verification request",
+        ),
         FlowProviderError::InvalidResponse { .. }
         | FlowProviderError::Unavailable { .. }
         | FlowProviderError::Missing(_) => {
