@@ -84,8 +84,9 @@ const CredentialTemplateWizard = () => {
       }));
     }
 
+    const { _organization_default_trust: _defaultTrust, ...templateData } = data;
     const payload = {
-      ...data,
+      ...templateData,
       organization_id: effectiveOrganizationId,
     };
     const epoch = organizationEpoch.current;
@@ -140,7 +141,7 @@ const CredentialTemplateWizard = () => {
     setCreatedDraft(null);
     updateWizardData({ trust_profile_id: null, compliance_profile_id: null, issuer_did: null,
       revocation_profile_id: null, credential_payload_format: undefined, supported_formats: undefined,
-      issuance_protocol: undefined, _issuer_selection: null });
+      issuance_protocol: undefined, _issuer_selection: null, _organization_default_trust: null });
     return () => { organizationEpoch.current += 1; };
   }, [activeOrgId, principalId, updateWizardData]);
 

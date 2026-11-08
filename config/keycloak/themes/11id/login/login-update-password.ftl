@@ -7,13 +7,13 @@
         <div id="kc-form">
             <div id="kc-form-wrapper">
                 <p class="elevenid-login-title">${msg("updatePasswordTitle")}</p>
-                <p class="elevenid-context-hint">${msg("updatePasswordBody"!"Choose a new password for your account")}</p>
+                <p class="elevenid-context-hint">${msg("updatePasswordBody")}</p>
 
                 <form id="kc-passwd-update-form" class="${properties.kcFormClass!}" action="${url.loginAction}" method="post">
                     <input type="text"
                            id="username"
                            name="username"
-                           value="${username!""}
+                           value="${username!""}"
                            autocomplete="username"
                            readonly="readonly"
                            style="display:none;"
@@ -63,7 +63,7 @@
                                 'req-digit':   function (v) { return /[0-9]/.test(v); },
                                 'req-special': function (v) { return /[^A-Za-z0-9]/.test(v); }
                             };
-                            pwdInput.addEventListener('input', function () {
+                            function updateRequirements() {
                                 var val = pwdInput.value;
                                 var hasTyped = val.length > 0;
                                 Object.keys(rules).forEach(function (id) {
@@ -75,7 +75,11 @@
                                     li.classList.toggle('unmet-active', !ok && hasTyped);
                                     if (icon) icon.textContent = ok ? '✓' : '✗';
                                 });
-                            });
+                            }
+                            pwdInput.addEventListener('input', updateRequirements);
+                            pwdInput.addEventListener('change', updateRequirements);
+                            window.addEventListener('pageshow', updateRequirements);
+                            updateRequirements();
                         })();
                         </script>
                     </div>

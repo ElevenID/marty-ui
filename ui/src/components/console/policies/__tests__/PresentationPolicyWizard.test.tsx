@@ -26,6 +26,7 @@ vi.mock('../../../../contexts/ConsoleContext', () => ({
 describe('PresentationPolicyWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    server.use(http.get('*/v1/organizations/:organizationId/defaults', () => HttpResponse.json({})))
   })
 
   describe('initial render', () => {
