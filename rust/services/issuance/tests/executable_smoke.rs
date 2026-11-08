@@ -14,8 +14,8 @@ use marty_issuance_service::issuance_proto::{
 mod issuance_process;
 
 use issuance_process::{
-    bounded_http_client, isolated_smoke_command, reserve_port, smoke_command,
-    terminal_startup_failure, wait_for_health_with_client, ChildGuard,
+    bounded_http_client, bounded_startup_diagnostic, isolated_smoke_command, reserve_port,
+    smoke_command, terminal_startup_failure, wait_for_health_with_client, ChildGuard,
 };
 
 #[path = "support/canvas_worker_logging_contract.rs"]
@@ -238,7 +238,7 @@ async fn executable_serves_health_readiness_and_version() {
         let (http_reservation, port) = reserve_port();
         let (grpc_reservation, grpc_port) = reserve_port();
         assert_ne!(port, grpc_port);
-        let mut stderr = tempfile::tempfile().expect("owned smoke stderr");
+        let stderr = tempfile::tempfile().expect("owned smoke stderr");
         let mut command = smoke_command(port, grpc_port);
         command
             .env("DATABASE_URL", &database_url)
@@ -251,13 +251,21 @@ async fn executable_serves_health_readiness_and_version() {
         drop(grpc_reservation);
         let mut child = ChildGuard(command.spawn().expect("start issuance candidate"));
         let health = wait_for_health(port).await;
-        if let Some(failure) = terminal_startup_failure(&mut child.0, &mut stderr) {
+        if let Some(failure) = terminal_startup_failure(&mut child.0, &stderr) {
             if retries == 0 && failure.bind_collision {
                 retries += 1;
                 drop(child);
                 continue;
             }
             eprintln!("Issuance smoke startup failed: {}", failure.diagnostic);
+        } else if health.is_none() {
+            // A live but unhealthy child is never retried. Preserve the same
+            // actionable startup logs formerly inherited on stderr.
+            eprintln!(
+                "Issuance smoke unhealthy: {}",
+                bounded_startup_diagnostic(&stderr)
+                    .unwrap_or_else(|_| "<stderr unavailable>".into())
+            );
         }
         break (child, port, grpc_port, health);
     };

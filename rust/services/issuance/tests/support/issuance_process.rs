@@ -2,7 +2,6 @@
 //! Callers own any database and provider fixtures, and supply their explicit
 //! synthetic configuration to the isolated command before spawning it.
 use std::{
-    io::{Read, Seek},
     net::TcpListener,
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -39,7 +38,7 @@ pub(super) struct TerminalStartupFailure {
 
 pub(super) fn terminal_startup_failure(
     child: &mut Child,
-    stderr: &mut std::fs::File,
+    stderr: &std::fs::File,
 ) -> Option<TerminalStartupFailure> {
     let status = child.try_wait().ok().flatten()?;
     if status.success() {
@@ -52,11 +51,30 @@ pub(super) fn terminal_startup_failure(
     })
 }
 
-fn bounded_startup_diagnostic(stderr: &mut (impl Read + Seek)) -> std::io::Result<String> {
-    let length = stderr.seek(std::io::SeekFrom::End(0))?;
-    stderr.seek(std::io::SeekFrom::Start(length.saturating_sub(16 * 1024)))?;
-    let mut bytes = Vec::new();
-    stderr.take(16 * 1024).read_to_end(&mut bytes)?;
+/// Read a fixed-size snapshot without moving the child writer's shared file
+/// offset. This is also safe while an unhealthy child remains alive.
+pub(super) fn bounded_startup_diagnostic(stderr: &std::fs::File) -> std::io::Result<String> {
+    let length = stderr.metadata()?.len();
+    let start = length.saturating_sub(16 * 1024);
+    let mut bytes = vec![0; (length - start) as usize];
+    let mut filled = 0;
+    while filled < bytes.len() {
+        #[cfg(unix)]
+        let count = {
+            use std::os::unix::fs::FileExt;
+            stderr.read_at(&mut bytes[filled..], start + filled as u64)?
+        };
+        #[cfg(windows)]
+        let count = {
+            use std::os::windows::fs::FileExt;
+            stderr.seek_read(&mut bytes[filled..], start + filled as u64)?
+        };
+        if count == 0 {
+            break;
+        }
+        filled += count;
+    }
+    bytes.truncate(filled);
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -67,7 +85,7 @@ fn retryable_listener_bind_failure(terminal_failure: bool, diagnostic: &str) -> 
 #[cfg(test)]
 mod listener_bind_collision_tests {
     use super::{bounded_startup_diagnostic, retryable_listener_bind_failure};
-    use std::io::Cursor;
+    use std::io::Write;
 
     #[test]
     fn retries_only_terminal_addr_in_use() {
@@ -86,12 +104,32 @@ mod listener_bind_collision_tests {
 
     #[test]
     fn retains_bounded_tail_for_non_bind_failure() {
-        let mut bytes = vec![b'x'; 17 * 1024];
-        bytes.extend_from_slice(b"Error: database migration failed");
-        let diagnostic = bounded_startup_diagnostic(&mut Cursor::new(bytes)).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "marty-issuance-stderr-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let mut child_writer = file.try_clone().unwrap();
+        child_writer.write_all(&vec![b'x'; 17 * 1024]).unwrap();
+        child_writer
+            .write_all(b"Error: database migration failed")
+            .unwrap();
+        let diagnostic = bounded_startup_diagnostic(&file).unwrap();
         assert!(diagnostic.len() <= 16 * 1024);
         assert!(diagnostic.ends_with("Error: database migration failed"));
         assert!(!retryable_listener_bind_failure(true, &diagnostic));
+        child_writer.write_all(b"; writer remains at end").unwrap();
+        let later = bounded_startup_diagnostic(&file).unwrap();
+        assert!(later.ends_with("Error: database migration failed; writer remains at end"));
+        drop(child_writer);
+        drop(file);
+        std::fs::remove_file(path).unwrap();
     }
 }
 

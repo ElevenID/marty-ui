@@ -15,6 +15,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from scoped_d12_native_host import D12ReadOnlyHost
+from scoped_native_database import bounded_run
 from scoped_linux_journal import LinuxBuildJournal
 from scoped_native_runtime import daemon_source, read_executable_ref, read_ref, ref, require, sha
 from scoped_passport_maintenance import exact_roles, observed_role_state
@@ -22,6 +23,17 @@ from scoped_passport_successor import CURRENT_PROFILE
 from scoped_native_profiles import D12_PASSPORT_CURRENT
 
 LOCK_OWNER_SHA = "c4531f96157232ea4adc2a28e8822e3daa364d394e609a734820610c45760d89"
+
+RESOURCE_VERIFY_JS = r"""const fs=require('node:fs'),cp=require('node:child_process'),crypto=require('node:crypto');
+const [modulePath,moduleHash,profilePath,profileHash,dockerPath]=process.argv.slice(1);
+const digest=p=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+if(digest(modulePath)!==moduleHash||digest(profilePath)!==profileHash)throw Error('D12_RESOURCE_SOURCE_CHANGED');
+const runtime=require(modulePath),profile=JSON.parse(fs.readFileSync(profilePath));
+const readDocker=argv=>cp.execFileSync(dockerPath,['--context','desktop-linux',...argv],
+ {encoding:'utf8',env:process.env,timeout:150000,maxBuffer:1048576});
+const result=runtime.verifyFunctionalRuntime(profile,{qualification:'FUNCTIONAL_ONLY',readDocker});
+if(digest(modulePath)!==moduleHash||digest(profilePath)!==profileHash)throw Error('D12_RESOURCE_SOURCE_CHANGED');
+process.stdout.write(JSON.stringify(result));"""
 
 
 class D12HeldCanonicalLock:
@@ -252,7 +264,7 @@ class D12CurrentHostBindings:
 
     def __init__(self, host, *, inputs_ref, private_root, operation_journal,
                  build_journal, node_executable, docker_executable, docker_config, docker_config_refs,
-                 lock_lease=None):
+                 lock_lease=None, dispatch_permit_ref=None):
         require(type(host) is D12ReadOnlyHost and type(operation_journal) is LinuxBuildJournal
                 and type(build_journal) is LinuxBuildJournal,
                 "D12_REVIEWED_HOST_AND_JOURNALS_REQUIRED")
@@ -293,6 +305,23 @@ class D12CurrentHostBindings:
             {"SYSTEMROOT", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "COMSPEC", "PATHEXT"}}
         self.environment.update(PATH=";".join((str(self.docker.parent), "C:/Windows/System32")),
                                 DOCKER_CONFIG=str(config), DOCKER_CONTEXT="desktop-linux")
+        self.dispatch_permit_ref = dispatch_permit_ref
+        self.dispatch_permit = None
+        if dispatch_permit_ref is not None:
+            permit = json.loads(read_ref(dispatch_permit_ref, 65536).read_bytes())
+            require(permit.get("schema") == "marty.d12-current-dispatch-intent/v1"
+                    and permit.get("dispatchAuthorized") is True
+                    and permit.get("runId") == self.inputs.get("runId")
+                    and permit.get("scope") == "FUNCTIONAL_ONLY"
+                    and permit.get("releaseQualified") is False
+                    and permit.get("recordingQualified") is False
+                    and permit.get("inputs") == inputs_ref
+                    and permit.get("authority") == self.inputs.get("d12Authority")
+                    and permit.get("resourceProfile") == self.inputs.get("resourceProfile")
+                    and Path(dispatch_permit_ref["path"]).resolve().is_relative_to(
+                        Path.home() / ".codex/private"),
+                    "D12_EXACT_ROOT_DISPATCH_INTENT_REQUIRED")
+            self.dispatch_permit = permit
 
     def assert_inputs(self, *, rollback=False):
         require(rollback is False and json.loads(read_ref(self.inputs_ref).read_bytes()) == self.inputs,
@@ -306,6 +335,77 @@ class D12CurrentHostBindings:
                 "D12_DOCKER_CONFIG_CHANGED")
         for name, bound in self.config_refs.items():
             require(read_ref(bound).resolve() == Path(name).resolve(), "D12_DOCKER_CONFIG_FILE_CHANGED")
+        if self.dispatch_permit_ref is not None:
+            require(json.loads(read_ref(self.dispatch_permit_ref, 65536).read_bytes()) == self.dispatch_permit,
+                    "D12_DISPATCH_INTENT_CHANGED")
+        return True
+
+    @staticmethod
+    def _bind_resource_rows(result, frozen):
+        require(isinstance(result, dict) and result.get("scope") == "FUNCTIONAL_ONLY"
+                and result.get("releaseQualified") is False
+                and result.get("recordingQualified") is False
+                and isinstance(result.get("roles"), list),
+                "D12_ACTUAL_RESOURCE_RESULT_REQUIRED")
+        expected = exact_roles(frozen, CURRENT_PROFILE)
+        observed = exact_roles(result, CURRENT_PROFILE)
+        for role, old in expected.items():
+            row = observed[role]
+            require(all(row.get(key) == old.get(key) for key in
+                        ("containerId", "imageId", "project", "startedAt", "hostPid"))
+                    and row.get("health") == old.get("health"),
+                    "D12_RESOURCE28_AND_NATIVE22_DIVERGED:" + role)
+        return True
+
+    def authorization_verified(self, authority_ref):
+        if self.dispatch_permit is None:
+            return False
+        self.assert_inputs()
+        require(self.lock is not None and self.lock.held()
+                and authority_ref == self.inputs.get("d12Authority")
+                and self.dispatch_permit["authority"] == authority_ref,
+                "D12_ROOT_INTENT_AND_HELD_LOCK_REQUIRED")
+        profile_ref = self.dispatch_permit["resourceProfile"]
+        profile = json.loads(read_ref(profile_ref, 2 * 1024 * 1024).read_bytes())
+        require(profile.get("schema") == "marty.functional-mixed-runtime/v2"
+                and profile.get("scope") == "FUNCTIONAL_ONLY"
+                and profile.get("releaseQualified") is False
+                and profile.get("recordingQualified") is False
+                and isinstance(profile.get("resourceRestart"), dict),
+                "D12_EXACT_RESTART_RESOURCE_PROFILE_REQUIRED")
+        source_ref = self.inputs.get("functionalRuntimeModule")
+        require(isinstance(source_ref, dict) and
+                read_ref(source_ref).resolve() == self.host._root / "tests/scripts/functional-debug-runtime.js"
+                and source_ref["sha256"] == self.host._source_files.get(
+                    "tests/scripts/functional-debug-runtime.js", {}).get("sha256"),
+                "D12_RESOURCE_VERIFIER_SOURCE_REQUIRED")
+        require(read_ref(authority_ref, 65536).is_file(), "D12_EXACT_REVIEWED_AUTHORITY_REQUIRED")
+        frozen = json.loads(read_ref(self.inputs["runtimeBefore"]).read_bytes())
+        self.save("d12-resource28-request.private.json", {"runId": self.inputs["runId"],
+            "source": source_ref, "resourceProfile": profile_ref,
+            "runtimeBefore": self.inputs["runtimeBefore"], "scope": "FUNCTIONAL_ONLY"})
+        result = bounded_run([str(self.node), "-e", RESOURCE_VERIFY_JS,
+            source_ref["path"], source_ref["sha256"], profile_ref["path"],
+            profile_ref["sha256"], str(self.docker)], env=self.environment,
+            timeout=600, stdout_limit=1024 * 1024, stderr_limit=65536)
+        self.save_bytes("d12-resource28-stdout.private", result.stdout)
+        self.save_bytes("d12-resource28-stderr.private", result.stderr)
+        self.save("d12-resource28-terminal.private.json", {"exitCode": result.returncode,
+            "observation": result.observation})
+        require(type(result.returncode) is int and result.returncode == 0
+                and result.observation["timedOut"] is False
+                and not result.observation["failures"],
+                "D12_ACTUAL_RESOURCE28_VERIFIER_FAILED")
+        actual = json.loads(result.stdout)
+        self._bind_resource_rows(actual, frozen)
+        self.assert_inputs()
+        require(self.lock.held(), "D12_CANONICAL_LOCK_LOST_DURING_RESOURCE_READ")
+        read_ref(profile_ref, 2 * 1024 * 1024)
+        self.save("d12-resource28-bound.private.json", {"runId": self.inputs["runId"],
+            "source": source_ref, "resourceProfile": profile_ref,
+            "runtimeBefore": self.inputs["runtimeBefore"],
+            "full28AncillaryVerifiedByReviewedRuntime": True,
+            "actualRoleCount": len(actual["roles"]), "releaseQualified": False})
         return True
 
     def save_bytes(self, name, data):
@@ -361,10 +461,10 @@ class D12CurrentHostBindings:
     def context(self):
         # No caller-supplied booleans or forged database identity can promote
         # this source slice to an effect-capable D12 executor context.
-        return {"dispatch_enabled": False,
+        return {"dispatch_enabled": self.dispatch_permit is not None,
                 "operation_lock_held": lambda: self.lock is not None and self.lock.held(),
                 "recording_lock_held": lambda: self.lock is not None and self.lock.held(),
-                "authorization_verified": lambda _ref: False,
+                "authorization_verified": self.authorization_verified,
                 "observe22": self.observer.inspect_all22,
                 "inspect_all22": self.observer.inspect_all22,
                 "inspect_role": self.observer.inspect_role,

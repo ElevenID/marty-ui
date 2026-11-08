@@ -236,3 +236,82 @@ def test_owned_create_ack_rebinds_only_exact_three_cids_and_refuses_foreign_same
     foreign["id"] = "f" * 64
     with pytest.raises(ValueError, match="D12_EXACT_OWNED_INSPECTION_REQUIRED"):
         observer.inspect_role("flow")
+
+
+@pytest.mark.parametrize("change", [None, "cid", "image", "generation", "failed", "bool_exit", "lock", "lock_lost"])
+def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_path, monkeypatch, change):
+    binding, rows, _, inp, _ = setup_context(tmp_path, monkeypatch)
+    for row in rows["roles"]:
+        row.update(imageId="sha256:" + "a" * 64,
+                   project="elevenid-beta-ui" if row["role"] == "ui-prod" else "elevenid-beta",
+                   startedAt="2026-11-08T00:00:00Z")
+    private = tmp_path / ".codex" / "private"
+    runtime = tmp_path / "runtime-before.json"
+    runtime.write_text(json.dumps(rows))
+    authority = tmp_path / "authority.json"
+    authority.write_text("{}")
+    profile = private / "resource-profile.json"
+    profile.write_text(json.dumps({"schema": "marty.functional-mixed-runtime/v2",
+        "scope": "FUNCTIONAL_ONLY", "releaseQualified": False,
+        "recordingQualified": False, "resourceRestart": {}}))
+    module = Path(effect.__file__).resolve().parents[1] / "tests/scripts/functional-debug-runtime.js"
+    binding.host._source_files["tests/scripts/functional-debug-runtime.js"] = {
+        "sha256": ref(module)["sha256"]}
+    value = json.loads(inp.read_text())
+    value.update(d12Authority=ref(authority), runtimeBefore=ref(runtime),
+                 resourceProfile=ref(profile), functionalRuntimeModule=ref(module))
+    inp.write_text(json.dumps(value))
+    permit_path = private / "dispatch-permit.json"
+    permit = {"schema": "marty.d12-current-dispatch-intent/v1",
+              "dispatchAuthorized": True, "runId": value["runId"], "scope": "FUNCTIONAL_ONLY",
+              "releaseQualified": False, "recordingQualified": False,
+              "inputs": ref(inp), "authority": ref(authority), "resourceProfile": ref(profile)}
+    permit_path.write_text(json.dumps(permit))
+    lease = D12HeldCanonicalLock.__new__(D12HeldCanonicalLock)
+    live = {"held": change != "lock"}
+    lease.held = lambda: live["held"]
+    config = tmp_path / "docker-config"
+    meta = config / "meta.json"
+    owner = D12CurrentHostBindings(binding.host, inputs_ref=ref(inp),
+        private_root=private / "run", operation_journal=binding.store,
+        build_journal=binding.build_journal, node_executable=ref(tmp_path / "node.exe"),
+        docker_executable=ref(tmp_path / "docker.exe"), docker_config=config,
+        docker_config_refs={str(meta): ref(meta)}, lock_lease=lease,
+        dispatch_permit_ref=ref(permit_path))
+    assert owner.context()["dispatch_enabled"] is True
+    actual = deepcopy(rows)
+    if change == "cid":
+        actual["roles"][0]["containerId"] = "f" * 64
+    if change == "image":
+        actual["roles"][0]["imageId"] = "sha256:" + "f" * 64
+    if change == "generation":
+        actual["roles"][0]["startedAt"] = "2026-11-08T01:00:00Z"
+    class Result:
+        returncode = False if change == "bool_exit" else 1 if change == "failed" else 0
+        stdout = json.dumps({**actual, "scope": "FUNCTIONAL_ONLY",
+            "releaseQualified": False, "recordingQualified": False}).encode()
+        stderr = b""
+        observation = {"timedOut": False, "failures": []}
+    calls = []
+    def run(*args, **kwargs):
+        calls.append(args)
+        if change == "lock_lost":
+            live["held"] = False
+        return Result()
+    monkeypatch.setattr(effect, "bounded_run", run)
+    if change is None:
+        assert owner.context()["authorization_verified"](ref(authority)) is True
+        assert len(calls) == 1
+        assert (private / "run" / "d12-resource28-bound.private.json").is_file()
+    elif change == "lock":
+        with pytest.raises(ValueError, match="D12_ROOT_INTENT_AND_HELD_LOCK_REQUIRED"):
+            owner.context()["authorization_verified"](ref(authority))
+        assert calls == []
+    elif change == "lock_lost":
+        with pytest.raises(ValueError, match="D12_CANONICAL_LOCK_LOST_DURING_RESOURCE_READ"):
+            owner.context()["authorization_verified"](ref(authority))
+        assert not (private / "run" / "d12-resource28-bound.private.json").exists()
+    else:
+        with pytest.raises(ValueError, match="D12_ACTUAL_RESOURCE28_VERIFIER_FAILED|D12_RESOURCE28_AND_NATIVE22_DIVERGED"):
+            owner.context()["authorization_verified"](ref(authority))
+        assert not (private / "run" / "d12-resource28-bound.private.json").exists()
