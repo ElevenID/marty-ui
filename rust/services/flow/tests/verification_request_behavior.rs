@@ -1,3 +1,6 @@
+#[path = "support/presentation_snapshot.rs"]
+mod presentation_snapshot;
+
 use std::{
     collections::BTreeMap,
     sync::{
@@ -11,10 +14,11 @@ use chrono::{Duration, TimeZone, Utc};
 use marty_flow::{
     prepare_verification_request, CredentialTemplateProvider, CredentialTemplateReference,
     FlowInstanceRecord, FlowKeyEnvelopeProvider, FlowProviderError, FlowProviderRegistry,
-    PreparedVerificationRequest, PresentationEvaluationRequest, PresentationEvaluationResult,
-    PresentationPolicyProvider, PresentationPolicyReference, RequestObjectCompatibility,
-    SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult,
-    VerificationRequestMethod, VerificationRequestRetrievalOptions, VerificationRequestTransport,
+    FlowVerificationRequestError, PreparedVerificationRequest, PresentationEvaluationRequest,
+    PresentationEvaluationResult, PresentationPolicyProvider, PresentationPolicyReference,
+    RequestObjectCompatibility, SigningIdentity, SigningIdentityProvider, SigningRequest,
+    SigningResult, VerificationRequestMethod, VerificationRequestRetrievalOptions,
+    VerificationRequestTransport,
 };
 #[path = "support/haip_remote_fixture.rs"]
 mod haip_remote_fixture;
@@ -48,6 +52,7 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            policy_revision: presentation_snapshot::revision(policy_id),
             id: policy_id.into(),
             organization_id: "org-1".into(),
             status: "active".into(),
@@ -168,7 +173,7 @@ fn now() -> chrono::DateTime<Utc> {
 }
 
 fn instance() -> FlowInstanceRecord {
-    FlowInstanceRecord {
+    let mut instance = FlowInstanceRecord {
         id: "instance-1".into(),
         flow_definition_id: "definition-1".into(),
         organization_id: "org-1".into(),
@@ -196,7 +201,64 @@ fn instance() -> FlowInstanceRecord {
         error: None,
         created_at: now(),
         updated_at: now(),
+    };
+    presentation_snapshot::freeze_default(&mut instance);
+    instance
+}
+
+#[tokio::test]
+async fn unfrozen_legacy_requests_require_restart_and_corrupt_snapshots_never_sign() {
+    let signing = Arc::new(Signing::default());
+    let ports = providers(signing.clone());
+    let mut legacy = instance();
+    legacy
+        .context
+        .as_object_mut()
+        .unwrap()
+        .remove(presentation_snapshot::SNAPSHOT_KEY);
+    assert!(matches!(
+        prepare_verification_request(
+            &ports,
+            legacy,
+            "https://verifier.example",
+            &Default::default(),
+            now()
+        )
+        .await,
+        Err(FlowVerificationRequestError::RestartRequired)
+    ));
+    for mutation in 0..6 {
+        let mut altered = instance();
+        match mutation {
+            0 => altered.organization_id = "other-org".into(),
+            1 => altered.id = "other-instance".into(),
+            2 => altered.context["presentation_policy_id"] = json!("other-policy"),
+            3 => altered.context["nonce"] = json!("other-nonce"),
+            4 => {
+                altered.context[presentation_snapshot::SNAPSHOT_KEY]["dcql_query"]["credentials"] =
+                    json!([])
+            }
+            _ => {
+                altered.context[presentation_snapshot::SNAPSHOT_KEY]["policy_revision"]["version"] =
+                    json!(0)
+            }
+        }
+        assert!(
+            matches!(
+                prepare_verification_request(
+                    &ports,
+                    altered,
+                    "https://verifier.example",
+                    &Default::default(),
+                    now()
+                )
+                .await,
+                Err(FlowVerificationRequestError::InvalidContext)
+            ),
+            "mutation {mutation}"
+        );
     }
+    assert_eq!(signing.resolutions.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

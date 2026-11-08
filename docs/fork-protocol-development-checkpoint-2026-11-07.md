@@ -39,7 +39,7 @@ registered; it should not be recreated as unfinished W01 work.
 
 | Work package | Current development | Completion boundary |
 | --- | --- | --- |
-| W05 — verified prerequisites before issuance | Atomic revalidation of the admitted transaction and live access/session authority at the signing claim | Foundation for the workflow; canonical prerequisite evidence and continuation policy are still required |
+| W05 — verified prerequisites before issuance | Atomic signing authority revalidation, frozen Flow requests and authoritative policy-revision checks | Foundations for the workflow; native query-bound prerequisite evidence and issuance continuation are still required |
 | W14 — verified wallets | Reconcile existing [Authenticator PR 57](https://github.com/ElevenID/marty-authenticator/pull/57) with the merged fork foundation, current APIs and verified receipt/presentation contracts | Source integration and tests; external wallet activation and release qualification remain open |
 
 ### W05: current signing authorization boundary
@@ -67,6 +67,23 @@ This change does not introduce canonical prerequisite evaluation, persist a
 proof-to-subject/dataset continuation, or atomically check a prerequisite policy
 revision. In particular, the existing asynchronous Canvas readiness check does
 not establish that broader policy guarantee.
+
+### W05: policy and request binding continuation
+
+Flow now freezes the saved policy reference and generated Presentation Exchange
+and DCQL artifacts at session start. Retrieval uses those artifacts; evaluation
+requires the same policy reference from the policy-owned producer. A final
+repository comparison rejects a result if the stored request context changed
+while evaluation was running, with nonce consumption and callback insertion
+rolled back together. The validated reference is retained in the result and
+callback decision digest.
+
+[Policy-bound verification](policy-bound-verification.md) describes the service
+contract, coordinated deployment, workload mutual TLS, legacy-session restart
+behavior and validation. Native satisfaction of the exact query and a
+production authenticated subject/key projection remain unfinished. No result
+in this slice grants a single-use issuance continuation or locks a remote policy
+revision through credential signing.
 
 ### W14: current verified-wallet integration
 
@@ -98,10 +115,11 @@ of existing checked-in WASM artifacts does not qualify a new-fork build.
 
 1. Finish review and exact-commit gates for the signing boundary and wallet
    integration. Resolve failures; do not bypass protected merge or release rules.
-2. Define the small shared W05 evidence/continuation contract. Bind the verified
-   subject and prerequisite evidence to the tenant, issuing template, exact
-   dataset and policy revision, with single-use continuation and expiry. The
-   final authorization must be revalidated at the signing boundary.
+2. Connect the existing W05 evidence contract to native query satisfaction and
+   authenticated issuer-scoped subject/holder-key evidence. Bind that evidence
+   to the tenant, issuing template, exact dataset and saved policy reference
+   through an issuance-owned single-use continuation and expiry. Revalidate and
+   consume that authority at the signing boundary.
 3. Implement the selected W04 request/client authentication profile and recipient
    consent required by W14. Reject unsupported security parameters explicitly.
 4. Complete the first prerequisite-to-issuance workflow against one selected
@@ -151,11 +169,12 @@ conditions in their descriptions.
   The restored source tree was checked against every reviewed file hash before
   publication; its tree is `e06e5cb730d180d0476ed814952557f8a1e56bf5`.
 - The earlier automatic publication-review pause is resolved by that explicit
-  approval. The branch is intended for a draft PR; actual PostgreSQL execution
+  approval. [Draft PR 1845](https://github.com/ElevenID/marty-ui/pull/1845) is
+  open; actual PostgreSQL execution
   remains a required CI gate before merge. Protected merge and release rules
   continue to apply.
-- The next development slice binds the saved policy revision and exact generated
-  presentation request to the live Flow verification session and evaluator
-  response. It reuses the existing OID4VP contract and canonical digest owner.
+- The continuation adds saved-policy identity, frozen generated requests and
+  original-instance finalization to the same W05 PR. It reuses the existing
+  OID4VP contract and canonical digest owner.
   Authenticated subject/key evidence and issuance-owned single-use continuation
   remain subsequent work; a passed decision alone cannot authorize issuance.

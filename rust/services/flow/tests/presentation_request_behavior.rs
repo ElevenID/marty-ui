@@ -1,3 +1,6 @@
+#[path = "support/presentation_snapshot.rs"]
+mod presentation_snapshot;
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -37,6 +40,7 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            policy_revision: presentation_snapshot::revision(policy_id),
             id: policy_id.into(),
             organization_id: self.organization_id.into(),
             status: "ACTIVE".into(),

@@ -1206,7 +1206,9 @@ impl From<FlowProviderError> for FlowHttpError {
             FlowProviderError::Rejected { .. } if reference_validation => StatusCode::BAD_REQUEST,
             FlowProviderError::Rejected { .. } => StatusCode::FORBIDDEN,
             FlowProviderError::NotFound { .. } => StatusCode::NOT_FOUND,
-            FlowProviderError::Conflict { .. } => StatusCode::CONFLICT,
+            FlowProviderError::Conflict { .. } | FlowProviderError::PolicyRevisionMismatch => {
+                StatusCode::CONFLICT
+            }
             FlowProviderError::InvalidResponse { .. }
             | FlowProviderError::Unavailable { .. }
             | FlowProviderError::Missing(_) => StatusCode::SERVICE_UNAVAILABLE,

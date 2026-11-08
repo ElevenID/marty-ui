@@ -1,3 +1,6 @@
+#[path = "support/presentation_snapshot.rs"]
+mod presentation_snapshot;
+
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -29,6 +32,7 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            policy_revision: presentation_snapshot::revision(policy_id),
             id: policy_id.into(),
             organization_id: "org-1".into(),
             status: "active".into(),
@@ -85,7 +89,7 @@ fn instance(callback: bool) -> FlowInstanceRecord {
     if callback {
         context["callback_url"] = json!("https://callbacks.example/flows/abcdefghijklmnop");
     }
-    FlowInstanceRecord {
+    let mut instance = FlowInstanceRecord {
         id: "abcdefghijklmnop".into(),
         flow_definition_id: "definition-1".into(),
         organization_id: "org-1".into(),
@@ -105,7 +109,14 @@ fn instance(callback: bool) -> FlowInstanceRecord {
         error: None,
         created_at: now(),
         updated_at: now(),
-    }
+    };
+    presentation_snapshot::freeze_default(&mut instance);
+    presentation_snapshot::emit_query(
+        &mut instance,
+        "dcql_query",
+        json!({"credentials": [{"id": "member"}]}),
+    );
+    instance
 }
 
 fn with_emitted_query(
@@ -113,17 +124,13 @@ fn with_emitted_query(
     field: &str,
     query: Value,
 ) -> FlowInstanceRecord {
-    let mut payload = json!({
-        "nonce": "nonce-with-at-least-32-bytes-1234567890",
-        "client_id": "did:web:verifier.example"
-    });
-    payload[field] = query;
-    instance.context["mip_messages"]["presentation_request"] = json!({"payload": payload});
+    presentation_snapshot::emit_query(&mut instance, field, query);
     instance
 }
 
 fn allowed() -> PresentationEvaluationResult {
     PresentationEvaluationResult {
+        policy_revision: presentation_snapshot::revision("policy-1"),
         authentication_diagnostic: None,
         result: "passed".into(),
         decision: "allow".into(),
@@ -188,6 +195,154 @@ fn input(token: &str) -> VerificationSubmissionInput {
 }
 
 #[tokio::test]
+async fn legacy_or_changed_request_authority_fails_before_policy_evaluation() {
+    let (ports, seen) = providers(Ok(allowed()));
+    let mut legacy = instance(false);
+    legacy
+        .context
+        .as_object_mut()
+        .unwrap()
+        .remove(presentation_snapshot::SNAPSHOT_KEY);
+    assert!(matches!(
+        prepare_verification_submission(
+            &ports,
+            legacy,
+            input("header.payload.signature"),
+            &options(None),
+            now()
+        )
+        .await,
+        Err(FlowVerificationSubmissionError::RestartRequired)
+    ));
+    for mutation in 0..5 {
+        let mut altered = instance(false);
+        match mutation {
+            0 => altered.organization_id = "other-org".into(),
+            1 => altered.id = "other-instance".into(),
+            2 => altered.context["presentation_policy_id"] = json!("other-policy"),
+            3 => {
+                altered.context["mip_messages"]["presentation_request"]["payload"]["dcql_query"] =
+                    json!({"credentials": [{"id": "other"}]})
+            }
+            _ => {
+                altered
+                    .context
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("mip_messages");
+            }
+        }
+        assert!(
+            matches!(
+                prepare_verification_submission(
+                    &ports,
+                    altered,
+                    input("header.payload.signature"),
+                    &options(None),
+                    now()
+                )
+                .await,
+                Err(FlowVerificationSubmissionError::InvalidContext(_))
+            ),
+            "mutation {mutation}"
+        );
+    }
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn evaluator_revision_must_match_before_nonce_or_callback_finalization_is_prepared() {
+    for mutation in 0..4 {
+        let mut evaluated = allowed();
+        match mutation {
+            0 => evaluated.policy_revision.version += 1,
+            1 => evaluated.policy_revision.content_digest = format!("sha256:{}", "b".repeat(64)),
+            2 => evaluated.policy_revision.id = "other-policy".into(),
+            _ => evaluated.policy_revision.content_digest.clear(),
+        }
+        let (ports, seen) = providers(Ok(evaluated));
+        assert!(
+            matches!(
+                prepare_verification_submission(
+                    &ports,
+                    instance(true),
+                    input("header.payload.signature"),
+                    &options(Some("0123456789abcdef0123456789abcdef")),
+                    now()
+                )
+                .await,
+                Err(FlowVerificationSubmissionError::PolicyRevisionMismatch)
+            ),
+            "mutation {mutation}"
+        );
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].expected_policy_revision,
+            presentation_snapshot::revision("policy-1")
+        );
+    }
+}
+
+#[tokio::test]
+async fn producer_stale_revision_rejection_requires_restart_without_finalization() {
+    let (ports, seen) = providers(Err(FlowProviderError::PolicyRevisionMismatch));
+    assert!(matches!(
+        prepare_verification_submission(
+            &ports,
+            instance(true),
+            input("header.payload.signature"),
+            &options(Some("0123456789abcdef0123456789abcdef")),
+            now()
+        )
+        .await,
+        Err(FlowVerificationSubmissionError::PolicyRevisionMismatch)
+    ));
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn callback_decision_digest_binds_the_validated_policy_revision() {
+    let mut digests = Vec::new();
+    for version in [1, 2] {
+        let mut current = instance(true);
+        let mut evaluated = allowed();
+        evaluated.policy_revision.version = version;
+        evaluated.policy_revision.content_digest =
+            format!("sha256:{}", version.to_string().repeat(64));
+        current.context[presentation_snapshot::SNAPSHOT_KEY]["policy_revision"] =
+            json!(evaluated.policy_revision);
+        let revision = evaluated.policy_revision.clone();
+        let (ports, _) = providers(Ok(evaluated));
+        let PreparedVerificationSubmission::Final(prepared) = prepare_verification_submission(
+            &ports,
+            current,
+            input("header.payload.signature"),
+            &options(Some("0123456789abcdef0123456789abcdef")),
+            now(),
+        )
+        .await
+        .unwrap() else {
+            panic!("validated callback expected")
+        };
+        let mut payload = prepared.callback.unwrap().payload;
+        assert_eq!(payload["policy_revision"], json!(revision));
+        let digest = payload
+            .as_object_mut()
+            .unwrap()
+            .remove("decision_digest")
+            .unwrap();
+        assert_eq!(digest, json!(mmf_push::payload_digest(&payload).unwrap()));
+        assert!(!payload.to_string().contains("dcql_query"));
+        assert!(!payload
+            .to_string()
+            .contains(presentation_snapshot::SNAPSHOT_KEY));
+        digests.push(digest);
+    }
+    assert_ne!(digests[0], digests[1]);
+}
+
+#[tokio::test]
 async fn emitted_query_and_submission_structure_reach_policy_without_new_verdict() {
     let query = json!({"id": "definition-1", "input_descriptors": [{"id": "member"}]});
     let instance = with_emitted_query(instance(false), "presentation_definition", query.clone());
@@ -227,6 +382,14 @@ async fn emitted_query_and_submission_structure_reach_policy_without_new_verdict
     );
     transport.validate_transport().unwrap();
     assert_eq!(requests[0].presentation, "header.payload.signature");
+    assert_eq!(
+        requests[0].expected_policy_revision,
+        presentation_snapshot::revision("policy-1")
+    );
+    assert_eq!(
+        finalization.instance.result.as_ref().unwrap()["policy_revision"],
+        json!(requests[0].expected_policy_revision)
+    );
 }
 
 #[tokio::test]
@@ -287,7 +450,7 @@ async fn dc_api_preserves_legacy_empty_audience_while_carrying_emitted_client_id
 }
 
 #[tokio::test]
-async fn oversized_legacy_submission_keeps_existing_verdict_without_transport_claim() {
+async fn oversized_submission_cannot_drop_frozen_query_binding() {
     let instance = with_emitted_query(
         instance(false),
         "dcql_query",
@@ -299,18 +462,11 @@ async fn oversized_legacy_submission_keeps_existing_verdict_without_transport_cl
         "legacy_extension": "x".repeat(marty_oid4vp_contract::MAX_WALLET_SUBMISSION_BYTES)
     }));
     let (providers, seen) = providers(Ok(allowed()));
-    let PreparedVerificationSubmission::Final(finalization) =
-        prepare_verification_submission(&providers, instance, wallet, &options(None), now())
-            .await
-            .unwrap()
-    else {
-        panic!("legacy result must remain available")
-    };
-    assert_eq!(
-        finalization.instance.result.as_ref().unwrap()["decision"],
-        "allow"
-    );
-    assert!(seen.lock().unwrap()[0].oid4vp_transport.is_none());
+    assert!(matches!(
+        prepare_verification_submission(&providers, instance, wallet, &options(None), now()).await,
+        Err(FlowVerificationSubmissionError::InvalidPresentationSubmission)
+    ));
+    assert!(seen.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -334,8 +490,7 @@ async fn malformed_recorded_query_cannot_be_promoted_to_transport_metadata() {
     ));
     assert!(seen.lock().unwrap().is_empty());
 
-    // Unlike an absent historical request, a contradictory persisted request
-    // is a producer-state error and now fails before legacy evaluation.
+    // A contradictory persisted request fails before evaluation.
     let mut ambiguous = with_emitted_query(
         instance(false),
         "dcql_query",
@@ -390,9 +545,10 @@ async fn language_neutral_allow_contract_scrubs_evidence_and_builds_atomic_outpu
     };
 
     assert_eq!(
-        finalization.expected_status,
+        finalization.expected_instance.status,
         FlowInstanceStatus::AwaitingWallet
     );
+    assert_eq!(finalization.expected_instance, instance(true));
     assert_eq!(finalization.instance.status, FlowInstanceStatus::Completed);
     assert_eq!(
         finalization.instance.result.as_ref().unwrap()["decision"],

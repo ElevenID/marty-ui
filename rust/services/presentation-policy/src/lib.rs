@@ -8,6 +8,7 @@ pub mod grpc_service;
 pub mod http_service;
 pub mod native_kernel;
 pub mod persistence;
+pub mod policy_revision;
 pub mod postgres;
 pub mod runtime;
 pub mod verification;
@@ -36,6 +37,7 @@ pub use http_service::{
 };
 pub use native_kernel::{ResolvingCredentialKernel, RustCredentialKernel};
 pub use persistence::{PolicyRecord, PolicyRecordError, PRESENTATION_POLICY_MIGRATION};
+pub use policy_revision::policy_revision;
 pub use postgres::{
     migrate_presentation_policy_schema, validate_presentation_policy_schema, PostgresPolicyStore,
     PostgresPolicyStoreError,

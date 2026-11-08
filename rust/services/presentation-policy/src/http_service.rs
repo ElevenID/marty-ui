@@ -574,14 +574,19 @@ fn evaluate_verified_material_for_policy(
     let output = evaluate_verified_facts_json(&policy_facts.to_string()).map_err(domain_error)?;
     let native: Value = serde_json::from_str(&output)
         .map_err(|_| service_unavailable("PRESENTATION_POLICY.INVALID_NATIVE_RESULT"))?;
-    Ok(project_evaluation(
+    let mut result = project_evaluation(
         native,
         request,
         &policy_facts,
         authentication_diagnostic.as_ref(),
         authenticated_outer_jti.as_deref(),
         authenticated_issuer.as_ref(),
-    ))
+    );
+    // The reference comes from the saved policy used above, never from request
+    // context, verifier facts or the native result's self-reported identity.
+    result["policy_revision"] = crate::policy_revision::policy_revision_value(policy)
+        .map_err(|_| service_unavailable("PRESENTATION_POLICY.INVALID_POLICY_REVISION"))?;
+    Ok(result)
 }
 
 fn build_policy(

@@ -12,8 +12,9 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 use crate::{
-    public_context, public_status, CallbackEvent, FlowInstanceRecord, FlowProviderError,
-    FlowProviderRegistry, FlowRecordError, PresentationEvaluationRequest,
+    presentation_request::{load_frozen_flow_presentation_request, FrozenFlowPresentationRequest},
+    public_context, public_status, CallbackEvent, FlowInstanceRecord, FlowPresentationRequestError,
+    FlowProviderError, FlowProviderRegistry, FlowRecordError, PresentationEvaluationRequest,
     PresentationEvaluationResult, VerificationResultResponse,
 };
 
@@ -38,7 +39,7 @@ pub struct VerificationSubmissionOptions {
 #[derive(Clone, Debug)]
 pub struct PreparedVerificationFinalization {
     pub instance: FlowInstanceRecord,
-    pub expected_status: FlowInstanceStatus,
+    pub expected_instance: FlowInstanceRecord,
     pub nonce_digest: String,
     pub replay_expires_at_ms: u64,
     pub callback: Option<Message>,
@@ -73,6 +74,10 @@ pub enum FlowVerificationSubmissionError {
     InvalidState,
     #[error("FLOW.VERIFICATION_SUBMISSION_INVALID_CONTEXT: {0}")]
     InvalidContext(&'static str),
+    #[error("FLOW.VERIFICATION_RESTART_REQUIRED: start a new verification request")]
+    RestartRequired,
+    #[error("FLOW.VERIFICATION_POLICY_REVISION_MISMATCH: start a new verification request")]
+    PolicyRevisionMismatch,
     #[error("FLOW.VERIFICATION_SUBMISSION_STATE_MISMATCH")]
     StateMismatch,
     #[error("FLOW.VERIFICATION_SUBMISSION_INVALID_PRESENTATION_SUBMISSION")]
@@ -184,7 +189,7 @@ pub async fn prepare_verification_submission(
     ) {
         return Err(FlowVerificationSubmissionError::InvalidState);
     }
-    let expected_status = instance.status;
+    let expected_instance = instance.clone();
     let context = instance
         .context
         .as_object()
@@ -200,6 +205,12 @@ pub async fn prepare_verification_submission(
     }
     let nonce = required_context_string(context, "nonce")?.to_owned();
     let policy_id = required_context_string(context, "presentation_policy_id")?.to_owned();
+    let frozen = load_frozen_flow_presentation_request(&instance).map_err(|error| match error {
+        FlowPresentationRequestError::FrozenRequestMissing => {
+            FlowVerificationSubmissionError::RestartRequired
+        }
+        _ => FlowVerificationSubmissionError::InvalidContext("frozen_presentation_request"),
+    })?;
     let principal_id =
         required_context_string(context, "_marty_verification_principal_id")?.to_owned();
     let audience = input
@@ -210,8 +221,12 @@ pub async fn prepare_verification_submission(
         .to_owned();
     let presentation_submission = parse_presentation_submission(input.presentation_submission)?;
     let raw_vp_token = input.vp_token;
-    let oid4vp_transport =
-        evaluation_transport(context, presentation_submission.as_ref(), &raw_vp_token)?;
+    let oid4vp_transport = evaluation_transport(
+        context,
+        &frozen,
+        presentation_submission.as_ref(),
+        &raw_vp_token,
+    )?;
     let vp_token = select_vp_token(&raw_vp_token);
     let mut evaluation_context = BTreeMap::new();
     if context
@@ -270,11 +285,12 @@ pub async fn prepare_verification_submission(
                 .evaluate(&PresentationEvaluationRequest {
                     policy_id: policy_id.clone(),
                     organization_id: instance.organization_id.clone(),
+                    expected_policy_revision: frozen.policy_revision.clone(),
                     principal_id,
                     presentation: vp_token.clone(),
                     nonce: nonce.clone(),
                     audience: audience.clone(),
-                    oid4vp_transport,
+                    oid4vp_transport: Some(oid4vp_transport),
                     context: evaluation_context,
                 })
                 .await
@@ -296,6 +312,9 @@ pub async fn prepare_verification_submission(
                 now,
             ));
         }
+        Err(FlowProviderError::PolicyRevisionMismatch) => {
+            return Err(FlowVerificationSubmissionError::PolicyRevisionMismatch);
+        }
         Err(error) => {
             tracing::warn!(
                 flow_instance_id = %instance.id,
@@ -311,6 +330,14 @@ pub async fn prepare_verification_submission(
             ));
         }
     };
+    // A successful credential check under another policy revision cannot
+    // authorize this session. Check before any result, nonce or callback is
+    // prepared for the repository's finalization transaction.
+    if evaluation.policy_revision.validate().is_err()
+        || evaluation.policy_revision != frozen.policy_revision
+    {
+        return Err(FlowVerificationSubmissionError::PolicyRevisionMismatch);
+    }
     let authenticated = !evaluation.credential_results.is_empty()
         && evaluation
             .credential_results
@@ -400,6 +427,7 @@ pub async fn prepare_verification_submission(
         now,
     );
     instance.result = Some(json!({
+        "policy_revision": evaluation.policy_revision,
         "evaluation_result": evaluation.result,
         "decision": evaluation.decision,
         "decision_reason": evaluation.decision_reason,
@@ -427,7 +455,7 @@ pub async fn prepare_verification_submission(
     Ok(PreparedVerificationSubmission::Final(Box::new(
         PreparedVerificationFinalization {
             instance,
-            expected_status,
+            expected_instance,
             nonce_digest: sha256_hex(nonce.as_bytes()),
             replay_expires_at_ms,
             callback,
@@ -520,22 +548,24 @@ fn parse_presentation_submission(
 
 fn evaluation_transport(
     context: &Map<String, Value>,
+    frozen: &FrozenFlowPresentationRequest,
     submission: Option<&Value>,
     vp_token_raw: &str,
-) -> Result<Option<Oid4vpEvaluationTransportV1>, FlowVerificationSubmissionError> {
+) -> Result<Oid4vpEvaluationTransportV1, FlowVerificationSubmissionError> {
     if context.get("oid4vp_verifier_context") != Some(&Value::Bool(true)) {
-        return Ok(None);
+        return Err(FlowVerificationSubmissionError::InvalidContext(
+            "presentation_request",
+        ));
     }
-    // Only the request actually emitted and retained by Flow is authoritative.
-    // Legacy records lacking that request keep their current evaluation path;
-    // malformed recorded requests are not silently promoted to metadata.
-    let Some(message) = context
+    // The emitted request must contain one of the exact Core artifacts frozen
+    // with this policy. Public message projections are not authority alone.
+    let message = context
         .get("mip_messages")
         .and_then(Value::as_object)
         .and_then(|messages| messages.get("presentation_request"))
-    else {
-        return Ok(None);
-    };
+        .ok_or(FlowVerificationSubmissionError::InvalidContext(
+            "presentation_request",
+        ))?;
     let payload = message.get("payload").and_then(Value::as_object).ok_or(
         FlowVerificationSubmissionError::InvalidContext("presentation_request"),
     )?;
@@ -564,6 +594,11 @@ fn evaluation_transport(
             ))
         }
     };
+    if !frozen.matches_query(query_kind, query_document) {
+        return Err(FlowVerificationSubmissionError::InvalidContext(
+            "presentation_request_query",
+        ));
+    }
     let transport = Oid4vpEvaluationTransportV1 {
         query_kind,
         query_document: query_document.clone(),
@@ -587,19 +622,15 @@ fn evaluation_transport(
             ))?
             .into(),
     };
-    match transport.validate_transport() {
-        Ok(()) => {}
-        // Existing accepted payloads can exceed the narrower canonical
-        // transport limits. Keep their legacy policy path, but expose no
-        // transport metadata that a future signed-VP route could accept.
-        Err(marty_oid4vp_contract::Oid4vpContractError::SizeLimit(_)) => return Ok(None),
-        Err(_) => {
-            return Err(FlowVerificationSubmissionError::InvalidContext(
-                "presentation_request_query",
-            ));
-        }
-    }
-    Ok(Some(transport))
+    transport
+        .validate_transport()
+        .map_err(|error| match error {
+            marty_oid4vp_contract::Oid4vpContractError::SizeLimit(
+                "presentation_submission" | "vp_token_raw",
+            ) => FlowVerificationSubmissionError::InvalidPresentationSubmission,
+            _ => FlowVerificationSubmissionError::InvalidContext("presentation_request_query"),
+        })?;
+    Ok(transport)
 }
 
 fn select_vp_token(raw: &str) -> String {
@@ -902,6 +933,9 @@ fn build_callback(
         .get("credential_results")
         .cloned()
         .unwrap_or_else(|| json!([]));
+    let policy_revision = result
+        .get("policy_revision")
+        .ok_or(FlowVerificationSubmissionError::Serialization)?;
     let mut payload = json!({
         "flow_instance_id": instance.id,
         "result": result.get("evaluation_result"),
@@ -909,6 +943,7 @@ fn build_callback(
         "decision_reason": result.get("decision_reason"),
         "verified_claims": result.get("verified_claims"),
         "presentation_policy_id": policy_id,
+        "policy_revision": policy_revision,
         "completed_at": instance.completed_at.map(|value| value.to_rfc3339()),
         "evidence_digest": payload_digest(&json!({"credential_results": credential_results}))
             .map_err(|_| FlowVerificationSubmissionError::Serialization)?
@@ -997,6 +1032,11 @@ mod tests {
     #[test]
     fn authentication_failure_diagnostic_excludes_claims_tokens_and_warning_text() {
         let evaluation = PresentationEvaluationResult {
+            policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity {
+                id: "policy-1".into(),
+                version: 1,
+                content_digest: format!("sha256:{}", "a".repeat(64)),
+            },
             authentication_diagnostic: None,
             result: "failed".into(),
             decision: "deny".into(),

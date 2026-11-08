@@ -925,7 +925,7 @@ def test_verified_rust_test_leaves_select_owned_unit_or_contracts_not_runtime(
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 14
+    assert verified[-1] == b"" and len(verified) == 15
     leaves = [value.decode("utf-8") for value in verified[:-1]]
     unit_leaves = [
         "rust/services/issuance/src/canvas_operation_http_prepared_tests.rs",
@@ -944,8 +944,9 @@ def test_verified_rust_test_leaves_select_owned_unit_or_contracts_not_runtime(
     ]
     assert set(unit_leaves) <= set(leaves)
     assert "rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs" in leaves
-    assert leaves[-2:] == [
+    assert leaves[-3:] == [
         "rust/crates/oid4vp-contract/tests/contract_vectors.rs",
+        "rust/crates/oid4vp-contract/tests/policy_revision.rs",
         "rust/crates/oid4vp-contract/tests/transport_metadata.rs",
     ]
     nested = (

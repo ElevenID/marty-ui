@@ -72,6 +72,20 @@ impl PolicyAuthorization for Authorization {
 
 struct VerifiedFacts;
 
+struct CountedVerifiedFacts(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait]
+impl PresentationVerificationOrchestrator for CountedVerifiedFacts {
+    async fn verify(
+        &self,
+        policy: &PresentationPolicy,
+        request: &EvaluatePresentationRequest,
+    ) -> Result<Value, PresentationVerificationError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        VerifiedFacts.verify(policy, request).await
+    }
+}
+
 #[async_trait]
 impl PresentationVerificationOrchestrator for VerifiedFacts {
     async fn verify(
@@ -177,12 +191,13 @@ async fn principal_authenticated_fallback_cannot_supply_workload_oid4vp_transpor
         .await
         .unwrap()
         .into_inner();
-    service
+    let active = service
         .activate_policy(authenticated(PolicyIdRequest {
             policy_id: policy.id.clone(),
         }))
         .await
-        .unwrap();
+        .unwrap()
+        .into_inner();
     let error = service
         .evaluate_presentation(authenticated(EvaluatePresentationMessage {
             policy_id: policy.id.clone(),
@@ -198,6 +213,7 @@ async fn principal_authenticated_fallback_cannot_supply_workload_oid4vp_transpor
     let legacy = service
         .evaluate_presentation(authenticated(EvaluatePresentationMessage {
             policy_id: policy.id,
+            expected_policy_revision: active.policy_revision,
             vp_token: "header.payload.signature".into(),
             nonce: "nonce-1".into(),
             audience: "verifier-1".into(),
@@ -286,6 +302,7 @@ async fn all_ten_grpc_methods_use_shared_native_behavior_and_security() {
     let evaluated = service
         .evaluate_presentation(authenticated(EvaluatePresentationMessage {
             policy_id: policy_id.clone(),
+            expected_policy_revision: active.policy_revision.clone(),
             vp_token: "header.payload.signature".into(),
             nonce: "challenge-1".into(),
             audience: "https://verifier.example".into(),
@@ -297,6 +314,7 @@ async fn all_ten_grpc_methods_use_shared_native_behavior_and_security() {
         .into_inner();
     assert_eq!(evaluated.decision, "allow");
     assert_eq!(evaluated.nonce, "challenge-1");
+    assert_eq!(evaluated.policy_revision, active.policy_revision);
     let claims: Value = serde_json::from_str(&evaluated.verified_claims_json).unwrap();
     assert_eq!(claims["email"], "member@example.com");
 
@@ -406,4 +424,157 @@ async fn exact_internal_operations_use_service_auth_while_management_requires_a_
         .await
         .unwrap_err();
     assert_eq!(unauthenticated.code(), Code::Unauthenticated);
+}
+
+#[tokio::test]
+async fn saved_revision_mismatch_fails_before_verification_and_matching_result_is_authoritative() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let organization_id = Uuid::new_v4();
+    let repository = Arc::new(Repository::default());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let service = PresentationPolicyGrpcService::new(
+        Arc::new(PolicyApplication::new(
+            repository.clone(),
+            Arc::new(Authorization(organization_id)),
+        )),
+        Arc::new(CountedVerifiedFacts(calls.clone())),
+        Some(TOKEN.into()),
+        true,
+    )
+    .unwrap();
+    let created = service
+        .create_policy(authenticated(create_request(organization_id)))
+        .await
+        .unwrap()
+        .into_inner();
+    let active = service
+        .activate_policy(authenticated(PolicyIdRequest {
+            policy_id: created.id.clone(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let revision = active.policy_revision.clone().unwrap();
+    let request = EvaluatePresentationMessage {
+        policy_id: active.id.clone(),
+        vp_token: "header.payload.signature".into(),
+        nonce: "revision-challenge".into(),
+        audience: "https://verifier.example".into(),
+        expected_policy_revision: Some(revision.clone()),
+        // Untrusted context must not replace the authoritative output revision.
+        context_json: json!({"policy_revision": {"id": "attacker"}}).to_string(),
+        ..EvaluatePresentationMessage::default()
+    };
+
+    let mut missing = request.clone();
+    missing.expected_policy_revision = None;
+    assert_eq!(
+        service
+            .evaluate_presentation(authenticated(missing))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::InvalidArgument
+    );
+
+    for mutation in 0..4 {
+        let mut altered = request.clone();
+        let expected = altered.expected_policy_revision.as_mut().unwrap();
+        match mutation {
+            0 => expected.organization_id = Uuid::new_v4().to_string(),
+            1 => expected.id = Uuid::new_v4().to_string(),
+            2 => expected.version += 1,
+            _ => expected.content_digest = format!("sha256:{}", "0".repeat(64)),
+        }
+        assert_eq!(
+            service
+                .evaluate_presentation(authenticated(altered))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::FailedPrecondition
+        );
+    }
+    let mut malformed = request.clone();
+    malformed
+        .expected_policy_revision
+        .as_mut()
+        .unwrap()
+        .content_digest = "not-a-digest".into();
+    assert_eq!(
+        service
+            .evaluate_presentation(authenticated(malformed))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::InvalidArgument
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    let result = service
+        .evaluate_presentation(authenticated(request.clone()))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(result.policy_revision, Some(revision));
+    assert_eq!(result.decision, "allow");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let policy_id = Uuid::parse_str(&active.id).unwrap();
+    {
+        let mut stored = repository.0.lock().unwrap();
+        let policy = stored.get_mut(&policy_id).unwrap();
+        policy.status = marty_presentation_policy::PolicyStatus::Suspended;
+        policy.updated_at += chrono::Duration::seconds(1);
+    }
+    let suspended = service
+        .get_policy(service_authenticated(GetPolicyRequest {
+            policy_id: active.id.clone(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut suspended_request = request.clone();
+    suspended_request.expected_policy_revision = suspended.policy_revision;
+    assert_eq!(
+        service
+            .evaluate_presentation(authenticated(suspended_request))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::FailedPrecondition
+    );
+    {
+        let mut stored = repository.0.lock().unwrap();
+        let policy = stored.get_mut(&policy_id).unwrap();
+        policy.status = marty_presentation_policy::PolicyStatus::Active;
+        policy.updated_at += chrono::Duration::seconds(1);
+    }
+    assert_eq!(
+        service
+            .evaluate_presentation(authenticated(request.clone()))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::FailedPrecondition
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let reactivated = service
+        .get_policy(service_authenticated(GetPolicyRequest {
+            policy_id: active.id,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut restarted = request;
+    restarted.expected_policy_revision = reactivated.policy_revision.clone();
+    let result = service
+        .evaluate_presentation(authenticated(restarted))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(result.policy_revision, reactivated.policy_revision);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }

@@ -1030,7 +1030,8 @@ async fn changed_authority_or_expired_transaction_never_reaches_the_signer() {
         "../../../../contracts/issuance-credential-signing.json"
     ))
     .unwrap();
-    let mutations: &[(&str, fn(&mut CredentialTransaction))] = &[
+    type TransactionMutation = (&'static str, fn(&mut CredentialTransaction));
+    let mutations: &[TransactionMutation] = &[
         ("tenant", |transaction| {
             transaction.organization_id = "other-tenant".into()
         }),

@@ -127,6 +127,21 @@ impl Oid4vpEvaluationTransportV1 {
     }
 }
 
+impl FrozenPolicyIdentity {
+    /// Validate the bounded reference shape only. The caller must still bind
+    /// the reference to its tenant and obtain it from the policy authority.
+    pub fn validate(&self) -> Result<(), Oid4vpContractError> {
+        require_identifier(&self.id, "policy.id")?;
+        if self.id.chars().any(char::is_control) {
+            return Err(Oid4vpContractError::InvalidField("policy.id"));
+        }
+        if self.version == 0 {
+            return Err(Oid4vpContractError::InvalidField("policy.version"));
+        }
+        validate_digest(&self.content_digest, "policy.content_digest")
+    }
+}
+
 impl WalletSubmissionV1 {
     pub fn from_json(value: &str) -> Result<Self, Oid4vpContractError> {
         let submission: Self =

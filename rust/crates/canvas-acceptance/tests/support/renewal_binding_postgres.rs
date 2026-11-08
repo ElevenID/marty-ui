@@ -41,6 +41,7 @@ mod canvas;
 const ENDPOINT: &str = "https://synthetic-wallet.example/renewal";
 const MESSAGE: &str = "synthetic-renewal-message";
 const TOKEN: &str = "synthetic-renewal-status-token";
+const TOKEN_HMAC_KEY: &[u8] = b"synthetic-renewal-pg-hmac";
 
 struct Fixture {
     pool: PgPool,
@@ -627,7 +628,7 @@ pub(super) async fn run(database_url: &str) {
         .await
         .unwrap();
     let fixture = Fixture {
-        repository: PostgresCredentialRepository::new(pool.clone(), b"synthetic-renewal-pg-hmac"),
+        repository: PostgresCredentialRepository::new(pool.clone(), TOKEN_HMAC_KEY),
         pool,
         organization: format!("renewal-pg-{}", Uuid::new_v4()),
     };

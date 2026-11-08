@@ -154,6 +154,16 @@ message PolicyResponse {
   int32 version = 10;
   string created_at = 11;
   string updated_at = 12;
+  PolicyRevision policy_revision = 13;
+}
+
+// Server-computed identity of the exact saved policy snapshot. A revision is
+// metadata, not credential or presentation authentication evidence.
+message PolicyRevision {
+  string organization_id = 1;
+  string id = 2;
+  uint32 version = 3;
+  string content_digest = 4;
 }
 
 message EvaluatePresentationRequest {
@@ -164,6 +174,8 @@ message EvaluatePresentationRequest {
   string trust_profile_id = 5;     // optional override
   string context_json = 6;        // JSON-encoded extra context
   Oid4vpEvaluationTransport oid4vp_transport = 7; // optional, unverified metadata
+  // Required by the gRPC evaluator; must match the current active saved policy.
+  PolicyRevision expected_policy_revision = 8;
 }
 
 // Producer-owned query plus structure-preserving untrusted wallet submission. Presence and
@@ -193,6 +205,7 @@ message PolicyEvaluationResponse {
   string evaluation_timestamp = 12;
   string nonce = 13;
   string authentication_diagnostic_json = 14; // Optional server-owned request-bound diagnostic; never credential authority
+  PolicyRevision policy_revision = 15;
 }
 
 message HealthCheckRequest {}
