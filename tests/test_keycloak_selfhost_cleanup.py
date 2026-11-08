@@ -18,7 +18,7 @@ def shell_path(path):
 
 
 class ProductionDemoCleanupTest(unittest.TestCase):
-    def run_cleanup(self, bad_lookup=False, fail_lookup=False):
+    def run_cleanup(self, bad_lookup=False, fail_lookup=False, invalid_id=False, extra_field=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scripts = root / "scripts"
@@ -40,7 +40,11 @@ if [[ "$1" == get ]]; then
     [[ "${TEST_FAIL_LOOKUP:-false}" == true ]] && exit 72
     case " $* " in
         *' email=admin@marty.demo '*)
-            if [[ "${TEST_BAD_LOOKUP:-false}" == true ]]; then
+            if [[ "${TEST_INVALID_ID:-false}" == true ]]; then
+                echo '------------------------------------,admin@marty.demo'
+            elif [[ "${TEST_EXTRA_FIELD:-false}" == true ]]; then
+                echo 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa,admin@marty.demo,'
+            elif [[ "${TEST_BAD_LOOKUP:-false}" == true ]]; then
                 echo 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa,canvas.admin@marty.demo'
             else
                 echo 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa,admin@marty.demo'
@@ -59,6 +63,8 @@ fi
                 TEST_CALLS=shell_path(calls),
                 TEST_BAD_LOOKUP="true" if bad_lookup else "false",
                 TEST_FAIL_LOOKUP="true" if fail_lookup else "false",
+                TEST_INVALID_ID="true" if invalid_id else "false",
+                TEST_EXTRA_FIELD="true" if extra_field else "false",
             )
             result = subprocess.run([os.environ.get("BASH_EXECUTABLE", "bash"), shell_path(wrapper)],
                                     env=env, capture_output=True, text=True, timeout=15, check=False)
@@ -78,6 +84,13 @@ fi
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(any(line.startswith("delete ") for line in calls))
         self.assertIn("Keycloak demo-user lookup failed", result.stderr)
+
+    def test_invalid_csv_id_or_extra_field_fails_before_delete(self):
+        for settings in ({"invalid_id": True}, {"extra_field": True}):
+            with self.subTest(settings=settings):
+                result, calls = self.run_cleanup(**settings)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(any(line.startswith("delete ") for line in calls))
 
     def test_mismatched_lookup_fails_before_delete(self):
         result, calls = self.run_cleanup(bad_lookup=True)
