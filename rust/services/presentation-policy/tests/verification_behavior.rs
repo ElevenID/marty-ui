@@ -882,6 +882,7 @@ async fn foreign_key_resolution_rejects_tampering_private_and_ambiguous_keys() {
         ));
         let context = CredentialVerificationContext {
             presentation_only: false,
+            sd_jwt_dcql: None,
             resolved_issuer_key: Some(marty_presentation_policy::ResolvedIssuerKey {
                 issuer_id: fixture["issuer"].as_str().unwrap().into(),
                 public_jwk: key.clone(),
@@ -919,6 +920,7 @@ async fn foreign_key_resolution_rejects_tampering_private_and_ambiguous_keys() {
     );
     let context = CredentialVerificationContext {
         presentation_only: false,
+        sd_jwt_dcql: None,
         resolved_issuer_key: None,
         format: DetectedCredentialFormat::OpenbadgeV3,
         token: json!(token),
@@ -950,6 +952,7 @@ async fn existing_governed_key_remains_authoritative_without_resolution() {
         serde_json::from_str(include_str!("fixtures/foreign_ob3_jwt.json")).unwrap();
     let context = CredentialVerificationContext {
         presentation_only: false,
+        sd_jwt_dcql: None,
         resolved_issuer_key: None,
         format: DetectedCredentialFormat::OpenbadgeV3,
         token: fixture["token"].clone(),
@@ -990,6 +993,7 @@ async fn explicit_profile_key_authority_cannot_downgrade_to_public_discovery() {
     ] {
         let context = CredentialVerificationContext {
             presentation_only: false,
+            sd_jwt_dcql: None,
             resolved_issuer_key: None,
             format: DetectedCredentialFormat::OpenbadgeV3,
             token: fixture["token"].clone(),
@@ -1011,5 +1015,1072 @@ async fn explicit_profile_key_authority_cannot_downgrade_to_public_discovery() {
             rejected.failure_reason.as_deref(),
             Some("Trust Profile does not authorize this issuer signing key")
         );
+    }
+}
+
+mod bounded_sd_jwt_query_evidence {
+    use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use ed25519_dalek::{Signer, SigningKey};
+    use marty_oid4vp_contract::{
+        digest_audience, digest_domain_json, digest_nonce, digest_query_document,
+        digest_response_item, Oid4vpEvaluationTransportV1, QueryKind,
+    };
+    use marty_presentation_policy::{
+        evaluate_verified_facts_for_policy, evaluate_verified_material_for_policy, policy_revision,
+        EvaluatePresentationRequest, VerifiedPolicyMaterial,
+    };
+    use p256::ecdsa::{
+        signature::Signer as _, Signature as P256Signature, SigningKey as P256SigningKey,
+    };
+    use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    const ISSUER: &str = "did:web:prerequisite-issuer.example";
+    const ISSUER_KEY_ID: &str = "did:web:prerequisite-issuer.example#assertion";
+    const SUBJECT: &str = "issuer-local-prerequisite-subject-001";
+    const EMAIL: &str = "private-selected-email@example.test";
+    const VCT: &str = "urn:example:prerequisite-email";
+    const NONCE: &str = "prerequisite-nonce-123456789012345678901234567890";
+    const AUDIENCE: &str = "did:web:prerequisite-verifier.example";
+
+    fn issuer_key() -> SigningKey {
+        SigningKey::from_bytes(&[31; 32])
+    }
+
+    fn holder_key() -> SigningKey {
+        SigningKey::from_bytes(&[79; 32])
+    }
+
+    fn public_key(key: &SigningKey) -> Value {
+        json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes()),
+        })
+    }
+
+    fn sign_jwt(key: &SigningKey, header: Value, claims: &Value) -> String {
+        let input = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(header.to_string()),
+            URL_SAFE_NO_PAD.encode(claims.to_string()),
+        );
+        format!(
+            "{input}.{}",
+            URL_SAFE_NO_PAD.encode(key.sign(input.as_bytes()).to_bytes()),
+        )
+    }
+
+    fn issuer_jwt(claims: &Value) -> String {
+        sign_jwt(
+            &issuer_key(),
+            json!({"alg": "EdDSA", "typ": "dc+sd-jwt", "kid": ISSUER_KEY_ID}),
+            claims,
+        )
+    }
+
+    fn bind_issuer_jwt(issuer_jwt: &str, nonce: &str, audience: &str, now: u64) -> String {
+        let disclosed = format!("{issuer_jwt}~");
+        bind_disclosed_sd_jwt(&disclosed, nonce, audience, now)
+    }
+
+    fn bind_disclosed_sd_jwt(disclosed: &str, nonce: &str, audience: &str, now: u64) -> String {
+        bind_disclosed_sd_jwt_with_claims(
+            disclosed,
+            json!({"aud": audience, "nonce": nonce, "iat": now}),
+        )
+    }
+
+    fn bind_disclosed_sd_jwt_with_claims(disclosed: &str, mut claims: Value) -> String {
+        claims["sd_hash"] = json!(URL_SAFE_NO_PAD.encode(Sha256::digest(disclosed.as_bytes())));
+        let holder_jwt = sign_jwt(
+            &holder_key(),
+            json!({"alg": "EdDSA", "typ": "kb+jwt"}),
+            &claims,
+        );
+        format!("{disclosed}{holder_jwt}")
+    }
+
+    fn presentation(claims: &Value, nonce: &str, audience: &str, now: u64) -> String {
+        bind_disclosed_sd_jwt(&disclosed_sd_jwt(claims, &["email"]), nonce, audience, now)
+    }
+
+    fn disclosed_sd_jwt(claims: &Value, selected: &[&str]) -> String {
+        let mut issued_claims = claims.clone();
+        // Exercise actual SD-JWT reconstruction: the requested email value is
+        // carried only in a disclosure authenticated by the issuer's digest.
+        let disclosures = selected
+            .iter()
+            .filter_map(|name| {
+                issued_claims
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(*name)
+                    .map(|value| {
+                        URL_SAFE_NO_PAD.encode(
+                            json!(["synthetic-fixed-disclosure-salt", name, value]).to_string(),
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+        issued_claims["_sd"] = json!(disclosures
+            .iter()
+            .map(|value| URL_SAFE_NO_PAD.encode(Sha256::digest(value.as_bytes())))
+            .collect::<Vec<_>>());
+        let issuer = issuer_jwt(&issued_claims);
+        if disclosures.is_empty() {
+            format!("{issuer}~")
+        } else {
+            format!("{issuer}~{}~", disclosures.join("~"))
+        }
+    }
+
+    fn generic_core_verification(
+        token: &str,
+    ) -> marty_oid4vci::formats::sd_jwt::AuthenticatedSdJwt {
+        marty_oid4vci::formats::sd_jwt::verify_sd_jwt_with_policy(
+            token,
+            &public_key(&issuer_key()).to_string(),
+            &marty_oid4vci::formats::sd_jwt::SdJwtVerificationPolicy {
+                expected_issuer: ISSUER.into(),
+                issuer_algorithm: marty_oid4vci::types::SigningAlgorithm::EdDSA,
+                holder_algorithms: vec![marty_oid4vci::types::SigningAlgorithm::EdDSA],
+            },
+            Some(AUDIENCE.into()),
+            Some(NONCE.into()),
+        )
+        .expect("the generic Core verifier must accept genuine issuer and holder signatures")
+    }
+
+    fn tamper_signature(jwt: &str) -> String {
+        let mut changed = jwt.to_owned();
+        let start = changed.rfind('.').unwrap() + 1;
+        changed.replace_range(
+            start..start + 1,
+            if &jwt[start..start + 1] == "A" {
+                "B"
+            } else {
+                "A"
+            },
+        );
+        changed
+    }
+
+    struct Fixture {
+        policy: PresentationPolicy,
+        request: EvaluatePresentationRequest,
+        orchestrator: VerifiedFactsOrchestrator,
+        claims: Value,
+        now: u64,
+        query_id: String,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            Self::with_kernel(Arc::new(RustCredentialKernel))
+        }
+
+        fn with_kernel(kernel: Arc<dyn CredentialVerificationKernel>) -> Self {
+            Self::with_kernel_and_clock_advance(kernel, 0)
+        }
+
+        fn with_kernel_and_clock_advance(
+            kernel: Arc<dyn CredentialVerificationKernel>,
+            final_clock_advance: u64,
+        ) -> Self {
+            let now = u64::try_from(chrono::Utc::now().timestamp()).unwrap();
+            let mut policy = policy();
+            policy.credential_requirements[0].credential_payload_format = "SD_JWT_VC".into();
+            let query_id = policy.credential_requirements[0].id.to_string();
+            let claims = json!({
+                "iss": ISSUER,
+                "sub": SUBJECT,
+                "jti": "urn:example:prerequisite-credential-001",
+                "vct": VCT,
+                "iat": now - 60,
+                "exp": now + 600,
+                "cnf": {"jwk": public_key(&holder_key())},
+                "_sd_alg": "sha-256",
+                "_sd": [],
+                "email": EMAIL,
+            });
+            let token = presentation(&claims, NONCE, AUDIENCE, now);
+            let query = json!({"credentials": [{
+                "id": query_id,
+                "format": "dc+sd-jwt",
+                "meta": {"vct_values": [VCT]},
+                "claims": [{"id": "email", "path": ["email"]}],
+            }]});
+            let transport = Oid4vpEvaluationTransportV1 {
+                query_kind: QueryKind::Dcql,
+                query_digest: digest_query_document(&query).unwrap(),
+                query_document: query,
+                presentation_submission: None,
+                vp_token_raw: json!({(query_id.clone()): [token.clone()]}).to_string(),
+                verifier_client_id: AUDIENCE.into(),
+                request_nonce: NONCE.into(),
+            };
+            transport.validate_transport().unwrap();
+            let request = EvaluatePresentationRequest {
+                vp_token: json!(token),
+                trust_profile_id: None,
+                nonce: Some(NONCE.into()),
+                audience: Some(AUDIENCE.into()),
+                context: serde_json::Map::new(),
+                oid4vp_transport: Some(transport),
+                trusted_internal_context: true,
+            };
+            let mut issuer_jwk = public_key(&issuer_key());
+            issuer_jwk["kid"] = json!(ISSUER_KEY_ID);
+            let first_clock_read = AtomicBool::new(true);
+            let orchestrator = VerifiedFactsOrchestrator::with_clock(
+                kernel,
+                Arc::new(Trust {
+                    evidence: IssuerTrustEvidence {
+                        verified: true,
+                        trust_level: Some(90),
+                        ..Default::default()
+                    },
+                    fail_load: false,
+                    profile_organization_id: None,
+                    profile_document: Some(json!({
+                        "status": "ACTIVE",
+                        "issuer_relationships": [{
+                            "issuer_id": ISSUER,
+                            "relationship_status": "TRUSTED",
+                            "compliance_status": "COMPLIANT",
+                            "verification_keys": [issuer_jwk],
+                        }],
+                    })),
+                    loads: Mutex::new(Vec::new()),
+                }),
+                Arc::new(Status {
+                    evidence: CredentialStatusEvidence {
+                        checked_at_epoch_seconds: Some(now),
+                        not_revoked: Some(true),
+                        credential_status: Some("active".into()),
+                        warnings: Vec::new(),
+                    },
+                    calls: Mutex::new(Vec::new()),
+                }),
+                Arc::new(move || {
+                    if first_clock_read.swap(false, Ordering::SeqCst) {
+                        now
+                    } else {
+                        now + final_clock_advance
+                    }
+                }),
+            )
+            .unwrap();
+            Self {
+                policy,
+                request,
+                orchestrator,
+                claims,
+                now,
+                query_id,
+            }
+        }
+
+        fn request_for_token(&self, token: String) -> EvaluatePresentationRequest {
+            let mut request = self.request.clone();
+            request.vp_token = json!(token);
+            request.oid4vp_transport.as_mut().unwrap().vp_token_raw =
+                json!({(self.query_id.clone()): [request.vp_token.clone()]}).to_string();
+            request
+        }
+
+        async fn verify(&self, request: &EvaluatePresentationRequest) -> VerifiedPolicyMaterial {
+            self.orchestrator
+                .verify_material(&self.policy, request)
+                .await
+                .expect("synthetic trust/status ports remain available")
+        }
+
+        async fn assert_no_evidence(&self, label: &str, request: &EvaluatePresentationRequest) {
+            match self
+                .orchestrator
+                .verify_material(&self.policy, request)
+                .await
+            {
+                Ok(material) => assert!(
+                    material.authenticated_sd_jwt_query().is_none(),
+                    "{label} must not produce authenticated query evidence",
+                ),
+                Err(PresentationVerificationError::Failed(_)) => {}
+                Err(PresentationVerificationError::Unavailable) => {
+                    panic!("{label} must reject input, not lose its synthetic backend")
+                }
+            }
+        }
+    }
+
+    fn refresh_query_digest(request: &mut EvaluatePresentationRequest) {
+        let transport = request.oid4vp_transport.as_mut().unwrap();
+        transport.query_digest = digest_query_document(&transport.query_document).unwrap();
+    }
+
+    #[tokio::test]
+    async fn real_sd_jwt_produces_query_subject_and_holder_bound_evidence() {
+        let fixture = Fixture::new();
+        let material = fixture.verify(&fixture.request).await;
+        let evidence = material
+            .authenticated_sd_jwt_query()
+            .expect("real governed issuer and holder proofs satisfy the frozen query");
+        let actual = serde_json::to_value(evidence).unwrap();
+        let holder_x = URL_SAFE_NO_PAD.encode(holder_key().verifying_key().to_bytes());
+        // RFC 7638 requires this exact lexicographic member order, without kid.
+        let holder_canonical = format!(r#"{{"crv":"Ed25519","kty":"OKP","x":"{holder_x}"}}"#);
+        assert_eq!(actual["contract"], "marty.sd-jwt-dcql-query-evidence/v1");
+        assert_eq!(actual["query_id"], fixture.query_id);
+        assert_eq!(
+            actual["query_digest"],
+            fixture
+                .request
+                .oid4vp_transport
+                .as_ref()
+                .unwrap()
+                .query_digest,
+        );
+        assert_eq!(
+            actual["response_token_digest"],
+            digest_response_item(
+                fixture.request.vp_token.as_str().unwrap(),
+                &fixture.query_id,
+                "0",
+            )
+            .unwrap(),
+        );
+        assert_eq!(actual["organization_id"], ORGANIZATION_ID.to_string());
+        assert_eq!(
+            actual["policy"],
+            serde_json::to_value(policy_revision(&fixture.policy).unwrap()).unwrap(),
+        );
+        assert_eq!(actual["credential_template_id"], "template-email");
+        assert_eq!(actual["issuer_id"], ISSUER);
+        assert_eq!(
+            actual["issuer_scoped_subject_digest"],
+            digest_domain_json(
+                "marty.oid4vp/issuer-scoped-subject/v1",
+                &json!({"issuer_id": ISSUER, "subject_id": SUBJECT}),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            actual["holder_key_thumbprint"],
+            URL_SAFE_NO_PAD.encode(Sha256::digest(holder_canonical.as_bytes())),
+        );
+        assert_eq!(actual["vct"], VCT);
+        assert_eq!(actual["issuer_algorithm"], "EdDSA");
+        assert_eq!(actual["matched_claims"], json!(["email"]));
+        assert_eq!(actual["nonce_digest"], digest_nonce(NONCE).unwrap());
+        assert_eq!(
+            actual["audience_digest"],
+            digest_audience(AUDIENCE).unwrap()
+        );
+        assert_eq!(actual["checked_at_epoch_seconds"], fixture.now);
+        let serialized = actual.to_string();
+        for private_input in [
+            SUBJECT,
+            EMAIL,
+            fixture.request.vp_token.as_str().unwrap(),
+            holder_x.as_str(),
+            NONCE,
+            AUDIENCE,
+        ] {
+            assert!(
+                !serialized.contains(private_input),
+                "typed prerequisite evidence must not retain raw presentation inputs",
+            );
+        }
+        assert_eq!(material.policy_facts()["holder_binding_verified"], true);
+        assert_eq!(material.policy_facts()["challenge_verified"], true);
+        assert_eq!(material.policy_facts()["audience_verified"], true);
+        assert_eq!(
+            material.policy_facts()["replay_check_verified"],
+            false,
+            "query authentication alone does not prove durable replay consumption",
+        );
+
+        let disclosed_identity = bind_disclosed_sd_jwt(
+            &disclosed_sd_jwt(&fixture.claims, &["email", "sub", "iat"]),
+            NONCE,
+            AUDIENCE,
+            fixture.now,
+        );
+        let material = fixture
+            .verify(&fixture.request_for_token(disclosed_identity))
+            .await;
+        let disclosed_evidence =
+            serde_json::to_value(material.authenticated_sd_jwt_query().unwrap()).unwrap();
+        assert_eq!(
+            disclosed_evidence["issuer_scoped_subject_digest"],
+            actual["issuer_scoped_subject_digest"],
+            "issuer-authenticated disclosed sub and iat remain valid in this profile",
+        );
+        assert_eq!(
+            disclosed_evidence["holder_key_thumbprint"],
+            actual["holder_key_thumbprint"],
+        );
+    }
+
+    #[tokio::test]
+    async fn eddsa_issuer_and_es256_holder_use_independent_algorithms_and_public_thumbprint() {
+        let fixture = Fixture::new();
+        let holder = P256SigningKey::from_bytes(&[82u8; 32].into()).unwrap();
+        let holder_point = holder.verifying_key().to_sec1_point(false);
+        let x = URL_SAFE_NO_PAD.encode(holder_point.x().unwrap());
+        let y = URL_SAFE_NO_PAD.encode(holder_point.y().unwrap());
+        let mut claims = fixture.claims.clone();
+        claims["cnf"]["jwk"] = json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": x,
+            "y": y,
+            "kid": "synthetic-holder-key-id-excluded-from-thumbprint",
+        });
+        let disclosed = disclosed_sd_jwt(&claims, &["email"]);
+        let input = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(json!({"alg": "ES256", "typ": "kb+jwt"}).to_string()),
+            URL_SAFE_NO_PAD.encode(
+                json!({
+                    "aud": AUDIENCE,
+                    "nonce": NONCE,
+                    "iat": fixture.now,
+                    "sd_hash": URL_SAFE_NO_PAD.encode(Sha256::digest(disclosed.as_bytes())),
+                })
+                .to_string()
+            ),
+        );
+        let signature: P256Signature = holder.sign(input.as_bytes());
+        let request = fixture.request_for_token(format!(
+            "{disclosed}{input}.{}",
+            URL_SAFE_NO_PAD.encode(signature.to_bytes()),
+        ));
+        let material = fixture.verify(&request).await;
+        let actual = serde_json::to_value(material.authenticated_sd_jwt_query().unwrap()).unwrap();
+        let canonical = format!(r#"{{"crv":"P-256","kty":"EC","x":"{x}","y":"{y}"}}"#);
+        assert_eq!(actual["issuer_algorithm"], "EdDSA");
+        assert_eq!(
+            actual["holder_key_thumbprint"],
+            URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes())),
+        );
+        assert_eq!(material.policy_facts()["holder_binding_verified"], true);
+        let projected =
+            evaluate_verified_material_for_policy(material, &fixture.policy, &request).unwrap();
+        assert_eq!(
+            projected["credential_results"][0]["authenticated_sd_jwt_query"],
+            actual,
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_signed_identity_or_holder_proof_cannot_produce_query_evidence() {
+        let fixture = Fixture::new();
+        let mut variants = vec![
+            (
+                "wrong holder nonce",
+                presentation(&fixture.claims, "different-nonce", AUDIENCE, fixture.now),
+            ),
+            (
+                "wrong holder audience",
+                presentation(
+                    &fixture.claims,
+                    NONCE,
+                    "did:web:other-verifier.example",
+                    fixture.now,
+                ),
+            ),
+            (
+                "tampered issuer signature with a valid holder hash",
+                bind_issuer_jwt(
+                    &tamper_signature(&issuer_jwt(&fixture.claims)),
+                    NONCE,
+                    AUDIENCE,
+                    fixture.now,
+                ),
+            ),
+            (
+                "tampered holder signature",
+                tamper_signature(fixture.request.vp_token.as_str().unwrap()),
+            ),
+        ];
+        for (label, protected_type) in [
+            ("missing issuer protected type", None),
+            ("generic JWT protected type", Some("JWT")),
+            ("legacy SD-JWT protected type", Some("vc+sd-jwt")),
+        ] {
+            let mut header = json!({"alg": "EdDSA", "kid": ISSUER_KEY_ID});
+            if let Some(protected_type) = protected_type {
+                header["typ"] = json!(protected_type);
+            }
+            let issuer = sign_jwt(&issuer_key(), header, &fixture.claims);
+            let token = bind_issuer_jwt(&issuer, NONCE, AUDIENCE, fixture.now);
+            // These are genuine issuer and holder signatures accepted by the
+            // generic Core verifier. The selected DCQL VC profile must reject
+            // them specifically because their protected type is not dc+sd-jwt.
+            generic_core_verification(&token);
+            variants.push((label, token));
+        }
+        for (label, field) in [
+            ("selectively disclosed VCT", "vct"),
+            ("selectively disclosed expiry", "exp"),
+            ("selectively disclosed not-before time", "nbf"),
+        ] {
+            let mut claims = fixture.claims.clone();
+            if field == "nbf" {
+                claims[field] = json!(fixture.now - 30);
+            }
+            let token = bind_disclosed_sd_jwt(
+                &disclosed_sd_jwt(&claims, &["email", field]),
+                NONCE,
+                AUDIENCE,
+                fixture.now,
+            );
+            let generic = generic_core_verification(&token);
+            assert_eq!(
+                generic.claims()[field],
+                claims[field],
+                "the generic verifier must authenticate and reconstruct {field}",
+            );
+            variants.push((label, token));
+        }
+        for (label, field, replacement) in [
+            (
+                "wrong signed issuer",
+                "iss",
+                Some(json!("did:web:foreign-issuer.example")),
+            ),
+            ("missing subject", "sub", None),
+            ("empty subject", "sub", Some(json!(""))),
+            (
+                "expired issuer credential",
+                "exp",
+                Some(json!(fixture.now - 1)),
+            ),
+            ("missing issuer expiry", "exp", None),
+            (
+                "future issuer issuance",
+                "iat",
+                Some(json!(fixture.now + 1)),
+            ),
+            ("missing issuer issuance time", "iat", None),
+            (
+                "future issuer not-before time",
+                "nbf",
+                Some(json!(fixture.now + 1)),
+            ),
+            ("missing holder confirmation", "cnf", None),
+            (
+                "different confirmed holder key",
+                "cnf",
+                Some(json!({"jwk": public_key(&SigningKey::from_bytes(&[80; 32]))})),
+            ),
+            (
+                "wrong signed VCT",
+                "vct",
+                Some(json!("urn:example:other-type")),
+            ),
+            ("missing requested claim", "email", None),
+            (
+                "nonscalar requested claim",
+                "email",
+                Some(json!({"address": EMAIL})),
+            ),
+        ] {
+            let mut claims = fixture.claims.clone();
+            if let Some(value) = replacement {
+                claims[field] = value;
+            } else {
+                claims.as_object_mut().unwrap().remove(field);
+            }
+            variants.push((label, presentation(&claims, NONCE, AUDIENCE, fixture.now)));
+        }
+        for (label, token) in variants {
+            fixture
+                .assert_no_evidence(label, &fixture.request_for_token(token))
+                .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn production_projection_retains_partial_evidence_only_from_native_material() {
+        let fixture = Fixture::new();
+        let material = fixture.verify(&fixture.request).await;
+        let expected =
+            serde_json::to_value(material.authenticated_sd_jwt_query().unwrap()).unwrap();
+        let facts = material.policy_facts().clone();
+        let projected =
+            evaluate_verified_material_for_policy(material, &fixture.policy, &fixture.request)
+                .unwrap();
+        let credentials = projected["credential_results"].as_array().unwrap();
+        assert_eq!(credentials.len(), 1, "{projected}");
+        assert_eq!(credentials[0]["signature_valid"], true, "{projected}");
+        assert_eq!(credentials[0]["credential_template_id"], "template-email");
+        assert_eq!(credentials[0]["issuer_did"], ISSUER);
+        assert_eq!(credentials[0]["authenticated_sd_jwt_query"], expected);
+        assert!(projected.get("authenticated_sd_jwt_query").is_none());
+        assert_eq!(
+            projected["decision"], "deny",
+            "partial query authentication must not satisfy required replay consumption",
+        );
+
+        let mut caller = fixture.request.clone();
+        caller
+            .context
+            .insert("authenticated_sd_jwt_query".into(), expected.clone());
+        let facts_only =
+            evaluate_verified_facts_for_policy(facts.clone(), &fixture.policy, &caller).unwrap();
+        assert_eq!(facts_only["credential_results"][0]["signature_valid"], true);
+        assert!(facts_only["credential_results"][0]
+            .get("authenticated_sd_jwt_query")
+            .is_none());
+        assert!(facts_only.get("authenticated_sd_jwt_query").is_none());
+
+        for inject_on_credential in [false, true] {
+            let mut forged_facts = facts.clone();
+            if inject_on_credential {
+                forged_facts["credentials"][0]["authenticated_sd_jwt_query"] = expected.clone();
+            } else {
+                forged_facts["authenticated_sd_jwt_query"] = expected.clone();
+            }
+            assert!(
+                evaluate_verified_facts_for_policy(forged_facts, &fixture.policy, &caller).is_err(),
+                "generic facts cannot manufacture native query evidence",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn production_projection_rejects_material_from_another_policy_or_request() {
+        let fixture = Fixture::new();
+        let mut foreign_policy = fixture.policy.clone();
+        foreign_policy.id = Uuid::from_u128(90);
+        let mut foreign_organization = fixture.policy.clone();
+        foreign_organization.organization_id = Uuid::from_u128(91);
+        let mut newer_revision = fixture.policy.clone();
+        newer_revision.version += 1;
+        let mut duplicate_requirement = fixture.policy.clone();
+        let mut extra_requirement = duplicate_requirement.credential_requirements[0].clone();
+        extra_requirement.id = Uuid::from_u128(92);
+        duplicate_requirement
+            .credential_requirements
+            .push(extra_requirement);
+
+        for (label, policy) in [
+            (
+                "another policy with the same template and issuer",
+                foreign_policy,
+            ),
+            ("another organization", foreign_organization),
+            ("a newer saved policy revision", newer_revision),
+            (
+                "multiple results for the same template",
+                duplicate_requirement,
+            ),
+        ] {
+            let material = fixture.verify(&fixture.request).await;
+            assert!(
+                evaluate_verified_material_for_policy(material, &policy, &fixture.request).is_err(),
+                "authentic query evidence cannot be projected under {label}",
+            );
+        }
+
+        let mut other_claims = fixture.claims.clone();
+        other_claims["sub"] = json!("another-authenticated-subject");
+        let another_token =
+            fixture.request_for_token(presentation(&other_claims, NONCE, AUDIENCE, fixture.now));
+        let mut another_nonce = fixture.request.clone();
+        let changed_nonce = "another-nonce-123456789012345678901234567890";
+        another_nonce.nonce = Some(changed_nonce.into());
+        another_nonce
+            .oid4vp_transport
+            .as_mut()
+            .unwrap()
+            .request_nonce = changed_nonce.into();
+        let mut another_audience = fixture.request.clone();
+        let changed_audience = "did:web:another-verifier.example";
+        another_audience.audience = Some(changed_audience.into());
+        another_audience
+            .oid4vp_transport
+            .as_mut()
+            .unwrap()
+            .verifier_client_id = changed_audience.into();
+        let mut another_query = fixture.request.clone();
+        another_query
+            .oid4vp_transport
+            .as_mut()
+            .unwrap()
+            .query_document["credentials"][0]["claims"][0]["id"] = json!("new-email-alias");
+        refresh_query_digest(&mut another_query);
+        let mut another_trust_profile = fixture.request.clone();
+        another_trust_profile.trust_profile_id = Some(REQUEST_PROFILE_ID.to_string());
+        for (label, request) in [
+            ("another selected token", another_token),
+            ("another request nonce", another_nonce),
+            ("another verifier audience", another_audience),
+            ("another frozen query document", another_query),
+            ("another selected Trust Profile", another_trust_profile),
+        ] {
+            let material = fixture.verify(&fixture.request).await;
+            assert!(
+                evaluate_verified_material_for_policy(material, &fixture.policy, &request).is_err(),
+                "authentic query evidence cannot be projected with {label}",
+            );
+        }
+    }
+
+    #[derive(Default)]
+    struct CachedNativeKernel {
+        first_result: Mutex<Option<CredentialVerificationEvidence>>,
+    }
+
+    #[async_trait]
+    impl CredentialVerificationKernel for CachedNativeKernel {
+        async fn verify(
+            &self,
+            context: &CredentialVerificationContext,
+        ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
+            let cached = self.first_result.lock().unwrap().clone();
+            if let Some(cached) = cached {
+                return Ok(cached);
+            }
+            let verified = RustCredentialKernel.verify(context).await?;
+            *self.first_result.lock().unwrap() = Some(verified.clone());
+            Ok(verified)
+        }
+    }
+
+    #[tokio::test]
+    async fn cached_native_evidence_cannot_authenticate_a_different_response() {
+        let fixture = Fixture::with_kernel(Arc::new(CachedNativeKernel::default()));
+        let original = fixture.verify(&fixture.request).await;
+        assert!(original.authenticated_sd_jwt_query().is_some());
+        evaluate_verified_material_for_policy(original, &fixture.policy, &fixture.request).unwrap();
+        let mut explicit_original_profile = fixture.request.clone();
+        explicit_original_profile.trust_profile_id = Some(POLICY_PROFILE_ID.to_string());
+        let original_again = fixture.verify(&explicit_original_profile).await;
+        evaluate_verified_material_for_policy(
+            original_again,
+            &fixture.policy,
+            &explicit_original_profile,
+        )
+        .expect("the same selected Trust Profile must retain genuine native evidence");
+        let mut other_claims = fixture.claims.clone();
+        other_claims["sub"] = json!("different-authenticated-subject");
+        let other_request =
+            fixture.request_for_token(presentation(&other_claims, NONCE, AUDIENCE, fixture.now));
+        let result = fixture
+            .orchestrator
+            .verify_material(&fixture.policy, &other_request)
+            .await;
+        assert!(matches!(
+            result,
+            Err(PresentationVerificationError::Failed(ref reason))
+                if reason == "PRESENTATION_POLICY.AUTHENTICATED_QUERY_EVIDENCE_MISMATCH"
+        ));
+
+        let mut other_profile = fixture.request.clone();
+        other_profile.trust_profile_id = Some(REQUEST_PROFILE_ID.to_string());
+        let result = fixture
+            .orchestrator
+            .verify_material(&fixture.policy, &other_profile)
+            .await;
+        assert!(matches!(
+            result,
+            Err(PresentationVerificationError::Failed(ref reason))
+                if reason == "PRESENTATION_POLICY.AUTHENTICATED_QUERY_EVIDENCE_MISMATCH"
+        ));
+    }
+
+    struct ClaimsReplacingNativeKernel;
+
+    #[async_trait]
+    impl CredentialVerificationKernel for ClaimsReplacingNativeKernel {
+        async fn verify(
+            &self,
+            context: &CredentialVerificationContext,
+        ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
+            let mut verified = RustCredentialKernel.verify(context).await?;
+            verified.claims.insert(
+                "email".into(),
+                json!("substituted-policy-claim@example.test"),
+            );
+            Ok(verified)
+        }
+    }
+
+    #[tokio::test]
+    async fn authentic_query_evidence_cannot_be_combined_with_substituted_policy_claims() {
+        let fixture = Fixture::with_kernel(Arc::new(ClaimsReplacingNativeKernel));
+        let result = fixture
+            .orchestrator
+            .verify_material(&fixture.policy, &fixture.request)
+            .await;
+        assert!(matches!(
+            result,
+            Err(PresentationVerificationError::Failed(ref reason))
+                if reason == "PRESENTATION_POLICY.AUTHENTICATED_QUERY_EVIDENCE_MISMATCH"
+        ));
+    }
+
+    #[tokio::test]
+    async fn final_observation_rechecks_credential_lifetime_after_awaited_work() {
+        let expired = Fixture::with_kernel_and_clock_advance(Arc::new(RustCredentialKernel), 1_000);
+        let result = expired
+            .orchestrator
+            .verify_material(&expired.policy, &expired.request)
+            .await;
+        assert!(matches!(
+            result,
+            Err(PresentationVerificationError::Failed(ref reason))
+                if reason == "PRESENTATION_POLICY.SD_JWT_EXPIRED_DURING_EVALUATION"
+        ));
+
+        let stale_holder =
+            Fixture::with_kernel_and_clock_advance(Arc::new(RustCredentialKernel), 301);
+        let mut long_lived_claims = stale_holder.claims.clone();
+        long_lived_claims["exp"] = json!(stale_holder.now + 3_600);
+        let request = stale_holder.request_for_token(presentation(
+            &long_lived_claims,
+            NONCE,
+            AUDIENCE,
+            stale_holder.now,
+        ));
+        // The issuer credential remains live. Only the authenticated KB-JWT's
+        // 300-second freshness window expires while the awaited work runs.
+        let result = stale_holder
+            .orchestrator
+            .verify_material(&stale_holder.policy, &request)
+            .await;
+        assert!(matches!(
+            result,
+            Err(PresentationVerificationError::Failed(ref reason))
+                if reason == "PRESENTATION_POLICY.SD_JWT_HOLDER_PROOF_EXPIRED_DURING_EVALUATION"
+        ));
+
+        let expired_holder =
+            Fixture::with_kernel_and_clock_advance(Arc::new(RustCredentialKernel), 120);
+        let mut long_lived_claims = expired_holder.claims.clone();
+        long_lived_claims["exp"] = json!(expired_holder.now + 3_600);
+        let request = expired_holder.request_for_token(bind_disclosed_sd_jwt_with_claims(
+            &disclosed_sd_jwt(&long_lived_claims, &["email"]),
+            json!({
+                "aud": AUDIENCE,
+                "nonce": NONCE,
+                "iat": expired_holder.now,
+                "exp": expired_holder.now + 1,
+                "nbf": expired_holder.now - 1,
+            }),
+        ));
+        // The proof remains within Core's 300-second iat window, but its
+        // shorter authenticated exp must still invalidate the final result.
+        let result = expired_holder
+            .orchestrator
+            .verify_material(&expired_holder.policy, &request)
+            .await;
+        assert!(matches!(
+            result,
+            Err(PresentationVerificationError::Failed(ref reason))
+                if reason == "PRESENTATION_POLICY.SD_JWT_HOLDER_PROOF_EXPIRED_DURING_EVALUATION"
+        ));
+
+        let fresh = Fixture::with_kernel_and_clock_advance(Arc::new(RustCredentialKernel), 5);
+        let request = fresh.request_for_token(bind_disclosed_sd_jwt_with_claims(
+            &disclosed_sd_jwt(&fresh.claims, &["email"]),
+            json!({
+                "aud": AUDIENCE,
+                "nonce": NONCE,
+                "iat": fresh.now,
+                "exp": fresh.now + 60,
+                "nbf": fresh.now - 1,
+            }),
+        ));
+        let material = fresh.verify(&request).await;
+        let evidence =
+            serde_json::to_value(material.authenticated_sd_jwt_query().unwrap()).unwrap();
+        assert_eq!(evidence["checked_at_epoch_seconds"], fresh.now + 5);
+        assert_eq!(
+            material.policy_facts()["evaluation_time_epoch_seconds"],
+            fresh.now + 5,
+        );
+        let projected =
+            evaluate_verified_material_for_policy(material, &fresh.policy, &request).unwrap();
+        assert_eq!(
+            projected["credential_results"][0]["authenticated_sd_jwt_query"]
+                ["checked_at_epoch_seconds"],
+            fresh.now + 5,
+            "projection must preserve the final live observation",
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_query_and_selected_response_are_required_for_authenticated_evidence() {
+        let fixture = Fixture::new();
+        let mut changed_vct = fixture.request.clone();
+        changed_vct
+            .oid4vp_transport
+            .as_mut()
+            .unwrap()
+            .query_document["credentials"][0]["meta"]["vct_values"] =
+            json!(["urn:example:changed-query-type"]);
+        refresh_query_digest(&mut changed_vct);
+
+        let mut changed_token = fixture.request.clone();
+        let mut other_claims = fixture.claims.clone();
+        other_claims["sub"] = json!("another-authenticated-subject");
+        let other_token = presentation(&other_claims, NONCE, AUDIENCE, fixture.now);
+        changed_token
+            .oid4vp_transport
+            .as_mut()
+            .unwrap()
+            .vp_token_raw = json!({(fixture.query_id.clone()): [other_token]}).to_string();
+
+        let mut wrong_response_id = fixture.request.clone();
+        wrong_response_id
+            .oid4vp_transport
+            .as_mut()
+            .unwrap()
+            .vp_token_raw =
+            json!({"different-query": [fixture.request.vp_token.clone()]}).to_string();
+
+        let mut extra_response_id = fixture.request.clone();
+        extra_response_id
+            .oid4vp_transport
+            .as_mut()
+            .unwrap()
+            .vp_token_raw = json!({
+            (fixture.query_id.clone()): [fixture.request.vp_token.clone()],
+            "additional-query": [fixture.request.vp_token.clone()],
+        })
+        .to_string();
+
+        let mut multiple_tokens = fixture.request.clone();
+        multiple_tokens
+            .oid4vp_transport
+            .as_mut()
+            .unwrap()
+            .vp_token_raw = json!({
+            (fixture.query_id.clone()): [fixture.request.vp_token.clone(), other_token],
+        })
+        .to_string();
+
+        let mut wrong_query_id = fixture.request.clone();
+        wrong_query_id
+            .oid4vp_transport
+            .as_mut()
+            .unwrap()
+            .query_document["credentials"][0]["id"] = json!(Uuid::from_u128(90).to_string());
+        wrong_query_id
+            .oid4vp_transport
+            .as_mut()
+            .unwrap()
+            .vp_token_raw =
+            json!({(Uuid::from_u128(90).to_string()): [fixture.request.vp_token.clone()]})
+                .to_string();
+        refresh_query_digest(&mut wrong_query_id);
+
+        let mut extra_query_id = fixture.request.clone();
+        let transport = extra_query_id.oid4vp_transport.as_mut().unwrap();
+        let mut extra_requirement = transport.query_document["credentials"][0].clone();
+        extra_requirement["id"] = json!(Uuid::from_u128(91).to_string());
+        transport.query_document["credentials"]
+            .as_array_mut()
+            .unwrap()
+            .push(extra_requirement);
+        refresh_query_digest(&mut extra_query_id);
+
+        let mut wrong_digest = fixture.request.clone();
+        wrong_digest.oid4vp_transport.as_mut().unwrap().query_digest = "0".repeat(64);
+
+        for (label, request) in [
+            ("changed query VCT with a recomputed digest", changed_vct),
+            ("different selected response token", changed_token),
+            ("wrong response query ID", wrong_response_id),
+            ("extra response query ID", extra_response_id),
+            ("multiple tokens for one query", multiple_tokens),
+            (
+                "query ID differs from the saved policy requirement",
+                wrong_query_id,
+            ),
+            ("additional query requirement", extra_query_id),
+            ("query document digest mismatch", wrong_digest),
+        ] {
+            fixture.assert_no_evidence(label, &request).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn workload_transport_and_both_standard_verifier_bindings_are_required() {
+        let fixture = Fixture::new();
+        let mut untrusted = fixture.request.clone();
+        untrusted.trusted_internal_context = false;
+        let mut missing_transport = fixture.request.clone();
+        missing_transport.oid4vp_transport = None;
+        let mut no_audience = fixture.request.clone();
+        no_audience.audience = None;
+        let mut no_nonce = fixture.request.clone();
+        no_nonce.nonce = None;
+        let mut changed_audience = fixture.request.clone();
+        changed_audience
+            .oid4vp_transport
+            .as_mut()
+            .unwrap()
+            .verifier_client_id = "did:web:substituted-verifier.example".into();
+        let mut changed_nonce = fixture.request.clone();
+        changed_nonce
+            .oid4vp_transport
+            .as_mut()
+            .unwrap()
+            .request_nonce = "substituted-nonce-123456789012345678901234567890".into();
+        for (label, request) in [
+            ("untrusted transport context", untrusted),
+            ("missing query transport", missing_transport),
+            ("absent standard audience, including DC API", no_audience),
+            ("missing nonce", no_nonce),
+            ("transport client ID mismatch", changed_audience),
+            ("transport nonce mismatch", changed_nonce),
+        ] {
+            fixture.assert_no_evidence(label, &request).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn caller_json_cannot_create_or_replace_authenticated_query_identity() {
+        let fixture = Fixture::new();
+        let mut forged = fixture.request.clone();
+        let false_identity = json!({
+            "issuer_id": "did:web:caller-selected.example",
+            "issuer_scoped_subject_digest": "f".repeat(64),
+            "holder_key_thumbprint": "caller-selected-holder",
+            "matched_claims": ["administrator"],
+            "verified": true,
+        });
+        forged
+            .context
+            .insert("authenticated_sd_jwt_query".into(), false_identity);
+        forged.context.insert(
+            "verified_claims".into(),
+            json!({
+                "iss": "did:web:caller-selected.example",
+                "sub": "caller-selected-subject",
+                "cnf": {"jwk": public_key(&SigningKey::from_bytes(&[81; 32]))},
+            }),
+        );
+        let authentic = fixture.verify(&fixture.request).await;
+        let material = fixture.verify(&forged).await;
+        assert!(material.authenticated_sd_jwt_query().is_some());
+        assert_eq!(
+            serde_json::to_value(material.authenticated_sd_jwt_query().unwrap()).unwrap(),
+            serde_json::to_value(authentic.authenticated_sd_jwt_query().unwrap()).unwrap(),
+            "caller JSON cannot replace native authenticated identity",
+        );
+        let mut unproved = fixture.request_for_token("unverified-presentation".into());
+        unproved.context = forged.context;
+        fixture
+            .assert_no_evidence("forged identity without a valid presentation", &unproved)
+            .await;
     }
 }

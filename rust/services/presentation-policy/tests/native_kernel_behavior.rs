@@ -60,6 +60,7 @@ async fn scoped_did_policy_cannot_bypass_registry_using_relationship_keys_or_mis
 fn context(format: DetectedCredentialFormat, token: Value) -> CredentialVerificationContext {
     CredentialVerificationContext {
         presentation_only: false,
+        sd_jwt_dcql: None,
         resolved_issuer_key: None,
         format,
         token,

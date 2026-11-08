@@ -8,10 +8,12 @@ to the policy service's decision and fences finalization against a changed
 session. It extends the signing-authorization work in
 [atomic-signing-authorization.md](atomic-signing-authorization.md).
 
-The change does not authorize prerequisite-based issuance. The existing
-OID4VP evidence contract still needs a production producer of authenticated
-subject and holder-key evidence, native satisfaction of the exact query, and
-an issuance-owned continuation bound to one tenant, template and dataset.
+The change does not authorize prerequisite-based issuance. The selected
+SD-JWT/DCQL continuation now produces native query, subject and holder-key
+evidence, described in [SD-JWT prerequisite evidence](sd-jwt-prerequisite-evidence.md).
+The full OID4VP evidence contract still needs authoritative trust/status/replay
+outcomes and an issuance-owned continuation bound to one tenant, template and
+dataset.
 
 ## Authoritative policy identity
 
@@ -59,13 +61,13 @@ Plaintext channels cannot silently discard that metadata for bound Flow
 verification. Existing standalone calls without Flow transport metadata remain
 separate.
 
-The current production `VerifiedFactsOrchestrator` still evaluates native
-credential facts against the saved policy without consuming this typed query
-transport to produce a query-bound evidence projection. This patch establishes
-request stability and policy identity; native proof that the presentation
-satisfies the exact DCQL/Presentation Exchange query remains a subsequent
-contract integration task. A policy decision here must not be promoted to an
-authenticated prerequisite continuation.
+The production `VerifiedFactsOrchestrator` now consumes this typed transport
+for the bounded one-credential SD-JWT/DCQL profile. Its native producer verifies
+the exact query selection, both holder-proof bindings, issuer-scoped subject
+and holder key before emitting a private-constructor typed record. Other
+formats and Presentation Exchange retain their existing behavior. This partial
+record and a policy decision must not be promoted to an authenticated
+prerequisite continuation.
 
 ## Atomic finalization
 
@@ -146,7 +148,7 @@ the existing target preserves their execution and the reviewed context.
 Two independent source audits passed after correcting the DC API comparison
 snapshot, stale-policy error propagation, callback digest binding and Auth
 consumer compatibility. They also checked the descriptor and exact-path CI
-ownership requirements. The implementation passed 942 selected Rust library and
+ownership requirements. That preceding foundation passed 942 selected Rust library and
 behavior tests, with 15 explicitly ignored cases, and a locked build of all
 seven affected package groups. The strict workspace/all-target Clippy run passed
 on CI's pinned Rust 1.95.0. Two descriptor checks and 38 context/CI-policy

@@ -39,7 +39,7 @@ registered; it should not be recreated as unfinished W01 work.
 
 | Work package | Current development | Completion boundary |
 | --- | --- | --- |
-| W05 — verified prerequisites before issuance | Atomic signing authority revalidation, frozen Flow requests and authoritative policy-revision checks | Foundations for the workflow; native query-bound prerequisite evidence and issuance continuation are still required |
+| W05 — verified prerequisites before issuance | Atomic signing authority revalidation, frozen Flow requests, authoritative policy-revision checks and bounded native SD-JWT/DCQL query/subject/key evidence | Full authoritative trust/status/replay evidence and an issuance-owned continuation are still required |
 | W14 — verified wallets | Reconcile existing [Authenticator PR 57](https://github.com/ElevenID/marty-authenticator/pull/57) with the merged fork foundation, current APIs and verified receipt/presentation contracts | Source integration and tests; external wallet activation and release qualification remain open |
 
 ### W05: current signing authorization boundary
@@ -80,10 +80,13 @@ callback decision digest.
 
 [Policy-bound verification](policy-bound-verification.md) describes the service
 contract, coordinated deployment, workload mutual TLS, legacy-session restart
-behavior and validation. Native satisfaction of the exact query and a
-production authenticated subject/key projection remain unfinished. No result
-in this slice grants a single-use issuance continuation or locks a remote policy
-revision through credential signing.
+behavior and validation. The next bounded producer now verifies one exact
+SD-JWT/DCQL query and emits native issuer-scoped subject and holder-key evidence.
+[SD-JWT prerequisite evidence](sd-jwt-prerequisite-evidence.md) records the
+supported profile, private construction, correspondence and freshness checks.
+It does not yet produce the full canonical trust/status/replay record. No
+result in this slice grants a single-use issuance continuation or locks a
+remote policy revision through credential signing.
 
 ### W14: current verified-wallet integration
 
@@ -115,11 +118,12 @@ of existing checked-in WASM artifacts does not qualify a new-fork build.
 
 1. Finish review and exact-commit gates for the signing boundary and wallet
    integration. Resolve failures; do not bypass protected merge or release rules.
-2. Connect the existing W05 evidence contract to native query satisfaction and
-   authenticated issuer-scoped subject/holder-key evidence. Bind that evidence
-   to the tenant, issuing template, exact dataset and saved policy reference
-   through an issuance-owned single-use continuation and expiry. Revalidate and
-   consume that authority at the signing boundary.
+2. Complete the selected SD-JWT/DCQL native producer with authoritative
+   issuer/type trust, status and durable replay outcomes in the full canonical
+   evidence contract. Bind that evidence to the tenant, issuing template, exact
+   dataset and saved policy reference through an issuance-owned single-use
+   continuation and expiry. Revalidate and consume that authority at the
+   signing boundary.
 3. Implement the selected W04 request/client authentication profile and recipient
    consent required by W14. Reject unsupported security parameters explicitly.
 4. Complete the first prerequisite-to-issuance workflow against one selected
@@ -157,6 +161,15 @@ CI-context checks passed. The shared revision assertions use the existing
 contract test target to retain the reviewed migrations build context. Hosted
 results and the final published head are tracked in PR 1845.
 
+The bounded SD-JWT/DCQL producer and three hosted integration corrections
+passed two new independent source audits. The current locked/offline Rust run
+passed 161 library/behavior/contract tests across ten executables, with one
+existing disposable-KMS test explicitly ignored. The compile-fail doctest
+confirming that query evidence cannot be deserialized also passed. Forty-one
+focused Python dependency, Docker-context and descriptor checks passed. These
+are current-increment receipts, separate from the preceding 942-test foundation
+run and from actual database execution.
+
 The signing-boundary PR must distinguish behavioral test results from actual
 PostgreSQL execution. Local environment restrictions that prevent a supported
 database instance are a pending CI gate, not a database test pass. Both PRs
@@ -181,8 +194,21 @@ conditions in their descriptions.
   open; actual PostgreSQL execution
   remains a required CI gate before merge. Protected merge and release rules
   continue to apply.
-- The continuation adds saved-policy identity, frozen generated requests and
+- The following published head, `0a6cc6c7b28413baf4e38261cdc77a3eb7e00edd`,
+  added saved-policy identity, frozen generated requests and
   original-instance finalization to the same W05 PR. It reuses the existing
   OID4VP contract and canonical digest owner.
-  Authenticated subject/key evidence and issuance-owned single-use continuation
-  remain subsequent work; a passed decision alone cannot authorize issuance.
+  Its hosted run executed the Flow HTTP/PostgreSQL stale-context regression and
+  workspace atomic-finalization database assertions. Three failures remained:
+  the forbidden Auth-to-Flow dev dependency, a stale descriptor hash expectation
+  and Canvas renewal's historical-schema fixture missing native expiry columns.
+  Dedicated serialized database gates were skipped after those failures;
+  issuance tests returning early without their database URL were not database
+  evidence.
+- This development increment fixes those three integration failures and adds
+  bounded native SD-JWT/DCQL query, subject and key evidence. It retains the
+  existing override API while binding evidence to the effective trust-profile
+  identity, and rechecks credential validity and holder-proof freshness after
+  asynchronous work. The full canonical trust/status/replay record and
+  issuance-owned continuation remain subsequent work. A passed decision alone
+  cannot authorize issuance.

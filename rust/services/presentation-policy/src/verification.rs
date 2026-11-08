@@ -125,6 +125,8 @@ impl AuthenticatedIssuerEvidence {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CredentialVerificationContext {
+    /// Prepared by the workload transport adapter; caller JSON cannot supply it.
+    pub sd_jwt_dcql: Option<crate::SdJwtDcqlRequest>,
     /// Derived from the saved policy, never from caller-supplied context.
     /// A verified presentation need not carry a credential for this obligation.
     pub presentation_only: bool,
@@ -143,6 +145,9 @@ pub struct CredentialVerificationContext {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CredentialVerificationEvidence {
+    /// Native query/subject/key evidence has no JSON promotion path.
+    #[serde(skip)]
+    pub authenticated_sd_jwt_query: Option<crate::AuthenticatedSdJwtQueryEvidence>,
     pub verified: bool,
     pub failure_reason: Option<String>,
     pub mdoc_authentication_diagnostic:
@@ -269,6 +274,8 @@ impl VerifiedFactsOrchestrator {
             )));
         }
 
+        let sd_jwt_dcql =
+            crate::SdJwtDcqlRequest::prepare(policy, request, format, (self.clock)())?;
         let presentation_only = is_presentation_only(policy);
         let profile_id = if presentation_only {
             None
@@ -298,20 +305,63 @@ impl VerifiedFactsOrchestrator {
         let audience_required = freshness_flag(policy, "audience_binding_required");
 
         let context = CredentialVerificationContext {
+            sd_jwt_dcql: sd_jwt_dcql.clone(),
             presentation_only,
             resolved_issuer_key: None,
             format,
             token: request.vp_token.clone(),
-            nonce: (requires_bound_presentation && challenge_required)
-                .then(|| request.nonce.clone())
-                .flatten(),
-            audience: (requires_bound_presentation && audience_required)
-                .then(|| request.audience.clone())
-                .flatten(),
+            nonce: sd_jwt_dcql
+                .as_ref()
+                .map(|query| query.nonce().to_owned())
+                .or_else(|| {
+                    (requires_bound_presentation && challenge_required)
+                        .then(|| request.nonce.clone())
+                        .flatten()
+                }),
+            audience: sd_jwt_dcql
+                .as_ref()
+                .map(|query| query.audience().to_owned())
+                .or_else(|| {
+                    (requires_bound_presentation && audience_required)
+                        .then(|| request.audience.clone())
+                        .flatten()
+                }),
             verifier_context: request.context.clone(),
             trust_profile: trust_profile.clone(),
         };
         let mut evidence = self.kernel.verify(&context).await?;
+        let query_evidence_matches = match (&sd_jwt_dcql, &evidence.authenticated_sd_jwt_query) {
+            (Some(prepared), Some(authenticated)) => {
+                prepared.matches_evidence(authenticated)
+                    && authenticated.matches_claims(&evidence.claims)
+                    && evidence.issuer_id.as_deref() == Some(authenticated.issuer_id())
+                    && evidence
+                        .authenticated_issuer
+                        .as_ref()
+                        .is_some_and(|issuer| {
+                            issuer.issuer_id == authenticated.issuer_id()
+                                && issuer.provenance.trust_profile_id
+                                    == context.trust_profile.as_ref().map(|profile| profile.id)
+                                && issuer.provenance.organization_id
+                                    == context
+                                        .trust_profile
+                                        .as_ref()
+                                        .map(|profile| profile.organization_id)
+                        })
+                    && evidence.verified
+                    && evidence.holder_binding_verified
+                    && evidence.challenge_verified
+                    && evidence.audience_verified
+            }
+            (Some(_), None) => !evidence.verified,
+            (None, None) => true,
+            (None, Some(_)) => false,
+        };
+        if !query_evidence_matches {
+            return Err(PresentationVerificationError::Failed(
+                "PRESENTATION_POLICY.AUTHENTICATED_QUERY_EVIDENCE_MISMATCH".into(),
+            ));
+        }
         apply_trusted_oid4vp_context(policy, request, &mut evidence);
         let authenticated_outer_jti = if evidence.verified && !presentation_only {
             evidence.authenticated_outer_jti.clone()
@@ -322,7 +372,10 @@ impl VerifiedFactsOrchestrator {
             evidence.claims.clear();
             evidence.issuer_id = None;
             evidence.authenticated_issuer = None;
+            evidence.authenticated_sd_jwt_query = None;
         }
+
+        let mut authenticated_sd_jwt_query = evidence.authenticated_sd_jwt_query.clone();
 
         let authenticated_issuer = if evidence.verified && !presentation_only {
             evidence.authenticated_issuer.clone()
@@ -356,7 +409,6 @@ impl VerifiedFactsOrchestrator {
             },
         };
 
-        let evaluation_time = (self.clock)();
         // A trusted mDL issuer certificate says nothing about the status of
         // this credential. Only credential-specific status evidence may set
         // not_revoked; policies requiring it fail closed when none is present.
@@ -374,6 +426,11 @@ impl VerifiedFactsOrchestrator {
                     &evidence.credential_status_ids,
                 )
                 .await?;
+        }
+
+        let evaluation_time = (self.clock)();
+        if let Some(query) = authenticated_sd_jwt_query.as_mut() {
+            query.revalidate_at(evaluation_time)?;
         }
 
         let external_authorization = if presentation_only {
@@ -419,7 +476,14 @@ impl VerifiedFactsOrchestrator {
             .credential_id
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "presented-credential".into());
-        let templates = credential_template_ids(policy);
+        let templates = if sd_jwt_dcql.is_some() {
+            authenticated_sd_jwt_query
+                .as_ref()
+                .map(|evidence| vec![evidence.credential_template_id().to_owned()])
+                .unwrap_or_default()
+        } else {
+            credential_template_ids(policy)
+        };
         let credential_status = normalized_status(evidence.status.credential_status.as_deref());
         let credentials = if presentation_only {
             json!([])
@@ -466,6 +530,7 @@ impl VerifiedFactsOrchestrator {
             policy_facts: facts,
             authenticated_outer_jti,
             authenticated_issuer,
+            authenticated_sd_jwt_query,
         })
     }
 }
@@ -653,7 +718,7 @@ fn canonical_token(token: &Value) -> Result<String, PresentationVerificationErro
     }
 }
 
-fn selected_trust_profile(
+pub(crate) fn selected_trust_profile(
     policy: &PresentationPolicy,
     request: &EvaluatePresentationRequest,
 ) -> Result<Option<Uuid>, PresentationVerificationError> {

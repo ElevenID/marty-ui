@@ -11,6 +11,7 @@ pub mod persistence;
 pub mod policy_revision;
 pub mod postgres;
 pub mod runtime;
+mod sd_jwt_query;
 pub mod verification;
 
 pub use application::{
@@ -31,9 +32,9 @@ pub use domain::{
 pub use grpc_security::PresentationGrpcSecurity;
 pub use grpc_service::PresentationPolicyGrpcService;
 pub use http_service::{
-    evaluate_verified_facts_for_policy, presentation_policy_router, EvaluatePresentationRequest,
-    PresentationPolicyHttpState, PresentationVerificationError,
-    PresentationVerificationOrchestrator, VerifiedPolicyMaterial,
+    evaluate_verified_facts_for_policy, evaluate_verified_material_for_policy,
+    presentation_policy_router, EvaluatePresentationRequest, PresentationPolicyHttpState,
+    PresentationVerificationError, PresentationVerificationOrchestrator, VerifiedPolicyMaterial,
 };
 pub use native_kernel::{ResolvingCredentialKernel, RustCredentialKernel};
 pub use persistence::{PolicyRecord, PolicyRecordError, PRESENTATION_POLICY_MIGRATION};
@@ -43,6 +44,7 @@ pub use postgres::{
     PostgresPolicyStoreError,
 };
 pub use runtime::{PresentationPolicyDependency, PresentationPolicyRuntime};
+pub use sd_jwt_query::{AuthenticatedSdJwtQueryEvidence, SdJwtDcqlRequest};
 pub use verification::{
     AuthenticatedIssuerEvidence, CredentialStatusEvidence, CredentialStatusResolver,
     CredentialVerificationContext, CredentialVerificationEvidence, CredentialVerificationKernel,

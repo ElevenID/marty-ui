@@ -177,6 +177,7 @@ async fn data_integrity_credential_fields_cannot_bypass_registry_controls() {
         nonce: None,
         audience: None,
         presentation_only: false,
+        sd_jwt_dcql: None,
         verifier_context: Map::new(),
         trust_profile: Some(ResolvedTrustProfile {
             id: Uuid::new_v4(),
@@ -302,6 +303,7 @@ async fn exercise_registry(key: &SigningKey, signed: Value, format: DetectedCred
             nonce: None,
             audience: None,
             presentation_only: false,
+            sd_jwt_dcql: None,
             verifier_context: Map::new(),
             trust_profile: Some(ResolvedTrustProfile {
                 id: Uuid::new_v4(),
@@ -459,6 +461,7 @@ async fn ob3_wrappers_apply_registry_controls_to_the_credential_the_native_verif
                 nonce: None,
                 audience: None,
                 presentation_only: false,
+                sd_jwt_dcql: None,
                 verifier_context: Map::new(),
                 trust_profile: Some(ResolvedTrustProfile {
                     id: Uuid::new_v4(),
@@ -544,6 +547,7 @@ async fn retired_assertion_wrapper_is_rejected_before_scoped_registry_lookup() {
         nonce: None,
         audience: None,
         presentation_only: false,
+        sd_jwt_dcql: None,
         verifier_context: Map::new(),
         trust_profile: Some(ResolvedTrustProfile {
             id: Uuid::new_v4(),

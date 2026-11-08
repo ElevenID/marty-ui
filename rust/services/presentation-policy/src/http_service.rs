@@ -77,6 +77,7 @@ pub struct VerifiedPolicyMaterial {
     pub(crate) policy_facts: Value,
     pub(crate) authenticated_outer_jti: Option<String>,
     pub(crate) authenticated_issuer: Option<crate::AuthenticatedIssuerEvidence>,
+    pub(crate) authenticated_sd_jwt_query: Option<crate::AuthenticatedSdJwtQueryEvidence>,
 }
 
 impl VerifiedPolicyMaterial {
@@ -85,6 +86,7 @@ impl VerifiedPolicyMaterial {
             policy_facts,
             authenticated_outer_jti: None,
             authenticated_issuer: None,
+            authenticated_sd_jwt_query: None,
         }
     }
 
@@ -98,6 +100,10 @@ impl VerifiedPolicyMaterial {
 
     pub fn authenticated_issuer(&self) -> Option<&crate::AuthenticatedIssuerEvidence> {
         self.authenticated_issuer.as_ref()
+    }
+
+    pub fn authenticated_sd_jwt_query(&self) -> Option<&crate::AuthenticatedSdJwtQueryEvidence> {
+        self.authenticated_sd_jwt_query.as_ref()
     }
 }
 
@@ -553,7 +559,10 @@ pub fn evaluate_verified_facts_for_policy(
     )
 }
 
-fn evaluate_verified_material_for_policy(
+/// Evaluate native material and project its independently authenticated
+/// provenance through the same boundary used by the HTTP and gRPC adapters.
+/// Material built with `facts_only` cannot supply authenticated query identity.
+pub fn evaluate_verified_material_for_policy(
     material: VerifiedPolicyMaterial,
     policy: &PresentationPolicy,
     request: &EvaluatePresentationRequest,
@@ -562,7 +571,23 @@ fn evaluate_verified_material_for_policy(
         mut policy_facts,
         authenticated_outer_jti,
         authenticated_issuer,
+        authenticated_sd_jwt_query,
     } = material;
+    if authenticated_sd_jwt_query.as_ref().is_some_and(|query| {
+        !query.matches_request(policy, request)
+            || policy_facts["credentials"]
+                .as_array()
+                .is_none_or(|credentials| {
+                    credentials.len() != 1
+                        || credentials[0]["claims"]
+                            .as_object()
+                            .is_none_or(|claims| !query.matches_claims(claims))
+                })
+    }) {
+        return Err(bad_request(
+            "PRESENTATION_POLICY.QUERY_EVIDENCE_BINDING_MISMATCH",
+        ));
+    }
     let object = policy_facts
         .as_object_mut()
         .ok_or_else(|| service_unavailable("PRESENTATION_POLICY.INVALID_VERIFICATION_EVIDENCE"))?;
@@ -586,6 +611,28 @@ fn evaluate_verified_material_for_policy(
     // context, verifier facts or the native result's self-reported identity.
     result["policy_revision"] = crate::policy_revision::policy_revision_value(policy)
         .map_err(|_| service_unavailable("PRESENTATION_POLICY.INVALID_POLICY_REVISION"))?;
+    // Carry only native-constructed query evidence on its unique credential
+    // result. Generic policy facts and caller JSON cannot create this field.
+    if let Some(query) = authenticated_sd_jwt_query {
+        if let Some(results) = result
+            .get_mut("credential_results")
+            .and_then(Value::as_array_mut)
+        {
+            if results.len() == 1 {
+                let credential = &mut results[0];
+                if credential["signature_valid"] == true
+                    && credential["credential_template_id"].as_str()
+                        == Some(query.credential_template_id())
+                    && credential["issuer_did"].as_str() == Some(query.issuer_id())
+                {
+                    credential["authenticated_sd_jwt_query"] = serde_json::to_value(query)
+                        .map_err(|_| {
+                            service_unavailable("PRESENTATION_POLICY.INVALID_QUERY_EVIDENCE")
+                        })?;
+                }
+            }
+        }
+    }
     Ok(result)
 }
 

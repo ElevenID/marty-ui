@@ -4972,6 +4972,7 @@ dependencies = [
  "mmf-platform",
  "mmf-runtime",
  "mmf-security",
+ "p256",
  "prost",
  "protoc-bin-vendored",
  "reqwest",
