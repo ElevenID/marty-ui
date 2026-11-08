@@ -18,6 +18,8 @@
     "GET /v1/organizations/mine",
     "GET /v1/organizations/{org_id}",
     "PATCH /v1/organizations/{org_id}",
+    "GET /v1/organizations/{org_id}/defaults",
+    "PATCH /v1/organizations/{org_id}/defaults",
     "GET /v1/organizations/{org_id}/api-keys",
     "POST /v1/organizations/{org_id}/api-keys",
     "DELETE /v1/organizations/{org_id}/api-keys/{key_id}",

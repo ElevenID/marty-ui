@@ -33,6 +33,14 @@ import { useTranslation } from 'react-i18next';
  * Environment configurations factory
  */
 const getEnvironments = (t) => ({
+  unset: {
+    label: t('dashboard.environment.unset', 'Not configured'),
+    fullLabel: t('dashboard.environment.unsetFull', 'Environment not configured'),
+    color: 'default',
+    icon: HelpOutlineIcon,
+    warning: false,
+    description: t('dashboard.environment.unsetDescription', 'No environment has been configured for this organization.'),
+  },
   unknown: {
     label: t('dashboard.environment.unknown', 'Unknown'),
     fullLabel: t('dashboard.environment.unknownFull', 'Environment unknown'),
@@ -112,7 +120,7 @@ export function EnvironmentBadge({
           label={currentEnv.label}
           color={currentEnv.color}
           size="small"
-          onClick={handleClick}
+          onClick={showSwitcher ? handleClick : undefined}
           sx={{
             fontWeight: 600,
             cursor: showSwitcher ? 'pointer' : 'default',
@@ -137,7 +145,8 @@ export function EnvironmentBadge({
             horizontal: 'right',
           }}
         >
-          {Object.entries(ENVIRONMENTS).map(([key, config]) => {
+          {['development', 'staging', 'production'].map((key) => {
+            const config = ENVIRONMENTS[key];
             const EnvIcon = config.icon;
             const isSelected = key === environment;
             

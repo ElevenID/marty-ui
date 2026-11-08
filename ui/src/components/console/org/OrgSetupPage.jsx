@@ -149,6 +149,7 @@ export function OrgSetupPage() {
         label={primaryRole?.display_name || primaryRole?.name || 'No roles'}
         color={roleColors[primaryRole?.name] || 'default'}
         size="small"
+        sx={{ maxWidth: '100%' }}
       />
     );
   };
@@ -232,7 +233,7 @@ export function OrgSetupPage() {
           </Typography>
           <Grid container spacing={3} sx={{ mb: 4 }}>
             {resolvedOrganizations.map((org) => (
-              <Grid item xs={12} sm={6} md={4} key={org.id}>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }} key={org.id}>
                 {(() => {
                   const isSelected = org.id === activeOrgId;
 
@@ -255,12 +256,12 @@ export function OrgSetupPage() {
                     {/* Organization Name */}
                     <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 2 }}>
                       <BusinessIcon color="action" sx={{ mt: 0.5 }} />
-                      <Box sx={{ flexGrow: 1 }}>
-                        <Typography variant="h6" gutterBottom>
+                      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                        <Typography variant="h6" gutterBottom sx={{ overflowWrap: 'anywhere' }}>
                           {org.display_name || org.name}
                         </Typography>
                         {org.description && (
-                          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                          <Typography variant="body2" color="text.secondary" sx={{ mb: 1, overflowWrap: 'anywhere' }}>
                             {org.description}
                           </Typography>
                         )}
@@ -270,32 +271,45 @@ export function OrgSetupPage() {
                     <Divider sx={{ my: 2 }} />
 
                     {/* Membership Details */}
-                    <Stack spacing={1.5}>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Typography variant="caption" color="text.secondary">
-                          Role:
-                        </Typography>
+                    <Box
+                      component="dl"
+                      sx={{
+                        m: 0,
+                        display: 'grid',
+                        gridTemplateColumns: 'max-content minmax(0, 1fr)',
+                        columnGap: 1,
+                        rowGap: 1.5,
+                        alignItems: 'center',
+                      }}
+                    >
+                      <Typography component="dt" variant="caption" color="text.secondary">
+                        Role:
+                      </Typography>
+                      <Box component="dd" sx={{ m: 0 }}>
                         {getRoleBadge(
                           org.membership?.roles,
                           org.membership?.has_org_console_access
                         )}
                       </Box>
 
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Typography variant="caption" color="text.secondary">
-                          Status:
-                        </Typography>
+                      <Typography component="dt" variant="caption" color="text.secondary">
+                        Status:
+                      </Typography>
+                      <Box component="dd" sx={{ m: 0 }}>
                         {getStatusBadge(org.membership?.status)}
                       </Box>
 
                       {org.membership?.joined_at && (
-                        <Box>
-                          <Typography variant="caption" color="text.secondary">
-                            Joined: {new Date(org.membership.joined_at).toLocaleDateString()}
+                        <>
+                          <Typography component="dt" variant="caption" color="text.secondary">
+                            Joined:
                           </Typography>
-                        </Box>
+                          <Typography component="dd" variant="caption" color="text.secondary" sx={{ m: 0 }}>
+                            {new Date(org.membership.joined_at).toLocaleDateString()}
+                          </Typography>
+                        </>
                       )}
-                    </Stack>
+                    </Box>
 
                     {/* Organization Type */}
                     {org.org_type && (

@@ -38,6 +38,7 @@ const INITIAL_DATA = {
   selectedDeployment: null,
   triggerType: 'API_CALL',
   trustProfileId: null,
+  _organization_default_bindings: null,
 };
 
 const CREDENTIAL_TYPES = new Set([

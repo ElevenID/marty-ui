@@ -5,7 +5,7 @@
  * Shows status, alerts, and next step guidance.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   AlertTitle,
@@ -228,7 +228,6 @@ function ConsoleDashboard() {
   const {
     user,
     organizationName: authOrganizationName,
-    organizationId: authOrganizationId,
     isAdministrator,
     isVendor,
   } = useAuth();
@@ -243,7 +242,12 @@ function ConsoleDashboard() {
   }, [authOrganizationName, memberships, organizationId, t]);
   const { data, loading, error, refetch } = useDashboardData();
   useSSE(organizationId);
-  const [environment, setEnvironment] = useState(data.environment || null);
+  const environmentScope = useMemo(() => ({ organizationId }), [organizationId]);
+  const currentEnvironmentScope = useRef(environmentScope);
+  currentEnvironmentScope.current = environmentScope;
+  const environmentRequest = useRef(0);
+  const [environmentChange, setEnvironmentChange] = useState(null);
+  const currentEnvironmentChange = environmentChange?.scope === environmentScope ? environmentChange : null;
   const [purgingPilotData, setPurgingPilotData] = useState(false);
   const [purgeFeedback, setPurgeFeedback] = useState(null);
   const [setupIntent, setSetupIntent] = useState(null);
@@ -257,14 +261,11 @@ function ConsoleDashboard() {
   const quickActionVisibility = useMemo(() => computeQuickActionVisibility(readiness), [readiness]);
   const dashboardErrors = data.dashboardErrors || {};
   const environmentUnavailable = Boolean(dashboardErrors.environment);
-  const displayEnvironment = environmentUnavailable || !environment ? 'unknown' : environment;
-  const canSwitchEnvironment = Boolean(environment && !environmentUnavailable);
+  const displayEnvironment = environmentUnavailable ? 'unknown' : (data.environment ?? 'unset');
+  const canSwitchEnvironment = Boolean(organizationId && !environmentUnavailable
+    && !permissionsLoading && can('organization', 'edit') && !currentEnvironmentChange?.pending);
 
-  useEffect(() => {
-    if (data.environment) {
-      setEnvironment(data.environment);
-    }
-  }, [data.environment]);
+  useEffect(() => () => { environmentRequest.current += 1; }, [environmentScope]);
 
   // Filter visible quick actions
   const visibleQuickActions = useMemo(() => {
@@ -276,15 +277,25 @@ function ConsoleDashboard() {
 
   // Handle environment change
   const handleEnvironmentChange = async (newEnv) => {
-    if (!organizationId) {
+    if (!canSwitchEnvironment) {
       return;
     }
 
+    const request = ++environmentRequest.current;
+    const applies = () => currentEnvironmentScope.current === environmentScope
+      && environmentRequest.current === request;
+    setEnvironmentChange({ scope: environmentScope, environment: newEnv, pending: true, error: null });
     try {
       await updateOrganizationEnvironment(organizationId, newEnv);
-      setEnvironment(newEnv);
+      if (applies()) {
+        setEnvironmentChange(null);
+        refetch();
+      }
     } catch (error) {
-      logDashboardError('Failed to update environment:', error);
+      if (applies()) {
+        setEnvironmentChange({ scope: environmentScope, environment: newEnv, pending: false, error });
+        logDashboardError('Failed to update environment:', error);
+      }
     }
   };
 
@@ -406,7 +417,18 @@ function ConsoleDashboard() {
           />
         </Box>
       ) : null}
+      {currentEnvironmentChange?.error ? (
+        <Box sx={{ mb: 2 }}>
+          <DashboardErrorAlert
+            title="Environment change failed"
+            error={currentEnvironmentChange.error}
+            onRetry={canSwitchEnvironment ? () => handleEnvironmentChange(currentEnvironmentChange.environment) : undefined}
+            fallback="The organization's environment could not be updated."
+          />
+        </Box>
+      ) : null}
       <EnvironmentContext
+        key={organizationId}
         organizationName={organizationName}
         environment={displayEnvironment}
         organizationId={organizationId}

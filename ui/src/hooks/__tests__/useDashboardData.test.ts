@@ -268,6 +268,79 @@ describe('useDashboardData', () => {
     expect(mockGetTeamSnapshot).not.toHaveBeenCalled()
   })
 
+  it('clears the previous organization immediately while loading an explicitly unset environment', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'healthy' }) }))
+    let resolveEnvironment!: (environment: null) => void
+    const nextEnvironment = new Promise<null>((resolve) => { resolveEnvironment = resolve })
+    mockGetOrganizationEnvironment.mockResolvedValueOnce('production').mockImplementationOnce(() => nextEnvironment)
+    const renders: Array<{ organizationId: string; environment: unknown; loading: boolean }> = []
+    const { result, rerender } = renderHook(() => {
+      const dashboard = useDashboardData()
+      renders.push({ organizationId: mockUseConsole().activeOrgId, environment: dashboard.data.environment, loading: dashboard.loading })
+      return dashboard
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(result.current.data.environment).toBe('production')
+
+    mockUseConsole.mockReturnValue({ activeOrgId: 'org_new' })
+    rerender()
+    expect(result.current.loading).toBe(true)
+    expect(result.current.data.environment).toBeNull()
+    expect(renders.filter((render) => render.organizationId === 'org_new')).toEqual(expect.arrayContaining([
+      { organizationId: 'org_new', environment: null, loading: true },
+    ]))
+    expect(renders.filter((render) => render.organizationId === 'org_new').every((render) => render.environment === null && render.loading)).toBe(true)
+
+    await act(async () => { resolveEnvironment(null); await nextEnvironment })
+    expect(mockGetOrganizationEnvironment).toHaveBeenNthCalledWith(1, 'org_live')
+    expect(mockGetOrganizationEnvironment).toHaveBeenNthCalledWith(2, 'org_new')
+    expect(result.current.loading).toBe(false)
+    expect(result.current.data.environment).toBeNull()
+    expect(result.current.data.dashboardErrors.environment).toBeNull()
+  })
+
+  it('ignores an old environment response even after returning to the same organization', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'healthy' }) }))
+    let resolveOriginal!: (environment: string) => void
+    const originalEnvironment = new Promise<string>((resolve) => { resolveOriginal = resolve })
+    mockGetOrganizationEnvironment
+      .mockImplementationOnce(() => originalEnvironment)
+      .mockResolvedValueOnce('staging')
+      .mockResolvedValueOnce(null)
+    const { result, rerender } = renderHook(() => useDashboardData())
+    expect(result.current.loading).toBe(true)
+
+    mockUseConsole.mockReturnValue({ activeOrgId: 'org_other' })
+    rerender()
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(result.current.data.environment).toBe('staging')
+
+    mockUseConsole.mockReturnValue({ activeOrgId: 'org_live' })
+    rerender()
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(result.current.data.environment).toBeNull()
+    await act(async () => { resolveOriginal('production'); await originalEnvironment })
+    expect(result.current.data.environment).toBeNull()
+    expect(result.current.data.dashboardErrors.environment).toBeNull()
+    expect(result.current.loading).toBe(false)
+  })
+
+  it('keeps environment request failures distinct from unset and clears them on a successful retry', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'healthy' }) }))
+    const failure = new Error('Environment service unavailable')
+    mockGetOrganizationEnvironment.mockRejectedValueOnce(failure).mockResolvedValueOnce(null)
+    const { result } = renderHook(() => useDashboardData())
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(result.current.data.environment).toBeNull()
+    expect(result.current.data.dashboardErrors.environment).toBe(failure)
+
+    act(() => result.current.refetch())
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(result.current.data.environment).toBeNull()
+    expect(result.current.data.dashboardErrors.environment).toBeNull()
+    expect(result.current.loading).toBe(false)
+  })
+
   it('loads native profiles beyond the first page independently of lifecycle metadata', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'healthy' }) }))
     const first = Array.from({ length: 100 }, (_, index) => ({ id: `draft-${index}`, status: 'DRAFT' }))

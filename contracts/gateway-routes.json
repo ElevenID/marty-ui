@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 463,
+  "route_count": 465,
   "routes": [
     {
       "include_in_schema": true,
@@ -1707,6 +1707,18 @@
       "include_in_schema": true,
       "method": "GET",
       "path": "/v1/organizations/{org_id}/dashboard/applicant-stats",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/defaults",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/organizations/{org_id}/defaults",
       "status_code": 200
     },
     {

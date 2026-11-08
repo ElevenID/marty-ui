@@ -110,6 +110,16 @@ pub fn schemas() -> Value {
         .as_object_mut()
         .expect("schemas")
         .extend(api_keys.as_object().expect("API-key schemas").clone());
+    let organization_defaults: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/organization-defaults-http-schemas.json"
+    ))
+    .expect("native organization defaults HTTP schemas");
+    schemas.as_object_mut().expect("schemas").extend(
+        organization_defaults
+            .as_object()
+            .expect("organization defaults schemas")
+            .clone(),
+    );
     schemas
 }
 pub fn protocol_revision() -> &'static str {
@@ -127,6 +137,42 @@ fn schema(name: &str) -> Value {
 
 pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
     use HttpMethod::{Get, Patch, Post};
+    if path == "/v1/organizations/{org_id}/defaults" {
+        operation["summary"] = json!(if method == Patch {
+            "Update organization resource defaults"
+        } else {
+            "Read organization resource defaults"
+        });
+        operation["description"] = json!(if method == Patch {
+            "Requires organization:edit. Each non-null reference must be active, belong to this organization, and be readable by the caller. Omitted fields are preserved; null clears a default. Changes are saved only after all supplied references pass validation."
+        } else {
+            "Requires organization:view and active membership. Returns all three saved defaults, using null for unset values. Creation forms must recheck saved resources before applying them because their availability can change."
+        });
+        if method == Patch {
+            operation["requestBody"] = json!({
+                "required": true,
+                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/runtime__organization_defaults_patch"}}}
+            });
+        }
+        operation["responses"][status.to_string()]["content"] = json!({
+            "application/json": {"schema": {"$ref": "#/components/schemas/runtime__organization_defaults"}}
+        });
+        for (code, description) in [
+            (401, "Authentication required."),
+            (403, "Organization or referenced resource access denied."),
+            (404, "Organization or referenced resource not found."),
+            (422, "Invalid defaults patch or inactive resource."),
+            (
+                502,
+                "Required service is unavailable or returned invalid data.",
+            ),
+        ] {
+            operation["responses"][code.to_string()] = json!({"description": description});
+        }
+        operation["x-marty-request-schema-documented"] = json!(true);
+        operation["x-marty-response-schema-documented"] = json!(true);
+        return;
+    }
     if path == "/v1/api-keys" || path == "/v1/api-keys/{key_id}" {
         describe_api_keys(operation, method, status);
         return;

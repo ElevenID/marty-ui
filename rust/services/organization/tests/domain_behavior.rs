@@ -269,8 +269,10 @@ fn frozen_surface_is_unique_and_complete() {
         .iter()
         .map(|route| route.as_str().expect("route must be a string"))
         .collect();
-    assert_eq!(routes.len(), 62);
+    assert_eq!(routes.len(), 64);
     assert_eq!(unique_routes.len(), routes.len());
+    assert!(unique_routes.contains("GET /v1/organizations/{org_id}/defaults"));
+    assert!(unique_routes.contains("PATCH /v1/organizations/{org_id}/defaults"));
     assert_eq!(
         fixture["grpc_methods"]
             .as_array()

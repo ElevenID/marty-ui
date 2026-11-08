@@ -38,6 +38,10 @@
 
                         <#if usernameHidden??>
                             <#assign attemptedUser = (auth.attemptedUsername)!''>
+                            <#-- Associate the authenticated account with this password-only
+                                 form without submitting another username parameter. -->
+                            <input type="text" id="username" value="${attemptedUser}"
+                                   autocomplete="username" readonly="readonly" style="display:none;" />
                             <div class="elevenid-reauth-user">
                                 <span class="elevenid-reauth-username">${attemptedUser}</span>
                             </div>
