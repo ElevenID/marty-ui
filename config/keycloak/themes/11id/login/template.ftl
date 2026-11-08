@@ -80,7 +80,9 @@
     <script type="text/javascript">
     (function () {
         function createEyeIcon() {
-            return '<span class="kc-password-toggle-glyph" aria-hidden="true">\u{1F441}</span>';
+            return '<svg class="kc-password-toggle-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">' +
+                '<path d="M2 12C4.5 7.5 7.5 5 12 5s7.5 2.5 10 7c-2.5 4.5-5.5 7-10 7S4.5 16.5 2 12Z"/><circle cx="12" cy="12" r="3"/>' +
+                '</svg>';
         }
 
         function attachPasswordToggle(input) {
