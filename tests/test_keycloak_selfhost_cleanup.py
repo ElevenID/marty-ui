@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -17,6 +18,20 @@ def shell_path(path):
     return str(path)
 
 
+def bash_executable():
+    override = os.environ.get("BASH_EXECUTABLE")
+    if override:
+        return override
+    if os.name == "nt":
+        git = shutil.which("git")
+        candidates = ([Path(git).resolve().parent.parent / "bin/bash.exe"] if git else [])
+        candidates.append(Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe")
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate)
+        raise unittest.SkipTest("Git Bash is required for this shell test on Windows")
+    return "bash"
+
 class ProductionDemoCleanupTest(unittest.TestCase):
     def run_cleanup(self, bad_lookup=False, fail_lookup=False, invalid_id=False, extra_field=False):
         with tempfile.TemporaryDirectory() as directory:
@@ -24,7 +39,9 @@ class ProductionDemoCleanupTest(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir()
             (scripts / "load-secrets-env.sh").write_text("require_secret_var() { :; }\n", encoding="utf-8")
-            (scripts / "setup-keycloak.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            setup = scripts / "setup-keycloak.sh"
+            setup.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            setup.chmod(0o700)
             wrapper = scripts / "wrapper.sh"
             wrapper.write_text(
                 (ROOT / "scripts/setup-keycloak-selfhost-production.sh").read_text(encoding="utf-8")
@@ -59,6 +76,7 @@ fi
             env = dict(os.environ,
                 KCADM_PATH=shell_path(stub),
                 KEYCLOAK_ADMIN_PASSWORD="fixture-admin",
+                KEYCLOAK_SETUP_STRICT="true",
                 MARTY_API_CLIENT_SECRET="fixture-client",
                 TEST_CALLS=shell_path(calls),
                 TEST_BAD_LOOKUP="true" if bad_lookup else "false",
@@ -66,7 +84,7 @@ fi
                 TEST_INVALID_ID="true" if invalid_id else "false",
                 TEST_EXTRA_FIELD="true" if extra_field else "false",
             )
-            result = subprocess.run([os.environ.get("BASH_EXECUTABLE", "bash"), shell_path(wrapper)],
+            result = subprocess.run([bash_executable(), shell_path(wrapper)],
                                     env=env, capture_output=True, text=True, timeout=15, check=False)
             return result, calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
 
