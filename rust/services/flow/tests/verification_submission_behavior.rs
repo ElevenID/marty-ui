@@ -32,6 +32,8 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            prerequisite_evidence_profile: None,
+            credential_authority: None,
             policy_revision: presentation_snapshot::revision(policy_id),
             id: policy_id.into(),
             organization_id: "org-1".into(),
@@ -126,6 +128,38 @@ fn with_emitted_query(
 ) -> FlowInstanceRecord {
     presentation_snapshot::emit_query(&mut instance, field, query);
     instance
+}
+
+#[tokio::test]
+async fn managed_owner_snapshot_reaches_policy_and_changed_authority_requires_restart() {
+    let authority = presentation_snapshot::authority("org-1");
+    let mut managed = instance(false);
+    managed.context[presentation_snapshot::SNAPSHOT_KEY]["credential_authority"] = json!(authority);
+    let (ports, seen) = providers(Ok(allowed()));
+    let mut wallet = input("header.payload.signature");
+    wallet.presentation_submission = None;
+    prepare_verification_submission(
+        &ports,
+        managed.clone(),
+        wallet.clone(),
+        &options(None),
+        now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        seen.lock().unwrap()[0]
+            .oid4vp_transport
+            .as_ref()
+            .unwrap()
+            .credential_authority,
+        Some(authority)
+    );
+    let (changed, _) = providers(Err(FlowProviderError::CredentialAuthorityChanged));
+    assert!(matches!(
+        prepare_verification_submission(&changed, managed, wallet, &options(None), now()).await,
+        Err(FlowVerificationSubmissionError::RestartRequired)
+    ));
 }
 
 fn allowed() -> PresentationEvaluationResult {

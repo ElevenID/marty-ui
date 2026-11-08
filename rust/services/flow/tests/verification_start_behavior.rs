@@ -56,6 +56,8 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            prerequisite_evidence_profile: None,
+            credential_authority: None,
             policy_revision: presentation_snapshot::revision(policy_id),
             id: policy_id.into(),
             organization_id: self.organization_id.into(),
@@ -77,6 +79,31 @@ impl PresentationPolicyProvider for Policies {
 }
 
 struct Templates;
+
+struct ManagedPolicies;
+
+#[async_trait]
+impl PresentationPolicyProvider for ManagedPolicies {
+    async fn get_policy(
+        &self,
+        policy_id: &str,
+    ) -> Result<PresentationPolicyReference, FlowProviderError> {
+        let mut policy = Policies {
+            organization_id: "org-1",
+        }
+        .get_policy(policy_id)
+        .await?;
+        policy.prerequisite_evidence_profile = Some("managed_sd_jwt_dcql_v1".into());
+        policy.credential_authority = Some(presentation_snapshot::authority("org-1"));
+        Ok(policy)
+    }
+    async fn evaluate(
+        &self,
+        _: &PresentationEvaluationRequest,
+    ) -> Result<PresentationEvaluationResult, FlowProviderError> {
+        unreachable!("verification start does not evaluate presentations")
+    }
+}
 
 #[async_trait]
 impl CredentialTemplateProvider for Templates {
@@ -241,6 +268,57 @@ fn callbacks() -> WebhookDestinationRegistry {
 
 fn now() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap()
+}
+
+#[tokio::test]
+async fn managed_start_freezes_owner_revision_and_rejects_trust_override() {
+    let mut ports = providers("org-1");
+    ports.presentation_policy = Some(Arc::new(ManagedPolicies));
+    let context = VerificationStartContext {
+        public_base_url: "https://verifier.example",
+        allow_http_loopback: false,
+        principal_id: "user-1",
+        now: now(),
+    };
+    let prepared = prepare_profiled_verification_start(
+        &ports,
+        &callbacks(),
+        request(RequestTransport::RequestUri),
+        &Default::default(),
+        context,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        prepared.instance.context[presentation_snapshot::SNAPSHOT_KEY]["credential_authority"],
+        json!(presentation_snapshot::authority("org-1"))
+    );
+    let mut foreign = request(RequestTransport::RequestUri);
+    foreign.trust_profile_id = Some("other-trust".into());
+    assert!(matches!(
+        prepare_profiled_verification_start(
+            &ports,
+            &callbacks(),
+            foreign,
+            &Default::default(),
+            context
+        )
+        .await,
+        Err(FlowVerificationStartError::InvalidPolicyReference)
+    ));
+    let mut lissi = VerificationStartOptions::default();
+    lissi.request_object.compatibility = marty_flow::RequestObjectCompatibility::Lissi;
+    assert!(matches!(
+        prepare_profiled_verification_start(
+            &ports,
+            &callbacks(),
+            request(RequestTransport::RequestUri),
+            &lissi,
+            context
+        )
+        .await,
+        Err(FlowVerificationStartError::InvalidPolicyReference)
+    ));
 }
 
 #[tokio::test]

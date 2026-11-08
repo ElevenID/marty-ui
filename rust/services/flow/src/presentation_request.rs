@@ -49,6 +49,9 @@ pub(crate) struct FrozenFlowPresentationRequest {
     pub organization_id: String,
     pub nonce: String,
     pub policy_revision: FrozenPolicyIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_authority:
+        Option<marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1>,
     pub presentation_definition: Value,
     pub presentation_definition_digest: String,
     pub dcql_query: Value,
@@ -76,6 +79,9 @@ impl FrozenFlowPresentationRequest {
 pub(crate) fn freeze_flow_presentation_request(
     instance: &mut FlowInstanceRecord,
     policy_revision: FrozenPolicyIdentity,
+    credential_authority: Option<
+        marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1,
+    >,
     artifacts: &PresentationRequestArtifacts,
 ) -> Result<(), FlowPresentationRequestError> {
     let snapshot = FrozenFlowPresentationRequest {
@@ -86,6 +92,7 @@ pub(crate) fn freeze_flow_presentation_request(
             .ok_or(FlowPresentationRequestError::InvalidFrozenRequest)?
             .into(),
         policy_revision,
+        credential_authority,
         presentation_definition: artifacts.presentation_definition.clone(),
         presentation_definition_digest: digest_query_document(&artifacts.presentation_definition)
             .map_err(|_| {
@@ -119,6 +126,16 @@ fn validate_frozen_request(
     instance: &FlowInstanceRecord,
 ) -> Result<(), FlowPresentationRequestError> {
     if snapshot.policy_revision.validate().is_err()
+        || snapshot
+            .credential_authority
+            .as_ref()
+            .is_some_and(|authority| {
+                authority.validate().is_err()
+                    || authority.organization_id != instance.organization_id
+                    || instance.context["trust_profile_id"]
+                        .as_str()
+                        .is_some_and(|profile_id| profile_id != authority.profile.id)
+            })
         || snapshot.instance_id != instance.id
         || snapshot.organization_id != instance.organization_id
         || snapshot.nonce.is_empty()
@@ -180,6 +197,21 @@ pub async fn resolve_flow_presentation_policy(
         return Err(FlowPresentationRequestError::InvalidPolicy(
             "policy revision is missing or invalid".into(),
         ));
+    }
+    match (
+        &policy.prerequisite_evidence_profile,
+        &policy.credential_authority,
+    ) {
+        (None, None) => {}
+        (Some(profile), Some(authority))
+            if profile == "managed_sd_jwt_dcql_v1"
+                && authority.organization_id == organization_id
+                && authority.validate().is_ok() => {}
+        _ => {
+            return Err(FlowPresentationRequestError::InvalidPolicy(
+                "managed prerequisite authority is missing or invalid".into(),
+            ))
+        }
     }
     if policy.credential_requirements.is_empty() {
         return Err(FlowPresentationRequestError::InvalidPolicy(

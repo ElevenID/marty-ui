@@ -62,6 +62,8 @@ struct Policies {
 impl PresentationPolicyProvider for Policies {
     async fn get_policy(&self, id: &str) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            prerequisite_evidence_profile: None,
+            credential_authority: None,
             policy_revision: presentation_snapshot::revision(id),
             id: id.into(),
             organization_id: "org-1".into(),

@@ -45,6 +45,8 @@ pub struct EvaluatePresentationRequest {
 pub enum PresentationVerificationError {
     #[error("PRESENTATION_POLICY.NATIVE_BACKEND_UNAVAILABLE")]
     Unavailable,
+    #[error("PRESENTATION_POLICY.CREDENTIAL_AUTHORITY_CHANGED")]
+    CredentialAuthorityChanged,
     #[error("PRESENTATION_POLICY.VERIFICATION_FAILED: {0}")]
     Failed(String),
 }
@@ -54,6 +56,16 @@ pub enum PresentationVerificationError {
 /// the HTTP service never interprets an unverified token as policy facts.
 #[async_trait]
 pub trait PresentationVerificationOrchestrator: Send + Sync {
+    async fn freeze_credential_authority(
+        &self,
+        _policy: &PresentationPolicy,
+    ) -> Result<
+        Option<marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1>,
+        PresentationVerificationError,
+    > {
+        Ok(None)
+    }
+
     async fn verify(
         &self,
         policy: &PresentationPolicy,
@@ -78,6 +90,7 @@ pub struct VerifiedPolicyMaterial {
     pub(crate) authenticated_outer_jti: Option<String>,
     pub(crate) authenticated_issuer: Option<crate::AuthenticatedIssuerEvidence>,
     pub(crate) authenticated_sd_jwt_query: Option<crate::AuthenticatedSdJwtQueryEvidence>,
+    pub(crate) managed_credential_authority: Option<crate::VerifiedManagedCredentialAuthority>,
 }
 
 impl VerifiedPolicyMaterial {
@@ -87,6 +100,7 @@ impl VerifiedPolicyMaterial {
             authenticated_outer_jti: None,
             authenticated_issuer: None,
             authenticated_sd_jwt_query: None,
+            managed_credential_authority: None,
         }
     }
 
@@ -104,6 +118,12 @@ impl VerifiedPolicyMaterial {
 
     pub fn authenticated_sd_jwt_query(&self) -> Option<&crate::AuthenticatedSdJwtQueryEvidence> {
         self.authenticated_sd_jwt_query.as_ref()
+    }
+
+    pub fn managed_credential_authority(
+        &self,
+    ) -> Option<&crate::VerifiedManagedCredentialAuthority> {
+        self.managed_credential_authority.as_ref()
     }
 }
 
@@ -245,6 +265,7 @@ struct DisplayMetadataRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CreatePolicyRequest {
+    prerequisite_evidence_profile: Option<crate::PrerequisiteEvidenceProfile>,
     organization_id: String,
     name: String,
     description: Option<String>,
@@ -276,6 +297,8 @@ struct CreatePolicyRequest {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct UpdatePolicyRequest {
+    #[serde(deserialize_with = "nullable_prerequisite_profile")]
+    prerequisite_evidence_profile: Option<Option<crate::PrerequisiteEvidenceProfile>>,
     name: Option<String>,
     description: Option<String>,
     purpose: Option<String>,
@@ -291,6 +314,12 @@ struct UpdatePolicyRequest {
     credential_requirements: Option<Vec<CredentialRequirementRequest>>,
     alternative_requirements: Option<Vec<AlternativeRequirementRequest>>,
     compliance_profile_id: Option<String>,
+}
+
+fn nullable_prerequisite_profile<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<crate::PrerequisiteEvidenceProfile>>, D::Error> {
+    Option::<crate::PrerequisiteEvidenceProfile>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -478,6 +507,7 @@ async fn evaluate_inline(
     }
     let now = Utc::now();
     let policy = PresentationPolicy {
+        prerequisite_evidence_profile: None,
         id: Uuid::new_v4(),
         organization_id,
         name: "Inline Policy".into(),
@@ -572,7 +602,30 @@ pub fn evaluate_verified_material_for_policy(
         authenticated_outer_jti,
         authenticated_issuer,
         authenticated_sd_jwt_query,
+        managed_credential_authority,
     } = material;
+    if managed_credential_authority
+        .as_ref()
+        .is_some_and(|authority| {
+            policy.prerequisite_evidence_profile.is_none()
+                || authenticated_sd_jwt_query
+                    .as_ref()
+                    .is_none_or(|query| !authority.matches_query(query))
+        })
+        || (policy.prerequisite_evidence_profile.is_some()
+            && managed_credential_authority.is_none()
+            && policy_facts["credentials"]
+                .as_array()
+                .is_some_and(|credentials| {
+                    credentials
+                        .iter()
+                        .any(|credential| credential["signature_verified"] == true)
+                }))
+    {
+        return Err(bad_request(
+            "PRESENTATION_POLICY.MANAGED_AUTHORITY_BINDING_INVALID",
+        ));
+    }
     if authenticated_sd_jwt_query.as_ref().is_some_and(|query| {
         !query.matches_request(policy, request)
             || policy_facts["credentials"]
@@ -599,6 +652,14 @@ pub fn evaluate_verified_material_for_policy(
     let output = evaluate_verified_facts_json(&policy_facts.to_string()).map_err(domain_error)?;
     let native: Value = serde_json::from_str(&output)
         .map_err(|_| service_unavailable("PRESENTATION_POLICY.INVALID_NATIVE_RESULT"))?;
+    if policy.prerequisite_evidence_profile.is_some()
+        && native["decision"] == "allow"
+        && (authenticated_sd_jwt_query.is_none() || managed_credential_authority.is_none())
+    {
+        return Err(bad_request(
+            "PRESENTATION_POLICY.MANAGED_AUTHORITY_BINDING_INVALID",
+        ));
+    }
     let mut result = project_evaluation(
         native,
         request,
@@ -629,6 +690,12 @@ pub fn evaluate_verified_material_for_policy(
                         .map_err(|_| {
                             service_unavailable("PRESENTATION_POLICY.INVALID_QUERY_EVIDENCE")
                         })?;
+                    if let Some(authority) = managed_credential_authority {
+                        credential["managed_sd_jwt_authority"] = serde_json::to_value(authority)
+                            .map_err(|_| {
+                                service_unavailable("PRESENTATION_POLICY.INVALID_MANAGED_AUTHORITY")
+                            })?;
+                    }
                 }
             }
         }
@@ -670,6 +737,7 @@ fn build_policy(
         id: Uuid::new_v4(),
         organization_id,
         name: input.name,
+        prerequisite_evidence_profile: input.prerequisite_evidence_profile,
         description: input.description,
         status: PolicyStatus::Draft,
         display_metadata,
@@ -714,6 +782,9 @@ fn apply_update(
     input: UpdatePolicyRequest,
     now: chrono::DateTime<Utc>,
 ) -> Result<(), PresentationPolicyHttpError> {
+    if let Some(profile) = input.prerequisite_evidence_profile {
+        policy.prerequisite_evidence_profile = profile;
+    }
     if let Some(name) = input.name {
         validate_name(&name, "name", 255)?;
         policy.name = name;
@@ -954,6 +1025,7 @@ pub(crate) fn policy_response(policy: &PresentationPolicy) -> Value {
         "alternative_requirements": policy.alternative_requirements.iter().map(alternative_response).collect::<Vec<_>>(),
         "compliance_profile_id": policy.compliance_profile_id,
         "trust_profile_id": policy.trust_profile_id,
+        "prerequisite_evidence_profile": policy.prerequisite_evidence_profile,
         "holder_binding": holder_response(&policy.holder_binding),
         "freshness": policy.freshness,
         "prefer_predicates": policy.prefer_predicates,
@@ -1469,6 +1541,9 @@ fn verification_error(error: PresentationVerificationError) -> PresentationPolic
             service_unavailable("PRESENTATION_POLICY.NATIVE_BACKEND_UNAVAILABLE")
         }
         PresentationVerificationError::Failed(detail) => unprocessable(&detail),
+        PresentationVerificationError::CredentialAuthorityChanged => {
+            bad_request("PRESENTATION_POLICY.CREDENTIAL_AUTHORITY_CHANGED")
+        }
     }
 }
 

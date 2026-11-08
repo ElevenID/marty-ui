@@ -75,6 +75,11 @@ impl Oid4vpEvaluationTransportV1 {
     /// Check transport integrity and work bounds only. This does not verify a
     /// VP, credential, descriptor, issuer, holder, or replay decision.
     pub fn validate_transport(&self) -> Result<(), Oid4vpContractError> {
+        if let Some(authority) = &self.credential_authority {
+            authority
+                .validate()
+                .map_err(|_| Oid4vpContractError::InvalidField("credential_authority"))?;
+        }
         validate_serialized_size(
             &self.query_document,
             MAX_QUERY_DOCUMENT_BYTES,

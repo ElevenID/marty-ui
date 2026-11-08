@@ -183,6 +183,75 @@ fn create_request(organization_id: Uuid) -> CreatePolicyRequest {
 }
 
 #[tokio::test]
+async fn managed_profile_can_be_authored_and_cleared_but_lookup_requires_owner_snapshot() {
+    let organization_id = Uuid::new_v4();
+    let service = service(organization_id);
+    let mut request = create_request(organization_id);
+    request.prerequisite_evidence_profile = "managed_sd_jwt_dcql_v1".into();
+    let mut requirements: Value =
+        serde_json::from_str(&request.credential_requirements_json).unwrap();
+    requirements[0]["credential_payload_format"] = json!("SD_JWT_VC");
+    requirements[0]["requested_claims"][0]["accept_derived"] = json!(false);
+    request.credential_requirements_json = requirements.to_string();
+    request.trust_profile_id = Uuid::new_v4().to_string();
+    request.holder_binding_json = json!({"required":true}).to_string();
+    request.freshness_json = json!({"require_not_revoked":true}).to_string();
+    let created = service
+        .create_policy(authenticated(request.clone()))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        created.prerequisite_evidence_profile,
+        "managed_sd_jwt_dcql_v1"
+    );
+    assert!(created.credential_authority_snapshot_json.is_empty());
+    let unavailable = service
+        .get_policy(service_authenticated(GetPolicyRequest {
+            policy_id: created.id.clone(),
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        unavailable.code(),
+        Code::Unavailable,
+        "a generic facts-only provider cannot fabricate a frozen authority"
+    );
+    let unchanged = service
+        .update_policy(authenticated(UpdatePolicyRequest {
+            policy_id: created.id.clone(),
+            name: "Renamed".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        unchanged.prerequisite_evidence_profile,
+        "managed_sd_jwt_dcql_v1"
+    );
+    let cleared = service
+        .update_policy(authenticated(UpdatePolicyRequest {
+            policy_id: created.id,
+            prerequisite_evidence_profile: Some(String::new()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(cleared.prerequisite_evidence_profile.is_empty());
+    request.freshness_json.clear();
+    assert_eq!(
+        service
+            .create_policy(authenticated(request))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::InvalidArgument
+    );
+}
+
+#[tokio::test]
 async fn principal_authenticated_fallback_cannot_supply_workload_oid4vp_transport() {
     let organization_id = Uuid::new_v4();
     let service = service(organization_id);

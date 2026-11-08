@@ -9,7 +9,9 @@
 mod callback;
 mod digest;
 pub mod haip_key;
+pub mod managed_status;
 mod rejection;
+pub mod trust_authority;
 mod types;
 mod validation;
 

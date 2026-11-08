@@ -531,11 +531,44 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
                 "policy version mismatch",
             ));
         }
+        let prerequisite_evidence_profile = match response.prerequisite_evidence_profile.as_str() {
+            "" => None,
+            "managed_sd_jwt_dcql_v1" => Some(response.prerequisite_evidence_profile.clone()),
+            _ => {
+                return Err(invalid_response(
+                    "presentation_policy",
+                    "unknown prerequisite evidence profile",
+                ))
+            }
+        };
+        let credential_authority: Option<
+            marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1,
+        > = if response.credential_authority_snapshot_json.is_empty() {
+            None
+        } else {
+            Some(bounded_json(
+                &response.credential_authority_snapshot_json,
+                "presentation_policy",
+            )?)
+        };
+        if prerequisite_evidence_profile.is_some() != credential_authority.is_some()
+            || credential_authority.as_ref().is_some_and(|authority| {
+                authority.validate().is_err()
+                    || authority.organization_id != response.organization_id
+            })
+        {
+            return Err(invalid_response(
+                "presentation_policy",
+                "credential authority snapshot mismatch",
+            ));
+        }
         Ok(PresentationPolicyReference {
             id: response.id,
             organization_id: response.organization_id,
             status: response.status,
             policy_revision,
+            prerequisite_evidence_profile,
+            credential_authority,
             credential_requirements: bounded_json(
                 &response.credential_requirements_json,
                 "presentation_policy",
@@ -728,6 +761,12 @@ fn bounded_json<T: DeserializeOwned>(
 fn provider_status(provider: &'static str, resource: &str, status: Status) -> FlowProviderError {
     if provider == "presentation_policy"
         && status.code() == Code::FailedPrecondition
+        && status.message() == "PRESENTATION_POLICY.CREDENTIAL_AUTHORITY_CHANGED"
+    {
+        return FlowProviderError::CredentialAuthorityChanged;
+    }
+    if provider == "presentation_policy"
+        && status.code() == Code::FailedPrecondition
         && status.message() == "PRESENTATION_POLICY.POLICY_REVISION_MISMATCH"
     {
         return FlowProviderError::PolicyRevisionMismatch;
@@ -815,6 +854,18 @@ fn encode_oid4vp_transport(
     })?;
     Ok(
         crate::presentation_policy_proto::Oid4vpEvaluationTransport {
+            credential_authority_snapshot_json: transport
+                .credential_authority
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|_| {
+                    invalid_response(
+                        "presentation_policy",
+                        "credential authority is not serializable",
+                    )
+                })?
+                .unwrap_or_default(),
             query_kind: match transport.query_kind {
                 marty_oid4vp_contract::QueryKind::Dcql => "dcql",
                 marty_oid4vp_contract::QueryKind::PresentationExchange => "presentation_exchange",
@@ -979,6 +1030,7 @@ mod tests {
         let query = serde_json::json!({"credentials": [{"id": "member"}]});
         let submission = serde_json::json!({"id": "legacy", "descriptor_map": [], "extra": true});
         let metadata = marty_oid4vp_contract::Oid4vpEvaluationTransportV1 {
+            credential_authority: None,
             query_kind: marty_oid4vp_contract::QueryKind::Dcql,
             query_digest: marty_oid4vp_contract::digest_query_document(&query).unwrap(),
             query_document: query.clone(),
@@ -1048,6 +1100,14 @@ mod tests {
 
     #[test]
     fn producer_revision_rejection_is_not_erased_as_provider_unavailability() {
+        assert_eq!(
+            provider_status(
+                "presentation_policy",
+                "policy-1",
+                Status::failed_precondition("PRESENTATION_POLICY.CREDENTIAL_AUTHORITY_CHANGED")
+            ),
+            FlowProviderError::CredentialAuthorityChanged
+        );
         assert_eq!(
             provider_status(
                 "presentation_policy",

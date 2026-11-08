@@ -101,6 +101,7 @@ impl CredentialStatusResolver for Status {
 fn policy() -> PresentationPolicy {
     let now = chrono::DateTime::from_timestamp(1_787_240_000, 0).unwrap();
     PresentationPolicy {
+        prerequisite_evidence_profile: None,
         id: Uuid::from_u128(4),
         organization_id: ORGANIZATION_ID,
         name: "Email login".into(),
@@ -494,6 +495,7 @@ async fn only_authenticated_internal_oid4vp_context_can_project_replay_evidence(
     let (orchestrator, mut request) = verify(true);
     let query = serde_json::json!({"credentials": [{"id": "member"}]});
     request.oid4vp_transport = Some(marty_oid4vp_contract::Oid4vpEvaluationTransportV1 {
+        credential_authority: None,
         query_kind: marty_oid4vp_contract::QueryKind::Dcql,
         query_digest: marty_oid4vp_contract::digest_query_document(&query).unwrap(),
         query_document: query,
@@ -1213,6 +1215,7 @@ mod bounded_sd_jwt_query_evidence {
                 "claims": [{"id": "email", "path": ["email"]}],
             }]});
             let transport = Oid4vpEvaluationTransportV1 {
+                credential_authority: None,
                 query_kind: QueryKind::Dcql,
                 query_digest: digest_query_document(&query).unwrap(),
                 query_document: query,
@@ -1308,7 +1311,8 @@ mod bounded_sd_jwt_query_evidence {
                     material.authenticated_sd_jwt_query().is_none(),
                     "{label} must not produce authenticated query evidence",
                 ),
-                Err(PresentationVerificationError::Failed(_)) => {}
+                Err(PresentationVerificationError::Failed(_))
+                | Err(PresentationVerificationError::CredentialAuthorityChanged) => {}
                 Err(PresentationVerificationError::Unavailable) => {
                     panic!("{label} must reject input, not lose its synthetic backend")
                 }
@@ -2082,5 +2086,457 @@ mod bounded_sd_jwt_query_evidence {
         fixture
             .assert_no_evidence("forged identity without a valid presentation", &unproved)
             .await;
+    }
+
+    mod managed_authority {
+        use super::*;
+        use marty_oid4vp_contract::{
+            managed_status::*, trust_authority::*, EvidenceCheckOutcome, EvidenceProfileReference,
+        };
+        use marty_presentation_policy::PrerequisiteEvidenceProfile;
+
+        #[derive(Clone, Copy)]
+        enum Mode {
+            Valid,
+            WrongTrustScope,
+            WrongStatusArtifact,
+            Denied,
+            Revoked,
+            Changed,
+        }
+
+        struct Owners {
+            snapshot: CredentialAuthoritySnapshotV1,
+            now: i64,
+            mode: Mode,
+            trust_calls: Mutex<Vec<CredentialTrustEvaluationRequestV1>>,
+            status_calls: Mutex<Vec<ManagedCredentialStatusRequestV1>>,
+        }
+
+        #[async_trait]
+        impl PresentationTrustResolver for Owners {
+            async fn freeze_credential_authority(
+                &self,
+                organization_id: Uuid,
+                profile_id: Uuid,
+            ) -> Result<CredentialAuthoritySnapshotV1, PresentationVerificationError> {
+                assert_eq!(organization_id.to_string(), self.snapshot.organization_id);
+                assert_eq!(profile_id.to_string(), self.snapshot.profile.id);
+                Ok(self.snapshot.clone())
+            }
+
+            async fn evaluate_credential_authority(
+                &self,
+                request: &CredentialTrustEvaluationRequestV1,
+            ) -> Result<CredentialTrustEvaluationResponseV1, PresentationVerificationError>
+            {
+                self.trust_calls.lock().unwrap().push(request.clone());
+                assert_eq!(request.expected_profile, self.snapshot.profile);
+                assert_eq!(request.issuer_id, ISSUER);
+                assert_eq!(request.vct, VCT);
+                assert_eq!(request.format, "SD_JWT_VC");
+                assert_eq!(request.issuer_algorithm, "EdDSA");
+                assert_eq!(
+                    request.issuer_key_thumbprint,
+                    issuer_public_key_thumbprint(&public_key(&issuer_key())).unwrap()
+                );
+                if matches!(self.mode, Mode::Changed) {
+                    return Err(PresentationVerificationError::CredentialAuthorityChanged);
+                }
+                let denied = matches!(self.mode, Mode::Denied);
+                let mut response = CredentialTrustEvaluationResponseV1 {
+                    contract: CREDENTIAL_TRUST_EVALUATION_CONTRACT.into(),
+                    organization_id: request.organization_id.clone(),
+                    profile: request.expected_profile.clone(),
+                    issuer_id: request.issuer_id.clone(),
+                    format: request.format.clone(),
+                    vct: request.vct.clone(),
+                    issuer_algorithm: request.issuer_algorithm.clone(),
+                    issuer_key_thumbprint: request.issuer_key_thumbprint.clone(),
+                    request_binding_digest: request.request_binding_digest.clone(),
+                    outcome: if denied {
+                        EvidenceCheckOutcome::Failed
+                    } else {
+                        EvidenceCheckOutcome::Passed
+                    },
+                    reason_code: if denied {
+                        "TRUST_PROFILE.CREDENTIAL_NOT_AUTHORIZED"
+                    } else {
+                        "TRUST_PROFILE.CREDENTIAL_AUTHORIZED"
+                    }
+                    .into(),
+                    trust_level: (!denied).then_some(90),
+                    compliance_statuses: if denied {
+                        vec![]
+                    } else {
+                        vec!["COMPLIANT".into()]
+                    },
+                    accreditations: vec![],
+                    checked_at_epoch_seconds: self.now,
+                    valid_until_epoch_seconds: self.now + 60,
+                    evidence_digest: String::new(),
+                };
+                if matches!(self.mode, Mode::WrongTrustScope) {
+                    response.request_binding_digest = format!("sha256:{}", "b".repeat(64));
+                }
+                response.evidence_digest = credential_trust_evaluation_digest(&response).unwrap();
+                Ok(response)
+            }
+
+            async fn load_profile(
+                &self,
+                _: Uuid,
+                _: Uuid,
+            ) -> Result<ResolvedTrustProfile, PresentationVerificationError> {
+                panic!("managed prerequisite keys must come from the frozen owner basis")
+            }
+
+            async fn evaluate_issuer(
+                &self,
+                _: &ResolvedTrustProfile,
+                _: &str,
+                _: DetectedCredentialFormat,
+            ) -> Result<IssuerTrustEvidence, PresentationVerificationError> {
+                panic!("generic issuer acceptance cannot replace exact VCT authorization")
+            }
+        }
+
+        #[async_trait]
+        impl CredentialStatusResolver for Owners {
+            async fn observe_managed_status(
+                &self,
+                request: &ManagedCredentialStatusRequestV1,
+            ) -> Result<ManagedCredentialStatusObservationV1, PresentationVerificationError>
+            {
+                self.status_calls.lock().unwrap().push(request.clone());
+                let mut response = ManagedCredentialStatusObservationV1 {
+                    contract: MANAGED_STATUS_CONTRACT.into(),
+                    authority: MANAGED_STATUS_AUTHORITY.into(),
+                    request: request.clone(),
+                    state: if matches!(self.mode, Mode::Revoked) {
+                        ManagedCredentialStatusState::Revoked
+                    } else {
+                        ManagedCredentialStatusState::Active
+                    },
+                    status_updated_at_epoch_seconds: self.now - 1,
+                    checked_at_epoch_seconds: self.now,
+                    valid_until_epoch_seconds: self.now + 60,
+                    credential_expires_at_epoch_seconds: self.now + 600,
+                    evidence_digest: String::new(),
+                };
+                if matches!(self.mode, Mode::WrongStatusArtifact) {
+                    response.request.issuer_jwt_digest = format!("sha256:{}", "c".repeat(64));
+                }
+                response.evidence_digest = digest_managed_status_observation(&response).unwrap();
+                Ok(response)
+            }
+
+            async fn resolve(
+                &self,
+                _: Uuid,
+                _: &str,
+                _: &[String],
+            ) -> Result<CredentialStatusEvidence, PresentationVerificationError> {
+                panic!("mutable public status IDs cannot replace exact native artifact binding")
+            }
+        }
+
+        fn fixture(mode: Mode, advance: u64) -> (Fixture, Arc<Owners>) {
+            let mut fixture = Fixture::new();
+            fixture.policy.prerequisite_evidence_profile =
+                Some(PrerequisiteEvidenceProfile::ManagedSdJwtDcqlV1);
+            fixture.policy.freshness = Some(FreshnessPolicy {
+                max_age_seconds: None,
+                require_not_revoked: true,
+                revocation_grace_seconds: None,
+            });
+            fixture.policy.validate().unwrap();
+            fixture.claims["nbf"] = json!(fixture.now - 60);
+            fixture.request = fixture.request_for_token(presentation(
+                &fixture.claims,
+                NONCE,
+                AUDIENCE,
+                fixture.now,
+            ));
+            let timestamp = chrono::DateTime::from_timestamp(fixture.now as i64 - 3600, 0)
+                .unwrap()
+                .to_rfc3339();
+            let mut key = public_key(&issuer_key());
+            key["kid"] = json!(ISSUER_KEY_ID);
+            key["use"] = json!("sig");
+            let basis: CredentialAuthorityBasisV1 = serde_json::from_value(json!({
+                "id": POLICY_PROFILE_ID, "organization_id": ORGANIZATION_ID,
+                "status": "active", "compliance_status": "COMPLIANT",
+                "trust_purposes": ["CREDENTIAL_ISSUER"], "supported_formats": ["SD_JWT_VC"],
+                "allowed_algorithms": ["EdDSA"], "allowed_issuers": null, "denied_issuers": [],
+                "policy_controls": {
+                    "validation_rules": {"min_key_size_rsa":2048,"min_key_size_ec":256,"require_key_usage":true,"max_chain_depth":5,"allow_self_signed":false},
+                    "time_policy": {"max_clock_skew_seconds":0,"credential_freshness_hours":null,"require_not_before":true,"require_expiration":true},
+                    "revocation_policy": {"check_mode":"HARD_FAIL","check_ocsp":false,"check_crl":false,"check_status_list":false,"offline_grace_period_hours":0,"cache_duration_hours":0},
+                    "trusted_assertion_formats":null,"unsupported_configuration_fields":[],
+                    "unsupported_configuration_digest": format!("sha256:{}", "0".repeat(64)),
+                },
+                "created_at": timestamp, "updated_at": timestamp,
+                "issuer_relationships": [{
+                    "relationship_id": Uuid::from_u128(100), "issuer_entity_id": Uuid::from_u128(101),
+                    "issuer_id": ISSUER, "issuer_organization_id": ORGANIZATION_ID, "is_system_issuer": false,
+                    "relationship_status": "TRUSTED", "trust_level": 90, "compliance_status": "COMPLIANT",
+                    "accreditations": [], "valid_from": timestamp, "valid_until": null, "revoked_at": null,
+                    "verification_keys": [key], "credential_authorizations": [{"format": "SD_JWT_VC", "vct": VCT}],
+                    "issuer_created_at": timestamp, "issuer_updated_at": timestamp,
+                    "relationship_created_at": timestamp, "relationship_updated_at": timestamp,
+                }],
+            })).unwrap();
+            let mut snapshot = CredentialAuthoritySnapshotV1 {
+                contract: CREDENTIAL_AUTHORITY_SNAPSHOT_CONTRACT.into(),
+                organization_id: ORGANIZATION_ID.to_string(),
+                profile: EvidenceProfileReference {
+                    id: POLICY_PROFILE_ID.to_string(),
+                    version: 7,
+                    content_digest: credential_authority_basis_digest(&basis).unwrap(),
+                },
+                basis,
+                response_digest: String::new(),
+            };
+            snapshot.response_digest = credential_authority_snapshot_digest(&snapshot).unwrap();
+            snapshot.validate().unwrap();
+            fixture
+                .request
+                .oid4vp_transport
+                .as_mut()
+                .unwrap()
+                .credential_authority = Some(snapshot.clone());
+            fixture
+                .request
+                .context
+                .insert("oid4vp_verifier_context".into(), json!(true));
+            fixture
+                .request
+                .context
+                .insert("replay_check_verified".into(), json!(true));
+            let owners = Arc::new(Owners {
+                snapshot,
+                now: fixture.now as i64,
+                mode,
+                trust_calls: Mutex::new(Vec::new()),
+                status_calls: Mutex::new(Vec::new()),
+            });
+            let now = fixture.now;
+            let first = AtomicBool::new(true);
+            fixture.orchestrator = VerifiedFactsOrchestrator::with_clock(
+                Arc::new(RustCredentialKernel),
+                owners.clone(),
+                owners.clone(),
+                Arc::new(move || {
+                    if first.swap(false, Ordering::SeqCst) {
+                        now
+                    } else {
+                        now + advance
+                    }
+                }),
+            )
+            .unwrap();
+            (fixture, owners)
+        }
+
+        #[tokio::test]
+        async fn native_managed_evaluation_binds_both_owners_and_minimizes_projection() {
+            let (fixture, owners) = fixture(Mode::Valid, 0);
+            let frozen = fixture
+                .orchestrator
+                .freeze_credential_authority(&fixture.policy)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(frozen, owners.snapshot);
+            let material = fixture.verify(&fixture.request).await;
+            let authority =
+                serde_json::to_value(material.managed_credential_authority().unwrap()).unwrap();
+            assert_eq!(authority["contract"], "marty.managed-sd-jwt-authority/v1");
+            assert_eq!(
+                authority["trust"]["profile"],
+                serde_json::to_value(&owners.snapshot.profile).unwrap()
+            );
+            assert_eq!(authority["status"]["state"], "active");
+            assert!(authority["status"].get("request").is_none());
+            let serialized = authority.to_string();
+            for private in [SUBJECT, EMAIL, "urn:example:prerequisite-credential-001"] {
+                assert!(!serialized.contains(private));
+            }
+            let facts = material.policy_facts().clone();
+            assert!(
+                evaluate_verified_facts_for_policy(facts, &fixture.policy, &fixture.request)
+                    .is_err(),
+                "managed profile cannot accept cached or forged verification booleans"
+            );
+            let output =
+                evaluate_verified_material_for_policy(material, &fixture.policy, &fixture.request)
+                    .unwrap();
+            assert_eq!(output["decision"], "allow", "{output}");
+            assert_eq!(
+                output["credential_results"][0]["managed_sd_jwt_authority"],
+                authority
+            );
+            assert!(output.get("authenticated_oid4vp_evidence").is_none());
+            assert!(output.get("issuance_continuation").is_none());
+            let trust = owners.trust_calls.lock().unwrap();
+            let status = owners.status_calls.lock().unwrap();
+            assert_eq!(trust.len(), 1);
+            assert_eq!(status.len(), 1);
+            assert_eq!(
+                status[0].credential_id,
+                "urn:example:prerequisite-credential-001"
+            );
+            assert_eq!(status[0].credential_template_id, "template-email");
+            assert_eq!(
+                status[0].issuer_jwt_digest,
+                digest_sd_jwt_issuer_jws(fixture.request.vp_token.as_str().unwrap()).unwrap()
+            );
+            assert_eq!(
+                trust[0].request_binding_digest,
+                status[0].request_binding_digest
+            );
+        }
+
+        #[tokio::test]
+        async fn wrong_owner_scope_expired_observation_and_revision_changes_fail_closed() {
+            for (mode, advance) in [
+                (Mode::WrongTrustScope, 0),
+                (Mode::WrongStatusArtifact, 0),
+                (Mode::Valid, 60),
+                (Mode::Changed, 0),
+            ] {
+                let (fixture, _) = fixture(mode, advance);
+                assert!(fixture
+                    .orchestrator
+                    .verify_material(&fixture.policy, &fixture.request)
+                    .await
+                    .is_err());
+            }
+            for mode in [Mode::Denied, Mode::Revoked] {
+                let (fixture, _) = fixture(mode, 0);
+                let material = fixture.verify(&fixture.request).await;
+                assert!(material.managed_credential_authority().is_some());
+                let output = evaluate_verified_material_for_policy(
+                    material,
+                    &fixture.policy,
+                    &fixture.request,
+                )
+                .unwrap();
+                assert_eq!(output["decision"], "deny", "{output}");
+            }
+        }
+
+        #[tokio::test]
+        async fn managed_profile_has_no_missing_snapshot_override_or_credential_id_fallback() {
+            let (fixture, owners) = fixture(Mode::Valid, 0);
+            let mut missing = fixture.request.clone();
+            missing
+                .oid4vp_transport
+                .as_mut()
+                .unwrap()
+                .credential_authority = None;
+            assert!(fixture
+                .orchestrator
+                .verify_material(&fixture.policy, &missing)
+                .await
+                .is_err());
+            let mut foreign = fixture.request.clone();
+            foreign.trust_profile_id = Some(REQUEST_PROFILE_ID.to_string());
+            assert!(fixture
+                .orchestrator
+                .verify_material(&fixture.policy, &foreign)
+                .await
+                .is_err());
+            let mut claims = fixture.claims.clone();
+            claims.as_object_mut().unwrap().remove("nbf");
+            let missing_not_before =
+                fixture.request_for_token(presentation(&claims, NONCE, AUDIENCE, fixture.now));
+            fixture
+                .assert_no_evidence("configured not-before requirement", &missing_not_before)
+                .await;
+            claims = fixture.claims.clone();
+            claims.as_object_mut().unwrap().remove("jti");
+            let missing_id =
+                fixture.request_for_token(presentation(&claims, NONCE, AUDIENCE, fixture.now));
+            assert!(fixture
+                .orchestrator
+                .verify_material(&fixture.policy, &missing_id)
+                .await
+                .is_err());
+            assert!(owners.trust_calls.lock().unwrap().is_empty());
+            assert!(owners.status_calls.lock().unwrap().is_empty());
+        }
+
+        #[tokio::test]
+        async fn mutable_public_status_ids_cannot_change_the_owner_request() {
+            struct SubstitutedIds;
+            #[async_trait]
+            impl CredentialVerificationKernel for SubstitutedIds {
+                async fn verify(
+                    &self,
+                    context: &CredentialVerificationContext,
+                ) -> Result<CredentialVerificationEvidence, PresentationVerificationError>
+                {
+                    let mut evidence = RustCredentialKernel.verify(context).await?;
+                    evidence.credential_status_ids = vec!["attacker-selected-record".into()];
+                    evidence.status = CredentialStatusEvidence {
+                        checked_at_epoch_seconds: Some(u64::MAX),
+                        not_revoked: Some(true),
+                        credential_status: Some("active".into()),
+                        warnings: vec![],
+                    };
+                    Ok(evidence)
+                }
+            }
+            let (mut fixture, owners) = fixture(Mode::Revoked, 0);
+            let now = fixture.now;
+            fixture.orchestrator = VerifiedFactsOrchestrator::with_clock(
+                Arc::new(SubstitutedIds),
+                owners.clone(),
+                owners.clone(),
+                Arc::new(move || now),
+            )
+            .unwrap();
+            let material = fixture.verify(&fixture.request).await;
+            assert_eq!(
+                material.policy_facts()["credentials"][0]["not_revoked"],
+                false
+            );
+            assert_eq!(
+                owners.status_calls.lock().unwrap()[0].credential_id,
+                "urn:example:prerequisite-credential-001"
+            );
+        }
+
+        #[test]
+        fn managed_policy_admission_requires_every_opt_in_obligation() {
+            let (fixture, _) = fixture(Mode::Valid, 0);
+            for mutation in 0..7 {
+                let mut policy = fixture.policy.clone();
+                match mutation {
+                    0 => policy.trust_profile_id = None,
+                    1 => policy.freshness = None,
+                    2 => policy.holder_binding.required = false,
+                    3 => {
+                        policy
+                            .holder_binding
+                            .proof_freshness
+                            .insert("replay_detection_required".into(), false);
+                    }
+                    4 => policy.credential_requirements[0].required = false,
+                    5 => {
+                        policy.credential_requirements[0].credential_payload_format =
+                            "W3C_VCDM_V2_DI".into()
+                    }
+                    6 => {
+                        policy.credential_requirements[0].trust_profile_id =
+                            Some(REQUEST_PROFILE_ID)
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(policy.validate().is_err(), "mutation {mutation}");
+            }
+        }
     }
 }

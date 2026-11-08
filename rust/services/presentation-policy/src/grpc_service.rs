@@ -97,7 +97,21 @@ impl PresentationPolicyService for PresentationPolicyGrpcService {
             .get_for_internal_service(parse_uuid(&request.get_ref().policy_id)?)
             .await
             .map_err(application_status)?;
-        Ok(Response::new(policy_message(&policy)?))
+        let mut response = policy_message(&policy)?;
+        if policy.prerequisite_evidence_profile.is_some() {
+            let authority = self
+                .verification
+                .freeze_credential_authority(&policy)
+                .await
+                .map_err(|_| {
+                    Status::unavailable("PRESENTATION_POLICY.CREDENTIAL_AUTHORITY_UNAVAILABLE")
+                })?
+                .ok_or_else(|| {
+                    Status::unavailable("PRESENTATION_POLICY.CREDENTIAL_AUTHORITY_UNAVAILABLE")
+                })?;
+            response.credential_authority_snapshot_json = serialize(&authority)?;
+        }
+        Ok(Response::new(response))
     }
 
     async fn list_policies(
@@ -163,6 +177,14 @@ impl PresentationPolicyService for PresentationPolicyGrpcService {
             input.alternative_requirements_json,
         )?;
         insert_json(&mut value, "display_metadata", input.display_metadata_json)?;
+        insert_text(
+            &mut value,
+            "prerequisite_evidence_profile",
+            input.prerequisite_evidence_profile,
+        );
+        insert_text(&mut value, "trust_profile_id", input.trust_profile_id);
+        insert_json(&mut value, "holder_binding", input.holder_binding_json)?;
+        insert_json(&mut value, "freshness", input.freshness_json)?;
         let policy =
             build_policy_from_transport(Value::Object(value), Utc::now()).map_err(http_status)?;
         let policy = self
@@ -186,6 +208,16 @@ impl PresentationPolicyService for PresentationPolicyGrpcService {
             .await
             .map_err(application_status)?;
         let mut patch = Map::new();
+        if let Some(profile) = input.prerequisite_evidence_profile {
+            patch.insert(
+                "prerequisite_evidence_profile".into(),
+                if profile.is_empty() {
+                    Value::Null
+                } else {
+                    Value::String(profile)
+                },
+            );
+        }
         insert_text(&mut patch, "name", input.name);
         insert_text(&mut patch, "description", input.description);
         insert_text(
@@ -345,6 +377,8 @@ fn parse_oid4vp_transport(
         _ => return Err(Status::invalid_argument("unsupported OID4VP query kind")),
     };
     if input.query_document_json.len() > MAX_QUERY_DOCUMENT_BYTES
+        || input.credential_authority_snapshot_json.len()
+            > marty_oid4vp_contract::MAX_FROZEN_REQUEST_BYTES
         || input.vp_token_raw.len() > MAX_TRANSPORT_RAW_TOKEN_BYTES
         || input.verifier_client_id.len() > MAX_TRANSPORT_CLIENT_ID_BYTES
         || input
@@ -365,6 +399,15 @@ fn parse_oid4vp_transport(
         .transpose()
         .map_err(|_| Status::invalid_argument("OID4VP submission is not valid JSON"))?;
     let transport = Oid4vpEvaluationTransportV1 {
+        credential_authority: if input.credential_authority_snapshot_json.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::from_str(&input.credential_authority_snapshot_json).map_err(|_| {
+                    Status::invalid_argument("invalid credential authority snapshot")
+                })?,
+            )
+        },
         query_kind,
         query_document,
         query_digest: input.query_digest,
@@ -381,6 +424,11 @@ fn parse_oid4vp_transport(
 
 fn policy_message(policy: &PresentationPolicy) -> Result<PolicyResponse, Status> {
     Ok(PolicyResponse {
+        prerequisite_evidence_profile: policy
+            .prerequisite_evidence_profile
+            .map(|profile| profile.as_str().to_owned())
+            .unwrap_or_default(),
+        credential_authority_snapshot_json: String::new(),
         id: policy.id.to_string(),
         organization_id: policy.organization_id.to_string(),
         name: policy.name.clone(),
@@ -612,6 +660,7 @@ mod oid4vp_transport_tests {
     fn bounded_transport_preserves_legacy_structure_and_rejects_mutations() {
         let query = json!({"credentials": [{"id": "member"}]});
         let wire = crate::presentation_policy_proto::Oid4vpEvaluationTransport {
+            credential_authority_snapshot_json: String::new(),
             query_kind: "dcql".into(),
             query_document_json: query.to_string(),
             query_digest: marty_oid4vp_contract::digest_query_document(&query).unwrap(),

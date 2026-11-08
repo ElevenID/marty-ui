@@ -104,6 +104,8 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            prerequisite_evidence_profile: None,
+            credential_authority: None,
             id: policy_id.into(),
             policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity {
                 id: policy_id.into(),

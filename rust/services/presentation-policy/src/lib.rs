@@ -10,6 +10,7 @@ pub mod native_kernel;
 pub mod persistence;
 pub mod policy_revision;
 pub mod postgres;
+mod prerequisite_authority;
 pub mod runtime;
 mod sd_jwt_query;
 pub mod verification;
@@ -26,8 +27,8 @@ pub use control_plane::NativePresentationControlPlane;
 pub use domain::{
     evaluate_verified_facts_json, normalize_credential_format, AlternativeRequirement,
     ClaimConstraint, ConstraintType, CredentialRequirement, DisplayMetadata, FreshnessPolicy,
-    HolderBinding, IssuerConstraints, PolicyDomainError, PolicyStatus, PresentationPolicy,
-    RequestPurpose, RequestedClaim,
+    HolderBinding, IssuerConstraints, PolicyDomainError, PolicyStatus, PrerequisiteEvidenceProfile,
+    PresentationPolicy, RequestPurpose, RequestedClaim,
 };
 pub use grpc_security::PresentationGrpcSecurity;
 pub use grpc_service::PresentationPolicyGrpcService;
@@ -43,6 +44,7 @@ pub use postgres::{
     migrate_presentation_policy_schema, validate_presentation_policy_schema, PostgresPolicyStore,
     PostgresPolicyStoreError,
 };
+pub use prerequisite_authority::VerifiedManagedCredentialAuthority;
 pub use runtime::{PresentationPolicyDependency, PresentationPolicyRuntime};
 pub use sd_jwt_query::{AuthenticatedSdJwtQueryEvidence, SdJwtDcqlRequest};
 pub use verification::{

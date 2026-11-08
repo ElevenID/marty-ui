@@ -79,7 +79,8 @@ async fn assert_denied(format: DetectedCredentialFormat, token: Value) {
             assert!(evidence.issuer_id.is_none());
         }
         Err(PresentationVerificationError::Failed(_)) => {}
-        Err(PresentationVerificationError::Unavailable) => {
+        Err(PresentationVerificationError::Unavailable)
+        | Err(PresentationVerificationError::CredentialAuthorityChanged) => {
             panic!("a linked native format verifier unexpectedly reported unavailable")
         }
     }
