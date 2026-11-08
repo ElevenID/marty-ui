@@ -1,11 +1,15 @@
 'use strict';
 const assert=require('node:assert/strict');
 const crypto=require('node:crypto');
+const fs=require('node:fs');
 const HASH=/^[a-f0-9]{64}$/;
 const sha=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 function envMap(rows){assert(Array.isArray(rows),'RESOURCE_ENV_SCHEMA');const pairs=rows.map(text=>{assert(typeof text==='string');const i=text.indexOf('=');assert(i>0,'RESOURCE_ENV_SCHEMA');return [text.slice(0,i),text.slice(i+1)]});assert.equal(new Set(pairs.map(pair=>pair[0])).size,pairs.length,'RESOURCE_ENV_DUPLICATE');return Object.fromEntries(pairs);}
 function envDigest(value){return sha(Object.entries(value).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0));}
 const CONFIG_DIGEST_SCHEMA='marty.beta-resource-config-digests/v2';
+function sameGeneration(live,expected,role){
+ assert(live.State?.StartedAt===expected.startedAt&&live.State?.Pid===expected.pid,'RESOURCE_GENERATION_CHANGED:'+role);
+}
 function mountDigest(row){
  assert(Array.isArray(row.Mounts),'RESOURCE_MOUNT_SCHEMA');
  const mounts=row.Mounts.map(m=>{
@@ -79,10 +83,18 @@ function authority(profile,{boundJson,expectedRuntime,receiptDigests}){
   const observation=row.requiredObservation?{...row.requiredObservation,containerId:after.id,startedAt:after.startedAt,hostPid:after.pid}:undefined;
   return {...row,requiredContainerId:after.id,requiredStartedAt:after.startedAt,requiredHostPid:after.pid,...(observation?{requiredObservation:observation}:{})};
  });
- return {rows,cap,input,ui,kc,configs,engineId:engine.engineId};
+ return {rows,cap,input,ui,uiStarted,uiLive,kc,configs,engineId:engine.engineId};
 }
-function verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDigests}){
+function verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDigests},generations=null){
  const a=authority(profile,{boundJson,expectedRuntime,receiptDigests});
+ if(generations){
+  assert(generations instanceof Map&&generations.size===Object.keys(a.cap.allRunningRoles).length+1,'RESOURCE_RESTART_COHORT_CHANGED');
+  for(const [role,prior] of Object.entries(a.cap.allRunningRoles)){
+   const row=generations.get(role);assert(row&&row.cid===(role==='keycloak'?a.kc.newCid:prior.id),'RESOURCE_RESTART_ID_CHANGED:'+role);
+   assert(Number.isFinite(Date.parse(row.startedAt))&&Number.isSafeInteger(row.pid)&&row.pid>0,'RESOURCE_RESTART_GENERATION_INVALID:'+role);
+  }
+  const ui=generations.get('ui-prod');assert(ui&&ui.cid===a.ui.newCid,'RESOURCE_RESTART_ID_CHANGED:ui-prod');
+ }
  const ids=readDocker(['ps','-q','--no-trunc','--filter','label=com.docker.compose.project=elevenid-beta','--filter','label=com.docker.compose.service=keycloak']).trim().split(/\s+/).filter(Boolean);
  assert.deepEqual(ids,[a.kc.newCid],'KEYCLOAK_GENERATION_CHANGED');
  const configRows=new Map(a.configs.rows.map(x=>[x.cid,x]));
@@ -101,6 +113,8 @@ function verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDi
  }
  const row=JSON.parse(readDocker(['inspect',ids[0]]))[0];
  assert.equal(row.Id,a.kc.newCid);assert.equal(row.State?.Running,true);assert.equal(row.State?.Health?.Status,'healthy');
+ if(generations)assert(row.State?.Paused===false&&row.State?.OOMKilled===false,'RESOURCE_RESTART_STATE_CHANGED:keycloak');
+ if(generations)sameGeneration(row,generations.get('keycloak'),'keycloak');
  assert.equal(row.HostConfig?.Memory,1073741824);assert.equal(row.HostConfig?.MemorySwap,2147483648);
  assert.equal(row.Image,a.cap.allRunningRoles.keycloak.image);
  const env=row.Config?.Env||[];assert(env.includes('JAVA_OPTS_KC_HEAP=-XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=65'),'KEYCLOAK_HEAP_ENV_CHANGED');
@@ -108,7 +122,8 @@ function verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDi
  for(const [role,expected] of Object.entries(a.cap.allRunningRoles)){if(role==='keycloak')continue;const old=a.input.before[role];
   const live=JSON.parse(readDocker(['inspect',expected.id]))[0];
   assert.equal(live.Id,expected.id);assert.equal(live.Image,expected.image);
-  assert.equal(live.State?.Running,true);assert.equal(live.State?.StartedAt,expected.startedAt);assert.equal(live.State?.Pid,expected.pid);
+  if(generations)assert(live.State?.Paused===false&&live.State?.OOMKilled===false,'RESOURCE_RESTART_STATE_CHANGED:'+role);
+  assert.equal(live.State?.Running,true);sameGeneration(live,generations?.get(role)||expected,role);
   assert.equal(live.HostConfig?.Memory,a.input.targets[role]||old.memory);
   assert.equal(live.HostConfig?.MemorySwap,a.input.targets[role]?a.input.targets[role]*2:old.memorySwap);
   assert.equal(live.State?.Health?.Status||null,expected.health,'RESOURCE_ROLE_HEALTH_CHANGED:'+role);
@@ -117,6 +132,8 @@ function verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDi
  }
  const liveUi=JSON.parse(readDocker(['inspect',a.ui.newCid]))[0];
  assert.equal(liveUi.Id,a.ui.newCid);assert.equal(liveUi.HostConfig?.Memory,268435456);assert.equal(liveUi.HostConfig?.MemorySwap,536870912);
+ if(generations)assert(liveUi.State?.Paused===false&&liveUi.State?.OOMKilled===false,'RESOURCE_RESTART_STATE_CHANGED:ui-prod');
+ if(generations){assert.equal(liveUi.State?.Running,true);sameGeneration(liveUi,generations.get('ui-prod'),'ui-prod');assert.equal(liveUi.State?.Health?.Status,'healthy');}
  assert.equal(liveUi.Config?.Labels?.['com.docker.compose.project.config_files'],a.ui.modelPath);
  checkConfiguration(liveUi,'ui-prod',a.ui.modelPath,a.ui.modelSha256);
  return a;
@@ -159,4 +176,78 @@ function resourceSuccessor(previousRef,profile,context){
  return {kind:'resource-recreation',replacements,uiGlobalIds:a.ui.globalIds};
 }
 
-module.exports={resourceSuccessor,authority,verifyAncillary,mountDigest,CONFIG_DIGEST_SCHEMA};
+// Match the committed UTF-8 Git blob across Windows CRLF and LF checkouts.
+// Receipt/configuration files remain byte-hashed by the existing bound readers.
+const canonicalSourceDigest=bytes=>crypto.createHash('sha256')
+ .update(Buffer.from(bytes.toString('utf8').replaceAll('\r\n','\n'))).digest('hex');
+const restartSource=()=>canonicalSourceDigest(fs.readFileSync(__filename));
+function restartBaseline(a){
+ const rows=Object.entries(a.cap.allRunningRoles).map(([role,row])=>role==='keycloak'
+  // The cap row belongs to the retired KC CID. It is only a time floor, never a same-CID generation.
+  ?{role,cid:a.kc.newCid,earliestStartedAt:row.startedAt}
+  :{role,cid:row.id,startedAt:row.startedAt,pid:row.pid});
+ assert(Number.isFinite(Date.parse(a.uiLive.startedAt))&&Number.isSafeInteger(a.uiLive.pid)&&a.uiLive.pid>0,
+  'RESOURCE_RESTART_UI_BASELINE_MISSING');
+ rows.push({role:'ui-prod',cid:a.ui.newCid,startedAt:a.uiLive.startedAt,pid:a.uiLive.pid});
+ return rows.sort((x,y)=>x.role.localeCompare(y.role));
+}
+function restartAuthority(profile,context){
+ assert.deepEqual(Object.keys(profile).sort(),['schema','scope','releaseQualified','recordingQualified','baseProfile','resourceRestart'].sort(),'RESOURCE_RESTART_PROFILE_SCHEMA');
+ assert.equal(profile.schema,'marty.functional-mixed-runtime/v2');assert.equal(profile.scope,'FUNCTIONAL_ONLY');
+ assert.equal(profile.releaseQualified,false);assert.equal(profile.recordingQualified,false);
+ const base=context.boundJson(profile.baseProfile),receipt=context.boundJson(profile.resourceRestart);
+ return validateRestart(profile.baseProfile,base,receipt,context);
+}
+function validateRestart(baseRef,base,receipt,context){
+ assert(base.resourceRecreation&&!base.resourceRestart,'RESOURCE_RESTART_BASE_REQUIRED');
+ assert.deepEqual(Object.keys(receipt).sort(),['schema','scope','releaseQualified','recordingQualified','baseProfile','engineId','sourceSha256','historicalGenerationUnknown','roles'].sort(),'RESOURCE_RESTART_RECEIPT_SCHEMA');
+ assert.equal(receipt.schema,'marty.beta-resource-restart/v1');assert.equal(receipt.scope,'FUNCTIONAL_ONLY');
+ assert.equal(receipt.releaseQualified,false);assert.equal(receipt.recordingQualified,false);
+ assert.deepEqual(receipt.baseProfile,baseRef,'RESOURCE_RESTART_BASE_CHANGED');
+ assert.equal(receipt.sourceSha256,restartSource(),'RESOURCE_RESTART_SOURCE_CHANGED');
+ assert.deepEqual(receipt.historicalGenerationUnknown,['keycloak'],'RESOURCE_RESTART_UNKNOWN_GENERATION_CHANGED');
+ const a=authority(base,context);assert.equal(receipt.engineId,a.engineId,'RESOURCE_RESTART_ENGINE_CHANGED');
+ const baseline=restartBaseline(a),roles=receipt.roles;
+ assert(Array.isArray(roles)&&roles.length===baseline.length,'RESOURCE_RESTART_COHORT_CHANGED');
+ assert.deepEqual(roles.map(row=>row.role),baseline.map(row=>row.role),'RESOURCE_RESTART_COHORT_CHANGED');
+ let changed=0;
+ const generations=new Map(roles.map((row,index)=>{
+  assert.deepEqual(Object.keys(row).sort(),['role','cid','startedAt','pid'].sort(),'RESOURCE_RESTART_ROW_SCHEMA');
+  const old=baseline[index];assert.equal(row.cid,old.cid,'RESOURCE_RESTART_ID_CHANGED:'+row.role);
+  assert(Number.isSafeInteger(row.pid)&&row.pid>0&&Number.isFinite(Date.parse(row.startedAt)),'RESOURCE_RESTART_GENERATION_INVALID:'+row.role);
+  if(row.role==='keycloak')assert(Date.parse(row.startedAt)>Date.parse(old.earliestStartedAt),
+   'RESOURCE_RESTART_KEYCLOAK_BEFORE_RECREATION');
+  else if(row.startedAt===old.startedAt)assert.equal(row.pid,old.pid,'RESOURCE_RESTART_UNCHANGED_PID:'+row.role);
+  else {assert(Date.parse(row.startedAt)>Date.parse(old.startedAt),'RESOURCE_RESTART_NOT_NEWER:'+row.role);changed++;}
+  return [row.role,row];
+ }));
+ assert(changed>0,'RESOURCE_RESTART_NO_CHANGE');
+ const expected=context.expectedRuntime(base);
+ const rows=expected.map(row=>{const g=generations.get(row.role);assert(g,'RESOURCE_RESTART_ROLE_MISSING');
+  return {...row,requiredStartedAt:g.startedAt,requiredHostPid:g.pid,
+   ...(row.requiredObservation?{requiredObservation:{...row.requiredObservation,startedAt:g.startedAt,hostPid:g.pid}}:{})};});
+ return {base,a,receipt,generations,rows};
+}
+function produceResourceRestart(baseRef,{boundJson,expectedRuntime,receiptDigests,observeDocker,validateRuntimeObservation,readDocker}){
+ assert.equal(typeof readDocker,'function','RESOURCE_RESTART_ACTUAL_DOCKER_REQUIRED');
+ const base=boundJson(baseRef),context={boundJson,expectedRuntime,receiptDigests};
+ assert(base.resourceRecreation&&!base.resourceRestart,'RESOURCE_RESTART_BASE_REQUIRED');
+ const a=authority(base,context),before=JSON.parse(readDocker(['info','--format','{{json .}}']));
+ assert.equal(before.ID,a.engineId,'RESOURCE_RESTART_ENGINE_CHANGED');
+ const baseline=restartBaseline(a),roles=baseline.map(old=>{
+  const live=JSON.parse(readDocker(['inspect',old.cid]))[0];
+  assert(live&&live.Id===old.cid,'RESOURCE_RESTART_ID_CHANGED:'+old.role);
+  return {role:old.role,cid:old.cid,startedAt:live.State?.StartedAt,pid:live.State?.Pid};
+ });
+ const receipt={schema:'marty.beta-resource-restart/v1',scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,
+  baseProfile:baseRef,engineId:a.engineId,sourceSha256:restartSource(),historicalGenerationUnknown:['keycloak'],roles};
+ const result=validateRestart(baseRef,base,receipt,context);
+ verifyAncillary(base,readDocker,context,result.generations);
+ for(const row of expectedRuntime(base)){const actual=observeDocker(row,readDocker);validateRuntimeObservation(row,actual,true);
+  const generation=result.generations.get(row.role);assert.equal(actual.startedAt,generation.startedAt);assert.equal(actual.hostPid,generation.pid);}
+ verifyAncillary(base,readDocker,context,result.generations);
+ const after=JSON.parse(readDocker(['info','--format','{{json .}}']));assert.equal(after.ID,a.engineId,'RESOURCE_RESTART_ENGINE_CHANGED');
+ boundJson(baseRef);return receipt;
+}
+
+module.exports={resourceSuccessor,authority,verifyAncillary,restartAuthority,produceResourceRestart,canonicalSourceDigest,mountDigest,CONFIG_DIGEST_SCHEMA};
