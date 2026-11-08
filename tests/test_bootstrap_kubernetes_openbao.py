@@ -21,6 +21,14 @@ import bootstrap_kubernetes_openbao as bootstrap
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Linux bootstrap file contract")
 
 
+def expected_publication_contract():
+    return {
+        "schema": "marty.kubernetes-secret-publication/v1",
+        "catalog": json.loads(
+            (bootstrap.ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes()),
+    }
+
+
 class ExistingNamespace:
     namespace = "marty-test"
 
@@ -54,7 +62,7 @@ class ExistingNamespace:
 def test_existing_destination_secret_refused_before_mutation(tmp_path, name):
     transport = ExistingNamespace(tmp_path, {name})
     with pytest.raises(bootstrap.BootstrapError, match="already contains Marty credentials"):
-        bootstrap.prepare_namespace(transport, "fixture-bootstrap")
+        bootstrap.prepare_namespace(transport, "fixture-bootstrap", expected_publication_contract())
     assert name in transport.inspected_secrets
     assert transport.mutations == []
     assert list(tmp_path.iterdir()) == []
@@ -62,11 +70,23 @@ def test_existing_destination_secret_refused_before_mutation(tmp_path, name):
 
 def test_existing_ingress_and_registry_secrets_are_preserved(tmp_path):
     transport = ExistingNamespace(tmp_path, {"marty-ingress-tls", "registry-pull"})
-    identity = bootstrap.prepare_namespace(transport, "fixture-bootstrap")
+    identity = bootstrap.prepare_namespace(transport, "fixture-bootstrap", expected_publication_contract())
     assert transport.mutations == []
     assert transport.secrets == {"marty-ingress-tls", "registry-pull"}
     assert identity == {"name": "marty-test", "uid": "namespace-fixture"}
     assert json.loads((tmp_path / "namespace.json").read_bytes())["uid"] == "namespace-fixture"
+
+
+def test_namespace_destinations_come_from_retained_validated_publication_contract(tmp_path, monkeypatch):
+    publication = expected_publication_contract()
+    transport = ExistingNamespace(tmp_path, set())
+    # Once validated, inspection must use this exact publisher inventory rather
+    # than reopening a checkout that can change during later cluster work.
+    monkeypatch.setattr(bootstrap, "ROOT", tmp_path / "no-checkout")
+    bootstrap.prepare_namespace(transport, "fixture-bootstrap", publication)
+    assert transport.inspected_secrets == {
+        entry["name"] for entry in publication["catalog"]["secrets"]
+    } | {"marty-operator", "marty-openbao-seal"}
 
 
 def archive_bytes(entries, contents=b"synthetic public certificate or scoped credential"):
@@ -225,6 +245,10 @@ def bootstrap_flow(tmp_path, monkeypatch):
     flow = SimpleNamespace(
         args=args, values=values, fail_at=None, init_calls=0, cleanup_calls=0,
         namespace_reads=0, status_reads=0, publication_calls=0,
+        publication_contract=expected_publication_contract(), contract_bytes=None,
+        contract_returncode=0, contract_exception=None,
+        processes=[], cluster_operations=[], supplemental_publications=[], events=[],
+        publication_before_cluster=None, native_publication=None,
         namespace_documents=[
             {"metadata": {"name": args.namespace, "uid": NAMESPACE_UID}},
             {"metadata": {"name": args.namespace, "uid": NAMESPACE_UID}},
@@ -236,19 +260,40 @@ def bootstrap_flow(tmp_path, monkeypatch):
     operator_bytes = b"synthetic authenticated operator; never executed"
 
     def prepared(**kwargs):
+        flow.events.append("prepare")
         assert kwargs["assets"] == args.assets
         for key in ("output", "openbao_output"):
             bootstrap.write_new(kwargs[key], b"{}")
         return values, {}
 
     def authenticated(assets, identity):
+        flow.events.append("authenticated")
         assert assets == args.assets and identity == values["release"]
         return operator_bytes, b"synthetic authenticated initializer; never executed"
 
     def process(command, **kwargs):
+        flow.processes.append(command)
         if command == [str(args.state_dir / "marty-deploy"), "--build-identity"]:
+            flow.events.append("build-identity")
             stdout = (args.runtime_source_sha + ":" + args.release_tag).encode()
+        elif command == [str(args.state_dir / "marty-deploy"), "kubernetes-secrets-contract"]:
+            flow.events.append("publication-contract")
+            assert kwargs["env"] == {}
+            assert kwargs["stdin"] == bootstrap.subprocess.DEVNULL
+            assert kwargs["capture_output"] is True and kwargs["check"] is False
+            assert kwargs["timeout"] == 10
+            if flow.contract_exception:
+                raise flow.contract_exception
+            return SimpleNamespace(
+                returncode=flow.contract_returncode,
+                stdout=(bootstrap.encoded(flow.publication_contract)
+                        if flow.contract_bytes is None else flow.contract_bytes),
+                stderr=b"PRIVATE_CONTRACT_DIAGNOSTIC_CANARY",
+            )
         elif command[:1] == ["/synthetic/kubectl"] and "config" in command:
+            flow.events.append("kubeconfig")
+            flow.publication_before_cluster = json.loads(
+                (args.state_dir / "kubernetes-secret-publication.json").read_bytes())
             stdout = bootstrap.encoded({
                 "current-context": args.context, "contexts": [{"name": args.context}],
                 "users": [{"user": {"token": "PRIVATE_KUBECONFIG_CANARY"}}],
@@ -263,22 +308,27 @@ def bootstrap_flow(tmp_path, monkeypatch):
             flow.transport = self
 
         def run(self, operation, command, **kwargs):
+            flow.cluster_operations.append(operation)
             if operation == "official OpenBao Helm installation":
                 return b""
             assert operation == "native Kubernetes credential publication"
             flow.publication_calls += 1
+            flow.native_publication = (command, kwargs["env"])
             assert kwargs["env"]["KUBECONFIG"] == str(self.state / "kubeconfig")
             if flow.fail_at == "publication":
                 raise bootstrap.BootstrapError("synthetic publication failure")
             return b""
 
         def create(self, document):
+            flow.cluster_operations.append("create")
             flow.resources.append(document)
 
         def upload(self, pod, destination, contents, **kwargs):
+            flow.cluster_operations.append("upload")
             flow.uploads[(pod, destination)] = contents
 
         def kubectl(self, operation, *command, **kwargs):
+            flow.cluster_operations.append(operation)
             if operation == "namespace inspection":
                 return b""
             if operation == "namespace identity":
@@ -297,12 +347,14 @@ def bootstrap_flow(tmp_path, monkeypatch):
                     raise bootstrap.BootstrapError("synthetic producer cleanup failure")
                 return b""
             if operation == "application credential publication":
-                if flow.fail_at == "notification-publication" and command[3] == "notification-tls-kms":
-                    raise bootstrap.BootstrapError("synthetic Notification publication failure")
+                flow.supplemental_publications.append(command)
+                if flow.fail_at == "operator-publication":
+                    raise bootstrap.BootstrapError("synthetic operator publication failure")
                 return b""
             raise AssertionError("unexpected Kubernetes operation: " + operation)
 
         def execute(self, pod, command, *, data=None, **kwargs):
+            flow.cluster_operations.append("execute")
             if command[:3] == ["bao", "operator", "init"]:
                 flow.init_calls += 1
                 # Reading here proves persistence precedes the mutating call.
@@ -366,6 +418,106 @@ def bootstrap_flow(tmp_path, monkeypatch):
     return flow
 
 
+@pytest.mark.parametrize("invalid", [
+    "unsupported", "timeout", "unavailable", "empty", "malformed", "non-utf8",
+    "oversized", "array", "schema", "missing-secret", "extra-secret",
+    "duplicate-secret", "wrong-input", "wrong-key", "missing-required",
+    "boolean-version", "duplicate-json-member", "extra-member",
+])
+def test_incompatible_compiled_publisher_refused_before_cluster_access(bootstrap_flow, invalid, capsys):
+    flow = bootstrap_flow
+    contract = flow.publication_contract
+    catalog = contract["catalog"]
+    notification = next(entry for entry in catalog["secrets"] if entry["name"] == "notification-tls-kms")
+    if invalid == "unsupported":
+        flow.contract_returncode = 2
+        flow.contract_bytes = b"PRIVATE_UNSUPPORTED_OPERATOR_OUTPUT"
+    elif invalid == "timeout":
+        flow.contract_exception = bootstrap.subprocess.TimeoutExpired(
+            ["PRIVATE_CONTRACT_COMMAND"], 10,
+            output=b"PRIVATE_CONTRACT_OUTPUT", stderr=b"PRIVATE_CONTRACT_ERROR",
+        )
+    elif invalid == "unavailable":
+        flow.contract_exception = OSError("PRIVATE_CONTRACT_PROCESS_ERROR")
+    elif invalid == "empty":
+        flow.contract_bytes = b""
+    elif invalid == "malformed":
+        flow.contract_bytes = b'{"PRIVATE_INVALID_JSON"'
+    elif invalid == "non-utf8":
+        flow.contract_bytes = b"\xff\xfePRIVATE_INVALID_ENCODING"
+    elif invalid == "oversized":
+        flow.contract_bytes = b" " * (128 * 1024) + bootstrap.encoded(contract)
+    elif invalid == "array":
+        flow.contract_bytes = b"[]"
+    elif invalid == "schema":
+        contract["schema"] = "marty.kubernetes-secret-publication/v0"
+    elif invalid == "missing-secret":
+        catalog["secrets"].remove(notification)
+    elif invalid == "extra-secret":
+        catalog["secrets"].append({
+            "name": "unexpected-destination", "fields": {"token": {"env": "OPENBAO_SERVICE_TOKEN"}},
+        })
+    elif invalid == "duplicate-secret":
+        catalog["secrets"].append(notification)
+    elif invalid == "wrong-input":
+        notification["fields"]["token"]["env"] = "OPENBAO_SERVICE_TOKEN"
+    elif invalid == "wrong-key":
+        notification["fields"]["password"] = notification["fields"].pop("token")
+    elif invalid == "missing-required":
+        catalog["required"].remove("NOTIFICATION_TLS_KMS_TOKEN")
+    elif invalid == "boolean-version":
+        catalog["schema_version"] = True  # bool and int compare equal in Python.
+    elif invalid == "duplicate-json-member":
+        # The last schema is correct: a permissive decoder would hide the first.
+        flow.contract_bytes = b'{"schema":"PRIVATE_DUPLICATE_SCHEMA",' + bootstrap.encoded(contract)[1:]
+    else:
+        contract["private"] = "PRIVATE_EXTRA_CONTRACT_MEMBER"
+
+    with pytest.raises(bootstrap.BootstrapError) as failure:
+        bootstrap.bootstrap(flow.args)
+    assert flow.events == ["prepare", "authenticated", "build-identity", "publication-contract"]
+    assert not any(command[0] == "/synthetic/kubectl" for command in flow.processes)
+    assert flow.cluster_operations == []
+    assert flow.resources == [] and flow.token_commands == {}
+    assert flow.init_calls == flow.publication_calls == 0
+    for name in ("kubeconfig", "namespace.json", "initialize-requested.json",
+                 "bootstrap-complete.json", "kubernetes-secret-publication.json"):
+        assert not (flow.args.state_dir / name).exists()
+    captured = capsys.readouterr()
+    assert "PRIVATE_" not in str(failure.value) + captured.out + captured.err
+
+
+def test_compiled_publication_preflight_retained_before_cluster_and_owns_notification(bootstrap_flow):
+    flow = bootstrap_flow
+    assert flow.args.runtime_source_sha != flow.args.chart_source_sha
+    bootstrap.bootstrap(flow.args)
+    contract = expected_publication_contract()
+    assert flow.events[:5] == [
+        "prepare", "authenticated", "build-identity", "publication-contract", "kubeconfig",
+    ]
+    assert flow.events.count("publication-contract") == 1
+    assert flow.publication_before_cluster == contract
+    state = flow.args.state_dir
+    retained = state / "kubernetes-secret-publication.json"
+    assert json.loads(retained.read_bytes()) == contract
+    assert stat.S_IMODE(retained.stat().st_mode) == 0o600
+    complete = json.loads((state / "bootstrap-complete.json").read_bytes())
+    assert complete["credentialPublication"] == contract
+    command, environment = flow.native_publication
+    assert command == [
+        str(state / "marty-deploy"), "--repo-root", str(bootstrap.ROOT),
+        "kubernetes-secrets", "kubernetes-production", flow.args.namespace,
+    ]
+    assert environment["NOTIFICATION_WORKLOAD_SERVER_CERT_FILE"] == str(
+        state / "credentials/notification_workload_server_cert")
+    assert environment["NOTIFICATION_TLS_KMS_TOKEN_FILE"] == str(
+        state / "credentials/notification_tls_kms_token")
+    assert flow.supplemental_publications == [(
+        "create", "secret", "generic", "marty-operator",
+        "--from-file=password=" + str(state / "credentials/marty_org_admin_password"),
+    )]
+
+
 def test_lifecycle_receipt_binds_actual_producers_and_ordinary_token_requests(bootstrap_flow, capsys):
     flow = bootstrap_flow
     bootstrap.bootstrap(flow.args)
@@ -418,7 +570,8 @@ def test_lifecycle_receipt_binds_actual_producers_and_ordinary_token_requests(bo
     assert ROOT_TOKEN.encode() in (state / "openbao-initialization.json").read_bytes()
     assert b"PRIVATE_SCALAR_CANARY" in (state / "credentials/keycloak_admin_password").read_bytes()
     assert b"PRIVATE_WORKLOAD_TOKEN_CANARY" in (state / "credentials/gateway_tls_kms_token").read_bytes()
-    for name in ("namespace.json", "initialize-requested.json", "bootstrap-complete.json"):
+    for name in ("namespace.json", "initialize-requested.json", "bootstrap-complete.json",
+                 "kubernetes-secret-publication.json"):
         path = state / name
         assert b"PRIVATE_" not in path.read_bytes()
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -486,7 +639,7 @@ def test_initial_cluster_identity_refusal_prevents_credential_provisioning(boots
 
 
 @pytest.mark.parametrize("failure", [
-    "producer", "producer-cleanup", "publication", "notification-publication",
+    "producer", "producer-cleanup", "publication", "operator-publication",
 ])
 def test_producer_or_publication_failure_preserves_request_without_success(bootstrap_flow, failure):
     flow = bootstrap_flow
@@ -499,6 +652,10 @@ def test_producer_or_publication_failure_preserves_request_without_success(boots
         (flow.args.state_dir / "initialize-requested.json").read_bytes())
     assert not (flow.args.state_dir / "bootstrap-complete.json").exists()
     assert flow.publication_calls == (0 if failure in {"producer", "producer-cleanup"} else 1)
+    retained_publication = flow.args.state_dir / "kubernetes-secret-publication.json"
+    assert json.loads(retained_publication.read_bytes()) == expected_publication_contract()
+    if failure != "operator-publication":
+        assert flow.supplemental_publications == []
 
 
 @pytest.mark.parametrize("nonce,project", [

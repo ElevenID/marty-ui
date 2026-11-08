@@ -252,8 +252,37 @@ fn print_plan(plan: &Value) {
     }
 }
 
+// These helpers return compiled public metadata and static usage text only.
+// Credential resolution belongs exclusively to the separate publication command.
+fn kubernetes_publication_usage_error() -> String {
+    usage_error(
+        &command_usage("kubernetes-secrets-contract"),
+        "marty-deploy kubernetes-secrets-contract",
+        "this command accepts no arguments except -h or --help",
+    )
+}
+
+fn kubernetes_publication_metadata(params: &[String]) -> Result<String, String> {
+    match params {
+        [] => serde_json::to_string(&marty_deployment_catalog::kubernetes_secrets::contract())
+            .map(|contract| format!("{contract}\n"))
+            .map_err(|error| error.to_string()),
+        [help] if help == "--help" || help == "-h" => {
+            Ok(frozen_help("kubernetes-secrets-contract"))
+        }
+        _ => Err(kubernetes_publication_usage_error()),
+    }
+}
+
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|arg| arg == "kubernetes-secrets-contract")
+    {
+        print!("{}", kubernetes_publication_metadata(&args[1..])?);
+        return Ok(());
+    }
     if args
         .first()
         .is_some_and(|arg| arg == "installer-rootless-canary-helper")
@@ -1123,6 +1152,11 @@ fn run() -> Result<(), String> {
         .first()
         .map(String::as_str)
         .ok_or_else(|| "command is required".to_owned())?;
+    // The standalone contract was already dispatched before global options.
+    // Reaching it here means --repo-root was supplied before the command.
+    if command == "kubernetes-secrets-contract" {
+        return Err(kubernetes_publication_usage_error());
+    }
     let params = &args[1..];
     if params.iter().any(|arg| arg == "--help" || arg == "-h") {
         if command == "kubernetes-secrets" {
@@ -1284,7 +1318,38 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::posix_shell_quote;
+    use super::{kubernetes_publication_metadata, posix_shell_quote};
+
+    #[test]
+    fn kubernetes_publication_contract_command_returns_compiled_metadata() {
+        let output = kubernetes_publication_metadata(&[]).unwrap();
+        let actual: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(
+            actual,
+            marty_deployment_catalog::kubernetes_secrets::contract()
+        );
+    }
+
+    #[test]
+    fn kubernetes_publication_contract_command_accepts_only_standalone_help() {
+        for flag in ["--help", "-h"] {
+            let output = kubernetes_publication_metadata(&[flag.into()]).unwrap();
+            assert!(output.starts_with("usage: marty-deploy kubernetes-secrets-contract"));
+        }
+        for args in [
+            vec!["kubernetes-production"],
+            vec!["--repo-root", "private-sentinel"],
+            vec!["--repo-root=private-sentinel"],
+            vec!["--help", "private-sentinel"],
+            vec!["private-sentinel", "--help"],
+            vec!["--help", "-h"],
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let error = kubernetes_publication_metadata(&args).unwrap_err();
+            assert!(error.starts_with("__USAGE__"));
+            assert!(!error.contains("private-sentinel"));
+        }
+    }
 
     #[test]
     fn compose_preview_quotes_posix_shell_metacharacters() {

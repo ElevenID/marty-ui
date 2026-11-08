@@ -171,8 +171,6 @@ def test_existing_secret_renames_cover_env_and_volumes(tmp_path: Path) -> None:
     keys.update({
         "marty-redis-tls": {"tls.crt", "tls.key", "ca.crt"},
         "marty-operator": {"password"},
-        "notification-workload-tls": {"tls.crt", "ca.crt"},
-        "notification-tls-kms": {"token", "ca.crt"},
     })
     for obj in walk(rendered):
         if "secretKeyRef" in obj:
