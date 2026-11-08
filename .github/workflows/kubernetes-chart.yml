@@ -11,6 +11,7 @@ on:
       - 'scripts/prepare_kubernetes_helm_values.py'
       - 'scripts/bootstrap_kubernetes_openbao.py'
       - 'scripts/stage_kubernetes_application_credentials.py'
+      - 'scripts/stage_kubernetes_renewal_credentials.py'
       - 'scripts/activate_kubernetes_application_credentials.py'
       - 'scripts/kubernetes_application_state.py'
       - 'scripts/installer_*.py'
@@ -28,6 +29,7 @@ on:
       - 'tests/test_prepare_kubernetes_helm_values.py'
       - 'tests/test_bootstrap_kubernetes_openbao.py'
       - 'tests/test_stage_kubernetes_application_credentials.py'
+      - 'tests/test_stage_kubernetes_renewal_credentials.py'
       - 'tests/test_activate_kubernetes_application_credentials.py'
       - 'tests/test_kubernetes_application_state.py'
       - 'tests/scripts/run-kubernetes-acceptance.cjs'
@@ -85,5 +87,6 @@ jobs:
             tests/test_prepare_kubernetes_helm_values.py \
             tests/test_bootstrap_kubernetes_openbao.py \
             tests/test_stage_kubernetes_application_credentials.py \
+            tests/test_stage_kubernetes_renewal_credentials.py \
             tests/test_activate_kubernetes_application_credentials.py \
             tests/test_kubernetes_application_state.py

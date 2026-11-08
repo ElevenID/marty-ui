@@ -107,6 +107,7 @@ pub mod installer_uninstall;
 pub mod installer_validation;
 pub mod installer_verify;
 pub mod kubernetes_application;
+pub mod kubernetes_renewal;
 pub mod kubernetes_secrets;
 pub mod passport_model;
 
@@ -785,4 +786,6 @@ pub mod operator;
 pub mod operator_certificates;
 mod operator_files;
 mod operator_http;
+#[cfg(target_os = "linux")]
+mod operator_process;
 pub mod snapshot;

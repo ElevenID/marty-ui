@@ -160,6 +160,43 @@ def validate_native_evidence(payload: bytes, runtime_files: set[str], *, complet
         modes={0o600}, directories={".", "inputs"}, complete=complete, allow_empty=not complete)
 
 
+def admitted_runtime(args: argparse.Namespace, complete: dict, retained_images: dict,
+                     operation: Path) -> tuple[Path, bytes, dict, dict, dict]:
+    """Reauthenticate the retained runtime before any credential or cluster use.
+
+    Routine adapters share this original signed artifact closure. Further public
+    capability contracts are checked by each caller before creating a transport.
+    The authenticated operator bytes stay in memory for the later private upload.
+    """
+    bootstrap.require(complete["runtimeSourceSha"] == args.runtime_source_sha
+                      and complete["chartSourceSha"] == args.chart_source_sha,
+                      "explicit runtime or chart identity differs from original bootstrap")
+    values, _ = bootstrap.prepare(assets=args.assets,
+        runtime_source_sha=args.runtime_source_sha, release_tag=args.release_tag,
+        build_run_id=args.build_run_id, build_run_attempt=args.build_run_attempt,
+        chart_source_sha=args.chart_source_sha, gh=args.gh, cosign=args.cosign,
+        output=operation / "marty-images.json", openbao_output=operation / "openbao-images.json")
+    bootstrap.require(bootstrap.encoded(values) == bootstrap.encoded(retained_images),
+                      "authenticated original runtime images or provenance differ")
+    operator_bytes, _ = bootstrap.authenticated_bootstrap_inputs(args.assets, values["release"])
+    retained_operator, _ = private_bytes(args.state_dir / "marty-deploy", OPERATOR_LIMIT, {0o700})
+    bootstrap.require(retained_operator == operator_bytes and len(operator_bytes) <= OPERATOR_LIMIT,
+                      "retained signed operator differs or exceeds transport bounds")
+    operator = operation / "marty-deploy"
+    bootstrap.write_new(operator, operator_bytes, 0o700)
+    identity = subprocess.run([str(operator), "--build-identity"], stdin=subprocess.DEVNULL,
+                             capture_output=True, check=False, timeout=10, env={})
+    bootstrap.require(identity.returncode == 0 and identity.stdout.strip().decode()
+                      == args.runtime_source_sha + ":" + args.release_tag,
+                      "signed operator build identity differs")
+    publication = bootstrap.publication_contract(operator)
+    application = bootstrap.application_token_contract(operator)
+    bootstrap.require(bootstrap.encoded(complete["credentialPublication"]) == bootstrap.encoded(publication)
+                      and bootstrap.encoded(complete["applicationTokenContract"]) == bootstrap.encoded(application),
+                      "original bootstrap compiled contracts differ")
+    return operator, operator_bytes, values, publication, application
+
+
 def stage(args: argparse.Namespace) -> None:
     bootstrap.require(os.name == "posix", "this development transport requires Linux")
     with application_state.locked(args.state_dir) as held:
@@ -190,7 +227,8 @@ def _stage_locked(args: argparse.Namespace, held: application_state.LockedState)
     current = selected.directory
     bootstrap.require(not operation.is_relative_to(current)
                       and not operation.is_relative_to(state / "credentials")
-                      and not operation.is_relative_to(state / "application-identity"),
+                      and not operation.is_relative_to(state / "application-identity")
+                      and not operation.is_relative_to(state / "renewal-identity"),
                       "operation directory overlaps retained credential inputs")
     bootstrap.private_directory(operation)
     bootstrap.require(complete["runtimeSourceSha"] == args.runtime_source_sha
@@ -200,29 +238,8 @@ def _stage_locked(args: argparse.Namespace, held: application_state.LockedState)
     bootstrap.require(isinstance(pull_secrets, list) and all(
         isinstance(name, str) and re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,251}[a-z0-9]|[a-z0-9]", name)
         for name in pull_secrets), "retained image pull Secret names are invalid")
-    values, _ = bootstrap.prepare(assets=args.assets,
-        runtime_source_sha=args.runtime_source_sha, release_tag=args.release_tag,
-        build_run_id=args.build_run_id, build_run_attempt=args.build_run_attempt,
-        chart_source_sha=args.chart_source_sha, gh=args.gh, cosign=args.cosign,
-        output=operation / "marty-images.json", openbao_output=operation / "openbao-images.json")
-    bootstrap.require(bootstrap.encoded(values) == bootstrap.encoded(retained_images),
-                      "authenticated original runtime images or provenance differ")
-    operator_bytes, _ = bootstrap.authenticated_bootstrap_inputs(args.assets, values["release"])
-    retained_operator, _ = private_bytes(state / "marty-deploy", OPERATOR_LIMIT, {0o700})
-    bootstrap.require(retained_operator == operator_bytes and len(operator_bytes) <= OPERATOR_LIMIT,
-                      "retained signed operator differs or exceeds transport bounds")
-    operator = operation / "marty-deploy"
-    bootstrap.write_new(operator, operator_bytes, 0o700)
-    identity = subprocess.run([str(operator), "--build-identity"], stdin=subprocess.DEVNULL,
-                             capture_output=True, check=False, timeout=10, env={})
-    bootstrap.require(identity.returncode == 0 and identity.stdout.strip().decode()
-                      == args.runtime_source_sha + ":" + args.release_tag,
-                      "signed operator build identity differs")
-    publication = bootstrap.publication_contract(operator)
-    application = bootstrap.application_token_contract(operator)
-    bootstrap.require(bootstrap.encoded(complete["credentialPublication"]) == bootstrap.encoded(publication)
-                      and bootstrap.encoded(complete["applicationTokenContract"]) == bootstrap.encoded(application),
-                      "original bootstrap compiled contracts differ")
+    operator, operator_bytes, values, _publication, application = admitted_runtime(
+        args, complete, retained_images, operation)
     snapshot = current_snapshot(current)
     bootstrap.require("openbao_tls_ca_cert" in snapshot, "original OpenBao trust is unavailable")
     identity_path = state / "application-identity"

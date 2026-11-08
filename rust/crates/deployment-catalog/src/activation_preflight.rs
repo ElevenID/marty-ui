@@ -98,6 +98,41 @@ fn token_scopes() -> Vec<(String, Option<&'static str>)> {
     scopes.sort_by(|a, b| a.0.cmp(&b.0));
     scopes
 }
+
+fn closed_new_token_metadata(data: &Value) -> Result<()> {
+    let ttl = data["ttl"].as_u64().ok_or(REFUSAL)?;
+    let created = data["creation_ttl"].as_u64().ok_or(REFUSAL)?;
+    // The existing Renewal producers request eight-hour service leaves. The
+    // shared leaf role supplies the explicit lifetime cap; neither producer
+    // promises non-renewability, so renewal remains bounded by that same cap.
+    if data["type"] != "service"
+        || data["num_uses"] != 0
+        || data["explicit_max_ttl"] != 28800
+        || !(1..=28800).contains(&created)
+        || !(1..=created).contains(&ttl)
+        || data
+            .get("identity_policies")
+            .is_some_and(|value| !value.is_null() && value != &json!([]))
+        || data
+            .get("token_policies")
+            .is_some_and(|value| value != &data["policies"])
+        || ["period", "token_period"].iter().any(|name| {
+            data.get(*name)
+                .is_some_and(|value| !value.is_null() && value != 0)
+        })
+    {
+        return Err("renewed OpenBao token has additional authority or an unbounded lifetime");
+    }
+    Ok(())
+}
+
+fn closed_new_metadata_requested(context: &Value) -> Result<bool> {
+    match context.get("require_closed_new_metadata") {
+        None => Ok(false),
+        Some(value) => value.as_bool().ok_or(REFUSAL),
+    }
+}
+
 pub async fn tokens(bao: &OpenBaoHttp, context: &Value) -> Result<Vec<String>> {
     let operator = text(context, "token")?;
     let ttl = context["minimum_ttl"].as_u64().ok_or(REFUSAL)?;
@@ -105,6 +140,7 @@ pub async fn tokens(bao: &OpenBaoHttp, context: &Value) -> Result<Vec<String>> {
     let new = Path::new(text(context, "new")?);
     let orphan_new = flag(context, "require_orphan_new")?;
     let orphan_old = flag(context, "require_orphan_old")?;
+    let closed_new = closed_new_metadata_requested(context)?;
     let scopes = token_scopes();
     let mut names = Vec::new();
     for (root, orphan) in [
@@ -130,6 +166,9 @@ pub async fn tokens(bao: &OpenBaoHttp, context: &Value) -> Result<Vec<String>> {
             )
             .await?;
             let data = &response["data"];
+            if closed_new && root == new {
+                closed_new_token_metadata(data)?;
+            }
             let policies = data["policies"]
                 .as_array()
                 .ok_or("renewed OpenBao token has invalid scope or lifetime")?;

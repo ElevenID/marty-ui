@@ -16,7 +16,7 @@ const FILE_MODES: &[u32] = &[0o400, 0o440, 0o444, 0o600, 0o640, 0o644];
 type Files = BTreeMap<String, PathBuf>;
 type Payloads = BTreeMap<String, (Vec<u8>, u32)>;
 
-fn inventories() -> (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>) {
+pub(crate) fn inventories() -> (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>) {
     let mut tls = BTreeSet::from([CA.to_owned()]);
     let mut tokens = BTreeSet::new();
     for role in SELFHOST_ROLES {

@@ -332,6 +332,28 @@ def flow(stage_flow, tmp_path, monkeypatch):
     return world
 
 
+@pytest.mark.parametrize("reconcile", [False, True])
+def test_activation_cannot_create_an_operation_inside_enrolled_renewal_identity(flow, reconcile):
+    identity = flow.args.state_dir / "renewal-identity"
+    identity.mkdir(mode=0o700)
+    for name, value in {
+        "renewal-role-id": b"PUBLIC_RENEWAL_ROLE_CANARY",
+        "renewal-secret-id": b"PRIVATE_RENEWAL_SECRET_CANARY",
+        "renewal-leaf-policies.json": b"[]",
+    }.items():
+        put(identity / name, value)
+    before = staging.current_snapshot(identity)
+    flow.args.operation_dir = identity / "unsafe-operation"
+    flow.args.reconcile = reconcile
+    with pytest.raises(bootstrap.BootstrapError, match="overlaps retained private inputs"):
+        activation.activate(flow.args)
+    assert not flow.args.operation_dir.exists()
+    assert staging.current_snapshot(identity) == before
+    assert flow.events == [] and flow.argv == []
+    assert flow.secret_patches == 0 and flow.deployment_patches == {}
+    assert not (flow.args.state_dir / selection.PENDING).exists()
+
+
 def test_complete_activation_preserves_unrelated_data_verifies_delivery_and_advances_selection(flow, capsys):
     before = deepcopy(flow.secret["data"])
     activation.activate(flow.args)

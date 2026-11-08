@@ -526,10 +526,17 @@ def test_pending_activation_refuses_staging_before_artifact_or_cluster_activity(
     assert not flow.args.operation_dir.exists()
 
 
-@pytest.mark.parametrize("target", ["selected", "original"])
+@pytest.mark.parametrize("target", ["selected", "original", "renewal-identity"])
 def test_new_stage_directory_cannot_be_created_inside_retained_generations(flow, target):
     selected = retained_activation(flow)
-    protected = selected if target == "selected" else flow.args.state_dir / "credentials"
+    if target == "renewal-identity":
+        protected = flow.args.state_dir / target
+        protected.mkdir(mode=0o700)
+        write(protected / "renewal-role-id", b"PUBLIC_RENEWAL_ROLE_CANARY")
+        write(protected / "renewal-secret-id", b"PRIVATE_RENEWAL_SECRET_CANARY")
+        write(protected / "renewal-leaf-policies.json", b"[]")
+    else:
+        protected = selected if target == "selected" else flow.args.state_dir / "credentials"
     before = staging.current_snapshot(protected)
     flow.args.operation_dir = protected / "unsafe-operation"
     with pytest.raises(bootstrap.BootstrapError, match="overlaps retained credential inputs"):

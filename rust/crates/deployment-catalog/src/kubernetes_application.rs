@@ -20,7 +20,7 @@ pub const DESTINATION: &str = "marty-secrets";
 pub const ACTIVATION_ANNOTATION: &str = "marty.elevenid.com/application-activation";
 const MAX_OBJECT: usize = 2 * 1024 * 1024;
 const GENERATION_MODES: &[u32] = &[0o400, 0o440, 0o444, 0o600, 0o640, 0o644];
-type Snapshot = BTreeMap<String, (Vec<u8>, u32)>;
+pub(crate) type Snapshot = BTreeMap<String, (Vec<u8>, u32)>;
 type Inputs = BTreeMap<String, String>;
 
 #[derive(Clone)]
@@ -92,7 +92,7 @@ pub fn activation_metadata() -> Value {
     })
 }
 
-fn owned_directory(path: &Path) -> Result<PathBuf> {
+pub(crate) fn owned_directory(path: &Path) -> Result<PathBuf> {
     let canonical = private_directory(path)?;
     if canonical != path {
         return Err(REFUSAL);
@@ -146,8 +146,18 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     }
 }
 
-fn read_owned(path: &Path, maximum: usize, modes: &[u32]) -> Result<(Vec<u8>, u32)> {
+pub(crate) fn read_owned(path: &Path, maximum: usize, modes: &[u32]) -> Result<(Vec<u8>, u32)> {
     owned_directory(path.parent().ok_or(REFUSAL)?)?;
+    read_owned_file(path, maximum, modes)
+}
+
+/// The Renewal transport also admits individual private inputs in its tmpfs
+/// root. Existing application callers retain the private-parent requirement.
+pub(crate) fn read_owned_file(
+    path: &Path,
+    maximum: usize,
+    modes: &[u32],
+) -> Result<(Vec<u8>, u32)> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -192,7 +202,7 @@ fn read_owned(path: &Path, maximum: usize, modes: &[u32]) -> Result<(Vec<u8>, u3
     Ok((bytes, mode))
 }
 
-fn snapshot(path: &Path) -> Result<Snapshot> {
+pub(crate) fn snapshot(path: &Path) -> Result<Snapshot> {
     owned_directory(path)?;
     let entries = generation::entries(path)?;
     if entries.is_empty() || entries.len() > 256 {

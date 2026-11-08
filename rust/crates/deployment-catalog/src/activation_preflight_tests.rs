@@ -1,5 +1,62 @@
 use super::*;
 
+#[test]
+fn closed_new_leaf_metadata_rejects_identity_grants_and_lifetime_expansion() {
+    let original = json!({"type":"service","policies":["one-exact-policy"],"num_uses":0,
+        "identity_policies":[],"period":0,"token_period":0,"ttl":28000,
+        "creation_ttl":28800,"explicit_max_ttl":28800,"renewable":true});
+    assert!(closed_new_token_metadata(&original).is_ok());
+    // Existing producers do not request non-renewability. Both variants remain
+    // acceptable under the original absolute eight-hour role lifetime cap.
+    let mut nonrenewable = original.clone();
+    nonrenewable["renewable"] = json!(false);
+    assert!(closed_new_token_metadata(&nonrenewable).is_ok());
+    for (field, value) in [
+        ("type", json!("batch")),
+        ("num_uses", json!(1)),
+        ("identity_policies", json!(["unexpected-identity-grant"])),
+        ("token_policies", json!(["unexpected-token-grant"])),
+        ("period", json!(28800)),
+        ("token_period", json!(28800)),
+        ("explicit_max_ttl", json!(0)),
+        ("explicit_max_ttl", json!(86400)),
+        ("creation_ttl", json!(86400)),
+        ("creation_ttl", json!(1)),
+        ("ttl", json!(0)),
+        ("ttl", json!(28801)),
+    ] {
+        let mut changed = original.clone();
+        changed[field] = value;
+        assert!(closed_new_token_metadata(&changed).is_err(), "{field}");
+    }
+    for field in ["type", "num_uses", "creation_ttl", "explicit_max_ttl"] {
+        let mut changed = original.clone();
+        changed.as_object_mut().unwrap().remove(field);
+        assert!(
+            closed_new_token_metadata(&changed).is_err(),
+            "missing {field}"
+        );
+    }
+}
+
+#[test]
+fn closed_new_metadata_is_explicit_and_preserves_existing_callers() {
+    assert_eq!(closed_new_metadata_requested(&json!({})), Ok(false));
+    assert_eq!(
+        closed_new_metadata_requested(&json!({"require_closed_new_metadata":false})),
+        Ok(false)
+    );
+    assert_eq!(
+        closed_new_metadata_requested(&json!({"require_closed_new_metadata":true})),
+        Ok(true)
+    );
+    for value in [json!(null), json!(1), json!("true")] {
+        assert!(
+            closed_new_metadata_requested(&json!({"require_closed_new_metadata":value})).is_err()
+        );
+    }
+}
+
 fn native_policy_orders() -> (Vec<String>, Vec<String>) {
     const PROJECT: &str = "marty-selfhost-disposable-enrollment-test";
     const NONCE: &str = "0123456789ab";

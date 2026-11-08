@@ -35,11 +35,11 @@ const INITIALIZER: &str = include_str!("../../../../docker/openbao-init.sh");
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Binding {
-    namespace: String,
-    namespace_uid: String,
-    openbao_cluster_id: String,
-    workload_project: String,
+pub(crate) struct Binding {
+    pub(crate) namespace: String,
+    pub(crate) namespace_uid: String,
+    pub(crate) openbao_cluster_id: String,
+    pub(crate) workload_project: String,
 }
 
 #[derive(Deserialize)]
@@ -92,7 +92,7 @@ fn canonical_uuid(value: &str) -> bool {
 }
 
 impl Binding {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         let namespace = self.namespace.as_bytes();
         let nonce = self
             .workload_project

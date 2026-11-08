@@ -56,10 +56,22 @@ APPLICATION_IDENTITY_LIMITS = {
     "application-role-id": 1025, "application-secret-id": 1025,
     "application-binding.json": 4097,
 }
+RENEWAL_IDENTITY_LIMITS = {
+    "renewal-role-id": 1025, "renewal-secret-id": 1025,
+    "renewal-leaf-policies.json": 4097,
+}
+RENEWAL_IDENTITY_FILES = set(RENEWAL_IDENTITY_LIMITS)
+RENEWAL_IDENTITY_ARCHIVE_LIMIT = 64 * 1024
+RENEWAL_ENROLLMENT_LIMITS = {
+    "pending.json": 65536, "binding.json": 4096, "completed.json": 4096,
+}
+RENEWAL_ENROLLMENT_ARCHIVE_LIMIT = 128 * 1024
 PRODUCER_DEADLINE_SECONDS = 1200
 NATIVE_EXPORT_DIRECTORIES = {
     "/tmp/application-identity", "/tmp/application-operation",
     "/tmp/application-operation/inputs", "/tmp/application-candidate",
+    "/tmp/renewal-identity", "/tmp/renewal-enrollment",
+    "/tmp/renewal-operation", "/tmp/renewal-candidate",
 }
 REMOTE_ARCHIVE_COMMAND = (
     'umask 077; set -C; : > "$3"; trap \'rm -f "$3"\' 0; '
@@ -263,6 +275,22 @@ def application_token_contract(operator: Path) -> dict:
                              APPLICATION_TOKEN_SPEC, "Kubernetes application token contract")
 
 
+def renewal_contract(operator: Path) -> dict:
+    # Inventories come from the existing producer contracts. Native code owns
+    # authority, issuance and live verification; this only admits its capability.
+    return compiled_contract(operator, "kubernetes-renewal-contract", {
+        "schema": "marty.kubernetes-renewal/v1",
+        "enrollmentOperation": "kubernetes-renewal-enroll",
+        "stagingOperation": "kubernetes-renewal-stage",
+        "bindingSchema": "marty.kubernetes-renewal-binding/v1",
+        "identityFiles": sorted(RENEWAL_IDENTITY_FILES),
+        "minimumTtlSeconds": 3600, "operationBudgetSeconds": 900,
+        "renewableFiles": sorted(set(SELFHOST_TLS_FILES) | KEYCLOAK_FILES),
+        "unchangedFiles": ["workload_identity_ca_cert"], "changedFiles": 39,
+        "scopedLeafTokens": 21, "tlsMetadataFile": "selfhost-tls-kms-roles.json",
+    }, "Kubernetes renewal contract")
+
+
 def remote_archive(transport: Transport, pod: str, directory: str, maximum: int) -> bytes:
     # A separate successful tar step is required: POSIX sh pipelines otherwise
     # report only the final reader's status and can mask a failed tar producer.
@@ -372,6 +400,42 @@ def take_application_identity(payload: bytes, output: Path, binding: dict,
         write_new(output / name, value, mode)
 
 
+def renewal_binding(value: object, binding: dict) -> dict:
+    expected = {
+        "schema": "marty.kubernetes-renewal-binding/v1",
+        "binding": application_binding(binding),
+        "producerNonce": binding["workloadProject"].removeprefix("marty-selfhost-disposable-k8s-"),
+    }
+    require(encoded(value) == encoded(expected), "retained renewal authority binding differs")
+    return expected
+
+
+def take_renewal_identity(payload: bytes, output: Path, root_token: str | None = None, *,
+                          modes: set[int] | None = None) -> None:
+    members = private_archive(payload, RENEWAL_IDENTITY_LIMITS,
+        maximum=RENEWAL_IDENTITY_ARCHIVE_LIMIT, modes=modes or {0o600},
+        directories={"."}, complete=True, allow_empty=False)
+    identifiers = []
+    for name in ("renewal-role-id", "renewal-secret-id"):
+        value = members[name][0].removesuffix(b"\n")
+        require(20 <= len(value) <= 1024 and all(33 <= byte <= 126 for byte in value)
+                and (root_token is None or root_token.encode() not in value),
+                "exported renewal authority identity is invalid")
+        identifiers.append(value)
+    require(identifiers[0] != identifiers[1], "exported renewal authority identifiers are shared")
+    policies = json.loads(members["renewal-leaf-policies.json"][0],
+                          object_pairs_hook=unique_json_members)
+    require(isinstance(policies, list) and len(policies) == 21 and all(
+        isinstance(name, str) and re.fullmatch(r"[a-z0-9-]{1,160}", name)
+        and not name.startswith("installer-ingress-") for name in policies)
+        and len(set(policies)) == 21 and policies == sorted(policies),
+        "exported renewal policy inventory is invalid")
+    for name, (value, mode) in members.items():
+        require(root_token is None or root_token.encode() not in value,
+                "exported renewal authority contains bootstrap material")
+        write_new(output / name, value, mode)
+
+
 def take_tls_outputs(payload: bytes, output: Path) -> None:
     expected = set(SELFHOST_TLS_FILES) | {"selfhost-tls-kms-roles.json"}
     require(len(payload) <= 2 * 1024 * 1024, "TLS output archive is oversized")
@@ -477,7 +541,7 @@ def prepare_namespace(transport: Transport, bootstrap_id: str, publication: dict
 def create_producer_pod(transport: Transport, *, image: str, nonce: str,
                         pull_secrets: list[str], purpose: str = "bootstrap") -> str:
     require(re.fullmatch(r"[0-9a-f]{12}", nonce) is not None
-            and purpose in {"bootstrap", "application-stage", "application-activation"},
+            and purpose in {"bootstrap", "application-stage", "application-activation", "renewal-stage"},
             "native transport identity is invalid")
     pod = "marty-kms-" + purpose + "-" + nonce
     # A bounded disposable transport pod runs the existing native producers.
@@ -576,6 +640,94 @@ def enroll_application_authority(transport: Transport, pod: str, *, root_token: 
     }
 
 
+def enroll_renewal_authority(transport: Transport, pod: str, *, root_token: str,
+                             binding: dict) -> dict:
+    # Share the same bounded, private generation custody as routine staging.
+    # Import lazily: application staging already imports this bootstrap module.
+    from stage_kubernetes_application_credentials import current_snapshot, archive_snapshot
+
+    binding = application_binding(binding)
+    current = "/tmp/renewal-current"
+    identity = "/tmp/renewal-identity"
+    evidence = "/tmp/renewal-enrollment"
+    output = transport.state / "renewal-identity"
+    private_directory(output)
+    source = transport.state / "credentials"
+    snapshot = current_snapshot(source)
+    require(set(SELFHOST_TLS_FILES) | KEYCLOAK_FILES <= set(snapshot),
+            "initial renewal generation is incomplete")
+    transport.execute(pod, ["/bin/sh", "-ec",
+        'umask 077; mkdir "$1" "$2" "$3"; chmod 700 "$1" "$2" "$3"',
+        "--", current, identity, evidence])
+    transport.execute(pod, ["tar", "-xf", "-", "-C", current], data=archive_snapshot(snapshot))
+    write_new(transport.state / "renewal-authority-requested.json", encoded({
+        "schema": "marty.kubernetes-renewal-authority-request/v1", "binding": binding,
+        "operation": "kubernetes-renewal-enroll", "identityDirectory": "renewal-identity",
+        "bindingFile": "renewal-binding.json", "transportPod": pod,
+        "transportDeadlineSeconds": PRODUCER_DEADLINE_SECONDS, "currentFiles": len(snapshot),
+    }))
+    check_application_binding(transport, binding)
+    outcome_uncertain = True
+    try:
+        response = transport.execute(pod, ["/tmp/marty-deploy", "operator",
+            "kubernetes-renewal-enroll", "https://openbao:8200", "/tmp/ca.crt", identity],
+            data=encoded({"root_token": root_token, "current": current,
+                          "output": evidence, "binding": binding}), timeout=930)
+        outcome_uncertain = False
+        require(len(response) <= 4096 and encoded(json.loads(response,
+            object_pairs_hook=unique_json_members)) == encoded({
+                "ready": True, "identity": identity, "binding": evidence + "/binding.json", "count": 3,
+            }), "native renewal authority enrollment did not confirm readiness")
+        identity_archive = remote_archive(transport, pod, identity, RENEWAL_IDENTITY_ARCHIVE_LIMIT)
+        evidence_archive = remote_archive(transport, pod, evidence, RENEWAL_ENROLLMENT_ARCHIVE_LIMIT)
+        members = private_archive(evidence_archive, RENEWAL_ENROLLMENT_LIMITS,
+            maximum=RENEWAL_ENROLLMENT_ARCHIVE_LIMIT, modes={0o600},
+            directories={"."}, complete=True, allow_empty=False)
+        receipt = renewal_binding(json.loads(members["binding.json"][0],
+            object_pairs_hook=unique_json_members), binding)
+        completed = json.loads(members["completed.json"][0], object_pairs_hook=unique_json_members)
+        require(encoded(completed) == encoded({
+            "schema": "marty.kubernetes-renewal-enrollment/v1", "binding": binding,
+            "producerNonce": receipt["producerNonce"], "identityFiles": sorted(RENEWAL_IDENTITY_FILES),
+            "scopedLeafTokens": 21, "enrolled": True, "activated": False,
+        }), "native renewal enrollment evidence is incomplete")
+        require(all(root_token.encode() not in value for value, _ in members.values()),
+                "renewal enrollment evidence contains bootstrap material")
+        require(current_snapshot(source) == snapshot, "initial generation changed during renewal enrollment")
+        take_renewal_identity(identity_archive, output, root_token)
+        write_new(transport.state / "renewal-binding.json", encoded(receipt))
+        write_new(transport.state / "renewal-enrollment-evidence.tar", evidence_archive)
+    except Exception as error:
+        # Capture each closed directory independently. Do not export the root
+        # token or discard the only recovery copy when exec/export is uncertain.
+        try:
+            for remote, limits, maximum, name in (
+                (identity, RENEWAL_IDENTITY_LIMITS, RENEWAL_IDENTITY_ARCHIVE_LIMIT,
+                 "renewal-authority-recovery.tar"),
+                (evidence, RENEWAL_ENROLLMENT_LIMITS, RENEWAL_ENROLLMENT_ARCHIVE_LIMIT,
+                 "renewal-enrollment-recovery.tar"),
+            ):
+                archive = remote_archive(transport, pod, remote, maximum)
+                private_archive(archive, limits, maximum=maximum, modes={0o600},
+                    directories={"."}, complete=False, allow_empty=True)
+                write_new(transport.state / name, archive)
+        except Exception as export_error:
+            raise RetainProducerError("renewal authority enrollment requires recovery; private evidence "
+                "export failed and authority may exist; native pod retained only within its remaining "
+                "1200-second total lifetime; inspect transport-pod.json and do not replay") from export_error
+        if outcome_uncertain:
+            raise RetainProducerError("renewal authority enrollment outcome is uncertain; private evidence "
+                "is only a snapshot and native work may still be running; native pod retained only within "
+                "its remaining 1200-second total lifetime; inspect transport-pod.json and do not replay") from error
+        raise BootstrapError("renewal authority enrollment requires recovery; private evidence retained "
+                             "and authority may exist; do not replay enrollment") from error
+    return {
+        "schema": "marty.kubernetes-renewal-authority/v1", "binding": binding,
+        "identityDirectory": "renewal-identity", "files": sorted(RENEWAL_IDENTITY_FILES),
+        "bindingFile": "renewal-binding.json",
+    }
+
+
 def provision_workload_identity(transport: Transport, *, image: str, operator: Path,
                                root_token: str, ca: bytes, nonce: str, workload_project: str,
                                files: dict[str, Path], pull_secrets: list[str], binding: dict) -> dict:
@@ -633,8 +785,10 @@ def provision_workload_identity(transport: Transport, *, image: str, operator: P
             write_new(path, value.encode())
             files[name.upper()] = path
         require(len(tokens) == len(set(tokens)) == 5, "Keycloak scoped tokens are shared")
-        return enroll_application_authority(transport, pod, root_token=root_token,
-                                            binding=binding, files=files)
+        application = enroll_application_authority(transport, pod, root_token=root_token,
+                                                   binding=binding, files=files)
+        renewal = enroll_renewal_authority(transport, pod, root_token=root_token, binding=binding)
+        return {"applicationAuthority": application, "renewalAuthority": renewal}
     except RetainProducerError:
         retain_pod = True
         raise
@@ -686,8 +840,10 @@ def bootstrap(args: argparse.Namespace) -> None:
             "signed operator build identity differs")
     publication = publication_contract(operator)
     application = application_token_contract(operator)
+    renewal = renewal_contract(operator)
     write_new(state / "kubernetes-secret-publication.json", encoded(publication))
     write_new(state / "kubernetes-application-tokens.json", encoded(application))
+    write_new(state / "kubernetes-renewal.json", encoded(renewal))
     upstream = json.loads(UPSTREAM.read_bytes())
     require(args.chart_package.is_file()
             and hashlib.sha256(args.chart_package.read_bytes()).hexdigest() == upstream["sha256"],
@@ -770,7 +926,7 @@ def bootstrap(args: argparse.Namespace) -> None:
     operator_password = credential_dir / "marty_org_admin_password"
     write_new(operator_password, ("Aa1!" + secrets.token_hex(24)).encode())
     files["MARTY_ORG_ADMIN_PASSWORD"] = operator_password
-    authority = provision_workload_identity(transport, image=values["images"]["services"],
+    authorities = provision_workload_identity(transport, image=values["images"]["services"],
         operator=operator, root_token=root_token, ca=ca, nonce=nonce,
         workload_project=workload_project, files=files, pull_secrets=args.image_pull_secret,
         binding={"namespace": namespace["name"], "namespaceUid": namespace["uid"],
@@ -789,7 +945,9 @@ def bootstrap(args: argparse.Namespace) -> None:
         "credentialLifetimeHours": 8, "migrationBootstrapLifetimeHours": 2,
         "credentialPublication": publication,
         "applicationTokenContract": application,
-        "applicationAuthority": authority,
+        "applicationAuthority": authorities["applicationAuthority"],
+        "renewalContract": renewal,
+        "renewalAuthority": authorities["renewalAuthority"],
         "imagePullSecrets": list(args.image_pull_secret),
         "credentialLifecycle": {
             "schema": "marty.kubernetes-credential-lifecycle/v1",
@@ -799,7 +957,8 @@ def bootstrap(args: argparse.Namespace) -> None:
     }))
     print("OpenBao is initialized and unsealed; application credentials are installed.")
     print("Keep the private state directory. Finish first-install migrations within two hours.")
-    print("This development credential set expires after eight hours; renewal is not installed.")
+    print("This development credential set expires after eight hours; scoped manual renewal staging is enrolled.")
+    print("Staging does not activate replacements; automatic renewal is not installed.")
 
 
 def main(argv: list[str] | None = None) -> int:

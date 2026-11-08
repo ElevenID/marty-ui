@@ -829,7 +829,8 @@ def activate(args: argparse.Namespace) -> None:
     staging.existing_private_directory(state)
     bootstrap.require(operation.is_absolute() and operation.resolve() == operation
                       and operation != state and not operation.is_relative_to(state / "credentials")
-                      and not operation.is_relative_to(state / "application-identity"),
+                      and not operation.is_relative_to(state / "application-identity")
+                      and not operation.is_relative_to(state / "renewal-identity"),
                       "activation operation overlaps retained private inputs")
     with application_state.locked(state) as held:
         complete, binding = original_binding(state)

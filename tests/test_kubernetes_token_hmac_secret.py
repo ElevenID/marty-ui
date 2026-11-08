@@ -19,7 +19,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = "synthetic-existing-shared-token-$literal;not-a-command"
 METADATA_COMMANDS = ("kubernetes-secrets-contract", "kubernetes-application-token-contract",
-                     "kubernetes-application-activation-contract")
+                     "kubernetes-application-activation-contract", "kubernetes-renewal-contract")
 FUNCTIONS = (
     "catalog_required_secret_envs",
     "is_placeholder_secret",
@@ -142,6 +142,24 @@ def test_native_publication_contract_is_compiled_and_needs_no_inputs_repo_or_clu
             "inputs": sorted(({"input": entry["input"], "file": entry["file"], "key": entry["input"]}
                               for entry in application["tokens"] if entry["replacementRole"] is not None),
                              key=lambda entry: entry["input"]),
+        }
+    if command == "kubernetes-renewal-contract":
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from passport_remote_tls import SELFHOST_TLS_FILES
+        keycloak_files = {"keycloak_signing_kms_token"}
+        for realm in ("master", "11id"):
+            keycloak_files.add(f"keycloak_{realm}_rs256_cert")
+            keycloak_files.update(f"keycloak_{realm}_{purpose}_token" for purpose in ("cookie", "ciba"))
+        expected = {
+            "schema": "marty.kubernetes-renewal/v1",
+            "enrollmentOperation": "kubernetes-renewal-enroll",
+            "stagingOperation": "kubernetes-renewal-stage",
+            "bindingSchema": "marty.kubernetes-renewal-binding/v1",
+            "identityFiles": ["renewal-leaf-policies.json", "renewal-role-id", "renewal-secret-id"],
+            "minimumTtlSeconds": 3600, "operationBudgetSeconds": 900,
+            "renewableFiles": sorted(set(SELFHOST_TLS_FILES) | keycloak_files),
+            "unchangedFiles": ["workload_identity_ca_cert"], "changedFiles": 39,
+            "scopedLeafTokens": 21, "tlsMetadataFile": "selfhost-tls-kms-roles.json",
         }
     assert json.loads(result.stdout) == expected
     assert "PRIVATE_" not in result.stdout

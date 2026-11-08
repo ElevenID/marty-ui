@@ -235,7 +235,8 @@ class LockedState:
                 and path_value(value["candidateDirectory"]) == operation / "candidate"
                 and operation != self.path and not self.path.is_relative_to(operation)
                 and not operation.is_relative_to(self.path / "credentials")
-                and not operation.is_relative_to(self.path / "application-identity"))
+                and not operation.is_relative_to(self.path / "application-identity")
+                and not operation.is_relative_to(self.path / "renewal-identity"))
         previous = path_value(value["previousDirectory"])
         require(not previous.is_relative_to(operation) and not operation.is_relative_to(previous))
         owned_directory(previous)
@@ -320,7 +321,8 @@ class LockedState:
                 and not current.is_relative_to(operation) and operation != self.path
                 and not self.path.is_relative_to(operation)
                 and not operation.is_relative_to(self.path / "credentials")
-                and not operation.is_relative_to(self.path / "application-identity"))
+                and not operation.is_relative_to(self.path / "application-identity")
+                and not operation.is_relative_to(self.path / "renewal-identity"))
         for path, key in ((operation, "operationIdentity"), (candidate, "candidateIdentity"),
                           (current, "currentIdentity")):
             require(valid_identity(value[key], 5) and tuple(value[key]) == owned_directory(path))
@@ -382,7 +384,8 @@ class LockedState:
                 and not expected.directory.is_relative_to(operation) and operation != self.path
                 and not self.path.is_relative_to(operation)
                 and not operation.is_relative_to(self.path / "credentials")
-                and not operation.is_relative_to(self.path / "application-identity"))
+                and not operation.is_relative_to(self.path / "application-identity")
+                and not operation.is_relative_to(self.path / "renewal-identity"))
         value = {
             "schema": PENDING_SCHEMA, "binding": binding, "activationId": activation_id,
             "operationDirectory": str(operation), "candidateDirectory": str(candidate),

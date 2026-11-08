@@ -85,6 +85,41 @@ def activate(state):
         return previous, held.current(state.binding)
 
 
+@pytest.mark.parametrize("boundary", ["begin", "proof", "pending"])
+def test_selection_rejects_operations_inside_enrolled_renewal_identity(state, boundary):
+    identity = private_directory(state.root / "renewal-identity")
+    for name in ("renewal-role-id", "renewal-secret-id", "renewal-leaf-policies.json"):
+        write(identity / name, b"PRIVATE_RETAINED_RENEWAL_CANARY")
+    unsafe = identity / "unsafe-operation"
+    with selection.locked(state.root) as held:
+        selected = held.current(state.binding)
+        if boundary == "begin":
+            with pytest.raises(bootstrap.BootstrapError):
+                held.begin(state.binding, unsafe, unsafe / "candidate", state.activation_id,
+                           expected=selected)
+            assert not unsafe.exists() and not (state.root / selection.PENDING).exists()
+        else:
+            if boundary == "pending":
+                begin(state, held)
+                pending = json.loads((state.root / selection.PENDING).read_bytes())
+            state.operation.rename(unsafe)
+            state.operation, state.candidate = unsafe, unsafe / "candidate"
+            if boundary == "proof":
+                write(unsafe / selection.VERIFIED, proof(state, state.current))
+                with pytest.raises(bootstrap.BootstrapError):
+                    held.proof(unsafe, state.binding)
+            else:
+                pending["operationDirectory"] = str(unsafe)
+                pending["candidateDirectory"] = str(state.candidate)
+                write(state.root / selection.PENDING, pending)
+                with pytest.raises(bootstrap.BootstrapError):
+                    held.pending(state.binding)
+        assert not (state.root / selection.SELECTOR).exists()
+        for path in identity.iterdir():
+            if path.is_file():
+                assert path.read_bytes() == b"PRIVATE_RETAINED_RENEWAL_CANARY"
+
+
 def test_bootstrap_fallback_is_private_readonly_and_requires_an_active_lock(state):
     names = set(state.root.iterdir())
     with selection.locked(state.root) as held:

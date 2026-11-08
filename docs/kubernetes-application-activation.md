@@ -6,10 +6,11 @@ native operator, OpenBao AppRole, Kubernetes Secret API and Deployment
 controllers. It updates one existing Secret and then selects a verified private
 credential generation for the next staging cycle.
 
-This remains a development adapter. Workload TLS and Keycloak renewal, recovery
-after credential expiry, scheduling, production upgrades and authenticated
-application acceptance are separate work. Updating ordinary tokens does not
-extend the original TLS or Keycloak lifetime.
+This remains a development adapter. Workload TLS and Keycloak candidates have a
+separate [scoped renewal staging command](kubernetes-renewal-staging.md); their
+activation, recovery after credential expiry, scheduling, production upgrades
+and authenticated application acceptance remain separate work. Updating ordinary
+tokens does not extend the original TLS or Keycloak lifetime.
 
 ## Prerequisites
 
