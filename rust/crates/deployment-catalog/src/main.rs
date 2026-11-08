@@ -252,7 +252,9 @@ fn print_plan(plan: &Value) {
     }
 }
 
-fn kubernetes_secrets_contract_usage_error() -> String {
+// These helpers return compiled public metadata and static usage text only.
+// Credential resolution belongs exclusively to the separate publication command.
+fn kubernetes_publication_usage_error() -> String {
     usage_error(
         &command_usage("kubernetes-secrets-contract"),
         "marty-deploy kubernetes-secrets-contract",
@@ -260,7 +262,7 @@ fn kubernetes_secrets_contract_usage_error() -> String {
     )
 }
 
-fn kubernetes_secrets_contract(params: &[String]) -> Result<String, String> {
+fn kubernetes_publication_metadata(params: &[String]) -> Result<String, String> {
     match params {
         [] => serde_json::to_string(&marty_deployment_catalog::kubernetes_secrets::contract())
             .map(|contract| format!("{contract}\n"))
@@ -268,7 +270,7 @@ fn kubernetes_secrets_contract(params: &[String]) -> Result<String, String> {
         [help] if help == "--help" || help == "-h" => {
             Ok(frozen_help("kubernetes-secrets-contract"))
         }
-        _ => Err(kubernetes_secrets_contract_usage_error()),
+        _ => Err(kubernetes_publication_usage_error()),
     }
 }
 
@@ -278,7 +280,7 @@ fn run() -> Result<(), String> {
         .first()
         .is_some_and(|arg| arg == "kubernetes-secrets-contract")
     {
-        print!("{}", kubernetes_secrets_contract(&args[1..])?);
+        print!("{}", kubernetes_publication_metadata(&args[1..])?);
         return Ok(());
     }
     if args
@@ -1153,7 +1155,7 @@ fn run() -> Result<(), String> {
     // The standalone contract was already dispatched before global options.
     // Reaching it here means --repo-root was supplied before the command.
     if command == "kubernetes-secrets-contract" {
-        return Err(kubernetes_secrets_contract_usage_error());
+        return Err(kubernetes_publication_usage_error());
     }
     let params = &args[1..];
     if params.iter().any(|arg| arg == "--help" || arg == "-h") {
@@ -1316,11 +1318,11 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{kubernetes_secrets_contract, posix_shell_quote};
+    use super::{kubernetes_publication_metadata, posix_shell_quote};
 
     #[test]
     fn kubernetes_publication_contract_command_returns_compiled_metadata() {
-        let output = kubernetes_secrets_contract(&[]).unwrap();
+        let output = kubernetes_publication_metadata(&[]).unwrap();
         let actual: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(
             actual,
@@ -1331,7 +1333,7 @@ mod tests {
     #[test]
     fn kubernetes_publication_contract_command_accepts_only_standalone_help() {
         for flag in ["--help", "-h"] {
-            let output = kubernetes_secrets_contract(&[flag.into()]).unwrap();
+            let output = kubernetes_publication_metadata(&[flag.into()]).unwrap();
             assert!(output.starts_with("usage: marty-deploy kubernetes-secrets-contract"));
         }
         for args in [
@@ -1343,7 +1345,7 @@ mod tests {
             vec!["--help", "-h"],
         ] {
             let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
-            let error = kubernetes_secrets_contract(&args).unwrap_err();
+            let error = kubernetes_publication_metadata(&args).unwrap_err();
             assert!(error.starts_with("__USAGE__"));
             assert!(!error.contains("private-sentinel"));
         }
