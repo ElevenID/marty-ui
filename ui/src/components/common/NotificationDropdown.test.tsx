@@ -27,7 +27,9 @@ describe('scoped native notification dropdown', () => {
       }),
     );
     const { user } = renderWithRouter(<NotificationDropdown open anchorEl={anchor} organizationId="org-a" recipientId="user-a" onClose={vi.fn()} onMarkAllRead={vi.fn()} onCountChange={changed} />);
-    await user.click(await screen.findByText(examples.response.body));
+    const notificationBody = await screen.findByText(examples.response.body);
+    expect(notificationBody.parentElement?.closest('p')).toBeNull();
+    await user.click(notificationBody);
     await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
     expect(changed).toHaveBeenCalledWith();
   });

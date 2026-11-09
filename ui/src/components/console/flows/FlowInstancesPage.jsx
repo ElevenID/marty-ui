@@ -212,7 +212,7 @@ function InstanceTimeline({ instance }) {
             primary={String(event.label).replaceAll('_', ' ')}
             secondary={[event.detail, event.timestamp ? formatDate(event.timestamp) : null].filter(Boolean).join(' | ')}
             slotProps={{
-              primary: { variant: 'body2', fontWeight: 600, textTransform: 'capitalize' },
+              primary: { variant: 'body2', sx: { fontWeight: 600, textTransform: 'capitalize' } },
               secondary: { variant: 'caption' }
             }} />
         </ListItem>

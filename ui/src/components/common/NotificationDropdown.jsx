@@ -153,6 +153,7 @@ function ScopedNotificationDropdown({ organizationId, recipientId, anchorEl, ope
                 {getSeverityIcon(notification.severity)}
               </ListItemIcon>
               <ListItemText
+                slotProps={{ secondary: { component: 'div' } }}
                 primary={
                   <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
                     <Typography variant="body2" sx={{ fontWeight: notification.read ? 400 : 600, flex: 1 }}>

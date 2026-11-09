@@ -232,7 +232,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               <Typography variant="subtitle2" color="text.secondary">
                 {t('wizards.presentationPolicy.reviewStep.fields.revocationCheck')}
               </Typography>
-              <Typography variant="body1">
+              <Typography variant="body1" component="div">
                 {policyConfig.freshness_requirements.require_revocation_check ? (
                   <Chip label={t('wizards.presentationPolicy.reviewStep.values.required')} size="small" color="success" />
                 ) : (
