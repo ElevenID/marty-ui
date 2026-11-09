@@ -151,7 +151,7 @@ export function DeveloperQuickStartPanel({ canViewApiKeys = false }) {
     <Paper sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <CodeIcon color="primary" />
-        <Typography variant="h6" fontWeight={600}>
+        <Typography variant="h6" sx={{ fontWeight: 600 }}>
           {t('dashboard.developerQuickStart.title')}
         </Typography>
       </Box>
@@ -160,7 +160,7 @@ export function DeveloperQuickStartPanel({ canViewApiKeys = false }) {
       </Typography>
       {/* Organization Reference */}
       <Box sx={{ mb: 2 }}>
-        <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+        <Typography variant="caption" color="text.secondary" gutterBottom sx={{ display: "block" }}>
           Organization Reference
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -220,7 +220,7 @@ export function DeveloperQuickStartPanel({ canViewApiKeys = false }) {
       </Box>
       {/* Base API URL */}
       <Box sx={{ mb: 2 }}>
-        <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+        <Typography variant="caption" color="text.secondary" gutterBottom sx={{ display: "block" }}>
           {t('dashboard.developerQuickStart.baseApiUrl')}
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -248,7 +248,7 @@ export function DeveloperQuickStartPanel({ canViewApiKeys = false }) {
       </Box>
       {/* Example Request */}
       <Box sx={{ mb: 2 }}>
-        <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+        <Typography variant="caption" color="text.secondary" gutterBottom sx={{ display: "block" }}>
           {t('dashboard.developerQuickStart.exampleRequest')}
         </Typography>
         <Box 

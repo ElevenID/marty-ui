@@ -10,6 +10,7 @@ import { CircularProgress, Box, Typography } from '@mui/material';
 import { useAuth } from '../hooks/useAuth';
 import { useConsole } from '../contexts/ConsoleContext';
 import OrgConsoleUnavailable from './console/OrgConsoleUnavailable';
+import { getConsoleEligibleOrganizations } from '../application/session/authSession';
 import {
   evaluateApplicantConsolePolicy,
   evaluateOrgConsolePolicy,
@@ -163,23 +164,27 @@ export function VendorRoute({ children, ...props }) {
 
 /**
  * Organization console route with org selection guard
- * Requires org:view capability AND an active organization to be selected.
- * Redirects to /console/org/setup if no org is selected.
+ * Requires a current console-eligible membership for the selected organization.
+ * Redirects to /console/org/setup if that membership is not available.
  */
 export function OrgConsoleRoute({ children, ...props }) {
   const {
     mode,
     activeOrgId,
+    memberships,
+    membershipsLoaded,
     isLoading: consoleLoading,
     membershipLoadError,
     isOrgBootstrapRequired,
     reloadConsoleState,
   } = useConsole();
   const location = useLocation();
+  const hasSelectedMembership = membershipsLoaded && getConsoleEligibleOrganizations(memberships)
+    .some((organization) => organization.id === activeOrgId);
   const decision = evaluateOrgConsolePolicy({
     consoleLoading,
     mode,
-    activeOrgId,
+    activeOrgId: hasSelectedMembership ? activeOrgId : null,
   });
 
   // Show loading while console context initializes
@@ -196,9 +201,11 @@ export function OrgConsoleRoute({ children, ...props }) {
     return <Navigate to={decision.destination} state={{ from: location }} replace />;
   }
 
-  // Otherwise, apply standard protected route check with org:view capability
+  // Newly created/joined memberships can precede the auth snapshot's org:view
+  // capability. Use the current membership here and keep the applicant identity
+  // unchanged; page actions still load their grants from the native RBAC API.
   return (
-    <ProtectedRoute requiredCapabilities={['org:view']} unauthorizedRedirect="/console/applicant/catalog" {...props}>
+    <ProtectedRoute {...props}>
       {children}
     </ProtectedRoute>
   );

@@ -100,10 +100,9 @@ function ScopedNotificationDropdown({ organizationId, recipientId, anchorEl, ope
       anchorEl={anchorEl}
       open={open}
       onClose={onClose}
-      PaperProps={{
-        sx: {
-          width: 400,
-          maxHeight: 600,
+      slotProps={{
+        paper: {
+          sx: { width: 400, maxHeight: 600 },
         },
       }}
       transformOrigin={{ horizontal: 'right', vertical: 'top' }}

@@ -70,7 +70,7 @@ function GuidedSetupBanner({ readiness, onDismiss }) {
       sx={{ mb: 3 }}
     >
       <Box>
-        <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+        <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
           {isStarted ? t('dashboard.guidedSetupBanner.resumeSetup') : t('dashboard.guidedSetupBanner.getStarted')}
         </Typography>
         <Typography variant="body2" sx={{ mb: 2 }}>

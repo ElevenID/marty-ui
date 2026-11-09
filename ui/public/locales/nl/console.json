@@ -85,6 +85,14 @@
   },
   "org": {
     "team": {
+      "access": {
+        "rolesTitle": "Rollen",
+        "signIn": "Meld je aan om het team te bekijken.",
+        "selectOrganization": "Selecteer een organisatie om het team te bekijken.",
+        "readDenied": "Je hebt geen toestemming om dit team te bekijken.",
+        "rolesLoadFailed": "De beschikbare rollen konden niet worden geladen. Probeer opnieuw om leden uit te nodigen of rollen te wijzigen.",
+        "rolesReadRequired": "Om leden uit te nodigen of hun rollen te wijzigen, moet je de beschikbare rollen kunnen bekijken. Vraag een organisatiebeheerder om toegang."
+      },
       "memberships": {
         "title": "Lidmaatschapsstatus",
         "status": "Status",

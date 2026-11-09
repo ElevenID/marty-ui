@@ -170,7 +170,7 @@ export function OrgSetupPage() {
     <Container maxWidth="lg" sx={{ py: 4 }}>
       {/* Header */}
       <Box sx={{ mb: 4 }}>
-        <Typography variant="h4" gutterBottom fontWeight={600}>
+        <Typography variant="h4" gutterBottom sx={{ fontWeight: 600 }}>
           {resolvedOrganizations.length > 0
             ? t('org.setup.chooseTitle', 'Choose an Organization')
             : t('org.setup.accessTitle', 'Organization Console Access')}
@@ -204,7 +204,7 @@ export function OrgSetupPage() {
                 ? 'Create an organization, discover a public organization, or join with a code to get started.'
                 : 'Discover a public organization or join with a code to get started.'}
             </Typography>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center">
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: "center" }}>
               {organizationCreationEnabled && (
                 <Button
                   variant="contained"
@@ -355,7 +355,7 @@ export function OrgSetupPage() {
             <Typography variant="h6" gutterBottom>
               Manage Organizations
             </Typography>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center" sx={{ mt: 2 }}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: "center", mt: 2 }}>
               {organizationCreationEnabled && (
                 <Button
                   variant="outlined"

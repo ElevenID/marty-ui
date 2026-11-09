@@ -188,7 +188,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
           {t('wizards.deploymentProfile.runtimeSettingsStep.blocked.title')}
         </Typography>
         
-        <Typography color="text.secondary" paragraph sx={{ maxWidth: 600, mx: 'auto' }}>
+        <Typography color="text.secondary" sx={{ marginBottom: '16px', maxWidth: 600, mx: 'auto' }} component="p">
           {t('wizards.deploymentProfile.runtimeSettingsStep.blocked.description')}
         </Typography>
 
@@ -222,7 +222,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
       <Typography variant="h6" gutterBottom>
         {t('wizards.deploymentProfile.runtimeSettingsStep.title')}
       </Typography>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.deploymentProfile.runtimeSettingsStep.description')}
       </Typography>
 
@@ -272,7 +272,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
       <Typography variant="subtitle2" gutterBottom>
         {t('wizards.deploymentProfile.runtimeSettingsStep.fields.enabledFlows')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" paragraph>
+      <Typography variant="body2" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         Select active flow definitions. Issuance flows require their credential template to be selected; verification flows must use the selected policy and trust profile.
       </Typography>
       

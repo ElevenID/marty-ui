@@ -233,7 +233,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
 
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 3 }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 3 }}>
         <IconButton aria-label="Back" onClick={() => navigate('/console/org/templates/applications')}><ArrowBackIcon /></IconButton>
         <Box>
           <Typography variant="h4">{templateId ? 'Edit Application Template' : 'Create Application Template'}</Typography>
@@ -259,7 +259,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
           </FormControl>
 
           <Box>
-            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+            <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
               <Typography variant="h6">Form fields</Typography>
               <Button startIcon={<AddIcon />} onClick={() => setData((current) => ({ ...current, form_fields: [...current.form_fields, { field_id: '', label: '', field_type: 'TEXT', required: false }] }))}>Add field</Button>
             </Stack>
@@ -267,7 +267,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
               {data.form_fields.map((field, index) => (
                 <Paper key={`${field.field_id}-${index}`} variant="outlined" sx={{ p: 2 }}>
                   <Stack spacing={1.5}>
-                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
+                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'center' } }}>
                       <TextField required label="Field ID" value={field.field_id || ''} onChange={(event) => updateField(index, { field_id: event.target.value })} sx={{ flex: 1 }} />
                       <TextField required label="Label" value={field.label || ''} onChange={(event) => updateField(index, { label: event.target.value })} sx={{ flex: 1 }} />
                       <FormControl sx={{ minWidth: 145 }}><InputLabel id={`application-field-type-${index}-label`}>Type</InputLabel><Select id={`application-field-type-${index}`} labelId={`application-field-type-${index}-label`} label="Type" value={field.field_type || 'TEXT'} onChange={(event) => updateField(index, { field_type: event.target.value })}>
@@ -327,7 +327,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
             <>
               <TextField label="Required checks" helperText="Comma-separated check types" value={(data.required_checks || []).map((item) => item.check_type).filter(Boolean).join(', ')} onChange={(event) => setData({ ...data, required_checks: event.target.value.split(',').map((value, index) => value.trim()).filter(Boolean).map((check_type, index) => ({ check_type, is_required: true, order: index + 1 })) })} />
               <Box>
-                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                   <Typography variant="h6">Claim collection rules</Typography>
                   <Button
                     startIcon={<AddIcon />}
@@ -345,7 +345,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
                 <Stack spacing={1.5}>
                   {data.claim_collection_rules.map((rule, index) => (
                     <Paper key={`${rule.claim_name}-${index}`} variant="outlined" sx={{ p: 2 }}>
-                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
+                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'center' } }}>
                         <TextField required label="Claim name" value={rule.claim_name || ''} onChange={(event) => updateClaimRule(index, { claim_name: event.target.value })} sx={{ flex: 1 }} />
                         <FormControl sx={{ minWidth: { sm: 190 } }}>
                           <InputLabel id={`application-claim-source-${index}-label`}>Source</InputLabel>
@@ -403,7 +403,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
             </>
           )}
 
-          <Stack direction="row" justifyContent="flex-end" spacing={1}>
+          <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end' }}>
             <Button onClick={() => navigate('/console/org/templates/applications')}>Cancel</Button>
             <Button variant="contained" startIcon={saving ? <CircularProgress size={18} /> : <SaveIcon />} disabled={saving || !selectedCredential || String(data.status || 'DRAFT').toUpperCase() !== 'DRAFT'} onClick={save}>Save draft</Button>
           </Stack>

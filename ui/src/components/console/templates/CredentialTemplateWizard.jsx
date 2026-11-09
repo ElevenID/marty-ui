@@ -209,7 +209,7 @@ const CredentialTemplateWizard = () => {
           <Typography variant="h4" gutterBottom>
             {t('wizards.credentialTemplate.success.title')}
           </Typography>
-          <Typography variant="h6" color="text.secondary" paragraph>
+          <Typography variant="h6" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
             {wizard.data.activate_immediately 
               ? t('wizards.credentialTemplate.success.messageActive', { name: wizard.data.name })
               : t('wizards.credentialTemplate.success.messageDraft', { name: wizard.data.name })}

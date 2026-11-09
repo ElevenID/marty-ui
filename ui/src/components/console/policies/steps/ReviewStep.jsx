@@ -51,7 +51,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
         {t('wizards.presentationPolicy.reviewStep.title')}
       </Typography>
       
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
         {t('wizards.presentationPolicy.reviewStep.description')}
       </Typography>
 
@@ -70,7 +70,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
         editLabel={t('wizards.presentationPolicy.reviewStep.actions.edit')}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.policyName')}
                 value={policyConfig.name}
@@ -79,7 +79,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.description')}
                 value={policyConfig.description}
@@ -88,7 +88,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.purposeStatement')}
                 value={policyConfig.purpose}
@@ -221,14 +221,14 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
         editLabel={t('wizards.presentationPolicy.reviewStep.actions.edit')}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.holderBinding')}
                 value={holderBindingLabels[policyConfig.holder_binding] || policyConfig.holder_binding}
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <Typography variant="subtitle2" color="text.secondary">
                 {t('wizards.presentationPolicy.reviewStep.fields.revocationCheck')}
               </Typography>
@@ -241,14 +241,14 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               </Typography>
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.maxCredentialAge')}
                 value={formatDuration(policyConfig.freshness_requirements.max_credential_age_seconds)}
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.maxProofAge')}
                 value={formatDuration(policyConfig.freshness_requirements.max_proof_age_seconds)}

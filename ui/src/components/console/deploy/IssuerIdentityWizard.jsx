@@ -261,7 +261,7 @@ export default function IssuerIdentityWizard() {
             </Select>
           </FormControl>
 
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="flex-end">
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: 'flex-end' }}>
             <Button onClick={() => navigate('/console/org/deploy/issuer-identity')} disabled={submitting}>
               Cancel
             </Button>

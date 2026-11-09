@@ -188,6 +188,67 @@ describe('TeamPage', () => {
     vi.restoreAllMocks()
   })
 
+  it.each(['signed-out', 'no-organization', 'loading', 'read-denied'])('does not fetch team or role inventories while %s', async condition => {
+    if (condition === 'signed-out') mockUseAuth.mockReturnValue({ isAuthenticated: false, user: null })
+    if (condition === 'no-organization') mockUseConsole.mockReturnValue({ activeOrgId: '' })
+    if (condition === 'loading') permissionState.isLoading = true
+    if (condition === 'read-denied') mockHasPermission.mockImplementation((resource: string) => resource === 'role')
+    renderWithRouter(<TeamPage />)
+    await act(async () => {})
+    expect(mockListMembers).not.toHaveBeenCalled()
+    expect(mockListRoles).not.toHaveBeenCalled()
+    expect(screen.queryByText('alex@example.com')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('explains missing role-list access without showing unusable invitation or role-edit dialogs', async () => {
+    mockHasPermission.mockImplementation((resource: string, action: string) =>
+      (resource === 'team' && ['view', 'invite'].includes(action)) || (resource === 'role' && action === 'assign'))
+    renderWithRouter(<TeamPage />, { initialEntries: ['/console/org/team?invite=1'] })
+    await screen.findAllByText('alex@example.com')
+    expect(screen.getByRole('alert')).toHaveTextContent('org.team.access.rolesReadRequired')
+    expect(screen.getByRole('button', { name: 'org.team.members.actions.invite' })).toBeDisabled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(mockListRoles).not.toHaveBeenCalled()
+    expect(mockInviteMember).not.toHaveBeenCalled()
+    expect(mockSetMemberRoles).not.toHaveBeenCalled()
+  })
+
+  it('closes role editing when role:assign is revoked even if team:manage remains', async () => {
+    const { user, rerender } = renderWithRouter(<TeamPage />)
+    await openRoleDialog(user)
+    mockHasPermission.mockImplementation((resource: string, action: string) =>
+      (resource === 'team' && ['view', 'manage'].includes(action)) || (resource === 'role' && action === 'view'))
+    rerender(<TeamPage />)
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(mockSetMemberRoles).not.toHaveBeenCalled()
+  })
+
+  it('permits Team inventory without the separate role:view grant', async () => {
+    mockHasPermission.mockImplementation((resource: string, action: string) => resource === 'team' && action === 'view')
+    mockListRoles.mockRejectedValue(new Error('Permission denied: role:view'))
+    renderWithRouter(<TeamPage />)
+    await screen.findAllByText('alex@example.com')
+    expect(mockListRoles).not.toHaveBeenCalled()
+  })
+
+  it('exposes role assignment for the native role:assign grant without team:manage', async () => {
+    mockHasPermission.mockImplementation((resource: string, action: string) =>
+      (resource === 'team' && action === 'view') || (resource === 'role' && ['view', 'assign'].includes(action)))
+    const { user } = renderWithRouter(<TeamPage />)
+    await openRoleDialog(user)
+  })
+
+  it('keeps team:manage separate from native role:assign', async () => {
+    mockHasPermission.mockImplementation((resource: string, action: string) =>
+      (resource === 'team' && ['view', 'manage'].includes(action)) || (resource === 'role' && action === 'view'))
+    const { user } = renderWithRouter(<TeamPage />)
+    const cells = await screen.findAllByText('alex@example.com')
+    await user.click(within(cells[0].closest('tr') as HTMLElement).getByRole('button'))
+    expect(screen.queryByText('org.team.members.actions.changeRole')).not.toBeInTheDocument()
+    expect(screen.getByText('org.team.members.actions.remove')).toBeInTheDocument()
+  })
+
   it('keeps native active, invited, pending, and deactivated memberships in their correct sections', async () => {
     mockListMembers.mockResolvedValue([
       { id: 'active-member', user_id: 'active-user', email: 'active@example.com', status: 'active', roles: [], is_owner: false },
@@ -263,7 +324,8 @@ describe('TeamPage', () => {
 
     const { user } = renderWithRouter(<TeamWithLocation />, { initialEntries: ['/console/org/team'] })
 
-    await screen.findAllByText('approval@example.com')
+    if (visible) await screen.findAllByText('approval@example.com')
+    else await act(async () => {})
     const link = screen.queryByRole('link', { name: 'org.team.memberships.reviewRequests' })
     if (visible) {
       expect(link).toHaveAttribute('href', '/console/org/membership-requests')
@@ -271,6 +333,8 @@ describe('TeamPage', () => {
       expect(screen.getByTestId('current-location')).toHaveTextContent('/console/org/membership-requests')
     } else {
       expect(link).not.toBeInTheDocument()
+      expect(screen.queryByText('approval@example.com')).not.toBeInTheDocument()
+      expect(mockListMembers).not.toHaveBeenCalled()
     }
     expect(mockRemoveMember).not.toHaveBeenCalled()
     expect(mockSetMemberRoles).not.toHaveBeenCalled()
@@ -287,7 +351,8 @@ describe('TeamPage', () => {
     rerender(<TeamPage />)
 
     expect(screen.queryByRole('link', { name: 'org.team.memberships.reviewRequests' })).not.toBeInTheDocument()
-    expect(screen.getAllByText('approval@example.com')).toHaveLength(2)
+    expect(screen.queryByText('approval@example.com')).not.toBeInTheDocument()
+    await act(async () => {})
   })
 
   it('discards prior-scope approval records and links while a different organization loads', async () => {
@@ -387,13 +452,31 @@ describe('TeamPage', () => {
     expect(screen.queryByText('first@example.com')).not.toBeInTheDocument()
   })
 
+  it('requires an explicit invitation role when the organization has no configured default', async () => {
+    mockListRoles.mockResolvedValue({ roles: [
+      { id: 'role_admin', name: 'admin', display_name: 'Admin' },
+      { id: 'role_viewer', name: 'viewer', display_name: 'Viewer' },
+    ] })
+    const { user } = renderWithRouter(<TeamPage />, { initialEntries: ['/console/org/team?invite=1'] })
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText('org.team.dialog.invite.emailLabel'), 'new@example.invalid')
+    expect(within(dialog).getByRole('checkbox', { name: 'Admin' })).not.toBeChecked()
+    expect(within(dialog).getByRole('checkbox', { name: 'Viewer' })).not.toBeChecked()
+    expect(within(dialog).getByRole('button', { name: 'org.team.dialog.invite.send' })).toBeDisabled()
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Viewer' }))
+    await user.click(within(dialog).getByRole('button', { name: 'org.team.dialog.invite.send' }))
+    await waitFor(() => expect(mockInviteMember).toHaveBeenCalledExactlyOnceWith('console-org', {
+      email: 'new@example.invalid', role_ids: ['role_viewer'],
+    }))
+  })
+
   it('uses the active console organization when inviting a member', async () => {
     const { user } = renderWithRouter(<TeamPage />, {
       initialEntries: ['/console/org/team'],
     })
 
     await waitFor(() => {
-      expect(mockListMembers).toHaveBeenCalledWith('console-org')
+      expect(mockListMembers).toHaveBeenCalledWith('console-org', {}, { isCurrent: expect.any(Function) })
       expect(mockListRoles).toHaveBeenCalledWith('console-org')
     })
 
@@ -423,7 +506,9 @@ describe('TeamPage', () => {
       initialEntries: ['/console/org/team'],
     })
 
-    await waitFor(() => expect(screen.getAllByText('alex@example.com').length).toBeGreaterThan(0))
+    await act(async () => {})
+    expect(mockListMembers).not.toHaveBeenCalled()
+    expect(mockListRoles).not.toHaveBeenCalled()
     const invite = screen.getByRole('button', { name: 'org.team.members.actions.invite' })
     expect(invite).toBeVisible()
     expect(invite).toBeDisabled()
@@ -489,16 +574,16 @@ describe('TeamPage', () => {
       initialEntries: ['/console/org/team?invite=1&view=members'],
     })
 
-    await waitFor(() => expect(mockListRoles).toHaveBeenCalledWith('console-org'))
+    await act(async () => {})
+    expect(mockListMembers).not.toHaveBeenCalled()
+    expect(mockListRoles).not.toHaveBeenCalled()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    permissionState.isLoading = false
+    rerender(<TeamWithLocation />)
+    await waitFor(() => expect(mockListRoles).toHaveBeenCalledWith('console-org'))
     await act(async () => roles.resolve({ roles: [{
       id: 'loaded-role', name: 'viewer', display_name: 'Loaded viewer', is_default_for_new_members: true,
     }] }))
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    expect(screen.getByTestId('current-location')).toHaveTextContent('invite=1')
-
-    permissionState.isLoading = false
-    rerender(<TeamWithLocation />)
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('Loaded viewer')).toBeInTheDocument()
     expect(within(dialog).getByRole('checkbox')).toBeChecked()
@@ -616,18 +701,31 @@ describe('TeamPage', () => {
     expect(within(inviteRow as HTMLElement).queryByRole('button')).not.toBeInTheDocument()
   })
 
-  it('surfaces role loading failures instead of rendering team management with empty roles', async () => {
+  it('keeps team inventory and removal available while failed role options remain retryable', async () => {
     mockListRoles.mockRejectedValue(new Error('Roles service unavailable'))
 
-    renderWithRouter(<TeamWithLocation />, {
+    const { user } = renderWithRouter(<TeamWithLocation />, {
       initialEntries: ['/console/org/team?invite=1'],
     })
 
     expect((await screen.findAllByText(/Roles service unavailable/i)).length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'org.team.members.actions.invite' })).toBeDisabled()
-    expect(screen.queryByText('alex@example.com')).not.toBeInTheDocument()
+    const memberRow = screen.getAllByText('alex@example.com')[0].closest('tr') as HTMLElement
+    await user.click(within(memberRow).getByRole('button'))
+    expect(screen.getByRole('menuitem', { name: 'org.team.members.actions.changeRole' })).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.getByRole('menuitem', { name: 'org.team.members.actions.remove' })).not.toHaveAttribute('aria-disabled', 'true')
+    await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.getByTestId('current-location')).toHaveTextContent('invite=1')
+    mockListRoles.mockResolvedValue({ roles: [{ id: 'role_viewer', name: 'viewer', display_name: 'Viewer' }] })
+    const retry = screen.getByRole('button', { name: 'actions.retry' })
+    // Keep a concrete focus target while the Retry control disappears; jsdom
+    // otherwise reports Document as focusout.relatedTarget to MUI's trap.
+    document.body.focus()
+    fireEvent.click(retry)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(mockListMembers).toHaveBeenCalledTimes(1)
+    expect(mockListRoles).toHaveBeenCalledTimes(2)
   })
 
   it('lets keyboard users select invitation roles with Tab and Space', async () => {
@@ -692,7 +790,7 @@ describe('TeamPage', () => {
 
     mockUseConsole.mockReturnValue({ activeOrgId: 'another-org' })
     rerender(<TeamPage />)
-    await waitFor(() => expect(mockListMembers).toHaveBeenLastCalledWith('another-org'))
+    await waitFor(() => expect(mockListMembers).toHaveBeenLastCalledWith('another-org', {}, { isCurrent: expect.any(Function) }))
     mockUseConsole.mockReturnValue({ activeOrgId: 'console-org' })
     rerender(<TeamPage />)
     const replacementDialog = await openRoleDialog(user)
@@ -719,7 +817,7 @@ describe('TeamPage', () => {
     await waitFor(() => expect(mockRefreshPermissions).toHaveBeenCalledOnce())
     mockUseConsole.mockReturnValue({ activeOrgId: 'current-org' })
     rerender(<TeamPage />)
-    await waitFor(() => expect(mockListMembers).toHaveBeenLastCalledWith('current-org'))
+    await waitFor(() => expect(mockListMembers).toHaveBeenLastCalledWith('current-org', {}, { isCurrent: expect.any(Function) }))
     await act(async () => refresh.resolve(undefined))
     expect(mockListMembers.mock.calls.map(([organizationId]) => organizationId)).toEqual(['console-org', 'current-org'])
   })
@@ -788,7 +886,7 @@ describe('TeamPage', () => {
     unmount()
     await act(async () => request.resolve({ ok: true }))
 
-    expect(mockListMembers).toHaveBeenCalledExactlyOnceWith('console-org')
+    expect(mockListMembers).toHaveBeenCalledExactlyOnceWith('console-org', {}, { isCurrent: expect.any(Function) })
     expect(mockShowNotification).not.toHaveBeenCalled()
   })
 
@@ -846,8 +944,10 @@ describe('TeamPage', () => {
     expect(within(replacement).getByRole('button', { name: 'org.team.dialog.invite.send' })).toBeEnabled()
     expect(screen.queryByText('Previous invitation failed')).not.toBeInTheDocument()
     expect(mockShowNotification).not.toHaveBeenCalled()
-    expect(mockListMembers).toHaveBeenCalledExactlyOnceWith('console-org')
-    expect(mockListRoles).toHaveBeenCalledExactlyOnceWith('console-org')
+    // Revalidated permissions reload the authorized inventories once; the old
+    // invitation completion must not trigger another read.
+    expect(mockListMembers.mock.calls.map(([organizationId]) => organizationId)).toEqual(['console-org', 'console-org'])
+    expect(mockListRoles.mock.calls).toEqual([['console-org'], ['console-org']])
   })
 
   it('keeps a failed invitation draft available for correction and retry', async () => {
@@ -932,7 +1032,7 @@ describe('TeamPage', () => {
       else request.reject(new Error('Previous invitation failed'))
     })
 
-    expect(mockListMembers).toHaveBeenCalledExactlyOnceWith('console-org')
+    expect(mockListMembers).toHaveBeenCalledExactlyOnceWith('console-org', {}, { isCurrent: expect.any(Function) })
     expect(mockListRoles).toHaveBeenCalledExactlyOnceWith('console-org')
     expect(mockShowNotification).not.toHaveBeenCalled()
   })

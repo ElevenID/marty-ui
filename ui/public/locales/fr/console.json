@@ -320,6 +320,14 @@
 			"noMembershipsTitle": "Aucune adhésion avec accès à la console pour le moment"
 		},
 		"team": {
+			"access": {
+				"rolesTitle": "Rôles",
+				"signIn": "Connectez-vous pour consulter l’équipe.",
+				"selectOrganization": "Sélectionnez une organisation pour consulter son équipe.",
+				"readDenied": "Vous n’avez pas l’autorisation de consulter cette équipe.",
+				"rolesLoadFailed": "Les rôles disponibles n’ont pas pu être chargés. Réessayez pour inviter des membres ou modifier leurs rôles.",
+				"rolesReadRequired": "Pour inviter des membres ou modifier leurs rôles, vous devez pouvoir consulter les rôles disponibles. Demandez l’accès à un administrateur de l’organisation."
+			},
 			"memberships": {
 				"title": "Statut des adhésions",
 				"status": "Statut",

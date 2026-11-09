@@ -160,16 +160,16 @@ export default function ErrorState({
           
           <Collapse in={expanded} timeout="auto">
             <Box sx={{ mt: 2, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
-              <Typography variant="caption" display="block" gutterBottom>
+              <Typography variant="caption" gutterBottom sx={{ display: "block" }}>
                 <strong>{t('errorState.errorCode')}</strong> {errorDetails.code || t('errorState.notAvailable')}
               </Typography>
               {errorDetails.requestId && (
-                <Typography variant="caption" display="block" gutterBottom>
+                <Typography variant="caption" gutterBottom sx={{ display: "block" }}>
                   <strong>{t('errorState.requestId')}</strong> {errorDetails.requestId}
                 </Typography>
               )}
               {errorDetails.technicalMessage && (
-                <Typography variant="caption" display="block" gutterBottom>
+                <Typography variant="caption" gutterBottom sx={{ display: "block" }}>
                   <strong>{t('errorState.technicalDetails')}</strong> {errorDetails.technicalMessage}
                 </Typography>
               )}
@@ -221,8 +221,7 @@ export default function ErrorState({
         <Stack 
           direction="row" 
           spacing={1} 
-          justifyContent="center" 
-          sx={{ mb: 3 }}
+          sx={{ justifyContent: "center", mb: 3 }}
         >
           {errorDetails.code && (
             <Chip 
@@ -241,7 +240,7 @@ export default function ErrorState({
         </Stack>
 
         {/* Action buttons */}
-        <Stack direction="row" spacing={2} justifyContent="center" sx={{ mb: 3 }}>
+        <Stack direction="row" spacing={2} sx={{ justifyContent: "center", mb: 3 }}>
           {onRetry && (
             <Button
               variant="contained"

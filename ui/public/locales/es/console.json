@@ -320,6 +320,14 @@
 			"noMembershipsTitle": "Aún no tienes membresías con acceso a la consola"
 		},
 		"team": {
+			"access": {
+				"rolesTitle": "Roles",
+				"signIn": "Inicia sesión para ver el equipo.",
+				"selectOrganization": "Selecciona una organización para ver su equipo.",
+				"readDenied": "No tienes permiso para ver este equipo.",
+				"rolesLoadFailed": "No se pudieron cargar los roles disponibles. Vuelve a intentarlo para invitar miembros o cambiar roles.",
+				"rolesReadRequired": "Para invitar miembros o cambiar sus roles necesitas acceso a los roles disponibles. Solicita acceso a un administrador de la organización."
+			},
 			"memberships": {
 				"title": "Estado de las membresías",
 				"status": "Estado",

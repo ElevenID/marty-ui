@@ -338,9 +338,11 @@ export function ConsoleProvider({ children }) {
    */
   const setActiveOrgId = useCallback(async (orgId, membershipOverride = null) => {
     if (orgId === activeOrgId) return;
-    const membershipsForSelection = Array.isArray(membershipOverride)
-      ? membershipOverride
-      : memberships;
+    const membershipsForSelection = isCanvasApplicantOnlyUser
+      ? []
+      : Array.isArray(membershipOverride)
+        ? getConsoleEligibleOrganizations(membershipOverride)
+        : memberships;
 
     const nextSelection = resolveActiveOrgSelection({
       orgId,
@@ -352,6 +354,15 @@ export function ConsoleProvider({ children }) {
     if (!nextSelection.valid) {
       logConsoleContextWarning('[ConsoleContext] Attempted to set invalid org ID:', orgId);
       return;
+    }
+
+    // Organization creation returns the creator's membership before a list
+    // refresh is necessarily current. Retain that verified selection for route
+    // guards, the organization header, and native permission loading.
+    if (Array.isArray(membershipOverride)) {
+      setMemberships(membershipsForSelection);
+      setMembershipsLoaded(true);
+      setMembershipLoadError(null);
     }
 
     // Optimistically update UI
@@ -382,7 +393,7 @@ export function ConsoleProvider({ children }) {
         transitionTo(nextSelection.destination);
       }
     }
-  }, [activeOrgId, mode, memberships, transitionTo]);
+  }, [activeOrgId, mode, memberships, isCanvasApplicantOnlyUser, transitionTo]);
 
   /**
    * Clear active org (triggers setup flow)

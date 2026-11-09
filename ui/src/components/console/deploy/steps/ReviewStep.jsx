@@ -47,7 +47,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
       <Typography variant="h6" gutterBottom>
         {t('wizards.deploymentProfile.reviewStep.title')}
       </Typography>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.deploymentProfile.reviewStep.description')}
       </Typography>
 
@@ -60,7 +60,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         editLabel={t('wizards.deploymentProfile.reviewStep.actions.edit')}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12}>
+            <Grid size={12}>
               <ReviewField
                 label={t('wizards.deploymentProfile.reviewStep.fields.profileName')}
                 value={data.name}
@@ -70,7 +70,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
             </Grid>
 
             {data.description && (
-              <Grid item xs={12}>
+              <Grid size={12}>
                 <ReviewField
                   label={t('wizards.deploymentProfile.reviewStep.fields.description')}
                   value={data.description}
@@ -79,14 +79,14 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               </Grid>
             )}
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.deploymentProfile.reviewStep.fields.environmentType')}
                 value={ENV_TYPE_LABELS[data.environment_type] || data.environment_type}
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.deploymentProfile.reviewStep.fields.networkMode')}
                 value={NETWORK_MODE_LABELS[data.network_mode] || data.network_mode}
@@ -104,7 +104,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         editLabel={t('wizards.deploymentProfile.reviewStep.actions.edit')}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12}>
+            <Grid size={12}>
               <ReviewField
                 label={t('wizards.deploymentProfile.reviewStep.fields.defaultPolicy')}
                 value={data.default_policy_id
@@ -115,7 +115,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={12}>
               <Typography variant="subtitle2" color="text.secondary" gutterBottom>
                 {t('wizards.deploymentProfile.reviewStep.fields.enabledFlows')}
               </Typography>
@@ -147,7 +147,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         editLabel={t('wizards.deploymentProfile.reviewStep.actions.edit')}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12}>
+            <Grid size={12}>
               <Typography variant="subtitle2" color="text.secondary">
                 {t('wizards.deploymentProfile.reviewStep.fields.webhook')}
               </Typography>
@@ -171,7 +171,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               )}
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={12}>
               <Typography variant="subtitle2" color="text.secondary" gutterBottom>
                 {t('wizards.deploymentProfile.reviewStep.fields.featureFlags')}
               </Typography>
@@ -190,14 +190,14 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               </Box>
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.deploymentProfile.reviewStep.fields.theme')}
                 value={data.environment_config?.theme || t('wizards.deploymentProfile.reviewStep.values.defaultTheme')}
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.deploymentProfile.reviewStep.fields.language')}
                 value={data.environment_config?.language || t('wizards.deploymentProfile.reviewStep.values.defaultLanguage')}

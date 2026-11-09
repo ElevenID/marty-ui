@@ -55,12 +55,12 @@ import { listRoles, setMemberRoles } from '../../../services/rbacApi';
 
 const MARTY_ORG_ID = '00000000-0000-0000-0000-000000000001';
 
-const getOrgTabs = (t) => [
-  { label: t('org.tabs.organization'), path: '/console/org/settings' },
-  { label: t('org.tabs.team'), path: '/console/org/team' },
-  { label: 'Roles', path: '/console/org/roles' },
-  { label: t('org.tabs.notifications'), path: '/console/org/notifications' },
-];
+const getOrgTabs = (t, can) => [
+  { label: t('org.tabs.organization'), path: '/console/org/settings', allowed: can('organization', 'view') },
+  { label: t('org.tabs.team'), path: '/console/org/team', allowed: can('team', 'view') },
+  { label: t('org.team.access.rolesTitle'), path: '/console/org/roles', allowed: can('role', 'view') },
+  { label: t('org.tabs.notifications'), path: '/console/org/notifications', allowed: can('notification', 'view') },
+].filter(tab => tab.allowed);
 
 const getBreadcrumbs = (t) => [
   { label: t('org.breadcrumbs.console'), path: '/console' },
@@ -171,30 +171,45 @@ function TeamContent({ organizationId, currentUser }) {
     return () => { active.current = false; };
   }, []);
   const isMartyOrg = effectiveOrgId === MARTY_ORG_ID;
-  const canInvite = !permissionsLoading && hasPermission('team', 'invite');
-  const canManage = !permissionsLoading && !isMartyOrg && hasPermission('team', 'manage');
-  const canViewRequests = !permissionsLoading && hasPermission('team', 'view');
-  currentInviteDialog.current = inviteDialog.isOpen && canInvite
+  const currentPermission = (resource, action) => Boolean(currentUser && effectiveOrgId
+    && !permissionsLoading && hasPermission(resource, action));
+  const canView = currentPermission('team', 'view');
+  const canViewRoles = canView && currentPermission('role', 'view');
+  const canInvite = canView && currentPermission('team', 'invite');
+  const canManage = canView && !isMartyOrg && currentPermission('team', 'manage');
+  const canAssignRoles = canView && !isMartyOrg && currentPermission('role', 'assign');
+  const canViewRequests = canView;
+  const currentAccess = useRef({ canView });
+  currentAccess.current = { canView };
+  currentInviteDialog.current = inviteDialog.isOpen && canInvite && canViewRoles
     && inviteDialog.data?.organizationId === effectiveOrgId ? inviteDialog.data : null;
-  currentRoleDialog.current = roleDialog.isOpen && canManage
+  currentRoleDialog.current = roleDialog.isOpen && canAssignRoles && canViewRoles
     && roleDialog.data?.organizationId === effectiveOrgId ? roleDialog.data : null;
 
   const { data: teamData, loading: dataLoading, error, reload: loadData } = useAsyncData(async () => {
-    if (!effectiveOrgId) throw new Error('Organization context unavailable');
-    const [memberData, rolesData] = await Promise.all([
-      teamApi.listMembers(effectiveOrgId),
-      listRoles(effectiveOrgId),
-    ]);
+    if (!canView || !currentAccess.current.canView || !active.current) return null;
+    const memberData = await teamApi.listMembers(effectiveOrgId, {}, {
+      isCurrent: () => active.current && currentAccess.current.canView && currentOrgId.current === effectiveOrgId,
+    });
     const membershipRecords = Array.isArray(memberData) ? memberData : (memberData?.members ?? []);
     return {
       organizationId: effectiveOrgId,
       ...splitMemberships(membershipRecords),
-      availableRoles: rolesData?.roles || rolesData || [],
     };
-  }, [effectiveOrgId]);
-  const currentTeam = teamData?.organizationId === effectiveOrgId ? teamData : null;
+  }, [effectiveOrgId, canView]);
+  const { data: roleData, loading: rolesLoading, error: rolesError, reload: loadRoles } = useAsyncData(async () => {
+    if (!canViewRoles) return null;
+    const response = await listRoles(effectiveOrgId);
+    const roles = response?.roles || response;
+    if (!Array.isArray(roles)) throw new Error(t('org.team.access.rolesLoadFailed'));
+    return { organizationId: effectiveOrgId, roles };
+  }, [effectiveOrgId, canViewRoles]);
+  const currentTeam = canView && teamData?.organizationId === effectiveOrgId ? teamData : null;
+  const currentRoles = canViewRoles && roleData?.organizationId === effectiveOrgId ? roleData : null;
+  const availableRoles = useMemo(() => currentRoles?.roles || [], [currentRoles]);
+  const rolesReady = Boolean(currentRoles && !rolesLoading && !rolesError);
   const loading = dataLoading || Boolean(effectiveOrgId && !currentTeam && !error);
-  const { activeMembers: teamMembers = [], pendingInvites = [], otherMemberships = [], availableRoles = [] } = currentTeam || {};
+  const { activeMembers: teamMembers = [], pendingInvites = [], otherMemberships = [] } = currentTeam || {};
   const members = teamMembers.map((member) => memberForDisplay(member, currentUser));
   const remainingMemberships = otherMemberships.map((member) => memberForDisplay(member, currentUser));
   const teamReady = Boolean(effectiveOrgId && currentTeam && !loading && !error);
@@ -203,36 +218,34 @@ function TeamContent({ organizationId, currentUser }) {
   const { close: closeRole } = roleDialog;
 
   useEffect(() => {
-    if (!inviteRequested || !teamReady || permissionsLoading) return;
+    if (!inviteRequested || !teamReady || permissionsLoading || (canInvite && canViewRoles && !rolesReady)) return;
     const remainingParams = new URLSearchParams(searchParams);
     remainingParams.delete('invite');
     setSearchParams(remainingParams, { replace: true });
-    if (canInvite) openInvite({ organizationId: effectiveOrgId, generation: ++inviteSequence.current });
-  }, [inviteRequested, teamReady, permissionsLoading, canInvite, effectiveOrgId, searchParams, setSearchParams, openInvite]);
+    if (canInvite && rolesReady) openInvite({ organizationId: effectiveOrgId, generation: ++inviteSequence.current });
+  }, [inviteRequested, teamReady, permissionsLoading, canInvite, canViewRoles, rolesReady, effectiveOrgId, searchParams, setSearchParams, openInvite]);
 
   useEffect(() => {
-    if (inviteDialog.isOpen && (!canInvite || inviteDialog.data?.organizationId !== effectiveOrgId)) closeInvite();
-  }, [inviteDialog.isOpen, inviteDialog.data, effectiveOrgId, canInvite, closeInvite]);
+    if (inviteDialog.isOpen && (!canInvite || !canViewRoles || inviteDialog.data?.organizationId !== effectiveOrgId)) closeInvite();
+  }, [inviteDialog.isOpen, inviteDialog.data, effectiveOrgId, canInvite, canViewRoles, closeInvite]);
 
   useEffect(() => {
-    if (roleDialog.isOpen && (!canManage || roleDialog.data?.organizationId !== effectiveOrgId)) closeRole();
-  }, [roleDialog.isOpen, roleDialog.data, effectiveOrgId, canManage, closeRole]);
+    if (roleDialog.isOpen && (!canAssignRoles || !canViewRoles || roleDialog.data?.organizationId !== effectiveOrgId)) closeRole();
+  }, [roleDialog.isOpen, roleDialog.data, effectiveOrgId, canAssignRoles, canViewRoles, closeRole]);
 
   const defaultInviteRoleIds = useMemo(() => {
     const explicitDefaults = availableRoles
       .filter((role) => role.is_default_for_new_members)
       .map((role) => role.id);
 
-    if (explicitDefaults.length > 0) {
-      return explicitDefaults;
-    }
-
-    return availableRoles[0]?.id ? [availableRoles[0].id] : [];
+    // An unconfigured default is not authority to select the first catalog
+    // role, which could be an administrator role. Require an explicit choice.
+    return explicitDefaults;
   }, [availableRoles]);
 
   const handleInvite = async (email, roleIds) => {
     const dialogContext = inviteDialog.data;
-    if (!inviteDialog.isOpen || !canInvite || !teamReady || dialogContext?.organizationId !== effectiveOrgId) return;
+    if (!inviteDialog.isOpen || !canInvite || !teamReady || !rolesReady || dialogContext?.organizationId !== effectiveOrgId) return;
     const invitedOrgId = effectiveOrgId;
     const applies = () => active.current && currentOrgId.current === invitedOrgId
       && currentInviteDialog.current === dialogContext;
@@ -254,7 +267,7 @@ function TeamContent({ organizationId, currentUser }) {
 
   const handleChangeRole = async (memberId, roleIds) => {
     const dialogContext = roleDialog.data;
-    if (!roleDialog.isOpen || !canManage || !teamReady || dialogContext?.organizationId !== effectiveOrgId
+    if (!roleDialog.isOpen || !canAssignRoles || !teamReady || !rolesReady || dialogContext?.organizationId !== effectiveOrgId
       || dialogContext?.member?.id !== memberId) return;
     const updatedOrgId = effectiveOrgId;
     const applies = () => active.current && currentOrgId.current === updatedOrgId
@@ -319,7 +332,7 @@ function TeamContent({ organizationId, currentUser }) {
       title={t('org.team.title')}
       subtitle={t('org.team.subtitle')}
       icon={<PeopleIcon />}
-      tabs={getOrgTabs(t)}
+      tabs={getOrgTabs(t, currentPermission)}
       breadcrumbs={getBreadcrumbs(t)}
       pageTestId="org.team.page"
       actions={
@@ -328,7 +341,7 @@ function TeamContent({ organizationId, currentUser }) {
             variant="contained"
             startIcon={<AddIcon />}
             onClick={() => openInvite({ organizationId: effectiveOrgId, generation: ++inviteSequence.current })}
-            disabled={!canInvite || !teamReady}
+            disabled={!canInvite || !teamReady || !rolesReady}
             data-testid="org.team.invite.action"
           >
             {t('org.team.members.actions.invite')}
@@ -336,12 +349,31 @@ function TeamContent({ organizationId, currentUser }) {
         </PermissionGate>
       }
     >
-      {loading ? (
+      {!currentUser ? (
+        <Alert severity="info">{t('org.team.access.signIn')}</Alert>
+      ) : !effectiveOrgId ? (
+        <Alert severity="info">{t('org.team.access.selectOrganization')}</Alert>
+      ) : permissionsLoading ? (
+        <TableSkeleton rows={5} columns={4} showActions />
+      ) : !canView ? (
+        <Alert severity="info">{t('org.team.access.readDenied')}</Alert>
+      ) : loading ? (
         <TableSkeleton rows={5} columns={4} showActions />
       ) : error ? (
         <ErrorState error={error} onRetry={loadData} variant="inline" />
       ) : (
         <>
+          {rolesError && canViewRoles && (
+            <Alert severity="error" sx={{ mb: 3 }} action={
+              <Button color="inherit" onClick={loadRoles}>{t('actions.retry', { ns: 'common' })}</Button>
+            }>
+              {typeof rolesError?.message === 'string' && rolesError.message.trim()
+                ? rolesError.message : t('org.team.access.rolesLoadFailed')}
+            </Alert>
+          )}
+          {!canViewRoles && (canInvite || canAssignRoles) && (
+            <Alert severity="info" sx={{ mb: 3 }}>{t('org.team.access.rolesReadRequired')}</Alert>
+          )}
           <Paper sx={{ mb: 3 }}>
             <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
               <Typography variant="h6">{t('org.team.members.title')}</Typography>
@@ -384,10 +416,11 @@ function TeamContent({ organizationId, currentUser }) {
                             : '-'}
                         </TableCell>
                         <TableCell align="right">
-                          {!member.is_owner && canManage && teamReady && (
+                          {!member.is_owner && (canManage || (canAssignRoles && canViewRoles)) && teamReady && (
                             <MemberActionsMenu
-                              onChangeRole={() => roleDialog.open({ member, organizationId: effectiveOrgId })}
-                              onRemove={() => handleRemoveMember(member.id, member.email || getDisplayName(member))}
+                              onChangeRole={canAssignRoles && canViewRoles ? () => roleDialog.open({ member, organizationId: effectiveOrgId }) : undefined}
+                              roleDisabled={!rolesReady}
+                              onRemove={canManage ? () => handleRemoveMember(member.id, member.email || getDisplayName(member)) : undefined}
                             />
                           )}
                         </TableCell>
@@ -497,7 +530,7 @@ function TeamContent({ organizationId, currentUser }) {
 
       <InviteMemberDialog
         key={`${effectiveOrgId}:${inviteDialog.data?.generation || 0}:${inviteDialog.isOpen}`}
-        open={inviteDialog.isOpen && inviteDialog.data?.organizationId === effectiveOrgId && canInvite && teamReady}
+        open={inviteDialog.isOpen && inviteDialog.data?.organizationId === effectiveOrgId && canInvite && teamReady && rolesReady}
         availableRoles={availableRoles}
         defaultRoleIds={defaultInviteRoleIds}
         onClose={inviteDialog.close}
@@ -507,7 +540,7 @@ function TeamContent({ organizationId, currentUser }) {
 
       <ChangeRoleDialog
         key={`${effectiveOrgId}:${roleDialog.data?.member?.id || ''}:${roleDialog.isOpen}`}
-        open={roleDialog.isOpen && roleDialog.data?.organizationId === effectiveOrgId && canManage && teamReady}
+        open={roleDialog.isOpen && roleDialog.data?.organizationId === effectiveOrgId && canAssignRoles && teamReady && rolesReady}
         member={roleDialog.data?.member}
         availableRoles={availableRoles}
         onClose={roleDialog.close}
@@ -518,7 +551,7 @@ function TeamContent({ organizationId, currentUser }) {
   );
 }
 
-function MemberActionsMenu({ onChangeRole, onRemove }) {
+function MemberActionsMenu({ onChangeRole, roleDisabled, onRemove }) {
   const { t } = useTranslation('console');
   const [anchorEl, setAnchorEl] = useState(null);
   const open = Boolean(anchorEl);
@@ -529,7 +562,8 @@ function MemberActionsMenu({ onChangeRole, onRemove }) {
         <MoreVertIcon />
       </IconButton>
       <Menu anchorEl={anchorEl} open={open} onClose={() => setAnchorEl(null)}>
-        <MenuItem
+        {onChangeRole && <MenuItem
+          disabled={roleDisabled}
           onClick={() => {
             setAnchorEl(null);
             onChangeRole();
@@ -539,9 +573,9 @@ function MemberActionsMenu({ onChangeRole, onRemove }) {
             <EditIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText>{t('org.team.members.actions.changeRole')}</ListItemText>
-        </MenuItem>
-        <Divider />
-        <MenuItem
+        </MenuItem>}
+        {onChangeRole && onRemove && <Divider />}
+        {onRemove && <MenuItem
           onClick={() => {
             setAnchorEl(null);
             onRemove();
@@ -552,7 +586,7 @@ function MemberActionsMenu({ onChangeRole, onRemove }) {
             <DeleteIcon fontSize="small" color="error" />
           </ListItemIcon>
           <ListItemText>{t('org.team.members.actions.remove')}</ListItemText>
-        </MenuItem>
+        </MenuItem>}
       </Menu>
     </>
   );

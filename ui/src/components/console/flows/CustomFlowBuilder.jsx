@@ -223,13 +223,13 @@ const CustomFlowBuilderForm = ({ organizationId, requestedTemplateId }) => {
             {!templates.loading && !templates.error && templates.items.length === 0 && <Alert severity="warning" sx={{ mt: 2 }}>No active pre-authorized credential template with a trust profile is available in this organization.</Alert>}
             <Typography sx={{ mt: 2 }}>Step: Issue credential</Typography>
           </Box> : <Box>
-            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
+            <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 1.5 }}>
               <Typography variant="subtitle1">Steps</Typography>
               <Button size="small" startIcon={<AddIcon />} onClick={() => setForm({ ...form, steps: [...form.steps, { ...NEW_STEP }] })}>Add step</Button>
             </Stack>
             <Stack spacing={1.5}>
               {form.steps.map((step, index) => (
-                <Stack key={index} direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="center">
+                <Stack key={index} direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: "center" }}>
                   <TextField required fullWidth label="Step ID" value={step.step_id} onChange={(event) => updateStep(index, { step_id: event.target.value })} />
                   <TextField required fullWidth label="Action" value={step.action} onChange={(event) => updateStep(index, { action: event.target.value })} />
                   <TextField fullWidth label="Description" value={step.description} onChange={(event) => updateStep(index, { description: event.target.value })} />

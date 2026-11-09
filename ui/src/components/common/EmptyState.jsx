@@ -172,7 +172,7 @@ function EmptyState({
           <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5 }}>
             {hasBlockedPrerequisites ? 'You need:' : 'Prerequisites:'}
           </Typography>
-          <Stack spacing={1} alignItems="center">
+          <Stack spacing={1} sx={{ alignItems: "center" }}>
             {prerequisites.map((prereq, index) => (
               <Chip
                 key={index}

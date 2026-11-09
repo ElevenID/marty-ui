@@ -186,7 +186,7 @@ function TrustProfilesPage() {
                 {safeProfiles.map((profile) => (
                     <TableRow key={profile.id} hover>
                       <TableCell>
-                        <Typography variant="body2" fontWeight={500}>
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
                           {profile.name}
                         </Typography>
                       </TableCell>

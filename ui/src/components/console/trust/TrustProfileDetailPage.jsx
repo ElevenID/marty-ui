@@ -87,7 +87,7 @@ function WalletCompatibilityPanel({ trustProfileId }) {
     <Paper sx={{ p: 3, mb: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <PhoneAndroidIcon color="primary" />
-        <Typography variant="h6" fontWeight={600}>
+        <Typography variant="h6" sx={{ fontWeight: 600 }}>
           {t('trust.trustProfileDetail.walletCompatibility')}
         </Typography>
       </Box>
@@ -158,14 +158,14 @@ function ProvenanceSection({ trustProfile }) {
     <Paper sx={{ p: 3, mb: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <AccountBalanceIcon color="primary" />
-        <Typography variant="h6" fontWeight={600}>
+        <Typography variant="h6" sx={{ fontWeight: 600 }}>
           {t('trust.trustProfileDetail.trustProvenance')}
         </Typography>
       </Box>
 
       <Grid container spacing={3}>
         {/* Trust Anchors */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Typography variant="subtitle2" gutterBottom>
             {t('trust.trustProfileDetail.trustAnchors')}
           </Typography>
@@ -191,7 +191,7 @@ function ProvenanceSection({ trustProfile }) {
         </Grid>
 
         {/* Metadata */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Typography variant="subtitle2" gutterBottom>
             {t('trust.trustProfileDetail.trustMetadata')}
           </Typography>
@@ -200,7 +200,7 @@ function ProvenanceSection({ trustProfile }) {
               <Typography variant="body2" color="text.secondary">
                 {t('trust.trustProfileDetail.trustedIssuersCount')}
               </Typography>
-              <Typography variant="body2" fontWeight={600}>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
                 {issuerCount}
               </Typography>
             </Box>
@@ -355,7 +355,7 @@ function TrustedIssuersSection({ profileId, organizationId }) {
     <Paper sx={{ p: 3, mb: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <VerifiedUserIcon color="primary" />
-        <Typography variant="h6" fontWeight={600} sx={{ flex: 1 }}>
+        <Typography variant="h6" sx={{ fontWeight: 600, flex: 1 }}>
           {t('trust.trustedIssuers')}
         </Typography>
         <Chip label={safeIssuers.length} size="small" sx={{ mr: 1 }} />
@@ -508,28 +508,28 @@ export function TrustProfileDetailPage() {
 
       {/* Basic Information */}
       <Paper sx={{ p: 3, mb: 3 }}>
-        <Typography variant="h6" fontWeight={600} gutterBottom>
+        <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
           {t('trust.trustProfileDetail.basicInformation')}
         </Typography>
         <Grid container spacing={2}>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <Typography variant="body2" color="text.secondary">
               {t('trust.trustProfileDetail.profileId')}
             </Typography>
-            <Typography variant="body1" fontWeight={500}>
+            <Typography variant="body1" sx={{ fontWeight: 500 }}>
               {profile.id}
             </Typography>
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <Typography variant="body2" color="text.secondary">
               {t('trust.trustProfileDetail.created')}
             </Typography>
-            <Typography variant="body1" fontWeight={500}>
+            <Typography variant="body1" sx={{ fontWeight: 500 }}>
               {profile.created_at ? new Date(profile.created_at).toLocaleDateString() : t('trust.trustProfileDetail.notAvailable')}
             </Typography>
           </Grid>
           {profile.description && (
-            <Grid item xs={12}>
+            <Grid size={12}>
               <Typography variant="body2" color="text.secondary">
                 {t('trust.trustProfileDetail.description')}
               </Typography>

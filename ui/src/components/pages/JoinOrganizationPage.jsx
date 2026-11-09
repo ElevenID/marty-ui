@@ -297,7 +297,7 @@ export default function JoinOrganizationPage({
 
           {inviteState === JOIN_ORGANIZATION_INVITE_STATES.VALID && (
             <>
-              <Typography variant="h4" fontWeight={700} gutterBottom>
+              <Typography variant="h4" sx={{ fontWeight: 700 }} gutterBottom>
                 Join {invitation?.organization_name || selectedOrg?.name}
               </Typography>
               <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
@@ -306,7 +306,7 @@ export default function JoinOrganizationPage({
 
               <Card variant="outlined" sx={{ mb: 3 }}>
                 <CardContent>
-                  <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }} gutterBottom>
                     Invitation details
                   </Typography>
                   <Stack spacing={1}>
@@ -365,7 +365,7 @@ export default function JoinOrganizationPage({
         <Card>
           <CardContent sx={{ textAlign: 'center', py: 6 }}>
             <CheckCircleIcon color="success" sx={{ fontSize: 64, mb: 2 }} />
-            <Typography variant="h4" fontWeight={700} gutterBottom>
+            <Typography variant="h4" sx={{ fontWeight: 700 }} gutterBottom>
               You joined {successOrgName}
             </Typography>
             <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
@@ -386,13 +386,13 @@ export default function JoinOrganizationPage({
         <Card>
           <CardContent sx={{ textAlign: 'center', py: 6 }}>
             <HourglassTopIcon color="warning" sx={{ fontSize: 64, mb: 2 }} />
-            <Typography variant="h4" fontWeight={700} gutterBottom>
+            <Typography variant="h4" sx={{ fontWeight: 700 }} gutterBottom>
               Request submitted to {successOrgName}
             </Typography>
             <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
               An administrator must approve your membership before access is granted.
             </Typography>
-            <Stack direction="row" spacing={2} justifyContent="center">
+            <Stack direction="row" spacing={2} sx={{ justifyContent: 'center' }}>
               <Button variant="outlined" onClick={() => navigate(managePath)}>
                 View My Organizations
               </Button>
@@ -409,7 +409,7 @@ export default function JoinOrganizationPage({
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
       <Box sx={{ mb: 4 }}>
-        <Typography variant="h4" gutterBottom fontWeight={700}>
+        <Typography variant="h4" gutterBottom sx={{ fontWeight: 700 }}>
           Join an Organization
         </Typography>
         <Typography variant="body1" color="text.secondary">
@@ -423,7 +423,7 @@ export default function JoinOrganizationPage({
       )}
       <Grid container spacing={3}>
         {/* Left side: discovery list + join code */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Card sx={{ mb: 3 }}>
             <CardContent>
               <Typography variant="h6" gutterBottom>
@@ -500,7 +500,7 @@ export default function JoinOrganizationPage({
                         setError(null);
                       }}>
                         <CardContent sx={{ pb: 1.5 }}>
-                          <Typography fontWeight={600}>{org.name || org.display_name}</Typography>
+                          <Typography sx={{ fontWeight: 600 }}>{org.name || org.display_name}</Typography>
                           {org.description && (
                             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
                               {org.description}
@@ -523,7 +523,7 @@ export default function JoinOrganizationPage({
         </Grid>
 
         {/* Right side: org preview and action */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Card sx={{ minHeight: 480 }}>
             <CardContent>
               <Typography variant="h6" gutterBottom>
@@ -543,7 +543,7 @@ export default function JoinOrganizationPage({
                 </Box>
               ) : (
                 <>
-                  <Typography variant="h5" fontWeight={700} gutterBottom>
+                  <Typography variant="h5" sx={{ fontWeight: 700 }} gutterBottom>
                     {selectedOrg.name || selectedOrg.display_name}
                   </Typography>
 

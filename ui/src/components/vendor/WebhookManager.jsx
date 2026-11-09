@@ -569,7 +569,7 @@ export default function WebhookManager() {
                     )}
                     label={(
                       <Box>
-                        <Typography variant="body2" fontWeight="bold">
+                        <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
                           All Events
                         </Typography>
                         <Typography variant="caption" color="text.secondary">

@@ -2350,6 +2350,14 @@
       }
     },
     "team": {
+      "access": {
+        "rolesTitle": "Roles",
+        "signIn": "Sign in to view the team.",
+        "selectOrganization": "Select an organization to view its team.",
+        "readDenied": "You do not have permission to view this team.",
+        "rolesLoadFailed": "Available roles could not be loaded. Try again to invite members or change roles.",
+        "rolesReadRequired": "Viewing available roles is required to invite members or change their roles. Ask an organization administrator for access."
+      },
       "title": "Team",
       "subtitle": "Manage team members, roles, and invitations",
       "memberships": {

@@ -49,6 +49,20 @@ describe('Policy Set scoped consumer journeys', () => {
     )
   })
 
+  it('keeps policy rows in the table and exposes a keyboard-accessible detail link', async () => {
+    const { user } = renderPage('')
+    const row = await screen.findByRole('row', { name: /Owned policy set/ })
+    expect(row.tagName).toBe('TR')
+    expect(row.parentElement?.tagName).toBe('TBODY')
+    const link = screen.getByRole('link', { name: 'Owned policy set' })
+    expect(link).toHaveAttribute('href', BASE + '/set-1')
+    link.focus()
+    expect(link).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(await screen.findByRole('heading', { name: 'Owned policy set' })).toBeInTheDocument()
+    expect(writes).toEqual([])
+  })
+
   it('rejects an existing detail response from another organization', async () => {
     record.organization_id = 'org-2'; renderPage()
     expect(await screen.findByRole('alert')).toHaveTextContent(/selected organization/)

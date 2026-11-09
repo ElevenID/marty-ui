@@ -809,7 +809,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1 }}>
-          <Typography variant={compact ? 'subtitle1' : 'h6'} fontWeight={700}>
+          <Typography variant={compact ? 'subtitle1' : 'h6'} sx={{ fontWeight: 700 }}>
             Course completion requirement
           </Typography>
           <Chip size="small" color="success" variant="outlined" label="Launch verified" />
@@ -932,11 +932,11 @@ export default function ApplicationForm({ previewContext = null } = {}) {
         {canvasSummaryItems.length > 0 && (
           <Grid container spacing={2} sx={{ mb: evidenceItems.length > 0 ? 2 : 0 }}>
             {canvasSummaryItems.map((item) => (
-              <Grid item xs={12} sm={6} key={item.label}>
+              <Grid size={{ xs: 12, sm: 6 }} key={item.label}>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                   {item.label}
                 </Typography>
-                <Typography variant="body2" fontWeight={600}>
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>
                   {item.value}
                 </Typography>
               </Grid>
@@ -961,7 +961,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
                     bgcolor: 'background.paper',
                   }}
                 >
-                  <Typography variant="body2" fontWeight={600}>{item.label}</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>{item.label}</Typography>
                   <Typography variant="caption" color="text.secondary">{item.details}</Typography>
                 </Box>
               ))}
@@ -1011,7 +1011,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
       {renderCanvasSummaryPanel({ compact: true })}
 
       <Grid container spacing={3}>
-        <Grid item xs={12}>
+        <Grid size={{ xs: 12 }}>
           {steps.slice(0, -1).map((step, idx) => (
             <Card key={idx} variant="outlined" sx={{ mb: 2 }}>
               <CardContent>
@@ -1037,7 +1037,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
                     }
                     
                     return (
-                      <Grid item xs={12} sm={6} key={fieldName}>
+                      <Grid size={{ xs: 12, sm: 6 }} key={fieldName}>
                         <Typography variant="body2" color="text.secondary">
                           {field.label || fieldName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
                         </Typography>
@@ -1051,7 +1051,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
           ))}
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={{ xs: 12 }}>
           <FormControlLabel
             control={
               <Checkbox
@@ -1063,7 +1063,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
             label={t('applicationForm.review.terms')}
           />
           {validationErrors.acceptTerms && (
-            <Typography color="error" variant="caption" display="block">
+            <Typography color="error" variant="caption" sx={{ display: 'block' }}>
               {validationErrors.acceptTerms}
             </Typography>
           )}
@@ -1082,7 +1082,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
         {isPreview ? (
           <>
             <Alert severity="info" sx={{ maxWidth: 600, mx: 'auto', mb: 3, textAlign: 'left' }}>
-              <Typography variant="body2" paragraph>
+              <Typography variant="body2" component="p" sx={{ marginBottom: '16px' }}>
                 <strong>{t('applicationForm.success.previewMode')}:</strong> {t('applicationForm.success.previewMessage')}
               </Typography>
               <Typography variant="body2">
@@ -1269,7 +1269,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
             {/* Icon + title */}
             <Box sx={{ mb: 3 }}>
               <HeroIcon sx={{ fontSize: 64, color: 'primary.main', mb: 1 }} />
-              <Typography variant="h5" fontWeight={700} gutterBottom>
+              <Typography variant="h5" sx={{ fontWeight: 700 }} gutterBottom>
                 {heroTitle}
               </Typography>
               <Typography variant="body2" color="text.secondary">
@@ -1282,7 +1282,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
               <Typography variant="caption" color="text.secondary">
                 Issued by
               </Typography>
-              <Typography variant="body2" fontWeight={600}>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
                 ElevenID LLC
               </Typography>
             </Box>
@@ -1299,7 +1299,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
                 {summaryFields.map(({ label, value }) => (
                   <Box key={label} sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
                     <Typography variant="body2" color="text.secondary">{label}</Typography>
-                    <Typography variant="body2" fontWeight={500}>{value}</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>{value}</Typography>
                   </Box>
                 ))}
               </Box>

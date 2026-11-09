@@ -320,6 +320,14 @@
 			"noMembershipsTitle": "Noch keine Mitgliedschaften mit Konsolenzugriff"
 		},
 		"team": {
+			"access": {
+				"rolesTitle": "Rollen",
+				"signIn": "Melden Sie sich an, um das Team anzuzeigen.",
+				"selectOrganization": "Wählen Sie eine Organisation aus, um deren Team anzuzeigen.",
+				"readDenied": "Sie haben keine Berechtigung, dieses Team anzuzeigen.",
+				"rolesLoadFailed": "Verfügbare Rollen konnten nicht geladen werden. Versuchen Sie es erneut, um Mitglieder einzuladen oder Rollen zu ändern.",
+				"rolesReadRequired": "Um Mitglieder einzuladen oder ihre Rollen zu ändern, benötigen Sie Zugriff auf die verfügbaren Rollen. Wenden Sie sich an einen Organisationsadministrator."
+			},
 			"memberships": {
 				"title": "Mitgliedschaftsstatus",
 				"status": "Status",

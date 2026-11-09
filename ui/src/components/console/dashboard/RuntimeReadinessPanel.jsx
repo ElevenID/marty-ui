@@ -99,7 +99,7 @@ function StatusCard({
       <CardContent>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
           <Icon color={getStatusColor()} />
-          <Typography variant="subtitle2" fontWeight={600}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
             {label}
           </Typography>
         </Box>

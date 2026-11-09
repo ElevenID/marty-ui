@@ -37,7 +37,7 @@ function StatItem({ icon: Icon, label, value, color = 'primary' }) {
       <Box sx={{ mb: 1 }}>
         <Icon sx={{ fontSize: 40, color: `${color}.main` }} />
       </Box>
-      <Typography variant="h4" fontWeight={600}>
+      <Typography variant="h4" sx={{ fontWeight: 600 }}>
         {value}
       </Typography>
       <Typography variant="body2" color="text.secondary">
@@ -88,7 +88,7 @@ export function ApplicantStatsCard() {
   return (
     <Paper sx={{ p: 3, mb: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h6" fontWeight={600}>
+        <Typography variant="h6" sx={{ fontWeight: 600 }}>
           {t('dashboard.applicantStats.title')}
         </Typography>
         <Button

@@ -77,7 +77,7 @@ const IntegrationStep = ({ data, onChange }) => {
       <Typography variant="h6" gutterBottom>
         {t('wizards.deploymentProfile.integrationStep.title')}
       </Typography>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.deploymentProfile.integrationStep.description')}
       </Typography>
 
@@ -89,7 +89,7 @@ const IntegrationStep = ({ data, onChange }) => {
       <Typography variant="subtitle2" gutterBottom>
         {t('wizards.deploymentProfile.integrationStep.sections.webhooks')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" paragraph>
+      <Typography variant="body2" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.deploymentProfile.integrationStep.helpers.webhooks')}
       </Typography>
 
@@ -135,7 +135,7 @@ const IntegrationStep = ({ data, onChange }) => {
       <Typography variant="subtitle2" gutterBottom>
         {t('wizards.deploymentProfile.integrationStep.sections.featureFlags')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" paragraph>
+      <Typography variant="body2" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.deploymentProfile.integrationStep.helpers.featureFlags')}
       </Typography>
 
@@ -183,7 +183,7 @@ const IntegrationStep = ({ data, onChange }) => {
       <Typography variant="subtitle2" gutterBottom>
         Canvas integration gates
       </Typography>
-      <Typography variant="body2" color="text.secondary" paragraph>
+      <Typography variant="body2" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         Bindings that use this deployment profile only enable the selected Canvas modes.
       </Typography>
 
@@ -208,12 +208,12 @@ const IntegrationStep = ({ data, onChange }) => {
       <Typography variant="subtitle2" gutterBottom>
         {t('wizards.deploymentProfile.integrationStep.sections.userExperience')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" paragraph>
+      <Typography variant="body2" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.deploymentProfile.integrationStep.helpers.ux')}
       </Typography>
 
       <Grid container spacing={2}>
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <FormControl fullWidth>
             <InputLabel>{t('wizards.deploymentProfile.integrationStep.fields.theme')}</InputLabel>
             <Select
@@ -229,7 +229,7 @@ const IntegrationStep = ({ data, onChange }) => {
           </FormControl>
         </Grid>
 
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <FormControl fullWidth>
             <InputLabel>{t('wizards.deploymentProfile.integrationStep.fields.language')}</InputLabel>
             <Select

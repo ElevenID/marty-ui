@@ -204,7 +204,7 @@ function PolicySelectStep({ value, onChange, organizationId, onValidityChange })
           </FormControl>
 
           {selectedFlow && (
-            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }} useFlexGap>
               <Chip size="small" label={`Policy: ${value.policy_id}`} variant="outlined" />
               {value.trust_profile_id && <Chip size="small" label={`Trust: ${value.trust_profile_id}`} variant="outlined" />}
               {value.deployment_profile_id && <Chip size="small" label={`Deployment: ${value.deployment_profile_id}`} variant="outlined" />}

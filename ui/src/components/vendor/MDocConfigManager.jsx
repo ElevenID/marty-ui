@@ -328,7 +328,7 @@ export default function MDocConfigManager() {
       <TabPanel value={activeTab} index={0}>
         <Grid container spacing={3}>
           {Object.entries(MDOC_TYPES).map(([typeId, typeInfo]) => (
-            <Grid item xs={12} md={4} key={typeId}>
+            <Grid size={{ xs: 12, md: 4 }} key={typeId}>
               <Card 
                 sx={{ 
                   height: '100%',
@@ -433,7 +433,7 @@ export default function MDocConfigManager() {
 
         <Grid container spacing={3}>
           {/* Field Configuration */}
-          <Grid item xs={12} md={8}>
+          <Grid size={{ xs: 12, md: 8 }}>
             <Paper sx={{ p: 2 }}>
               <Typography variant="h6" gutterBottom>
                 Application Form Fields
@@ -492,7 +492,7 @@ export default function MDocConfigManager() {
           </Grid>
 
           {/* Preview */}
-          <Grid item xs={12} md={4}>
+          <Grid size={{ xs: 12, md: 4 }}>
             <Paper sx={{ p: 2, position: 'sticky', top: 20 }}>
               <Typography variant="h6" gutterBottom>
                 Form Preview
@@ -541,7 +541,7 @@ export default function MDocConfigManager() {
 
         <Grid container spacing={3}>
           {/* Validity & Verification */}
-          <Grid item xs={12} md={6}>
+          <Grid size={{ xs: 12, md: 6 }}>
             <Paper sx={{ p: 3 }}>
               <Typography variant="h6" gutterBottom>
                 Validity & Verification
@@ -585,7 +585,7 @@ export default function MDocConfigManager() {
           </Grid>
 
           {/* Renewal Settings */}
-          <Grid item xs={12} md={6}>
+          <Grid size={{ xs: 12, md: 6 }}>
             <Paper sx={{ p: 3 }}>
               <Typography variant="h6" gutterBottom>
                 Renewal Settings
