@@ -276,10 +276,13 @@ describe('vendorApi', () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it('fetchPreviewCredentialTemplate calls GET', async () => {
+  it('fetchPreviewCredentialTemplate reads the encoded native template without mutation', async () => {
     get.mockResolvedValue({ name: 'Visa' });
-    await fetchPreviewCredentialTemplate({ templateId: 't-1' });
-    expect(get).toHaveBeenCalledWith(expect.stringContaining('/credential-templates/t-1?preview=true'));
+    await fetchPreviewCredentialTemplate({ templateId: 't/1 ?' });
+    expect(get).toHaveBeenCalledWith('/v1/credential-templates/t%2F1%20%3F');
+    expect(post).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+    expect(del).not.toHaveBeenCalled();
   });
 
   // ── Wallet Pairing ──────────────────────────────────────────
