@@ -241,6 +241,11 @@
 		"flowDefinition": "Définition de flux"
 	},
 	"deploy": {
+		"keyManagementWizard": {
+			"selectOrganization": "Sélectionnez une organisation pour enregistrer un service de signature.",
+			"readDenied": "Vous n’avez pas l’autorisation de consulter les services de signature de l’organisation sélectionnée.",
+			"createDenied": "Vous n’avez pas l’autorisation d’enregistrer des services de signature dans l’organisation sélectionnée."
+		},
 		"issuerIdentityWizard": {
 			"selectOrganization": "Sélectionnez une organisation pour créer une identité d’émetteur.",
 			"readDenied": "Vous ne disposez pas de l’autorisation de consulter les capacités des émetteurs dans l’organisation sélectionnée.",

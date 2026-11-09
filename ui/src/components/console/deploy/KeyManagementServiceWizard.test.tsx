@@ -35,6 +35,15 @@ vi.mock('../../../contexts/ConsoleContext', () => ({
   useConsole: () => mockUseConsole(),
 }))
 
+vi.mock('../../../hooks/useAuth', () => ({
+  useAuth: () => ({ isAuthenticated: true, user: { id: 'principal-1' } }),
+}))
+
+vi.mock('../../../hooks/usePermissions', () => ({
+  usePermissions: () => ({ isLoading: false, can: (resource: string, action: string) =>
+    resource === 'signing-key' && ['view', 'create'].includes(action) }),
+}))
+
 describe('KeyManagementServiceWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
