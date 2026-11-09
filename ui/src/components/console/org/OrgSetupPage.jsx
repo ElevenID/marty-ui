@@ -7,6 +7,7 @@
  */
 
 import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
 import {
   Box,
   Container,
@@ -51,6 +52,7 @@ function logOrgSetupError(message, error) {
  * Organization Setup Page Component
  */
 export function OrgSetupPage() {
+  const beginAction = useAsyncActionScope();
   const { t } = useTranslation('console');
   const organizationCreationEnabled = isOrganizationCreationEnabled(ENABLE_ORGANIZATION_CREATION);
   const navigate = useNavigate();
@@ -97,10 +99,13 @@ export function OrgSetupPage() {
    * Handle switching to an organization
    */
   const handleSelectOrganization = async (org) => {
+    const action = beginAction();
     try {
-      await setActiveOrgId(org.id);
+      await action.run(setActiveOrgId, org.id, null, { navigate: false });
+      if (!action.isCurrent()) return;
       navigate(returnTo || '/console/org');
     } catch (err) {
+      if (!action.isCurrent() || err?.name === 'AbortError') return;
       logOrgSetupError('[OrgSetupPage] Failed to switch organization:', err);
     }
   };

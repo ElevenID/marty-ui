@@ -40,6 +40,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import SearchIcon from '@mui/icons-material/Search';
 
 import { useAuth } from '../../hooks/useAuth';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
 import { SHOW_PUBLIC_DOCUMENTATION_NAV } from '@ui-public-config';
 import { useBranding } from '../../hooks/useBranding';
 import { useConsole } from '../../contexts/ConsoleContext';
@@ -162,6 +163,7 @@ export function getAccountAvatarInitial(user) {
  * Console Header Bar Component
  */
 export function ConsoleHeaderBar({ onMobileMenuToggle }) {
+  const beginAction = useAsyncActionScope();
   const navigate = useNavigate();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -226,13 +228,26 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
   };
 
   const handleSelectOrganization = async (organization) => {
+    const action = beginAction();
     setOrgMenuAnchor(null);
     setOrgSearch('');
 
     try {
-      await setActiveOrgId(organization.id);
+      await action.run(setActiveOrgId, organization.id);
     } catch (error) {
+      if (!action.isCurrent() || error?.name === 'AbortError') return;
       console.error('[ConsoleHeaderBar] Failed to switch organization:', error);
+    }
+  };
+
+  const handleModeChange = async (_, newMode) => {
+    if (!newMode) return;
+    const action = beginAction();
+    try {
+      await action.run(setMode, newMode);
+    } catch (error) {
+      if (!action.isCurrent() || error?.name === 'AbortError') return;
+      console.error('[ConsoleHeaderBar] Failed to switch console:', error);
     }
   };
 
@@ -314,7 +329,7 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
           <ToggleButtonGroup
             value={mode}
             exclusive
-            onChange={(_, newMode) => { if (newMode) setMode(newMode); }}
+            onChange={handleModeChange}
             size="small"
             sx={{
               bgcolor: 'rgba(255,255,255,0.15)',

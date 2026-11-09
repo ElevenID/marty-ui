@@ -23,6 +23,7 @@ import { ENABLE_ORGANIZATION_CREATION } from '@ui-public-config';
 
 import { membershipHasOrgConsoleAccess } from '../../application/session/authSession';
 import { isOrganizationCreationEnabled } from '../../utils/runtimeConfig';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
 
 const DEFAULT_TITLE = 'My Organizations';
 const DEFAULT_DESCRIPTION = "Organizations you're a member of. Switch to an organization to access its console.";
@@ -113,9 +114,20 @@ function OrganizationMembershipHub({
   joinPath = '/organizations/join',
   dataTestId,
 }) {
+  const beginAction = useAsyncActionScope();
   const { t } = useTranslation('console');
   const organizationCreationEnabled = isOrganizationCreationEnabled(ENABLE_ORGANIZATION_CREATION);
   const items = Array.isArray(organizations) ? organizations : [];
+  const handleSwitchToOrg = async (organizationId) => {
+    if (!onSwitchToOrg) return;
+    const action = beginAction();
+    try {
+      await action.run(onSwitchToOrg, organizationId);
+    } catch (error) {
+      if (!action.isCurrent() || error?.name === 'AbortError') return;
+      console.error('[OrganizationMembershipHub] Failed to switch organization:', error);
+    }
+  };
 
   if (loading) {
     return (
@@ -275,7 +287,7 @@ function OrganizationMembershipHub({
                       <Button
                         fullWidth
                         variant={organization.id === activeOrgId ? 'outlined' : 'contained'}
-                        onClick={() => onSwitchToOrg?.(organization.id)}
+                        onClick={() => handleSwitchToOrg(organization.id)}
                         disabled={status !== 'active' || !hasOrgConsoleAccess || !onSwitchToOrg}
                       >
                         {hasOrgConsoleAccess

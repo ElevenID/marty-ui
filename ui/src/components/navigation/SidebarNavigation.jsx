@@ -37,6 +37,7 @@ import BusinessIcon from '@mui/icons-material/Business';
 import LogoutIcon from '@mui/icons-material/Logout';
 import Badge from '@mui/material/Badge';
 import { useAuth } from '../../hooks/useAuth';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useConsole } from '../../contexts/ConsoleContext';
 import { ADMIN_VENDOR_NAV, APPLICANT_NAV, findActiveNavItem } from '../../config/navigation';
@@ -243,6 +244,7 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
  * Sidebar Navigation Component
  */
 function SidebarNavigation({ mobileOpen, onMobileClose }) {
+  const beginAction = useAsyncActionScope();
   const theme = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
@@ -263,11 +265,17 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
   const { can } = usePermissions();
 
   // Console mode switching
-  const handleModeChange = useCallback((event, newMode) => {
+  const handleModeChange = useCallback(async (event, newMode) => {
     if (newMode && newMode !== mode) {
-      setMode(newMode);
+      const action = beginAction();
+      try {
+        await action.run(setMode, newMode);
+      } catch (error) {
+        if (!action.isCurrent() || error?.name === 'AbortError') return;
+        console.error('[SidebarNavigation] Failed to switch console:', error);
+      }
     }
-  }, [mode, setMode]);
+  }, [beginAction, mode, setMode]);
 
   // Get nav items based on console mode, filtered by permissions
   const navItems = useMemo(() => {
@@ -369,7 +377,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
           <Tooltip title="Applicant Console" placement="right">
             <IconButton
               size="small"
-              onClick={() => setMode('applicant')}
+              onClick={(event) => handleModeChange(event, 'applicant')}
               disabled={!isApplicantConsoleAvailable}
               sx={{
                 bgcolor: mode === 'applicant' ? 'action.selected' : 'transparent',
@@ -383,7 +391,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
             <Tooltip title="Organization Console" placement="right">
               <IconButton
                 size="small"
-                onClick={() => setMode('org')}
+                onClick={(event) => handleModeChange(event, 'org')}
                 sx={{
                   bgcolor: mode === 'org' ? 'action.selected' : 'transparent',
                   '&:hover': { bgcolor: 'action.hover' },

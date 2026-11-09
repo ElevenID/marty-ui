@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Route, Routes, useLocation } from 'react-router';
-import { renderWithRouter, screen, waitFor } from '@test/utils';
+import { Route, Routes, useLocation, useNavigate } from 'react-router';
+import { act, renderWithRouter, screen, waitFor } from '@test/utils';
 
 import { AuthContext } from '../../contexts/AuthContext';
 import { ConsoleContext, ConsoleProvider, useConsole } from '../../contexts/ConsoleContext';
@@ -194,6 +194,119 @@ describe('organization creation console handoff', () => {
     expect(screen.getByTestId('path')).toHaveTextContent('/console/organizations');
     expect(window.localStorage.getItem('activeOrgId')).toBeNull();
     expect(updatePreferences).not.toHaveBeenCalled();
+    expect(getMyPermissions).not.toHaveBeenCalled();
+  });
+});
+
+function CreationNavigation() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  return <>
+    <button onClick={() => navigate('/console/applicant/catalog')}>Leave creation</button>
+    <output data-testid="complete-location">{location.pathname}{location.search}{location.hash}</output>
+  </>;
+}
+
+function CreationLifetimeApp({ auth }: { auth: any }) {
+  return <AuthContext.Provider value={auth}>
+    <ConsoleProvider>
+      <ContextProbe />
+      <CreationNavigation />
+      <Routes>
+        <Route path="/console/org" element={<OrgConsoleRoute><OrganizationDashboard /></OrgConsoleRoute>} />
+        <Route path="/console/org/team" element={<OrgConsoleRoute><div>Created organization team</div></OrgConsoleRoute>} />
+        <Route path="/console/org/setup" element={<div>Organization setup</div>} />
+        <Route path="/console/organizations/create" element={<CreateOrganizationPage />} />
+        <Route path="/console/applicant/catalog" element={<div>Applicant catalog</div>} />
+      </Routes>
+    </ConsoleProvider>
+  </AuthContext.Provider>;
+}
+
+describe('organization creation request lifetime', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    window.localStorage.clear();
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { organizationCreationEnabled: true };
+    vi.mocked(getPreferences).mockResolvedValue({ last_view_mode: 'applicant', last_active_org_id: null });
+    vi.mocked(updatePreferences).mockResolvedValue({});
+    vi.mocked(getMyOrganizations).mockResolvedValue([applicantOrganization]);
+  });
+  afterEach(() => { delete (window as any).__MARTY_RUNTIME_CONFIG__; });
+
+  async function submit(user: ReturnType<typeof renderWithRouter>['user']) {
+    await waitFor(() => expect(screen.getByTestId('console-loading')).toHaveTextContent('ready'));
+    await user.type(screen.getByLabelText('Organization Slug'), createdOrganization.name);
+    await user.type(screen.getByLabelText('Display Name'), createdOrganization.display_name);
+    await user.click(screen.getByRole('button', { name: 'Create Organization' }));
+    await waitFor(() => expect(createOrganization).toHaveBeenCalledTimes(1));
+  }
+
+  it.each(['saved', 'failed'])('honors creation returnTo including query and hash when preference persistence %s', async persistence => {
+    vi.mocked(createOrganization).mockResolvedValue(createdOrganization);
+    if (persistence === 'failed') vi.mocked(updatePreferences).mockRejectedValue(new Error('Preferences temporarily unavailable'));
+    const destination = '/console/org/team?invite=1#members';
+    const { user } = renderWithRouter(<CreationLifetimeApp auth={applicantAuth} />, {
+      initialEntries: ['/console/organizations/create?returnTo=' + encodeURIComponent(destination)],
+    });
+    await submit(user);
+
+    expect(await screen.findByText('Created organization team')).toBeInTheDocument();
+    expect(screen.getByTestId('complete-location')).toHaveTextContent(destination);
+    expect(screen.getByTestId('selected-org')).toHaveTextContent(createdOrganization.id);
+    expect(updatePreferences).toHaveBeenCalledExactlyOnceWith({ last_view_mode: 'org', last_active_org_id: createdOrganization.id });
+  });
+
+  it.each(['create', 'refresh'])('does not let an old account %s completion refresh, select or navigate the replacement session', async phase => {
+    let finish!: (value: any) => void;
+    const request = new Promise(resolve => { finish = resolve; });
+    if (phase === 'create') vi.mocked(createOrganization).mockReturnValueOnce(request);
+    else {
+      vi.mocked(createOrganization).mockResolvedValue(createdOrganization);
+      vi.mocked(getMyOrganizations).mockResolvedValueOnce([applicantOrganization]).mockReturnValueOnce(request)
+        .mockResolvedValue([applicantOrganization]);
+    }
+    const { user, rerender } = renderWithRouter(<CreationLifetimeApp auth={applicantAuth} />,
+      { initialEntries: ['/console/organizations/create'] });
+    await submit(user);
+    if (phase === 'refresh') await waitFor(() => expect(getMyOrganizations).toHaveBeenCalledTimes(2));
+    const replacement = { ...applicantAuth, user: { ...applicantAuth.user, user_id: 'replacement-user', organizations: [] } };
+    rerender(<CreationLifetimeApp auth={replacement} />);
+    await waitFor(() => expect(getMyOrganizations).toHaveBeenCalledTimes(phase === 'create' ? 2 : 3));
+    await waitFor(() => expect(screen.getByTestId('console-loading')).toHaveTextContent('ready'));
+    const reads = vi.mocked(getMyOrganizations).mock.calls.length;
+
+    await act(async () => finish(phase === 'create' ? createdOrganization : [createdOrganization]));
+
+    expect(screen.getByTestId('path')).toHaveTextContent('/console/organizations/create');
+    expect(screen.getByTestId('selected-org')).toBeEmptyDOMElement();
+    expect(screen.queryByRole('heading', { name: 'Organization dashboard' })).not.toBeInTheDocument();
+    expect(getMyOrganizations).toHaveBeenCalledTimes(reads);
+    expect(getMyPermissions).not.toHaveBeenCalled();
+    expect(updatePreferences).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem('activeOrgId')).toBeNull();
+  });
+
+  it.each(['create', 'preference'])('does not navigate back after leaving creation while %s is pending', async phase => {
+    let finish!: (value: any) => void;
+    const request = new Promise(resolve => { finish = resolve; });
+    if (phase === 'create') vi.mocked(createOrganization).mockReturnValueOnce(request);
+    else {
+      vi.mocked(createOrganization).mockResolvedValue(createdOrganization);
+      vi.mocked(updatePreferences).mockReturnValueOnce(request);
+    }
+    const { user } = renderWithRouter(<CreationLifetimeApp auth={applicantAuth} />,
+      { initialEntries: ['/console/organizations/create'] });
+    await submit(user);
+    if (phase === 'preference') await waitFor(() => expect(updatePreferences).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('button', { name: 'Leave creation' }));
+    const reads = vi.mocked(getMyOrganizations).mock.calls.length;
+
+    await act(async () => finish(phase === 'create' ? createdOrganization : {}));
+
+    expect(screen.getByTestId('path')).toHaveTextContent('/console/applicant/catalog');
+    expect(screen.getByText('Applicant catalog')).toBeInTheDocument();
+    expect(getMyOrganizations).toHaveBeenCalledTimes(reads);
     expect(getMyPermissions).not.toHaveBeenCalled();
   });
 });

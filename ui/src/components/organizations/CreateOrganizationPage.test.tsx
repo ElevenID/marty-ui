@@ -93,7 +93,7 @@ describe('CreateOrganizationPage', () => {
         requires_approval: false,
       }));
       expect(mockRefreshMemberships).toHaveBeenCalled();
-      expect(mockSetActiveOrgId).toHaveBeenCalledWith('org-new', [{ id: 'org-new' }]);
+      expect(mockSetActiveOrgId).toHaveBeenCalledWith('org-new', [{ id: 'org-new' }], { navigate: false });
       expect(mockNavigate).toHaveBeenCalledWith('/console/org');
     });
   });
@@ -194,7 +194,7 @@ describe('CreateOrganizationPage', () => {
             has_org_console_access: true,
           },
         },
-      ]);
+      ], { navigate: false });
       expect(mockNavigate).toHaveBeenCalledWith('/console/org');
     });
   });
