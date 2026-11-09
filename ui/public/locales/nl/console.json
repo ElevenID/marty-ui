@@ -1,5 +1,14 @@
 {
   "trust": {
+    "trustProfileWizard": {
+      "selectOrganization": "Selecteer een organisatie om een vertrouwensprofiel te maken.",
+      "createDenied": "Je hebt geen toestemming om vertrouwensprofielen te maken in de geselecteerde organisatie.",
+      "issuerDenied": "Voor het toevoegen van relaties met uitgevers is toestemming nodig om vertrouwde uitgevers te bekijken en te maken. Verwijder de geselecteerde uitgevers om zonder hen door te gaan.",
+      "registryDenied": "Voor het synchroniseren van registerbronnen is toestemming nodig om vertrouwensprofielen te bekijken. Verwijder de geselecteerde registers om zonder deze door te gaan.",
+      "activateDenied": "Je hebt geen toestemming om vertrouwensprofielen te activeren. Schakel directe activering uit om een concept te maken.",
+      "responseMismatch": "De server heeft de gevraagde bewerking voor het vertrouwensprofiel niet bevestigd. Controleer de lijst met profielen voordat je het opnieuw probeert.",
+      "profileCreated": "Dit vertrouwensprofiel is gemaakt: {{id}}. Controleer de huidige status en rond de configuratie af voordat je het opnieuw probeert."
+    },
     "revocationWizard": {
       "selectOrganization": "Selecteer een organisatie om een intrekkingsprofiel te maken.",
       "createDenied": "Je hebt geen toestemming om intrekkingsprofielen in de geselecteerde organisatie te maken.",

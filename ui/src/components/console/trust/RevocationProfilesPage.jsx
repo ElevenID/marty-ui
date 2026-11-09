@@ -26,6 +26,7 @@ import { Link } from 'react-router';
 import { ResourcePage, StatusChip, EmptyState, EmptyStates } from '../../common';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useAuth } from '../../../hooks/useAuth';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { listRevocationProfiles } from '../../../services/presentationPolicyApi';
 import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
@@ -41,6 +42,9 @@ function RevocationProfilesPage() {
   const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
   const organizationId = activeOrgId;
+  const { can, isLoading: permissionsLoading } = usePermissions();
+  const canCreate = typeof organizationId === 'string' && organizationId.trim().length > 0
+    && !permissionsLoading && can('revocation-profile', 'create');
 
   const { data: profiles = [], loading, error } = useAsyncData(
     () => {
@@ -60,8 +64,8 @@ function RevocationProfilesPage() {
       title={t('trust.revocationProfiles')}
       description={t('trust.revocationProfilesDescription')}
       resourceName={t('trust.revocationProfile', 'Revocation Profile')}
-      buildPath="/console/org/trust/revocation/new"
-      newPath="/console/org/trust/revocation/new"
+      buildPath={canCreate ? '/console/org/trust/revocation/new' : undefined}
+      newPath={canCreate ? '/console/org/trust/revocation/new' : undefined}
       breadcrumbs={getBreadcrumbs(t)}
     >
       {loading && <LinearProgress sx={{ mb: 2 }} />}

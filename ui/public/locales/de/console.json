@@ -1,5 +1,14 @@
 {
   "trust": {
+    "trustProfileWizard": {
+      "selectOrganization": "Wählen Sie eine Organisation aus, um ein Vertrauensprofil zu erstellen.",
+      "createDenied": "Sie sind nicht berechtigt, Vertrauensprofile in der ausgewählten Organisation zu erstellen.",
+      "issuerDenied": "Zum Hinzufügen von Ausstellerbeziehungen benötigen Sie die Berechtigung, vertrauenswürdige Aussteller anzuzeigen und zu erstellen. Entfernen Sie die ausgewählten Aussteller, um ohne sie fortzufahren.",
+      "registryDenied": "Zum Synchronisieren von Registrierungsquellen benötigen Sie die Berechtigung, Vertrauensprofile anzuzeigen. Entfernen Sie die ausgewählten Registrierungen, um ohne sie fortzufahren.",
+      "activateDenied": "Sie sind nicht berechtigt, Vertrauensprofile zu aktivieren. Deaktivieren Sie die sofortige Aktivierung, um einen Entwurf zu erstellen.",
+      "responseMismatch": "Der Server hat den angeforderten Vorgang für das Vertrauensprofil nicht bestätigt. Prüfen Sie die Profilliste, bevor Sie es erneut versuchen.",
+      "profileCreated": "Dieses Vertrauensprofil wurde erstellt: {{id}}. Prüfen Sie den aktuellen Status und schließen Sie die Einrichtung ab, bevor Sie es erneut versuchen."
+    },
     "revocationWizard": {
       "selectOrganization": "Wählen Sie eine Organisation aus, um ein Sperrprofil zu erstellen.",
       "createDenied": "Sie haben keine Berechtigung, Sperrprofile in der ausgewählten Organisation zu erstellen.",

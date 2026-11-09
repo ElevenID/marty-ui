@@ -1,5 +1,14 @@
 {
   "trust": {
+    "trustProfileWizard": {
+      "selectOrganization": "Selecciona una organización para crear un perfil de confianza.",
+      "createDenied": "No tienes permiso para crear perfiles de confianza en la organización seleccionada.",
+      "issuerDenied": "Para añadir relaciones con emisores se necesitan permisos para ver y crear emisores de confianza. Elimina los emisores seleccionados para continuar sin ellos.",
+      "registryDenied": "Para sincronizar fuentes de registros se necesita permiso para ver perfiles de confianza. Elimina los registros seleccionados para continuar sin ellos.",
+      "activateDenied": "No tienes permiso para activar perfiles de confianza. Desactiva la activación inmediata para crear un borrador.",
+      "responseMismatch": "El servidor no confirmó la operación solicitada para el perfil de confianza. Revisa la lista de perfiles antes de volver a intentarlo.",
+      "profileCreated": "Este perfil de confianza se ha creado: {{id}}. Comprueba su estado actual y completa la configuración antes de volver a intentarlo."
+    },
     "revocationWizard": {
       "selectOrganization": "Selecciona una organización para crear un perfil de revocación.",
       "createDenied": "No tienes permiso para crear perfiles de revocación en la organización seleccionada.",

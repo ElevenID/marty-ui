@@ -5,8 +5,8 @@
  * Defines trusted issuers and validation rules for credential verification.
  */
 
-import { useCallback } from 'react';
-import { useNavigate } from 'react-router';
+import { useCallback, useRef } from 'react';
+import { useNavigate, useLocation, Link as RouterLink } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import {
   Box,
@@ -18,12 +18,18 @@ import {
   Button,
   Typography,
   CircularProgress,
+  Alert,
+  Link,
+  LinearProgress,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 
 import { useWizard } from '../../../hooks/useWizard';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
+import { useAuth } from '../../../hooks/useAuth';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import {
   activateTrustProfile,
@@ -54,11 +60,34 @@ const hasTrustConfiguration = (data) => (
   || data.allow_all_issuers === true
 );
 
-const TrustProfileWizard = () => {
+const TrustProfileWizardContent = ({ organizationId, canActivate, canViewProfile, canViewIssuers, canCreateIssuers }) => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
-  const { activeOrgId } = useConsole();
-  const effectiveOrganizationId = activeOrgId;
+  const effectiveOrganizationId = organizationId;
+  const startAction = useAsyncActionScope();
+  const submissionPending = useRef(false);
+  const currentSubmission = useRef(null);
+  const createdProfile = useRef(null);
+  // BrowserRouter updates the history entry before its React transition commits.
+  const browserEntry = useRef(typeof window === 'undefined' ? null : {
+    href: window.location.href, key: window.history.state?.key,
+  });
+  const isCurrentBrowserEntry = useCallback(() => !browserEntry.current || (
+    typeof window !== 'undefined' && window.location.href === browserEntry.current.href
+      && window.history.state?.key === browserEntry.current.key
+  ), []);
+  const missingPermission = useCallback((data) => {
+    if (data.trusted_issuers?.some((issuer) => issuer.did) && (!canViewIssuers || !canCreateIssuers)) {
+      return t('trust.trustProfileWizard.issuerDenied');
+    }
+    if (data.registry_sources?.length && !canViewProfile) {
+      return t('trust.trustProfileWizard.registryDenied');
+    }
+    if (data.activate_immediately && !canActivate) {
+      return t('trust.trustProfileWizard.activateDenied');
+    }
+    return null;
+  }, [canActivate, canViewProfile, canViewIssuers, canCreateIssuers, t]);
 
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {
@@ -69,13 +98,39 @@ const TrustProfileWizard = () => {
       case 2: // Validation Rules (optional)
         return true;
       case 3: // Review
-        return data.name?.trim().length > 0 && (!data.activate_immediately || hasTrustConfiguration(data));
+        return data.name?.trim().length > 0 && (!data.activate_immediately || hasTrustConfiguration(data))
+          && !missingPermission(data);
       default:
         return false;
     }
-  }, []);
+  }, [missingPermission]);
 
   const handleSubmit = useCallback(async (data) => {
+    const action = startAction();
+    const ownsView = () => action.isCurrent() && isCurrentBrowserEntry();
+    const isCurrent = () => submissionPending.current && ownsView();
+    currentSubmission.current = ownsView;
+    const assertCurrent = () => {
+      if (!isCurrent()) {
+        const error = new Error('The trust profile view or action changed.');
+        error.name = 'AbortError';
+        throw error;
+      }
+    };
+    const run = async (operation, ...args) => {
+      assertCurrent();
+      try {
+        return await action.run(operation, ...args);
+      } finally {
+        assertCurrent();
+      }
+    };
+    assertCurrent();
+    if (createdProfile.current) {
+      throw new Error(t('trust.trustProfileWizard.profileCreated', { id: createdProfile.current.id }));
+    }
+    const permissionError = missingPermission(data);
+    if (permissionError) throw new Error(permissionError);
     if (!effectiveOrganizationId) {
       throw new Error(t('trust.failedToLoad', { defaultValue: 'Organization context is required to create a trust profile.' }));
     }
@@ -115,7 +170,7 @@ const TrustProfileWizard = () => {
           .filter((field) => issuer[field] !== undefined).map((field) => [field, issuer[field]])),
       }));
 
-    const profile = await createTrustProfile({
+    const profile = await run(createTrustProfile, {
       ...data,
       // Relationships retain issuer lifecycle/accreditation. Explicit DID source
       // controls separately govern resolution and cannot be dropped at creation.
@@ -130,28 +185,48 @@ const TrustProfileWizard = () => {
         ...certTrustSources,
         ...controlledDidSources,
       ],
-    });
+    }, { isCurrent });
+    if (typeof profile?.id !== 'string' || !profile.id.trim()
+      || profile.organization_id !== effectiveOrganizationId || profile.status !== 'draft') {
+      throw new Error(t('trust.trustProfileWizard.responseMismatch'));
+    }
+    // Creation has persisted. A later failure must lead to this profile, never
+    // silently recreate the entire chain or claim a dispatched write was undone.
+    createdProfile.current = profile;
 
-    await Promise.all(
+    await run(() => Promise.all(
       didIssuers.map((issuer) => addTrustProfileIssuer(profile.id, effectiveOrganizationId, {
         name: issuer.name || issuer.did,
         description: issuer.description || null,
         issuer_did: issuer.did,
         accreditation_body: issuer.accreditation_body || null,
         accreditations: Array.isArray(issuer.accreditations) ? issuer.accreditations : [],
-      }))
-    );
+      }, { isCurrent, singleAttemptReads: true }))
+    ));
 
     if ((data.registry_sources?.length || 0) > 0) {
-      await synchronizeTrustProfileRegistries(profile.id);
+      const synchronized = await run(synchronizeTrustProfileRegistries, profile.id, { isCurrent });
+      if (synchronized?.trust_profile_id !== profile.id || !Array.isArray(synchronized.sources)
+        || synchronized.sources.length === 0 || typeof synchronized.synchronized_at !== 'string'
+        || Number.isNaN(Date.parse(synchronized.synchronized_at))) {
+        throw new Error(t('trust.trustProfileWizard.responseMismatch'));
+      }
     }
 
     if (data.activate_immediately) {
-      return activateTrustProfile(profile.id);
+      const activated = await run(activateTrustProfile, profile.id, {
+        isCurrent, allowReadback: canViewProfile, singleAttemptReads: true,
+      });
+      if (activated?.id !== profile.id || activated.organization_id !== effectiveOrganizationId
+        || activated.status !== 'active') {
+        throw new Error(t('trust.trustProfileWizard.responseMismatch'));
+      }
+      return activated;
     }
 
+    assertCurrent();
     return profile;
-  }, [effectiveOrganizationId, t]);
+  }, [effectiveOrganizationId, t, startAction, isCurrentBrowserEntry, missingPermission, canViewProfile]);
 
   const wizard = useWizard({
     steps: getSteps(t),
@@ -181,50 +256,64 @@ const TrustProfileWizard = () => {
       activate_immediately: true,
     },
     validateStep,
-    onSubmit: handleSubmit,
+    onSubmit: async (data) => {
+      submissionPending.current = true;
+      try {
+        return await handleSubmit(data);
+      } finally {
+        submissionPending.current = false;
+      }
+    },
     onComplete: () => {
-      navigate('/console/org/templates/credentials');
+      if (currentSubmission.current?.()) navigate('/console/org/templates/credentials');
     },
     onCancel: () => {
-      navigate('/console/org/trust/profiles');
+      if (isCurrentBrowserEntry()) navigate('/console/org/trust/profiles');
     },
   });
 
+  const canEditForm = () => !submissionPending.current && !createdProfile.current && isCurrentBrowserEntry();
+  const updateData = (updates) => { if (canEditForm()) wizard.updateData(updates); };
+  const goToStep = (index) => { if (canEditForm()) wizard.goToStep(index); };
   const renderStepContent = () => {
     switch (wizard.activeStep) {
       case 0:
         return (
           <BasicsStep
             data={wizard.data}
-            onChange={wizard.updateData}
+            onChange={updateData}
           />
         );
       case 1:
         return (
           <TrustSourcesStep
             data={wizard.data}
-            onChange={wizard.updateData}
+            onChange={updateData}
           />
         );
       case 2:
         return (
           <ValidationRulesStep
             data={wizard.data}
-            onChange={wizard.updateData}
+            onChange={updateData}
           />
         );
       case 3:
         return (
           <ReviewStep
             data={wizard.data}
-            onChange={wizard.updateData}
-            onEdit={wizard.goToStep}
+            onChange={updateData}
+            onEdit={goToStep}
           />
         );
       default:
         return <Typography>{t('wizards.trustProfile.unknownStep')}</Typography>;
     }
   };
+
+  // The shared hook retains its duplicate-submit and unmount protections. A
+  // still-mounted old browser entry may neither display its outcome nor redirect.
+  if (!isCurrentBrowserEntry()) return <LinearProgress />;
 
   // Success screen
   if (wizard.success) {
@@ -298,18 +387,30 @@ const TrustProfileWizard = () => {
             </Typography>
           </Box>
         )}
+        {wizard.error && createdProfile.current && (
+          <Alert severity="info" sx={{ mb: 3 }}>
+            {t('trust.trustProfileWizard.profileCreated', { id: createdProfile.current.id })}{' '}
+            {canViewProfile && <Link component={RouterLink} to={`/console/org/trust/profiles/${encodeURIComponent(createdProfile.current.id)}`}>
+              {t('trust.trustProfilesPage.viewDetails')}
+            </Link>}
+          </Alert>
+        )}
+        {wizard.isLastStep && missingPermission(wizard.data) && (
+          <Alert severity="error" sx={{ mb: 3 }}>{missingPermission(wizard.data)}</Alert>
+        )}
 
         {/* Step Content */}
-        <Box sx={{ minHeight: 400, mb: 4 }}>
+        <Box component="fieldset" disabled={wizard.loading || Boolean(createdProfile.current)}
+          sx={{ minHeight: 400, minWidth: 0, m: 0, mb: 4, p: 0, border: 0 }}>
           {renderStepContent()}
         </Box>
 
         {/* Navigation Buttons */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 2 }}>
           <Button
-            onClick={wizard.isFirstStep ? wizard.cancel : wizard.goBack}
+            onClick={() => { if (canEditForm()) (wizard.isFirstStep ? wizard.cancel : wizard.goBack)(); }}
             startIcon={<ArrowBackIcon />}
-            disabled={wizard.loading}
+            disabled={wizard.loading || Boolean(createdProfile.current)}
             data-testid={wizard.isFirstStep ? 'wizard.trustProfile.cancel' : 'wizard.trustProfile.back'}
           >
             {wizard.isFirstStep ? t('wizards.trustProfile.buttons.cancel') : t('wizards.trustProfile.buttons.back')}
@@ -319,8 +420,8 @@ const TrustProfileWizard = () => {
             {/* Show Skip button for optional steps */}
             {wizard.activeStep > 0 && wizard.activeStep < 3 && (
               <Button
-                onClick={wizard.goNext}
-                disabled={wizard.loading}
+                onClick={() => { if (canEditForm()) wizard.goNext(); }}
+                disabled={wizard.loading || Boolean(createdProfile.current)}
                 data-testid="wizard.trustProfile.skip"
               >
                 {t('wizards.trustProfile.buttons.skip')}
@@ -330,8 +431,8 @@ const TrustProfileWizard = () => {
             {wizard.isLastStep ? (
               <Button
                 variant="contained"
-                onClick={wizard.submit}
-                disabled={!wizard.isStepValid() || wizard.loading}
+                onClick={() => { if (canEditForm()) wizard.submit(); }}
+                disabled={!wizard.isStepValid() || wizard.loading || Boolean(createdProfile.current)}
                 startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
                 data-testid="wizard.trustProfile.submit"
               >
@@ -340,8 +441,8 @@ const TrustProfileWizard = () => {
             ) : (
               <Button
                 variant="contained"
-                onClick={wizard.goNext}
-                disabled={!wizard.isStepValid() || wizard.loading}
+                onClick={() => { if (canEditForm()) wizard.goNext(); }}
+                disabled={!wizard.isStepValid() || wizard.loading || Boolean(createdProfile.current)}
                 endIcon={<ArrowForwardIcon />}
                 data-testid="wizard.trustProfile.next"
               >
@@ -354,5 +455,34 @@ const TrustProfileWizard = () => {
     </Container>
   );
 };
+
+function TrustProfileWizard() {
+  const { t } = useTranslation('console');
+  const { activeOrgId } = useConsole();
+  const { user, isAuthenticated } = useAuth();
+  const { can, isLoading } = usePermissions();
+  const location = useLocation();
+  const principalId = user?.user_id || user?.sub || user?.id || null;
+  const canCreate = can('trust-profile', 'create');
+  const canActivate = can('trust-profile', 'activate');
+  const canViewProfile = can('trust-profile', 'view');
+  const canViewIssuers = can('trusted-issuer', 'view');
+  const canCreateIssuers = can('trusted-issuer', 'create');
+
+  if (isLoading) return <LinearProgress />;
+  if (typeof activeOrgId !== 'string' || !activeOrgId.trim()) {
+    return <Alert severity="info">{t('trust.trustProfileWizard.selectOrganization')}</Alert>;
+  }
+  if (!canCreate) return <Alert severity="error">{t('trust.trustProfileWizard.createDenied')}</Alert>;
+  return <TrustProfileWizardContent
+    key={JSON.stringify([activeOrgId, principalId, isAuthenticated, location.key, location.pathname,
+      location.search, location.hash, canCreate, canActivate, canViewProfile, canViewIssuers, canCreateIssuers])}
+    organizationId={activeOrgId}
+    canActivate={canActivate}
+    canViewProfile={canViewProfile}
+    canViewIssuers={canViewIssuers}
+    canCreateIssuers={canCreateIssuers}
+  />;
+}
 
 export default TrustProfileWizard;
