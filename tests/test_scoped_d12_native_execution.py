@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from scoped_d12_native_execution import D12CurrentExecution, exact_exported_sql
 from scoped_native_profiles import D12_PASSPORT_CURRENT
 from scoped_native_runtime import MIGRATIONS, ref
+from scoped_native_runtime import D12_CURRENT_RUNTIME_ROLES
 import scoped_d12_native_execution as execution
 import json
 import subprocess
@@ -30,6 +31,22 @@ def test_no_lock_or_dispatch_refuses_before_any_command():
     with pytest.raises(ValueError, match="D12_EXCLUSIVE_AUTHORITY_REQUIRED"):
         executor.run()
     assert not commands
+
+
+def test_current_inspect_batch_reads_once_and_legacy_fallback_still_reads_each_role():
+    snapshot = {"roles": [{"role": role, "containerId": f"{index+1:064x}"}
+                          for index, role in enumerate(sorted(D12_CURRENT_RUNTIME_ROLES))]}
+    calls = []
+    context = {"inspect_all22": lambda: calls.append("batch") or snapshot,
+               "inspect_role": lambda role: (_ for _ in ()).throw(AssertionError("unexpected role read"))}
+    executor = D12CurrentExecution(context, inputs(), object())
+    assert executor.inspect_all22() is snapshot
+    assert calls == ["batch"]
+    roles = []
+    context = {"inspect_role": lambda role: roles.append(role) or
+               next(row for row in snapshot["roles"] if row["role"] == role)}
+    assert D12CurrentExecution(context, inputs(), object()).inspect_all22()["roles"] == snapshot["roles"]
+    assert roles == sorted(D12_CURRENT_RUNTIME_ROLES)
 
 
 @pytest.mark.parametrize("edit", [

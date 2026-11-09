@@ -567,10 +567,35 @@ async function reverifyIssuedCredential(issued) {
   };
 }
 
-async function rebindThroughConsole(page, issuerDid, revision, recording = null) {
+function matchesOwnedRebindInventory(request) {
+  try {
+    const url = new URL(request.url());
+    const query = [...url.searchParams];
+    return request.method() === 'GET' && request.postData() === null
+      && url.origin === new URL(BETA_ORIGIN).origin
+      && url.pathname === '/v1/signing-keys/issuer-identities' && url.hash === ''
+      && query.length === 1 && query[0][0] === 'organization_id' && query[0][1] === ORG_ID;
+  } catch { return false; }
+}
+
+function matchesOwnedRebindRequest(request, issuerDid) {
+  let url, payload;
+  try { url = new URL(request.url()); payload = request.postDataJSON(); } catch { return false; }
+  const expected = identityRequest(issuerDid);
+  return request.method() === 'PATCH'
+    && url.origin === new URL(BETA_ORIGIN).origin
+    && url.pathname === '/v1/signing-keys/issuer-identities'
+    && url.search === '' && url.hash === ''
+    && payload && typeof payload === 'object' && !Array.isArray(payload)
+    && Object.keys(payload).sort().join(',') === Object.keys(expected).sort().join(',')
+    && Object.entries(expected).every(([key, value]) => payload[key] === value);
+}
+
+async function rebindThroughConsole(page, issuerDid, revision, recording = null, observation = {}) {
   if (!STRONG_CONFIG_REVISION.test(revision || '')) {
     throw new Error('UI issuer rebind requires an owned config revision');
   }
+  Object.assign(observation, {forwardAttempted:0, blockedRequests:0, readRequestsContinued:0, responseObserved:false});
   await page.goto(`${BETA_ORIGIN}/console/org/deploy/issuer-identity`, {
     waitUntil: 'domcontentloaded',
     timeout: 60_000,
@@ -584,34 +609,25 @@ async function rebindThroughConsole(page, issuerDid, revision, recording = null)
   let forwarded = 0;
   const bindOwnedRevision = async (route) => {
     const request = route.request();
-    let payload;
-    try { payload = request.postDataJSON(); } catch { payload = null; }
-    const url = new URL(request.url());
-    if (forwarded !== 0 || url.origin !== new URL(BETA_ORIGIN).origin
-        || url.pathname !== '/v1/signing-keys/issuer-identities'
-        || url.searchParams.get('organization_id') !== ORG_ID
-        || request.method() !== 'PATCH' || payload?.organization_id !== ORG_ID
-        || payload?.issuer_did !== issuerDid) {
+    if (matchesOwnedRebindInventory(request)) {
+      observation.readRequestsContinued += 1;
+      await route.continue();
+      return;
+    }
+    if (forwarded !== 0 || !matchesOwnedRebindRequest(request, issuerDid)) {
+      observation.blockedRequests += 1;
       await route.abort();
       return;
     }
     forwarded = 1;
+    observation.forwardAttempted = 1;
     await route.continue({ headers: { ...(await request.allHeaders()), 'If-Match': revision } });
   };
   await page.route(identityRoute, bindOwnedRevision);
   try {
-    const responsePromise = page.waitForResponse((response) => {
-      const url = new URL(response.url());
-      if (url.origin !== new URL(BETA_ORIGIN).origin
-          || url.pathname !== '/v1/signing-keys/issuer-identities'
-          || response.request().method() !== 'PATCH') return false;
-      try {
-        const payload = response.request().postDataJSON();
-        return payload?.organization_id === ORG_ID && payload?.issuer_did === issuerDid;
-      } catch {
-        return false;
-      }
-    }, { timeout: 60_000 });
+    const responsePromise = page.waitForResponse(response =>
+      response.url() === response.request().url()
+        && matchesOwnedRebindRequest(response.request(), issuerDid), { timeout: 60_000 });
     const move = row.getByRole('button', { name: 'Move identity to default signing service' });
     if (recording) await recording.click(page, move, { action: 'change-signing-provider', phase: 'open' });
     else await move.click();
@@ -619,6 +635,7 @@ async function rebindThroughConsole(page, issuerDid, revision, recording = null)
     if (recording) await recording.click(page, confirm, { action: 'change-signing-provider', phase: 'confirmation', durationMs: 3200 });
     else await confirm.click();
     const response = await responsePromise;
+    observation.responseObserved = true;
     if (forwarded !== 1) throw new Error('UI rebind was not bound to the owned config revision');
     const body = await response.json().catch(() => null);
     recording?.mark('change-signing-provider', 'response-received', { httpStatus: response.status(), changed: body?.changed === true });
@@ -942,7 +959,8 @@ async function main() {
 
         configJournal.intent('rebind-issuer-identity-ui', lastOwnedConfigRevision, identityRequest(issuerDid));
         uiRebindAttempted = true;
-        report.rebind = await rebindThroughConsole(page, issuerDid, lastOwnedConfigRevision, recording);
+        report.rebindObservation = {};
+        report.rebind = await rebindThroughConsole(page, issuerDid, lastOwnedConfigRevision, recording, report.rebindObservation);
         if (!report.rebind.ok || !report.rebind.changed) {
           throw new Error(`Provider switch failed (HTTP ${report.rebind.status})`);
         }
@@ -1004,6 +1022,7 @@ async function main() {
       } catch (error) {
         qualificationError = error;
         report.error = redact(error.stack || error.message || String(error));
+        report.behaviorAssertions = providerSwitchBehaviorAssertions(report);
       } finally {
         report.partialDidPublicationPossible = (createIdentityAttempted && !createIdentityConfirmed)
           || (uiRebindAttempted && !uiRebindConfirmed)
@@ -1103,6 +1122,8 @@ module.exports = {
   createIdentity,
   directRebind,
   rebindThroughConsole,
+  matchesOwnedRebindRequest,
+  matchesOwnedRebindInventory,
   ownedIdentityRevision,
   createConfigMutationJournal,
   loadSigningConfig,
