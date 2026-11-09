@@ -55,6 +55,7 @@ import { get } from '../../services/api';
 import { getCurrentCanvasLtiExperience } from '../../services/canvasLtiExperience';
 import { listApplications } from '../../services/applicantApi';
 import { listApplicationTemplates } from '../../services/applicationTemplatesApi';
+import { hasAsciiControlCharacters } from '../../utils/hasAsciiControlCharacters';
 import {
   buildCredentialApplicationNavigationState,
   extractApplicationStatusInfo,
@@ -143,13 +144,28 @@ function createEmptyApplicationStatusInfo() {
   };
 }
 
+function previewOrganizationScope(isPreview, search) {
+  const values = isPreview ? new URLSearchParams(search || '').getAll('organization_id') : [];
+  if (values.length === 0) return { explicit: false, id: null };
+  const id = values.length === 1 && !hasAsciiControlCharacters(values[0])
+    ? normalizeOrganizationIdCandidate(values[0]) : null;
+  return { explicit: true, id };
+}
+
 const CredentialCatalog = () => {
   const { t } = useTranslation('applicant');
   const categoryLabelId = React.useId();
   const navigate = useNavigate();
   const location = useLocation();
-  const { organizationId, organizationName, user } = useAuth();
+  const { organizationId, organizationName: authenticatedOrganizationName, user } = useAuth();
   const { isPreview } = usePreview?.() || { isPreview: false };
+  const previewOrganization = useMemo(
+    () => previewOrganizationScope(isPreview, location.search),
+    [isPreview, location.search],
+  );
+  const organizationName = previewOrganization.explicit
+    && (!previewOrganization.id || previewOrganization.id !== resolveEffectiveOrganizationId(organizationId, user))
+    ? null : authenticatedOrganizationName;
   
   const CATEGORIES = useMemo(() => getCredentialCatalogCategories(t), [t]);
   
@@ -165,28 +181,36 @@ const CredentialCatalog = () => {
   const [existingApplications, setExistingApplications] = useState([]);
   const [appStatusInfo, setAppStatusInfo] = useState(createEmptyApplicationStatusInfo);
   const [canvasLtiSession, setCanvasLtiSession] = useState(() => location.state?.canvasLtiSession || null);
+  // An explicitly scoped catalog preview must not inherit another launch's
+  // organization, template restrictions or navigation state.
+  const activeCanvasLtiSession = previewOrganization.explicit ? null : canvasLtiSession;
   const [canvasLtiLoading, setCanvasLtiLoading] = useState(false);
   const catalogRequest = useRef(0);
   const applicationsRequest = useRef(0);
 
   const canvasLtiState = useMemo(
-    () => new URLSearchParams(location.search || '').get('canvas_lti_state') || '',
-    [location.search]
+    () => previewOrganization.explicit ? '' : new URLSearchParams(location.search || '').get('canvas_lti_state') || '',
+    [location.search, previewOrganization.explicit]
   );
   const canvasLtiOrganizationId = useMemo(
-    () => getLtiSessionValue(canvasLtiSession, 'organization_id'),
-    [canvasLtiSession]
+    () => getLtiSessionValue(activeCanvasLtiSession, 'organization_id'),
+    [activeCanvasLtiSession]
   );
   const effectiveOrganizationId = useMemo(
-    () => canvasLtiOrganizationId || resolveEffectiveOrganizationId(organizationId, user),
-    [canvasLtiOrganizationId, organizationId, user]
+    () => previewOrganization.explicit ? previewOrganization.id
+      : canvasLtiOrganizationId || resolveEffectiveOrganizationId(organizationId, user),
+    [previewOrganization.explicit, previewOrganization.id, canvasLtiOrganizationId, organizationId, user]
   );
 
   useEffect(() => {
+    if (previewOrganization.explicit) {
+      setCanvasLtiSession(null);
+      return;
+    }
     if (location.state?.canvasLtiSession) {
       setCanvasLtiSession(location.state.canvasLtiSession);
     }
-  }, [location.state]);
+  }, [location.state, previewOrganization.explicit]);
 
   useEffect(() => {
     let alive = true;
@@ -332,12 +356,12 @@ const CredentialCatalog = () => {
    * Filter credentials based on search and category
    */
   const canvasLtiCredentialTemplateId = useMemo(
-    () => getLtiSessionValue(canvasLtiSession, 'credential_template_id'),
-    [canvasLtiSession]
+    () => getLtiSessionValue(activeCanvasLtiSession, 'credential_template_id'),
+    [activeCanvasLtiSession]
   );
   const canvasLtiApplicationTemplateId = useMemo(
-    () => getLtiSessionValue(canvasLtiSession, 'application_template_id'),
-    [canvasLtiSession]
+    () => getLtiSessionValue(activeCanvasLtiSession, 'application_template_id'),
+    [activeCanvasLtiSession]
   );
   useLayoutEffect(() => {
     // Details belong to the selected account, organization, and course launch.
@@ -361,12 +385,12 @@ const CredentialCatalog = () => {
     }
     return {
       state: canvasLtiState,
-      canvas_program_binding_id: getLtiSessionValue(canvasLtiSession, 'canvas_program_binding_id'),
-      canvas_platform_id: getLtiSessionValue(canvasLtiSession, 'canvas_platform_id'),
+      canvas_program_binding_id: getLtiSessionValue(activeCanvasLtiSession, 'canvas_program_binding_id'),
+      canvas_platform_id: getLtiSessionValue(activeCanvasLtiSession, 'canvas_platform_id'),
       application_template_id: canvasLtiApplicationTemplateId,
       credential_template_id: canvasLtiCredentialTemplateId,
     };
-  }, [canvasLtiApplicationTemplateId, canvasLtiCredentialTemplateId, canvasLtiSession, canvasLtiState]);
+  }, [canvasLtiApplicationTemplateId, canvasLtiCredentialTemplateId, activeCanvasLtiSession, canvasLtiState]);
 
   /**
    * Handle credential application
@@ -379,7 +403,7 @@ const CredentialCatalog = () => {
         isPreview,
         organizationId: effectiveOrganizationId,
         canvasLtiContext: canvasLtiNavigationContext,
-        canvasLtiSession,
+        canvasLtiSession: activeCanvasLtiSession,
       });
       navigate(navigation.path, { state: navigation.state });
     } catch (error) {
@@ -428,7 +452,9 @@ const CredentialCatalog = () => {
   const { counts } = appStatusInfo;
   const hasAnyApplications = counts.pending + counts.approved + counts.offered + counts.rejected + counts.credentialed > 0;
   const catalogLoadAlertMessage = catalogLoadError
-    ? catalogMissingOrganization
+    ? previewOrganization.explicit && !previewOrganization.id
+      ? 'This preview link does not identify a single organization. Open a new preview link for the organization you want to inspect.'
+      : catalogMissingOrganization
       ? 'We could not determine your organization yet. Refresh after sign-in, or choose or join an organization before browsing credentials.'
       : t('catalog.errorLoading', 'We could not load the credential catalog. Try again, or contact support if the problem continues.')
     : null;

@@ -210,6 +210,99 @@ describe('CredentialCatalog', () => {
     });
   });
 
+  it('uses the explicit preview organization without labeling it as the authenticated organization', async () => {
+    mockPreview.isPreview = true;
+    mockPathname = '/applicant/preview/catalog';
+    mockSearch = '?organization_id=selected%20org%2F2';
+    const { user } = render(<CredentialCatalog />);
+    const card = await screen.findByTestId('credential-card-cfg-1');
+
+    expect(mockGet).toHaveBeenCalledWith('/v1/credential-templates?organization_id=selected%20org%2F2&status=active');
+    expect(mockGet.mock.calls.some(([endpoint]) => String(endpoint).includes('organization_id=org-1'))).toBe(false);
+    expect(screen.queryByRole('heading', { name: 'Acme Org' })).not.toBeInTheDocument();
+    expect(card).not.toHaveTextContent('Acme Org');
+    await user.click(within(card).getByTestId('apply-btn'));
+    expect(mockNavigate).toHaveBeenCalledTimes(1);
+    const [destination, options] = mockNavigate.mock.calls[0];
+    const target = new URL(destination, 'https://preview.invalid');
+    expect(target.pathname).toBe('/applicant/preview/applications/app-tpl-1');
+    expect(target.searchParams.get('organization_id')).toBe('selected org/2');
+    expect(options).toEqual({
+      state: expect.objectContaining({ applicationTemplate: expect.objectContaining({ organization_id: 'selected org/2' }) }),
+    });
+  });
+
+  it.each(['?organization_id=', '?organization_id=%20%09', '?organization_id=org-2&organization_id=org-3',
+    '?organization_id=org-2&organization_id=org-2', '?organization_id=org-2%09'])('refuses an empty or ambiguous explicit preview scope: %s', async (query) => {
+    mockPreview.isPreview = true;
+    mockPathname = '/applicant/preview/catalog';
+    mockSearch = query;
+    render(<CredentialCatalog />);
+
+    const alert = await screen.findByTestId('catalog-load-alert');
+    expect(alert).toHaveTextContent(/preview|organization/i);
+    expect(mockGet.mock.calls.some(([endpoint]) => String(endpoint).includes('/v1/credential-templates')
+      || String(endpoint).includes('/v1/application-templates'))).toBe(false);
+    expect(screen.queryByTestId('credential-card-cfg-1')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Acme Org' })).not.toBeInTheDocument();
+  });
+
+  it('preserves the known organization name for a matching explicit preview', async () => {
+    mockPreview.isPreview = true;
+    mockPathname = '/applicant/preview/catalog';
+    mockSearch = '?organization_id=org-1';
+    render(<CredentialCatalog />);
+    await screen.findByTestId('credential-card-cfg-1');
+    expect(screen.getByRole('heading', { name: 'Acme Org' })).toBeInTheDocument();
+  });
+
+  it('ignores the preview organization query in the ordinary applicant catalog', async () => {
+    mockPathname = '/console/applicant/catalog';
+    mockSearch = '?organization_id=another-org';
+    render(<CredentialCatalog />);
+    await screen.findByTestId('credential-card-cfg-1');
+    expect(mockGet).toHaveBeenCalledWith('/v1/credential-templates?organization_id=org-1&status=active');
+    expect(mockGet.mock.calls.some(([endpoint]) => String(endpoint).includes('organization_id=another-org'))).toBe(false);
+  });
+
+  it('does not carry another Canvas launch into an explicitly scoped catalog preview', async () => {
+    mockPreview.isPreview = true;
+    mockPathname = '/applicant/preview/catalog';
+    mockSearch = '?organization_id=selected-org&canvas_lti_state=old-state';
+    mockLocationState = { canvasLtiSession: {
+      organization_id: 'canvas-org', credential_template_id: 'cfg-2', application_template_id: 'other-app',
+      canvas_program_binding_id: 'other-binding', canvas_platform_id: 'other-platform',
+    } };
+    const { user } = render(<CredentialCatalog />);
+    const card = await screen.findByTestId('credential-card-cfg-1');
+    expect(mockGet).toHaveBeenCalledWith('/v1/credential-templates?organization_id=selected-org&status=active');
+    expect(mockGet.mock.calls.some(([endpoint]) => String(endpoint).includes('/v1/integrations/canvas/'))).toBe(false);
+    await user.click(within(card).getByTestId('apply-btn'));
+    expect(mockNavigate).toHaveBeenCalledWith('/applicant/preview/applications/app-tpl-1?organization_id=selected-org', {
+      state: expect.not.objectContaining({ canvasLtiSession: expect.anything() }),
+    });
+  });
+
+  it('discards an old explicit organization catalog after the preview query changes', async () => {
+    mockPreview.isPreview = true;
+    mockPathname = '/applicant/preview/catalog';
+    mockSearch = '?organization_id=old-org';
+    const oldCatalog = deferred<any[]>();
+    const baseGet = mockGet.getMockImplementation()!;
+    mockGet.mockImplementation((endpoint: string) => endpoint.includes('/v1/credential-templates?organization_id=old-org')
+      ? oldCatalog.promise : baseGet(endpoint));
+    const { rerender } = render(<CredentialCatalog />);
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith('/v1/credential-templates?organization_id=old-org&status=active'));
+    mockSearch = '?organization_id=current-org';
+    rerender(<CredentialCatalog />);
+    expect(await screen.findByTestId('credential-card-cfg-1')).toHaveTextContent('Member Login Credential');
+    await act(async () => { oldCatalog.resolve([{
+      id: 'cfg-1', name: 'Obsolete organization credential', claims: [], status: 'ACTIVE', revocation_profile_id: 'rp-old',
+    }]); });
+    expect(screen.queryByText('Obsolete organization credential')).not.toBeInTheDocument();
+    expect(screen.getByTestId('credential-card-cfg-1')).toHaveTextContent('Member Login Credential');
+  });
+
   it('loads credentials, marks existing applications, filters, and navigates with serializable state', async () => {
     const { user } = render(<CredentialCatalog />);
 

@@ -62,7 +62,6 @@ function PreviewNotFound({ resourceType = 'resource', returnUrl = '/console' }) 
             <li>The {getResourceLabel().toLowerCase()} was deleted</li>
             <li>You don't have permission to view this {getResourceLabel().toLowerCase()}</li>
             <li>The URL is incorrect or outdated</li>
-            <li>The {getResourceLabel().toLowerCase()} is in a draft state and not yet available</li>
           </Typography>
         </Alert>
 
