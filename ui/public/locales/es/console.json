@@ -1,7 +1,44 @@
 {
 	"dashboard": {
 		"title": "Panel",
-		"welcome": "Bienvenido de nuevo"
+		"welcome": "Bienvenido de nuevo",
+		"criticalEvents": {
+			"noCriticalEvents": "No se han notificado eventos críticos en las últimas 24 horas."
+		},
+		"runtimeReadiness": {
+			"issuance": {
+				"noDeployments": "No hay despliegues activos",
+				"deploymentsReason": "Se requiere un perfil de despliegue activo para emitir credenciales.",
+				"configureDeployment": "Configurar despliegue",
+				"notReady": "La emisión de credenciales no está lista",
+				"readinessReason": "Revise el flujo de emisión y sus recursos necesarios antes de emitir credenciales.",
+				"reviewFlows": "Revisar flujos de emisión",
+				"operational": "La emisión de credenciales está lista",
+				"issuerConfigurationRequired": "La configuración del emisor necesita revisión",
+				"issuerConfigurationReason": "Revise la identidad del emisor y el DID del emisor al que hace referencia la plantilla de credencial activa antes de emitir credenciales."
+			},
+			"verification": {
+				"notReady": "La verificación de credenciales no está lista",
+				"readinessReason": "Revise la configuración de verificación antes de iniciar una sesión.",
+				"reviewSetup": "Revisar configuración de verificación",
+				"operational": "La verificación de credenciales está lista",
+				"policyUnreachable": "No hay políticas de presentación activas",
+				"policyReason": "Se requiere al menos una política de presentación activa para verificar credenciales."
+			},
+			"issuerConfiguration": {
+				"title": "Configuración del emisor",
+				"configured": "Configurado",
+				"notConfigured": "No configurado",
+				"configuredDetail": "Una plantilla de credencial activa hace referencia a un DID de emisor.",
+				"notConfiguredDetail": "Ninguna plantilla de credencial activa hace referencia a un DID de emisor.",
+				"reason": "Las plantillas de credenciales necesitan un DID de emisor antes de poder usarse para la emisión.",
+				"manage": "Gestionar identidades de emisor"
+			}
+		},
+		"systemStatus": {
+			"issuanceService": "Servicio de emisión",
+			"notReported": "Este servicio no se incluyó en la última comprobación de disponibilidad."
+		}
 	},
 	"flows": {
 		"title": "Flujos",
@@ -36,7 +73,8 @@
 			"console": "Consola",
 			"flows": "Flujos",
 			"flowInstances": "Instancias de flujo"
-		}
+		},
+		"flowDefinition": "Definición de flujo"
 	},
 	"deploy": {
 		"title": "Despliegue",
@@ -247,6 +285,14 @@
 		}
 	},
 	"org": {
+		"setup": {
+			"chooseTitle": "Elige una organización",
+			"chooseDescription": "Selecciona una organización para abrir su consola.",
+			"accessTitle": "Acceso a la consola de la organización",
+			"accessDescriptionWithCreate": "Únete a una organización con acceso a la consola o crea una para continuar.",
+			"accessDescription": "Únete a una organización con acceso a la consola para continuar.",
+			"noMembershipsTitle": "Aún no tienes membresías con acceso a la consola"
+		},
 		"team": {
 			"title": "Equipo",
 			"subtitle": "Gestiona miembros, roles e invitaciones"
@@ -272,5 +318,15 @@
 				"saveSuccess": "Valores predeterminados guardados correctamente"
 			}
 		}
+	},
+	"policies": {
+		"verificationSessions": "Sesiones de verificación"
+	},
+	"organizationCreation": {
+		"createAction": "Crear organización",
+		"emptyDescription": "Aún no eres miembro de ninguna organización. Crea una organización, descubre organizaciones públicas o únete a una con un código.",
+		"discoveryRequired": "Las organizaciones con acceso abierto o sujeto a aprobación siempre se pueden encontrar en la búsqueda pública de organizaciones.",
+		"discoveryPublic": "Esta organización puede aparecer en la búsqueda pública de organizaciones.",
+		"discoveryPrivate": "Esta organización no aparece en la búsqueda pública de organizaciones."
 	}
 }

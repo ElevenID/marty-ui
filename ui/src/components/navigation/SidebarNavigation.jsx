@@ -422,7 +422,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
       {/* Collapse toggle for desktop */}
       {!isMobile && !collapsed && (
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: 2, py: 1 }}>
-          <IconButton onClick={handleCollapseToggle} size="small">
+          <IconButton onClick={handleCollapseToggle} size="small" aria-label="Collapse sidebar" aria-expanded={true}>
             <ChevronLeftIcon />
           </IconButton>
         </Box>
@@ -430,7 +430,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
 
       {!isMobile && collapsed && (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 1 }}>
-          <IconButton onClick={handleCollapseToggle} size="small">
+          <IconButton onClick={handleCollapseToggle} size="small" aria-label="Expand sidebar" aria-expanded={false}>
             <MenuIcon />
           </IconButton>
         </Box>

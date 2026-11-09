@@ -1,3 +1,10 @@
+{{- $development := .Values.ui.development | default dict -}}
+{{- if $development.enabled -}}
+{{- $checkout := required "ui.development.checkoutPath must name an existing dedicated source checkout on the node" .Values.ui.development.checkoutPath -}}
+{{- if or (not (regexMatch "^/[a-zA-Z0-9._/-]+$" $checkout)) (regexMatch "/\\.\\.?(/|$)|//|/$" $checkout) -}}
+{{- fail "ui.development.checkoutPath must be an absolute checkout path without traversal or trailing slash" -}}
+{{- end -}}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -49,10 +56,32 @@ spec:
         checksum/nginx: {{ include "marty.nginx" . | sha256sum | quote }}
     spec:
       {{- include "marty.podSettings" . | nindent 6 }}
+      {{- if $development.enabled }}
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: ui-dev-install
+          {{- include "marty.uiDevelopmentContainer" . | nindent 10 }}
+          command: [npm, ci, --include=dev, --no-audit, --no-fund]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1536Mi
+      {{- end }}
       containers:
         - name: ui
           image: {{ include "marty.image" (dict "root" . "role" "ui") | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            - name: ORGANIZATION_CREATION_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ORGANIZATION_CREATION_ENABLED
           ports:
             - name: http
               containerPort: 80
@@ -79,7 +108,46 @@ spec:
             - name: config
               mountPath: /etc/nginx/conf.d
               readOnly: true
+        {{- if $development.enabled }}
+        - name: ui-dev
+          {{- include "marty.uiDevelopmentContainer" . | nindent 10 }}
+          command: [npm, run, dev, --, --host, 127.0.0.1, --port, '3000', --strictPort]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 4096Mi
+          startupProbe:
+            exec:
+              command: [node, -e, "fetch('http://127.0.0.1:3000/@vite/client').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+            periodSeconds: 5
+            timeoutSeconds: 4
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: [node, -e, "fetch('http://127.0.0.1:3000/@vite/client').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+            periodSeconds: 10
+            timeoutSeconds: 4
+        {{- end }}
       volumes:
         - name: config
           configMap:
             name: nginx-prod-config
+        {{- if $development.enabled }}
+        - name: ui-dev-source
+          hostPath:
+            path: {{ printf "%s/ui" .Values.ui.development.checkoutPath | quote }}
+            type: Directory
+        - name: ui-dev-contracts
+          hostPath:
+            path: {{ printf "%s/contracts" .Values.ui.development.checkoutPath | quote }}
+            type: Directory
+        - name: ui-dev-dependencies
+          emptyDir:
+            sizeLimit: 4Gi
+        - name: ui-dev-tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        {{- end }}

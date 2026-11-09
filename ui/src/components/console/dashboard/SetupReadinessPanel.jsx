@@ -78,7 +78,7 @@ const getResourceConfig = (t) => ({
   revocation: {
     label: 'Revocation Profile',
     icon: PolicyIcon,
-    path: '/console/org/policies/revocation',
+    path: '/console/org/trust/revocation',
     tooltip: 'Defines revocation or renewal controls for credential lifecycle operations.',
   },
   trust: {

@@ -1,5 +1,8 @@
 //! Focused real HTTP/PostgreSQL contract, using synthetic policy ports only.
 //! Run explicitly against an owned disposable loopback database; never demo evidence.
+#[path = "support/presentation_snapshot.rs"]
+mod presentation_snapshot;
+
 use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
@@ -51,12 +54,17 @@ impl TenantMembershipProvider for Members {
 struct Policies {
     mode: AtomicUsize,
     repository: PostgresFlowRepository,
+    pool: PgPool,
     cancel: Mutex<Option<String>>,
+    replace: Mutex<Option<String>>,
 }
 #[async_trait]
 impl PresentationPolicyProvider for Policies {
     async fn get_policy(&self, id: &str) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            prerequisite_evidence_profile: None,
+            credential_authority: None,
+            policy_revision: presentation_snapshot::revision(id),
             id: id.into(),
             organization_id: "org-1".into(),
             status: "active".into(),
@@ -68,10 +76,46 @@ impl PresentationPolicyProvider for Policies {
         request: &PresentationEvaluationRequest,
     ) -> Result<PresentationEvaluationResult, FlowProviderError> {
         let mode = self.mode.load(Ordering::SeqCst);
+        if mode == 5 {
+            return Err(FlowProviderError::PolicyRevisionMismatch);
+        }
         let cancel = self.cancel.lock().unwrap().clone();
         if let Some(id) = cancel {
             self.repository
                 .cancel_instance(&id, "owned-test-cancel", Utc::now())
+                .await
+                .map_err(|_| FlowProviderError::Unavailable {
+                    provider: "test_repository",
+                })?;
+        }
+        if mode == 4 {
+            let id = self
+                .replace
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("owned replacement race selected");
+            let mut current = self
+                .repository
+                .instance(&id)
+                .await
+                .map_err(|_| FlowProviderError::Unavailable {
+                    provider: "test_repository",
+                })?
+                .expect("owned race instance exists");
+            current.context["nonce"] = json!("replacement-request-nonce-1234567890");
+            presentation_snapshot::freeze_default(&mut current);
+            presentation_snapshot::emit_query(
+                &mut current,
+                "dcql_query",
+                json!({"credentials": [{"id": "member"}]}),
+            );
+            // Deliberately leave the timestamp unchanged: context equality
+            // must protect the nonce/policy snapshot even at the same instant.
+            sqlx::query("UPDATE flow_service.flow_instances SET context=$1 WHERE id=$2")
+                .bind(&current.context)
+                .bind(&id)
+                .execute(&self.pool)
                 .await
                 .map_err(|_| FlowProviderError::Unavailable {
                     provider: "test_repository",
@@ -97,19 +141,25 @@ impl PresentationPolicyProvider for Policies {
         if mode == 2 {
             diagnostic.nonce_sha256 = "f".repeat(64);
         }
+        let accepted = matches!(mode, 1 | 3 | 4);
+        let mut revision = presentation_snapshot::revision("policy-1");
+        if mode == 3 {
+            revision.version += 1;
+        }
         Ok(PresentationEvaluationResult {
-            result: if mode == 1 { "passed" } else { "failed" }.into(),
-            decision: if mode == 1 { "allow" } else { "deny" }.into(),
+            policy_revision: revision,
+            result: if accepted { "passed" } else { "failed" }.into(),
+            decision: if accepted { "allow" } else { "deny" }.into(),
             decision_reason: Some("Synthetic policy port for controller contract".into()),
-            verified_claims: if mode == 1 {
+            verified_claims: if accepted {
                 [("age_over_21".into(), json!(true))].into()
             } else {
                 Default::default()
             },
             credential_results: vec![
-                json!({"signature_valid":mode==1,"trust_check_passed":mode==1}),
+                json!({"signature_valid":accepted,"trust_check_passed":accepted}),
             ],
-            authentication_diagnostic: (mode != 1).then_some(diagnostic),
+            authentication_diagnostic: (!accepted).then_some(diagnostic),
             error_codes: vec![],
             warnings: vec![],
         })
@@ -117,13 +167,13 @@ impl PresentationPolicyProvider for Policies {
 }
 fn instance(id: &str) -> FlowInstanceRecord {
     let now = Utc::now();
-    FlowInstanceRecord {
+    let mut instance = FlowInstanceRecord {
         id: id.into(),
         flow_definition_id: "__verification__".into(),
         organization_id: "org-1".into(),
         status: FlowInstanceStatus::AwaitingWallet,
         current_step_id: None,
-        context: json!({"flow_type":"verification","nonce":format!("owned-nonce-{id}-1234567890"),"oid4vp_expected_state":"state-1","presentation_policy_id":"policy-1","_marty_verification_principal_id":"member-1","verification_audience":"did:web:verifier.example"}),
+        context: json!({"flow_type":"verification","nonce":format!("owned-nonce-{id}-1234567890"),"oid4vp_expected_state":"state-1","presentation_policy_id":"policy-1","_marty_verification_principal_id":"member-1","verification_audience":"did:web:verifier.example","oid4vp_verifier_context":true,"oid4vp_client_id":"did:web:verifier.example"}),
         step_history: vec![],
         state_history: vec![],
         subject_id: None,
@@ -137,7 +187,14 @@ fn instance(id: &str) -> FlowInstanceRecord {
         error: None,
         created_at: now,
         updated_at: now,
-    }
+    };
+    presentation_snapshot::freeze_default(&mut instance);
+    presentation_snapshot::emit_query(
+        &mut instance,
+        "dcql_query",
+        json!({"credentials": [{"id": "member"}]}),
+    );
+    instance
 }
 async fn send(
     app: &Router,
@@ -163,6 +220,38 @@ async fn send(
     let response = app.clone().oneshot(request.body(Body::from(body))?).await?;
     let status = response.status().as_u16();
     let bytes = to_bytes(response.into_body(), 65536).await?;
+    Ok((status, serde_json::from_slice(&bytes)?))
+}
+
+fn dc_api_instance(id: &str) -> FlowInstanceRecord {
+    let mut value = instance(id);
+    value
+        .context
+        .as_object_mut()
+        .unwrap()
+        .remove("oid4vp_expected_state");
+    value.context["dc_api_expected_origins"] = json!(["https://verifier.example"]);
+    value
+}
+
+async fn send_dc_api(app: &Router, id: &str) -> Result<(u16, Value), Box<dyn Error + Send + Sync>> {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/v1/flows/instances/{id}/submit/dc-api"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocol": "openid4vp-v1-signed",
+                        "origin": "https://verifier.example",
+                        "data": {"vp_token": "accepted-dc-api-mdoc"},
+                    })
+                    .to_string(),
+                ))?,
+        )
+        .await?;
+    let status = response.status().as_u16();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await?;
     Ok((status, serde_json::from_slice(&bytes)?))
 }
 
@@ -237,7 +326,9 @@ async fn retryable_mdoc_rejection_survives_http_readback_recovery_and_terminal_r
     let policy = Arc::new(Policies {
         mode: AtomicUsize::new(0),
         repository: repository.clone(),
+        pool: pool.clone(),
         cancel: Mutex::new(None),
+        replace: Mutex::new(None),
     });
     let state = FlowHttpState {
         service_authenticator: None,
@@ -309,6 +400,14 @@ async fn retryable_mdoc_rejection_survives_http_readback_recovery_and_terminal_r
     let mut reset = repository.instance(id).await?.unwrap();
     let prior = reset.clone();
     reset.context["nonce"] = json!("fresh-reset-owned-nonce-1234567890");
+    // This trusted fixture issues a fresh request authority with the reset.
+    // Merely changing the public nonce cannot authorize a new submission.
+    presentation_snapshot::freeze_default(&mut reset);
+    presentation_snapshot::emit_query(
+        &mut reset,
+        "dcql_query",
+        json!({"credentials": [{"id": "member"}]}),
+    );
     reset.updated_at = Utc::now().max(prior.updated_at + Duration::microseconds(1));
     assert!(
         repository
@@ -337,6 +436,102 @@ async fn retryable_mdoc_rejection_survives_http_readback_recovery_and_terminal_r
     let (_, response) = send(&app, wrong, Some("wrong-bound-mdoc"), None).await?;
     assert!(response.get("last_presentation_attempt").is_none());
     assert!(repository.instance(wrong).await?.unwrap().result.is_none());
+    // An allow result under another policy revision cannot consume a nonce,
+    // alter the stored active instance or produce a durable callback.
+    let revised = "90000000-0000-0000-0000-000000000924";
+    let revision_original = instance(revised);
+    repository.save_instance(&revision_original).await?;
+    let revision_before = repository.instance(revised).await?.unwrap();
+    policy.mode.store(3, Ordering::SeqCst);
+    assert_eq!(
+        send(&app, revised, Some("revision-mismatch-mdoc"), None)
+            .await?
+            .0,
+        409
+    );
+    let revision_stored = repository.instance(revised).await?.unwrap();
+    assert_eq!(revision_stored.status, revision_original.status);
+    assert_eq!(revision_stored.updated_at, revision_before.updated_at);
+    assert!(revision_stored.result.is_none());
+    assert_eq!(authority_counts(&pool, revised).await?, (0, 0));
+    // Historical active sessions have no reconstructable request snapshot.
+    let legacy = "90000000-0000-0000-0000-000000000925";
+    let mut legacy_instance = instance(legacy);
+    legacy_instance
+        .context
+        .as_object_mut()
+        .unwrap()
+        .remove(presentation_snapshot::SNAPSHOT_KEY);
+    repository.save_instance(&legacy_instance).await?;
+    policy.mode.store(1, Ordering::SeqCst);
+    assert_eq!(send(&app, legacy, Some("legacy-mdoc"), None).await?.0, 409);
+    assert_eq!(authority_counts(&pool, legacy).await?, (0, 0));
+    assert!(repository.instance(legacy).await?.unwrap().result.is_none());
+    let replaced = "90000000-0000-0000-0000-000000000926";
+    repository.save_instance(&instance(replaced)).await?;
+    let replacement_before = repository.instance(replaced).await?.unwrap();
+    policy.mode.store(4, Ordering::SeqCst);
+    *policy.replace.lock().unwrap() = Some(replaced.into());
+    let (status, replacement_error) =
+        send(&app, replaced, Some("racing-replacement-mdoc"), None).await?;
+    assert_eq!(status, 409, "{replacement_error}");
+    assert!(replacement_error
+        .to_string()
+        .contains("verification_request_changed"));
+    let replacement_after = repository.instance(replaced).await?.unwrap();
+    assert_eq!(replacement_after.status, replacement_before.status);
+    assert_eq!(replacement_after.updated_at, replacement_before.updated_at);
+    assert_eq!(
+        replacement_after.context["nonce"],
+        "replacement-request-nonce-1234567890"
+    );
+    assert!(replacement_after.result.is_none());
+    assert_eq!(authority_counts(&pool, replaced).await?, (0, 0));
+    // DC API origin observations are replacement fields; the original loaded
+    // context must remain the expected CAS preimage for a valid first success.
+    let dc_success = "90000000-0000-0000-0000-000000000927";
+    repository
+        .save_instance(&dc_api_instance(dc_success))
+        .await?;
+    policy.mode.store(1, Ordering::SeqCst);
+    let (status, dc_response) = send_dc_api(&app, dc_success).await?;
+    assert_eq!(status, 200, "{dc_response}");
+    let dc_completed = repository.instance(dc_success).await?.unwrap();
+    assert_eq!(dc_completed.status, FlowInstanceStatus::Completed);
+    assert_eq!(
+        dc_completed.context["dc_api_last_origin"],
+        "https://verifier.example"
+    );
+    assert_eq!(authority_counts(&pool, dc_success).await?, (1, 0));
+    let dc_race = "90000000-0000-0000-0000-000000000928";
+    repository.save_instance(&dc_api_instance(dc_race)).await?;
+    let dc_before = repository.instance(dc_race).await?.unwrap();
+    policy.mode.store(4, Ordering::SeqCst);
+    *policy.replace.lock().unwrap() = Some(dc_race.into());
+    let (status, dc_race_response) = send_dc_api(&app, dc_race).await?;
+    assert_eq!(status, 409, "{dc_race_response}");
+    assert!(dc_race_response
+        .to_string()
+        .contains("verification_request_changed"));
+    let dc_after = repository.instance(dc_race).await?.unwrap();
+    assert_eq!(dc_after.updated_at, dc_before.updated_at);
+    assert_eq!(
+        dc_after.context["nonce"],
+        "replacement-request-nonce-1234567890"
+    );
+    assert!(dc_after.context.get("dc_api_last_origin").is_none());
+    assert!(dc_after.result.is_none());
+    assert_eq!(authority_counts(&pool, dc_race).await?, (0, 0));
+    let stale = "90000000-0000-0000-0000-000000000929";
+    repository.save_instance(&instance(stale)).await?;
+    policy.mode.store(5, Ordering::SeqCst);
+    let (status, stale_response) = send(&app, stale, Some("stale-policy-mdoc"), None).await?;
+    assert_eq!(status, 409, "{stale_response}");
+    assert!(stale_response
+        .to_string()
+        .contains("verification_restart_required"));
+    assert_eq!(authority_counts(&pool, stale).await?, (0, 0));
+    assert!(repository.instance(stale).await?.unwrap().result.is_none());
     // Deterministic interleaving: cancellation wins while policy is evaluating.
     let race = "90000000-0000-0000-0000-000000000923";
     repository.save_instance(&instance(race)).await?;

@@ -72,8 +72,13 @@ describe('CreateOrganizationPage', () => {
     await user.type(screen.getByLabelText('Display Name'), 'Acme Travel');
     await user.type(screen.getByLabelText('Description'), 'Trusted travel credentials');
     await user.type(screen.getByLabelText('Contact Email'), 'ops@example.com');
-    await user.click(screen.getByLabelText('Discoverable'));
+    expect(screen.getByLabelText('Discoverable')).not.toBeChecked();
     await user.click(screen.getByLabelText(/Open/));
+    expect(screen.getByLabelText('Discoverable')).toBeChecked();
+    expect(screen.getByLabelText('Discoverable')).toBeDisabled();
+    expect(screen.getByLabelText('Discoverable')).toHaveAccessibleDescription(
+      'Organizations with open or approval-based membership are always discoverable in public organization search.',
+    );
     await user.click(screen.getByRole('button', { name: 'Create Organization' }));
 
     await waitFor(() => {
@@ -99,6 +104,8 @@ describe('CreateOrganizationPage', () => {
     await user.type(screen.getByLabelText('Organization Slug'), 'approval-org');
     await user.type(screen.getByLabelText('Display Name'), 'Approval Org');
     await user.click(screen.getByLabelText(/Approval Required/));
+    expect(screen.getByLabelText('Discoverable')).toBeChecked();
+    expect(screen.getByLabelText('Discoverable')).toBeDisabled();
     await user.click(screen.getByRole('button', { name: 'Create Organization' }));
 
     await waitFor(() => {
@@ -106,6 +113,39 @@ describe('CreateOrganizationPage', () => {
         visibility: 'PUBLIC',
         join_mechanism: 'open',
         requires_approval: true,
+      }));
+    });
+  });
+
+  it.each([false, true])('preserves the invite-only discovery preference (%s) after open and approval membership', async (isDiscoverable) => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { organizationCreationEnabled: true };
+    const { user } = render(<CreateOrganizationPage />);
+
+    await user.type(screen.getByLabelText('Organization Slug'), 'invite-org');
+    await user.type(screen.getByLabelText('Display Name'), 'Invite Org');
+    if (isDiscoverable) {
+      await user.click(screen.getByLabelText('Discoverable'));
+    }
+
+    for (const membershipLabel of [/Open/, /Approval Required/]) {
+      await user.click(screen.getByLabelText(membershipLabel));
+      expect(screen.getByLabelText('Discoverable')).toBeChecked();
+      expect(screen.getByLabelText('Discoverable')).toBeDisabled();
+      await user.click(screen.getByLabelText(/Invite Only/));
+      expect(screen.getByLabelText('Discoverable')).toBeEnabled();
+      expect(screen.getByLabelText('Discoverable')).toHaveProperty('checked', isDiscoverable);
+    }
+
+    expect(screen.getByLabelText('Discoverable')).toHaveAccessibleDescription(isDiscoverable
+      ? 'This organization can appear in public organization search.'
+      : 'This organization does not appear in public organization search.');
+    await user.click(screen.getByRole('button', { name: 'Create Organization' }));
+
+    await waitFor(() => {
+      expect(mockCreateOrganization).toHaveBeenCalledWith(expect.objectContaining({
+        visibility: isDiscoverable ? 'PUBLIC' : 'PRIVATE',
+        join_mechanism: 'invite',
+        requires_approval: false,
       }));
     });
   });

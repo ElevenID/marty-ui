@@ -2,6 +2,7 @@ pub mod application;
 pub mod catalog;
 pub mod config;
 pub mod control_plane;
+pub mod credential_authority;
 pub mod domain;
 pub mod http_service;
 pub mod issuer_keys;

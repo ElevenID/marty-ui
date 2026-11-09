@@ -145,7 +145,7 @@ impl InMemoryFlowRepository {
         instance: FlowInstance,
         nonce_digest: &str,
         replay_expires_at_ms: u64,
-        expected_status: FlowInstanceStatus,
+        expected: &FlowInstance,
         callback: Option<Message>,
         now_ms: u64,
     ) -> Result<bool, RepositoryError> {
@@ -157,9 +157,12 @@ impl InMemoryFlowRepository {
             return Err(RepositoryError::InvalidReplayDigest);
         }
         if !matches!(
-            expected_status,
+            expected.status,
             FlowInstanceStatus::AwaitingWallet | FlowInstanceStatus::InProgress
-        ) {
+        ) || instance.id != expected.id
+            || instance.organization_id != expected.organization_id
+            || instance.flow_definition_id != expected.flow_definition_id
+        {
             return Ok(false);
         }
         let mut state = self.lock()?;
@@ -169,8 +172,7 @@ impl InMemoryFlowRepository {
         let accepted = !state.consumed_nonce_digests.contains_key(nonce_digest)
             && !state.finalized_instance_ids.contains(&instance.id)
             && state.instances.get(&instance.id).is_some_and(|stored| {
-                stored.status == expected_status
-                    && stored.expires_at_ms.is_none_or(|expiry| now_ms <= expiry)
+                stored == expected && stored.expires_at_ms.is_none_or(|expiry| now_ms <= expiry)
             });
         if !accepted {
             return Ok(false);

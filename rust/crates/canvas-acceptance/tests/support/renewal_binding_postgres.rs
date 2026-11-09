@@ -1,4 +1,5 @@
-//! Real published-schema renewal binding and finalizer boundaries.
+//! Real renewal binding and finalizer boundaries on the published baseline
+//! with the native repository's OID4VCI schema extensions.
 //!
 //! Rows below are explicitly seeded historical/recovery inputs, not newly
 //! admitted offers or actual wallet sends. The repository and finalizer are real.
@@ -27,6 +28,7 @@ use marty_issuance_service::{
     credential_postgres::PostgresCredentialRepository,
     credential_renewal::{RenewalRepository, RenewalRepositoryError, RenewalSource},
     initiation::{idempotency_binding, InitiationRepository, InitiationRequest},
+    migration,
 };
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -41,6 +43,7 @@ mod canvas;
 const ENDPOINT: &str = "https://synthetic-wallet.example/renewal";
 const MESSAGE: &str = "synthetic-renewal-message";
 const TOKEN: &str = "synthetic-renewal-status-token";
+const TOKEN_HMAC_KEY: &[u8] = b"synthetic-renewal-pg-hmac";
 
 struct Fixture {
     pool: PgPool,
@@ -626,8 +629,13 @@ pub(super) async fn run(database_url: &str) {
         .connect(database_url)
         .await
         .unwrap();
+    // This scenario calls the current credential repository, including its
+    // live grant checks. Apply and validate the real native OID4VCI extensions
+    // on this owned database before seeding recovery rows; the published
+    // baseline alone predates access-token expiry and notification bindings.
+    migration::migrate(&pool).await.unwrap();
     let fixture = Fixture {
-        repository: PostgresCredentialRepository::new(pool.clone(), b"synthetic-renewal-pg-hmac"),
+        repository: PostgresCredentialRepository::new(pool.clone(), TOKEN_HMAC_KEY),
         pool,
         organization: format!("renewal-pg-{}", Uuid::new_v4()),
     };

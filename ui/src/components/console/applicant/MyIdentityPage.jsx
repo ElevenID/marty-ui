@@ -42,8 +42,6 @@ import {
 } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import DownloadIcon from '@mui/icons-material/Download';
-import QrCodeIcon from '@mui/icons-material/QrCode';
 import AddIcon from '@mui/icons-material/Add';
 import CheckIcon from '@mui/icons-material/Check';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -132,14 +130,10 @@ function isActionRequired(row) {
 
 /** Status → primary action label. */
 function getActionLabel(row) {
-  if (row.kind === 'credential') {
-    if (row.status === 'expired') return 'Renew';
-    return 'Present';
-  }
+  if (row.kind !== 'application') return null;
   switch (row.status) {
     case 'approved':
     case 'offered':      return hasLiveOffer(row) ? 'Claim' : null;
-    case 'needs_info':   return 'Continue';
     default:             return null;
   }
 }
@@ -834,8 +828,6 @@ function MyIdentityPage() {
     const label = getActionLabel(row);
     if (label === 'Claim') {
       setClaimApp(row);
-    } else if (label === 'Continue' || label === 'Present') {
-      setSelectedApp(row);
     }
   }, []);
 
@@ -907,12 +899,6 @@ function MyIdentityPage() {
                   <VisibilityIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-              <Tooltip title={t('credentials.actions.showQRCode')}>
-                <IconButton size="small" color="primary"><QrCodeIcon fontSize="small" /></IconButton>
-              </Tooltip>
-              <Tooltip title={t('credentials.actions.download')}>
-                <IconButton size="small"><DownloadIcon fontSize="small" /></IconButton>
-              </Tooltip>
             </>
           )}
           {row.kind === 'application' && (
@@ -921,7 +907,6 @@ function MyIdentityPage() {
                 <Button
                   size="small"
                   variant="contained"
-                  color={getActionLabel(row) === 'Continue' ? 'warning' : 'primary'}
                   onClick={() => handlePrimaryAction(row)}
                 >
                   {getActionLabel(row)}
@@ -1006,12 +991,6 @@ function MyIdentityPage() {
                 <VisibilityIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title={t('credentials.actions.showQRCode')}>
-              <IconButton size="small" color="primary"><QrCodeIcon fontSize="small" /></IconButton>
-            </Tooltip>
-            <Tooltip title={t('credentials.actions.download')}>
-              <IconButton size="small"><DownloadIcon fontSize="small" /></IconButton>
-            </Tooltip>
           </>
         )}
         {row.kind === 'application' && (
@@ -1020,7 +999,6 @@ function MyIdentityPage() {
               <Button
                 size="small"
                 variant="contained"
-                color={getActionLabel(row) === 'Continue' ? 'warning' : 'primary'}
                 onClick={() => handlePrimaryAction(row)}
               >
                 {getActionLabel(row)}
@@ -1280,6 +1258,27 @@ function MyIdentityPage() {
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                 {getStatusMessage(selectedApp)}
               </Typography>
+
+              {selectedApp.kind === 'credential' && selectedApp.status === 'active' && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  {t('identity.guidance.walletPresentation', 'To present a credential, use the wallet where it is stored.')}
+                </Alert>
+              )}
+              {selectedApp.kind === 'credential' && selectedApp.status === 'expired' && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  {t('identity.guidance.expired', 'This credential has expired. Contact the issuer about renewal.')}
+                </Alert>
+              )}
+              {selectedApp.kind === 'credential' && selectedApp.status === 'revoked' && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  {t('identity.guidance.revoked', 'This credential has been revoked. Contact the issuer for help.')}
+                </Alert>
+              )}
+              {selectedApp.kind === 'application' && selectedApp.status === 'needs_info' && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  {t('identity.guidance.additionalInformation', 'The issuer needs more information. Contact the issuer for instructions on how to provide it.')}
+                </Alert>
+              )}
 
               {canvasDetailsForRow(selectedApp).length > 0 && (
                 <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 1 }} data-testid="identity-canvas-source">

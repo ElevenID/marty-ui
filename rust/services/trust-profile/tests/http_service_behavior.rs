@@ -1300,3 +1300,537 @@ async fn issuer_and_relationship_shared_fields_keep_scope_patch_and_atomic_refus
         );
     }
 }
+
+mod credential_authority_tests {
+    use super::*;
+    use marty_oid4vp_contract::{
+        trust_authority::{
+            issuer_public_key_thumbprint, CredentialAuthoritySnapshotV1,
+            CredentialTrustEvaluationRequestV1, CredentialTrustEvaluationResponseV1,
+        },
+        EvidenceCheckOutcome,
+    };
+    use marty_trust_profile::credential_authority::evaluate_credential_authority;
+
+    const VCT: &str = "https://credentials.example.test/Employee";
+    const SERVICE_TOKEN: &str = "credential-authority-service-token-32";
+
+    fn public_key(second: bool) -> Value {
+        // RFC 8032 Ed25519 public test keys; these fixtures contain no secret.
+        json!({"kty":"OKP", "crv":"Ed25519", "alg":"EdDSA", "use":"sig",
+            "kid": if second {"key-2"} else {"key-1"},
+            "x": if second {"PUAXw-hDiVqStwqnTRt-vJyYLM8uxJaMwM1V8Sr0Zgw"}
+                else {"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}})
+    }
+
+    async fn fixture(
+        repository: &MemoryTrustProfileRepository,
+    ) -> (TrustProfile, IssuerEntity, TrustProfileIssuer) {
+        let mut selected = profile("Canonical issuer authority");
+        selected.status = TrustProfileStatus::Active;
+        selected.compliance_status = ComplianceStatus::Compliant;
+        selected.trust_purposes = Some(vec![TrustPurpose::CredentialIssuer]);
+        selected.supported_formats = vec!["SD_JWT_VC".into()];
+        selected.revocation_policy.check_ocsp = false;
+        selected.revocation_policy.check_crl = false;
+        selected.revocation_policy.check_status_list = false;
+        let now = Utc::now() - Duration::hours(1);
+        let issuer = IssuerEntity {
+            id: Uuid::new_v4(),
+            organization_id: Some(selected.organization_id.clone()),
+            issuer_id: "https://issuer.example.test/tenant-A".into(),
+            issuer_type: IssuerEntityType::Organization,
+            display_name: "Issuer".into(),
+            description: None,
+            is_system_issuer: false,
+            compliance_status: IssuerEntityComplianceStatus::Compliant,
+            accreditation_body: None,
+            accreditations: vec!["Z".into(), "A".into()],
+            accreditation_date: None,
+            valid_from: now,
+            valid_until: None,
+            trust_anchor_id: None,
+            revoked_at: None,
+            revocation_reason: None,
+            revoked_by: None,
+            metadata: json!({"verification_keys":[public_key(false), public_key(true)]}),
+            created_at: now,
+            updated_at: now,
+        };
+        let relationship = TrustProfileIssuer {
+            id: Uuid::new_v4(),
+            trust_profile_id: selected.id,
+            issuer_id: issuer.id,
+            trust_level: 70,
+            relationship_status: TrustRelationshipStatus::Trusted,
+            cascade_revocation_policy: CascadeRevocationPolicy::Manual,
+            metadata: json!({"marty_credential_authorizations_v1":[{"format":"SD_JWT_VC","vct":VCT}]}),
+            created_at: now,
+            updated_at: now,
+        };
+        repository.save_profile(&selected, None).await.unwrap();
+        repository.save_issuer_entity(&issuer).await.unwrap();
+        repository.save_profile_issuer(&relationship).await.unwrap();
+        (selected, issuer, relationship)
+    }
+
+    fn authenticated_service(repository: Arc<MemoryTrustProfileRepository>) -> axum::Router {
+        let repository: Arc<dyn TrustProfileRepository> = repository;
+        let application = Arc::new(TrustProfileApplication::new(
+            repository.clone(),
+            Arc::new(AllowControlPlane),
+        ));
+        trust_profile_router(TrustProfileHttpState {
+            application,
+            repository,
+            service_authenticator: Arc::new(
+                ServiceTokenAuthenticator::new(Some(SERVICE_TOKEN.into()), true).unwrap(),
+            ),
+            internal_api_key: None,
+            registry_synchronizer: Arc::new(EchoSynchronizer),
+        })
+    }
+
+    async fn post(
+        app: &axum::Router,
+        uri: &str,
+        token: Option<&str>,
+        value: Value,
+    ) -> axum::response::Response {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("content-type", "application/json");
+        if let Some(token) = token {
+            builder = builder.header("x-service-token", token);
+        }
+        app.clone()
+            .oneshot(builder.body(Body::from(value.to_string())).unwrap())
+            .await
+            .unwrap()
+    }
+
+    fn evaluation(
+        snapshot: &CredentialAuthoritySnapshotV1,
+        issuer: &IssuerEntity,
+    ) -> CredentialTrustEvaluationRequestV1 {
+        CredentialTrustEvaluationRequestV1 {
+            organization_id: snapshot.organization_id.clone(),
+            expected_profile: snapshot.profile.clone(),
+            issuer_id: issuer.issuer_id.clone(),
+            format: "SD_JWT_VC".into(),
+            vct: VCT.into(),
+            issuer_algorithm: "EdDSA".into(),
+            issuer_key_thumbprint: issuer_public_key_thumbprint(&public_key(false)).unwrap(),
+            request_binding_digest: format!("sha256:{}", "1".repeat(64)),
+        }
+    }
+
+    async fn snapshot(
+        repository: &MemoryTrustProfileRepository,
+        selected: &TrustProfile,
+    ) -> CredentialAuthoritySnapshotV1 {
+        repository
+            .credential_authority_snapshot(&selected.organization_id, selected.id)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn owner_routes_require_service_auth_and_bind_exact_tenant_revision_and_selection() {
+        let repository = Arc::new(MemoryTrustProfileRepository::default());
+        let (selected, issuer, mut relationship) = fixture(&repository).await;
+        let app = authenticated_service(repository.clone());
+        let freeze_uri = format!(
+            "/internal/v1/trust-profiles/{}/credential-authority-snapshot",
+            selected.id
+        );
+        let assess_uri = format!(
+            "/internal/v1/trust-profiles/{}/credential-trust-evaluations",
+            selected.id
+        );
+        for token in [None, Some("incorrect")] {
+            assert_eq!(
+                post(&app, &freeze_uri, token, json!({"organization_id":"org-1"}))
+                    .await
+                    .status(),
+                401
+            );
+        }
+        let frozen = post(
+            &app,
+            &freeze_uri,
+            Some(SERVICE_TOKEN),
+            json!({"organization_id":"org-1"}),
+        )
+        .await;
+        assert_eq!(frozen.status(), 200);
+        assert_eq!(frozen.headers()["cache-control"], "no-store");
+        let frozen: CredentialAuthoritySnapshotV1 =
+            serde_json::from_value(body(frozen).await).unwrap();
+        frozen.validate().unwrap();
+        assert_eq!(frozen.profile.version, 1);
+        assert_eq!(
+            frozen.basis.issuer_relationships[0].issuer_id,
+            issuer.issuer_id
+        );
+        assert_eq!(
+            frozen.basis.issuer_relationships[0].issuer_entity_id,
+            issuer.id.to_string()
+        );
+        let exact = evaluation(&frozen, &issuer);
+        let unconfigured = service_with_repository(repository.clone());
+        for token in [None, Some(SERVICE_TOKEN)] {
+            assert_eq!(
+                post(
+                    &unconfigured,
+                    &freeze_uri,
+                    token,
+                    json!({"organization_id":"org-1"})
+                )
+                .await
+                .status(),
+                401
+            );
+            assert_eq!(
+                post(&unconfigured, &assess_uri, token, json!(exact))
+                    .await
+                    .status(),
+                401
+            );
+        }
+        for token in [None, Some("incorrect")] {
+            assert_eq!(
+                post(&app, &assess_uri, token, json!(exact)).await.status(),
+                401
+            );
+        }
+        let assessed = post(&app, &assess_uri, Some(SERVICE_TOKEN), json!(exact)).await;
+        assert_eq!(assessed.status(), 200);
+        assert_eq!(assessed.headers()["cache-control"], "no-store");
+        let assessed: CredentialTrustEvaluationResponseV1 =
+            serde_json::from_value(body(assessed).await).unwrap();
+        assessed
+            .validate_for_request(&exact, Utc::now().timestamp())
+            .unwrap();
+        assert_eq!(assessed.outcome, EvidenceCheckOutcome::Passed);
+        assert_eq!(assessed.trust_level, Some(70));
+        assert_eq!(assessed.compliance_statuses, ["COMPLIANT"]);
+        assert_eq!(assessed.accreditations, ["A", "Z"]);
+
+        for (field, value, status, reason) in [
+            (
+                "issuer_id",
+                json!("https://issuer.example.test/tenant-a"),
+                200,
+                "TRUST_PROFILE.ISSUER_NOT_AUTHORIZED",
+            ),
+            (
+                "vct",
+                json!("https://credentials.example.test/employee"),
+                200,
+                "TRUST_PROFILE.CREDENTIAL_TYPE_NOT_AUTHORIZED",
+            ),
+            (
+                "issuer_algorithm",
+                json!("ES256"),
+                200,
+                "TRUST_PROFILE.ISSUER_KEY_NOT_AUTHORIZED",
+            ),
+            (
+                "issuer_key_thumbprint",
+                json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+                200,
+                "TRUST_PROFILE.ISSUER_KEY_NOT_AUTHORIZED",
+            ),
+            ("format", json!("MDOC"), 422, ""),
+            ("format", json!("dc+sd-jwt"), 422, ""),
+            ("organization_id", json!("org-other"), 404, ""),
+        ] {
+            let mut altered = json!(exact);
+            altered[field] = value;
+            let response = post(&app, &assess_uri, Some(SERVICE_TOKEN), altered).await;
+            assert_eq!(response.status(), status, "{field}");
+            if status == 200 {
+                let response: CredentialTrustEvaluationResponseV1 =
+                    serde_json::from_value(body(response).await).unwrap();
+                assert_eq!(response.outcome, EvidenceCheckOutcome::Failed, "{field}");
+                assert_eq!(response.reason_code, reason, "{field}");
+                assert!(response.trust_level.is_none());
+                assert!(response.compliance_statuses.is_empty());
+                assert!(response.accreditations.is_empty());
+            }
+        }
+        for field in ["version", "content_digest"] {
+            let mut altered = json!(exact);
+            altered["expected_profile"][field] = if field == "version" {
+                json!(2)
+            } else {
+                json!(format!("sha256:{}", "2".repeat(64)))
+            };
+            assert_eq!(
+                post(&app, &assess_uri, Some(SERVICE_TOKEN), altered)
+                    .await
+                    .status(),
+                409
+            );
+        }
+        let mut crossed = exact.clone();
+        crossed.request_binding_digest = format!("sha256:{}", "2".repeat(64));
+        assert!(assessed
+            .validate_for_request(&crossed, assessed.checked_at_epoch_seconds)
+            .is_err());
+        assert!(assessed
+            .validate_for_request(&exact, assessed.checked_at_epoch_seconds - 1)
+            .is_err());
+        assert!(assessed
+            .validate_for_request(&exact, assessed.valid_until_epoch_seconds)
+            .is_err());
+        let mut forged = assessed.clone();
+        forged.trust_level = Some(100);
+        assert!(forged.validate().is_err());
+
+        // An owner edit invalidates the frozen reference even if no row timestamp changes.
+        relationship.trust_level = 71;
+        repository.save_profile_issuer(&relationship).await.unwrap();
+        assert_eq!(
+            post(&app, &assess_uri, Some(SERVICE_TOKEN), json!(exact))
+                .await
+                .status(),
+            409
+        );
+        assert_eq!(snapshot(&repository, &selected).await.profile.version, 2);
+    }
+
+    #[tokio::test]
+    async fn unsupported_controls_are_rejected_and_still_advance_owner_revisions() {
+        let repository = Arc::new(MemoryTrustProfileRepository::default());
+        let (mut selected, issuer, _) = fixture(&repository).await;
+        let app = authenticated_service(repository.clone());
+        let uri = format!(
+            "/internal/v1/trust-profiles/{}/credential-authority-snapshot",
+            selected.id
+        );
+        let original = snapshot(&repository, &selected).await;
+        selected.system_issuer_overrides.insert(
+            issuer.issuer_id.clone(),
+            json!({"public_jwk":public_key(true)}),
+        );
+        repository.save_profile(&selected, None).await.unwrap();
+        assert_eq!(
+            post(
+                &app,
+                &uri,
+                Some(SERVICE_TOKEN),
+                json!({"organization_id":"org-1"})
+            )
+            .await
+            .status(),
+            422
+        );
+        let overridden = snapshot(&repository, &selected).await;
+        assert_eq!(overridden.profile.version, 2);
+        assert_eq!(
+            overridden
+                .basis
+                .policy_controls
+                .unsupported_configuration_fields,
+            ["system_issuer_overrides"]
+        );
+        assert!(evaluate_credential_authority(
+            &overridden,
+            &evaluation(&overridden, &issuer),
+            Utc::now()
+        )
+        .is_err());
+        selected.system_issuer_overrides.insert(
+            issuer.issuer_id.clone(),
+            json!({"public_jwk":public_key(false)}),
+        );
+        repository.save_profile(&selected, None).await.unwrap();
+        assert_eq!(snapshot(&repository, &selected).await.profile.version, 3);
+        selected.system_issuer_overrides.clear();
+        repository.save_profile(&selected, None).await.unwrap();
+        let restored = snapshot(&repository, &selected).await;
+        assert_eq!(restored.profile.version, 4);
+        assert_eq!(
+            restored.profile.content_digest,
+            original.profile.content_digest
+        );
+        for condition in ["min_ec", "freshness", "ocsp", "crl", "status_list"] {
+            let mut restricted = selected.clone();
+            match condition {
+                "min_ec" => restricted.validation_rules.min_key_size_ec = 384,
+                "freshness" => restricted.time_policy.credential_freshness_hours = Some(24),
+                "ocsp" => restricted.revocation_policy.check_ocsp = true,
+                "crl" => restricted.revocation_policy.check_crl = true,
+                _ => restricted.revocation_policy.check_status_list = true,
+            }
+            repository.save_profile(&restricted, None).await.unwrap();
+            assert_eq!(
+                post(
+                    &app,
+                    &uri,
+                    Some(SERVICE_TOKEN),
+                    json!({"organization_id":"org-1"})
+                )
+                .await
+                .status(),
+                422,
+                "{condition}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn governed_keys_and_lifecycle_bound_receipts_without_resolution_or_row_time_shortcuts() {
+        let repository = MemoryTrustProfileRepository::default();
+        let (selected, mut issuer, _) = fixture(&repository).await;
+        let original = snapshot(&repository, &selected).await;
+        let fingerprints = original.basis.issuer_relationships[0]
+            .verification_keys
+            .iter()
+            .map(|key| issuer_public_key_thumbprint(key).unwrap())
+            .collect::<Vec<_>>();
+        assert!(fingerprints[0] < fingerprints[1]);
+        issuer.metadata["verification_keys"]
+            .as_array_mut()
+            .unwrap()
+            .reverse();
+        repository.save_issuer_entity(&issuer).await.unwrap();
+        assert_eq!(snapshot(&repository, &selected).await, original);
+        let observed_at = Utc::now();
+        issuer.valid_until = Some(observed_at + Duration::seconds(20));
+        repository.save_issuer_entity(&issuer).await.unwrap();
+        let bounded = snapshot(&repository, &selected).await;
+        assert_eq!(bounded.profile.version, 2);
+        let exact = evaluation(&bounded, &issuer);
+        let receipt = evaluate_credential_authority(&bounded, &exact, observed_at).unwrap();
+        assert_eq!(receipt.outcome, EvidenceCheckOutcome::Passed);
+        assert_eq!(
+            receipt.valid_until_epoch_seconds,
+            issuer.valid_until.unwrap().timestamp()
+        );
+        assert!(receipt
+            .validate_for_request(&exact, receipt.valid_until_epoch_seconds)
+            .is_err());
+        let expired =
+            evaluate_credential_authority(&bounded, &exact, issuer.valid_until.unwrap()).unwrap();
+        assert_eq!(expired.outcome, EvidenceCheckOutcome::Failed);
+        assert_eq!(expired.reason_code, "TRUST_PROFILE.ISSUER_NOT_CURRENT");
+        issuer.valid_until = None;
+        issuer.valid_from = observed_at + Duration::seconds(1);
+        repository.save_issuer_entity(&issuer).await.unwrap();
+        let future = snapshot(&repository, &selected).await;
+        assert_eq!(
+            evaluate_credential_authority(&future, &evaluation(&future, &issuer), observed_at)
+                .unwrap()
+                .outcome,
+            EvidenceCheckOutcome::Failed
+        );
+        issuer.valid_from = observed_at - Duration::seconds(1);
+        for compliance in [
+            IssuerEntityComplianceStatus::Suspended,
+            IssuerEntityComplianceStatus::Revoked,
+        ] {
+            issuer.compliance_status = compliance;
+            repository.save_issuer_entity(&issuer).await.unwrap();
+            let frozen = snapshot(&repository, &selected).await;
+            assert_eq!(
+                evaluate_credential_authority(&frozen, &evaluation(&frozen, &issuer), observed_at)
+                    .unwrap()
+                    .outcome,
+                EvidenceCheckOutcome::Failed
+            );
+        }
+        issuer.compliance_status = IssuerEntityComplianceStatus::Compliant;
+        issuer.revoked_at = Some(observed_at - Duration::seconds(1));
+        repository.save_issuer_entity(&issuer).await.unwrap();
+        let revoked = snapshot(&repository, &selected).await;
+        assert_eq!(
+            evaluate_credential_authority(&revoked, &evaluation(&revoked, &issuer), observed_at)
+                .unwrap()
+                .outcome,
+            EvidenceCheckOutcome::Failed
+        );
+
+        issuer.revoked_at = None;
+        issuer.issuer_id = "did:web:never-resolve.example.test".into();
+        issuer.metadata = json!({});
+        repository.save_issuer_entity(&issuer).await.unwrap();
+        let no_key = snapshot(&repository, &selected).await;
+        assert!(no_key.basis.issuer_relationships[0]
+            .verification_keys
+            .is_empty());
+        let denied =
+            evaluate_credential_authority(&no_key, &evaluation(&no_key, &issuer), observed_at)
+                .unwrap();
+        assert_eq!(
+            denied.reason_code,
+            "TRUST_PROFILE.ISSUER_KEY_NOT_AUTHORIZED"
+        );
+        assert_eq!(
+            repository
+                .issuer_entity_by_id(issuer.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .metadata,
+            json!({})
+        );
+        issuer.organization_id = Some("other-org".into());
+        issuer.is_system_issuer = true;
+        repository.save_issuer_entity(&issuer).await.unwrap();
+        assert!(repository
+            .credential_authority_snapshot("org-1", selected.id)
+            .await
+            .is_err());
+        assert!(repository
+            .credential_authority_snapshot("other-org", selected.id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn relationship_grant_writes_are_strict_and_atomic() {
+        let repository = Arc::new(MemoryTrustProfileRepository::default());
+        let (selected, _, relationship) = fixture(&repository).await;
+        let app = service_with_repository(repository.clone());
+        let uri = format!(
+            "/v1/trust-profiles/{}/issuers/{}",
+            selected.id, relationship.id
+        );
+        for malformed in [
+            json!({"format":"SD_JWT_VC","vct":VCT}),
+            json!([{"format":"SD_JWT_VC","vct":VCT,"allow":true}]),
+            json!([{"format":"SD_JWT_VC"}]),
+            json!([{"format":"MDOC","vct":VCT}]),
+            json!([{"format":"SD_JWT_VC","vct":"not-a-uri"}]),
+            json!([{"format":"SD_JWT_VC","vct":VCT},{"format":"SD_JWT_VC","vct":VCT}]),
+        ] {
+            let response = request(
+                app.clone(),
+                "PATCH",
+                &uri,
+                Some(json!({"metadata":{"marty_credential_authorizations_v1":malformed}})),
+            )
+            .await;
+            assert_eq!(response.status(), 422);
+            assert_eq!(
+                repository
+                    .profile_issuer_by_id(relationship.id)
+                    .await
+                    .unwrap(),
+                Some(relationship.clone())
+            );
+        }
+        let cleared = request(app, "PATCH", &uri, Some(json!({"metadata":{}}))).await;
+        assert_eq!(cleared.status(), 200);
+        let frozen = snapshot(&repository, &selected).await;
+        assert!(frozen.basis.issuer_relationships[0]
+            .credential_authorizations
+            .is_empty());
+    }
+}

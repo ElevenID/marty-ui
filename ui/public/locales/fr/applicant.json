@@ -12,7 +12,8 @@
       "title": "Actions rapides",
       "applyForCredential": "Demander un justificatif",
       "viewMyCredentials": "Voir mes justificatifs"
-    }
+    },
+    "loadError": "Le récapitulatif de vos justificatifs n’a pas pu être chargé. Veuillez réessayer."
   },
   "credentials": {
     "title": "Mes justificatifs",
@@ -40,6 +41,38 @@
   "catalog": {
     "title": "Catalogue de justificatifs",
     "description": "Parcourez et demandez les justificatifs disponibles",
-    "searchPlaceholder": "Rechercher des justificatifs..."
+    "searchPlaceholder": "Rechercher des justificatifs...",
+    "searchLabel": "Rechercher des justificatifs",
+    "filters": {
+      "clear": "Effacer les filtres"
+    },
+    "errorLoading": "Impossible de charger le catalogue de justificatifs. Réessayez ou contactez le support si le problème persiste.",
+    "empty": {
+      "launchUnavailable": "Le justificatif de ce cours n’est pas disponible actuellement. Contactez le fournisseur du cours.",
+      "title": "Aucun justificatif disponible",
+      "description": "Aucun justificatif n’est disponible pour votre organisation pour le moment."
+    }
+  },
+  "settings": {
+    "profile": {
+      "loadError": "Votre profil n’a pas pu être chargé. Veuillez réessayer.",
+      "saved": "Profil enregistré.",
+      "save": "Enregistrer le profil"
+    },
+    "notifications": {
+      "unavailable": "Les préférences de notification ne sont pas disponibles dans ce déploiement."
+    },
+    "wallets": {
+      "loadError": "Les portefeuilles disponibles n’ont pas pu être chargés. Veuillez réessayer.",
+      "savedAutomatically": "Vos choix de portefeuilles sont enregistrés automatiquement dans ce navigateur."
+    }
+  },
+  "identity": {
+    "guidance": {
+      "walletPresentation": "Pour présenter un justificatif, utilisez le portefeuille dans lequel il est enregistré.",
+      "expired": "Ce justificatif a expiré. Contactez l’émetteur pour le renouveler.",
+      "revoked": "Ce justificatif a été révoqué. Contactez l’émetteur pour obtenir de l’aide.",
+      "additionalInformation": "L’émetteur a besoin d’informations supplémentaires. Contactez-le pour savoir comment les fournir."
+    }
   }
 }

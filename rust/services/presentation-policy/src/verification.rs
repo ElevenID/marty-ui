@@ -125,6 +125,8 @@ impl AuthenticatedIssuerEvidence {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CredentialVerificationContext {
+    /// Prepared by the workload transport adapter; caller JSON cannot supply it.
+    pub sd_jwt_dcql: Option<crate::SdJwtDcqlRequest>,
     /// Derived from the saved policy, never from caller-supplied context.
     /// A verified presentation need not carry a credential for this obligation.
     pub presentation_only: bool,
@@ -143,6 +145,9 @@ pub struct CredentialVerificationContext {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CredentialVerificationEvidence {
+    /// Native query/subject/key evidence has no JSON promotion path.
+    #[serde(skip)]
+    pub authenticated_sd_jwt_query: Option<crate::AuthenticatedSdJwtQueryEvidence>,
     pub verified: bool,
     pub failure_reason: Option<String>,
     pub mdoc_authentication_diagnostic:
@@ -181,6 +186,27 @@ pub trait CredentialVerificationKernel: Send + Sync {
 
 #[async_trait]
 pub trait PresentationTrustResolver: Send + Sync {
+    async fn freeze_credential_authority(
+        &self,
+        _organization_id: Uuid,
+        _profile_id: Uuid,
+    ) -> Result<
+        marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1,
+        PresentationVerificationError,
+    > {
+        Err(PresentationVerificationError::Unavailable)
+    }
+
+    async fn evaluate_credential_authority(
+        &self,
+        _request: &marty_oid4vp_contract::trust_authority::CredentialTrustEvaluationRequestV1,
+    ) -> Result<
+        marty_oid4vp_contract::trust_authority::CredentialTrustEvaluationResponseV1,
+        PresentationVerificationError,
+    > {
+        Err(PresentationVerificationError::Unavailable)
+    }
+
     async fn load_profile(
         &self,
         profile_id: Uuid,
@@ -197,6 +223,16 @@ pub trait PresentationTrustResolver: Send + Sync {
 
 #[async_trait]
 pub trait CredentialStatusResolver: Send + Sync {
+    async fn observe_managed_status(
+        &self,
+        _request: &marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1,
+    ) -> Result<
+        marty_oid4vp_contract::managed_status::ManagedCredentialStatusObservationV1,
+        PresentationVerificationError,
+    > {
+        Err(PresentationVerificationError::Unavailable)
+    }
+
     async fn resolve(
         &self,
         organization_id: Uuid,
@@ -269,6 +305,8 @@ impl VerifiedFactsOrchestrator {
             )));
         }
 
+        let sd_jwt_dcql =
+            crate::SdJwtDcqlRequest::prepare(policy, request, format, (self.clock)())?;
         let presentation_only = is_presentation_only(policy);
         let profile_id = if presentation_only {
             None
@@ -276,6 +314,23 @@ impl VerifiedFactsOrchestrator {
             selected_trust_profile(policy, request)?
         };
         let trust_profile = match profile_id {
+            Some(profile_id) if policy.prerequisite_evidence_profile.is_some() => {
+                let authority = request
+                    .oid4vp_transport
+                    .as_ref()
+                    .and_then(|transport| transport.credential_authority.as_ref())
+                    .ok_or_else(|| {
+                        PresentationVerificationError::Failed(
+                            "PRESENTATION_POLICY.MANAGED_AUTHORITY_SNAPSHOT_REQUIRED".into(),
+                        )
+                    })?;
+                Some(ResolvedTrustProfile {
+                    id: profile_id,
+                    organization_id: policy.organization_id,
+                    document: serde_json::to_value(&authority.basis)
+                        .map_err(|_| PresentationVerificationError::Unavailable)?,
+                })
+            }
             Some(profile_id) => {
                 let profile = self
                     .trust
@@ -298,20 +353,63 @@ impl VerifiedFactsOrchestrator {
         let audience_required = freshness_flag(policy, "audience_binding_required");
 
         let context = CredentialVerificationContext {
+            sd_jwt_dcql: sd_jwt_dcql.clone(),
             presentation_only,
             resolved_issuer_key: None,
             format,
             token: request.vp_token.clone(),
-            nonce: (requires_bound_presentation && challenge_required)
-                .then(|| request.nonce.clone())
-                .flatten(),
-            audience: (requires_bound_presentation && audience_required)
-                .then(|| request.audience.clone())
-                .flatten(),
+            nonce: sd_jwt_dcql
+                .as_ref()
+                .map(|query| query.nonce().to_owned())
+                .or_else(|| {
+                    (requires_bound_presentation && challenge_required)
+                        .then(|| request.nonce.clone())
+                        .flatten()
+                }),
+            audience: sd_jwt_dcql
+                .as_ref()
+                .map(|query| query.audience().to_owned())
+                .or_else(|| {
+                    (requires_bound_presentation && audience_required)
+                        .then(|| request.audience.clone())
+                        .flatten()
+                }),
             verifier_context: request.context.clone(),
             trust_profile: trust_profile.clone(),
         };
         let mut evidence = self.kernel.verify(&context).await?;
+        let query_evidence_matches = match (&sd_jwt_dcql, &evidence.authenticated_sd_jwt_query) {
+            (Some(prepared), Some(authenticated)) => {
+                prepared.matches_evidence(authenticated)
+                    && authenticated.matches_claims(&evidence.claims)
+                    && evidence.issuer_id.as_deref() == Some(authenticated.issuer_id())
+                    && evidence
+                        .authenticated_issuer
+                        .as_ref()
+                        .is_some_and(|issuer| {
+                            issuer.issuer_id == authenticated.issuer_id()
+                                && issuer.provenance.trust_profile_id
+                                    == context.trust_profile.as_ref().map(|profile| profile.id)
+                                && issuer.provenance.organization_id
+                                    == context
+                                        .trust_profile
+                                        .as_ref()
+                                        .map(|profile| profile.organization_id)
+                        })
+                    && evidence.verified
+                    && evidence.holder_binding_verified
+                    && evidence.challenge_verified
+                    && evidence.audience_verified
+            }
+            (Some(_), None) => !evidence.verified,
+            (None, None) => true,
+            (None, Some(_)) => false,
+        };
+        if !query_evidence_matches {
+            return Err(PresentationVerificationError::Failed(
+                "PRESENTATION_POLICY.AUTHENTICATED_QUERY_EVIDENCE_MISMATCH".into(),
+            ));
+        }
         apply_trusted_oid4vp_context(policy, request, &mut evidence);
         let authenticated_outer_jti = if evidence.verified && !presentation_only {
             evidence.authenticated_outer_jti.clone()
@@ -322,7 +420,10 @@ impl VerifiedFactsOrchestrator {
             evidence.claims.clear();
             evidence.issuer_id = None;
             evidence.authenticated_issuer = None;
+            evidence.authenticated_sd_jwt_query = None;
         }
+
+        let mut authenticated_sd_jwt_query = evidence.authenticated_sd_jwt_query.clone();
 
         let authenticated_issuer = if evidence.verified && !presentation_only {
             evidence.authenticated_issuer.clone()
@@ -337,7 +438,47 @@ impl VerifiedFactsOrchestrator {
             .filter(|issuer| !issuer.trim().is_empty())
             .unwrap_or("unknown")
             .to_string();
+        let mut owner_observations = None;
         let trust = match (&trust_profile, evidence.verified, issuer_id.as_str()) {
+            (Some(_), true, _) if policy.prerequisite_evidence_profile.is_some() => {
+                let query = authenticated_sd_jwt_query.as_ref().ok_or_else(|| {
+                    PresentationVerificationError::Failed(
+                        "PRESENTATION_POLICY.MANAGED_AUTHORITY_BINDING_INVALID".into(),
+                    )
+                })?;
+                let (trust_request, status_request) = query.authority_requests()?;
+                let assessment = self
+                    .trust
+                    .evaluate_credential_authority(&trust_request)
+                    .await?;
+                let observation = self.status.observe_managed_status(&status_request).await?;
+                let trusted =
+                    assessment.outcome == marty_oid4vp_contract::EvidenceCheckOutcome::Passed;
+                let trust = IssuerTrustEvidence {
+                    verified: trusted,
+                    failure_reason: (!trusted).then(|| assessment.reason_code.clone()),
+                    trust_level: assessment.trust_level,
+                    compliance_statuses: assessment.compliance_statuses.clone(),
+                    accreditations: assessment.accreditations.clone(),
+                };
+                use marty_oid4vp_contract::managed_status::ManagedCredentialStatusState;
+                evidence.status = CredentialStatusEvidence {
+                    checked_at_epoch_seconds: u64::try_from(observation.checked_at_epoch_seconds)
+                        .ok(),
+                    not_revoked: Some(observation.state == ManagedCredentialStatusState::Active),
+                    credential_status: Some(
+                        match observation.state {
+                            ManagedCredentialStatusState::Active => "active",
+                            ManagedCredentialStatusState::Suspended => "suspended",
+                            ManagedCredentialStatusState::Revoked => "revoked",
+                        }
+                        .into(),
+                    ),
+                    warnings: Vec::new(),
+                };
+                owner_observations = Some((assessment, observation));
+                trust
+            }
             (Some(profile), true, issuer) if issuer != "unknown" => {
                 self.trust.evaluate_issuer(profile, issuer, format).await?
             }
@@ -356,11 +497,11 @@ impl VerifiedFactsOrchestrator {
             },
         };
 
-        let evaluation_time = (self.clock)();
         // A trusted mDL issuer certificate says nothing about the status of
         // this credential. Only credential-specific status evidence may set
         // not_revoked; policies requiring it fail closed when none is present.
         if !presentation_only
+            && policy.prerequisite_evidence_profile.is_none()
             && evidence.verified
             && evidence.status.checked_at_epoch_seconds.is_none()
             && !evidence.credential_status_ids.is_empty()
@@ -375,6 +516,21 @@ impl VerifiedFactsOrchestrator {
                 )
                 .await?;
         }
+
+        let evaluation_time = (self.clock)();
+        if let Some(query) = authenticated_sd_jwt_query.as_mut() {
+            query.revalidate_at(evaluation_time)?;
+        }
+        let managed_credential_authority =
+            match (authenticated_sd_jwt_query.as_ref(), owner_observations) {
+                (Some(query), Some((trust, status))) => Some(
+                    crate::VerifiedManagedCredentialAuthority::from_owner_observations(
+                        query, trust, status,
+                    )?,
+                ),
+                (_, None) => None,
+                (None, Some(_)) => return Err(PresentationVerificationError::Unavailable),
+            };
 
         let external_authorization = if presentation_only {
             Value::Null
@@ -419,7 +575,14 @@ impl VerifiedFactsOrchestrator {
             .credential_id
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "presented-credential".into());
-        let templates = credential_template_ids(policy);
+        let templates = if sd_jwt_dcql.is_some() {
+            authenticated_sd_jwt_query
+                .as_ref()
+                .map(|evidence| vec![evidence.credential_template_id().to_owned()])
+                .unwrap_or_default()
+        } else {
+            credential_template_ids(policy)
+        };
         let credential_status = normalized_status(evidence.status.credential_status.as_deref());
         let credentials = if presentation_only {
             json!([])
@@ -466,6 +629,8 @@ impl VerifiedFactsOrchestrator {
             policy_facts: facts,
             authenticated_outer_jti,
             authenticated_issuer,
+            authenticated_sd_jwt_query,
+            managed_credential_authority,
         })
     }
 }
@@ -624,6 +789,39 @@ fn apply_trusted_oid4vp_context(
 
 #[async_trait]
 impl PresentationVerificationOrchestrator for VerifiedFactsOrchestrator {
+    async fn freeze_credential_authority(
+        &self,
+        policy: &PresentationPolicy,
+    ) -> Result<
+        Option<marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1>,
+        PresentationVerificationError,
+    > {
+        if policy.prerequisite_evidence_profile.is_none() {
+            return Ok(None);
+        }
+        policy.validate().map_err(|_| {
+            PresentationVerificationError::Failed(
+                "PRESENTATION_POLICY.UNSUPPORTED_PREREQUISITE_PROFILE".into(),
+            )
+        })?;
+        let profile_id = policy
+            .trust_profile_id
+            .ok_or(PresentationVerificationError::Unavailable)?;
+        let authority = self
+            .trust
+            .freeze_credential_authority(policy.organization_id, profile_id)
+            .await?;
+        authority
+            .validate()
+            .map_err(|_| PresentationVerificationError::Unavailable)?;
+        if authority.organization_id != policy.organization_id.to_string()
+            || authority.profile.id != profile_id.to_string()
+        {
+            return Err(PresentationVerificationError::Unavailable);
+        }
+        Ok(Some(authority))
+    }
+
     async fn verify(
         &self,
         policy: &PresentationPolicy,
@@ -653,7 +851,7 @@ fn canonical_token(token: &Value) -> Result<String, PresentationVerificationErro
     }
 }
 
-fn selected_trust_profile(
+pub(crate) fn selected_trust_profile(
     policy: &PresentationPolicy,
     request: &EvaluatePresentationRequest,
 ) -> Result<Option<Uuid>, PresentationVerificationError> {

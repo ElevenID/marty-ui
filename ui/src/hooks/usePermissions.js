@@ -47,7 +47,7 @@ export function usePermissions() {
   const effectiveOrganizationId = mode === 'org' && hasSelectedMembership
     ? activeOrgId
     : null;
-  const principalId = user?.sub || user?.id || null;
+  const principalId = user?.user_id || user?.sub || user?.id || null;
   const scope = useMemo(() => ({ organizationId: effectiveOrganizationId, principalId, isAuthenticated }),
     [effectiveOrganizationId, principalId, isAuthenticated]);
   const currentScope = useRef(scope);

@@ -169,6 +169,9 @@ jobs:
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
           PUPPETEER_SKIP_DOWNLOAD=true bun install
+      - name: Verify development checker cleanup
+        working-directory: ui
+        run: node --test scripts/checker-worker-cleanup.test.mjs
       - name: Validate shard completeness and run fast checks
         working-directory: ui
         shell: bash

@@ -127,9 +127,10 @@ fn language_neutral_siop_contract_completes_and_preserves_only_safe_result_state
     assert_eq!(prepared.finalization.nonce_digest.len(), 64);
     assert!(prepared.finalization.callback.is_none());
     assert_eq!(
-        prepared.finalization.expected_status,
+        prepared.finalization.expected_instance.status,
         FlowInstanceStatus::AwaitingWallet
     );
+    assert_eq!(prepared.finalization.expected_instance, instance());
     assert_eq!(prepared.finalization.instance.state_history.len(), 2);
 
     let (ed_token, ed_subject) = public_vector("eddsa_default");

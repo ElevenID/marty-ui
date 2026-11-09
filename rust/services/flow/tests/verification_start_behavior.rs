@@ -1,4 +1,13 @@
-use std::{collections::BTreeMap, sync::Arc};
+#[path = "support/presentation_snapshot.rs"]
+mod presentation_snapshot;
+
+use std::{
+    collections::BTreeMap,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -47,6 +56,9 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            prerequisite_evidence_profile: None,
+            credential_authority: None,
+            policy_revision: presentation_snapshot::revision(policy_id),
             id: policy_id.into(),
             organization_id: self.organization_id.into(),
             status: "active".into(),
@@ -67,6 +79,31 @@ impl PresentationPolicyProvider for Policies {
 }
 
 struct Templates;
+
+struct ManagedPolicies;
+
+#[async_trait]
+impl PresentationPolicyProvider for ManagedPolicies {
+    async fn get_policy(
+        &self,
+        policy_id: &str,
+    ) -> Result<PresentationPolicyReference, FlowProviderError> {
+        let mut policy = Policies {
+            organization_id: "org-1",
+        }
+        .get_policy(policy_id)
+        .await?;
+        policy.prerequisite_evidence_profile = Some("managed_sd_jwt_dcql_v1".into());
+        policy.credential_authority = Some(presentation_snapshot::authority("org-1"));
+        Ok(policy)
+    }
+    async fn evaluate(
+        &self,
+        _: &PresentationEvaluationRequest,
+    ) -> Result<PresentationEvaluationResult, FlowProviderError> {
+        unreachable!("verification start does not evaluate presentations")
+    }
+}
 
 #[async_trait]
 impl CredentialTemplateProvider for Templates {
@@ -234,6 +271,57 @@ fn now() -> chrono::DateTime<Utc> {
 }
 
 #[tokio::test]
+async fn managed_start_freezes_owner_revision_and_rejects_trust_override() {
+    let mut ports = providers("org-1");
+    ports.presentation_policy = Some(Arc::new(ManagedPolicies));
+    let context = VerificationStartContext {
+        public_base_url: "https://verifier.example",
+        allow_http_loopback: false,
+        principal_id: "user-1",
+        now: now(),
+    };
+    let prepared = prepare_profiled_verification_start(
+        &ports,
+        &callbacks(),
+        request(RequestTransport::RequestUri),
+        &Default::default(),
+        context,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        prepared.instance.context[presentation_snapshot::SNAPSHOT_KEY]["credential_authority"],
+        json!(presentation_snapshot::authority("org-1"))
+    );
+    let mut foreign = request(RequestTransport::RequestUri);
+    foreign.trust_profile_id = Some("other-trust".into());
+    assert!(matches!(
+        prepare_profiled_verification_start(
+            &ports,
+            &callbacks(),
+            foreign,
+            &Default::default(),
+            context
+        )
+        .await,
+        Err(FlowVerificationStartError::InvalidPolicyReference)
+    ));
+    let mut lissi = VerificationStartOptions::default();
+    lissi.request_object.compatibility = marty_flow::RequestObjectCompatibility::Lissi;
+    assert!(matches!(
+        prepare_profiled_verification_start(
+            &ports,
+            &callbacks(),
+            request(RequestTransport::RequestUri),
+            &lissi,
+            context
+        )
+        .await,
+        Err(FlowVerificationStartError::InvalidPolicyReference)
+    ));
+}
+
+#[tokio::test]
 async fn language_neutral_contract_preserves_all_start_transports() {
     let contract: Contract = serde_json::from_str(include_str!(
         "../../../../contracts/flow-verification-start-behavior.json"
@@ -309,6 +397,23 @@ async fn language_neutral_contract_preserves_all_start_transports() {
             "user-1"
         );
         assert_eq!(prepared.instance.organization_id, "org-1");
+        let frozen = &prepared.instance.context[presentation_snapshot::SNAPSHOT_KEY];
+        assert_eq!(frozen["instance_id"], prepared.instance.id);
+        assert_eq!(frozen["organization_id"], "org-1");
+        assert_eq!(frozen["nonce"], prepared.response.nonce);
+        assert_eq!(
+            frozen["policy_revision"],
+            json!(presentation_snapshot::revision("policy-1"))
+        );
+        assert!(frozen["presentation_definition"]["id"].is_string());
+        assert!(frozen["dcql_query"]["credentials"].is_array());
+        assert!(marty_flow::public_context(&prepared.instance.context)
+            .get(presentation_snapshot::SNAPSHOT_KEY)
+            .is_none());
+        assert!(marty_flow::reject_private_context(&json!({
+            presentation_snapshot::SNAPSHOT_KEY: frozen,
+        }))
+        .is_err());
     }
 
     let mut siop = request(RequestTransport::RequestUri);
@@ -337,6 +442,100 @@ async fn language_neutral_contract_preserves_all_start_transports() {
         prepared.instance.context["flow_definition_reference"],
         "__siop_v2__"
     );
+    assert!(prepared
+        .instance
+        .context
+        .get(presentation_snapshot::SNAPSHOT_KEY)
+        .is_none());
+}
+
+struct CountedPolicies(Arc<AtomicUsize>);
+
+#[async_trait]
+impl PresentationPolicyProvider for CountedPolicies {
+    async fn get_policy(&self, id: &str) -> Result<PresentationPolicyReference, FlowProviderError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Policies {
+            organization_id: "org-1",
+        }
+        .get_policy(id)
+        .await
+    }
+
+    async fn evaluate(
+        &self,
+        _: &PresentationEvaluationRequest,
+    ) -> Result<PresentationEvaluationResult, FlowProviderError> {
+        unreachable!("request construction does not evaluate")
+    }
+}
+
+#[tokio::test]
+async fn request_uri_reuses_the_policy_and_exact_core_artifacts_frozen_at_start() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut ports = providers("org-1");
+    ports.presentation_policy = Some(Arc::new(CountedPolicies(calls.clone())));
+    let prepared = prepare_verification_start(
+        &ports,
+        &callbacks(),
+        request(RequestTransport::RequestUri),
+        "https://verifier.example",
+        false,
+        16_384,
+        16_384,
+        None,
+        "user-1",
+        now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let initial = prepared.instance;
+    let frozen = initial.context[presentation_snapshot::SNAPSHOT_KEY].clone();
+    // Policy/template changes or outages cannot rewrite an already advertised
+    // request. The evaluator separately rejects an obsolete policy revision.
+    ports.presentation_policy = Some(Arc::new(Policies {
+        organization_id: "other-org",
+    }));
+    ports.credential_template = None;
+    for compatibility in [
+        marty_flow::RequestObjectCompatibility::Standard,
+        marty_flow::RequestObjectCompatibility::Lissi,
+    ] {
+        let mut stored = initial.clone();
+        for _ in 0..2 {
+            let marty_flow::PreparedVerificationRequest::Ready(ready) =
+                marty_flow::prepare_verification_request(
+                    &ports,
+                    stored,
+                    "https://verifier.example",
+                    &marty_flow::VerificationRequestRetrievalOptions {
+                        compatibility,
+                        ..Default::default()
+                    },
+                    now(),
+                )
+                .await
+                .unwrap()
+            else {
+                panic!("frozen request must be served")
+            };
+            let payload =
+                &ready.instance.context["mip_messages"]["presentation_request"]["payload"];
+            let field = if compatibility == marty_flow::RequestObjectCompatibility::Standard {
+                "dcql_query"
+            } else {
+                "presentation_definition"
+            };
+            assert_eq!(payload[field], frozen[field]);
+            assert_eq!(
+                ready.instance.context[presentation_snapshot::SNAPSHOT_KEY],
+                frozen
+            );
+            stored = ready.instance;
+        }
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
