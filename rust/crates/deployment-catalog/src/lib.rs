@@ -108,6 +108,7 @@ pub mod installer_validation;
 pub mod installer_verify;
 pub mod kubernetes_application;
 pub mod kubernetes_renewal;
+pub mod kubernetes_renewal_activation;
 pub mod kubernetes_secrets;
 pub mod passport_model;
 

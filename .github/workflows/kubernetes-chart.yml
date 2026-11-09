@@ -13,6 +13,7 @@ on:
       - 'scripts/stage_kubernetes_application_credentials.py'
       - 'scripts/stage_kubernetes_renewal_credentials.py'
       - 'scripts/activate_kubernetes_application_credentials.py'
+      - 'scripts/activate_kubernetes_renewal_credentials.py'
       - 'scripts/kubernetes_application_state.py'
       - 'scripts/installer_*.py'
       - 'scripts/verify_installer_provenance.py'
@@ -31,6 +32,7 @@ on:
       - 'tests/test_stage_kubernetes_application_credentials.py'
       - 'tests/test_stage_kubernetes_renewal_credentials.py'
       - 'tests/test_activate_kubernetes_application_credentials.py'
+      - 'tests/test_activate_kubernetes_renewal_credentials.py'
       - 'tests/test_kubernetes_application_state.py'
       - 'tests/scripts/run-kubernetes-acceptance.cjs'
       - 'tests/scripts/run-kubernetes-acceptance.test.cjs'
@@ -89,4 +91,5 @@ jobs:
             tests/test_stage_kubernetes_application_credentials.py \
             tests/test_stage_kubernetes_renewal_credentials.py \
             tests/test_activate_kubernetes_application_credentials.py \
+            tests/test_activate_kubernetes_renewal_credentials.py \
             tests/test_kubernetes_application_state.py

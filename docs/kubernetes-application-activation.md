@@ -7,8 +7,8 @@ controllers. It updates one existing Secret and then selects a verified private
 credential generation for the next staging cycle.
 
 This remains a development adapter. Workload TLS and Keycloak candidates have a
-separate [scoped renewal staging command](kubernetes-renewal-staging.md); their
-activation, recovery after credential expiry, scheduling, production upgrades
+separate [scoped renewal staging command](kubernetes-renewal-staging.md) and
+[Renewal activation command](kubernetes-renewal-activation.md). Recovery after credential expiry, scheduling, production upgrades
 and authenticated application acceptance remain separate work. Updating ordinary
 tokens does not extend the original TLS or Keycloak lifetime.
 
@@ -128,6 +128,13 @@ records completion. It removes the pending marker only after verifying both the
 selector and completion receipt. Original and candidate credential directories
 are retained. The next staging command resolves the selected generation through
 the same custody-checked helper.
+
+Renewal activation shares this lock, selector and pending guard. It preserves
+the ordinary Secret marker while updating its own marker; later ordinary
+activation preserves the Renewal marker. Original application-only records
+remain readable. Once both domains participate, retained predecessor evidence
+binds their markers to the selected full generation. Keep every referenced
+operation and predecessor directory intact.
 
 If an attempt stops after recording pending intent, preserve all its private
 files and reconcile that same activation directory:

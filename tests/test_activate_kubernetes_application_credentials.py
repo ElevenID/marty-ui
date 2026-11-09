@@ -438,7 +438,7 @@ def test_unknown_native_activation_contract_refuses_before_any_cluster_access(fl
     assert not (flow.args.state_dir / selection.PENDING).exists()
 
 
-@pytest.mark.parametrize("fault", ["missing-consumer", "foreign-helm", "wrong-image", "wrong-mount",
+@pytest.mark.parametrize("fault", ["missing-consumer", "foreign-helm", "foreign-owner", "foreign-noncontroller-owner", "wrong-image", "wrong-mount",
     "wrong-entrypoint", "wrong-service-role", "extra-consumer", "missing-migration", "active-migration",
     "wrong-migration-image", "wrong-migration-command", "previous-marker"])
 def test_cluster_preflight_stops_before_fresh_authority_or_secret_mutation(flow, fault):
@@ -448,6 +448,9 @@ def test_cluster_preflight_stops_before_fresh_authority_or_secret_mutation(flow,
         flow.resources.remove(first)
     elif fault == "foreign-helm":
         first["metadata"]["annotations"]["meta.helm.sh/release-name"] = "other"
+    elif fault in {"foreign-owner", "foreign-noncontroller-owner"}:
+        first["metadata"]["ownerReferences"] = [{"kind": "CustomResource", "name": "other",
+            "uid": "foreign-owner", "controller": fault == "foreign-owner"}]
     elif fault == "wrong-image":
         first["spec"]["template"]["spec"]["containers"][0]["image"] = "unsigned:latest"
     elif fault == "wrong-mount":
@@ -828,3 +831,35 @@ def test_real_chart_consumers_match_activation_bindings(tmp_path):
             item["status"] = {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]}
             assert activation.migration_complete(item, item["metadata"]["namespace"],
                 item["metadata"]["labels"]["app.kubernetes.io/instance"], values["release"], values["images"])
+
+
+@pytest.mark.parametrize("phase", ["verified-proof", "publish", "complete"])
+def test_final_local_state_transitions_share_the_original_activation_deadline(flow, monkeypatch, phase):
+    clock = SimpleNamespace(now=time.monotonic())
+    monkeypatch.setattr(activation, "time", SimpleNamespace(
+        monotonic=lambda: clock.now, sleep=lambda seconds: setattr(clock, "now", clock.now + seconds)))
+    if phase == "verified-proof":
+        original = bootstrap.write_new
+
+        def delayed(path, *args, **kwargs):
+            result = original(path, *args, **kwargs)
+            if path == flow.args.operation_dir / activation.VERIFIED:
+                clock.now += activation.ACTIVATION_SECONDS + 1
+            return result
+
+        monkeypatch.setattr(bootstrap, "write_new", delayed)
+    else:
+        original = getattr(selection.LockedState, phase)
+
+        def delayed(held, *args, **kwargs):
+            result = original(held, *args, **kwargs)
+            clock.now += activation.ACTIVATION_SECONDS + 1
+            return result
+
+        monkeypatch.setattr(selection.LockedState, phase, delayed)
+    with pytest.raises(bootstrap.BootstrapError, match="deadline"):
+        activation.activate(flow.args)
+    assert (flow.args.operation_dir / activation.VERIFIED).is_file()
+    assert (flow.args.state_dir / selection.PENDING).is_file()
+    assert (flow.args.state_dir / selection.SELECTOR).exists() is (phase != "verified-proof")
+    assert flow.secret_patches == 1 and len(flow.deployment_patches) == 6

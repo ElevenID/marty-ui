@@ -18,10 +18,10 @@ use std::{
 
 pub const DESTINATION: &str = "marty-secrets";
 pub const ACTIVATION_ANNOTATION: &str = "marty.elevenid.com/application-activation";
-const MAX_OBJECT: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_OBJECT: usize = 2 * 1024 * 1024;
 const GENERATION_MODES: &[u32] = &[0o400, 0o440, 0o444, 0o600, 0o640, 0o644];
 pub(crate) type Snapshot = BTreeMap<String, (Vec<u8>, u32)>;
-type Inputs = BTreeMap<String, String>;
+pub(crate) type Inputs = BTreeMap<String, String>;
 
 #[derive(Clone)]
 struct Mapping {
@@ -237,7 +237,7 @@ fn token_inputs(snapshot: &Snapshot) -> Result<Inputs> {
     Ok(inputs)
 }
 
-fn valid_namespace(value: &str) -> bool {
+pub(crate) fn valid_namespace(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 63
         && !value.starts_with('-')
@@ -247,7 +247,7 @@ fn valid_namespace(value: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-fn valid_activation(value: &str) -> bool {
+pub(crate) fn valid_activation(value: &str) -> bool {
     value.len() == 32
         && value
             .bytes()
@@ -263,11 +263,16 @@ fn opaque_metadata(value: &Value) -> Result<&str> {
         .ok_or(REFUSAL)
 }
 
-fn validate_object(value: &Value, namespace: &str) -> Result<()> {
+pub(crate) fn validate_secret_object(
+    value: &Value,
+    namespace: &str,
+    destination: &str,
+    annotation: &str,
+) -> Result<()> {
     if !valid_namespace(namespace)
         || value["apiVersion"] != "v1"
         || value["kind"] != "Secret"
-        || value["metadata"]["name"] != DESTINATION
+        || value["metadata"]["name"] != destination
         || value["metadata"]["namespace"] != namespace
         || value["type"] != "Opaque"
         || value.get("immutable").is_some_and(|flag| flag != false)
@@ -285,7 +290,7 @@ fn validate_object(value: &Value, namespace: &str) -> Result<()> {
         if annotations.values().any(|value| !value.is_string()) {
             return Err(REFUSAL);
         }
-        if let Some(marker) = annotations.get(ACTIVATION_ANNOTATION) {
+        if let Some(marker) = annotations.get(annotation) {
             if !marker.as_str().is_some_and(valid_activation) {
                 return Err(REFUSAL);
             }
@@ -314,11 +319,43 @@ fn transition(
     current: &Inputs,
     candidate: &Inputs,
 ) -> Result<(Value, Value)> {
-    validate_object(observed, namespace)?;
-    if !valid_activation(activation) || current.keys().ne(candidate.keys()) || current.len() != 11 {
+    if current.keys().ne(candidate.keys()) || current.len() != 11 {
         return Err(REFUSAL);
     }
-    if observed["metadata"]["annotations"][ACTIVATION_ANNOTATION] == activation {
+    let mut replacements = BTreeSet::new();
+    for after in candidate.values() {
+        if current.values().any(|old| old == after) || !replacements.insert(after) {
+            return Err(REFUSAL);
+        }
+    }
+    transition_secret_object(
+        observed,
+        namespace,
+        DESTINATION,
+        ACTIVATION_ANNOTATION,
+        activation,
+        current,
+        candidate,
+    )
+}
+
+/// Prepare one guarded update, preserving all unrelated data and annotations.
+/// Caller-owned compiled inventories define the destination and selected keys.
+pub(crate) fn transition_secret_object(
+    observed: &Value,
+    namespace: &str,
+    destination: &str,
+    annotation: &str,
+    activation: &str,
+    current: &Inputs,
+    candidate: &Inputs,
+) -> Result<(Value, Value)> {
+    validate_secret_object(observed, namespace, destination, annotation)?;
+    if !valid_activation(activation)
+        || current.is_empty()
+        || current.keys().ne(candidate.keys())
+        || observed["metadata"]["annotations"][annotation] == activation
+    {
         return Err(REFUSAL);
     }
     let mut expected = observed.clone();
@@ -326,25 +363,26 @@ fn transition(
         json!({"op":"test","path":"/metadata/uid","value":observed["metadata"]["uid"]}),
         json!({"op":"test","path":"/metadata/resourceVersion","value":observed["metadata"]["resourceVersion"]}),
     ];
-    let mut replacement_values = BTreeSet::new();
-    for mapping in mappings()? {
-        let before = current.get(&mapping.key).ok_or(REFUSAL)?;
-        let after = candidate.get(&mapping.key).ok_or(REFUSAL)?;
-        if observed["data"][&mapping.key].as_str() != Some(&STANDARD.encode(before))
-            || current.values().any(|old| old == after)
-            || !replacement_values.insert(after)
+    for (key, before) in current {
+        let after = candidate.get(key).ok_or(REFUSAL)?;
+        if key.is_empty()
+            || !key
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+            || before == after
+            || observed["data"][key].as_str() != Some(&STANDARD.encode(before))
         {
             return Err(REFUSAL);
         }
         let encoded = STANDARD.encode(after);
-        patch.push(json!({"op":"replace","path":format!("/data/{}",mapping.key),"value":encoded}));
-        expected["data"][&mapping.key] = Value::String(encoded);
+        patch.push(json!({"op":"replace","path":format!("/data/{key}"),"value":encoded}));
+        expected["data"][key] = Value::String(encoded);
     }
     let mut annotations = observed["metadata"]
         .get("annotations")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    annotations[ACTIVATION_ANNOTATION] = Value::String(activation.into());
+    annotations[annotation] = Value::String(activation.into());
     patch.push(json!({"op":"add","path":"/metadata/annotations","value":annotations}));
     expected["metadata"]["annotations"] = annotations;
     Ok((Value::Array(patch), expected))
@@ -356,7 +394,25 @@ fn classify(
     result: &Value,
     namespace: &str,
 ) -> Result<&'static str> {
-    validate_object(result, namespace)?;
+    classify_secret_object(
+        observed,
+        expected,
+        result,
+        namespace,
+        DESTINATION,
+        ACTIVATION_ANNOTATION,
+    )
+}
+
+pub(crate) fn classify_secret_object(
+    observed: &Value,
+    expected: &Value,
+    result: &Value,
+    namespace: &str,
+    destination: &str,
+    annotation: &str,
+) -> Result<&'static str> {
+    validate_secret_object(result, namespace, destination, annotation)?;
     if observed == result {
         return Ok("unchanged");
     }

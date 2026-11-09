@@ -541,7 +541,8 @@ def prepare_namespace(transport: Transport, bootstrap_id: str, publication: dict
 def create_producer_pod(transport: Transport, *, image: str, nonce: str,
                         pull_secrets: list[str], purpose: str = "bootstrap") -> str:
     require(re.fullmatch(r"[0-9a-f]{12}", nonce) is not None
-            and purpose in {"bootstrap", "application-stage", "application-activation", "renewal-stage"},
+            and purpose in {"bootstrap", "application-stage", "application-activation",
+                            "renewal-stage", "renewal-activation"},
             "native transport identity is invalid")
     pod = "marty-kms-" + purpose + "-" + nonce
     # A bounded disposable transport pod runs the existing native producers.

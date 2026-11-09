@@ -37,7 +37,7 @@ pub fn metadata() -> Value {
 }
 
 #[cfg(target_os = "linux")]
-pub use runtime::{enroll, stage};
+pub use runtime::{enroll, stage, verify_candidate};
 
 #[cfg(not(target_os = "linux"))]
 pub async fn enroll(
@@ -51,6 +51,16 @@ pub async fn enroll(
 
 #[cfg(not(target_os = "linux"))]
 pub async fn stage(
+    _endpoint: &str,
+    _ca: &std::path::Path,
+    _identity: &std::path::Path,
+    _context: &Value,
+) -> crate::operator::Result<Value> {
+    Err(crate::operator::REFUSAL)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub async fn verify_candidate(
     _endpoint: &str,
     _ca: &std::path::Path,
     _identity: &std::path::Path,
@@ -90,6 +100,11 @@ mod runtime {
     const ENROLLMENT_SCHEMA: &str = "marty.kubernetes-renewal-enrollment/v1";
     const STAGING_SCHEMA: &str = "marty.kubernetes-renewal-staging/v1";
     const MAX_RECEIPT: usize = 65536;
+    // The outer activation includes Pod setup, all publications, rollout,
+    // delivery and selection under one 900-second deadline. Its fresh proof
+    // must retain the public one-hour floor after that entire remaining window,
+    // even when the native verification has a shorter execution budget.
+    const ACTIVATION_PROOF_TTL: u64 = MINIMUM_TTL + OPERATION_SECONDS;
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -608,6 +623,159 @@ mod runtime {
         stage_with(&Native { bao: &bao, ca }, ca, &ca_bytes, identity, context).await
     }
 
+    /// Revalidate an existing candidate under a fresh scoped Renewal session.
+    /// The verifier never calls either producer or creates credentials.
+    pub async fn verify_candidate(
+        endpoint: &str,
+        ca: &Path,
+        identity: &Path,
+        context: &Value,
+    ) -> Result<Value> {
+        let ca_bytes = input(ca, 65536)?;
+        let context: Staging = serde_json::from_value(context.clone()).map_err(|_| REFUSAL)?;
+        let bao = OpenBaoHttp::connect(endpoint, Some(ca), Duration::from_secs(10))
+            .map_err(|_| REFUSAL)?;
+        require(input(ca, 65536)? == ca_bytes)?;
+        verify_with(&Native { bao: &bao, ca }, ca, &ca_bytes, identity, context).await
+    }
+
+    async fn verify_with(
+        api: &impl Producers,
+        ca: &Path,
+        ca_bytes: &[u8],
+        identity: &Path,
+        context: Staging,
+    ) -> Result<Value> {
+        let budget = Budget::new(context.budget_seconds)?;
+        let nonce = nonce(&context.binding)?.to_owned();
+        let identity = HeldDirectory::open(identity, false)?;
+        let current = HeldDirectory::open(&context.current, false)?;
+        let output = HeldDirectory::open(&context.output, true)?;
+        let candidate = HeldDirectory::open(&context.candidate, false)?;
+        distinct(&[&identity, &current, &output, &candidate])?;
+        let (before, next) = crate::kubernetes_renewal_activation::qualify_generation(
+            &current.path,
+            &candidate.path,
+        )?;
+        require(
+            before
+                .get("openbao_tls_ca_cert")
+                .is_some_and(|entry| entry.0 == ca_bytes),
+        )?;
+        let credentials = identity_snapshot(&identity)?;
+        let enrolled = policies(&credentials["renewal-leaf-policies.json"].0)?;
+        let bound_bytes = input(&context.binding_file, 4096)?;
+        binding_receipt(&bound_bytes, &context.binding)?;
+        let unchanged = || -> Result<()> {
+            for directory in [&current, &identity, &output, &candidate] {
+                directory.require()?;
+            }
+            require(
+                snapshot(&current.path)? == before
+                    && snapshot(&candidate.path)? == next
+                    && identity_snapshot(&identity)? == credentials
+                    && input(&context.binding_file, 4096)? == bound_bytes
+                    && input(ca, 65536)? == ca_bytes,
+            )
+        };
+        budget.run(false, api.health(&context.binding)).await?;
+        unchanged()?;
+        receipt(
+            &output,
+            "pending.json",
+            &json!({
+                "schema":"marty.kubernetes-renewal-verification-intent/v1", "binding":context.binding,
+                "producerNonce":nonce,"inputHashes":hashes(&before),"candidateHashes":hashes(&next),
+                "identityHashes":hashes(&credentials),
+                "bindingSha256":format!("{:x}",Sha256::digest(&bound_bytes)),
+                "budgetSeconds":context.budget_seconds,"activated":false,
+            }),
+            MAX_RECEIPT,
+        )?;
+        let mut captured = None;
+        let login = budget
+            .run(false, api.login(&identity.path, &mut captured))
+            .await;
+        let Some(token) = captured else {
+            return Err(RECOVERY);
+        };
+        let custody = write(&output, "authority.token", token.as_bytes(), 1024);
+        let verified: Result<()> = async {
+            custody?;
+            safe_token(&token)?;
+            require(login?["token"] == token)?;
+            unchanged()?;
+            budget.run(false, api.health(&context.binding)).await?;
+            budget.run(false, api.authority(&token)).await?;
+            require(!next.values().any(|entry| entry.0.windows(token.len()).any(|part| part == token.as_bytes())))?;
+            let checks = json!({"token":token,"old":current.path,"new":candidate.path,
+                "minimum_ttl":ACTIVATION_PROOF_TTL,"require_orphan_new":true,"require_orphan_old":false,
+                "require_closed_new_metadata":true,"replacement":null,"retiring":false});
+            same_policies(budget.run(false, api.tokens(&checks)).await?, &enrolled)?;
+            budget.run(false, api.certificates(&checks)).await?;
+            budget.run(false, api.health(&context.binding)).await?;
+            unchanged()?;
+            receipt(&output, "validated.json", &json!({
+                "schema":"marty.kubernetes-renewal-verification-validation/v1","binding":context.binding,
+                "inputHashes":hashes(&before),"outputHashes":hashes(&next),"files":next.len(),"changedFiles":39,
+                "scopedLeafTokens":21,"remoteKeyVersion":1,"caChanged":false,"minimumTtlSeconds":MINIMUM_TTL,
+            }), MAX_RECEIPT)
+        }.await;
+        // A returned session has one cleanup owner even after malformed login,
+        // private write, scope, token, certificate or custody-check failure.
+        budget
+            .run(true, api.retire(&token))
+            .await
+            .map_err(|_| RECOVERY)?;
+        receipt(
+            &output,
+            "session-retired.json",
+            &json!({
+                "schema":"marty.kubernetes-renewal-session-retirement/v1","transientRevoked":true,
+            }),
+            4096,
+        )
+        .map_err(|_| RECOVERY)?;
+        let finish: Result<Value> = (|| {
+            verified?;
+            unchanged()?;
+            let found = fs::read_dir(&output.path)
+                .map_err(|_| REFUSAL)?
+                .map(|entry| {
+                    entry
+                        .map_err(|_| REFUSAL)?
+                        .file_name()
+                        .into_string()
+                        .map_err(|_| REFUSAL)
+                })
+                .collect::<Result<BTreeSet<_>>>()?;
+            require(
+                found
+                    == [
+                        "pending.json",
+                        "authority.token",
+                        "validated.json",
+                        "session-retired.json",
+                    ]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            )?;
+            budget.remaining(true)?;
+            terminal_receipt(
+                &output,
+                &json!({
+                    "schema":"marty.kubernetes-renewal-verification/v1","binding":context.binding,"producerNonce":nonce,
+                    "files":next.len(),"changedFiles":39,"scopedLeafTokens":21,"transientRevoked":true,
+                    "activated":false,"caChanged":false,"minimumTtlSeconds":MINIMUM_TTL,
+                }),
+                &budget,
+            )?;
+            Ok(json!({"ready":true,"count":39,"minimumTtlSeconds":MINIMUM_TTL}))
+        })();
+        finish.map_err(|_| RECOVERY)
+    }
+
     async fn stage_with(
         api: &impl Producers,
         ca: &Path,
@@ -911,9 +1079,27 @@ mod runtime {
                 }
             }
 
+            fn verification(&self) -> Staging {
+                let (tls, keycloak, _) = generation::inventories();
+                for (name, (bytes, mode)) in snapshot(&self.current).unwrap() {
+                    let bytes = if name != "workload_identity_ca_cert"
+                        && (tls.contains(&name) || keycloak.contains(&name))
+                    {
+                        format!("new-credential-{name}").into_bytes()
+                    } else {
+                        bytes
+                    };
+                    put(&self.candidate.join(name), &bytes, mode);
+                }
+                let mut context = self.staging();
+                context.budget_seconds = 600;
+                context
+            }
+
             fn fake(&self, failure: &'static str) -> Fake {
                 Fake {
                     failure,
+                    certificate_ttl: None,
                     events: Mutex::new(Vec::new()),
                     current: self.current.clone(),
                     identity: self.identity.clone(),
@@ -926,6 +1112,7 @@ mod runtime {
 
         struct Fake {
             failure: &'static str,
+            certificate_ttl: Option<u64>,
             events: Mutex<Vec<&'static str>>,
             current: PathBuf,
             identity: PathBuf,
@@ -1080,12 +1267,52 @@ mod runtime {
                 if self.failure == "token-scope" {
                     result[0] = "wrong-scope".into();
                 }
+                if self.failure == "verification-identity-drift" {
+                    put(
+                        &self.identity.join("renewal-secret-id"),
+                        b"changed-private-secret-id",
+                        0o600,
+                    );
+                }
+                if self.failure == "verification-binding-drift" {
+                    put(&self.bound, b"{}", 0o600);
+                }
                 Ok(result)
             }
             async fn certificates(&self, checks: &Value) -> Result<()> {
                 assert_eq!(checks["replacement"], Value::Null);
                 assert_eq!(checks["retiring"], false);
                 self.tick("certificates")?;
+                if let Some(ttl) = self.certificate_ttl {
+                    use spki::der::{DecodePem, EncodePem};
+                    use std::time::UNIX_EPOCH;
+                    let now = Duration::from_secs(1_800_000_000);
+                    let mut certificate = x509_cert::Certificate::from_pem(include_bytes!(
+                        "../../../../tests/fixtures/selfhost_ca_issuer_public.pem"
+                    ))
+                    .unwrap();
+                    certificate.tbs_certificate.validity.not_before =
+                        (UNIX_EPOCH + now).try_into().unwrap();
+                    certificate.tbs_certificate.validity.not_after =
+                        (UNIX_EPOCH + now + Duration::from_secs(ttl))
+                            .try_into()
+                            .unwrap();
+                    let pem = certificate.to_pem(spki::der::pem::LineEnding::LF).unwrap();
+                    assert_eq!(checks["minimum_ttl"], 4500);
+                    require(crate::operator_certificates::check_lifetime_at(
+                        pem.as_bytes(),
+                        checks["minimum_ttl"].as_u64().unwrap(),
+                        now,
+                    )?)?;
+                    // The same proof must leave the public floor after the
+                    // complete outer activation budget has elapsed.
+                    assert!(crate::operator_certificates::check_lifetime_at(
+                        pem.as_bytes(),
+                        MINIMUM_TTL,
+                        now + Duration::from_secs(OPERATION_SECONDS),
+                    )
+                    .unwrap());
+                }
                 if self.failure == "validated-write" {
                     put(
                         &self.output.join("validated.json"),
@@ -1113,6 +1340,240 @@ mod runtime {
                     );
                 }
                 Ok(())
+            }
+        }
+
+        #[tokio::test]
+        async fn verification_keeps_the_lifetime_floor_through_the_whole_activation_window() {
+            for (ttl, accepted) in [(4499, false), (4500, true), (4501, true)] {
+                let fixture = Fixture::new();
+                let context = fixture.verification();
+                let mut api = fixture.fake("");
+                api.certificate_ttl = Some(ttl);
+                let result = verify_with(&api, &fixture.ca, CA, &fixture.identity, context).await;
+                assert_eq!(result.is_ok(), accepted, "certificate TTL {ttl}");
+                assert_eq!(fixture.output.join("completed.json").exists(), accepted);
+                assert_eq!(
+                    api.events
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|event| **event == "retire")
+                        .count(),
+                    1
+                );
+                assert!(fixture.output.join("session-retired.json").exists());
+            }
+        }
+
+        #[tokio::test]
+        async fn fresh_verification_is_read_only_and_retires_the_known_session_before_completion() {
+            let fixture = Fixture::new();
+            let context = fixture.verification();
+            let before = snapshot(&fixture.current).unwrap();
+            let candidate = snapshot(&fixture.candidate).unwrap();
+            let credentials = snapshot(&fixture.identity).unwrap();
+            let api = fixture.fake("");
+            let result = verify_with(&api, &fixture.ca, CA, &fixture.identity, context)
+                .await
+                .unwrap();
+            assert_eq!(
+                result,
+                json!({"ready":true,"count":39,"minimumTtlSeconds":3600})
+            );
+            assert_eq!(
+                *api.events.lock().unwrap(),
+                [
+                    "health",
+                    "login",
+                    "health",
+                    "authority",
+                    "tokens",
+                    "certificates",
+                    "health",
+                    "retire"
+                ]
+            );
+            assert_eq!(snapshot(&fixture.current).unwrap(), before);
+            assert_eq!(snapshot(&fixture.candidate).unwrap(), candidate);
+            assert_eq!(snapshot(&fixture.identity).unwrap(), credentials);
+            let evidence = snapshot(&fixture.output).unwrap();
+            assert_eq!(
+                evidence.keys().map(String::as_str).collect::<Vec<_>>(),
+                [
+                    "authority.token",
+                    "completed.json",
+                    "pending.json",
+                    "session-retired.json",
+                    "validated.json"
+                ]
+            );
+            assert!(evidence.values().all(|entry| entry.1 == 0o600));
+            let completed: Value = serde_json::from_slice(&evidence["completed.json"].0).unwrap();
+            assert_eq!(
+                completed,
+                json!({
+                    "schema":"marty.kubernetes-renewal-verification/v1","binding":binding(),
+                    "producerNonce":"123456abcdef","files":43,"changedFiles":39,"scopedLeafTokens":21,
+                    "transientRevoked":true,"activated":false,"caChanged":false,"minimumTtlSeconds":3600,
+                })
+            );
+            let retired: Value =
+                serde_json::from_slice(&evidence["session-retired.json"].0).unwrap();
+            assert_eq!(
+                retired,
+                json!({"schema":"marty.kubernetes-renewal-session-retirement/v1",
+                "transientRevoked":true})
+            );
+            assert!(!result.to_string().contains(LOGIN_TOKEN));
+        }
+
+        #[tokio::test]
+        async fn verification_failure_always_retires_known_sessions_without_producing_or_completing(
+        ) {
+            for fault in [
+                "login",
+                "session-write",
+                "authority",
+                "tokens",
+                "token-scope",
+                "certificates",
+                "validated-write",
+                "retire",
+                "late-input-drift",
+                "candidate-drift",
+                "verification-identity-drift",
+                "verification-binding-drift",
+                "session-in-candidate",
+            ] {
+                let fixture = Fixture::new();
+                let context = fixture.verification();
+                if fault == "session-in-candidate" {
+                    let path = fixture.candidate.join("keycloak_master_rs256_cert");
+                    let mode =
+                        snapshot(&fixture.candidate).unwrap()["keycloak_master_rs256_cert"].1;
+                    put(&path, LOGIN_TOKEN.as_bytes(), mode);
+                }
+                let api = fixture.fake(fault);
+                assert_eq!(
+                    verify_with(&api, &fixture.ca, CA, &fixture.identity, context).await,
+                    Err(RECOVERY),
+                    "{fault}"
+                );
+                let events = api.events.lock().unwrap();
+                assert_eq!(
+                    events.iter().filter(|event| **event == "retire").count(),
+                    1,
+                    "{fault}"
+                );
+                assert!(events.iter().all(|event| ![
+                    "inventory",
+                    "enroll",
+                    "executable",
+                    "tls",
+                    "keycloak"
+                ]
+                .contains(event)));
+                assert!(fixture.output.join("pending.json").exists(), "{fault}");
+                assert!(!fixture.output.join("completed.json").exists(), "{fault}");
+                assert_eq!(
+                    fixture.output.join("session-retired.json").exists(),
+                    fault != "retire",
+                    "{fault}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn unknown_verification_login_retains_one_intent_and_cannot_be_replayed() {
+            let fixture = Fixture::new();
+            let context = fixture.verification();
+            let api = fixture.fake("unknown-login");
+            assert_eq!(
+                verify_with(&api, &fixture.ca, CA, &fixture.identity, context).await,
+                Err(RECOVERY)
+            );
+            assert_eq!(*api.events.lock().unwrap(), ["health", "login"]);
+            assert_eq!(
+                generation::entries(&fixture.output)
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                ["pending.json"]
+            );
+            assert!(
+                verify_with(&api, &fixture.ca, CA, &fixture.identity, fixture.staging())
+                    .await
+                    .is_err()
+            );
+            assert_eq!(*api.events.lock().unwrap(), ["health", "login"]);
+        }
+
+        #[tokio::test]
+        async fn verification_rejects_generation_binding_and_custody_faults_before_any_session() {
+            for fault in [
+                "ordinary-change",
+                "ca-change",
+                "missing-input",
+                "wrong-mode",
+                "identity-extra",
+                "binding",
+                "ca",
+                "output-overlap",
+                "candidate-alias",
+                "budget-zero",
+                "budget-large",
+                "health",
+            ] {
+                let fixture = Fixture::new();
+                let mut context = fixture.verification();
+                match fault {
+                    "ordinary-change" => put(
+                        &fixture.candidate.join("ordinary_token"),
+                        b"unrelated-change",
+                        0o440,
+                    ),
+                    "ca-change" => put(
+                        &fixture.candidate.join("workload_identity_ca_cert"),
+                        b"unapproved-ca",
+                        0o444,
+                    ),
+                    "missing-input" => {
+                        fs::remove_file(fixture.candidate.join("keycloak_master_cookie_token"))
+                            .unwrap()
+                    }
+                    "wrong-mode" => fs::set_permissions(
+                        fixture.candidate.join("keycloak_master_cookie_token"),
+                        fs::Permissions::from_mode(0o666),
+                    )
+                    .unwrap(),
+                    "identity-extra" => put(&fixture.identity.join("extra"), b"extra", 0o600),
+                    "binding" => {
+                        context.binding.namespace_uid =
+                            "00000000-2222-3333-4444-555555555555".into()
+                    }
+                    "ca" => put(&fixture.ca, b"wrong-ca", 0o600),
+                    "output-overlap" => context.output = fixture.candidate.clone(),
+                    "candidate-alias" => {
+                        let path = fixture._root.path().join("alias");
+                        symlink(&fixture.candidate, &path).unwrap();
+                        context.candidate = path;
+                    }
+                    "budget-zero" => context.budget_seconds = 0,
+                    "budget-large" => context.budget_seconds = 901,
+                    "health" => {}
+                    _ => unreachable!(),
+                }
+                let api = fixture.fake(fault);
+                assert!(
+                    verify_with(&api, &fixture.ca, CA, &fixture.identity, context)
+                        .await
+                        .is_err(),
+                    "{fault}"
+                );
+                assert!(!api.events.lock().unwrap().contains(&"login"), "{fault}");
+                assert!(!fixture.output.join("pending.json").exists(), "{fault}");
             }
         }
 

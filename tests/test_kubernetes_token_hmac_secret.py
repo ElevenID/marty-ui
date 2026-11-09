@@ -19,7 +19,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = "synthetic-existing-shared-token-$literal;not-a-command"
 METADATA_COMMANDS = ("kubernetes-secrets-contract", "kubernetes-application-token-contract",
-                     "kubernetes-application-activation-contract", "kubernetes-renewal-contract")
+                     "kubernetes-application-activation-contract", "kubernetes-renewal-contract",
+                     "kubernetes-renewal-activation-contract")
 FUNCTIONS = (
     "catalog_required_secret_envs",
     "is_placeholder_secret",
@@ -143,7 +144,7 @@ def test_native_publication_contract_is_compiled_and_needs_no_inputs_repo_or_clu
                               for entry in application["tokens"] if entry["replacementRole"] is not None),
                              key=lambda entry: entry["input"]),
         }
-    if command == "kubernetes-renewal-contract":
+    if command in {"kubernetes-renewal-contract", "kubernetes-renewal-activation-contract"}:
         sys.path.insert(0, str(ROOT / "scripts"))
         from passport_remote_tls import SELFHOST_TLS_FILES
         keycloak_files = {"keycloak_signing_kms_token"}
@@ -161,6 +162,22 @@ def test_native_publication_contract_is_compiled_and_needs_no_inputs_repo_or_clu
             "unchangedFiles": ["workload_identity_ca_cert"], "changedFiles": 39,
             "scopedLeafTokens": 21, "tlsMetadataFile": "selfhost-tls-kms-roles.json",
         }
+        if command == "kubernetes-renewal-activation-contract":
+            catalog = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())
+            files = (set(SELFHOST_TLS_FILES) | keycloak_files) - {"workload_identity_ca_cert"}
+            mappings = [
+                {"input": file.upper(), "file": file, "secret": secret["name"], "key": key}
+                for file in files for secret in catalog["secrets"]
+                for key, field in secret["fields"].items() if field == {"env": file.upper()}
+            ]
+            assert len(mappings) == 39
+            assert len({entry["secret"] for entry in mappings}) == 33
+            expected = {
+                "schema": "marty.kubernetes-renewal-activation/v1",
+                "minimumTtlSeconds": 3600, "secretCount": 33, "changedFiles": 39,
+                "activationAnnotation": "marty.elevenid.com/renewal-activation",
+                "inputs": sorted(mappings, key=lambda entry: entry["input"]),
+            }
     assert json.loads(result.stdout) == expected
     assert "PRIVATE_" not in result.stdout
     assert not (tmp_path / "native-manifest.json").exists()
@@ -327,6 +344,120 @@ def test_native_application_patch_refuses_incomplete_generation_before_output(
     result = native_application_publication(native_tools, tmp_path, request)
     assert result.returncode != 0
     assert "PRIVATE_" not in result.stdout + result.stderr
+    assert not Path(request["output"]).exists()
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+@pytest.fixture
+def renewal_publication(tmp_path):
+    if os.name != "posix":
+        pytest.skip("Private Renewal activation uses POSIX operator custody")
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import bootstrap_kubernetes_openbao as bootstrap
+
+    tmp_path.chmod(0o700)
+    current, candidate = tmp_path / "current", tmp_path / "candidate"
+    current.mkdir(mode=0o700)
+    candidate.mkdir(mode=0o700)
+    changed = (set(bootstrap.SELFHOST_TLS_FILES) | bootstrap.KEYCLOAK_FILES) - {"workload_identity_ca_cert"}
+    names = changed | set(bootstrap.TOKEN_FILES.values()) | {"workload_identity_ca_cert", "openbao_tls_ca_cert"}
+    before, after = {}, {}
+    for name in names:
+        before[name] = ("PRIVATE_CURRENT_CANARY_" + name).encode()
+        after[name] = ("PRIVATE_CANDIDATE_CANARY_" + name).encode() if name in changed else before[name]
+        if name.endswith("cert"):
+            before[name] = b"-----BEGIN CERTIFICATE-----\r\n" + before[name] + b"\r\n-----END CERTIFICATE-----\r\n"
+            after[name] = b"-----BEGIN CERTIFICATE-----\r\n" + after[name] + b"\r\n-----END CERTIFICATE-----\r\n"
+        for directory, payload in ((current, before[name]), (candidate, after[name])):
+            (directory / name).write_bytes(payload)
+            (directory / name).chmod(0o600)
+    catalog = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())
+
+    def build(name):
+        entry = next(entry for entry in catalog["secrets"] if entry["name"] == name)
+        fields = {key: field["env"].lower() for key, field in entry["fields"].items()}
+        selected = {key: file for key, file in fields.items() if file in changed}
+        secret = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                  "metadata": {"name": name, "namespace": "marty-test", "uid": "existing-secret-uid",
+                               "resourceVersion": "41", "annotations": {"example.test/preserve": "original"}},
+                  "data": {key: base64.b64encode(before[file].replace(b"\r", b"").rstrip(b"\n")).decode()
+                           for key, file in fields.items()}}
+        secret["data"]["unrelated"] = base64.b64encode(b"PRIVATE_PRESERVED_CANARY").decode()
+        observed = tmp_path / "before.json"
+        observed.write_text(json.dumps(secret))
+        observed.chmod(0o600)
+        request = {"operation": "prepare", "namespace": "marty-test", "secret": name,
+                   "current": str(current), "candidate": str(candidate), "observed": str(observed),
+                   "output": str(tmp_path / "patch.json"), "activationId": "0123456789abcdef0123456789abcdef"}
+        return request, secret, before, after, selected
+
+    return build
+
+
+def native_renewal_publication(native_tools, tmp_path, request):
+    return subprocess.run(
+        [str(native_tools[0]), "operator", "kubernetes-renewal-publication"],
+        input=json.dumps(request), text=True, capture_output=True, timeout=20,
+        cwd=tmp_path, env={"PATH": str(native_tools[1].parent), "TEST_ROOT": str(tmp_path)},
+    )
+
+
+@pytest.mark.parametrize("secret_name", ["keycloak-kms", "signing-keys-integration-secret-server-tls"])
+def test_native_renewal_publication_has_private_per_secret_patches_and_exact_readback(
+    native_tools, tmp_path, renewal_publication, secret_name,
+):
+    request, secret, before, after, selected = renewal_publication(secret_name)
+    result = native_renewal_publication(native_tools, tmp_path, request)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"ready": True, "secret": secret_name, "count": len(selected)}
+    assert "PRIVATE_" not in result.stdout + result.stderr
+    output = Path(request["output"])
+    assert output.stat().st_mode & 0o7777 == 0o600
+    patch = json.loads(output.read_text())
+    assert patch[:2] == [
+        {"op": "test", "path": "/metadata/uid", "value": secret["metadata"]["uid"]},
+        {"op": "test", "path": "/metadata/resourceVersion", "value": "41"},
+    ]
+    assert len(patch) == len(selected) + 3
+    applied = json.loads(json.dumps(secret))
+    for key, file in selected.items():
+        published = base64.b64encode(after[file].replace(b"\r", b"").rstrip(b"\n")).decode()
+        assert {"op": "replace", "path": f"/data/{key}", "value": published} in patch
+        applied["data"][key] = published
+    applied["metadata"]["resourceVersion"] = "42"
+    applied["metadata"]["annotations"]["marty.elevenid.com/renewal-activation"] = request["activationId"]
+    verify = {key: value for key, value in request.items() if key != "output"}
+    result_path = tmp_path / "result.json"
+    verify.update(operation="verify", result=str(result_path))
+    for observation, state in ((applied, "candidate"), (secret, "unchanged")):
+        result_path.write_text(json.dumps(observation))
+        result_path.chmod(0o600)
+        result = native_renewal_publication(native_tools, tmp_path, verify)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == {"ready": True, "secret": secret_name,
+                                            "count": len(selected), "state": state}
+        assert "PRIVATE_" not in result.stdout + result.stderr
+    for path, expected in ((Path(request["current"]), before), (Path(request["candidate"]), after)):
+        assert {file.name: file.read_bytes() for file in path.iterdir()} == expected
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+@pytest.mark.parametrize("fault", ["foreign-owner", "changed-live-ca", "unrelated-generation"])
+def test_native_renewal_publication_refuses_other_owners_trust_and_generation_changes(
+    native_tools, tmp_path, renewal_publication, fault,
+):
+    request, secret, _, _, _ = renewal_publication("keycloak-kms")
+    if fault == "foreign-owner":
+        secret["metadata"]["ownerReferences"] = [{"kind": "Certificate", "uid": "foreign-owner"}]
+    elif fault == "changed-live-ca":
+        secret["data"]["openbao_tls_ca_cert"] = base64.b64encode(b"PRIVATE_WRONG_CA_CANARY").decode()
+    else:
+        (Path(request["candidate"]) / "openbao_tls_ca_cert").write_bytes(b"PRIVATE_CHANGED_CA_CANARY")
+    Path(request["observed"]).write_text(json.dumps(secret))
+    result = native_renewal_publication(native_tools, tmp_path, request)
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "PRIVATE_" not in result.stderr
     assert not Path(request["output"]).exists()
     assert not (tmp_path / "native-manifest.json").exists()
 

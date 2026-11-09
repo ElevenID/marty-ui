@@ -281,8 +281,10 @@ Use the [Kubernetes lifecycle guide](../../../docs/kubernetes-first-milestone.md
 for the fixed 11-input replacement scope, retained identity and recovery
 boundary. Fresh bootstrap also enrolls the existing Renewal AppRole for
 [private TLS and Keycloak candidate staging](../../../docs/kubernetes-renewal-staging.md).
-Activation of those candidates, automatic renewal and live upgrade qualification
-remain separate requirements.
+The [Renewal activation command](../../../docs/kubernetes-renewal-activation.md)
+uses conditional updates to the existing Secrets, Deployment controllers and
+private delivery checks. Authenticated workload acceptance, automatic renewal
+and live upgrade qualification remain separate requirements.
 
 Before claiming milestone acceptance, test a fresh isolated install, exact
 image IDs, HTTPS and OIDC readiness, existing issuance/verification/wallet demo

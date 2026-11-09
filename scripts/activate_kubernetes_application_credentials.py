@@ -277,14 +277,19 @@ def release_annotations(template: dict, runtime: dict) -> None:
         "application runtime provenance differs")
 
 
-def deployment_snapshot(value: dict, namespace: str, image: str, runtime: dict) -> tuple[str, dict]:
+def deployment_snapshot(value: dict, namespace: str, image: str, runtime: dict, *,
+                        allowed_names: set[str] | None = None, consumer_validator=None,
+                        component_label_required: bool = True) -> tuple[str, dict]:
     meta = metadata(value, "Deployment", namespace)
     name = meta["name"]
-    bootstrap.require(name in BINDINGS, "unknown application token consumer")
+    bootstrap.require(name in (BINDINGS if allowed_names is None else allowed_names),
+                      "unknown application token consumer")
     labels = meta.get("labels", {})
     release_name = labels.get("app.kubernetes.io/instance")
     bootstrap.require(labels.get("app.kubernetes.io/name") == "marty"
-                      and labels.get("app.kubernetes.io/component") == name
+                      and meta.get("ownerReferences", []) == []
+                      and (labels.get("app.kubernetes.io/component") == name
+                           or (not component_label_required and "app.kubernetes.io/component" not in labels))
                       and labels.get("app.kubernetes.io/managed-by") == "Helm"
                       and isinstance(release_name, str)
                       and re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,61}[a-z0-9]|[a-z0-9]", release_name),
@@ -307,7 +312,7 @@ def deployment_snapshot(value: dict, namespace: str, image: str, runtime: dict) 
                               for key, item in selector.items()),
                       "application Deployment selection differs")
     release_annotations(template, runtime)
-    consumer_bindings(pod_spec(value), name, image)
+    (consumer_bindings if consumer_validator is None else consumer_validator)(pod_spec(value), name, image)
     revision = meta.get("annotations", {}).get("deployment.kubernetes.io/revision")
     bootstrap.require(isinstance(revision, str) and re.fullmatch(r"[1-9][0-9]{0,9}", revision),
                       "application Deployment revision is unavailable")
@@ -627,21 +632,28 @@ def remaining(deadline: float) -> int:
     return seconds
 
 
-def target_spec(before: dict, activation_id: str) -> dict:
+def target_spec(before: dict, activation_id: str, *, annotation: str = ANNOTATION) -> dict:
     result = json.loads(bootstrap.encoded(before["spec"]))
     annotations = result["template"].setdefault("metadata", {}).setdefault("annotations", {})
-    bootstrap.require(isinstance(annotations, dict) and annotations.get(ANNOTATION) != activation_id,
+    bootstrap.require(isinstance(annotations, dict) and annotations.get(annotation) != activation_id,
                       "application activation marker already exists in its original template")
-    annotations[ANNOTATION] = activation_id
+    annotations[annotation] = activation_id
     return result
 
 
-def same_target(resource: dict, before: dict, activation_id: str, context: dict) -> dict:
-    _, observed = deployment_snapshot(resource, context["binding"]["namespace"],
+def context_deployment_snapshot(context: dict, resource: dict) -> tuple[str, dict]:
+    """Reuse the same guarded Deployment protocol for another closed consumer graph."""
+    if "deploymentSnapshot" in context:
+        return context["deploymentSnapshot"](resource)
+    return deployment_snapshot(resource, context["binding"]["namespace"],
         context["values"]["images"]["services"], context["values"]["release"])
+
+
+def same_target(resource: dict, before: dict, activation_id: str, context: dict) -> dict:
+    _, observed = context_deployment_snapshot(context, resource)
     bootstrap.require(observed["uid"] == before["uid"] and observed["labels"] == before["labels"]
                       and observed["ownership"] == before["ownership"]
-                      and observed["spec"] == target_spec(before, activation_id)
+                      and observed["spec"] == target_spec(before, activation_id, annotation=context.get("activationAnnotation", ANNOTATION))
                       and observed["generation"] == before["generation"] + 1,
                       "application rollout was changed by another writer")
     return observed
@@ -656,20 +668,19 @@ def rollout_one(context: dict, operation: Path, before: dict, activation_id: str
     name = before["name"]
     dispatched = operation / (name + "-rollout-requested.json")
     live = deployment_get(context, name, deadline)
-    marker = live.get("spec", {}).get("template", {}).get("metadata", {}).get("annotations", {}).get(ANNOTATION)
+    marker = live.get("spec", {}).get("template", {}).get("metadata", {}).get("annotations", {}).get(context.get("activationAnnotation", ANNOTATION))
     if not dispatched.exists():
-        _, observed = deployment_snapshot(live, context["binding"]["namespace"],
-            context["values"]["images"]["services"], context["values"]["release"])
+        _, observed = context_deployment_snapshot(context, live)
         bootstrap.require(observed == {**before, "resourceVersion": observed["resourceVersion"]},
                           "application Deployment changed before its rollout")
         bootstrap.write_new(operation / (name + "-before-rollout.json"), bootstrap.encoded(live))
         patch = [{"op": "test", "path": "/metadata/uid", "value": before["uid"]},
                  {"op": "test", "path": "/metadata/resourceVersion", "value": observed["resourceVersion"]},
                  {"op": "add", "path": "/spec/template/metadata/annotations",
-                  "value": target_spec(before, activation_id)["template"]["metadata"]["annotations"]}]
+                  "value": target_spec(before, activation_id, annotation=context.get("activationAnnotation", ANNOTATION))["template"]["metadata"]["annotations"]}]
         patch_file = operation / (name + "-rollout-patch.json")
         bootstrap.write_new(patch_file, bootstrap.encoded(patch))
-        bootstrap.write_new(dispatched, bootstrap.encoded({"schema": "marty.kubernetes-application-rollout-request/v1",
+        bootstrap.write_new(dispatched, bootstrap.encoded({"schema": context.get("rolloutRequestSchema", "marty.kubernetes-application-rollout-request/v1"),
             "activationId": activation_id, "name": name, "uid": before["uid"],
             "resourceVersion": observed["resourceVersion"], "generation": before["generation"] + 1}))
         response = context["transport"].kubectl("application Deployment rollout", "patch", "deployment", name,
@@ -678,12 +689,11 @@ def rollout_one(context: dict, operation: Path, before: dict, activation_id: str
         bootstrap.write_new(operation / (name + "-rollout-response.json"), response)
     else:
         retained = private_json(operation / (name + "-before-rollout.json"))
-        _, guarded = deployment_snapshot(retained, context["binding"]["namespace"],
-            context["values"]["images"]["services"], context["values"]["release"])
+        _, guarded = context_deployment_snapshot(context, retained)
         bootstrap.require(guarded == {**before, "resourceVersion": guarded["resourceVersion"]},
                           "retained rollout precondition differs")
         receipt = staging.record(dispatched)
-        bootstrap.require(receipt == {"schema": "marty.kubernetes-application-rollout-request/v1",
+        bootstrap.require(receipt == {"schema": context.get("rolloutRequestSchema", "marty.kubernetes-application-rollout-request/v1"),
             "activationId": activation_id, "name": name, "uid": before["uid"],
             "resourceVersion": guarded["resourceVersion"], "generation": before["generation"] + 1},
             "retained rollout request differs")
@@ -716,8 +726,9 @@ def rollout_one(context: dict, operation: Path, before: dict, activation_id: str
 
 def verified_workloads(value: dict, context: dict, original: dict, activation_id: str,
                        revisions: dict[str, int]) -> list[dict]:
-    observed_graph = preflight_resources(value, context["binding"]["namespace"],
-        context["values"]["images"], context["values"]["release"])
+    observed_graph = (context["preflightResources"](value) if "preflightResources" in context else
+        preflight_resources(value, context["binding"]["namespace"],
+            context["values"]["images"], context["values"]["release"]))
     bootstrap.require(observed_graph["releaseName"] == original["releaseName"]
                       and observed_graph["migrationUids"] == original["migrationUids"]
                       and set(observed_graph["deployments"]) == set(original["deployments"]),
@@ -739,7 +750,7 @@ def verified_workloads(value: dict, context: dict, original: dict, activation_id
         replica_sets = [item for item in entries if item.get("kind") == "ReplicaSet"
                         and controller(item) == ("Deployment", name, before["uid"])]
         target_sets = [item for item in replica_sets
-                       if item.get("spec", {}).get("template", {}).get("metadata", {}).get("annotations", {}).get(ANNOTATION) == activation_id]
+                       if item.get("spec", {}).get("template", {}).get("metadata", {}).get("annotations", {}).get(context.get("activationAnnotation", ANNOTATION)) == activation_id]
         bootstrap.require(len(target_sets) == 1, "application rollout ReplicaSet is ambiguous")
         selected_set = target_sets[0]
         set_meta = metadata(selected_set, "ReplicaSet", context["binding"]["namespace"])
@@ -755,7 +766,7 @@ def verified_workloads(value: dict, context: dict, original: dict, activation_id
         for pod in pods:
             pod_meta = metadata(pod, "Pod", context["binding"]["namespace"])
             bootstrap.require(controller(pod) == ("ReplicaSet", set_meta["name"], set_meta["uid"])
-                              and pod_meta.get("annotations", {}).get(ANNOTATION) == activation_id
+                              and pod_meta.get("annotations", {}).get(context.get("activationAnnotation", ANNOTATION)) == activation_id
                               and pod.get("status", {}).get("phase") == "Running"
                               and any(item.get("type") == "Ready" and item.get("status") == "True"
                                       for item in pod.get("status", {}).get("conditions", [])),
@@ -965,9 +976,12 @@ def activate(args: argparse.Namespace) -> None:
                               "previous activation proof no longer matches live observations")
         else:
             bootstrap.write_new(operation / VERIFIED, bootstrap.encoded(proof))
+        remaining(deadline)
         held.publish(binding, operation, expected=selected)
+        remaining(deadline)
         held.complete(binding, operation)
-        held.finish(binding, operation)
+        remaining(deadline)
+        held.finish(binding, operation, check_deadline=lambda: remaining(deadline))
     print("Application Secret and the selected Deployment rollouts were verified; the candidate generation is current.")
     print("Keep the private activation attempt. Runtime credential-use acceptance, TLS/Keycloak renewal and expiry recovery remain separate.")
 

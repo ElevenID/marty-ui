@@ -61,7 +61,13 @@ fn resolve(name: &str) -> Result<String> {
     }
     let value = String::from_utf8(bytes).map_err(|_| format!("{name}_FILE must be UTF-8"))?;
     // Match tr -d CR and Bash command substitution, including multiline certificates.
-    Ok(value.replace('\r', "").trim_end_matches('\n').to_owned())
+    Ok(normalize_file_value(&value))
+}
+
+/// Preserve the existing file-backed publication representation, including PEMs.
+/// Activation must compare these exact bytes while retaining raw generation files.
+pub(crate) fn normalize_file_value(value: &str) -> String {
+    value.replace('\r', "").trim_end_matches('\n').to_owned()
 }
 
 fn required(values: &BTreeMap<String, String>, name: &str) -> Result<()> {

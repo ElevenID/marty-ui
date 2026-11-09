@@ -20,6 +20,7 @@ qualification or admit a release to the consumer installation channel.
 | Application credential publication | Existing native Secret publisher and ordinary `kubectl apply` |
 | Ordinary token replacement authority and candidate staging | Existing native AppRole, OpenBao token roles and credential-generation commands |
 | Workload TLS and Keycloak renewal candidate staging | Existing Renewal AppRole, signed native producers and immutable generation verifier |
+| Credential activation and workload replacement | Conditional Kubernetes Secret updates, Deployment controllers and private delivery checks |
 | Release verification | Existing inventory validation, pinned `gh` and `cosign` verifiers |
 | Trial shutdown | A systemd timer with an absolute UTC deadline |
 
@@ -329,7 +330,10 @@ before selecting the generation for the next staging cycle.
 Fresh bootstrap also enrolls the existing scoped Renewal AppRole. Use the
 [TLS and Keycloak renewal staging command](kubernetes-renewal-staging.md) to
 prepare a private candidate for those 39 replacements while preserving the full
-selected generation. Its activation and workload adoption remain separate work.
+selected generation. The [Renewal activation command](kubernetes-renewal-activation.md)
+uses conditional updates to the 33 existing destinations and verifies the selected
+Deployment rollouts and credential delivery. Authenticated workload acceptance
+remains a separate gate.
 The ordinary token candidate alone does not extend those certificates or KMS
 tokens, install a renewal schedule, or qualify a production upgrade.
 
@@ -507,7 +511,10 @@ native producer and Kubernetes APIs. They do not renew workload TLS or Keycloak
 credentials, recover expired identities, or install unattended scheduling. Their
 complete live application flow still requires the acceptance evidence above.
 The separate [TLS and Keycloak staging command](kubernetes-renewal-staging.md)
-prepares a private candidate; its workload activation remains outstanding.
+prepares a private candidate; the [Renewal activation command](kubernetes-renewal-activation.md)
+installs it through the existing Secret owners and Deployment controllers. Both
+credential families preserve one shared current generation and separate activation
+markers. Authenticated runtime consumption and live AWS acceptance remain required.
 Do not extend credentials or disable their checks to hide expiration.
 
 Reboot testing here establishes recovery on the same single node. It does not

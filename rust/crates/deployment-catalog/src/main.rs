@@ -336,8 +336,37 @@ fn kubernetes_renewal_metadata(params: &[String]) -> Result<String, String> {
     }
 }
 
+fn kubernetes_renewal_activation_usage_error() -> String {
+    usage_error(
+        &command_usage("kubernetes-renewal-activation-contract"),
+        "marty-deploy kubernetes-renewal-activation-contract",
+        "this command accepts no arguments except -h or --help",
+    )
+}
+
+fn kubernetes_renewal_activation_metadata(params: &[String]) -> Result<String, String> {
+    match params {
+        [] => serde_json::to_string(
+            &marty_deployment_catalog::kubernetes_renewal_activation::metadata(),
+        )
+        .map(|metadata| format!("{metadata}\n"))
+        .map_err(|_| "cannot encode compiled renewal activation metadata".to_owned()),
+        [help] if help == "--help" || help == "-h" => {
+            Ok(frozen_help("kubernetes-renewal-activation-contract"))
+        }
+        _ => Err(kubernetes_renewal_activation_usage_error()),
+    }
+}
+
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|arg| arg == "kubernetes-renewal-activation-contract")
+    {
+        print!("{}", kubernetes_renewal_activation_metadata(&args[1..])?);
+        return Ok(());
+    }
     if args
         .first()
         .is_some_and(|arg| arg == "kubernetes-renewal-contract")
@@ -897,7 +926,11 @@ fn run() -> Result<(), String> {
                 serde_json::to_writer(&mut output, &value).map_err(|_| refusal)?;
                 output.flush().map_err(|_| refusal)
             }
-            Some("kubernetes-renewal-enroll" | "kubernetes-renewal-stage") if args.len() == 5 => {
+            Some(
+                "kubernetes-renewal-enroll"
+                | "kubernetes-renewal-stage"
+                | "kubernetes-renewal-verify",
+            ) if args.len() == 5 => {
                 use marty_deployment_catalog::kubernetes_renewal;
                 use std::{io::IsTerminal, path::Path};
                 if std::io::stdout().is_terminal() {
@@ -925,8 +958,16 @@ fn run() -> Result<(), String> {
                                 &context,
                             )
                             .await
-                        } else {
+                        } else if args[1] == "kubernetes-renewal-stage" {
                             kubernetes_renewal::stage(
+                                &args[2],
+                                Path::new(&args[3]),
+                                Path::new(&args[4]),
+                                &context,
+                            )
+                            .await
+                        } else {
+                            kubernetes_renewal::verify_candidate(
                                 &args[2],
                                 Path::new(&args[3]),
                                 Path::new(&args[4]),
@@ -982,7 +1023,9 @@ fn run() -> Result<(), String> {
                     .map_err(|_| application_authority::RECOVERY)?;
                 output.flush().map_err(|_| application_authority::RECOVERY)
             }
-            Some("kubernetes-application-publication") if args.len() == 2 => {
+            Some("kubernetes-application-publication" | "kubernetes-renewal-publication")
+                if args.len() == 2 =>
+            {
                 use std::io::IsTerminal;
                 if std::io::stdout().is_terminal() {
                     return Err(REFUSAL.into());
@@ -996,7 +1039,11 @@ fn run() -> Result<(), String> {
                     return Err(REFUSAL.into());
                 }
                 let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
-                let value = marty_deployment_catalog::kubernetes_application::operation(&context)?;
+                let value = if args[1] == "kubernetes-renewal-publication" {
+                    marty_deployment_catalog::kubernetes_renewal_activation::operation(&context)?
+                } else {
+                    marty_deployment_catalog::kubernetes_application::operation(&context)?
+                };
                 let mut output = std::io::stdout().lock();
                 serde_json::to_writer(&mut output, &value).map_err(|_| REFUSAL)?;
                 output.flush().map_err(|_| REFUSAL)
@@ -1362,6 +1409,9 @@ fn run() -> Result<(), String> {
     if command == "kubernetes-renewal-contract" {
         return Err(kubernetes_renewal_usage_error());
     }
+    if command == "kubernetes-renewal-activation-contract" {
+        return Err(kubernetes_renewal_activation_usage_error());
+    }
     let params = &args[1..];
     if params.iter().any(|arg| arg == "--help" || arg == "-h") {
         if command == "kubernetes-secrets" {
@@ -1527,8 +1577,38 @@ fn main() {
 mod tests {
     use super::{
         kubernetes_application_metadata, kubernetes_publication_metadata,
-        kubernetes_renewal_metadata, posix_shell_quote,
+        kubernetes_renewal_activation_metadata, kubernetes_renewal_metadata, posix_shell_quote,
     };
+
+    #[test]
+    fn kubernetes_renewal_activation_contract_is_public_and_refuses_input_paths() {
+        let output = kubernetes_renewal_activation_metadata(&[]).unwrap();
+        let actual: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(
+            actual,
+            marty_deployment_catalog::kubernetes_renewal_activation::metadata()
+        );
+        assert_eq!(actual["secretCount"], 33);
+        assert_eq!(actual["inputs"].as_array().unwrap().len(), 39);
+        for args in [
+            vec!["private-sentinel"],
+            vec!["--repo-root=private-sentinel"],
+            vec!["--help", "private-sentinel"],
+            vec!["--help", "-h"],
+        ] {
+            let error = kubernetes_renewal_activation_metadata(
+                &args.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+            )
+            .unwrap_err();
+            assert!(error.starts_with("__USAGE__"));
+            assert!(!error.contains("private-sentinel"));
+        }
+        for flag in ["--help", "-h"] {
+            assert!(kubernetes_renewal_activation_metadata(&[flag.into()])
+                .unwrap()
+                .starts_with("usage: marty-deploy kubernetes-renewal-activation-contract"));
+        }
+    }
 
     #[test]
     fn kubernetes_renewal_contract_is_public_and_refuses_input_paths() {

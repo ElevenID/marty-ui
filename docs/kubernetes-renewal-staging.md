@@ -139,10 +139,10 @@ attempt before any further issuance.
 
 ## Remaining deployment work
 
-Workload TLS and Keycloak candidate activation remains separate work. It must
-publish the verified replacements to their existing Kubernetes Secret owners,
-coordinate the existing workloads' adoption and verify authenticated behavior.
-The staging success receipt does not establish those results. Automatic renewal,
+Use the [Renewal activation command](kubernetes-renewal-activation.md) to publish
+the verified replacements to their existing Kubernetes Secret owners and verify
+the selected Deployment rollouts and private credential delivery. The staging
+success receipt does not establish those results. Authenticated runtime acceptance, automatic renewal,
 expired-credential recovery, production upgrades and a live AWS/Kubernetes
 acceptance trial also remain separate qualification steps.
 
