@@ -8,7 +8,8 @@ const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness
 const { createOwnedMembership } = require('./demo-owned-membership');
 const { login, selectOrg } = require('./audit-beta-credential-lifecycle');
 const { acquireWalletSession, openIsolatedWallet } = require('./demo-wallet-session');
-const { chromium } = require('@playwright/test');
+const { chromium, request } = require('@playwright/test');
+const { createCanvasCaptureCustody, createOriginalCookieSessionContext, retireCanvasBetaSession } = require('./run-canvas-oss-standard-contract');
 const {
   collectBetaOffer,
   loadEnvFile,
@@ -165,17 +166,52 @@ async function presentBadge(walletPage, requestUri) {
   };
 }
 
-async function runCredentialLogin({ retainedFirstParty = false, evidence = null } = {}) {
+function membershipSessionRetirement(runId) {
+  const sessions = new Map();
+  async function capture(role, context) {
+    const cookies = await context.cookies(BETA_ORIGIN);
+    const session = cookies.filter(cookie => cookie.name === 'sessionId');
+    assert.equal(session.length, 1, 'Owned membership session requires its original cookie');
+    if ([...sessions.values()].some(row => row.sessionId === session[0].value)) return;
+    assert.ok(!sessions.has(role), 'Owned membership session role cannot be replaced');
+    const custody = createCanvasCaptureCustody(`${runId}-${role}`);
+    // Publish custody before the next owned API effect, not after logout clears the jar.
+    sessions.set(role, { custody, sessionId: session[0].value, cookies: JSON.parse(JSON.stringify(cookies)) });
+    custody.retain('betaAdminSession', JSON.stringify(cookies));
+  }
+  async function retire() {
+    const results = [];
+    for (const [role, row] of sessions) {
+      let isolated;
+      try {
+        const cookies = row.cookies.map(cookie => ({ ...cookie }));
+        const original = await createOriginalCookieSessionContext(request, cookies);
+        isolated = original.isolated;
+        const retirement = await retireCanvasBetaSession(original.session, row.custody);
+        await isolated.dispose(); isolated = null;
+        assert.equal(row.custody.retire(), true, 'Original session custody retirement unconfirmed');
+        results.push({ role, ...retirement, originalCookieVerified: true, custodyRetired: true });
+      } catch (error) {
+        results.push({ role, originalCookieVerified: false, custodyRetired: false });
+      } finally { if (isolated) await isolated.dispose().catch(() => {}); }
+    }
+    return { complete: sessions.size > 0 && results.every(row => row.originalCookieVerified && row.custodyRetired), sessions: results };
+  }
+  return { capture, retire };
+}
+
+async function runCredentialLogin({ retainedFirstParty = false, retainedMembership = false, evidence = null } = {}) {
+  const ownedMembership = retainedFirstParty || retainedMembership;
   loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
   loadEnvFile(path.join(ROOT, '.env'));
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
   const artifactDir = createArtifactDir(ROOT, `beta-credential-login-${stamp}`);
   const uiCandidate = resolveUiCandidateDist(ROOT);
-  if (retainedFirstParty && (!['0', '1'].includes(process.env.RECORD_VIDEO) || LOCAL_BETA_PROXY || uiCandidate
+  if (ownedMembership && (!['0', '1'].includes(process.env.RECORD_VIDEO) || LOCAL_BETA_PROXY || uiCandidate
     || process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0' || new URL(BETA_ORIGIN).protocol !== 'https:')) {
     throw new Error('Retained first-party control requires explicit recording mode and authenticated deployed HTTPS');
   }
-  const inputs = retainedFirstParty ? await acknowledgeDemoInputs(artifactDir, 'first-party-run-input.json', {
+  const inputs = ownedMembership ? await acknowledgeDemoInputs(artifactDir, 'first-party-run-input.json', {
     runId: process.env.DEMO_EXECUTION_EVIDENCE_RUN_ID,
     organizationId: process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID,
     credentialTemplateId: process.env.LOGIN_BADGE_TEMPLATE_ID || DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
@@ -191,7 +227,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     assert.equal(inputs.email, process.env.DEMO_FIRST_PARTY_AUTHORIZED_APPLICANT,
       'Explicit authorization for the reserved beta test account is required');
   }
-  const explain = retainedFirstParty
+  const explain = ownedMembership
     ? (page, title, detail) => showRecordingStep(page, title, detail, {
       enabled: RECORD_VIDEO, eyebrow: 'First-party browser wallet control',
     }) : showStep;
@@ -210,12 +246,13 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     pageErrors: [],
     badResponses: [],
     consoleErrors: [],
-    ...(retainedFirstParty ? {
-      scenario: 'first-party-browser-wallet',
+    ...(ownedMembership ? {
+      scenario: retainedMembership ? 'membership-badge-login' : 'first-party-browser-wallet',
       controlScope: { classification: 'FIRST_PARTY_CONTROL', implementation: CONTROL_IMPLEMENTATION,
         productPath: 'GOVERNED_MEMBERSHIP_CLAIM_AND_CREDENTIAL_LOGIN', publicWalletProduct: false },
       limitations: [
-        'This fresh run reuses the governed membership product path with the internal Rust wallet control.',
+        'This fresh run uses the governed membership product path with the internal Rust development/test wallet.',
+        ...(retainedMembership ? ['The original three membership assertions do not qualify holder cancellation, untrusted-issuer or expired-offer behavior, or an independent wallet.'] : []),
         'Closed-session rejection is observed through the Rust wallet API; it does not qualify TTL expiry, public-device isolation or a public wallet product.',
         'A fresh owned application uses an authorized existing beta test account with synthetic form values. Its credential and application-template authority are retired after this run.',
       ],
@@ -233,12 +270,14 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
 
   let walletSession, walletContext, loginContext, holderContext, adminContext, adminPage;
   let control, loginVideo, walletVideo;
+  const sessionRetirement = ownedMembership ? membershipSessionRetirement(inputs.runId) : null;
   try {
-    if (retainedFirstParty) {
+    if (ownedMembership) {
       adminContext = await browser.newContext({ viewport: VIDEO_SIZE });
       adminPage = await adminContext.newPage();
       evidence.bindPage(adminPage);
       await login(adminPage, process.env.TEST_ADMIN_EMAIL, process.env.TEST_ADMIN_PASSWORD);
+      await sessionRetirement.capture('admin', adminContext);
       assert.equal((await selectOrg(adminPage)).ok, true);
       control = createOwnedMembership(adminPage, inputs);
       report.ownedResources = control.owned;
@@ -256,13 +295,16 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     const offerResult = await collectBetaOffer(browser, {
       walletId: 'wr-default',
       logoutAfterOffer: true,
-      keepContext: RECORD_VIDEO || retainedFirstParty,
-      prepareApplication: control ? (page) => control.prepare(page) : null,
+      keepContext: RECORD_VIDEO || ownedMembership,
+      prepareApplication: control ? async (page) => {
+        await sessionRetirement.capture('claim', page.context());
+        return control.prepare(page);
+      } : null,
       onPage: evidence ? (page) => evidence.bindPage(page) : null,
       contextOptions: RECORD_VIDEO ? { viewport: VIDEO_SIZE, recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {},
       onStep: explain,
       setupContext: async (context) => {
-        if (retainedFirstParty) holderContext = context;
+        if (ownedMembership) holderContext = context;
         await installUiCandidateRoute(context, uiCandidate, BETA_ORIGIN);
       },
     });
@@ -288,10 +330,10 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       offerSource: offer.offerSource,
       ...(control ? { governedApplicationId: control.owned.applicationId } : {}),
       loggedOut: offer.loggedOut === true,
-      ...await receiveBadge(walletPage, offer.offerUri, { retainSummary: retainedFirstParty,
+      ...await receiveBadge(walletPage, offer.offerUri, { retainSummary: ownedMembership,
         ...(inputs ? { configurationId: inputs.configurationId } : {}) }),
     };
-    if (retainedFirstParty && !controlCredentialReceived(report.badge)) {
+    if (ownedMembership && !controlCredentialReceived(report.badge)) {
       throw new Error('The control wallet did not receive and store the exact expected credential');
     }
     await explain(
@@ -355,7 +397,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     // The browser owns the one-use finalize; bind its status and redirect before presentation.
     const loginObservation = observeCredentialLoginBrowser(loginPage, BETA_ORIGIN, loginRequest.nonce);
     report.presentation = await presentBadge(walletPage, loginRequest.href);
-    if (!report.presentation.accepted || (retainedFirstParty && report.presentation.status !== 200)) {
+    if (!report.presentation.accepted || (ownedMembership && report.presentation.status !== 200)) {
       throw new Error(`Browser wallet presentation failed: ${report.presentation.error || 'unknown error'}`);
     }
     await explain(
@@ -405,6 +447,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       const body = await response.json().catch(() => null);
       return body?.authenticated === true ? true : null;
     }), 60_000, 500);
+    if (ownedMembership) await sessionRetirement.capture('credential-login', loginPage.context());
     const auth = await loginPage.evaluate(async () => {
       const response = await fetch('/v1/auth/me', { credentials: 'include' });
       return { status: response.status, body: await response.json().catch(() => null) };
@@ -421,10 +464,10 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       authStatus: auth.status,
       authenticatedEmail: auth.body?.authenticated ? auth.body?.user?.email : null,
     };
-    if (retainedFirstParty && report.completion.authenticatedEmail?.toLowerCase() !== inputs.email.toLowerCase()) {
+    if (ownedMembership && report.completion.authenticatedEmail?.toLowerCase() !== inputs.email.toLowerCase()) {
       throw new Error('Credential login resolved a different account');
     }
-    if (retainedFirstParty && !firstPartyControlAssertions(report).presentation_authenticated) {
+    if (ownedMembership && !firstPartyControlAssertions(report).presentation_authenticated) {
       throw new Error('The control presentation did not establish an authenticated HTTP 200 session');
     }
     await explain(
@@ -441,14 +484,16 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     );
     report.releaseReady = report.engineeringReady && !uiCandidate;
     report.finishedAt = new Date().toISOString();
-    if (retainedFirstParty) {
+    if (ownedMembership) {
       report.closedWalletSession = await closeControlSession(walletSession, walletContext);
-      report.firstPartyControlAssertions = firstPartyControlAssertions(report);
-      if (!Object.values(report.firstPartyControlAssertions).every(value => value === true)) {
-        throw new Error('The retained first-party control contract did not pass');
+      if (retainedFirstParty) {
+        report.firstPartyControlAssertions = firstPartyControlAssertions(report);
+        if (!Object.values(report.firstPartyControlAssertions).every(value => value === true)) {
+          throw new Error('The retained first-party control contract did not pass');
+        }
       }
       await explain(walletPage, 'Run-owned wallet session closed',
-        'The Rust control closed this run’s session. A fresh credential-list API request for that run is rejected with HTTP 410.');
+        "The Rust control closed this run's session. A fresh credential-list API request for that run is rejected with HTTP 410.");
       report.finishedAt = new Date().toISOString();
     } else await walletSession.close();
   } catch (error) {
@@ -461,20 +506,18 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       try { report.cleanup = await control.cleanup(); }
       catch (error) { report.cleanupError = redact(error.message); report.engineeringReady = false; }
     }
-    if (retainedFirstParty) {
-      report.authoringSessionsRetired = true;
-      for (const context of new Set([loginContext || holderContext, adminContext].filter(Boolean))) {
-        try {
-          const response = await context.request.post(`${BETA_ORIGIN}/v1/auth/logout`, { maxRedirects: 0 });
-          assert.ok(response.ok() || [302, 303, 307].includes(response.status()));
-          const me = await context.request.get(`${BETA_ORIGIN}/v1/auth/me`);
-          assert.equal((await me.json()).authenticated, false);
-        } catch (error) {
-          report.authoringSessionsRetired = false; report.engineeringReady = false;
-          report.cleanupErrors ||= [];
-          report.cleanupErrors.push({ operation: 'beta_session_logout', error: redact(error.message) });
+    if (ownedMembership) {
+      // Also retain any session acquired immediately before a failed login/claim callback.
+      try {
+        for (const [index, context] of [...new Set([adminContext, holderContext, loginContext].filter(Boolean))].entries()) {
+          if ((await context.cookies(BETA_ORIGIN)).some(cookie => cookie.name === 'sessionId')) {
+            await sessionRetirement.capture(`remaining-${index}`, context);
+          }
         }
-      }
+      } catch (error) { report.cleanupErrors ||= []; report.cleanupErrors.push({operation:'beta_session_custody',error:redact(error.message)}); }
+      report.originalSessionRetirement = await sessionRetirement.retire();
+      report.authoringSessionsRetired = report.originalSessionRetirement.complete === true;
+      if (!report.authoringSessionsRetired) report.engineeringReady = false;
     }
     for (const [operation, close] of [
       ['wallet', () => walletSession?.close()],
@@ -490,7 +533,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
         report.releaseReady = false;
       }
     }
-    if (retainedFirstParty) {
+    if (ownedMembership) {
       const cleanupComplete = report.cleanup?.complete === true && report.authoringSessionsRetired === true
         && walletSession?.evidence.closed === true && !report.cleanupError && !report.cleanupErrors?.length;
       report.engineeringReady = report.engineeringReady === true && cleanupComplete;
@@ -516,18 +559,22 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
   }
 }
 
-async function main({ retainedFirstParty = false } = {}) {
-  if (!retainedFirstParty) return runCredentialLogin();
+async function main({ retainedFirstParty = false, retainedMembership = false } = {}) {
+  assert.equal(typeof retainedFirstParty, 'boolean');
+  assert.equal(typeof retainedMembership, 'boolean');
+  assert.ok(!(retainedFirstParty && retainedMembership), 'Select one membership evidence contract');
+  if (!retainedFirstParty && !retainedMembership) return runCredentialLogin();
   const evidence = await createDemoLiveEvidence();
-  try { return await runCredentialLogin({ retainedFirstParty, evidence }); }
+  try { return await runCredentialLogin({ retainedFirstParty, retainedMembership, evidence }); }
   finally { evidence.close(); }
 }
 
 if (require.main === module) {
-  main().catch((error) => {
+  assert.ok(process.argv.length === 2 || (process.argv.length === 3 && process.argv[2] === '--owned-membership'), 'Unknown credential-login mode');
+  main({ retainedMembership: process.argv[2] === '--owned-membership' }).catch((error) => {
     console.log(JSON.stringify({ error: redact(error.stack || error.message || String(error)) }, null, 2));
     process.exitCode = 1;
   });
 }
 
-module.exports = { closeControlSession, controlCredentialReceived, firstPartyControlAssertions, main };
+module.exports = { membershipSessionRetirement, closeControlSession, controlCredentialReceived, firstPartyControlAssertions, main };

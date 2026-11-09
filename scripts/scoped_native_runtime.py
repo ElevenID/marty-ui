@@ -21,6 +21,16 @@ CORE_REVISION = "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
 ROLE_BINARIES = {"flow": "marty-flow", "gateway": "marty-gateway", "issuance-native": "marty-issuance-service"}
 MARTY_CLIENTS = frozenset("auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow verification revocation-profile device-registration issuance issuance-native canvas-sync-worker passport-beta-bureau".split())
 RUNTIME_ROLES = MARTY_CLIENTS | frozenset(("gateway", "signing-keys", "passport-callback-signer", "canvas-sandbox", "ui-prod"))
+# The current D12 functional cohort has event-stream in the 22 owned runtime
+# slots. Keep the historical Canvas cohort exact for every older profile.
+D12_CURRENT_RUNTIME_ROLES = (RUNTIME_ROLES - {"canvas-sandbox"}) | {"event-stream"}
+
+def runtime_roles(profile=None):
+    if profile == "d12-passport-current-functional":
+        return D12_CURRENT_RUNTIME_ROLES
+    require(profile in (None, "native-devtest-passport-four-role", "d12-passport-canonical-subset"),
+            "UNREVIEWED_RUNTIME_ROLE_PROFILE")
+    return RUNTIME_ROLES
 MIGRATIONS = ("flow/0003_physical_start_intents", "issuance/0010_passport_start_idempotency", "issuance/0011_passport_administrative_cancellation")
 JOURNAL_FILES = frozenset(("build-apply-intent.json", "build-state.json", "build-receipt.json", "configuration-receipt.json"))
 JOURNAL_FILE_MAXIMUM = 256 * 1024

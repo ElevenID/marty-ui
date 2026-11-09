@@ -737,6 +737,36 @@ function produceMdocConfigurationSuccessor(baseProfile,authority,deploymentRecei
  const binding=verifyFunctionalRuntime(profile,{readDocker});return {profile,binding};
 }
 const defaultDockerRead=args=>execFileSync('docker',args,{encoding:'utf8',timeout:30000,maxBuffer:4*1024*1024,windowsHide:true});
+// One fresh Docker multi-inspect for each ancillary verification pass. The
+// second pass gets a new reader after native role observation; no Docker data
+// is retained across guards or between full functional attempts.
+function freshExactAncillaryRead(readDocker,authority){
+ assert.equal(typeof readDocker,'function');
+ const roles=Object.entries(authority.cap.allRunningRoles);
+ assert.equal(roles.length,27,'RESOURCE_BATCH_COHORT_CHANGED');
+ const ids=[...roles.map(([role,row])=>role==='keycloak'?authority.kc.newCid:row.id),authority.ui.newCid];
+ assert(ids.every(id=>HASH.test(id))&&new Set(ids).size===28,'RESOURCE_BATCH_ID_SET_CHANGED');
+ const expected=new Set(ids);let snapshot=null;
+ return args=>{
+  if(args?.[0]!=='inspect')return readDocker(args);
+  assert(Array.isArray(args)&&args.length===2&&expected.has(args[1]),'RESOURCE_BATCH_UNEXPECTED_INSPECT');
+  if(!snapshot){
+   const raw=readDocker(['inspect',...ids]);
+   assert(typeof raw==='string'&&Buffer.byteLength(raw)>0&&Buffer.byteLength(raw)<=4*1024*1024,
+    'RESOURCE_BATCH_OUTPUT_BOUNDS');
+   let rows;try{rows=JSON.parse(raw);}catch{throw Error('RESOURCE_BATCH_INVALID_JSON');}
+   assert(Array.isArray(rows)&&rows.length===28,'RESOURCE_BATCH_ROW_COUNT_CHANGED');
+   const found=new Map();
+   for(const row of rows){
+    assert(row&&typeof row==='object'&&!Array.isArray(row)&&HASH.test(row.Id)&&expected.has(row.Id),
+     'RESOURCE_BATCH_FOREIGN_ID');
+    assert(!found.has(row.Id),'RESOURCE_BATCH_DUPLICATE_ID');found.set(row.Id,row);
+   }
+   assert(found.size===expected.size,'RESOURCE_BATCH_MISSING_ID');snapshot=found;
+  }
+  return JSON.stringify([snapshot.get(args[1])]);
+ };
+}
 function comparableBinaryMounts(mounts){
  assert(Array.isArray(mounts));
  return mounts.map(mount=>{
@@ -830,8 +860,11 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
  const expected=restart?.rows||resume?.rows||expectedRuntime(profile),roles=[];
  const configuration=profile.configurationOverlay?observeMdocConfiguration(profile,readDocker):null;
  const maintenance=restart?{engineId:restart.a.engineId}:resume|| (profile.resourceRecreation?{engineId:require('./beta-resource-runtime').authority(profile,{boundJson,expectedRuntime,receiptDigests}).engineId}:profile.configurationOverlay?boundJson(profile.configurationOverlay.deploymentReceipt):profile.maintenanceRestart?boundJson(profile.maintenanceRestart):profile.nativeOverlay?boundJson(profile.nativeOverlay.deploymentReceipt):profile.nativeMaintenance?boundJson(profile.nativeMaintenance.outcome):profile.issuanceFenceNativeOverlay?{engineId:boundJson(profile.issuanceFenceNativeOverlay.deploymentReceipt).engineId}:profile.issuanceOfferNativeOverlay?{engineId:boundJson(profile.issuanceOfferNativeOverlay.deploymentReceipt).engineId}:profile.signingPolicyNativeOverlay?{engineId:boundJson(profile.signingPolicyNativeOverlay.deploymentReceipt).engineId}:profile.serviceNativeOverlay?{engineId:boundJson(profile.serviceNativeOverlay.deploymentReceipt).engineId}:profile.authNativeOverlay?{engineId:boundJson(profile.authNativeOverlay.result).engineId}:profile.signedImageDeployment?{engineId:require('./nightly-functional-runtime').authority(profile,{boundJson,verifyBoundFile,boundBytes}).engineId}:null);
- if(profile.resourceRecreation)require('./beta-resource-runtime').verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDigests});
- if(restart)require('./beta-resource-runtime').verifyAncillary(restart.base,readDocker,{boundJson,expectedRuntime,receiptDigests},restart.generations);
+ const resourceOwner=profile.resourceRecreation||restart?require('./beta-resource-runtime'):null;
+ const ancillaryAuthority=restart?.a||(profile.resourceRecreation?resourceOwner.authority(profile,{boundJson,expectedRuntime,receiptDigests}):null);
+ const verifyFreshAncillary=()=>{if(ancillaryAuthority)resourceOwner.verifyAncillary(restart?.base||profile,
+  freshExactAncillaryRead(readDocker,ancillaryAuthority),{boundJson,expectedRuntime,receiptDigests},restart?.generations);};
+ verifyFreshAncillary();
  if(resume)require('./beta-retained-runtime-resume').verifyLive(resume,readDocker);
  if(maintenance)assert.equal(JSON.parse(readDocker(['info','--format','{{json .}}'])).ID,maintenance.engineId);
  for(const row of expected){
@@ -845,8 +878,7 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
  }
  // A changed receipt during the observation window cannot acquire a binding.
  expectedRuntime(profile);
- if(profile.resourceRecreation)require('./beta-resource-runtime').verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDigests});
- if(restart)require('./beta-resource-runtime').verifyAncillary(restart.base,readDocker,{boundJson,expectedRuntime,receiptDigests},restart.generations);
+ verifyFreshAncillary();
  if(resume)require('./beta-retained-runtime-resume').verifyLive(resume,readDocker);
  if(profile.configurationOverlay)observeMdocConfiguration(profile,readDocker);
  if(maintenance)assert.equal(JSON.parse(readDocker(['info','--format','{{json .}}'])).ID,maintenance.engineId);
@@ -875,4 +907,4 @@ function retainedBetaOffAuthority(profile){
  return {snapshot:plan.sources.retainedAfter,rows:rows.map(row=>({role:row.role,cid:row.cid}))};
 }
 
-module.exports={produceResourceRestart,retainedBetaOffAuthority,verifyResourceAncillary:(profile,readDocker)=>require('./beta-resource-runtime').verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDigests}),resourceRecreationSuccessor,canonicalHostMountRepresentations:mdocHostRepresentations,validateMdocJournalRead:mdocJournalRead,produceMdocConfigurationSuccessor,validateMdocConfigContainer,validateMdocKnownOutcome,produceSignedImageObservation:(profile,{readDocker=defaultDockerRead}={})=>require('./nightly-functional-runtime').produce(profile,{readDocker,boundJson,verifyBoundFile,boundBytes,observeDocker,validateRuntimeObservation,validateRestartObservation}),verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,validateRestartObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={produceResourceRestart,retainedBetaOffAuthority,verifyResourceAncillary:(profile,readDocker)=>require('./beta-resource-runtime').verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDigests}),resourceRecreationSuccessor,canonicalHostMountRepresentations:mdocHostRepresentations,validateMdocJournalRead:mdocJournalRead,produceMdocConfigurationSuccessor,validateMdocConfigContainer,validateMdocKnownOutcome,produceSignedImageObservation:(profile,{readDocker=defaultDockerRead}={})=>require('./nightly-functional-runtime').produce(profile,{readDocker,boundJson,verifyBoundFile,boundBytes,observeDocker,validateRuntimeObservation,validateRestartObservation}),verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,freshExactAncillaryRead,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,validateRestartObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
