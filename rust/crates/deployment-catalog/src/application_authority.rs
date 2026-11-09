@@ -319,6 +319,11 @@ fn initializer_policies(source: &str) -> Result<BTreeMap<String, String>> {
     Ok(policies)
 }
 
+/// The initializer remains the policy owner for read-only legacy inspection too.
+pub(crate) fn compiled_initializer_policies() -> Result<BTreeMap<String, String>> {
+    initializer_policies(INITIALIZER)
+}
+
 fn line(path: &str, caps: &[&str]) -> String {
     format!(
         "path \"{path}\" {{ capabilities = [\"{}\"] }}",

@@ -732,6 +732,51 @@ fn run() -> Result<(), String> {
         use marty_deployment_catalog::operator::{self, REFUSAL};
         use std::io::{Read, Write};
         let result = match args.get(1).map(String::as_str) {
+            #[cfg(target_os = "linux")]
+            Some("kubernetes-legacy-recovery-contract") if args.len() == 2 => {
+                serde_json::to_writer(
+                    std::io::stdout(),
+                    &marty_deployment_catalog::kubernetes_legacy_recovery::contract(),
+                )
+                .map_err(|_| REFUSAL)
+            }
+            #[cfg(target_os = "linux")]
+            Some("kubernetes-legacy-recovery-target") if args.len() == 4 => {
+                let summary = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL)?
+                    .block_on(
+                        marty_deployment_catalog::kubernetes_legacy_recovery::target(
+                            std::path::Path::new(&args[2]),
+                            &args[3],
+                        ),
+                    )?;
+                serde_json::to_writer(std::io::stdout(), &summary).map_err(|_| REFUSAL)
+            }
+            #[cfg(target_os = "linux")]
+            Some("kubernetes-legacy-recovery-inspect") if args.len() == 3 => {
+                use std::path::Path;
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(512 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 512 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let summary = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL)?
+                    .block_on(
+                        marty_deployment_catalog::kubernetes_legacy_recovery::inspect_to_file(
+                            &input,
+                            Path::new(&args[2]),
+                        ),
+                    )?;
+                serde_json::to_writer(std::io::stdout(), &summary).map_err(|_| REFUSAL)
+            }
             Some("beta-rehearsal") if args.len() == 2 => {
                 let mut input = Vec::new();
                 std::io::stdin()

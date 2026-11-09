@@ -106,6 +106,8 @@ pub mod installer_trust;
 pub mod installer_uninstall;
 pub mod installer_validation;
 pub mod installer_verify;
+#[cfg(target_os = "linux")]
+pub mod kubernetes_legacy_recovery;
 pub mod kubernetes_secrets;
 pub mod passport_model;
 
