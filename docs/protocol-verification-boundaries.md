@@ -87,8 +87,8 @@ predicate capabilities fail closed; supported raw predicates are evaluated over
 authenticated claim values according to the configured fallback policy.
 
 The dependency pins are Marty Core
-`a11313be1fdb6035c11c87b42b4120e395d63aba` and the microservices framework
-`d8b8d8583203c31a1a5cd6b513a6068e6c416b6d`. Regression suites use actual signed
+`4ddd60bc6872c6202b13abe52691429031760de1` and the microservices framework
+`67e6121f233d3edbb07a35b9b3be2ae7e1462821`. Regression suites use actual signed
 credentials to check type confusion, profile substitution, algorithm mismatch,
 configured Cedar denials, frozen query mismatch, and the presentation-count
 limit, with separate authenticated-route and response-association checks.
