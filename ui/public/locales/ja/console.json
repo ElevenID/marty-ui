@@ -241,6 +241,11 @@
 		"flowDefinition": "フロー定義"
 	},
 	"deploy": {
+		"keyManagementWizard": {
+			"selectOrganization": "署名サービスを登録する組織を選択してください。",
+			"readDenied": "選択した組織の署名サービスを表示する権限がありません。",
+			"createDenied": "選択した組織に署名サービスを登録する権限がありません。"
+		},
 		"issuerIdentityWizard": {
 			"selectOrganization": "発行者IDを作成する組織を選択してください。",
 			"readDenied": "選択した組織で発行者の機能を表示する権限がありません。",

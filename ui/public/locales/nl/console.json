@@ -1,5 +1,10 @@
 {
 	"deploy": {
+		"keyManagementWizard": {
+			"selectOrganization": "Selecteer een organisatie om een ondertekeningsservice te registreren.",
+			"readDenied": "U hebt geen toestemming om ondertekeningsservices in de geselecteerde organisatie te bekijken.",
+			"createDenied": "U hebt geen toestemming om ondertekeningsservices in de geselecteerde organisatie te registreren."
+		},
 		"issuerIdentityWizard": {
 			"selectOrganization": "Selecteer een organisatie om een uitgeversidentiteit te maken.",
 			"readDenied": "Je hebt geen toestemming om de mogelijkheden voor uitgevers in de geselecteerde organisatie te bekijken.",

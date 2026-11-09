@@ -932,6 +932,11 @@
     "flowDefinition": "Flow Definition"
   },
   "deploy": {
+    "keyManagementWizard": {
+      "selectOrganization": "Select an organization to register a signing service.",
+      "readDenied": "You do not have permission to view signing services in the selected organization.",
+      "createDenied": "You do not have permission to register signing services in the selected organization."
+    },
     "issuerIdentityWizard": {
       "selectOrganization": "Select an organization to create an issuer identity.",
       "readDenied": "You do not have permission to view issuer capabilities in the selected organization.",

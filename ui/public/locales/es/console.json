@@ -241,6 +241,11 @@
 		"flowDefinition": "Definición de flujo"
 	},
 	"deploy": {
+		"keyManagementWizard": {
+			"selectOrganization": "Seleccione una organización para registrar un servicio de firma.",
+			"readDenied": "No tiene permiso para ver los servicios de firma de la organización seleccionada.",
+			"createDenied": "No tiene permiso para registrar servicios de firma en la organización seleccionada."
+		},
 		"issuerIdentityWizard": {
 			"selectOrganization": "Selecciona una organización para crear una identidad de emisor.",
 			"readDenied": "No tienes permiso para ver las capacidades de los emisores en la organización seleccionada.",

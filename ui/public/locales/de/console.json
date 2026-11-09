@@ -241,6 +241,11 @@
 		"flowDefinition": "Ablaufdefinition"
 	},
 	"deploy": {
+		"keyManagementWizard": {
+			"selectOrganization": "Wählen Sie eine Organisation aus, um einen Signaturdienst zu registrieren.",
+			"readDenied": "Sie haben keine Berechtigung, Signaturdienste in der ausgewählten Organisation anzuzeigen.",
+			"createDenied": "Sie haben keine Berechtigung, Signaturdienste in der ausgewählten Organisation zu registrieren."
+		},
 		"issuerIdentityWizard": {
 			"selectOrganization": "Wählen Sie eine Organisation aus, um eine Ausstelleridentität zu erstellen.",
 			"readDenied": "Sie sind nicht berechtigt, die Ausstellerfunktionen in der ausgewählten Organisation anzuzeigen.",
