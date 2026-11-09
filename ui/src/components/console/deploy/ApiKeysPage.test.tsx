@@ -254,14 +254,14 @@ describe('ApiKeysPage', () => {
       expect(mockCreateApiKey).toHaveBeenCalledWith('org-123', expect.objectContaining({
         name: 'Gateway Partner',
         scopes: expect.arrayContaining(['flows:execute']),
-      }))
+      }), expect.objectContaining({ isCurrent: expect.any(Function) }))
     })
 
     expect(mockCreateWebhook).toHaveBeenCalledWith('org-123', expect.objectContaining({
       url: 'https://partner.example.com/callbacks',
       eventTypes: expect.arrayContaining(['application.approved']),
       description: expect.stringContaining('[api-key:key-new]'),
-    }))
+    }), expect.objectContaining({ isCurrent: expect.any(Function) }))
 
     await waitFor(() => {
       expect(screen.getByText('Integration provisioned')).toBeInTheDocument()
@@ -348,7 +348,7 @@ describe('ApiKeysPage', () => {
       expect(mockCreateApiKey).toHaveBeenCalledWith('org-123', expect.objectContaining({
         name: 'Gateway Partner',
         scopes: expect.arrayContaining(['flows:execute']),
-      }))
+      }), expect.objectContaining({ isCurrent: expect.any(Function) }))
     })
 
     expect(mockCreateWebhook).not.toHaveBeenCalled()
@@ -546,7 +546,7 @@ describe('ApiKeysPage', () => {
     await user.click(screen.getByRole('button', { name: 'Create integration key' }))
 
     expect(await screen.findByLabelText('API key')).toHaveValue('pk_live_secret')
-    expect(mockCreateApiKey).toHaveBeenCalledWith('org-123', expect.objectContaining({ name: 'Key-only partner' }))
+    expect(mockCreateApiKey).toHaveBeenCalledWith('org-123', expect.objectContaining({ name: 'Key-only partner' }), expect.objectContaining({ isCurrent: expect.any(Function) }))
     expect(mockCreateWebhook).not.toHaveBeenCalled()
   })
 

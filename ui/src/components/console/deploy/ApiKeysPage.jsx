@@ -6,7 +6,8 @@
  * asynchronous completions and notifications.
  */
 
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import {
   Alert,
@@ -49,6 +50,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import { ResourcePage } from '../../common';
 import ConfirmDeleteDialog from '../../common/ConfirmDeleteDialog';
 import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
 import { useAuth } from '../../../hooks/useAuth';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { useConsole } from '../../../contexts/ConsoleContext';
@@ -236,7 +238,7 @@ async function copyToClipboard(text) {
   }
 }
 
-function ApiKeysContent({ organizationId }) {
+function ApiKeysContent({ organizationId, browserEntry }) {
   const { t } = useTranslation('console');
   const { can, isLoading: permissionsLoading } = usePermissions();
   const canCreateKey = !permissionsLoading && can('api-key', 'create');
@@ -246,6 +248,13 @@ function ApiKeysContent({ organizationId }) {
   currentPermissions.current = { canCreateKey, canCreateCallback };
   const active = useRef(false);
   const dialogGeneration = useRef(0);
+  const createPending = useRef(false);
+  const startAction = useAsyncActionScope();
+  const isCurrentBrowserEntry = useCallback(() => browserEntry.href === null || (
+    typeof window !== 'undefined' && window.location.href === browserEntry.href
+      && window.history.state?.key === browserEntry.key
+      && (browserEntry.key || 'default') === browserEntry.routeKey
+  ), [browserEntry]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
@@ -266,6 +275,14 @@ function ApiKeysContent({ organizationId }) {
     active.current = true;
     return () => { active.current = false; };
   }, []);
+
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    // Invalidate pending work before Back can make the original URL current.
+    const invalidateAction = () => { startAction(); };
+    window.addEventListener('popstate', invalidateAction, true);
+    return () => window.removeEventListener('popstate', invalidateAction, true);
+  }, [startAction]);
 
   useLayoutEffect(() => {
     if (!canRevokeKey) setKeyPendingRevoke(null);
@@ -321,6 +338,7 @@ function ApiKeysContent({ organizationId }) {
   }, [data?.webhooks]);
 
   const handleScopeToggle = (scopeId) => {
+    if (createPending.current || saving || !canCreateKey || !isCurrentBrowserEntry()) return;
     setFormState((prev) => ({
       ...prev,
       scopes: prev.scopes.includes(scopeId)
@@ -330,6 +348,7 @@ function ApiKeysContent({ organizationId }) {
   };
 
   const handleCallbackEventToggle = (eventId) => {
+    if (createPending.current || saving || !canCreateKey || !isCurrentBrowserEntry()) return;
     setFormState((prev) => ({
       ...prev,
       callbackEvents: prev.callbackEvents.includes(eventId)
@@ -339,7 +358,7 @@ function ApiKeysContent({ organizationId }) {
   };
 
   const resetDialog = () => {
-    if (saving) return;
+    if (createPending.current || saving || !isCurrentBrowserEntry()) return;
     dialogGeneration.current += 1;
     setDialogOpen(false);
     setSaving(false);
@@ -358,15 +377,20 @@ function ApiKeysContent({ organizationId }) {
   };
 
   const openCreateDialog = () => {
-    if (!canCreateKey) return;
+    if (!canCreateKey || createPending.current || !isCurrentBrowserEntry()) return;
     dialogGeneration.current += 1;
     setCopiedMessage('');
     setFormState((prev) => ({ ...prev, createCallback: canCreateCallback }));
     setDialogOpen(true);
   };
 
+  const updateForm = (updates) => {
+    if (createPending.current || saving || !canCreateKey || !isCurrentBrowserEntry()) return;
+    setFormState((previous) => ({ ...previous, ...updates }));
+  };
+
   const handleCreate = async () => {
-    if (saving || createdResult || !canCreateKey) return;
+    if (createPending.current || saving || createdResult || !canCreateKey || !isCurrentBrowserEntry()) return;
     const shouldCreateCallback = canCreateCallback && formState.createCallback;
     if (!organizationId) {
       setFormError('No active organization selected.');
@@ -407,6 +431,10 @@ function ApiKeysContent({ organizationId }) {
       }
     }
 
+    const action = startAction();
+    const generation = dialogGeneration.current;
+    const isCurrent = () => action.isCurrent() && dialogGeneration.current === generation && isCurrentBrowserEntry();
+    createPending.current = true;
     setSaving(true);
     setFormError('');
 
@@ -417,8 +445,8 @@ function ApiKeysContent({ organizationId }) {
         name: formState.name.trim(),
         scopes: formState.scopes,
         expiresAt: formState.expiresAt ? new Date(formState.expiresAt).toISOString() : null,
-      });
-      if (!active.current) return;
+      }, { isCurrent });
+      if (!isCurrent()) return;
 
       const createdKey = normalizeApiKey(keyResponse);
       let createdWebhook = null;
@@ -435,7 +463,8 @@ function ApiKeysContent({ organizationId }) {
               formState.callbackDescription,
             ),
             eventTypes: formState.callbackEvents,
-          });
+          }, { isCurrent: () => isCurrent()
+            && currentPermissions.current.canCreateKey && currentPermissions.current.canCreateCallback });
           createdWebhook = normalizeWebhook(webhookResponse);
         } catch (errorCreatingWebhook) {
           callbackError = errorCreatingWebhook instanceof Error
@@ -444,7 +473,7 @@ function ApiKeysContent({ organizationId }) {
         }
       }
 
-      if (!active.current) return;
+      if (!isCurrent()) return;
       setCreatedResult({
         apiKey: createdKey,
         webhook: createdWebhook,
@@ -454,24 +483,28 @@ function ApiKeysContent({ organizationId }) {
 
       await reload();
     } catch (createError) {
-      if (active.current) setFormError(createError instanceof Error ? createError.message : String(createError));
+      if (isCurrent()) setFormError(createError instanceof Error ? createError.message : String(createError));
     } finally {
-      if (active.current) setSaving(false);
+      if (isCurrent()) {
+        createPending.current = false;
+        setSaving(false);
+      }
     }
   };
 
   const handleRevoke = async () => {
-    if (!organizationId || !keyPendingRevoke || !canRevokeKey) {
+    if (!organizationId || !keyPendingRevoke || !canRevokeKey || !isCurrentBrowserEntry()) {
       return;
     }
 
     await revokeApiKey(organizationId, keyPendingRevoke.id);
-    if (!active.current) return;
+    if (!active.current || !isCurrentBrowserEntry()) return;
     setKeyPendingRevoke(null);
     await reload();
   };
 
   const handleCopy = async (text, label) => {
+    if (!isCurrentBrowserEntry()) return;
     const generation = dialogGeneration.current;
     let copied = false;
     try {
@@ -479,7 +512,7 @@ function ApiKeysContent({ organizationId }) {
     } catch {
       // Browser clipboard permissions can reject even on an HTTPS origin.
     }
-    if (active.current && dialogGeneration.current === generation) {
+    if (active.current && dialogGeneration.current === generation && isCurrentBrowserEntry()) {
       setCopiedMessage(copied ? `${label} copied to clipboard.` : `Unable to copy ${label.toLowerCase()}.`);
     }
   };
@@ -495,7 +528,7 @@ function ApiKeysContent({ organizationId }) {
         tabs={getOrgTabs(t)}
         breadcrumbs={getBreadcrumbs(t)}
         actions={
-          <Button variant="contained" startIcon={<AddIcon />} disabled={!organizationId || loading || Boolean(error) || !canCreateKey} onClick={openCreateDialog}>
+          <Button variant="contained" startIcon={<AddIcon />} disabled={!organizationId || loading || Boolean(error) || !canCreateKey || !isCurrentBrowserEntry()} onClick={openCreateDialog}>
             {t('deploy.apiKeysPage.generateKey', 'Create API Key')}
           </Button>
         }
@@ -763,7 +796,7 @@ function ApiKeysContent({ organizationId }) {
               )}
             </Stack>
           ) : (
-            <Stack component="fieldset" disabled={saving || !canCreateKey} aria-label="API key settings" spacing={3} sx={{ p: 0, pt: 1, m: 0, border: 0, minWidth: 0 }}>
+            <Stack component="fieldset" disabled={saving || !canCreateKey || !isCurrentBrowserEntry()} aria-label="API key settings" spacing={3} sx={{ p: 0, pt: 1, m: 0, border: 0, minWidth: 0 }}>
               {formError && <Alert severity="error">{formError}</Alert>}
               {!canCreateKey && <Alert severity="info">{permissionsLoading ? 'Checking your permissions…' : 'You do not have permission to create API keys in this organization.'}</Alert>}
 
@@ -772,7 +805,7 @@ function ApiKeysContent({ organizationId }) {
                 label="Key name"
                 placeholder="Production issuer integration"
                 value={formState.name}
-                onChange={(event) => setFormState((prev) => ({ ...prev, name: event.target.value }))}
+                onChange={(event) => updateForm({ name: event.target.value })}
                 fullWidth
               />
 
@@ -780,7 +813,7 @@ function ApiKeysContent({ organizationId }) {
                 label="Expiration"
                 type="datetime-local"
                 value={formState.expiresAt}
-                onChange={(event) => setFormState((prev) => ({ ...prev, expiresAt: event.target.value }))}
+                onChange={(event) => updateForm({ expiresAt: event.target.value })}
                 fullWidth
                 helperText="Optional expiry for partner credentials or temporary environments."
                 slotProps={{
@@ -821,7 +854,7 @@ function ApiKeysContent({ organizationId }) {
                     <Switch
                       checked={canCreateCallback && formState.createCallback}
                       disabled={!canCreateCallback}
-                      onChange={(event) => setFormState((prev) => ({ ...prev, createCallback: event.target.checked }))}
+                      onChange={(event) => updateForm({ createCallback: event.target.checked })}
                     />
                   }
                   label="Provision associated callback"
@@ -839,14 +872,14 @@ function ApiKeysContent({ organizationId }) {
                     label="Callback URL"
                     placeholder="https://partner.example.com/marty/callbacks"
                     value={formState.callbackUrl}
-                    onChange={(event) => setFormState((prev) => ({ ...prev, callbackUrl: event.target.value }))}
+                    onChange={(event) => updateForm({ callbackUrl: event.target.value })}
                     fullWidth
                   />
                   <TextField
                     label="Callback description"
                     placeholder="Operations callback for partner orchestration"
                     value={formState.callbackDescription}
-                    onChange={(event) => setFormState((prev) => ({ ...prev, callbackDescription: event.target.value }))}
+                    onChange={(event) => updateForm({ callbackDescription: event.target.value })}
                     fullWidth
                   />
                   <Box>
@@ -884,7 +917,7 @@ function ApiKeysContent({ organizationId }) {
           ) : (
             <>
               <Button onClick={resetDialog} disabled={saving}>Cancel</Button>
-              <Button variant="contained" onClick={handleCreate} disabled={saving || !canCreateKey}>
+              <Button variant="contained" onClick={handleCreate} disabled={saving || !canCreateKey || !isCurrentBrowserEntry()}>
                 {saving ? 'Creating…' : 'Create integration key'}
               </Button>
             </>
@@ -911,6 +944,29 @@ function ApiKeysContent({ organizationId }) {
 export default function ApiKeysPage() {
   const { activeOrgId } = useConsole();
   const { user, isAuthenticated } = useAuth();
+  const location = useLocation();
+  const [returnedEntry, setReturnedEntry] = useState(0);
+  // Organization/session replacements retain the committed browser entry even
+  // while a suspended destination has already changed the address bar.
+  const browserEntry = useMemo(() => ({
+    href: typeof window === 'undefined' ? null : window.location.href,
+    key: typeof window === 'undefined' ? undefined : window.history.state?.key,
+    routeKey: location.key,
+    generation: returnedEntry,
+  }), [location, returnedEntry]);
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const entry = { href: window.location.href, key: window.history.state?.key };
+    const handlePopState = () => {
+      if (window.location.href === entry.href && window.history.state?.key === entry.key) {
+        setReturnedEntry((value) => value + 1);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [location.key, location.pathname, location.search, location.hash]);
   const principalId = isAuthenticated ? user?.user_id || user?.sub || user?.id || 'unknown-user' : 'signed-out';
-  return <ApiKeysContent key={`${activeOrgId || 'no-organization'}:${principalId}`} organizationId={activeOrgId} />;
+  return <ApiKeysContent key={JSON.stringify([activeOrgId, principalId, location.key,
+    location.pathname, location.search, location.hash, browserEntry.generation])}
+    organizationId={activeOrgId} browserEntry={browserEntry} />;
 }

@@ -52,14 +52,14 @@ export async function listApiKeys(organizationId, { includeRevoked = false, incl
  * @param {string|null} keyData.expiresAt - Optional expiration date ISO string
  * @returns {Promise<Object>} - Created API key with plain text 'key' field
  */
-export async function createApiKey(organizationId, { name, scopes, expiresAt }) {
+export async function createApiKey(organizationId, { name, scopes, expiresAt }, options = {}) {
   const activeOrganizationId = requireOrganizationId(organizationId);
   const url = withQuery(API_KEYS_BASE_PATH, buildDefinedQueryString({ organization_id: activeOrganizationId }));
   return postWithIdempotency(url, {
     name,
     scopes,
     expires_at: expiresAt || null,
-  });
+  }, options);
 }
 
 /**
