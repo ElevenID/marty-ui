@@ -19,16 +19,33 @@ def fixture(directory):
     compose = {project: {"name": project, "services": {}} for project in maintenance.PROJECTS}
     for index, role in enumerate(sorted(shared.RUNTIME_ROLES)):
         row = {"role": role, "project": maintenance.ROLE_PROJECTS[role], "containerId": f"{index+1:064x}", "imageId": "sha256:"+"a"*64, "source": "1"*40,
-               "sha256": "b"*64, "binaryMounts": [], "hostPid": index+100, "startedAt": "2026-10-27T15:00:00Z",
+               "binary": "marty-"+role, "sha256": "b"*64, "binaryMounts": [], "hostPid": index+100, "startedAt": "2026-10-27T15:00:00Z",
                "running": True, "paused": False, "state": "running", "containerExitCode": 0, "oomKilled": False}
+        if role == "ui-prod":
+            row.update(binary=None, sha256=None, kind="SIGNED_NIGHTLY_IMAGE")
         before["roles"].append(row)
         proof = directory / (role+"-source.json")
-        proof.write_text(json.dumps({"schema": "marty.graceful-shutdown-source-proof/v1", "role": role,
-            "sourceRevision": row["source"], "elfSha256": row["sha256"], "supportedSignals": ["SIGINT"]}))
         policy = directory / (role+"-stop.json")
-        policy.write_text(json.dumps({"schema": "marty.reviewed-graceful-stop/v1", "role": role,
-            "containerId": row["containerId"], "sourceRevision": row["source"], "elfSha256": row["sha256"],
-            "signal": "SIGINT", "allowedExitCodes": [0], "noAutomaticSigkill": True, "sourceProof": shared.ref(proof)}))
+        if role == "ui-prod":
+            observed = directory / "ui-image-observation.json"
+            observed.write_text(json.dumps({"schema": "marty.ui-image-stop-observation/v1", "role": role,
+                "containerId": row["containerId"], "imageId": row["imageId"], "sourceRevision": row["source"],
+                "configuredStopSignal": "SIGQUIT", "entrypoint": "/docker-entrypoint.sh",
+                "command": ["nginx", "-g", "daemon off;"], "exitCode": 0,
+                "runtimeWrites": False, "stopExecuted": False}))
+            proof.write_text(json.dumps({"schema": "marty.graceful-shutdown-image-source-proof/v1", "role": role,
+                "sourceRevision": row["source"], "imageId": row["imageId"], "supportedSignals": ["SIGQUIT"],
+                "imageObservation": shared.ref(observed), "stopExecuted": False}))
+            policy.write_text(json.dumps({"schema": "marty.reviewed-graceful-image-stop/v1", "role": role,
+                "containerId": row["containerId"], "sourceRevision": row["source"], "imageId": row["imageId"],
+                "signal": "SIGQUIT", "allowedExitCodes": [0], "noAutomaticSigkill": True,
+                "sourceProof": shared.ref(proof), "imageObservation": shared.ref(observed)}))
+        else:
+            proof.write_text(json.dumps({"schema": "marty.graceful-shutdown-source-proof/v1", "role": role,
+                "sourceRevision": row["source"], "elfSha256": row["sha256"], "supportedSignals": ["SIGINT"]}))
+            policy.write_text(json.dumps({"schema": "marty.reviewed-graceful-stop/v1", "role": role,
+                "containerId": row["containerId"], "sourceRevision": row["source"], "elfSha256": row["sha256"],
+                "signal": "SIGINT", "allowedExitCodes": [0], "noAutomaticSigkill": True, "sourceProof": shared.ref(proof)}))
         contracts[role] = shared.ref(policy)
         compose[maintenance.ROLE_PROJECTS[role]]["services"][role] = {"depends_on": {}}
     compose["elevenid-beta"]["services"]["gateway"]["depends_on"] = {"flow": {}, "issuance-native": {}}
@@ -51,6 +68,40 @@ def freeze_models(plan, models, directory):
 
 
 class MaintenanceControls(unittest.TestCase):
+    def test_ui_image_contract_requires_configured_quit_and_rejects_null_elf_fallback(self):
+        with tempfile.TemporaryDirectory() as temp:
+            plan, before, _, _, _ = fixture(Path(temp))
+            row = next(row for row in before["roles"] if row["role"] == "ui-prod")
+            bound = plan["stopContracts"]["ui-prod"]
+            self.assertEqual(maintenance._stop_contract("ui-prod", row, bound)["signal"], "SIGQUIT")
+            path = Path(bound["path"])
+            original = json.loads(path.read_text())
+            for change in [lambda p: p.update(signal="SIGTERM"),
+                           lambda p: p.update(schema="marty.reviewed-graceful-stop/v1"),
+                           lambda p: p.update(imageId="sha256:"+"c"*64)]:
+                wrong = copy.deepcopy(original)
+                change(wrong)
+                path.write_text(json.dumps(wrong))
+                with self.assertRaises(ValueError):
+                    maintenance._stop_contract("ui-prod", row, shared.ref(path))
+            path.write_text(json.dumps(original))
+            observed = Path(original["imageObservation"]["path"])
+            prior = json.loads(observed.read_text())
+            for field, value in [("configuredStopSignal", "SIGTERM"), ("entrypoint", "/foreign"),
+                                 ("imageId", "sha256:"+"c"*64), ("stopExecuted", True)]:
+                changed = copy.deepcopy(prior)
+                changed[field] = value
+                observed.write_text(json.dumps(changed))
+                wrong_policy = copy.deepcopy(original)
+                wrong_policy["imageObservation"] = shared.ref(observed)
+                path.write_text(json.dumps(wrong_policy))
+                with self.assertRaises(ValueError):
+                    maintenance._stop_contract("ui-prod", row, shared.ref(path))
+            native = next(row for row in before["roles"] if row["role"] == "gateway")
+            native["sha256"] = None
+            with self.assertRaisesRegex(ValueError, "ELF_STOP_CONTRACT_REQUIRES_BINARY"):
+                maintenance._stop_contract("gateway", native, plan["stopContracts"]["gateway"])
+
     def test_preview_requires_all22_and_gateway_first_without_automatic_kill(self):
         with tempfile.TemporaryDirectory() as temp:
             plan, before, _, _, compose = fixture(Path(temp))

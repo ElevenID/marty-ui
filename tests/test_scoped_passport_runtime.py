@@ -91,6 +91,10 @@ class ScopeTests(unittest.TestCase):
 
     def test_current_d12_runtime_requires_exact_selected_source_and_core(self):
         before, after, binaries = runtime_rows()
+        # The current D12 cohort uses event-stream; the historical default
+        # runtime_rows fixture intentionally retains canvas-sandbox.
+        for snapshot in (before, after):
+            next(row for row in snapshot["roles"] if row["role"] == "canvas-sandbox")["role"] = "event-stream"
         current = profiles.D12_PASSPORT_CURRENT
         for row in after["roles"]:
             if row["role"] in binaries:
