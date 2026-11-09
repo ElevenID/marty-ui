@@ -12,6 +12,7 @@ on:
       - 'scripts/bootstrap_kubernetes_openbao.py'
       - 'scripts/stage_kubernetes_application_credentials.py'
       - 'scripts/inspect_kubernetes_legacy_credentials.py'
+      - 'scripts/recover_kubernetes_legacy_credentials.py'
       - 'scripts/installer_*.py'
       - 'scripts/verify_installer_provenance.py'
       - 'scripts/build_selfhost_image_lock.py'
@@ -28,6 +29,7 @@ on:
       - 'tests/test_bootstrap_kubernetes_openbao.py'
       - 'tests/test_stage_kubernetes_application_credentials.py'
       - 'tests/test_inspect_kubernetes_legacy_credentials.py'
+      - 'tests/test_recover_kubernetes_legacy_credentials.py'
       - 'tests/scripts/run-kubernetes-acceptance.cjs'
       - 'tests/scripts/run-kubernetes-acceptance.test.cjs'
       - 'contracts/gateway-routes.json'
@@ -83,4 +85,5 @@ jobs:
             tests/test_prepare_kubernetes_helm_values.py \
             tests/test_bootstrap_kubernetes_openbao.py \
             tests/test_stage_kubernetes_application_credentials.py \
-            tests/test_inspect_kubernetes_legacy_credentials.py
+            tests/test_inspect_kubernetes_legacy_credentials.py \
+            tests/test_recover_kubernetes_legacy_credentials.py

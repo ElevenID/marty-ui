@@ -553,6 +553,39 @@ fn auth_metadata(auth: &Value, policies: &[String], ttl: u64, leaf: bool) -> Res
     Ok(())
 }
 
+/// The explicit legacy recovery path uses the same bounded leaf proof owner,
+/// without changing AppRole enrollment or routine replacement admission.
+#[cfg(test)]
+pub(crate) fn legacy_recovery_leaf(
+    created: &Value,
+    lookup: &Value,
+    value: &str,
+    policies: &[String],
+    ttl: u64,
+) -> Result<()> {
+    token(value)?;
+    auth_metadata(&created["auth"], policies, ttl, true)?;
+    let remaining = metadata(
+        &lookup["data"],
+        value,
+        policies,
+        ttl,
+        &["auth/token/create"],
+        Some(false),
+        false,
+    )?;
+    if remaining < 7 * 3600
+        || !mint_warnings(
+            &created["warnings"],
+            ttl,
+            created["auth"]["lease_duration"].as_u64().ok_or(REFUSAL)?,
+        )
+    {
+        return Err(REFUSAL);
+    }
+    Ok(())
+}
+
 /// This private seam exercises the real transaction with synthetic OpenBao replies.
 /// Production always delegates to the existing HTTPS client and bounded request owner.
 #[async_trait]

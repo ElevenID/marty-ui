@@ -221,6 +221,15 @@ fn identity(info: &fs::Metadata) -> (u64, u64, u32, u32, u32, u64, u64, i64, i64
 }
 
 fn read_input(path: &Path, modes: &[u32], allow_empty: bool) -> Result<(Vec<u8>, u32)> {
+    read_bounded(path, modes, allow_empty, MAX_FILE)
+}
+
+fn read_bounded(
+    path: &Path,
+    modes: &[u32],
+    allow_empty: bool,
+    maximum: usize,
+) -> Result<(Vec<u8>, u32)> {
     private_directory(path.parent().ok_or(REFUSAL)?)?;
     let mut file = fs::OpenOptions::new()
         .read(true)
@@ -233,17 +242,17 @@ fn read_input(path: &Path, modes: &[u32], allow_empty: bool) -> Result<(Vec<u8>,
         || before.nlink() != 1
         || before.uid() != unsafe { libc::geteuid() }
         || !modes.contains(&mode)
-        || before.len() > MAX_FILE as u64
+        || before.len() > maximum as u64
     {
         return Err(REFUSAL);
     }
     let mut bytes = Vec::new();
     (&mut file)
-        .take((MAX_FILE + 1) as u64)
+        .take((maximum + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| REFUSAL)?;
     if bytes.len() != before.len() as usize
-        || bytes.len() > MAX_FILE
+        || bytes.len() > maximum
         || (!allow_empty && bytes.is_empty())
         || bytes.contains(&0)
         || bytes.windows(11).any(|part| part == b"PRIVATE KEY")
@@ -713,3 +722,23 @@ pub fn contract() -> Value {
 #[cfg(test)]
 #[path = "kubernetes_legacy_recovery_tests.rs"]
 mod tests;
+
+// The staging increment remains unavailable to a release binary until its own
+// transaction/failure tests and independent audits are complete.
+#[cfg(test)]
+#[path = "kubernetes_legacy_recovery_stage.rs"]
+mod staging;
+
+#[cfg(test)]
+#[path = "kubernetes_legacy_recovery_activation.rs"]
+mod activation;
+
+#[cfg(test)]
+#[path = "kubernetes_legacy_recovery_qualify.rs"]
+mod qualification;
+
+// Native command implementations remain test-only in this checkpoint. Release
+// dispatch is a separate reviewed change after the mutation increment audits.
+#[cfg(test)]
+#[path = "kubernetes_legacy_recovery_commands.rs"]
+mod recovery_commands;

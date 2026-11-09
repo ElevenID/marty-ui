@@ -237,3 +237,108 @@ installer-input artifact do not satisfy the verifier. Both accepted producers,
 merged change therefore needs a matching signed nightly or stable release
 before this adapter can run against an installation. The installed application
 images remain the original runtime during credential recovery.
+
+## Mutation checkpoint and private evidence
+
+The next native checkpoint contains staging, candidate qualification and a pure
+Secret planner under test-only module wiring. It adds no release dispatch yet.
+The separate mutation increment requires its own independent audits before that
+wiring is enabled and a signed recovery artifact is produced.
+
+Staging has a fixed inventory of **18 certificates and 33 tokens**. Every leaf
+retains its subject, SANs, key usage, extended key usage, issuer and signer SPKI.
+Each replacement token uses only its existing policy bundle, is an orphan service
+token, is nonrenewable, omits the default policy and has an explicit eight-hour
+maximum lifetime. Issued credentials need at least seven hours remaining at
+qualification. No request can supply a policy body or a new key, role, issuer,
+CA, auth mount or credential lifetime.
+
+A complete positive stage has 120 bounded POST requests: existing-key CSRs and
+certificate signing, token creation and lookup, and same-key signature proofs.
+Each request has an exclusively created, durable private intent before network
+transmission. The opaque bounded response is persisted before decoding, including
+HTTP errors, malformed JSON or incomplete bodies. The retained root token is
+never written into request evidence. A failure after the attempt begins leaves
+the evidence in place and produces no completed candidate. Reusing the same
+operation directory is refused; selecting another directory is not an automated
+retry or evidence that an uncertain prior issuance did not occur.
+
+The completion receipt includes SHA-256 bindings for all 120 request records
+and all 120 opaque response captures. Qualification requires that exact record
+set and rechecks every bound byte after its live proofs. Missing, additional or
+changed records prevent a plan, including CSR/certificate captures that do not
+need semantic replay. The intermediate replacement inputs must also match the
+candidate exactly. These checks concern this newly created recovery evidence;
+they do not add an unrecorded historical-bootstrap proof requirement.
+
+Only after every postcondition succeeds is the candidate assembled. It has the
+same filenames and modes as the original generation. Exactly 51 files change;
+all other bytes, including static keys, passwords, CA inputs and the initial
+migration token, remain unchanged. The original generation is never edited.
+
+Qualification is a distinct native command over that completed stage. It checks
+the exact retained stage evidence, repeats the live cluster, issuer, key, role
+and policy admission, and proves the current validity and scope of all candidate
+credentials without creating replacements. It validates the observed Secret
+preimages and emits a private plan with a five-minute use deadline. The plan
+binds the original and candidate file hashes/modes, exact inspection bytes,
+exact staging receipt bytes, namespace/cluster identity, and all observed Secret
+UIDs and resource versions. Public summaries contain only counts, status and
+whole-artifact digests; the plan and response evidence remain private.
+
+The qualified plan also binds all 51 qualification request records and all 51
+opaque response captures by SHA-256. Native qualification rechecks that exact
+private journal after its final live inspection. The transport compares every
+exported record against the plan before the first Secret patch, so evidence
+changed after qualification cannot accompany an otherwise valid plan.
+
+The pure planner derives every changed field from the native Secret publication
+catalog. It permits exactly **51 field replacements in 34 existing Secrets**,
+including both Notification Secrets. It requires the exact normalized old field
+values and tests each Secret's UID, resource version and complete data object
+before replacements. A missing Secret, changed scope, extra input, mode change,
+unchanged replacement or stale preimage fails admission. Unrelated fields and
+metadata remain intact. Updates are atomic within one Secret, not across the
+whole set; a partial or ambiguous sequence needs explicit operator reconciliation
+from the retained preimages and responses.
+
+The local tests include real ephemeral RSA/P-256 signatures and a local TLS
+server for the production response-capture path. They cover malformed and lost
+responses, oversized/truncated bodies, incorrect returned credentials, drift
+after issuance, stale private evidence and Secret state, and refusal to replay
+a completed or partial operation. These checks do not constitute a live cluster
+recovery result.
+
+## Later enrollment and runtime upgrade boundary
+
+Recovery restores credentials for the installed application images. It does not
+claim that code changes in a later native runtime are active, and it does not
+run a database migration or change the original bootstrap receipt.
+
+Fresh recovered credentials can satisfy the existing TLS enrollment guard:
+`provision_selfhost_renewal_identity.py` calls native `renewal-inventory`, which
+proves all 21 scoped TLS/Keycloak tokens have at least one hour remaining and
+checks the current certificates and issuers before `approle-bootstrap renewal`.
+The native application enrollment owner likewise proves the namespace/cluster
+binding, existing policies and 11 live ordinary runtime token inputs before it
+creates its separate scoped application AppRole and leaf roles. Neither guard
+needs to accept expired credentials or fabricated enrollment receipts.
+
+There is still a Kubernetes adoption boundary. The routine application staging
+adapter requires the original bootstrap's `applicationAuthority` record, its
+retained identity directory and authenticated original operator bytes. The
+supported legacy bootstrap has no such record. The fresh-bootstrap helper is
+currently the owner that creates it; successfully invoking native enrollment
+later does not authorize rewriting historical `bootstrap-complete.json` or
+pretending it was present originally. A separately reviewed retained-Kubernetes
+enrollment/adoption owner must bind real new enrollment evidence before that
+routine adapter can be used for this installation.
+
+A migration grant is separate again. The routine application authority contains
+only 11 runtime replacement roles. It excludes the initial migration credential
+and the legacy `OPENBAO_SERVICE_TOKEN` alias; the TLS authority covers only its
+21 TLS/Keycloak scoped tokens. Neither grants migration minting. This recovery
+keeps the initial migration token unchanged, so a separately reviewed signed
+runtime upgrade that needs migrations still requires an explicit existing-target
+migration-authority path. No fresh bootstrap, manual receipt repair or expanded
+renewal policy is implied by recovery completion.

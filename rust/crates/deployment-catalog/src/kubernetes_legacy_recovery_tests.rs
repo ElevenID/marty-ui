@@ -677,3 +677,6 @@ fn authority_shape_does_not_claim_original_token_lineage() {
     let unknown = json!({"name":namespace.name,"uid":namespace.uid,"invented":"receipt"});
     assert!(serde_json::from_value::<NamespaceObservation>(unknown).is_err());
 }
+
+#[path = "kubernetes_legacy_recovery_stage_tests.rs"]
+mod staging_tests;
