@@ -1,6 +1,40 @@
 {
   "trust": {
+    "trustProfileEdit": {
+      "selectOrganization": "信頼プロファイルを編集する前に組織を選択してください。",
+      "permissionDenied": "信頼プロファイルを編集する権限がありません。",
+      "scopeMismatch": "信頼プロファイルの応答が、要求したプロファイルと選択した組織に一致しません。",
+      "invalidResponse": "信頼プロファイルの応答が無効です。",
+      "suspendedStatus": "停止中",
+      "unknownStatus": "不明",
+      "notFound": "信頼プロファイルが見つかりません。"
+    },
     "trustProfileDetail": {
+      "selectOrganization": "この信頼プロファイルを表示する組織を選択してください。",
+      "profileReadDenied": "この組織の信頼プロファイルを表示する権限がありません。",
+      "issuerReadDenied": "この組織の発行者との関係を表示する権限がありません。",
+      "profileScopeMismatch": "この信頼プロファイルは選択した組織では利用できません。",
+      "retryProfile": "プロファイルを再読み込み",
+      "retryIssuers": "発行者一覧を再読み込み",
+      "issuerScopeMismatch": "発行者の応答が、このプロファイル、組織、または要求したDIDと一致しません。",
+      "issuerNotConfirmed": "受け付けられた発行者との関係を現在の一覧で確認できませんでした。発行者一覧を再読み込みしてください。",
+      "issuerLoadFailed": "発行者一覧を読み込めませんでした。",
+      "issuerAddFailed": "発行者の追加を確認できませんでした。",
+      "issuerAwaitingReadback": "リンクは受け付けられました。再試行ではリンクを再送信せず、現在の発行者一覧を読み取ります。",
+      "statusUnknown": "不明",
+      "relationshipStatusLabel": "信頼関係",
+      "issuerComplianceLabel": "発行者の準拠状態",
+      "statusDraft": "下書き",
+      "statusActive": "有効",
+      "statusSuspended": "一時停止",
+      "statusArchived": "アーカイブ済み",
+      "relationshipTrusted": "信頼済み",
+      "relationshipDenied": "拒否",
+      "relationshipUnderReview": "審査中",
+      "complianceAccredited": "認定済み",
+      "complianceCompliant": "準拠",
+      "complianceSuspended": "一時停止",
+      "complianceRevoked": "失効",
       "credentialWalletGuidance": "ウォレットプロファイルは資格情報テンプレートで確認できます。テンプレートが対応するウォレットプロファイルをご確認ください。導出された設定は、相互運用性や配信の成功を証明するものではありません。",
       "viewCredentialTemplates": "資格情報テンプレートを表示"
     }

@@ -1,6 +1,40 @@
 {
   "trust": {
+    "trustProfileEdit": {
+      "selectOrganization": "Sélectionnez une organisation avant de modifier un profil de confiance.",
+      "permissionDenied": "Vous n’avez pas l’autorisation de modifier les profils de confiance.",
+      "scopeMismatch": "La réponse du profil de confiance ne correspond pas au profil demandé et à l’organisation sélectionnée.",
+      "invalidResponse": "La réponse du profil de confiance est invalide.",
+      "suspendedStatus": "Suspendu",
+      "unknownStatus": "Inconnu",
+      "notFound": "Profil de confiance introuvable."
+    },
     "trustProfileDetail": {
+      "selectOrganization": "Sélectionnez une organisation pour consulter ce profil de confiance.",
+      "profileReadDenied": "Vous n’avez pas l’autorisation de consulter les profils de confiance de cette organisation.",
+      "issuerReadDenied": "Vous n’avez pas l’autorisation de consulter les relations avec les émetteurs de cette organisation.",
+      "profileScopeMismatch": "Ce profil de confiance n’est pas disponible dans l’organisation sélectionnée.",
+      "retryProfile": "Réessayer le profil",
+      "retryIssuers": "Réessayer la liste des émetteurs",
+      "issuerScopeMismatch": "La réponse de l’émetteur ne correspond pas à ce profil, à cette organisation ou au DID demandé.",
+      "issuerNotConfirmed": "La relation avec l’émetteur acceptée n’a pas pu être confirmée dans la liste actuelle. Consultez à nouveau la liste des émetteurs.",
+      "issuerLoadFailed": "La liste des émetteurs n’a pas pu être chargée.",
+      "issuerAddFailed": "L’ajout de l’émetteur n’a pas pu être confirmé.",
+      "issuerAwaitingReadback": "Le lien a été accepté. Réessayer consulte la liste actuelle des émetteurs sans envoyer le lien une seconde fois.",
+      "statusUnknown": "Inconnu",
+      "relationshipStatusLabel": "Relation de confiance",
+      "issuerComplianceLabel": "Conformité de l’émetteur",
+      "statusDraft": "Brouillon",
+      "statusActive": "Actif",
+      "statusSuspended": "Suspendu",
+      "statusArchived": "Archivé",
+      "relationshipTrusted": "De confiance",
+      "relationshipDenied": "Refusé",
+      "relationshipUnderReview": "En cours d’examen",
+      "complianceAccredited": "Accrédité",
+      "complianceCompliant": "Conforme",
+      "complianceSuspended": "Suspendu",
+      "complianceRevoked": "Révoqué",
       "credentialWalletGuidance": "Les profils de portefeuille sont disponibles dans les modèles d’attestations. Consultez le profil de portefeuille pris en charge par un modèle ; la configuration dérivée ne prouve ni l’interopérabilité ni la réussite de la remise.",
       "viewCredentialTemplates": "Voir les modèles d’attestations"
     }

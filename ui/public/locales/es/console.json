@@ -1,6 +1,40 @@
 {
   "trust": {
+    "trustProfileEdit": {
+      "selectOrganization": "Seleccione una organización antes de editar un perfil de confianza.",
+      "permissionDenied": "No tiene permiso para editar perfiles de confianza.",
+      "scopeMismatch": "La respuesta del perfil de confianza no coincide con el perfil solicitado y la organización seleccionada.",
+      "invalidResponse": "La respuesta del perfil de confianza no es válida.",
+      "suspendedStatus": "Suspendido",
+      "unknownStatus": "Desconocido",
+      "notFound": "No se encontró el perfil de confianza."
+    },
     "trustProfileDetail": {
+      "selectOrganization": "Seleccione una organización para ver este perfil de confianza.",
+      "profileReadDenied": "No tiene permiso para ver perfiles de confianza en esta organización.",
+      "issuerReadDenied": "No tiene permiso para ver relaciones con emisores en esta organización.",
+      "profileScopeMismatch": "Este perfil de confianza no está disponible en la organización seleccionada.",
+      "retryProfile": "Reintentar perfil",
+      "retryIssuers": "Reintentar lista de emisores",
+      "issuerScopeMismatch": "La respuesta del emisor no coincide con este perfil, la organización o el DID solicitado.",
+      "issuerNotConfirmed": "La relación con el emisor aceptada no se pudo confirmar en la lista actual. Vuelva a consultar la lista de emisores.",
+      "issuerLoadFailed": "No se pudo cargar la lista de emisores.",
+      "issuerAddFailed": "No se pudo confirmar que se añadiera el emisor.",
+      "issuerAwaitingReadback": "El vínculo fue aceptado. El reintento consulta la lista actual de emisores sin volver a enviar el vínculo.",
+      "statusUnknown": "Desconocido",
+      "relationshipStatusLabel": "Relación de confianza",
+      "issuerComplianceLabel": "Conformidad del emisor",
+      "statusDraft": "Borrador",
+      "statusActive": "Activo",
+      "statusSuspended": "Suspendido",
+      "statusArchived": "Archivado",
+      "relationshipTrusted": "De confianza",
+      "relationshipDenied": "Denegado",
+      "relationshipUnderReview": "En revisión",
+      "complianceAccredited": "Acreditado",
+      "complianceCompliant": "Conforme",
+      "complianceSuspended": "Suspendido",
+      "complianceRevoked": "Revocado",
       "credentialWalletGuidance": "Los perfiles de cartera están disponibles en las plantillas de credenciales. Consulte el perfil de cartera compatible de una plantilla; la configuración derivada no demuestra interoperabilidad ni una entrega correcta.",
       "viewCredentialTemplates": "Ver plantillas de credenciales"
     }

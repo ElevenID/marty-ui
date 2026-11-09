@@ -1,6 +1,40 @@
 {
   "trust": {
+    "trustProfileEdit": {
+      "selectOrganization": "Wählen Sie eine Organisation aus, bevor Sie ein Vertrauensprofil bearbeiten.",
+      "permissionDenied": "Sie haben keine Berechtigung, Vertrauensprofile zu bearbeiten.",
+      "scopeMismatch": "Die Antwort zum Vertrauensprofil stimmt nicht mit dem angeforderten Profil und der ausgewählten Organisation überein.",
+      "invalidResponse": "Die Antwort zum Vertrauensprofil ist ungültig.",
+      "suspendedStatus": "Ausgesetzt",
+      "unknownStatus": "Unbekannt",
+      "notFound": "Vertrauensprofil nicht gefunden."
+    },
     "trustProfileDetail": {
+      "selectOrganization": "Wählen Sie eine Organisation aus, um dieses Vertrauensprofil anzuzeigen.",
+      "profileReadDenied": "Sie haben keine Berechtigung, Vertrauensprofile dieser Organisation anzuzeigen.",
+      "issuerReadDenied": "Sie haben keine Berechtigung, Ausstellerbeziehungen dieser Organisation anzuzeigen.",
+      "profileScopeMismatch": "Dieses Vertrauensprofil ist in der ausgewählten Organisation nicht verfügbar.",
+      "retryProfile": "Profil erneut laden",
+      "retryIssuers": "Ausstellerliste erneut laden",
+      "issuerScopeMismatch": "Die Ausstellerantwort stimmt nicht mit diesem Profil, dieser Organisation oder der angeforderten DID überein.",
+      "issuerNotConfirmed": "Die bestätigte Ausstellerbeziehung konnte in der aktuellen Liste nicht gefunden werden. Laden Sie die Ausstellerliste erneut.",
+      "issuerLoadFailed": "Die Ausstellerliste konnte nicht geladen werden.",
+      "issuerAddFailed": "Das Hinzufügen des Ausstellers konnte nicht bestätigt werden.",
+      "issuerAwaitingReadback": "Die Verknüpfung wurde angenommen. Beim erneuten Versuch wird die aktuelle Ausstellerliste gelesen, ohne die Verknüpfung erneut zu senden.",
+      "statusUnknown": "Unbekannt",
+      "relationshipStatusLabel": "Vertrauensbeziehung",
+      "issuerComplianceLabel": "Ausstellerkonformität",
+      "statusDraft": "Entwurf",
+      "statusActive": "Aktiv",
+      "statusSuspended": "Ausgesetzt",
+      "statusArchived": "Archiviert",
+      "relationshipTrusted": "Vertrauenswürdig",
+      "relationshipDenied": "Abgelehnt",
+      "relationshipUnderReview": "In Prüfung",
+      "complianceAccredited": "Akkreditiert",
+      "complianceCompliant": "Konform",
+      "complianceSuspended": "Ausgesetzt",
+      "complianceRevoked": "Widerrufen",
       "credentialWalletGuidance": "Wallet-Profile sind bei den Anmeldeinformationsvorlagen verfügbar. Prüfen Sie das unterstützte Wallet-Profil einer Vorlage. Die abgeleitete Konfiguration belegt weder Interoperabilität noch eine erfolgreiche Zustellung.",
       "viewCredentialTemplates": "Anmeldeinformationsvorlagen anzeigen"
     }

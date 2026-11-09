@@ -2,11 +2,11 @@
  * Trust Profile Edit Page
  *
  * Allows editing the basic configuration of an existing trust profile:
- * name, description, framework type, supported credential formats, and status.
+ * name, description, framework type, and supported credential formats.
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate, Link as RouterLink } from 'react-router';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useParams, useNavigate, useLocation, Link as RouterLink } from 'react-router';
 import {
   Alert,
   Box,
@@ -20,6 +20,7 @@ import {
   FormHelperText,
   InputLabel,
   Link,
+  LinearProgress,
   MenuItem,
   Paper,
   Select,
@@ -32,6 +33,9 @@ import SaveIcon from '@mui/icons-material/Save';
 import { useTranslation } from 'react-i18next';
 
 import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
+import { usePermissions } from '../../../hooks/usePermissions';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { getTrustProfile, updateTrustProfile } from '../../../services/presentationPolicyApi';
 import {
   TRUST_PROFILE_SUPPORTED_FORMATS,
@@ -49,17 +53,65 @@ const FRAMEWORK_TYPES = [
 const STATUS_OPTIONS = [
   { value: 'active', label: 'Active' },
   { value: 'draft', label: 'Draft' },
+  { value: 'suspended', label: 'Suspended' },
   { value: 'archived', label: 'Archived' },
 ];
 
-export function TrustProfileEditPage() {
-  const { t } = useTranslation('console');
-  const { id } = useParams();
-  const navigate = useNavigate();
+const STORED_FORMAT_ALIASES = {
+  VC_JWT: 'jwt_vc',
+  JWT_VC: 'jwt_vc',
+  SD_JWT_VC: 'sd_jwt_vc',
+  MDOC: 'mdoc',
+  JSON_LD: 'ldp_vc',
+  LDP_VC: 'ldp_vc',
+  VDS_NC: 'vds_nc',
+};
 
-  const { data: profile, loading: loadingProfile, error: loadError } = useAsyncData(
-    () => (id ? getTrustProfile(id) : Promise.resolve(null)),
-    [id]
+function TrustProfileEditContent({ id, organizationId }) {
+  const { t } = useTranslation('console');
+  const navigate = useNavigate();
+  const startAction = useAsyncActionScope();
+  const saveBusy = useRef(false);
+  // BrowserRouter changes the history entry before its React transition commits.
+  // Keep a completed save from overriding a newer navigation during that gap.
+  const browserEntry = useRef(typeof window === 'undefined' ? null : {
+    href: window.location.href,
+    key: window.history.state?.key,
+  });
+  const isCurrentView = useCallback((action) => action.isCurrent() && (
+    !browserEntry.current || (typeof window !== 'undefined'
+      && window.location.href === browserEntry.current.href
+      && window.history.state?.key === browserEntry.current.key)
+  ), []);
+  const validateProfile = useCallback((result, isSaveResponse = false) => {
+    if (!result) {
+      throw new Error(isSaveResponse
+        ? t('trust.trustProfileEdit.invalidResponse')
+        : t('trust.trustProfileEdit.notFound', 'Trust profile not found.'));
+    }
+    if (result.id !== id || result.organization_id !== organizationId) {
+      throw new Error(t('trust.trustProfileEdit.scopeMismatch'));
+    }
+    if (typeof result.name !== 'string'
+      || (result.description != null && typeof result.description !== 'string')) {
+      throw new Error(t('trust.trustProfileEdit.invalidResponse'));
+    }
+    const formats = result.supported_formats ?? [];
+    if (!Array.isArray(formats)) {
+      throw new Error(t('trust.trustProfileEdit.invalidResponse'));
+    }
+    const storedFormats = formats.map((format) => (
+      typeof format === 'string' ? STORED_FORMAT_ALIASES[format.toUpperCase()] : undefined
+    ));
+    if (storedFormats.includes(undefined) || new Set(storedFormats).size !== storedFormats.length) {
+      throw new Error(t('trust.trustProfileEdit.invalidResponse'));
+    }
+    return { ...result, supported_formats: storedFormats };
+  }, [id, organizationId, t]);
+
+  const { data: profile, loading: loadingProfile, error: loadError, reload: reloadProfile } = useAsyncData(
+    async () => validateProfile(await getTrustProfile(id)),
+    [id, organizationId]
   );
 
   const [form, setForm] = useState(null);
@@ -70,13 +122,15 @@ export function TrustProfileEditPage() {
   // Seed form state once profile is loaded
   useEffect(() => {
     if (profile && !form) {
-      const frameworkType = profile.framework || profile.profile_type || 'custom';
+      const frameworkType = (profile.framework || profile.profile_type || 'custom').toLowerCase();
       const values = {
         name: profile.name || '',
         description: profile.description || '',
         framework_type: frameworkType,
-        supported_formats: getSupportedFormatsForFramework(frameworkType, profile.supported_formats),
-        status: profile.status || 'active',
+        // Existing profiles keep their stored formats, including an empty set
+        // for machine-identity-only profiles. Presets apply to explicit changes.
+        supported_formats: profile.supported_formats,
+        status: typeof profile.status === 'string' ? profile.status.toLowerCase() : '',
       };
       setForm(values);
       setInitialForm(values);
@@ -89,7 +143,7 @@ export function TrustProfileEditPage() {
         return prev;
       }
 
-      const current = getSupportedFormatsForFramework('custom', prev.supported_formats);
+      const current = prev.supported_formats;
       return {
         ...prev,
         supported_formats: current.includes(fmt)
@@ -103,12 +157,17 @@ export function TrustProfileEditPage() {
     setForm((prev) => ({
       ...prev,
       framework_type: nextFrameworkType,
-      supported_formats: getSupportedFormatsForFramework(nextFrameworkType, prev?.supported_formats),
+      supported_formats: nextFrameworkType === 'custom'
+        ? prev.supported_formats
+        : getSupportedFormatsForFramework(nextFrameworkType),
     }));
   }, []);
 
   const handleSave = useCallback(async () => {
-    if (!form) return;
+    if (!form?.name?.trim() || saveBusy.current) return;
+    const action = startAction();
+    if (!isCurrentView(action)) return;
+    saveBusy.current = true;
     setSaving(true);
     setSaveError(null);
     try {
@@ -117,13 +176,24 @@ export function TrustProfileEditPage() {
           key !== 'status' && JSON.stringify(value) !== JSON.stringify(initialForm?.[key])
         ))
       );
-      if (Object.keys(changes).length) await updateTrustProfile(id, changes);
-      navigate(`/console/org/trust/profiles/${id}`);
+      if (Object.keys(changes).length) {
+        const result = await action.run(updateTrustProfile, id, changes);
+        if (!isCurrentView(action)) return;
+        validateProfile(result, true);
+      }
+      if (!isCurrentView(action)) return;
+      navigate(`/console/org/trust/profiles/${encodeURIComponent(id)}`);
     } catch (err) {
-      setSaveError(err?.message || t('trust.trustProfileEdit.saveFailed', 'Failed to save trust profile.'));
-      setSaving(false);
+      if (isCurrentView(action)) {
+        setSaveError(err?.message || t('trust.trustProfileEdit.saveFailed', 'Failed to save trust profile.'));
+      }
+    } finally {
+      if (isCurrentView(action)) {
+        saveBusy.current = false;
+        setSaving(false);
+      }
     }
-  }, [form, initialForm, id, navigate, t]);
+  }, [form, initialForm, id, navigate, startAction, isCurrentView, t, validateProfile]);
 
   if (loadingProfile || (!form && !loadError)) {
     return (
@@ -140,6 +210,9 @@ export function TrustProfileEditPage() {
         <Alert severity="error">
           {loadError?.message || t('trust.trustProfileEdit.notFound', 'Trust profile not found.')}
         </Alert>
+        <Button onClick={reloadProfile} sx={{ mt: 2, mr: 2 }}>
+          {t('actions.retry', { ns: 'common', defaultValue: 'Retry' })}
+        </Button>
         <Button
           startIcon={<ArrowBackIcon />}
           onClick={() => navigate('/console/org/trust/profiles')}
@@ -151,10 +224,13 @@ export function TrustProfileEditPage() {
     );
   }
 
-  const supportedFormats = TRUST_PROFILE_SUPPORTED_FORMATS.map((format) => ({
-    ...format,
-    label: t(format.labelKey, { defaultValue: format.value }),
-  }));
+  const supportedFormats = [
+    ...TRUST_PROFILE_SUPPORTED_FORMATS.map((format) => ({
+      ...format,
+      label: t(format.labelKey, { defaultValue: format.value }),
+    })),
+    { value: 'vds_nc', label: 'VDS-NC' },
+  ];
   const supportedFormatsLabel = t('wizards.trustProfile.basicsStep.fields.supportedFormats', 'Supported Credential Formats').replace(/\s*\*$/, '');
   const formatSelectionLocked = isFrameworkFormatSelectionLocked(form.framework_type);
 
@@ -200,6 +276,7 @@ export function TrustProfileEditPage() {
         <TextField
           fullWidth
           required
+          disabled={saving}
           label={t('wizards.trustProfile.basicsStep.fields.name', 'Profile Name')}
           value={form.name}
           onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
@@ -211,6 +288,7 @@ export function TrustProfileEditPage() {
         {/* Description */}
         <TextField
           fullWidth
+          disabled={saving}
           multiline
           rows={3}
           label={t('wizards.trustProfile.basicsStep.fields.description', 'Description')}
@@ -222,7 +300,7 @@ export function TrustProfileEditPage() {
         />
 
         {/* Framework Type */}
-        <FormControl fullWidth sx={{ mb: 3 }} data-testid="edit.trustProfile.frameworkTypeField">
+        <FormControl fullWidth disabled={saving} sx={{ mb: 3 }} data-testid="edit.trustProfile.frameworkTypeField">
           <InputLabel>{t('wizards.trustProfile.basicsStep.fields.frameworkType', 'Framework Type')}</InputLabel>
           <Select
             value={form.framework_type}
@@ -261,7 +339,7 @@ export function TrustProfileEditPage() {
                   <Checkbox
                     checked={(form.supported_formats || []).includes(fmt.value)}
                     onChange={() => handleFormatToggle(fmt.value)}
-                    disabled={formatSelectionLocked}
+                    disabled={formatSelectionLocked || saving}
                     slotProps={{ input: { 'data-testid': `edit.trustProfile.format.${fmt.value}` } }}
                   />
                 }
@@ -277,12 +355,16 @@ export function TrustProfileEditPage() {
           <Select
             value={form.status}
             disabled
+            displayEmpty
             label={t('trust.trustProfileEdit.statusLabel', 'Status')}
             inputProps={{ 'data-testid': 'edit.trustProfile.status' }}
           >
+            {!STATUS_OPTIONS.some((option) => option.value === form.status) && (
+              <MenuItem value={form.status}>{t('trust.trustProfileEdit.unknownStatus')}</MenuItem>
+            )}
             {STATUS_OPTIONS.map((opt) => (
               <MenuItem key={opt.value} value={opt.value}>
-                {opt.label}
+                {opt.value === 'suspended' ? t('trust.trustProfileEdit.suspendedStatus') : opt.label}
               </MenuItem>
             ))}
           </Select>
@@ -316,6 +398,21 @@ export function TrustProfileEditPage() {
       </Box>
     </Box>
   );
+}
+
+export function TrustProfileEditPage() {
+  const { t } = useTranslation('console');
+  const { id } = useParams();
+  const location = useLocation();
+  const { activeOrgId } = useConsole();
+  const { can, isLoading } = usePermissions();
+  const canView = can('trust-profile', 'view');
+  const canEdit = can('trust-profile', 'edit');
+  if (!activeOrgId) return <Alert severity="error">{t('trust.trustProfileEdit.selectOrganization')}</Alert>;
+  if (isLoading) return <LinearProgress />;
+  if (!canView || !canEdit) return <Alert severity="error">{t('trust.trustProfileEdit.permissionDenied')}</Alert>;
+  const key = JSON.stringify([activeOrgId, id, location.key, location.pathname, location.search, location.hash, canView, canEdit]);
+  return <TrustProfileEditContent key={key} id={id} organizationId={activeOrgId} />;
 }
 
 export default TrustProfileEditPage;
