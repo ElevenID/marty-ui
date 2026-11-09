@@ -682,12 +682,13 @@ async fn qualification_reproves_candidate_without_reissuing_credentials() {
     assert_eq!(result["credentialsQualified"], true);
     assert_eq!(result["credentialsIssued"], false);
     assert_eq!(result["activation"], false);
-    let posts = producer.posts.lock().unwrap();
-    assert_eq!(posts.len(), 171);
-    assert!(posts[120..]
-        .iter()
-        .all(|(path, _)| path == "auth/token/lookup" || path.starts_with("transit/sign/")));
-    drop(posts);
+    {
+        let posts = producer.posts.lock().unwrap();
+        assert_eq!(posts.len(), 171);
+        assert!(posts[120..]
+            .iter()
+            .all(|(path, _)| path == "auth/token/lookup" || path.starts_with("transit/sign/")));
+    }
     assert_eq!(producer.minted.lock().unwrap().len(), 33);
     let plan = staging::private_report(&request.output.join("plan.json")).unwrap();
     assert_eq!(
