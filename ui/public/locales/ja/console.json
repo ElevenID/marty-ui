@@ -348,7 +348,9 @@
 				"defaultCredentialTemplate": "既定の資格情報テンプレート"
 			},
 			"values": {
-				"noneManualSelection": "なし（手動選択が必要）"
+				"noneManualSelection": "なし（手動選択が必要）",
+				"unavailable": "利用できないリソース",
+				"detailsUnavailable": "リソースの詳細を表示できません"
 			},
 			"actions": {
 				"save": "既定値を保存",
@@ -357,7 +359,11 @@
 			"messages": {
 				"loadFailed": "組織の既定値を読み込めませんでした",
 				"saveFailed": "組織の既定値を保存できませんでした",
-				"saveSuccess": "組織の既定値を保存しました"
+				"saveSuccess": "組織の既定値を保存しました",
+				"organizationRequired": "既定値を設定する前に組織を選択してください。",
+				"permissionDenied": "組織の既定値を閲覧する権限がありません。",
+				"unavailableDefaultsPreserved": "保存済みの既定値の一部が利用できません。他の既定値を変更しても、これらの値は保持されます。編集権限がある場合は、置き換えるか選択を解除できます。",
+				"catalogPermissionRequired": "カタログの閲覧権限がないため、一部のリソースの詳細は表示されません。"
 			}
 		}
 	},

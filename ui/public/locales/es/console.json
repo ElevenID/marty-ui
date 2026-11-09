@@ -348,7 +348,9 @@
 				"defaultCredentialTemplate": "Plantilla de credencial predeterminada"
 			},
 			"values": {
-				"noneManualSelection": "Ninguno (se requiere selección manual)"
+				"noneManualSelection": "Ninguno (se requiere selección manual)",
+				"unavailable": "Recurso no disponible",
+				"detailsUnavailable": "Detalles del recurso no disponibles"
 			},
 			"actions": {
 				"save": "Guardar predeterminados",
@@ -357,7 +359,11 @@
 			"messages": {
 				"loadFailed": "No se pudieron cargar los valores predeterminados de la organización",
 				"saveFailed": "No se pudieron guardar los valores predeterminados de la organización",
-				"saveSuccess": "Valores predeterminados guardados correctamente"
+				"saveSuccess": "Valores predeterminados guardados correctamente",
+				"organizationRequired": "Selecciona una organización antes de configurar los valores predeterminados.",
+				"permissionDenied": "No tienes permiso para ver los valores predeterminados de la organización.",
+				"unavailableDefaultsPreserved": "Uno o varios valores predeterminados guardados no están disponibles. Se conservan al cambiar otros valores predeterminados. Si tienes permiso para editar, puedes sustituirlos o borrar la selección.",
+				"catalogPermissionRequired": "Algunos detalles de los recursos están ocultos porque no tienes permiso para ver sus catálogos."
 			}
 		}
 	},

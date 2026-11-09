@@ -348,7 +348,9 @@
 				"defaultCredentialTemplate": "Modèle d'identifiant par défaut"
 			},
 			"values": {
-				"noneManualSelection": "Aucun (sélection manuelle requise)"
+				"noneManualSelection": "Aucun (sélection manuelle requise)",
+				"unavailable": "Ressource indisponible",
+				"detailsUnavailable": "Détails de la ressource indisponibles"
 			},
 			"actions": {
 				"save": "Enregistrer les valeurs",
@@ -357,7 +359,11 @@
 			"messages": {
 				"loadFailed": "Impossible de charger les valeurs par défaut de l'organisation",
 				"saveFailed": "Impossible d'enregistrer les valeurs par défaut de l'organisation",
-				"saveSuccess": "Valeurs par défaut enregistrées avec succès"
+				"saveSuccess": "Valeurs par défaut enregistrées avec succès",
+				"organizationRequired": "Sélectionnez une organisation avant de configurer les valeurs par défaut.",
+				"permissionDenied": "Vous n’avez pas l’autorisation de consulter les valeurs par défaut de l’organisation.",
+				"unavailableDefaultsPreserved": "Une ou plusieurs valeurs par défaut enregistrées ne sont pas disponibles. Elles sont conservées lorsque vous modifiez d’autres valeurs par défaut. Si vous avez l’autorisation de modifier, vous pouvez les remplacer ou effacer la sélection.",
+				"catalogPermissionRequired": "Certains détails des ressources sont masqués, car vous n’avez pas l’autorisation de consulter leurs catalogues."
 			}
 		}
 	},

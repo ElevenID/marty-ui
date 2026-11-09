@@ -116,6 +116,33 @@
       "accessDescriptionWithCreate": "Word lid van een organisatie met consoletoegang of maak er een aan om verder te gaan.",
       "accessDescription": "Word lid van een organisatie met consoletoegang om verder te gaan.",
       "noMembershipsTitle": "Nog geen lidmaatschappen met consoletoegang"
+    },
+    "defaultsSection": {
+      "title": "Standaardinstellingen van de organisatie",
+      "description": "Stel standaardresources in die automatisch worden geselecteerd bij het aanmaken van nieuwe flows en configuraties.",
+      "fields": {
+        "defaultTrustProfile": "Standaardvertrouwensprofiel",
+        "defaultPresentationPolicy": "Standaardpresentatiebeleid",
+        "defaultCredentialTemplate": "Standaardsjabloon voor credentials"
+      },
+      "values": {
+        "noneManualSelection": "Geen (handmatige selectie vereist)",
+        "unavailable": "Resource niet beschikbaar",
+        "detailsUnavailable": "Resourcegegevens niet beschikbaar"
+      },
+      "actions": {
+        "save": "Standaardinstellingen opslaan",
+        "saving": "Bezig met opslaan..."
+      },
+      "messages": {
+        "loadFailed": "De standaardinstellingen van de organisatie konden niet worden geladen",
+        "saveFailed": "De standaardinstellingen van de organisatie konden niet worden opgeslagen",
+        "saveSuccess": "De standaardinstellingen van de organisatie zijn opgeslagen",
+        "organizationRequired": "Selecteer een organisatie voordat u de standaardinstellingen configureert.",
+        "permissionDenied": "U hebt geen rechten om de standaardinstellingen van de organisatie te bekijken.",
+        "unavailableDefaultsPreserved": "Een of meer opgeslagen standaardwaarden zijn niet beschikbaar. Ze blijven behouden wanneer u andere standaardwaarden wijzigt. Met bewerkingsrechten kunt u ze vervangen of de selectie wissen.",
+        "catalogPermissionRequired": "Sommige resourcegegevens zijn verborgen omdat u geen rechten hebt om de bijbehorende catalogi te bekijken."
+      }
     }
   }
 }

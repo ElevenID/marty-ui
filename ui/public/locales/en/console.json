@@ -2703,7 +2703,9 @@
         "defaultCredentialTemplate": "Default Credential Template"
       },
       "values": {
-        "noneManualSelection": "None (manual selection required)"
+        "noneManualSelection": "None (manual selection required)",
+        "unavailable": "Unavailable resource",
+        "detailsUnavailable": "Resource details unavailable"
       },
       "actions": {
         "save": "Save Defaults",
@@ -2712,7 +2714,11 @@
       "messages": {
         "loadFailed": "Failed to load organization defaults",
         "saveFailed": "Failed to save organization defaults",
-        "saveSuccess": "Organization defaults saved successfully"
+        "saveSuccess": "Organization defaults saved successfully",
+        "organizationRequired": "Select an organization before configuring defaults.",
+        "permissionDenied": "You do not have permission to view organization defaults.",
+        "unavailableDefaultsPreserved": "One or more saved defaults are unavailable. They are preserved when you change other defaults. You can replace or clear them if you have permission to edit.",
+        "catalogPermissionRequired": "Some resource details are hidden because you do not have permission to view their catalogs."
       }
     }
   },

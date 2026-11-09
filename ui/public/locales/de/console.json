@@ -348,7 +348,9 @@
 				"defaultCredentialTemplate": "Standard-Nachweisvorlage"
 			},
 			"values": {
-				"noneManualSelection": "Keine (manuelle Auswahl erforderlich)"
+				"noneManualSelection": "Keine (manuelle Auswahl erforderlich)",
+				"unavailable": "Nicht verfügbare Ressource",
+				"detailsUnavailable": "Ressourcendetails nicht verfügbar"
 			},
 			"actions": {
 				"save": "Standards speichern",
@@ -357,7 +359,11 @@
 			"messages": {
 				"loadFailed": "Organisationsstandards konnten nicht geladen werden",
 				"saveFailed": "Organisationsstandards konnten nicht gespeichert werden",
-				"saveSuccess": "Organisationsstandards erfolgreich gespeichert"
+				"saveSuccess": "Organisationsstandards erfolgreich gespeichert",
+				"organizationRequired": "Wählen Sie eine Organisation aus, bevor Sie Standardwerte konfigurieren.",
+				"permissionDenied": "Sie haben keine Berechtigung, die Standardwerte der Organisation anzuzeigen.",
+				"unavailableDefaultsPreserved": "Ein oder mehrere gespeicherte Standardwerte sind nicht verfügbar. Sie bleiben erhalten, wenn Sie andere Standardwerte ändern. Wenn Sie die Berechtigung zum Bearbeiten haben, können Sie sie ersetzen oder die Auswahl aufheben.",
+				"catalogPermissionRequired": "Einige Ressourcendetails werden ausgeblendet, da Sie keine Berechtigung haben, die zugehörigen Kataloge anzuzeigen."
 			}
 		}
 	},
