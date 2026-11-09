@@ -598,6 +598,7 @@ async fn run_contract(pool: &PgPool) -> TestResult {
     let now_ms = u64::try_from(now.timestamp_millis())?;
     run_crud_contract(&repository, now).await?;
     insert_live_instance(pool, FIRST_INSTANCE_ID, now, None).await?;
+    let expected = repository.instance(FIRST_INSTANCE_ID).await?.unwrap();
 
     let candidate_a = terminal_instance(FIRST_INSTANCE_ID, now, "allow-a");
     let candidate_b = terminal_instance(FIRST_INSTANCE_ID, now, "allow-b");
@@ -611,14 +612,14 @@ async fn run_contract(pool: &PgPool) -> TestResult {
             &candidate_a,
             &digest_a,
             replay_expiry,
-            FlowInstanceStatus::AwaitingWallet,
+            &expected,
             Some(&callback_a),
         ),
         repository.finalize_verification(
             &candidate_b,
             &digest_b,
             replay_expiry,
-            FlowInstanceStatus::AwaitingWallet,
+            &expected,
             Some(&callback_b),
         )
     );
@@ -738,13 +739,14 @@ async fn run_contract(pool: &PgPool) -> TestResult {
     )
     .await?;
     let expired = terminal_instance(EXPIRED_INSTANCE_ID, now, "allow");
+    let expected_expired = repository.instance(EXPIRED_INSTANCE_ID).await?.unwrap();
     assert!(
         !repository
             .finalize_verification(
                 &expired,
                 &"f".repeat(64),
                 replay_expiry,
-                FlowInstanceStatus::AwaitingWallet,
+                &expected_expired,
                 None,
             )
             .await?
@@ -762,6 +764,85 @@ async fn run_contract(pool: &PgPool) -> TestResult {
     .fetch_one(pool)
     .await?;
     assert_eq!(expired_replays, 0);
+    run_finalization_snapshot_contract(pool, &repository, now, replay_expiry).await?;
+    Ok(())
+}
+
+async fn run_finalization_snapshot_contract(
+    pool: &PgPool,
+    repository: &PostgresFlowRepository,
+    now: chrono::DateTime<Utc>,
+    replay_expiry: u64,
+) -> TestResult {
+    for (id, change_context, digest) in [
+        ("90000000-0000-0000-0000-000000000005", true, "5".repeat(64)),
+        (
+            "90000000-0000-0000-0000-000000000006",
+            false,
+            "6".repeat(64),
+        ),
+    ] {
+        insert_live_instance(pool, id, now, None).await?;
+        let expected = repository.instance(id).await?.unwrap();
+        let replacement_context = if change_context {
+            json!({"request_digest": "replacement", "nonce": "new-request"})
+        } else {
+            expected.context.clone()
+        };
+        let replacement_updated_at = if change_context {
+            expected.updated_at
+        } else {
+            expected.updated_at + Duration::microseconds(1)
+        };
+        sqlx::query("UPDATE flow_service.flow_instances SET context=$2, updated_at=$3 WHERE id=$1")
+            .bind(id)
+            .bind(&replacement_context)
+            .bind(replacement_updated_at)
+            .execute(pool)
+            .await?;
+        let replacement = repository.instance(id).await?.unwrap();
+        let callback = callback(id, u64::try_from(now.timestamp_millis())?, "snapshot")?;
+        assert!(
+            !repository
+                .finalize_verification(
+                    &terminal_instance(id, now, "stale"),
+                    &digest,
+                    replay_expiry,
+                    &expected,
+                    Some(&callback),
+                )
+                .await?
+        );
+        assert_eq!(repository.instance(id).await?, Some(replacement.clone()));
+        let counts: (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM flow_service.flow_nonce_consumptions WHERE flow_instance_id=$1), \
+                    (SELECT count(*) FROM flow_service.flow_callback_outbox WHERE flow_instance_id=$1)",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+        assert_eq!(
+            counts,
+            (0, 0),
+            "stale result must roll back nonce and callback"
+        );
+
+        let mut fresh_terminal = replacement.clone();
+        fresh_terminal.status = FlowInstanceStatus::Completed;
+        fresh_terminal.result = Some(json!({"decision": "fresh"}));
+        fresh_terminal.completed_at = Some(now);
+        assert!(
+            repository
+                .finalize_verification(
+                    &fresh_terminal,
+                    &digest,
+                    replay_expiry,
+                    &replacement,
+                    Some(&callback),
+                )
+                .await?
+        );
+    }
     Ok(())
 }
 
@@ -784,6 +865,10 @@ async fn run_callback_delivery_contract(
     let destinations = WebhookDestinationRegistry::parse(&registration)?;
 
     insert_live_instance(pool, DELIVERED_CALLBACK_INSTANCE_ID, now, None).await?;
+    let expected_delivery = repository
+        .instance(DELIVERED_CALLBACK_INSTANCE_ID)
+        .await?
+        .unwrap();
     let callback = CallbackEvent::new(
         DELIVERED_CALLBACK_INSTANCE_ID,
         "org-1",
@@ -799,7 +884,7 @@ async fn run_callback_delivery_contract(
                 &terminal_instance(DELIVERED_CALLBACK_INSTANCE_ID, now, "allow"),
                 &"d".repeat(64),
                 replay_expiry,
-                FlowInstanceStatus::AwaitingWallet,
+                &expected_delivery,
                 Some(&callback),
             )
             .await?
@@ -831,6 +916,10 @@ async fn run_callback_delivery_contract(
     assert_eq!(delivered, ("delivered".into(), String::new(), json!({})));
 
     insert_live_instance(pool, REJECTED_CALLBACK_INSTANCE_ID, now, None).await?;
+    let expected_rejection = repository
+        .instance(REJECTED_CALLBACK_INSTANCE_ID)
+        .await?
+        .unwrap();
     let rejected = CallbackEvent::new(
         REJECTED_CALLBACK_INSTANCE_ID,
         "org-1",
@@ -846,7 +935,7 @@ async fn run_callback_delivery_contract(
                 &terminal_instance(REJECTED_CALLBACK_INSTANCE_ID, now, "allow"),
                 &"e".repeat(64),
                 replay_expiry,
-                FlowInstanceStatus::AwaitingWallet,
+                &expected_rejection,
                 Some(&rejected),
             )
             .await?

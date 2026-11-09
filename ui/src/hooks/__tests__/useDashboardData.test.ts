@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act, renderHook } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { useDashboardData } from '../useDashboardData'
 
 const {
@@ -168,18 +168,24 @@ describe('useDashboardData', () => {
     vi.restoreAllMocks()
   })
 
-  it('preserves the last healthy status across polling failures and refreshes on recovery', async () => {
+  it('replaces stale healthy indicators when polling fails and refreshes them on recovery', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const mockFetch = vi
       .fn()
       .mockResolvedValueOnce({
         ok: true,
-        json: vi.fn().mockResolvedValue({ status: 'healthy' }),
+        json: vi.fn().mockResolvedValue({
+          status: 'ready',
+          services: { 'issuance-native': { status: 'healthy' }, verification: { status: 'healthy' } },
+        }),
       })
       .mockRejectedValueOnce(new Error('health check failed'))
       .mockResolvedValueOnce({
         ok: true,
-        json: vi.fn().mockResolvedValue({ status: 'degraded' }),
+        json: vi.fn().mockResolvedValue({
+          status: 'ready',
+          services: { 'issuance-native': { status: 'healthy' }, verification: { status: 'healthy' } },
+        }),
       })
 
     vi.stubGlobal('fetch', mockFetch)
@@ -193,7 +199,8 @@ describe('useDashboardData', () => {
     })
 
     expect(result.current.loading).toBe(false)
-    expect(result.current.data.systemHealth).toEqual({ status: 'healthy' })
+    expect(result.current.data.systemHealth).toEqual({ gateway: 'healthy', issuer: 'healthy', verifier: 'healthy' })
+    expect(mockFetch).toHaveBeenCalledWith('/health/ready', expect.objectContaining({ cache: 'no-store' }))
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60000)
@@ -201,7 +208,7 @@ describe('useDashboardData', () => {
     })
 
     expect(mockFetch).toHaveBeenCalledTimes(2)
-    expect(result.current.data.systemHealth).toEqual({ status: 'healthy' })
+    expect(result.current.data.systemHealth).toEqual({ gateway: 'error', issuer: 'unknown', verifier: 'unknown' })
     expect(consoleErrorSpy).not.toHaveBeenCalled()
 
     await act(async () => {
@@ -210,7 +217,7 @@ describe('useDashboardData', () => {
     })
 
     expect(mockFetch).toHaveBeenCalledTimes(3)
-    expect(result.current.data.systemHealth).toEqual({ status: 'degraded' })
+    expect(result.current.data.systemHealth).toEqual({ gateway: 'healthy', issuer: 'healthy', verifier: 'healthy' })
   })
 
   it('loads trust setup dependencies alongside the rest of the dashboard data', async () => {
@@ -245,6 +252,42 @@ describe('useDashboardData', () => {
     }])
     expect(result.current.data).not.toHaveProperty('issuerProfiles')
     expect(result.current.data).not.toHaveProperty('keyManagementConfig')
+  })
+
+  it('keeps malformed native readiness unavailable through the real API normalizer and recovers on retry', async () => {
+    vi.useRealTimers()
+    const { getRuntimeStatus } = await vi.importActual<typeof import('../../services/dashboardApi')>('../../services/dashboardApi')
+    mockGetRuntimeStatus.mockImplementation(getRuntimeStatus)
+    let canIssue: unknown = 'false'
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.endsWith('/v1/organizations/org_live/runtime/status')) {
+        return Response.json({
+          can_issue: canIssue,
+          can_verify: false,
+          issuer_keys_valid: false,
+          issuer_active: false,
+          deployment_active: false,
+          policy_reachable: false,
+        })
+      }
+      if (url === '/health/ready') return Response.json({ status: 'ready' })
+      throw new Error(`Unexpected request: ${url}`)
+    }))
+
+    const { result } = renderHook(() => useDashboardData())
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.data.runtimeStatus).toBeNull()
+    expect(result.current.data.dashboardErrors.runtimeStatus).toMatchObject({
+      code: 'DASHBOARD_PAYLOAD_INVALID', status: 502,
+      message: 'Runtime status returned invalid boolean fields: can_issue.',
+    })
+
+    canIssue = false
+    act(() => result.current.refetch())
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.data.runtimeStatus).toMatchObject({ canIssue: false, canVerify: false })
+    expect(result.current.data.dashboardErrors.runtimeStatus).toBeNull()
   })
 
   it('clears dashboard data and does not fetch org-scoped resources without organization context', async () => {

@@ -1070,6 +1070,10 @@ fn router_with_optional_services(
             .route(
                 "/v1/issuance/credentials/{credential_id}/status",
                 get(get_credential_status),
+            )
+            .route(
+                marty_oid4vp_contract::managed_status::MANAGED_STATUS_OBSERVATION_PATH,
+                post(observe_sd_jwt_status),
             );
     }
     if services.canvas_oauth.is_some() {
@@ -2813,6 +2817,21 @@ async fn get_credential_status(
         .map(Json)
 }
 
+async fn observe_sd_jwt_status(
+    State(state): State<IssuanceState>,
+    headers: HeaderMap,
+    Json(request): Json<marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1>,
+) -> Result<Response, CredentialManagementHttpError> {
+    let observation = credential_management(&state)?
+        .observe_sd_jwt_status(
+            &request,
+            header(&headers, "X-API-Key"),
+            header(&headers, "X-Organization-ID"),
+        )
+        .await?;
+    Ok(([("Cache-Control", "no-store")], Json(observation)).into_response())
+}
+
 fn credential_management(
     state: &IssuanceState,
 ) -> Result<&CredentialManagementHttpService, CredentialManagementHttpError> {
@@ -3791,6 +3810,23 @@ impl IntoResponse for CredentialManagementHttpError {
             }
         }
         let (status, detail) = match self {
+            Self::Observation(error) => match error {
+                crate::managed_status::ManagedStatusError::InvalidRequest => (
+                    StatusCode::BAD_REQUEST,
+                    "Invalid managed credential status request",
+                ),
+                crate::managed_status::ManagedStatusError::NotFound => {
+                    (StatusCode::NOT_FOUND, "Managed credential was not found")
+                }
+                crate::managed_status::ManagedStatusError::UnsupportedRecord => (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "Stored credential does not support this status observation",
+                ),
+                crate::managed_status::ManagedStatusError::Unavailable => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Managed credential status is temporarily unavailable",
+                ),
+            },
             Self::Security(error) => match error {
                 TransactionReadError::TrustedOrganizationRequired => (
                     StatusCode::FORBIDDEN,

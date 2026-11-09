@@ -14,9 +14,10 @@ use crate::oid4vci_authorization::{authorization_transaction_id, Oid4vciAuthoriz
 use crate::oid4vci_authorization_postgres::PostgresOid4vciAuthorizationRepository;
 use crate::{
     credential::{
-        reserved_credential_id, CredentialAccessTokenGrant, CredentialAuthorizationSession,
-        CredentialIssuanceError, CredentialRepository, CredentialTransaction,
-        CredentialTransactionStatus, ExistingCredential, IssuedCredential,
+        reserved_credential_id, same_signing_target, CredentialAccessTokenGrant,
+        CredentialAuthorizationSession, CredentialIssuanceError, CredentialRepository,
+        CredentialSigningAuthorization, CredentialTransaction, CredentialTransactionStatus,
+        ExistingCredential, IssuedCredential,
     },
     credential_lifecycle::delivery_record_id,
     credential_renewal::{RenewalRepository, RenewalRepositoryError, RenewalSource},
@@ -152,13 +153,42 @@ const REFRESH_PENDING_CANVAS_APPLICATION_OFFER: &str = concat!(
      RETURNING ",
     transaction_columns!()
 );
+// The same fresh-clock gate protects a new signing claim and recovery after a
+// concurrent winner. The caller already holds the transaction and linked session
+// rows, so neither expiry nor token collisions may be checked only before a wait.
+macro_rules! signing_authority_predicate {
+    () => {
+        "id = $1 AND organization_id = $2
+         AND access_token = $3 AND access_token_expires_at > clock_timestamp()
+         AND expires_at > clock_timestamp()
+         AND NOT EXISTS (
+             SELECT 1 FROM issuance_service.issuance_transactions AS other
+             WHERE other.access_token = $3 AND other.id <> $1
+               AND other.access_token_expires_at > clock_timestamp())
+         AND NOT EXISTS (
+             SELECT 1 FROM issuance_service.authorization_sessions AS other
+             WHERE other.access_token = $3
+               AND other.access_token_expires_at > clock_timestamp()
+               AND ($4::text IS NULL OR other.id <> $4))
+         AND ($4::text IS NULL OR EXISTS (
+             SELECT 1 FROM issuance_service.authorization_sessions AS session
+             WHERE session.id = $4 AND session.access_token = $3
+               AND session.access_token_expires_at > clock_timestamp()))"
+    };
+}
+const SIGNING_AUTHORITY_IS_LIVE: &str = concat!(
+    "SELECT EXISTS (SELECT 1 FROM issuance_service.issuance_transactions WHERE ",
+    signing_authority_predicate!(),
+    ")"
+);
 const CLAIM_FOR_SIGNING: &str = concat!(
     "UPDATE issuance_service.issuance_transactions
-     SET status = 'signing', reserved_credential_id = $2, credential_type = $3,
-         issuer_profile_id = $4, issuer_mode = $5, issuer_did_override = $6,
-         issuer_algorithm = $7, signing_service_id = $8
-     WHERE id = $1 AND status = 'authorized'
-     RETURNING ",
+     SET status = 'signing', reserved_credential_id = $5, credential_type = $6,
+         issuer_profile_id = $7, issuer_mode = $8, issuer_did_override = $9,
+         issuer_algorithm = $10, signing_service_id = $11
+     WHERE status = 'authorized' AND ",
+    signing_authority_predicate!(),
+    " RETURNING ",
     transaction_columns!()
 );
 
@@ -469,9 +499,15 @@ impl CredentialRepository for PostgresCredentialRepository {
             return Ok(CredentialAccessTokenGrant::Missing);
         };
         if let Some(transaction) = self.transaction_by_access_token(access_token).await? {
-            return Ok(CredentialAccessTokenGrant::Transaction(Box::new(
-                transaction,
-            )));
+            return Ok(
+                match self.authorization_by_access_token(access_token).await? {
+                    Some(authorization_session) => CredentialAccessTokenGrant::LinkedTransaction {
+                        transaction: Box::new(transaction),
+                        authorization_session,
+                    },
+                    None => CredentialAccessTokenGrant::Transaction(Box::new(transaction)),
+                },
+            );
         }
         self.authorization_by_access_token(access_token)
             .await
@@ -682,9 +718,115 @@ impl CredentialRepository for PostgresCredentialRepository {
         &self,
         transaction: &CredentialTransaction,
         credential_id: &str,
+        authorization: &CredentialSigningAuthorization<'_>,
     ) -> Result<Option<CredentialTransaction>, CredentialIssuanceError> {
-        sqlx::query(CLAIM_FOR_SIGNING)
-            .bind(&transaction.id)
+        let digest = hash_access_token(&self.token_hmac_key, authorization.access_token);
+        let mut database = self.pool.begin().await.map_err(repository_error)?;
+        let row = sqlx::query(concat!(
+            "SELECT ",
+            transaction_columns!(),
+            ", access_token, access_token_expires_at, ",
+            "expires_at > clock_timestamp() AS transaction_live, ",
+            "access_token_expires_at > clock_timestamp() AS grant_live ",
+            "FROM issuance_service.issuance_transactions ",
+            "WHERE id = $1 AND organization_id = $2 FOR UPDATE"
+        ))
+        .bind(&authorization.transaction.id)
+        .bind(&authorization.transaction.organization_id)
+        .fetch_optional(&mut *database)
+        .await
+        .map_err(repository_error)?
+        .ok_or(CredentialIssuanceError::InvalidTransactionState)?;
+        if row
+            .try_get::<Option<String>, _>("access_token")
+            .map_err(repository_error)?
+            .as_deref()
+            != Some(digest.as_str())
+            || row
+                .try_get::<Option<bool>, _>("grant_live")
+                .map_err(repository_error)?
+                != Some(true)
+        {
+            return Err(CredentialIssuanceError::InvalidAccessToken);
+        }
+        if !row
+            .try_get::<bool, _>("transaction_live")
+            .map_err(repository_error)?
+        {
+            return Err(CredentialIssuanceError::InvalidTransactionState);
+        }
+        let token_expires_at = row
+            .try_get::<DateTime<Utc>, _>("access_token_expires_at")
+            .map_err(repository_error)?;
+        let current = transaction_row(row)?;
+        if let Some(expected) = authorization.authorization_session {
+            let row = sqlx::query(
+                "SELECT id, client_id, organization_id, issuer_state,
+                        credential_configuration_ids, dpop_jkt, access_token_expires_at
+                 FROM issuance_service.authorization_sessions
+                 WHERE id = $1 AND access_token = $2
+                   AND access_token_expires_at > clock_timestamp()
+                 FOR UPDATE",
+            )
+            .bind(&expected.id)
+            .bind(&digest)
+            .fetch_optional(&mut *database)
+            .await
+            .map_err(repository_error)?
+            .ok_or(CredentialIssuanceError::InvalidAccessToken)?;
+            let session = authorization_row(row)?;
+            let deterministic_link = current.id == authorization_transaction_id(&session.id);
+            if session != *expected
+                || session.organization_id != current.organization_id
+                || !(current.oid4vci_client_id.as_deref() == Some(session.client_id.as_str())
+                    || (deterministic_link && current.oid4vci_client_id.is_none()))
+                || session.dpop_jkt.as_deref()
+                    != current.claims.get("_dpop_jkt").and_then(Value::as_str)
+                || session.access_token_expires_at != token_expires_at
+                || !(session.issuer_state.as_deref() == Some(current.pre_authorized_code.as_str())
+                    || deterministic_link)
+            {
+                return Err(CredentialIssuanceError::InvalidAccessToken);
+            }
+        }
+        if current.status != CredentialTransactionStatus::Authorized {
+            if !matches!(
+                current.status,
+                CredentialTransactionStatus::Signing | CredentialTransactionStatus::Issued
+            ) || !same_signing_target(transaction, &current)
+            {
+                return Err(CredentialIssuanceError::InvalidTransactionState);
+            }
+            let live = sqlx::query_scalar::<_, bool>(SIGNING_AUTHORITY_IS_LIVE)
+                .bind(&authorization.transaction.id)
+                .bind(&authorization.transaction.organization_id)
+                .bind(&digest)
+                .bind(
+                    authorization
+                        .authorization_session
+                        .map(|session| session.id.as_str()),
+                )
+                .fetch_one(&mut *database)
+                .await
+                .map_err(repository_error)?;
+            return if live {
+                Ok(None)
+            } else {
+                Err(CredentialIssuanceError::InvalidAccessToken)
+            };
+        }
+        if current != *authorization.transaction {
+            return Err(CredentialIssuanceError::InvalidTransactionState);
+        }
+        let claimed = sqlx::query(CLAIM_FOR_SIGNING)
+            .bind(&authorization.transaction.id)
+            .bind(&authorization.transaction.organization_id)
+            .bind(&digest)
+            .bind(
+                authorization
+                    .authorization_session
+                    .map(|session| session.id.as_str()),
+            )
             .bind(credential_id)
             .bind(&transaction.credential_type)
             .bind(&transaction.issuer_profile_id)
@@ -692,11 +834,13 @@ impl CredentialRepository for PostgresCredentialRepository {
             .bind(&transaction.issuer_did)
             .bind(&transaction.issuer_algorithm)
             .bind(&transaction.signing_service_id)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&mut *database)
             .await
             .map_err(repository_error)?
-            .map(transaction_row)
-            .transpose()
+            .ok_or(CredentialIssuanceError::InvalidAccessToken)?;
+        let claimed = transaction_row(claimed)?;
+        database.commit().await.map_err(repository_error)?;
+        Ok(Some(claimed))
     }
 
     async fn finalize(

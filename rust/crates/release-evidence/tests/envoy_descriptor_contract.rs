@@ -78,10 +78,11 @@ struct Http {
 fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_siblings() {
     // Reviewed policy transport, credential-template schema, additive auth_time,
     // PolicyEvaluationResponse authentication_diagnostic_json field 14, and
-    // optional per-offer lifetime at InitiateIssuanceRequest field 13.
+    // optional per-offer lifetime at InitiateIssuanceRequest field 13, and the
+    // additive saved-policy revision and managed prerequisite authority fields.
     assert_eq!(
         format!("{:x}", Sha256::digest(DESCRIPTOR)),
-        "f3f6a0c03d724bff696cb39948cabfa5f181099315f2a314ca504b0c7bc73611"
+        "784e407604510c45a68234a8d8cb84a57e26db297117b4ae37ed4557a3d5ab60"
     );
     let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
     let files: Vec<_> = set
@@ -211,5 +212,59 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
                 }
             );
         }
+    }
+}
+
+#[test]
+fn managed_prerequisite_fields_are_additive_and_keep_explicit_update_presence() {
+    let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
+    let file = set
+        .files
+        .iter()
+        .find(|file| file.name == "presentation_policy_service.proto")
+        .unwrap();
+    for (message, field, number, optional) in [
+        (
+            "CreatePolicyRequest",
+            "prerequisite_evidence_profile",
+            10,
+            false,
+        ),
+        ("CreatePolicyRequest", "trust_profile_id", 11, false),
+        ("CreatePolicyRequest", "holder_binding_json", 12, false),
+        ("CreatePolicyRequest", "freshness_json", 13, false),
+        (
+            "UpdatePolicyRequest",
+            "prerequisite_evidence_profile",
+            5,
+            true,
+        ),
+        ("PolicyResponse", "prerequisite_evidence_profile", 14, false),
+        (
+            "PolicyResponse",
+            "credential_authority_snapshot_json",
+            15,
+            false,
+        ),
+        (
+            "Oid4vpEvaluationTransport",
+            "credential_authority_snapshot_json",
+            8,
+            false,
+        ),
+    ] {
+        let definition = file
+            .messages
+            .iter()
+            .find(|value| value.name == message)
+            .unwrap();
+        let field = definition
+            .fields
+            .iter()
+            .find(|value| value.name == field)
+            .unwrap();
+        assert_eq!(field.number, number);
+        assert_eq!(field.kind, 9);
+        assert_eq!(field.proto3_optional, optional);
     }
 }

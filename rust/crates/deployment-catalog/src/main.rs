@@ -252,8 +252,64 @@ fn print_plan(plan: &Value) {
     }
 }
 
+// These helpers return compiled public metadata and static usage text only.
+// Credential resolution belongs exclusively to the separate publication command.
+fn kubernetes_publication_usage_error() -> String {
+    usage_error(
+        &command_usage("kubernetes-secrets-contract"),
+        "marty-deploy kubernetes-secrets-contract",
+        "this command accepts no arguments except -h or --help",
+    )
+}
+
+fn kubernetes_publication_metadata(params: &[String]) -> Result<String, String> {
+    match params {
+        [] => serde_json::to_string(&marty_deployment_catalog::kubernetes_secrets::contract())
+            .map(|contract| format!("{contract}\n"))
+            .map_err(|error| error.to_string()),
+        [help] if help == "--help" || help == "-h" => {
+            Ok(frozen_help("kubernetes-secrets-contract"))
+        }
+        _ => Err(kubernetes_publication_usage_error()),
+    }
+}
+
+fn kubernetes_application_usage_error() -> String {
+    usage_error(
+        &command_usage("kubernetes-application-token-contract"),
+        "marty-deploy kubernetes-application-token-contract",
+        "this command accepts no arguments except -h or --help",
+    )
+}
+
+fn kubernetes_application_metadata(params: &[String]) -> Result<String, String> {
+    match params {
+        [] => serde_json::to_string(&marty_deployment_catalog::application_tokens::contract())
+            .map(|inventory| format!("{inventory}\n"))
+            .map_err(|_| "cannot encode compiled application inventory".to_owned()),
+        [help] if help == "--help" || help == "-h" => {
+            Ok(frozen_help("kubernetes-application-token-contract"))
+        }
+        _ => Err(kubernetes_application_usage_error()),
+    }
+}
+
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|arg| arg == "kubernetes-application-token-contract")
+    {
+        print!("{}", kubernetes_application_metadata(&args[1..])?);
+        return Ok(());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "kubernetes-secrets-contract")
+    {
+        print!("{}", kubernetes_publication_metadata(&args[1..])?);
+        return Ok(());
+    }
     if args
         .first()
         .is_some_and(|arg| arg == "installer-rootless-canary-helper")
@@ -785,6 +841,41 @@ fn run() -> Result<(), String> {
                 serde_json::to_writer(&mut output, &value).map_err(|_| refusal)?;
                 output.flush().map_err(|_| refusal)
             }
+            Some("application-token-stage") if args.len() == 5 => {
+                use marty_deployment_catalog::application_authority;
+                use std::{io::IsTerminal, path::Path, time::Duration};
+                if std::io::stdout().is_terminal() {
+                    return Err(REFUSAL.into());
+                }
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let bao = marty_openbao_http::OpenBaoHttp::connect(
+                    &args[2],
+                    Some(Path::new(&args[3])),
+                    Duration::from_secs(10),
+                )
+                .map_err(|_| REFUSAL)?;
+                let value = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL)?
+                    .block_on(application_authority::stage(
+                        &bao,
+                        Path::new(&args[4]),
+                        &context,
+                    ))?;
+                let mut output = std::io::stdout().lock();
+                serde_json::to_writer(&mut output, &value)
+                    .map_err(|_| application_authority::RECOVERY)?;
+                output.flush().map_err(|_| application_authority::RECOVERY)
+            }
             Some("generation") if args.len() == 2 => {
                 use marty_deployment_catalog::generation;
                 use std::io::IsTerminal;
@@ -1075,7 +1166,16 @@ fn run() -> Result<(), String> {
                         })
                         .map_err(str::to_owned)?
                 };
-                serde_json::to_writer(std::io::stdout().lock(), &output).map_err(|_| REFUSAL)
+                if role == Role::Application && operation != "approle-policy" {
+                    let mut destination = std::io::stdout().lock();
+                    serde_json::to_writer(&mut destination, &output)
+                        .map_err(|_| marty_deployment_catalog::application_authority::RECOVERY)?;
+                    destination
+                        .flush()
+                        .map_err(|_| marty_deployment_catalog::application_authority::RECOVERY)
+                } else {
+                    serde_json::to_writer(std::io::stdout().lock(), &output).map_err(|_| REFUSAL)
+                }
             }
             Some("export-snapshot") if args.len() == 7 => {
                 use std::path::Path;
@@ -1123,6 +1223,14 @@ fn run() -> Result<(), String> {
         .first()
         .map(String::as_str)
         .ok_or_else(|| "command is required".to_owned())?;
+    // The standalone contract was already dispatched before global options.
+    // Reaching it here means --repo-root was supplied before the command.
+    if command == "kubernetes-secrets-contract" {
+        return Err(kubernetes_publication_usage_error());
+    }
+    if command == "kubernetes-application-token-contract" {
+        return Err(kubernetes_application_usage_error());
+    }
     let params = &args[1..];
     if params.iter().any(|arg| arg == "--help" || arg == "-h") {
         if command == "kubernetes-secrets" {
@@ -1270,6 +1378,7 @@ fn main() {
             marty_deployment_catalog::approle::CLEANUP_LEAF,
             marty_deployment_catalog::approle::CLEANUP_ROTATION,
             marty_deployment_catalog::approle::CLEANUP_REFRESH,
+            marty_deployment_catalog::application_authority::RECOVERY,
             marty_deployment_catalog::keycloak::RECOVERY,
             marty_deployment_catalog::ca_issuer::RECOVERY,
             marty_deployment_catalog::beta_rehearsal::RECOVERY,
@@ -1284,7 +1393,72 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::posix_shell_quote;
+    use super::{
+        kubernetes_application_metadata, kubernetes_publication_metadata, posix_shell_quote,
+    };
+
+    #[test]
+    fn kubernetes_application_contract_returns_only_compiled_inventory() {
+        let output = kubernetes_application_metadata(&[]).unwrap();
+        let actual: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(
+            actual,
+            marty_deployment_catalog::application_tokens::contract()
+        );
+        assert!(output.ends_with('\n'));
+    }
+
+    #[test]
+    fn kubernetes_application_contract_accepts_only_standalone_help() {
+        for flag in ["--help", "-h"] {
+            let output = kubernetes_application_metadata(&[flag.into()]).unwrap();
+            assert!(output.starts_with("usage: marty-deploy kubernetes-application-token-contract"));
+        }
+        for args in [
+            vec!["private-sentinel"],
+            vec!["--repo-root", "private-sentinel"],
+            vec!["--repo-root=private-sentinel"],
+            vec!["--help", "private-sentinel"],
+            vec!["private-sentinel", "--help"],
+            vec!["--help", "-h"],
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let error = kubernetes_application_metadata(&args).unwrap_err();
+            assert!(error.starts_with("__USAGE__"));
+            assert!(!error.contains("private-sentinel"));
+        }
+    }
+
+    #[test]
+    fn kubernetes_publication_contract_command_returns_compiled_metadata() {
+        let output = kubernetes_publication_metadata(&[]).unwrap();
+        let actual: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(
+            actual,
+            marty_deployment_catalog::kubernetes_secrets::contract()
+        );
+    }
+
+    #[test]
+    fn kubernetes_publication_contract_command_accepts_only_standalone_help() {
+        for flag in ["--help", "-h"] {
+            let output = kubernetes_publication_metadata(&[flag.into()]).unwrap();
+            assert!(output.starts_with("usage: marty-deploy kubernetes-secrets-contract"));
+        }
+        for args in [
+            vec!["kubernetes-production"],
+            vec!["--repo-root", "private-sentinel"],
+            vec!["--repo-root=private-sentinel"],
+            vec!["--help", "private-sentinel"],
+            vec!["private-sentinel", "--help"],
+            vec!["--help", "-h"],
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let error = kubernetes_publication_metadata(&args).unwrap_err();
+            assert!(error.starts_with("__USAGE__"));
+            assert!(!error.contains("private-sentinel"));
+        }
+    }
 
     #[test]
     fn compose_preview_quotes_posix_shell_metacharacters() {

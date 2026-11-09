@@ -44,7 +44,7 @@ export function createResourceCreationOperation(organizationId, principalId, {
     // A draft may have been resolved through its detail page while this
     // tab retained the journal. Verify its terminal state before a new payload.
     if (operation?.resource && operation.fingerprint !== fingerprint) {
-      let resolved = false;
+      let resolved;
       try {
         const current = await getResource(operation.resource.id);
         assertCurrent();

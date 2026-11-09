@@ -12,7 +12,8 @@
       "title": "Acciones rápidas",
       "applyForCredential": "Solicitar credencial",
       "viewMyCredentials": "Ver mis credenciales"
-    }
+    },
+    "loadError": "No se pudo cargar el resumen de tus credenciales. Inténtalo de nuevo."
   },
   "credentials": {
     "title": "Mis credenciales",
@@ -40,6 +41,38 @@
   "catalog": {
     "title": "Catálogo de credenciales",
     "description": "Explora y solicita credenciales disponibles",
-    "searchPlaceholder": "Buscar credenciales..."
+    "searchPlaceholder": "Buscar credenciales...",
+    "searchLabel": "Buscar credenciales",
+    "filters": {
+      "clear": "Borrar filtros"
+    },
+    "errorLoading": "No se pudo cargar el catálogo de credenciales. Inténtalo de nuevo o contacta con soporte si el problema continúa.",
+    "empty": {
+      "launchUnavailable": "La credencial de este curso no está disponible actualmente. Contacta con el proveedor del curso.",
+      "title": "No hay credenciales disponibles",
+      "description": "Actualmente no hay credenciales disponibles para tu organización."
+    }
+  },
+  "settings": {
+    "profile": {
+      "loadError": "No se pudo cargar tu perfil. Inténtalo de nuevo.",
+      "saved": "Perfil guardado.",
+      "save": "Guardar perfil"
+    },
+    "notifications": {
+      "unavailable": "Las preferencias de notificaciones no están disponibles en esta implementación."
+    },
+    "wallets": {
+      "loadError": "No se pudieron cargar las carteras disponibles. Inténtalo de nuevo.",
+      "savedAutomatically": "La selección de carteras se guarda automáticamente en este navegador."
+    }
+  },
+  "identity": {
+    "guidance": {
+      "walletPresentation": "Para presentar una credencial, utiliza la cartera donde está guardada.",
+      "expired": "Esta credencial ha caducado. Contacta con el emisor para renovarla.",
+      "revoked": "Esta credencial ha sido revocada. Contacta con el emisor para obtener ayuda.",
+      "additionalInformation": "El emisor necesita más información. Contacta con él para saber cómo proporcionarla."
+    }
   }
 }

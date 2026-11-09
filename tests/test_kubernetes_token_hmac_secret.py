@@ -17,6 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = "synthetic-existing-shared-token-$literal;not-a-command"
+METADATA_COMMANDS = ("kubernetes-secrets-contract", "kubernetes-application-token-contract")
 FUNCTIONS = (
     "catalog_required_secret_envs",
     "is_placeholder_secret",
@@ -87,11 +88,93 @@ fn main() {
         child.stdin.take().unwrap().write_all(&bytes).unwrap();
         std::process::exit(child.wait().unwrap().code().unwrap_or(1));
     }
-    if env::var("TEST_APPLY_FAIL").is_ok() { eprintln!("synthetic-sensitive-diagnostic"); std::process::exit(1); }
+    let fail_name=env::var("TEST_APPLY_FAIL_NAME").ok();
+    if env::var("TEST_APPLY_FAIL").is_ok() || fail_name.is_some_and(|name| String::from_utf8_lossy(&bytes).contains(&format!("\"name\":\"{name}\""))) {
+        eprintln!("synthetic-sensitive-diagnostic"); std::process::exit(1);
+    }
 }''', encoding="utf-8")
     kubectl = directory / ("kubectl.exe" if os.name == "nt" else "kubectl")
     subprocess.run(["rustc", "+1.95.0", str(source), "-o", str(kubectl)], check=True, capture_output=True)
     return binary, kubectl
+
+
+@pytest.mark.parametrize("command", METADATA_COMMANDS)
+def test_native_publication_contract_is_compiled_and_needs_no_inputs_repo_or_cluster(
+    native_tools, tmp_path, command,
+):
+    misleading = tmp_path / "deploy-config/catalog"
+    misleading.mkdir(parents=True)
+    (misleading / "kubernetes-secrets.json").write_text('{"required":[],"secrets":[]}')
+    (misleading / "kubernetes-application-tokens.json").write_text('{"tokens":[]}')
+    environment = {
+        "PATH": str(native_tools[1].parent), "TEST_ROOT": str(tmp_path),
+        "MARTY_REPO_ROOT": str(tmp_path), "KUBECONFIG": str(tmp_path / "absent-kubeconfig"),
+        # Any attempt to resolve credentials would fail on this deliberately
+        # conflicting source; metadata must not inspect either source.
+        "POSTGRES_PASSWORD": "PRIVATE_METADATA_CREDENTIAL_CANARY",
+        "POSTGRES_PASSWORD_FILE": str(tmp_path / "absent-private-input"),
+        "SIGNING_KEYS_OPENBAO_TOKEN": "PRIVATE_APPLICATION_CREDENTIAL_CANARY",
+        "SIGNING_KEYS_OPENBAO_TOKEN_FILE": str(tmp_path / "absent-application-input"),
+    }
+    if os.name == "nt":
+        environment["SystemRoot"] = os.environ["SystemRoot"]
+    result = subprocess.run(
+        [str(native_tools[0]), command], cwd=tmp_path,
+        env=environment, input="PRIVATE_STDIN_CANARY", capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    expected = (
+        {"schema": "marty.kubernetes-secret-publication/v1",
+         "catalog": json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())}
+        if command == "kubernetes-secrets-contract"
+        else json.loads((ROOT / "deploy-config/catalog/kubernetes-application-tokens.json").read_bytes())
+    )
+    assert json.loads(result.stdout) == expected
+    assert "PRIVATE_" not in result.stdout
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+@pytest.mark.parametrize("arguments", [
+    ["unexpected"], ["--repo-root", "/invalid"], ["--help", "unexpected"],
+])
+@pytest.mark.parametrize("command", METADATA_COMMANDS)
+def test_native_publication_contract_rejects_extra_parameters_without_catalog_or_cluster(
+    native_tools, tmp_path, arguments, command,
+):
+    environment = {"PATH": str(native_tools[1].parent), "TEST_ROOT": str(tmp_path),
+                   "MARTY_REPO_ROOT": str(tmp_path / "absent-repo")}
+    if os.name == "nt":
+        environment["SystemRoot"] = os.environ["SystemRoot"]
+    result = subprocess.run(
+        [str(native_tools[0]), command, *arguments],
+        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert f"usage: marty-deploy {command}" in result.stderr
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+@pytest.mark.parametrize("prefix", [["--repo-root", "/invalid"], ["--repo-root=/invalid"]])
+@pytest.mark.parametrize("suffix", [[], ["--help"]])
+@pytest.mark.parametrize("command", METADATA_COMMANDS)
+def test_native_publication_contract_rejects_repository_prefix_before_help_or_catalog(
+    native_tools, tmp_path, prefix, suffix, command,
+):
+    environment = {"PATH": str(native_tools[1].parent), "TEST_ROOT": str(tmp_path),
+                   "MARTY_REPO_ROOT": str(tmp_path / "absent-repo")}
+    if os.name == "nt":
+        environment["SystemRoot"] = os.environ["SystemRoot"]
+    result = subprocess.run(
+        [str(native_tools[0]), *prefix, command, *suffix],
+        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert f"usage: marty-deploy {command}" in result.stderr
+    assert "/invalid" not in result.stderr
+    assert not (tmp_path / "native-manifest.json").exists()
 
 
 @pytest.fixture
@@ -362,7 +445,7 @@ def test_setup_publishes_same_existing_token_once_without_echo(harness, source):
     )
     assert (
         len([call for call in calls if call[:3] == ["create", "secret", "generic"]])
-            == 33
+            == 35
     )
     created_names = {
         call[3]
@@ -375,6 +458,7 @@ def test_setup_publishes_same_existing_token_once_without_echo(harness, source):
         "es-workload-tls", "es-tls-kms",
         "rp-workload-tls", "rp-tls-kms",
         "ct-workload-tls", "ct-tls-kms",
+        "notification-workload-tls", "notification-tls-kms",
     } <= created_names
     signing_tls = next(
         call for call in calls
@@ -438,6 +522,61 @@ def test_setup_publishes_same_existing_token_once_without_echo(harness, source):
         )
         assert any(arg.startswith("--from-literal=ca.crt=") for arg in kms_secret)
         assert any(arg.startswith("--from-literal=token=") for arg in kms_secret)
+
+
+def test_native_publishes_notification_certificates_and_scoped_token_once(harness, tmp_path):
+    inputs = {
+        "TOKEN_HMAC_KEY": TOKEN,
+        "NOTIFICATION_WORKLOAD_SERVER_CERT": "PUBLIC_NOTIFICATION_CERTIFICATE_CANARY",
+        "MARTY_WORKLOAD_IDENTITY_CA_CERT": "PUBLIC_WORKLOAD_CA_CANARY",
+        "OPENBAO_TLS_CA_CERT": "PUBLIC_OPENBAO_CA_CANARY",
+        "NOTIFICATION_TLS_KMS_TOKEN": "PRIVATE_NOTIFICATION_TLS_TOKEN_CANARY",
+    }
+    result, _ = harness(inputs)
+    assert result.returncode == 0, result.stderr
+    manifests = [json.loads(line) for line in (tmp_path / "native-manifest.json").read_text().splitlines()]
+    expected = {
+        "notification-workload-tls": {
+            "tls.crt": inputs["NOTIFICATION_WORKLOAD_SERVER_CERT"],
+            "ca.crt": inputs["MARTY_WORKLOAD_IDENTITY_CA_CERT"],
+        },
+        "notification-tls-kms": {
+            "token": inputs["NOTIFICATION_TLS_KMS_TOKEN"],
+            "ca.crt": inputs["OPENBAO_TLS_CA_CERT"],
+        },
+    }
+    for name, fields in expected.items():
+        selected = [item for item in manifests if item["metadata"]["name"] == name]
+        assert len(selected) == 1
+        assert selected[0] == {
+            "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+            "metadata": {"name": name, "namespace": "synthetic-owned-namespace"},
+            "stringData": fields,
+        }
+    assert "PRIVATE_NOTIFICATION_TLS_TOKEN_CANARY" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("name", ["NOTIFICATION_WORKLOAD_SERVER_CERT", "NOTIFICATION_TLS_KMS_TOKEN"])
+def test_missing_notification_input_prevents_all_native_secret_publication(harness, tmp_path, name):
+    result, _ = harness({"TOKEN_HMAC_KEY": TOKEN, name: ""})
+    assert result.returncode != 0
+    assert name + " must be set to a non-placeholder value" in result.stderr
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+def test_notification_apply_failure_retains_prefix_and_stops_before_later_secrets(harness, tmp_path):
+    result, _ = harness({"TOKEN_HMAC_KEY": TOKEN, "TEST_APPLY_FAIL_NAME": "notification-tls-kms"})
+    assert result.returncode != 0
+    assert "secret apply failed" in result.stderr
+    assert "synthetic-sensitive-diagnostic" not in result.stdout + result.stderr
+    attempted = [json.loads(line)["metadata"]["name"]
+                 for line in (tmp_path / "native-manifest.json").read_text().splitlines()]
+    inventory = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())
+    names = [entry["name"] for entry in inventory["secrets"] if "optional_env" not in entry]
+    stop = names.index("notification-tls-kms") + 1
+    assert "notification-workload-tls" in attempted[:-1]
+    assert attempted == names[:stop]
+    assert stop < len(names), "failure must exercise a remaining destination"
 
 
 @pytest.mark.parametrize("source", ["environment", "file"])
@@ -778,7 +917,7 @@ def test_real_kubectl_applies_synthetic_secret_schema_against_owned_api(harness,
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        # This integration launches 33 real clients sequentially. Give their
+        # This integration launches 35 real clients sequentially. Give their
         # startup/API work a bounded aggregate budget while each request
         # retains the wrapper's three-second timeout.
         result, _ = harness({"TOKEN_HMAC_KEY": TOKEN, "TEST_REAL_KUBECTL": binary,
@@ -789,7 +928,7 @@ def test_real_kubectl_applies_synthetic_secret_schema_against_owned_api(harness,
         server.server_close()
         thread.join()
     assert result.returncode == 0, result.stderr
-    assert len(received) == 33
+    assert len(received) == 35
     expected = [json.loads(line) for line in (tmp_path / "native-manifest.json").read_text().splitlines()]
     for actual, manifest in zip(received, expected, strict=True):
         assert actual["metadata"]["name"] == manifest["metadata"]["name"]

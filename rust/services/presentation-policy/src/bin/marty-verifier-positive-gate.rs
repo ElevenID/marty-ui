@@ -168,6 +168,7 @@ impl CredentialStatusResolver for GateStatus {
 fn gate_policy(organization_id: Uuid, trust_profile_id: Uuid) -> PresentationPolicy {
     let now = Utc::now();
     PresentationPolicy {
+        prerequisite_evidence_profile: None,
         id: Uuid::from_u128(3),
         organization_id,
         name: "Exact image positive OID4VP gate".into(),

@@ -8,6 +8,7 @@ WORKDIR /app
 # the build context before dependency installation begins.
 COPY package.json bun.lock ./
 COPY scripts/patch-prerenderer-ts-deepmerge.cjs ./scripts/patch-prerenderer-ts-deepmerge.cjs
+COPY scripts/checker-worker-cleanup.mjs scripts/patch-checker-worker-cleanup.mjs ./scripts/
 RUN bun install --frozen-lockfile
 
 COPY . .

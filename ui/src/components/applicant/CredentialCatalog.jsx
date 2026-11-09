@@ -5,7 +5,7 @@
  * Credentials are filtered based on the vendor organization's configuration.
  */
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Container,
   Grid,
@@ -25,6 +25,7 @@ import {
   MenuItem,
   Skeleton,
   Alert,
+  AlertTitle,
   IconButton,
   Tooltip,
   Dialog,
@@ -145,6 +146,7 @@ function createEmptyApplicationStatusInfo() {
 
 const CredentialCatalog = () => {
   const { t } = useTranslation('applicant');
+  const categoryLabelId = React.useId();
   const navigate = useNavigate();
   const location = useLocation();
   const { organizationId, organizationName, user } = useAuth();
@@ -165,6 +167,8 @@ const CredentialCatalog = () => {
   const [appStatusInfo, setAppStatusInfo] = useState(createEmptyApplicationStatusInfo);
   const [canvasLtiSession, setCanvasLtiSession] = useState(() => location.state?.canvasLtiSession || null);
   const [canvasLtiLoading, setCanvasLtiLoading] = useState(false);
+  const catalogRequest = useRef(0);
+  const applicationsRequest = useRef(0);
 
   const canvasLtiState = useMemo(
     () => new URLSearchParams(location.search || '').get('canvas_lti_state') || '',
@@ -232,9 +236,12 @@ const CredentialCatalog = () => {
    * Fetch credentials available to applicants of this organization
    */
   const fetchAvailableCredentials = useCallback(async () => {
+    const request = ++catalogRequest.current;
     setLoading(true);
+    setCredentials([]);
+    setCatalogLoadError(null);
+    setCatalogMissingOrganization(false);
     if (!effectiveOrganizationId) {
-      setCredentials([]);
       setCatalogLoadError(new Error('Choose or join an organization to view its credential catalog.'));
       setCatalogMissingOrganization(true);
       setLoading(false);
@@ -249,6 +256,7 @@ const CredentialCatalog = () => {
         }),
         listApplicationTemplates(effectiveOrganizationId),
       ]);
+      if (request !== catalogRequest.current) return;
       const activeApplicationTemplateByCredential = new Map(
         (applicationTemplates || [])
           .filter((template) => String(template.status || '').toUpperCase() === 'ACTIVE')
@@ -268,12 +276,15 @@ const CredentialCatalog = () => {
         console.error('Failed to fetch credentials:', result.error);
       }
     } catch (error) {
+      if (request !== catalogRequest.current) return;
       console.error('Failed to fetch credentials:', error);
       setCredentials([]);
       setCatalogLoadError(error);
       setCatalogMissingOrganization(false);
     } finally {
-      setLoading(false);
+      if (request === catalogRequest.current) {
+        setLoading(false);
+      }
     }
   }, [effectiveOrganizationId, organizationName, listCredentialTemplates]);
 
@@ -281,31 +292,39 @@ const CredentialCatalog = () => {
    * Fetch applicant's existing applications (with status data)
    */
   const fetchExistingApplications = useCallback(async () => {
+    const request = ++applicationsRequest.current;
+    setExistingApplications([]);
+    setAppStatusInfo(createEmptyApplicationStatusInfo());
     if (!effectiveOrganizationId || !user?.user_id) {
-      setExistingApplications([]);
-      setAppStatusInfo(createEmptyApplicationStatusInfo());
       return;
     }
 
     try {
       const applications = await listApplicantApplications();
+      if (request !== applicationsRequest.current) return;
       const applicationIds = applications.map((application) => application.credential_template_id).filter(Boolean);
       setExistingApplications(applicationIds);
 
       // Also fetch raw application data for status counts
       setAppStatusInfo(extractApplicationStatusInfo(applications));
     } catch (error) {
+      if (request !== applicationsRequest.current) return;
       console.error('Failed to fetch applications:', error);
       setExistingApplications([]);
       setAppStatusInfo(createEmptyApplicationStatusInfo());
     }
   }, [effectiveOrganizationId, user?.user_id, listApplicantApplications]);
 
-  // Fetch data when component mounts or organizationId changes
-  useEffect(() => {
+  // Invalidate old requests and clear their data before a new account/organization paints.
+  useLayoutEffect(() => {
     fetchAvailableCredentials();
+    return () => { catalogRequest.current += 1; };
+  }, [fetchAvailableCredentials, user?.user_id]);
+
+  useLayoutEffect(() => {
     fetchExistingApplications();
-  }, [fetchAvailableCredentials, fetchExistingApplications]);
+    return () => { applicationsRequest.current += 1; };
+  }, [fetchExistingApplications]);
 
   /**
    * Filter credentials based on search and category
@@ -401,7 +420,7 @@ const CredentialCatalog = () => {
   const catalogLoadAlertMessage = catalogLoadError
     ? catalogMissingOrganization
       ? 'We could not determine your organization yet. Refresh after sign-in, or choose or join an organization before browsing credentials.'
-      : 'We could not load credential templates. Refresh the page, then contact support if the catalog still does not appear.'
+      : t('catalog.errorLoading', 'We could not load the credential catalog. Try again, or contact support if the problem continues.')
     : null;
 
   return (
@@ -495,9 +514,10 @@ const CredentialCatalog = () => {
       {/* Search and Filters */}
       <Paper sx={{ p: 2, mb: 3 }} data-testid="catalog-filters">
         <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} md={6}>
+          <Grid size={{ xs: 12, md: 6 }}>
             <TextField
               fullWidth
+              label={t('catalog.searchLabel', 'Search credentials')}
               placeholder={t('catalog.searchPlaceholder')}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -513,10 +533,11 @@ const CredentialCatalog = () => {
               }}
             />
           </Grid>
-          <Grid item xs={12} md={4}>
+          <Grid size={{ xs: 12, md: 4 }}>
             <FormControl fullWidth>
-              <InputLabel>{t('catalog.filters.category')}</InputLabel>
+              <InputLabel id={categoryLabelId}>{t('catalog.filters.category')}</InputLabel>
               <Select
+                labelId={categoryLabelId}
                 value={categoryFilter}
                 label={t('catalog.filters.category')}
                 onChange={(e) => setCategoryFilter(e.target.value)}
@@ -535,10 +556,12 @@ const CredentialCatalog = () => {
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} md={2}>
-            <Typography variant="body2" color="text.secondary" textAlign="center" data-testid="credentials-count">
-              {t('catalog.resultsCount', { count: filteredCredentials.length })}
-            </Typography>
+          <Grid size={{ xs: 12, md: 2 }}>
+            {!loading && !canvasLtiLoading && !catalogLoadError && (
+              <Typography variant="body2" color="text.secondary" textAlign="center" data-testid="credentials-count">
+                {t('catalog.resultsCount', { count: filteredCredentials.length })}
+              </Typography>
+            )}
           </Grid>
         </Grid>
       </Paper>
@@ -547,7 +570,7 @@ const CredentialCatalog = () => {
         {loading || canvasLtiLoading ? (
           // Loading skeletons
           ([...Array(6)].map((_, index) => (
-            <Grid item xs={12} sm={6} md={4} key={index}>
+            <Grid size={{ xs: 12, sm: 6, md: 4 }} key={index}>
               <Card>
                 <Skeleton variant="rectangular" height={140} />
                 <CardContent>
@@ -559,15 +582,37 @@ const CredentialCatalog = () => {
             </Grid>
           )))
         ) : catalogLoadAlertMessage ? (
-          <Grid item xs={12}>
-            <Alert severity={catalogMissingOrganization ? 'warning' : 'error'} data-testid="catalog-load-alert">
+          <Grid size={12}>
+            <Alert
+              severity={catalogMissingOrganization ? 'warning' : 'error'}
+              data-testid="catalog-load-alert"
+              action={!catalogMissingOrganization && (
+                <Button color="inherit" onClick={fetchAvailableCredentials}>
+                  {t('actions.retry', { ns: 'common' })}
+                </Button>
+              )}
+            >
               {catalogLoadAlertMessage}
             </Alert>
           </Grid>
         ) : filteredCredentials.length === 0 ? (
-          <Grid item xs={12}>
-            <Alert severity="info">
-              {t('catalog.empty.message')}
+          <Grid size={12}>
+            <Alert
+              severity="info"
+              action={canvasScopedCredentials.length > 0 && (
+                <Button color="inherit" onClick={() => { setSearchTerm(''); setCategoryFilter('all'); }}>
+                  {t('catalog.filters.clear', 'Clear filters')}
+                </Button>
+              )}
+            >
+              {canvasScopedCredentials.length === 0 ? (
+                <>
+                  <AlertTitle>{t('catalog.empty.title')}</AlertTitle>
+                  {canvasLtiCredentialTemplateId
+                    ? t('catalog.empty.launchUnavailable', 'The credential for this course is not currently available. Contact the course provider.')
+                    : t('catalog.empty.description')}
+                </>
+              ) : t('catalog.empty.message')}
             </Alert>
           </Grid>
         ) : (
@@ -587,7 +632,7 @@ const CredentialCatalog = () => {
                   : (hasApplied ? t('catalog.card.status.pending') : t('catalog.card.actions.apply'));
             
             return (
-              <Grid item xs={12} sm={6} md={4} key={credential.id}>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }} key={credential.id}>
                 <Card 
                   data-testid={`credential-card-${credential.id}`}
                   data-credential-type={credential.id}

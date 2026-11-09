@@ -48,6 +48,7 @@ uuid.workspace = true
 [dev-dependencies]
 isomdl.workspace = true
 ed25519-dalek.workspace = true
+p256 = { workspace = true, features = ["ecdsa"] }
 serde_json.workspace = true
 tower.workspace = true
 

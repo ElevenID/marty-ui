@@ -172,6 +172,19 @@ pub trait CredentialManagementRepository: Send + Sync {
         credential_id: &str,
     ) -> Result<Option<ManagedCredential>, CredentialManagementPortError>;
 
+    /// Read one exact tenant-owned artifact and its lifecycle snapshot.
+    /// Existing adapters without this owner operation cannot provide evidence.
+    async fn get_managed_sd_jwt_status(
+        &self,
+        _organization_id: &str,
+        _credential_id: &str,
+    ) -> Result<
+        Option<crate::managed_status::ManagedSdJwtStatusRecord>,
+        CredentialManagementPortError,
+    > {
+        Ok(None)
+    }
+
     /// Resolve only an authenticated mdoc reference within the caller's tenant.
     /// Repositories without an index return unknown; they must not adopt a UUID
     /// or fabricate non-revocation from issuer trust.
@@ -281,6 +294,27 @@ impl CredentialManagementService {
         let mut view = status_view(&credential, credential.revocation_reason.clone());
         view.mdoc_status_reference = reference.map(|value| value.to_string());
         Ok(view)
+    }
+
+    pub async fn observe_sd_jwt_status(
+        &self,
+        request: &marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1,
+    ) -> Result<
+        marty_oid4vp_contract::managed_status::ManagedCredentialStatusObservationV1,
+        crate::managed_status::ManagedStatusError,
+    > {
+        use crate::managed_status::{observe_record, ManagedStatusError};
+
+        request
+            .validate()
+            .map_err(|_| ManagedStatusError::InvalidRequest)?;
+        let record = self
+            .repository
+            .get_managed_sd_jwt_status(&request.organization_id, &request.credential_id)
+            .await
+            .map_err(|_| ManagedStatusError::Unavailable)?
+            .ok_or(ManagedStatusError::NotFound)?;
+        observe_record(request, &record, Utc::now())
     }
 
     pub async fn transition(

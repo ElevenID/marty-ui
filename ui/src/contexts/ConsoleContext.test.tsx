@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderWithRouter, screen, waitFor } from '@test/utils';
+import { Suspense } from 'react';
+import { Route, Routes, useLocation } from 'react-router';
+import { act, renderWithRouter, screen, waitFor } from '@test/utils';
 
 import { AuthContext } from './AuthContext';
 import { ConsoleProvider, useConsole } from './ConsoleContext';
 import { getPreferences, updatePreferences } from '../services/preferencesApi';
 import { getMyOrganizations } from '../services/organizationsApi';
+import { ApplicantConsoleRoute, OrgConsoleRoute } from '../components/ProtectedRoute';
 
 vi.mock('../services/preferencesApi', () => ({
   getPreferences: vi.fn(),
@@ -180,6 +183,70 @@ describe('ConsoleContext', () => {
     expect(screen.getByTestId('active-org')).toHaveTextContent('');
     expect(setActiveOrganizationId).not.toHaveBeenCalled();
     expect(vi.mocked(updatePreferences)).toHaveBeenCalledWith({
+      last_view_mode: 'applicant',
+      last_active_org_id: null,
+    });
+  });
+
+  it.each(['saved', 'failed'])('switches from an org route to a deferred applicant route when preference persistence %s without a competing setup redirect', async (persistence) => {
+    if (persistence === 'failed') vi.mocked(updatePreferences).mockRejectedValue(new Error('Preferences unavailable'));
+    vi.mocked(getMyOrganizations).mockResolvedValue([{
+      id: 'org-1',
+      name: 'Marty',
+      membership: { status: 'active', roles: [{ name: 'admin' }], has_org_console_access: true },
+    }]);
+    const authValue = {
+      user: { user_id: 'user-1', roles: ['admin'], capabilities: { 'org:view': true }, organizations: [] },
+      isAuthenticated: true,
+      isLoading: false,
+    };
+    let catalogReady = false;
+    let resolveCatalog!: () => void;
+    const catalogPromise = new Promise<void>((resolve) => { resolveCatalog = resolve; });
+    function DeferredCatalog() {
+      if (!catalogReady) throw catalogPromise;
+      return <div>Applicant catalog</div>;
+    }
+    function ModeSwitcher() {
+      const { setMode, mode, activeOrgId } = useConsole();
+      const location = useLocation();
+      return <>
+        <button onClick={() => setMode('applicant')}>Applicant mode</button>
+        <div data-testid="current-path">{location.pathname}</div>
+        <div data-testid="current-mode">{mode}</div>
+        <div data-testid="current-org">{activeOrgId || ''}</div>
+      </>;
+    }
+    const { user } = renderWithRouter(
+      <AuthContext.Provider value={authValue as any}>
+        <ConsoleProvider>
+          <ModeSwitcher />
+          <Suspense fallback={<div>Loading route</div>}>
+            <Routes>
+              <Route path="/console/org/settings" element={<OrgConsoleRoute><div>Organization settings</div></OrgConsoleRoute>} />
+              <Route path="/console/applicant/catalog" element={<ApplicantConsoleRoute><DeferredCatalog /></ApplicantConsoleRoute>} />
+              <Route path="/console/org/setup" element={<div>Organization setup</div>} />
+            </Routes>
+          </Suspense>
+        </ConsoleProvider>
+      </AuthContext.Provider>,
+      { initialEntries: ['/console/org/settings'] },
+    );
+    expect(await screen.findByText('Organization settings')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Applicant mode' }));
+    await act(async () => {
+      catalogReady = true;
+      resolveCatalog();
+    });
+
+    expect(await screen.findByText('Applicant catalog')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/applicant/catalog');
+    expect(screen.getByTestId('current-mode')).toHaveTextContent('applicant');
+    expect(screen.getByTestId('current-org')).toBeEmptyDOMElement();
+    expect(window.localStorage.getItem('activeOrgId')).toBeNull();
+    expect(screen.queryByText('Organization setup')).not.toBeInTheDocument();
+    expect(vi.mocked(updatePreferences)).toHaveBeenLastCalledWith({
       last_view_mode: 'applicant',
       last_active_org_id: null,
     });

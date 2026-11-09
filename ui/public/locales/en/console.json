@@ -50,7 +50,9 @@
       "error": "Error",
       "unknown": "Unknown",
       "errorBanner": "One or more services are experiencing issues. Click on a service below to view logs.",
-      "warningBanner": "One or more services are degraded. System may experience reduced performance."
+      "warningBanner": "One or more services are degraded. System may experience reduced performance.",
+      "issuanceService": "Issuance Service",
+      "notReported": "This service was not reported by the latest readiness check."
     },
     "environment": {
       "dev": "Dev",
@@ -122,7 +124,7 @@
       "justNow": "Just now",
       "minutesAgo": "{{minutes}}m ago",
       "hoursAgo": "{{hours}}h ago",
-      "noCriticalEvents": "No critical events in the last 24 hours. All systems operating normally.",
+      "noCriticalEvents": "No critical events were reported in the last 24 hours.",
       "criticalEventsDetected": "{{count}} critical event detected in the last 24 hours",
       "criticalEventsDetected_plural": "{{count}} critical events detected in the last 24 hours"
     },
@@ -159,26 +161,46 @@
       "issuance": {
         "keysInvalid": "Keys invalid or expired",
         "issuerInactive": "Issuer not active",
-        "operational": "All systems operational",
+        "operational": "Credential issuance is ready",
         "keysReason": "Valid signing keys are required to sign and issue verifiable credentials. Without them, credential issuance cannot proceed.",
         "issuerReason": "The issuer service must be active and properly configured to handle credential issuance requests.",
         "fixSigningKeys": "Fix Signing Keys",
-        "activateIssuer": "Activate Issuer"
+        "activateIssuer": "Activate Issuer",
+        "noDeployments": "No active deployments",
+        "deploymentsReason": "An active deployment profile is required before credentials can be issued.",
+        "configureDeployment": "Configure Deployment",
+        "notReady": "Credential issuance is not ready",
+        "readinessReason": "Review the issuance flow and its required resources before issuing credentials.",
+        "reviewFlows": "Review Issuance Flows",
+        "issuerConfigurationRequired": "Issuer configuration needs review",
+        "issuerConfigurationReason": "Review the issuer identity and the issuer DID referenced by the active credential template before issuing credentials."
       },
       "verification": {
         "noDeployments": "No active deployments",
-        "policyUnreachable": "Policy unreachable",
-        "operational": "All systems operational",
+        "policyUnreachable": "No active presentation policies",
+        "operational": "Credential verification is ready",
         "deploymentsReason": "At least one deployment profile must be active to verify credentials. Deployments define the trust policies and verification rules.",
-        "policyReason": "Presentation policies must be accessible to validate credentials during verification.",
+        "policyReason": "At least one active presentation policy is required before credentials can be verified.",
         "configureDeployment": "Configure Deployment",
-        "fixPolicies": "Fix Policies"
+        "fixPolicies": "Fix Policies",
+        "notReady": "Credential verification is not ready",
+        "readinessReason": "Review the verification configuration before starting a session.",
+        "reviewSetup": "Review Verification Setup"
       },
       "keys": {
         "valid": "Keys are valid and active",
         "needsAttention": "Keys require attention",
         "reason": "Signing keys authenticate your organization as a credential issuer. expired or invalid keys prevent credential issuance and may invalidate issued credentials.",
         "manageKeys": "Manage Keys"
+      },
+      "issuerConfiguration": {
+        "title": "Issuer Configuration",
+        "configured": "Configured",
+        "notConfigured": "Not configured",
+        "configuredDetail": "An active credential template references an issuer DID.",
+        "notConfiguredDetail": "No active credential template references an issuer DID.",
+        "reason": "Credential templates need an issuer DID before they can be used for issuance.",
+        "manage": "Manage Issuer Identities"
       }
     },
     "recentActivity": {
@@ -450,10 +472,6 @@
     "rules": "Rules",
     "conditions": "Conditions",
     "failedToLoad": "Failed to load presentation policies",
-    "testActions": {
-      "evaluateVP": "Evaluate VP",
-      "startQRVerification": "Start QR Verification"
-    },
     "holderBinding": {
       "required": "Required",
       "optional": "Optional"
@@ -476,7 +494,8 @@
       "console": "Console",
       "policies": "Policies",
       "presentationPolicies": "Presentation Policies"
-    }
+    },
+    "verificationSessions": "Verification sessions"
   },
   "complianceProfilesPage": {
     "title": "Compliance Profiles",
@@ -760,7 +779,8 @@
         "serviceUnavailable": "The backend service may be unavailable. Check console for details."
       },
       "loading": "Loading..."
-    }
+    },
+    "flowDefinition": "Flow Definition"
   },
   "deploy": {
     "title": "Deploy",
@@ -2208,6 +2228,14 @@
     }
   },
   "org": {
+    "setup": {
+      "chooseTitle": "Choose an Organization",
+      "chooseDescription": "Select an organization to open its organization console.",
+      "accessTitle": "Organization Console Access",
+      "accessDescriptionWithCreate": "Join or create an organization with console access to continue.",
+      "accessDescription": "Join an organization with console access to continue.",
+      "noMembershipsTitle": "No Console Memberships Yet"
+    },
     "title": "Organization",
     "settings": {
       "title": "Organization Settings",
@@ -2650,5 +2678,12 @@
         "saveSuccess": "Organization defaults saved successfully"
       }
     }
+  },
+  "organizationCreation": {
+    "createAction": "Create Organization",
+    "emptyDescription": "You're not a member of any organizations. Create an organization, discover public organizations, or join one with a code.",
+    "discoveryRequired": "Organizations with open or approval-based membership are always discoverable in public organization search.",
+    "discoveryPublic": "This organization can appear in public organization search.",
+    "discoveryPrivate": "This organization does not appear in public organization search."
   }
 }
