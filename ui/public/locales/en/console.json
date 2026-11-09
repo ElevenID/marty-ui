@@ -358,6 +358,11 @@
     "dependencyBlocked": "Complete previous steps first"
   },
   "trust": {
+    "revocationWizard": {
+      "selectOrganization": "Select an organization to create a revocation profile.",
+      "createDenied": "You do not have permission to create revocation profiles in the selected organization.",
+      "responseMismatch": "The creation response does not confirm a new draft profile for the selected organization. Check the profile list before retrying."
+    },
     "trustProfilesPage": {
       "title": "Trust profiles",
       "description": "Define the credential formats, trust sources, and validation rules your organization accepts.",

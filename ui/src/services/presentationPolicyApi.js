@@ -1089,14 +1089,15 @@ const REVOCATION_PROFILE_BASE = '/v1/revocation-profiles';
 /**
  * Create a revocation profile.
  * @param {Object} data - Profile data
+ * @param {Object} [options] - Request options, including an optional isCurrent predicate
  * @returns {Promise<Object>}
  */
-export async function createRevocationProfile(data) {
+export async function createRevocationProfile(data, options = {}) {
   const organizationId = requireOrganizationId(data);
   return postWithIdempotency(REVOCATION_PROFILE_BASE, {
     ...data,
     organization_id: organizationId,
-  });
+  }, options);
 }
 
 /**

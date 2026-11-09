@@ -1,5 +1,10 @@
 {
   "trust": {
+    "revocationWizard": {
+      "selectOrganization": "Wählen Sie eine Organisation aus, um ein Sperrprofil zu erstellen.",
+      "createDenied": "Sie haben keine Berechtigung, Sperrprofile in der ausgewählten Organisation zu erstellen.",
+      "responseMismatch": "Die Antwort bestätigt kein neues Profil im Entwurfsstatus für die ausgewählte Organisation. Prüfen Sie die Profilliste, bevor Sie es erneut versuchen."
+    },
     "trustProfilesPage": {
       "title": "Vertrauensprofile",
       "description": "Legen Sie fest, welche Nachweisformate, Vertrauensquellen und Validierungsregeln Ihre Organisation akzeptiert.",

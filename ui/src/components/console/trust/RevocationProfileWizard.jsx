@@ -6,8 +6,8 @@
  * optional grace period, cache TTL, and description.
  */
 
-import { useState, useCallback } from 'react';
-import { useNavigate, Link as RouterLink } from 'react-router';
+import { useState, useCallback, useRef } from 'react';
+import { useNavigate, useLocation, Link as RouterLink } from 'react-router';
 import {
   Alert,
   Box,
@@ -22,6 +22,7 @@ import {
   InputAdornment,
   InputLabel,
   Link,
+  LinearProgress,
   MenuItem,
   Paper,
   Select,
@@ -32,7 +33,8 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import SaveIcon from '@mui/icons-material/Save';
 import { useTranslation } from 'react-i18next';
 
-import { useAuth } from '../../../hooks/useAuth';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { createRevocationProfile } from '../../../services/presentationPolicyApi';
 
@@ -76,16 +78,28 @@ const INITIAL_FORM = {
   cache_ttl_seconds: '',
 };
 
-function RevocationProfileWizard() {
+function RevocationProfileWizardContent({ organizationId }) {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
-  const { organizationId: authOrganizationId } = useAuth();
-  const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId;
+  const startAction = useAsyncActionScope();
+  const submitBusy = useRef(false);
+  // BrowserRouter updates history before committing its React transition.
+  // The old form must not dispatch or redirect during that interval.
+  const browserEntry = useRef(typeof window === 'undefined' ? null : {
+    href: window.location.href, key: window.history.state?.key,
+  });
+  const isCurrentBrowserEntry = useCallback(() => !browserEntry.current || (
+    typeof window !== 'undefined' && window.location.href === browserEntry.current.href
+      && window.history.state?.key === browserEntry.current.key
+  ), []);
 
   const [form, setForm] = useState(INITIAL_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
+  const isValid = form.name.trim().length > 0
+    && form.revocation_mechanism.length > 0
+    && (form.check_mode !== 'CACHED' || Number(form.cache_ttl_seconds) > 0)
+    && (form.check_mode !== 'OFFLINE_GRACE' || Number(form.offline_grace_seconds) > 0);
 
   const handleMechanismToggle = useCallback((mechanism) => {
     setForm((prev) => {
@@ -100,6 +114,11 @@ function RevocationProfileWizard() {
   }, []);
 
   const handleSubmit = useCallback(async () => {
+    if (submitBusy.current || !isValid) return;
+    const action = startAction();
+    const isCurrent = () => action.isCurrent() && isCurrentBrowserEntry();
+    if (!isCurrent()) return;
+    submitBusy.current = true;
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -118,21 +137,29 @@ function RevocationProfileWizard() {
         payload.cache_ttl_seconds = Number(form.cache_ttl_seconds);
       }
 
-      const created = await createRevocationProfile(payload);
-      navigate(`/console/org/trust/revocation/${created.id}`);
+      const created = await action.run(createRevocationProfile, payload, { isCurrent });
+      if (!isCurrent()) return;
+      if (typeof created?.id !== 'string' || !created.id.trim()
+        || created.organization_id !== organizationId || created.status !== 'DRAFT') {
+        throw new Error(t('trust.revocationWizard.responseMismatch'));
+      }
+      // A dispatched create may finish after this view ends. Only a current,
+      // scoped DRAFT acknowledgement can navigate; no write is rolled back.
+      navigate(`/console/org/trust/revocation/${encodeURIComponent(created.id)}`);
     } catch (err) {
-      setSubmitError(
-        err?.message ||
-          t('trust.revocationWizard.submitFailed', 'Failed to create revocation profile.')
-      );
-      setSubmitting(false);
+      if (isCurrent()) {
+        setSubmitError(
+          err?.message ||
+            t('trust.revocationWizard.submitFailed', 'Failed to create revocation profile.')
+        );
+      }
+    } finally {
+      if (isCurrent()) {
+        submitBusy.current = false;
+        setSubmitting(false);
+      }
     }
-  }, [form, organizationId, navigate, t]);
-
-  const isValid = form.name.trim().length > 0
-    && form.revocation_mechanism.length > 0
-    && (form.check_mode !== 'CACHED' || Number(form.cache_ttl_seconds) > 0)
-    && (form.check_mode !== 'OFFLINE_GRACE' || Number(form.offline_grace_seconds) > 0);
+  }, [form, organizationId, navigate, t, isValid, startAction, isCurrentBrowserEntry]);
 
   return (
     <Box>
@@ -186,6 +213,7 @@ function RevocationProfileWizard() {
           fullWidth
           required
           label={t('trust.revocationWizard.nameLabel', 'Profile Name')}
+          disabled={submitting}
           value={form.name}
           onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
           sx={{ mb: 3 }}
@@ -199,6 +227,7 @@ function RevocationProfileWizard() {
           multiline
           rows={2}
           label={t('trust.revocationWizard.descriptionLabel', 'Description (optional)')}
+          disabled={submitting}
           value={form.description}
           onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
           sx={{ mb: 3 }}
@@ -212,6 +241,7 @@ function RevocationProfileWizard() {
           </InputLabel>
           <Select
             labelId="revocation-check-mode-label"
+            disabled={submitting}
             value={form.check_mode}
             onChange={(e) => setForm((prev) => ({ ...prev, check_mode: e.target.value }))}
             label={t('trust.revocationWizard.checkModeLabel', 'Revocation Check Mode')}
@@ -252,6 +282,7 @@ function RevocationProfileWizard() {
                 key={m.value}
                 control={
                   <Checkbox
+                    disabled={submitting}
                     checked={(form.revocation_mechanism || []).includes(m.value)}
                     onChange={() => handleMechanismToggle(m.value)}
                     data-testid={`revocationWizard.mechanism.${m.value}`}
@@ -272,6 +303,7 @@ function RevocationProfileWizard() {
         <TextField
           fullWidth
           label={t('trust.revocationWizard.statusListUrlLabel', 'Status List URL (optional)')}
+          disabled={submitting}
           value={form.status_list_url}
           onChange={(e) => setForm((prev) => ({ ...prev, status_list_url: e.target.value }))}
           sx={{ mb: 3 }}
@@ -295,6 +327,7 @@ function RevocationProfileWizard() {
             required
             type="number"
             label={t('trust.revocationWizard.gracePeriodLabel', 'Offline Grace Period')}
+            disabled={submitting}
             value={form.offline_grace_seconds}
             onChange={(e) => setForm((prev) => ({ ...prev, offline_grace_seconds: e.target.value }))}
             sx={{ mb: 3 }}
@@ -316,6 +349,7 @@ function RevocationProfileWizard() {
             required
             type="number"
             label={t('trust.revocationWizard.cacheTtlLabel', 'Cache TTL')}
+            disabled={submitting}
             value={form.cache_ttl_seconds}
             onChange={(e) => setForm((prev) => ({ ...prev, cache_ttl_seconds: e.target.value }))}
             slotProps={{
@@ -346,7 +380,9 @@ function RevocationProfileWizard() {
         <Button
           variant="outlined"
           startIcon={<ArrowBackIcon />}
-          onClick={() => navigate('/console/org/trust/revocation')}
+          onClick={() => {
+            if (!submitBusy.current && isCurrentBrowserEntry()) navigate('/console/org/trust/revocation');
+          }}
           disabled={submitting}
         >
           {t('trust.revocationWizard.cancel', 'Cancel')}
@@ -354,6 +390,26 @@ function RevocationProfileWizard() {
       </Box>
     </Box>
   );
+}
+
+function RevocationProfileWizard() {
+  const { t } = useTranslation('console');
+  const { activeOrgId } = useConsole();
+  const { can, isLoading } = usePermissions();
+  const location = useLocation();
+  const canCreate = can('revocation-profile', 'create');
+
+  if (isLoading) return <LinearProgress />;
+  if (typeof activeOrgId !== 'string' || !activeOrgId.trim()) {
+    return <Alert severity="info">{t('trust.revocationWizard.selectOrganization')}</Alert>;
+  }
+  if (!canCreate) {
+    return <Alert severity="error">{t('trust.revocationWizard.createDenied')}</Alert>;
+  }
+  return <RevocationProfileWizardContent
+    key={JSON.stringify([activeOrgId, location.key, location.pathname, location.search, location.hash, canCreate])}
+    organizationId={activeOrgId}
+  />;
 }
 
 export default RevocationProfileWizard;

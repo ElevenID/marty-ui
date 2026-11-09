@@ -1,5 +1,10 @@
 {
   "trust": {
+    "revocationWizard": {
+      "selectOrganization": "Selecciona una organización para crear un perfil de revocación.",
+      "createDenied": "No tienes permiso para crear perfiles de revocación en la organización seleccionada.",
+      "responseMismatch": "La respuesta no confirma un nuevo perfil en borrador para la organización seleccionada. Revisa la lista de perfiles antes de volver a intentarlo."
+    },
     "trustProfilesPage": {
       "title": "Perfiles de confianza",
       "description": "Defina los formatos de credenciales, las fuentes de confianza y las reglas de validación que acepta su organización.",

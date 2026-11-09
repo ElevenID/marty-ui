@@ -1,5 +1,10 @@
 {
   "trust": {
+    "revocationWizard": {
+      "selectOrganization": "失効プロファイルを作成する組織を選択してください。",
+      "createDenied": "選択した組織で失効プロファイルを作成する権限がありません。",
+      "responseMismatch": "作成応答から、選択した組織の新しい下書きプロファイルを確認できません。再試行する前にプロファイル一覧を確認してください。"
+    },
     "trustProfilesPage": {
       "title": "信頼プロファイル",
       "description": "組織が受け入れる資格情報の形式、信頼ソース、検証ルールを設定します。",
