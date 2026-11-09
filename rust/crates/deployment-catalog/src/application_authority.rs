@@ -319,6 +319,11 @@ fn initializer_policies(source: &str) -> Result<BTreeMap<String, String>> {
     Ok(policies)
 }
 
+/// The initializer remains the policy owner for read-only legacy inspection too.
+pub(crate) fn compiled_initializer_policies() -> Result<BTreeMap<String, String>> {
+    initializer_policies(INITIALIZER)
+}
+
 fn line(path: &str, caps: &[&str]) -> String {
     format!(
         "path \"{path}\" {{ capabilities = [\"{}\"] }}",
@@ -542,6 +547,39 @@ fn auth_metadata(auth: &Value, policies: &[String], ttl: u64, leaf: bool) -> Res
             .as_u64()
             .is_some_and(|value| (1..=ttl).contains(&value))
         || (leaf && auth["renewable"] != false)
+    {
+        return Err(REFUSAL);
+    }
+    Ok(())
+}
+
+/// The explicit legacy recovery path uses the same bounded leaf proof owner,
+/// without changing AppRole enrollment or routine replacement admission.
+#[cfg(target_os = "linux")]
+pub(crate) fn legacy_recovery_leaf(
+    created: &Value,
+    lookup: &Value,
+    value: &str,
+    policies: &[String],
+    ttl: u64,
+) -> Result<()> {
+    token(value)?;
+    auth_metadata(&created["auth"], policies, ttl, true)?;
+    let remaining = metadata(
+        &lookup["data"],
+        value,
+        policies,
+        ttl,
+        &["auth/token/create"],
+        Some(false),
+        false,
+    )?;
+    if remaining < 7 * 3600
+        || !mint_warnings(
+            &created["warnings"],
+            ttl,
+            created["auth"]["lease_duration"].as_u64().ok_or(REFUSAL)?,
+        )
     {
         return Err(REFUSAL);
     }
