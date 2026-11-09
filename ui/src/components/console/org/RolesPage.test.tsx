@@ -104,6 +104,30 @@ describe('Roles native permission catalog', () => {
     return { ...view, dialog: within(screen.getByRole('dialog')) };
   }
 
+  function mockNativeOptionalFieldReadback() {
+    let storedRole = { ...supportRole };
+    server.use(
+      http.get('*/v1/organizations/:org/roles', () => HttpResponse.json([storedRole, ownerRole])),
+      http.patch('*/v1/organizations/:org/roles/:id', async ({ request }) => {
+        const body = await request.json() as Record<string, unknown>;
+        updates.push(body);
+        if ('name' in body) return HttpResponse.json({ detail: 'unknown field name' }, { status: 422 });
+        // Native Option<String> ignores null/omitted fields. Only an explicit
+        // description string clears text; a display name must remain nonempty.
+        if (typeof body.display_name === 'string') {
+          if (!body.display_name.trim()) {
+            return HttpResponse.json({ detail: 'display_name must not be empty' }, { status: 400 });
+          }
+          storedRole = { ...storedRole, display_name: body.display_name };
+        }
+        if (typeof body.description === 'string') {
+          storedRole = { ...storedRole, description: body.description };
+        }
+        return HttpResponse.json(storedRole);
+      }),
+    );
+  }
+
   it('renders every native group action with its label and the real group count', async () => {
     const { user, dialog } = await openCreate();
     expect(dialog.getByText('0/3')).toBeInTheDocument();
@@ -156,6 +180,44 @@ describe('Roles native permission catalog', () => {
       is_default_for_new_members: false,
     }]);
     expect(creates).toHaveLength(0);
+  });
+
+  it('clears an existing description with an explicit empty string and confirms the saved readback', async () => {
+    mockNativeOptionalFieldReadback();
+    const { user } = renderWithRouter(<RolesPage />, { initialEntries: ['/console/org/roles'] });
+    await user.click(await screen.findByRole('button', { name: 'Edit role Support agents' }));
+    const dialog = within(screen.getByRole('dialog'));
+    await user.clear(dialog.getByRole('textbox', { name: 'Description' }));
+    await user.click(dialog.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    const edit = await screen.findByRole('button', { name: 'Edit role Support agents' });
+    const row = within(edit.closest('tr')!);
+    expect(row.queryByText('Customer support')).not.toBeInTheDocument();
+    expect(updates).toEqual([expect.objectContaining({ description: '' })]);
+    expect(updates[0]).not.toHaveProperty('name');
+    await user.click(edit);
+    expect(within(screen.getByRole('dialog')).getByRole('textbox', { name: 'Description' })).toHaveValue('');
+  });
+
+  it.each(['', '   '])('resets a blank display name %j to the immutable role name and confirms readback', async blank => {
+    mockNativeOptionalFieldReadback();
+    const { user } = renderWithRouter(<RolesPage />, { initialEntries: ['/console/org/roles'] });
+    await user.click(await screen.findByRole('button', { name: 'Edit role Support agents' }));
+    const dialog = within(screen.getByRole('dialog'));
+    const displayName = dialog.getByRole('textbox', { name: 'Display Name' });
+    await user.clear(displayName);
+    if (blank) await user.type(displayName, blank);
+    await user.click(dialog.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    const edit = await screen.findByRole('button', { name: 'Edit role support' });
+    expect(updates).toEqual([expect.objectContaining({ display_name: 'support' })]);
+    expect(updates[0]).not.toHaveProperty('name');
+    expect(state.notify).toHaveBeenCalledWith('Role "support" updated', 'success');
+    expect(state.notify).not.toHaveBeenCalledWith(expect.anything(), 'error');
+    await user.click(edit);
+    const reopened = within(screen.getByRole('dialog'));
+    expect(reopened.getByRole('textbox', { name: 'Display Name' })).toHaveValue('support');
+    expect(reopened.getByText('Leave blank to use the role name.')).toBeInTheDocument();
   });
 
   it('names each row action and keeps native system roles read-only', async () => {
@@ -415,26 +477,28 @@ describe('Roles native permission catalog', () => {
       expect(currentReads).toBe(1);
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
+  });
 
-    it.each(['create', 'update', 'delete'] as const)('checks the %s handoff when unmounted in the final-await microtask', async operation => {
-      const view = renderWithRouter(<RolesPage />, { initialEntries: ['/console/org/roles'] });
-      await screen.findByText('Support agents');
-      await view.user.click(screen.getByRole('button', { name: operation === 'create' ? 'Create Role'
-        : operation === 'update' ? 'Edit role Support agents' : 'Delete role Support agents' }));
-      const dialog = within(screen.getByRole('dialog'));
-      if (operation === 'create') await view.user.type(dialog.getByRole('textbox', { name: /^Name/ }), 'reviewer');
-      const pending = deferred();
-      const request = vi.spyOn(rbacApi, operation === 'create' ? 'createRole'
-        : operation === 'update' ? 'updateRole' : 'deleteRole').mockReturnValue(pending.promise);
-      await view.user.click(dialog.getByRole('button', { name: operation === 'create' ? 'Create Role'
-        : operation === 'update' ? 'Save Changes' : 'Delete' }));
-      await waitFor(() => expect(request).toHaveBeenCalledOnce());
-      // The real action.run is already awaiting this promise. Its finally runs
-      // first, this observer unmounts next, then the caller resumes after await.
-      const unmounted = pending.promise.then(() => view.unmount());
-      await act(async () => { pending.resolve(); await unmounted; });
-      expect(state.notify).not.toHaveBeenCalled();
-      expect(state.refreshPermissions).not.toHaveBeenCalled();
+  it.each(['create', 'edit', 'delete'] as const)('suppresses %s success after unmount between the action helper and caller continuation', async operation => {
+    const mutation = deferred();
+    const method = operation === 'create' ? 'createRole' : operation === 'edit' ? 'updateRole' : 'deleteRole';
+    const pending = vi.spyOn(rbacApi, method).mockReturnValue(mutation.promise);
+    const view = operation === 'create' ? await openCreate()
+      : renderWithRouter(<RolesPage />, { initialEntries: ['/console/org/roles'] });
+    if (operation !== 'create') {
+      await view.user.click(await screen.findByRole('button', { name: `${operation === 'edit' ? 'Edit' : 'Delete'} role Support agents` }));
+    }
+    const dialog = within(screen.getByRole('dialog'));
+    if (operation === 'create') await view.user.type(dialog.getByRole('textbox', { name: /^Name/ }), 'new-role');
+    await view.user.click(dialog.getByRole('button', { name: operation === 'create' ? 'Create Role' : operation === 'edit' ? 'Save Changes' : 'Delete' }));
+    await waitFor(() => expect(pending).toHaveBeenCalledTimes(1));
+
+    const unmounted = mutation.promise.then(() => view.unmount());
+    await act(async () => {
+      mutation.resolve();
+      await unmounted;
     });
+    expect(state.notify).not.toHaveBeenCalled();
+    expect(state.refreshPermissions).not.toHaveBeenCalled();
   });
 });

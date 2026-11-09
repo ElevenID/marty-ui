@@ -178,8 +178,9 @@ function RolesPageContent({ effectiveOrgId, canCreateRoles, canEditRoles, canDel
     setSaving(true);
     try {
       const data = {
-        display_name: formDisplayName || null,
-        description: formDescription || null,
+        display_name: formDisplayName.trim() || editingRole?.name || null,
+        // Native PATCH treats null as omitted; an empty string clears the text.
+        description: editingRole ? formDescription : formDescription || null,
         permission_ids: Array.from(formPermissionIds),
         is_default_for_new_members: formIsDefault,
       };
@@ -187,11 +188,11 @@ function RolesPageContent({ effectiveOrgId, canCreateRoles, canEditRoles, canDel
       if (editingRole) {
         await action.run(updateRole, effectiveOrgId, editingRole.id, data);
         if (!action.isCurrent()) return;
-        showNotification(`Role "${formDisplayName || formName}" updated`, 'success');
+        showNotification(`Role "${data.display_name || formName}" updated`, 'success');
       } else {
         await action.run(createRole, effectiveOrgId, { ...data, name: formName });
         if (!action.isCurrent()) return;
-        showNotification(`Role "${formDisplayName || formName}" created`, 'success');
+        showNotification(`Role "${data.display_name || formName}" created`, 'success');
       }
 
       setDialogOpen(false);
@@ -437,6 +438,7 @@ function RolesPageContent({ effectiveOrgId, canCreateRoles, canEditRoles, canDel
               label="Display Name"
               value={formDisplayName}
               onChange={(e) => setFormDisplayName(e.target.value)}
+              helperText="Leave blank to use the role name."
               fullWidth
             />
             <TextField
