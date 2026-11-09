@@ -12,6 +12,7 @@ import { useParams, useNavigate, Link as RouterLink } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { getFlow, publishFlow, testFlow, validateFlow } from '../../../services/flowsApi';
+import { publicEntryHref } from '../../../application/routing/publicEntry';
 import {
   Box,
   Paper,
@@ -416,6 +417,12 @@ function FlowDetailPage() {
   );
   const [copySuccess, setCopySuccess] = useState(false);
   const [activatedFlow, setActivatedFlow] = useState(null);
+  const displayedFlow = activatedFlow || flow;
+  const previewPath = typeof displayedFlow?.id === 'string' && displayedFlow.id.trim()
+    && displayedFlow.id === flowId
+    && typeof displayedFlow.organization_id === 'string' && displayedFlow.organization_id.trim()
+    ? `/applicant/preview/flows/${encodeURIComponent(displayedFlow.id)}?organization_id=${encodeURIComponent(displayedFlow.organization_id)}`
+    : null;
 
   const handleCopyUrl = () => {
     if (flow?.public_url) {
@@ -426,8 +433,8 @@ function FlowDetailPage() {
   };
 
   const handlePreview = () => {
-    if (flow?.public_url) {
-      window.open(flow.public_url, '_blank');
+    if (previewPath) {
+      window.open(publicEntryHref(previewPath), '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -454,7 +461,6 @@ function FlowDetailPage() {
     );
   }
 
-  const displayedFlow = activatedFlow || flow;
   const isPublished = displayedFlow.status === 'ACTIVE';
 
   return (
@@ -536,20 +542,19 @@ function FlowDetailPage() {
       <LifecycleActions flow={displayedFlow} onActivated={setActivatedFlow} />
 
       {/* Preview Button */}
-      {isPublished && (
-        <Box sx={{ mb: 3 }}>
-          <Button
-            variant="outlined"
-            size="large"
-            fullWidth
-            startIcon={<PreviewIcon />}
-            onClick={handlePreview}
-            sx={{ py: 1.5 }}
-          >
-            {t('flows.flowDetail.actions.previewButton')}
-          </Button>
-        </Box>
-      )}
+      <Box sx={{ mb: 3 }}>
+        <Button
+          variant="outlined"
+          size="large"
+          fullWidth
+          startIcon={<PreviewIcon />}
+          onClick={handlePreview}
+          disabled={!previewPath}
+          sx={{ py: 1.5 }}
+        >
+          {t('flows.flowDetail.actions.previewButton')}
+        </Button>
+      </Box>
 
       {/* Main Content Grid */}
       <Grid container spacing={3}>

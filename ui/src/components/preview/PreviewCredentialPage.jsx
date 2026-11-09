@@ -8,7 +8,8 @@ import { useEffect, useState } from 'react';
 import { useLocation, useParams, useSearchParams } from 'react-router';
 import { useAuth } from '../../hooks/useAuth';
 import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
-import { PreviewProvider, usePreview } from '../../contexts/PreviewContext';
+import { usePreview } from '../../contexts/PreviewContext';
+import PreviewPage from './PreviewPage';
 import { Box, Container, Paper, Typography, CircularProgress, Alert } from '@mui/material';
 import PreviewNotFound from './PreviewNotFound';
 import { fetchPreviewCredentialTemplate } from '../../application/vendor';
@@ -138,14 +139,14 @@ function PreviewCredentialPage() {
   ]);
 
   return (
-    <PreviewProvider
+    <PreviewPage
       key={scope}
       resourceType="credential" 
       resourceId={templateId}
       returnUrl="/console/org/templates/credentials"
     >
       <PreviewCredentialContent templateId={templateId} organizationId={organizationId} />
-    </PreviewProvider>
+    </PreviewPage>
   );
 }
 

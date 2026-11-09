@@ -6,7 +6,8 @@
  */
 
 import { useEffect } from 'react';
-import { PreviewProvider, usePreview } from '../../contexts/PreviewContext';
+import { usePreview } from '../../contexts/PreviewContext';
+import PreviewPage from './PreviewPage';
 import CredentialCatalog from '../applicant/CredentialCatalog';
 import { Box } from '@mui/material';
 
@@ -26,9 +27,9 @@ function PreviewCatalogContent() {
 
 function PreviewCatalogPage() {
   return (
-    <PreviewProvider resourceType="catalog" returnUrl="/console/org/templates/credentials">
+    <PreviewPage resourceType="catalog" returnUrl="/console/org/templates/credentials">
       <PreviewCatalogContent />
-    </PreviewProvider>
+    </PreviewPage>
   );
 }
 

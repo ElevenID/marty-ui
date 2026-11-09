@@ -8,7 +8,8 @@ import { useEffect, useState } from 'react';
 import { useLocation, useParams, useSearchParams } from 'react-router';
 import { useAuth } from '../../hooks/useAuth';
 import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
-import { PreviewProvider, usePreview } from '../../contexts/PreviewContext';
+import { usePreview } from '../../contexts/PreviewContext';
+import PreviewPage from './PreviewPage';
 import { Container, Alert, CircularProgress, Typography, Box } from '@mui/material';
 import ApplicationForm from '../applicant/ApplicationForm';
 import PreviewNotFound from './PreviewNotFound';
@@ -128,14 +129,14 @@ function PreviewFlowPage() {
   ]);
 
   return (
-    <PreviewProvider
+    <PreviewPage
       key={scope}
       resourceType="flow" 
       resourceId={flowId}
       returnUrl="/console/org/flows/definitions"
     >
       <PreviewFlowContent flowId={flowId} organizationId={organizationId} />
-    </PreviewProvider>
+    </PreviewPage>
   );
 }
 
