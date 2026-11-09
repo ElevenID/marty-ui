@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
-const source=fs.readFileSync(path.join(__dirname,'verify-beta-credential-login.js'),'utf8');
+const source=fs.readFileSync(path.join(__dirname,'verify-beta-credential-login.js'),'utf8').replaceAll('\r\n','\n');
 function launch(run){
  const body=source.slice(source.indexOf('async function main('),source.indexOf('\nif (require.main === module)'));
  let created=0,closed=0;const evidence={close(){closed++;}};
