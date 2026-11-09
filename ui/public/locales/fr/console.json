@@ -1,5 +1,29 @@
 {
   "trust": {
+    "trustProfilesPage": {
+      "title": "Profils de confiance",
+      "description": "Définissez les formats d’attestations, les sources de confiance et les règles de validation acceptés par votre organisation.",
+      "selectOrganization": "Sélectionnez une organisation pour consulter ses profils de confiance.",
+      "readDenied": "Vous n’avez pas l’autorisation de consulter les profils de confiance de cette organisation.",
+      "scopeMismatch": "La réponse du catalogue ne correspond pas à l’organisation sélectionnée ou contient un profil non valide.",
+      "loadFailed": "Impossible de charger les profils de confiance.",
+      "retryProfiles": "Recharger les profils",
+      "emptyTitle": "Aucun profil de confiance configuré",
+      "emptyDescription": "Créez un profil de confiance pour configurer les formats d’attestations, les sources de confiance et les règles de validation acceptés par votre organisation.",
+      "createProfile": "Créer un profil de confiance",
+      "pinnedSources": "Sources d’émetteurs fixes",
+      "pinnedSourcesHelp": "Les sources fixes font partie de la politique de confiance du profil. Ouvrez un profil pour consulter ses relations avec les émetteurs associés.",
+      "allowedAlgorithms": "Algorithmes autorisés",
+      "name": "Nom",
+      "framework": "Cadre",
+      "status": "Statut",
+      "lastUpdated": "Dernière mise à jour",
+      "actions": "Actions",
+      "viewDetails": "Voir les détails",
+      "edit": "Modifier",
+      "consoleBreadcrumb": "Console",
+      "trustBreadcrumb": "Confiance"
+    },
     "trustProfileEdit": {
       "selectOrganization": "Sélectionnez une organisation avant de modifier un profil de confiance.",
       "permissionDenied": "Vous n’avez pas l’autorisation de modifier les profils de confiance.",

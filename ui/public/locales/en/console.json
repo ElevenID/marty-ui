@@ -358,6 +358,30 @@
     "dependencyBlocked": "Complete previous steps first"
   },
   "trust": {
+    "trustProfilesPage": {
+      "title": "Trust profiles",
+      "description": "Define the credential formats, trust sources, and validation rules your organization accepts.",
+      "selectOrganization": "Select an organization to view its trust profiles.",
+      "readDenied": "You do not have permission to view this organization's trust profiles.",
+      "scopeMismatch": "The catalog response does not match the selected organization or contains an invalid profile.",
+      "loadFailed": "Trust profiles could not be loaded.",
+      "retryProfiles": "Retry loading profiles",
+      "emptyTitle": "No trust profiles configured",
+      "emptyDescription": "Create a trust profile to configure the credential formats, trust sources, and validation rules your organization accepts.",
+      "createProfile": "Create Trust Profile",
+      "pinnedSources": "Pinned issuer sources",
+      "pinnedSourcesHelp": "Pinned sources are part of a profile's trust policy. Open a profile to review its linked issuer relationships.",
+      "allowedAlgorithms": "Allowed algorithms",
+      "name": "Name",
+      "framework": "Framework",
+      "status": "Status",
+      "lastUpdated": "Last updated",
+      "actions": "Actions",
+      "viewDetails": "View details",
+      "edit": "Edit",
+      "consoleBreadcrumb": "Console",
+      "trustBreadcrumb": "Trust"
+    },
     "trustProfileEdit": {
       "selectOrganization": "Select an organization before editing a trust profile.",
       "permissionDenied": "You do not have permission to edit trust profiles.",

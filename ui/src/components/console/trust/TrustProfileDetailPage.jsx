@@ -81,8 +81,7 @@ function ProvenanceSection({ trustProfile }) {
   const { t } = useTranslation('console');
   const trustAnchors = trustProfile?.trust_sources || trustProfile?.trust_anchors || [];
   const revocationStrategy = trustProfile?.revocation_policy?.check_mode || trustProfile?.revocation_strategy || 'HARD_FAIL';
-  const issuerCount = trustProfile?.trusted_issuers?.length
-    || trustAnchors.filter((anchor) => anchor.issuer_did).length;
+  const pinnedSourceCount = trustAnchors.filter((anchor) => anchor?.source_type === 'PINNED_ISSUER').length;
 
   return (
     <Paper sx={{ p: 3, mb: 3 }}>
@@ -128,10 +127,10 @@ function ProvenanceSection({ trustProfile }) {
           <Box sx={{ mt: 1 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
               <Typography variant="body2" color="text.secondary">
-                {t('trust.trustProfileDetail.trustedIssuersCount')}
+                {t('trust.trustProfilesPage.pinnedSources')}
               </Typography>
               <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                {issuerCount}
+                {pinnedSourceCount}
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>

@@ -1,5 +1,29 @@
 {
   "trust": {
+    "trustProfilesPage": {
+      "title": "信頼プロファイル",
+      "description": "組織が受け入れる資格情報の形式、信頼ソース、検証ルールを設定します。",
+      "selectOrganization": "信頼プロファイルを表示する組織を選択してください。",
+      "readDenied": "この組織の信頼プロファイルを表示する権限がありません。",
+      "scopeMismatch": "カタログの応答が選択した組織と一致しないか、無効なプロファイルが含まれています。",
+      "loadFailed": "信頼プロファイルを読み込めませんでした。",
+      "retryProfiles": "プロファイルを再読み込み",
+      "emptyTitle": "信頼プロファイルが設定されていません",
+      "emptyDescription": "信頼プロファイルを作成して、組織が受け入れる資格情報の形式、信頼ソース、検証ルールを設定してください。",
+      "createProfile": "信頼プロファイルを作成",
+      "pinnedSources": "固定された発行者ソース",
+      "pinnedSourcesHelp": "固定されたソースはプロファイルの信頼ポリシーの一部です。リンクされた発行者との関係を確認するには、プロファイルを開いてください。",
+      "allowedAlgorithms": "許可するアルゴリズム",
+      "name": "名前",
+      "framework": "フレームワーク",
+      "status": "状態",
+      "lastUpdated": "最終更新",
+      "actions": "操作",
+      "viewDetails": "詳細を表示",
+      "edit": "編集",
+      "consoleBreadcrumb": "コンソール",
+      "trustBreadcrumb": "信頼"
+    },
     "trustProfileEdit": {
       "selectOrganization": "信頼プロファイルを編集する前に組織を選択してください。",
       "permissionDenied": "信頼プロファイルを編集する権限がありません。",

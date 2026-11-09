@@ -1,5 +1,29 @@
 {
   "trust": {
+    "trustProfilesPage": {
+      "title": "Vertrauensprofile",
+      "description": "Legen Sie fest, welche Nachweisformate, Vertrauensquellen und Validierungsregeln Ihre Organisation akzeptiert.",
+      "selectOrganization": "Wählen Sie eine Organisation aus, um deren Vertrauensprofile anzuzeigen.",
+      "readDenied": "Keine Berechtigung zum Anzeigen der Vertrauensprofile dieser Organisation.",
+      "scopeMismatch": "Die Katalogantwort gehört nicht zur ausgewählten Organisation oder enthält ein ungültiges Profil.",
+      "loadFailed": "Die Vertrauensprofile konnten nicht geladen werden.",
+      "retryProfiles": "Profile erneut laden",
+      "emptyTitle": "Keine Vertrauensprofile konfiguriert",
+      "emptyDescription": "Erstellen Sie ein Vertrauensprofil, um akzeptierte Nachweisformate, Vertrauensquellen und Validierungsregeln festzulegen.",
+      "createProfile": "Vertrauensprofil erstellen",
+      "pinnedSources": "Fest hinterlegte Ausstellerquellen",
+      "pinnedSourcesHelp": "Fest hinterlegte Quellen gehören zur Vertrauensrichtlinie eines Profils. Öffnen Sie ein Profil, um seine verknüpften Ausstellerbeziehungen zu prüfen.",
+      "allowedAlgorithms": "Zulässige Algorithmen",
+      "name": "Name",
+      "framework": "Rahmenwerk",
+      "status": "Status",
+      "lastUpdated": "Zuletzt aktualisiert",
+      "actions": "Aktionen",
+      "viewDetails": "Details anzeigen",
+      "edit": "Bearbeiten",
+      "consoleBreadcrumb": "Konsole",
+      "trustBreadcrumb": "Vertrauen"
+    },
     "trustProfileEdit": {
       "selectOrganization": "Wählen Sie eine Organisation aus, bevor Sie ein Vertrauensprofil bearbeiten.",
       "permissionDenied": "Sie haben keine Berechtigung, Vertrauensprofile zu bearbeiten.",

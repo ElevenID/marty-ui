@@ -1,5 +1,29 @@
 {
   "trust": {
+    "trustProfilesPage": {
+      "title": "Perfiles de confianza",
+      "description": "Defina los formatos de credenciales, las fuentes de confianza y las reglas de validación que acepta su organización.",
+      "selectOrganization": "Seleccione una organización para ver sus perfiles de confianza.",
+      "readDenied": "No tiene permiso para ver los perfiles de confianza de esta organización.",
+      "scopeMismatch": "La respuesta del catálogo no corresponde a la organización seleccionada o contiene un perfil no válido.",
+      "loadFailed": "No se pudieron cargar los perfiles de confianza.",
+      "retryProfiles": "Volver a cargar los perfiles",
+      "emptyTitle": "No hay perfiles de confianza configurados",
+      "emptyDescription": "Cree un perfil de confianza para configurar los formatos de credenciales, las fuentes de confianza y las reglas de validación que acepta su organización.",
+      "createProfile": "Crear perfil de confianza",
+      "pinnedSources": "Fuentes de emisores fijados",
+      "pinnedSourcesHelp": "Las fuentes fijadas forman parte de la política de confianza del perfil. Abra un perfil para revisar sus relaciones con emisores vinculados.",
+      "allowedAlgorithms": "Algoritmos permitidos",
+      "name": "Nombre",
+      "framework": "Marco",
+      "status": "Estado",
+      "lastUpdated": "Última actualización",
+      "actions": "Acciones",
+      "viewDetails": "Ver detalles",
+      "edit": "Editar",
+      "consoleBreadcrumb": "Consola",
+      "trustBreadcrumb": "Confianza"
+    },
     "trustProfileEdit": {
       "selectOrganization": "Seleccione una organización antes de editar un perfil de confianza.",
       "permissionDenied": "No tiene permiso para editar perfiles de confianza.",

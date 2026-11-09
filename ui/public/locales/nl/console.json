@@ -1,5 +1,29 @@
 {
   "trust": {
+    "trustProfilesPage": {
+      "title": "Vertrouwensprofielen",
+      "description": "Bepaal welke credentialformaten, vertrouwensbronnen en validatieregels uw organisatie accepteert.",
+      "selectOrganization": "Selecteer een organisatie om de vertrouwensprofielen te bekijken.",
+      "readDenied": "U hebt geen toestemming om de vertrouwensprofielen van deze organisatie te bekijken.",
+      "scopeMismatch": "Het catalogusantwoord hoort niet bij de geselecteerde organisatie of bevat een ongeldig profiel.",
+      "loadFailed": "De vertrouwensprofielen konden niet worden geladen.",
+      "retryProfiles": "Profielen opnieuw laden",
+      "emptyTitle": "Geen vertrouwensprofielen geconfigureerd",
+      "emptyDescription": "Maak een vertrouwensprofiel om de geaccepteerde credentialformaten, vertrouwensbronnen en validatieregels te configureren.",
+      "createProfile": "Vertrouwensprofiel maken",
+      "pinnedSources": "Vastgelegde uitgeversbronnen",
+      "pinnedSourcesHelp": "Vastgelegde bronnen maken deel uit van het vertrouwensbeleid van een profiel. Open een profiel om de gekoppelde uitgeversrelaties te bekijken.",
+      "allowedAlgorithms": "Toegestane algoritmen",
+      "name": "Naam",
+      "framework": "Raamwerk",
+      "status": "Status",
+      "lastUpdated": "Laatst bijgewerkt",
+      "actions": "Acties",
+      "viewDetails": "Details bekijken",
+      "edit": "Bewerken",
+      "consoleBreadcrumb": "Console",
+      "trustBreadcrumb": "Vertrouwen"
+    },
     "trustProfileEdit": {
       "selectOrganization": "Selecteer een organisatie voordat u een vertrouwensprofiel bewerkt.",
       "permissionDenied": "U hebt geen toestemming om vertrouwensprofielen te bewerken.",
