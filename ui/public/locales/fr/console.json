@@ -241,6 +241,12 @@
 		"flowDefinition": "Définition de flux"
 	},
 	"deploy": {
+		"issuerIdentityWizard": {
+			"selectOrganization": "Sélectionnez une organisation pour créer une identité d’émetteur.",
+			"readDenied": "Vous ne disposez pas de l’autorisation de consulter les capacités des émetteurs dans l’organisation sélectionnée.",
+			"createDenied": "Vous ne disposez pas de l’autorisation de créer des identités d’émetteur dans l’organisation sélectionnée.",
+			"responseMismatch": "Le serveur n’a pas confirmé l’identité d’émetteur demandée. Consultez la liste des identités d’émetteur avant de réessayer."
+		},
 		"title": "Déploiement",
 		"deploymentProfiles": "Profils de déploiement",
 		"deploymentProfilesDescription": "Configurez des profils de déploiement pour API, bornes et appareils en ligne/hors ligne.",

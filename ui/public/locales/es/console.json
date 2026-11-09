@@ -241,6 +241,12 @@
 		"flowDefinition": "Definición de flujo"
 	},
 	"deploy": {
+		"issuerIdentityWizard": {
+			"selectOrganization": "Selecciona una organización para crear una identidad de emisor.",
+			"readDenied": "No tienes permiso para ver las capacidades de los emisores en la organización seleccionada.",
+			"createDenied": "No tienes permiso para crear identidades de emisor en la organización seleccionada.",
+			"responseMismatch": "El servidor no confirmó la identidad de emisor solicitada. Revisa la lista de identidades de emisor antes de volver a intentarlo."
+		},
 		"title": "Despliegue",
 		"deploymentProfiles": "Perfiles de despliegue",
 		"deploymentProfilesDescription": "Configura perfiles de despliegue para APIs, quioscos y dispositivos en entornos en línea y fuera de línea.",
