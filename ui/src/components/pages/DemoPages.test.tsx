@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Link, Route, Routes } from 'react-router';
 import { act, renderWithRouter, screen, waitFor, within } from '@test/utils';
+import { AuthProvider } from '../../contexts/AuthContext';
+import { ConsoleProvider } from '../../contexts/ConsoleContext';
+import { useAuth } from '../../hooks/useAuth';
 
 import {
   DemoCatalogPage,
@@ -9,9 +12,17 @@ import {
   DemoScenarioPage,
 } from './DemoPages';
 
-const { mockLoadIndex, mockLoadManifest } = vi.hoisted(() => ({
+const { mockLoadIndex, mockLoadManifest, mockGetCurrentUser } = vi.hoisted(() => ({
   mockLoadIndex: vi.fn(),
   mockLoadManifest: vi.fn(),
+  mockGetCurrentUser: vi.fn(),
+}));
+
+vi.mock('../../services/authApi', () => ({
+  getCurrentUser: (...args: unknown[]) => mockGetCurrentUser(...args),
+  initiateLogin: vi.fn(),
+  initiateRegister: vi.fn(),
+  initiateLogout: vi.fn(),
 }));
 
 vi.mock('../../services/demoManifestService', async () => {
@@ -137,7 +148,51 @@ const index = {
   releases: [{ stack_version: '2026.07.0', release_name: 'Credential Lifecycle Foundation', mip_version: '0.3.1' }],
 };
 
+function AuthBootstrapProbe() {
+  const { isLoading, isAuthenticated } = useAuth();
+  return <output data-testid="auth-bootstrap">{isLoading ? 'loading' : isAuthenticated ? 'authenticated' : 'anonymous'}</output>;
+}
+
 describe('DemoPages', () => {
+  it.each(['catalog', 'scenario'] as const)('keeps the anonymous %s manifest request alive when authentication bootstrap settles', async page => {
+    let finishAuth!: (value: { authenticated: boolean; user: null }) => void;
+    const authRequest = new Promise(resolve => { finishAuth = resolve; });
+    let finishManifest!: (value: typeof manifest) => void;
+    const manifestRequest = new Promise<typeof manifest>(resolve => { finishManifest = resolve; });
+    const signals: AbortSignal[] = [];
+    mockGetCurrentUser.mockReset().mockReturnValue(authRequest);
+    mockLoadIndex.mockReset().mockResolvedValue(index);
+    mockLoadManifest.mockReset().mockImplementation((_version: string, { signal }: { signal: AbortSignal }) => {
+      signals.push(signal);
+      return manifestRequest;
+    });
+    const initialEntry = page === 'catalog' ? '/demos' : '/demos/2026.07.0/organization-primitives';
+    const view = renderWithRouter(
+      <AuthProvider><ConsoleProvider>
+        <AuthBootstrapProbe />
+        <Routes>
+          <Route path="/demos" element={<DemoCatalogPage />} />
+          <Route path="/demos/:stackVersion/:scenario" element={<DemoScenarioPage />} />
+        </Routes>
+      </ConsoleProvider></AuthProvider>,
+      { initialEntries: [initialEntry] },
+    );
+    await waitFor(() => expect(signals).toHaveLength(1));
+    expect(screen.getByTestId('auth-bootstrap')).toHaveTextContent('loading');
+    await act(async () => finishAuth({ authenticated: false, user: null }));
+
+    expect(screen.getByTestId('auth-bootstrap')).toHaveTextContent('anonymous');
+    expect(signals[0].aborted).toBe(false);
+    expect(mockLoadManifest).toHaveBeenCalledTimes(1);
+    await act(async () => finishManifest(manifest));
+    expect(await screen.findByRole('heading', { name: page === 'catalog'
+      ? manifest.release_name : 'Organization and MIP Primitives', level: 1 })).toBeVisible();
+    expect(signals[0].aborted).toBe(false);
+
+    view.unmount();
+    expect(signals[0].aborted).toBe(true);
+  });
+
   it('keeps same-build Android lane results distinct and renders historical wallet evidence', async () => {
     const wallet = {
       implementation: 'SpruceID Showcase Wallet', vendor: 'SpruceID', build: 'a'.repeat(40),

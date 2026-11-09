@@ -158,7 +158,10 @@ export function ConsoleProvider({ children }) {
   const principalId = user?.user_id || user?.sub || user?.id || null;
   const applicantOnly = Array.isArray(user?.roles) && user.roles.includes('canvas_lti_learner')
     && !user?.capabilities?.['org:view'];
-  const sessionKey = JSON.stringify([principalId, isAuthenticated, authLoading, Boolean(applicantOnly)]);
+  // An anonymous auth check has no account state to clear. Keep public resources
+  // mounted while it settles; known identities still reset across auth loading.
+  const sessionLoading = Boolean(principalId || isAuthenticated) && authLoading;
+  const sessionKey = JSON.stringify([principalId, isAuthenticated, sessionLoading, Boolean(applicantOnly)]);
   const previousSession = useRef({ principalId, isAuthenticated });
   useLayoutEffect(() => {
     if (previousSession.current.principalId && (previousSession.current.principalId !== principalId

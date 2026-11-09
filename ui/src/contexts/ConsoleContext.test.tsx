@@ -419,6 +419,50 @@ describe('ConsoleContext session and request lifetime', () => {
     expect(updatePreferences).not.toHaveBeenCalled();
   });
 
+  it('clears authenticated account state during identity refresh and never revives its prior callbacks', async () => {
+    vi.mocked(getPreferences).mockResolvedValue({ last_view_mode: 'org', last_active_org_id: oldOrg.id });
+    vi.mocked(getMyOrganizations).mockResolvedValue([oldOrg]);
+    const { rerender } = renderWithRouter(<App auth={oldAuth} />, { initialEntries: ['/console/org'] });
+    expect(await screen.findByRole('heading', { name: 'Organization dashboard' })).toBeInTheDocument();
+    const prior = currentConsole;
+
+    rerender(<App auth={{ ...oldAuth, isLoading: true }} />);
+
+    expect(screen.getByTestId('selected')).toBeEmptyDOMElement();
+    expect(currentConsole.memberships).toEqual([]);
+    expect(screen.queryByRole('heading', { name: 'Organization dashboard' })).not.toBeInTheDocument();
+    await expect(prior.setActiveOrgId(oldOrg.id, [oldOrg])).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(prior.refreshMemberships()).rejects.toMatchObject({ name: 'AbortError' });
+    expect(getMyOrganizations).toHaveBeenCalledTimes(1);
+    expect(updatePreferences).not.toHaveBeenCalled();
+
+    rerender(<App auth={oldAuth} />);
+    expect(await screen.findByRole('heading', { name: 'Organization dashboard' })).toBeInTheDocument();
+    expect(getMyOrganizations).toHaveBeenCalledTimes(2);
+    await expect(prior.setMode('org')).rejects.toMatchObject({ name: 'AbortError' });
+    expect(updatePreferences).not.toHaveBeenCalled();
+  });
+
+  it('clears organization state when the same principal becomes a Canvas-only learner', async () => {
+    vi.mocked(getPreferences).mockResolvedValue({ last_view_mode: 'org', last_active_org_id: oldOrg.id });
+    vi.mocked(getMyOrganizations).mockResolvedValue([oldOrg]);
+    const { rerender } = renderWithRouter(<App auth={oldAuth} />, { initialEntries: ['/console/org'] });
+    expect(await screen.findByRole('heading', { name: 'Organization dashboard' })).toBeInTheDocument();
+    const prior = currentConsole;
+
+    rerender(<App auth={{ ...oldAuth, user: {
+      ...oldAuth.user, roles: ['canvas_lti_learner'], capabilities: { 'org:view': false },
+    } }} />);
+
+    expect(screen.getByTestId('selected')).toBeEmptyDOMElement();
+    expect(currentConsole.memberships).toEqual([]);
+    expect(screen.queryByRole('heading', { name: 'Organization dashboard' })).not.toBeInTheDocument();
+    await expect(prior.setActiveOrgId(oldOrg.id, [oldOrg])).rejects.toMatchObject({ name: 'AbortError' });
+    await waitFor(() => expect(screen.getByTestId('loading')).toHaveTextContent('ready'));
+    expect(currentConsole.isOrgConsoleAvailable).toBe(false);
+    expect(screen.getByTestId('selected')).toBeEmptyDOMElement();
+  });
+
   it.each(['bootstrap', 'refresh'])('keeps a newer same-account selection when an older %s finishes', async operation => {
     let finishRead!: (organizations: any[]) => void;
     const read = new Promise<any[]>(resolve => { finishRead = resolve; });
