@@ -1,4 +1,10 @@
 {
+  "trust": {
+    "trustProfileDetail": {
+      "credentialWalletGuidance": "ウォレットプロファイルは資格情報テンプレートで確認できます。テンプレートが対応するウォレットプロファイルをご確認ください。導出された設定は、相互運用性や配信の成功を証明するものではありません。",
+      "viewCredentialTemplates": "資格情報テンプレートを表示"
+    }
+  },
   "membershipReview": {
     "pending": "承認待ち",
     "description": "保留中のメンバーシップを確認し、割り当て済みのロールでアクセスを承認します。",

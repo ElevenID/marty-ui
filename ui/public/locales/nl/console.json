@@ -1,4 +1,10 @@
 {
+  "trust": {
+    "trustProfileDetail": {
+      "credentialWalletGuidance": "Walletprofielen zijn beschikbaar bij de credentialtemplates. Bekijk het ondersteunde walletprofiel van een template; de afgeleide configuratie bewijst geen interoperabiliteit of geslaagde aflevering.",
+      "viewCredentialTemplates": "Credentialtemplates bekijken"
+    }
+  },
   "membershipReview": {
     "pending": "In afwachting",
     "description": "Beoordeel openstaande lidmaatschappen en keur toegang goed met de al toegewezen rollen.",

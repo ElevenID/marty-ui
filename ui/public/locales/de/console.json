@@ -1,4 +1,10 @@
 {
+  "trust": {
+    "trustProfileDetail": {
+      "credentialWalletGuidance": "Wallet-Profile sind bei den Anmeldeinformationsvorlagen verfügbar. Prüfen Sie das unterstützte Wallet-Profil einer Vorlage. Die abgeleitete Konfiguration belegt weder Interoperabilität noch eine erfolgreiche Zustellung.",
+      "viewCredentialTemplates": "Anmeldeinformationsvorlagen anzeigen"
+    }
+  },
   "membershipReview": {
     "pending": "Ausstehend",
     "description": "Prüfen Sie ausstehende Mitgliedschaften und genehmigen Sie den Zugriff mit den bereits zugewiesenen Rollen.",

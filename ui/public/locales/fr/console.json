@@ -1,4 +1,10 @@
 {
+  "trust": {
+    "trustProfileDetail": {
+      "credentialWalletGuidance": "Les profils de portefeuille sont disponibles dans les modèles d’attestations. Consultez le profil de portefeuille pris en charge par un modèle ; la configuration dérivée ne prouve ni l’interopérabilité ni la réussite de la remise.",
+      "viewCredentialTemplates": "Voir les modèles d’attestations"
+    }
+  },
   "membershipReview": {
     "pending": "En attente",
     "description": "Examinez les adhésions en attente et approuvez l’accès avec les rôles déjà attribués.",

@@ -428,6 +428,8 @@
       "error": "Failed to load revocation profiles"
     },
     "trustProfileDetail": {
+      "credentialWalletGuidance": "Wallet profiles are available on credential templates. Review a template’s supported wallet profile; derived configuration does not prove interoperability or successful delivery.",
+      "viewCredentialTemplates": "View credential templates",
       "walletCompatibility": "Wallet Compatibility",
       "supportedCredentialFormats": "Supported Credential Formats",
       "noFormatsConfigured": "No specific formats configured (accepts all)",

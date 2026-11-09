@@ -1,4 +1,10 @@
 {
+  "trust": {
+    "trustProfileDetail": {
+      "credentialWalletGuidance": "Los perfiles de cartera están disponibles en las plantillas de credenciales. Consulte el perfil de cartera compatible de una plantilla; la configuración derivada no demuestra interoperabilidad ni una entrega correcta.",
+      "viewCredentialTemplates": "Ver plantillas de credenciales"
+    }
+  },
   "membershipReview": {
     "pending": "Pendiente",
     "description": "Revisa las membresías pendientes y aprueba el acceso con los roles ya asignados.",

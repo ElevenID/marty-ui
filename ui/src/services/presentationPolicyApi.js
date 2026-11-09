@@ -985,15 +985,6 @@ export async function addTrustProfileIssuer(profileId, organizationId, data) {
   return composeTrustProfileIssuer(relationship, issuerEntity);
 }
 
-/**
- * Get wallet compatibility for a trust profile
- * @param {string} id - Trust profile ID
- * @returns {Promise<Object>} Wallet compatibility data
- */
-export async function getTrustProfileWalletCompatibility(id) {
-  return get(`${TRUST_PROFILE_BASE}/${id}/wallet-compatibility`);
-}
-
 // ── Revocation Profile API ────────────────────────────────────────────────
 
 const REVOCATION_PROFILE_BASE = '/v1/revocation-profiles';

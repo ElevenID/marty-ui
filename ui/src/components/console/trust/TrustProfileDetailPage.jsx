@@ -46,43 +46,14 @@ import EditIcon from '@mui/icons-material/Edit';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SecurityIcon from '@mui/icons-material/Security';
 import { useTranslation } from 'react-i18next';
 
-import { getTrustProfile, getTrustProfileWalletCompatibility, listTrustProfileIssuers, addTrustProfileIssuer } from '../../../services/presentationPolicyApi';
+import { getTrustProfile, listTrustProfileIssuers, addTrustProfileIssuer } from '../../../services/presentationPolicyApi';
 
-/**
- * Format badge icons for supported formats
- */
-const FORMAT_ICONS = {
-  'SD-JWT': '🔐',
-  'mDL': '🪪',
-  'W3C VC': '✓',
-  'OBv3': '🎓',
-  'VC-JWT': '🔑',
-};
-
-/**
- * Wallet Compatibility Panel Component
- */
-function WalletCompatibilityPanel({ trustProfileId }) {
+/** Link to the native credential-template wallet profiles without claiming evidence. */
+function WalletProfileGuidance() {
   const { t } = useTranslation('console');
-  const { data: compatibility = { supported_formats: [], supported_wallets: [] }, loading } = useAsyncData(
-    async () => {
-      if (!trustProfileId) return { supported_formats: [], supported_wallets: [] };
-      return await getTrustProfileWalletCompatibility(trustProfileId);
-    },
-    [trustProfileId]
-  );
-
-  if (loading) {
-    return <Skeleton variant="rectangular" height={200} />;
-  }
-
-  const formats = compatibility?.supported_formats || [];
-  const wallets = compatibility?.supported_wallets || [];
-
   return (
     <Paper sx={{ p: 3, mb: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
@@ -91,55 +62,12 @@ function WalletCompatibilityPanel({ trustProfileId }) {
           {t('trust.trustProfileDetail.walletCompatibility')}
         </Typography>
       </Box>
-
-      {/* Supported Formats */}
-      <Box sx={{ mb: 3 }}>
-        <Typography variant="subtitle2" gutterBottom>
-          {t('trust.trustProfileDetail.supportedCredentialFormats')}
-        </Typography>
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1 }}>
-          {formats.length > 0 ? (
-            formats.map((format) => (
-              <Chip
-                key={format}
-                label={`${FORMAT_ICONS[format] || '📄'} ${format}`}
-                color="primary"
-                variant="outlined"
-              />
-            ))
-          ) : (
-            <Typography variant="body2" color="text.secondary">
-              {t('trust.trustProfileDetail.noFormatsConfigured')}
-            </Typography>
-          )}
-        </Box>
-      </Box>
-
-      {/* Supported Wallets */}
-      <Box>
-        <Typography variant="subtitle2" gutterBottom>
-          {t('trust.trustProfileDetail.compatibleWalletApplications')}
-        </Typography>
-        {wallets.length > 0 ? (
-          <List dense>
-            {wallets.map((wallet, index) => (
-              <ListItem key={index}>
-                <ListItemIcon>
-                  <CheckCircleIcon color="success" fontSize="small" />
-                </ListItemIcon>
-                <ListItemText
-                  primary={wallet.name || wallet}
-                  secondary={wallet.description || t('trust.trustProfileDetail.compatibleWallet')}
-                />
-              </ListItem>
-            ))}
-          </List>
-        ) : (
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-            {t('trust.trustProfileDetail.standardCompliantWallets')}
-          </Typography>
-        )}
-      </Box>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        {t('trust.trustProfileDetail.credentialWalletGuidance')}
+      </Typography>
+      <Button component={RouterLink} to="/console/org/templates/credentials" variant="outlined">
+        {t('trust.trustProfileDetail.viewCredentialTemplates')}
+      </Button>
     </Paper>
   );
 }
@@ -551,7 +479,7 @@ export function TrustProfileDetailPage() {
       />
 
       {/* Wallet Compatibility */}
-      <WalletCompatibilityPanel trustProfileId={id} />
+      <WalletProfileGuidance />
 
       {/* Actions */}
       <Box sx={{ display: 'flex', gap: 2 }}>
