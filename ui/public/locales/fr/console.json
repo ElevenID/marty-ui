@@ -1,5 +1,10 @@
 {
   "trust": {
+    "revocationWizard": {
+      "selectOrganization": "Sélectionnez une organisation pour créer un profil de révocation.",
+      "createDenied": "Vous n’avez pas l’autorisation de créer des profils de révocation dans l’organisation sélectionnée.",
+      "responseMismatch": "La réponse ne confirme pas la création d’un nouveau profil à l’état de brouillon pour l’organisation sélectionnée. Consultez la liste des profils avant de réessayer."
+    },
     "trustProfilesPage": {
       "title": "Profils de confiance",
       "description": "Définissez les formats d’attestations, les sources de confiance et les règles de validation acceptés par votre organisation.",

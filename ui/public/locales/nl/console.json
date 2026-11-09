@@ -1,5 +1,10 @@
 {
   "trust": {
+    "revocationWizard": {
+      "selectOrganization": "Selecteer een organisatie om een intrekkingsprofiel te maken.",
+      "createDenied": "Je hebt geen toestemming om intrekkingsprofielen in de geselecteerde organisatie te maken.",
+      "responseMismatch": "Het antwoord bevestigt geen nieuw conceptprofiel voor de geselecteerde organisatie. Controleer de profiellijst voordat je het opnieuw probeert."
+    },
     "trustProfilesPage": {
       "title": "Vertrouwensprofielen",
       "description": "Bepaal welke credentialformaten, vertrouwensbronnen en validatieregels uw organisatie accepteert.",
