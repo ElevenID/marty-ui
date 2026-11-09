@@ -299,7 +299,7 @@ describe('Roles native permission catalog', () => {
       const { user, dialog } = await openDelete();
       await user.click(dialog.getByRole('combobox', { name: 'Replacement role' }));
       await user.click(screen.getByRole('option', { name: 'Viewer' }));
-      expect(dialog.getByText('Members will be reassigned to "Viewer".')).toBeInTheDocument();
+      expect(dialog.getByText('Members who would otherwise have no roles will receive "Viewer".')).toBeInTheDocument();
       await user.click(dialog.getByRole('button', { name: 'Delete' }));
       await waitFor(() => expect(state.notify).toHaveBeenCalledWith('Role "Support agents" deleted', 'success'));
       expect(deletes).toEqual([{ id: supportRole.id, replacement: viewerRole.id }]);
@@ -477,28 +477,26 @@ describe('Roles native permission catalog', () => {
       expect(currentReads).toBe(1);
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
-  });
 
-  it.each(['create', 'edit', 'delete'] as const)('suppresses %s success after unmount between the action helper and caller continuation', async operation => {
-    const mutation = deferred();
-    const method = operation === 'create' ? 'createRole' : operation === 'edit' ? 'updateRole' : 'deleteRole';
-    const pending = vi.spyOn(rbacApi, method).mockReturnValue(mutation.promise);
-    const view = operation === 'create' ? await openCreate()
-      : renderWithRouter(<RolesPage />, { initialEntries: ['/console/org/roles'] });
-    if (operation !== 'create') {
-      await view.user.click(await screen.findByRole('button', { name: `${operation === 'edit' ? 'Edit' : 'Delete'} role Support agents` }));
-    }
-    const dialog = within(screen.getByRole('dialog'));
-    if (operation === 'create') await view.user.type(dialog.getByRole('textbox', { name: /^Name/ }), 'new-role');
-    await view.user.click(dialog.getByRole('button', { name: operation === 'create' ? 'Create Role' : operation === 'edit' ? 'Save Changes' : 'Delete' }));
-    await waitFor(() => expect(pending).toHaveBeenCalledTimes(1));
-
-    const unmounted = mutation.promise.then(() => view.unmount());
-    await act(async () => {
-      mutation.resolve();
-      await unmounted;
+    it.each(['create', 'update', 'delete'] as const)('checks the %s handoff when unmounted in the final-await microtask', async operation => {
+      const view = renderWithRouter(<RolesPage />, { initialEntries: ['/console/org/roles'] });
+      await screen.findByText('Support agents');
+      await view.user.click(screen.getByRole('button', { name: operation === 'create' ? 'Create Role'
+        : operation === 'update' ? 'Edit role Support agents' : 'Delete role Support agents' }));
+      const dialog = within(screen.getByRole('dialog'));
+      if (operation === 'create') await view.user.type(dialog.getByRole('textbox', { name: /^Name/ }), 'reviewer');
+      const pending = deferred();
+      const request = vi.spyOn(rbacApi, operation === 'create' ? 'createRole'
+        : operation === 'update' ? 'updateRole' : 'deleteRole').mockReturnValue(pending.promise);
+      await view.user.click(dialog.getByRole('button', { name: operation === 'create' ? 'Create Role'
+        : operation === 'update' ? 'Save Changes' : 'Delete' }));
+      await waitFor(() => expect(request).toHaveBeenCalledOnce());
+      // The real action.run is already awaiting this promise. Its finally runs
+      // first, this observer unmounts next, then the caller resumes after await.
+      const unmounted = pending.promise.then(() => view.unmount());
+      await act(async () => { pending.resolve(); await unmounted; });
+      expect(state.notify).not.toHaveBeenCalled();
+      expect(state.refreshPermissions).not.toHaveBeenCalled();
     });
-    expect(state.notify).not.toHaveBeenCalled();
-    expect(state.refreshPermissions).not.toHaveBeenCalled();
   });
 });

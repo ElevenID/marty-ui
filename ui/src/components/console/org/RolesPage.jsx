@@ -565,7 +565,7 @@ function RolesPageContent({ effectiveOrgId, canCreateRoles, canEditRoles, canDel
               </TextField>
               {selectedReplacement && (
                 <Alert severity="info" sx={{ mt: 2 }}>
-                  Members will be reassigned to "{selectedReplacement.display_name || selectedReplacement.name}".
+                  Members who would otherwise have no roles will receive "{selectedReplacement.display_name || selectedReplacement.name}".
                   {deletingRole.is_default_for_new_members && ' This choice will also become the default for new members.'}
                 </Alert>
               )}
