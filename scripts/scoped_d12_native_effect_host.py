@@ -23,6 +23,7 @@ from scoped_passport_successor import CURRENT_PROFILE
 from scoped_native_profiles import D12_PASSPORT_CURRENT
 
 LOCK_OWNER_SHA = "c4531f96157232ea4adc2a28e8822e3daa364d394e609a734820610c45760d89"
+COMPOSE_PLUGIN_SHA = "7ab786491f8445d22c0779678a562116f09a7efe3a7a1c56f157c1fd6c4085f0"
 
 RESOURCE_VERIFY_JS = r"""const fs=require('node:fs'),cp=require('node:child_process'),crypto=require('node:crypto');
 const [modulePath,moduleHash,profilePath,profileHash,dockerPath]=process.argv.slice(1);
@@ -264,7 +265,7 @@ class D12CurrentHostBindings:
 
     def __init__(self, host, *, inputs_ref, private_root, operation_journal,
                  build_journal, node_executable, docker_executable, docker_config, docker_config_refs,
-                 lock_lease=None, dispatch_permit_ref=None):
+                 lock_lease=None, dispatch_permit_ref=None, compose_plugin_ref=None):
         require(type(host) is D12ReadOnlyHost and type(operation_journal) is LinuxBuildJournal
                 and type(build_journal) is LinuxBuildJournal,
                 "D12_REVIEWED_HOST_AND_JOURNALS_REQUIRED")
@@ -305,9 +306,14 @@ class D12CurrentHostBindings:
             {"SYSTEMROOT", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "COMSPEC", "PATHEXT"}}
         self.environment.update(PATH=";".join((str(self.docker.parent), "C:/Windows/System32")),
                                 DOCKER_CONFIG=str(config), DOCKER_CONTEXT="desktop-linux")
+        self.compose_plugin_ref = compose_plugin_ref
+        self.compose_plugin = None
         self.dispatch_permit_ref = dispatch_permit_ref
         self.dispatch_permit = None
         if dispatch_permit_ref is not None:
+            require(isinstance(compose_plugin_ref, dict), "D12_PINNED_COMPOSE_PLUGIN_REQUIRED")
+            self.compose_plugin = read_executable_ref(compose_plugin_ref)
+            self._check_compose_config()
             permit = json.loads(read_ref(dispatch_permit_ref, 65536).read_bytes())
             require(permit.get("schema") == "marty.d12-current-dispatch-intent/v1"
                     and permit.get("dispatchAuthorized") is True
@@ -323,6 +329,44 @@ class D12CurrentHostBindings:
                     "D12_EXACT_ROOT_DISPATCH_INTENT_REQUIRED")
             self.dispatch_permit = permit
 
+    def _check_compose_config(self):
+        require(self.compose_plugin is not None
+                and self.compose_plugin.name.lower() == "docker-compose.exe"
+                and self.compose_plugin_ref["sha256"] == COMPOSE_PLUGIN_SHA
+                and read_executable_ref(self.compose_plugin_ref) == self.compose_plugin,
+                "D12_EXACT_OFFICIAL_COMPOSE_PLUGIN_REQUIRED")
+        config_path = self.config / "config.json"
+        require(str(config_path) in self.config_refs
+                and read_ref(self.config_refs[str(config_path)]).resolve() == config_path,
+                "D12_OWNED_COMPOSE_CONFIG_REQUIRED")
+        config = json.loads(config_path.read_bytes())
+        require(config == {"currentContext": "desktop-linux",
+                           "cliPluginsExtraDirs": [str(self.compose_plugin.parent)]},
+                "D12_PINNED_COMPOSE_DISCOVERY_REQUIRED")
+        meta = [Path(name) for name in self.config_refs if Path(name) != config_path]
+        require(len(meta) == 1 and meta[0].name == "meta.json"
+                and meta[0].parent.parent.name == "meta"
+                and meta[0].parent.parent.parent.name == "contexts",
+                "D12_PINNED_DESKTOP_CONTEXT_META_REQUIRED")
+        return True
+
+    def _probe_compose_discovery(self):
+        self.assert_inputs()
+        result = bounded_run([str(self.docker), "--context", "desktop-linux",
+                              "compose", "version", "--short"], env=self.environment,
+                             timeout=30, stdout_limit=1024, stderr_limit=8192)
+        self.save_bytes("d12-compose-version-stdout.private", result.stdout)
+        self.save_bytes("d12-compose-version-stderr.private", result.stderr)
+        self.save("d12-compose-version-terminal.private.json", {"exitCode": result.returncode,
+            "observation": result.observation})
+        require(type(result.returncode) is int and result.returncode == 0
+                and result.observation["timedOut"] is False
+                and not result.observation["failures"]
+                and bool(result.stdout.strip()),
+                "D12_PINNED_COMPOSE_DISCOVERY_FAILED")
+        self.assert_inputs()
+        return True
+
     def assert_inputs(self, *, rollback=False):
         require(rollback is False and json.loads(read_ref(self.inputs_ref).read_bytes()) == self.inputs,
                 "D12_FROZEN_INPUTS_CHANGED")
@@ -336,6 +380,7 @@ class D12CurrentHostBindings:
         for name, bound in self.config_refs.items():
             require(read_ref(bound).resolve() == Path(name).resolve(), "D12_DOCKER_CONFIG_FILE_CHANGED")
         if self.dispatch_permit_ref is not None:
+            self._check_compose_config()
             require(json.loads(read_ref(self.dispatch_permit_ref, 65536).read_bytes()) == self.dispatch_permit,
                     "D12_DISPATCH_INTENT_CHANGED")
         return True
@@ -365,6 +410,7 @@ class D12CurrentHostBindings:
                 and authority_ref == self.inputs.get("d12Authority")
                 and self.dispatch_permit["authority"] == authority_ref,
                 "D12_ROOT_INTENT_AND_HELD_LOCK_REQUIRED")
+        self._probe_compose_discovery()
         profile_ref = self.dispatch_permit["resourceProfile"]
         profile = json.loads(read_ref(profile_ref, 2 * 1024 * 1024).read_bytes())
         require(profile.get("schema") == "marty.functional-mixed-runtime/v2"

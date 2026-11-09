@@ -79,7 +79,8 @@ def setup_context(tmp_path, monkeypatch):
     run.mkdir(parents=True)
     config = tmp_path / "docker-config"
     config.mkdir()
-    meta = config / "meta.json"
+    meta = config / "contexts" / "meta" / ("a" * 64) / "meta.json"
+    meta.parent.mkdir(parents=True)
     meta.write_text("{}")
     inp = tmp_path / "inputs.json"
     selected = tmp_path / "selection.json"
@@ -238,7 +239,7 @@ def test_owned_create_ack_rebinds_only_exact_three_cids_and_refuses_foreign_same
         observer.inspect_role("flow")
 
 
-@pytest.mark.parametrize("change", [None, "cid", "image", "generation", "failed", "bool_exit", "lock", "lock_lost"])
+@pytest.mark.parametrize("change", [None, "cid", "image", "generation", "failed", "bool_exit", "lock", "lock_lost", "compose_fail"])
 def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_path, monkeypatch, change):
     binding, rows, _, inp, _ = setup_context(tmp_path, monkeypatch)
     for row in rows["roles"]:
@@ -271,13 +272,21 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
     live = {"held": change != "lock"}
     lease.held = lambda: live["held"]
     config = tmp_path / "docker-config"
-    meta = config / "meta.json"
+    meta = config / "contexts" / "meta" / ("a" * 64) / "meta.json"
+    plugin = tmp_path / "cli-plugins" / "docker-compose.exe"
+    plugin.parent.mkdir()
+    plugin.write_bytes(b"reviewed compose plugin fixture")
+    monkeypatch.setattr(effect, "COMPOSE_PLUGIN_SHA", ref(plugin)["sha256"])
+    compose_config = config / "config.json"
+    compose_config.write_text(json.dumps({"currentContext": "desktop-linux",
+        "cliPluginsExtraDirs": [str(plugin.parent)]}))
     owner = D12CurrentHostBindings(binding.host, inputs_ref=ref(inp),
         private_root=private / "run", operation_journal=binding.store,
         build_journal=binding.build_journal, node_executable=ref(tmp_path / "node.exe"),
         docker_executable=ref(tmp_path / "docker.exe"), docker_config=config,
-        docker_config_refs={str(meta): ref(meta)}, lock_lease=lease,
-        dispatch_permit_ref=ref(permit_path))
+        docker_config_refs={str(meta): ref(meta), str(compose_config): ref(compose_config)},
+        lock_lease=lease, dispatch_permit_ref=ref(permit_path),
+        compose_plugin_ref=ref(plugin))
     assert owner.context()["dispatch_enabled"] is True
     actual = deepcopy(rows)
     if change == "cid":
@@ -292,16 +301,25 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
             "releaseQualified": False, "recordingQualified": False}).encode()
         stderr = b""
         observation = {"timedOut": False, "failures": []}
+    class ComposeResult:
+        returncode = 1 if change == "compose_fail" else 0
+        stdout = b"v2.39.4\n"
+        stderr = b""
+        observation = {"timedOut": False, "failures": []}
     calls = []
     def run(*args, **kwargs):
         calls.append(args)
+        if len(calls) == 1:
+            return ComposeResult()
         if change == "lock_lost":
             live["held"] = False
         return Result()
     monkeypatch.setattr(effect, "bounded_run", run)
     if change is None:
         assert owner.context()["authorization_verified"](ref(authority)) is True
-        assert len(calls) == 1
+        assert len(calls) == 2
+        assert calls[0][0][3:6] == ["compose", "version", "--short"]
+        assert (private / "run" / "d12-compose-version-terminal.private.json").is_file()
         assert (private / "run" / "d12-resource28-bound.private.json").is_file()
     elif change == "lock":
         with pytest.raises(ValueError, match="D12_ROOT_INTENT_AND_HELD_LOCK_REQUIRED"):
@@ -311,6 +329,11 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
         with pytest.raises(ValueError, match="D12_CANONICAL_LOCK_LOST_DURING_RESOURCE_READ"):
             owner.context()["authorization_verified"](ref(authority))
         assert not (private / "run" / "d12-resource28-bound.private.json").exists()
+    elif change == "compose_fail":
+        with pytest.raises(ValueError, match="D12_PINNED_COMPOSE_DISCOVERY_FAILED"):
+            owner.context()["authorization_verified"](ref(authority))
+        assert len(calls) == 1
+        assert not (private / "run" / "d12-resource28-request.private.json").exists()
     else:
         with pytest.raises(ValueError, match="D12_ACTUAL_RESOURCE28_VERIFIER_FAILED|D12_RESOURCE28_AND_NATIVE22_DIVERGED"):
             owner.context()["authorization_verified"](ref(authority))
