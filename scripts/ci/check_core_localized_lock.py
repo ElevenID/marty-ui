@@ -13,6 +13,8 @@ import tomllib
 CORE_REVISION = "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
 CORE_SOURCE = ("git+https://github.com/ElevenID/marty-core?rev="
                + CORE_REVISION + "#" + CORE_REVISION)
+D05_PROFILE = "d05-membership-verified-native-six-role"
+D05_CORE_REVISION = "ab91a6fd97b2483965e8cb966c3b2e3ddeedf1ca"
 ALLOWED_UNUSED_PATCHES = {("bls12_381_plus", "0.8.18"),
                           ("elliptic-curve", "0.13.8")}
 
@@ -22,8 +24,10 @@ def require(value: object, code: str) -> None:
         raise ValueError(code)
 
 
-def verify_localized_lock(original: dict, localized: dict) -> dict:
+def _verify_localized_lock(original: dict, localized: dict, core_revision: str, state: str) -> dict:
     """Reject every lock delta except the exact nine Core and two unused patches."""
+    core_source = ("git+https://github.com/ElevenID/marty-core?rev="
+                   + core_revision + "#" + core_revision)
     require(isinstance(original, dict) and isinstance(localized, dict)
             and set(original) == set(localized) == {"version", "package", "patch"}
             and original["version"] == localized["version"],
@@ -38,7 +42,7 @@ def verify_localized_lock(original: dict, localized: dict) -> dict:
                 "LOCK_PACKAGE_SHAPE")
         source = row.get("source", "")
         if "github.com/ElevenID/marty-core" in source:
-            require(source == CORE_SOURCE and "checksum" not in row
+            require(source == core_source and "checksum" not in row
                     and row["name"] not in core_names, "LOCK_CORE_SOURCE_CHANGED")
             core_names.add(row["name"])
             expected_packages.append({key: value for key, value in row.items()
@@ -61,7 +65,7 @@ def verify_localized_lock(original: dict, localized: dict) -> dict:
                 and isinstance(row.get("version"), str), "LOCK_PATCH_SHAPE")
         key = row["name"], row["version"]
         if key in ALLOWED_UNUSED_PATCHES:
-            require(row.get("source") == CORE_SOURCE and key not in seen
+            require(row.get("source") == core_source and key not in seen
                     and "checksum" not in row, "LOCK_CORE_PATCH_SOURCE_CHANGED")
             seen.add(key)
             expected_unused.append({field: value for field, value in row.items()
@@ -71,10 +75,20 @@ def verify_localized_lock(original: dict, localized: dict) -> dict:
     require(seen == ALLOWED_UNUSED_PATCHES
             and expected_unused == new_patch["unused"],
             "LOCK_PATCH_DELTA_CHANGED")
-    return {"state": "EXACT_CORE432_LOCALIZATION_ONLY", "coreRevision": CORE_REVISION,
+    return {"state": state, "coreRevision": core_revision,
             "corePackagesLocalized": len(core_names),
             "unusedCorePatchesLocalized": len(seen),
             "totalPackages": len(old_packages), "totalUnusedPatches": len(expected_unused)}
+
+
+def verify_localized_lock(original: dict, localized: dict) -> dict:
+    return _verify_localized_lock(original, localized, CORE_REVISION,
+                                  "EXACT_CORE432_LOCALIZATION_ONLY")
+
+
+def verify_d05_localized_lock(original: dict, localized: dict) -> dict:
+    return _verify_localized_lock(original, localized, D05_CORE_REVISION,
+                                  "EXACT_D05_CORE_LOCALIZATION_ONLY")
 
 
 def verify_files(original: Path, localized: Path) -> dict:
@@ -86,8 +100,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("original", type=Path)
     parser.add_argument("localized", type=Path)
+    parser.add_argument("--build-profile", choices=(D05_PROFILE,))
     args = parser.parse_args()
-    print(json.dumps(verify_files(args.original, args.localized), sort_keys=True))
+    if args.build_profile is None:
+        result = verify_files(args.original, args.localized)
+    else:
+        result = verify_d05_localized_lock(
+            tomllib.loads(args.original.read_text(encoding="utf-8")),
+            tomllib.loads(args.localized.read_text(encoding="utf-8")))
+    print(json.dumps(result, sort_keys=True))
 
 
 if __name__ == "__main__":

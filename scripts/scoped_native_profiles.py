@@ -92,6 +92,23 @@ ISSUANCE_OFFER_FORMAT = BuildProfile(
     "current-issuer-ready-native",
 )
 
+D05_MEMBERSHIP_CURRENT = BuildProfile(
+    "d05-membership-verified-native-six-role",
+    "d15139805564c7211d574d45659d972e08af0378",
+    (("presentation-policy", "marty-presentation-policy"),
+     ("credential-template", "marty-credential-template"),
+     ("trust-profile", "marty-trust-profile"),
+     ("compliance-profile", "marty-compliance-profile"),
+     ("signing-keys", "marty-signing-keys"), ("gateway", "marty-gateway")),
+    ("marty-presentation-policy", "marty-credential-template", "marty-trust-profile",
+     "marty-compliance-profile", "marty-signing-keys", "marty-gateway"),
+    "marty-d05-membership-",
+    "d05-membership-native",
+    "ab91a6fd97b2483965e8cb966c3b2e3ddeedf1ca",
+    volumes=("ui-canvas-cargo", "marty-d12-current-main-native-target"),
+)
+
+
 OFFICIAL_ALL_SERVICES = BuildProfile(
     "oid4vc-all-services",
     "d2debf0fde2a0c826f8925aca648c9d3dabfbc9f",
@@ -130,7 +147,7 @@ LATEST_ALL_SERVICES = BuildProfile(
 
 
 def reviewed_profile(name):
-    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, CANVAS_SCOPED_JOBS, D12_PASSPORT_CURRENT, ISSUANCE_OFFER_FORMAT, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
+    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, CANVAS_SCOPED_JOBS, D12_PASSPORT_CURRENT, ISSUANCE_OFFER_FORMAT, D05_MEMBERSHIP_CURRENT, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
         if name == profile.name:
             return profile
     raise ValueError("UNKNOWN_REVIEWED_BUILD_PROFILE")
