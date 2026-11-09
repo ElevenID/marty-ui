@@ -41,6 +41,7 @@ const m=require(file);let out;
 if(r.mode==='render')out={argv:['psql','-X','-U','postgres','-d','marty','-At','-v','ON_ERROR_STOP=1','-f','-'],pgOptions:m.sessionOptions(r.settings),stdin: m.operationalSql(r.name,r.sqlSources).toString('base64')};
 else if(r.mode==='json')out=m.sqlOutput(require(file.replace('native-maintenance-metadata.js','functional-debug-runtime.js')).boundBytes(r.stdout),r.schema);
 else if(r.mode==='digest')out=m.migrationDigest(r.sources);
+else if(r.mode==='baseline')out=m.currentDatabaseBaseline(r.refs,r.approvedBefore,r.approvedEngine);
 else if(r.mode==='catalog')out=m.observeCatalog(r.inputs,{readDocker:a=>cp.execFileSync(docker,['--context','desktop-linux',...a],{encoding:'utf8',env:process.env,timeout:150000,maxBuffer:1048576})});
 else if(r.mode==='verify')out=m.validateProof(r.proof,r.commands,r.context);
 else if(r.mode==='runtime'){
@@ -262,9 +263,10 @@ class NativeDatabasePhase:
         return reference, row
 
     def target_settings(self):
+        target = getattr(self, "current_database_target", None)
         value = {"marty.passport_beta_verified_project": "elevenid-beta",
-            "marty.passport_beta_expected_system_identifier": "7698090346923700258",
-            "marty.passport_beta_expected_database_oid": "16387"}
+            "marty.passport_beta_expected_system_identifier": target["systemIdentifier"] if target else "7698090346923700258",
+            "marty.passport_beta_expected_database_oid": target["databaseOid"] if target else "16387"}
         if self.epoch is not None:
             value.update({"marty.passport_beta_expected_fence_epoch": str(self.epoch),
                 "marty.passport_beta_expected_source_commit": self.source_revision,
@@ -296,6 +298,7 @@ class NativeDatabasePhase:
         return self.node("catalog", inputs={"runId": self.i["runId"], "databaseBefore": self.i["databaseBefore"],
             "sql": self.i["catalogSql"], "rolloutProfile": self.rollout_profile,
             "sourceRevision": self.source_revision, "coreRevision": self.core_revision,
+            **({"baseline": self.baseline_refs} if hasattr(self, "baseline_refs") else {}),
             "approvedDatabaseBeforeSha256": self.expected_database_before,
             "approvedEngineId": self.engine_id})
 
@@ -459,6 +462,25 @@ class NativeDatabasePhase:
             "operationState": self.g["save"]("database-operation-state.json", self.state)}
 
 
+def reviewed_database_baseline_refs(inputs, authority):
+    """Bind the shared metadata validator to exact reviewed observation refs."""
+    refs = inputs.get("databaseBaseline")
+    require(type(refs) is dict and set(refs) == {"catalog", "proof", "job"},
+            "D12_CURRENT_DATABASE_BASELINE_REFS_REQUIRED")
+    require(authority.get("approvedBaselineCatalogSha256") == refs["catalog"]["sha256"]
+            and authority.get("approvedBaselineProofSha256") == refs["proof"]["sha256"]
+            and authority.get("approvedBaselineJobSha256") == refs["job"]["sha256"],
+            "D12_REVIEWED_DATABASE_BASELINE_REQUIRED")
+    return refs
+
+
+def consume_current_database_target(target):
+    require(type(target) is dict and set(target) == {"database", "systemIdentifier", "databaseOid"}
+            and all(type(value) is str for value in target.values()) and target["database"] == "marty",
+            "D12_BASELINE_DATABASE_TARGET_INVALID")
+    return {"systemIdentifier": target["systemIdentifier"], "databaseOid": target["databaseOid"]}
+
+
 class D12CurrentDatabasePhase(NativeDatabasePhase):
     """Same fenced SQL and Rust CLI sequence, bound to the distinct current 3-role build."""
 
@@ -504,12 +526,16 @@ class D12CurrentDatabasePhase(NativeDatabasePhase):
                 and authority.get("dispatchAuthorized") is True,
                 "EXACT_D12_CURRENT_AUTHORITY_REQUIRED")
         self.expected_database_before = authority["approvedDatabaseBeforeSha256"]
+        self.baseline_refs = reviewed_database_baseline_refs(inputs, authority)
         self.expected_build_receipt = authority["approvedBuildReceiptSha256"]
         self.helper_image = IMAGE
         self.engine_id = authority["engineId"]
         self.runtime_before = inputs["runtimeBefore"]
         self.authority = inputs["d12Authority"]
         super().__init__(context, inputs, store)
+        self.current_database_target = consume_current_database_target(self.node("baseline",
+            refs=self.baseline_refs, approvedBefore=self.expected_database_before,
+            approvedEngine=self.engine_id))
         require(self.selection["scope"] == "FUNCTIONAL_ONLY"
                 and self.selection["releaseQualified"] is False
                 and self.selection["recordingQualified"] is False,
