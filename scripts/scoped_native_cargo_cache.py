@@ -382,6 +382,17 @@ def validate_bound_receipt(plan: dict, receipt_path: Path, receipt_sha256: str) 
     validate_receipt(plan, receipt, lock_path.read_bytes(), metadata_path.read_bytes(), checkout_path.read_bytes())
 
 
+def cache_budget(local_mode: bool) -> dict:
+    """Bound the sequential local-object import separately from networked fetch."""
+    if local_mode:
+        return {"memoryArg": "1g", "swapArg": "2g",
+                "memoryBytes": 1024 ** 3, "swapBytes": 2 * 1024 ** 3,
+                "hostFloorKiB": 1024 * 1024 + 64 * 1024}
+    return {"memoryArg": "2g", "swapArg": "4g",
+            "memoryBytes": 2 * 1024 ** 3, "swapBytes": 4 * 1024 ** 3,
+            "hostFloorKiB": 2 * 1024 * 1024 + 64 * 1024}
+
+
 def hydrate(plan: dict, helper, journal) -> dict:
     """One owned cache-only Docker operation; caller supplies reviewed journal/job.
 
@@ -398,6 +409,7 @@ def hydrate(plan: dict, helper, journal) -> dict:
     digest = sha(lock)
     expected_sources = git_sources(lock.read_bytes())
     local_objects = plan.get("localObjects")
+    budget = cache_budget(local_objects is not None)
     if local_objects is not None:
         require(plan.get("cacheMode") == "LOCAL_OFFLINE_OBJECTS"
                 and verified_local_objects(lock.read_bytes(), plan["localObjectSources"]) == local_objects,
@@ -420,7 +432,7 @@ def hydrate(plan: dict, helper, journal) -> dict:
             "NATIVE_CACHE_EXACT_DESKTOP_JOURNAL_REQUIRED")
     host_kib = int(helper.run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
                               "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory").stdout.strip())
-    require(host_kib >= 2 * 1024 * 1024 + 64 * 1024
+    require(host_kib >= budget["hostFloorKiB"]
             and shutil.disk_usage(output).free >= 1024 ** 3,
             "NATIVE_CACHE_CAPACITY_NOT_ADMITTED")
     engine = helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip()
@@ -451,7 +463,7 @@ def hydrate(plan: dict, helper, journal) -> dict:
     args = ["docker", "--context", "desktop-linux", "create", "--pull=never", "--name", name,
             "--label", "elevenid.owner=native-cargo-cache", "--label", "elevenid.run=" + run_id,
             "--network", "none" if local_objects is not None else "bridge",
-            "--memory", "2g", "--memory-swap", "4g", "--cpus", "1",
+            "--memory", budget["memoryArg"], "--memory-swap", budget["swapArg"], "--cpus", "1",
             "--pids-limit", "64", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--mount", "type=bind,src=" + daemon_source(source) + ",dst=/src/ui,readonly",
             "--mount", "type=bind,src=" + daemon_source(output) + ",dst=/out",
@@ -473,8 +485,8 @@ def hydrate(plan: dict, helper, journal) -> dict:
             and row["Config"]["Labels"]["elevenid.owner"] == "native-cargo-cache"
             and row["Config"]["Labels"]["elevenid.run"] == run_id
             and host["NetworkMode"] == ("none" if local_objects is not None else "bridge")
-            and host["Memory"] == 2 * 1024 ** 3
-            and host["MemorySwap"] == 4 * 1024 ** 3 and host["PidsLimit"] == 64
+            and host["Memory"] == budget["memoryBytes"]
+            and host["MemorySwap"] == budget["swapBytes"] and host["PidsLimit"] == 64
             and host["NanoCpus"] == 10 ** 9
             and host["Privileged"] is False and "ALL" in host["CapDrop"]
             and len(row["Mounts"]) == len(mounts) == 5 + len(local_mounts)
