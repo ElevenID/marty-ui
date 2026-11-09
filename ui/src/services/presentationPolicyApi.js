@@ -896,31 +896,41 @@ export async function deleteCredentialTemplate(id) {
 }
 
 /**
- * Create a new trust profile
+ * Create a new trust profile. Scoped callers can bind each idempotent attempt
+ * and its settlement to an optional isCurrent predicate.
  */
-export async function createTrustProfile(data) {
+export async function createTrustProfile(data, options = {}) {
+  // A shared caller-options object may also describe later helper reads. Those
+  // controls are not transport options for the create request.
+  const { singleAttemptReads: _singleAttemptReads, allowReadback: _allowReadback, ...createOptions } = options;
   const organizationId = requireOrganizationId(data);
   const payload = buildTrustProfilePayload({
     ...data,
     organization_id: organizationId,
   });
-  const result = await postWithIdempotency(TRUST_PROFILE_BASE, payload);
+  const result = await postWithIdempotency(TRUST_PROFILE_BASE, payload, createOptions);
   return normalizeTrustProfile(result);
 }
 
 /**
- * Activate a trust profile.
+ * Activate a trust profile. Ownership and allowReadback are helper-only options;
+ * callers without options retain the existing network-failure readback.
+ * singleAttemptReads opts out of lower transport retries for that readback.
  */
-export async function activateTrustProfile(id) {
+export async function activateTrustProfile(id, options = {}) {
   try {
-    const result = await post(`${TRUST_PROFILE_BASE}/${id}/activate`, {});
+    const result = await runTrustIssuerRequest(() => post(`${TRUST_PROFILE_BASE}/${id}/activate`, {}), options);
     return normalizeTrustProfile(result);
   } catch (error) {
-    if (!isNetworkAbortLikeError(error)) {
+    requireCurrentTrustIssuer(options);
+    if (!isNetworkAbortLikeError(error) || options.allowReadback === false) {
       throw error;
     }
 
-    const current = await getTrustProfile(id);
+    const current = await runTrustIssuerRequest(async () => {
+      if (!options.singleAttemptReads) return getTrustProfile(id);
+      return normalizeTrustProfile(await getWithRetryConfig(`${TRUST_PROFILE_BASE}/${id}`, {}, { maxRetries: 0 }));
+    }, options);
     if (isActiveResource(current)) {
       return current;
     }
@@ -931,8 +941,8 @@ export async function activateTrustProfile(id) {
 /**
  * Atomically synchronize every external registry source on a trust profile.
  */
-export async function synchronizeTrustProfileRegistries(id) {
-  return post(`${TRUST_PROFILE_BASE}/${id}/registry-sync`, {});
+export async function synchronizeTrustProfileRegistries(id, options = {}) {
+  return runTrustIssuerRequest(() => post(`${TRUST_PROFILE_BASE}/${id}/registry-sync`, {}), options);
 }
 
 /**
@@ -978,11 +988,14 @@ export async function deleteTrustProfile(id) {
 /**
  * List trusted issuers for a trust profile.
  */
-export async function listIssuerEntities(organizationId) {
+export async function listIssuerEntities(organizationId, options = {}) {
   const scopedOrganizationId = requireOrganizationId({ organization_id: organizationId });
-  const result = await get(ISSUER_ENTITY_BASE, {
-    params: { organization_id: scopedOrganizationId },
-  });
+  const requestOptions = { params: { organization_id: scopedOrganizationId } };
+  // Opt-in callers own the whole continuation; no native retry may dispatch
+  // between the outer ownership checks. Legacy reads keep their retry policy.
+  const result = await runTrustIssuerRequest(() => (options.singleAttemptReads
+    ? getWithRetryConfig(ISSUER_ENTITY_BASE, requestOptions, { maxRetries: 0 })
+    : get(ISSUER_ENTITY_BASE, requestOptions)), options);
   return requireDirectArray(result, 'Issuer Entity');
 }
 
@@ -1026,6 +1039,7 @@ export async function listTrustProfileIssuers(profileId, organizationId, options
 /**
  * Add a trusted issuer to a trust profile. Existing three-argument callers keep
  * their API; scoped callers can supply { isCurrent } for every internal await.
+ * singleAttemptReads additionally disables native inventory-read retries.
  */
 export async function addTrustProfileIssuer(profileId, organizationId, data, options = {}) {
   const scopedOrganizationId = requireOrganizationId({ organization_id: organizationId });
@@ -1036,7 +1050,7 @@ export async function addTrustProfileIssuer(profileId, organizationId, data, opt
     throw error;
   }
 
-  const entities = await runTrustIssuerRequest(() => listIssuerEntities(scopedOrganizationId), options);
+  const entities = await runTrustIssuerRequest(() => listIssuerEntities(scopedOrganizationId, options), options);
   requireCurrentTrustIssuer(options);
   issuerEntitiesById(entities);
   // Prefer the organization's existing record, while preserving the native

@@ -358,6 +358,15 @@
     "dependencyBlocked": "Complete previous steps first"
   },
   "trust": {
+    "trustProfileWizard": {
+      "selectOrganization": "Select an organization to create a trust profile.",
+      "createDenied": "You do not have permission to create trust profiles in the selected organization.",
+      "issuerDenied": "Adding issuer relationships requires permission to view and create trusted issuers. Remove the issuer selections to continue without them.",
+      "registryDenied": "Synchronizing registry sources requires permission to view trust profiles. Remove the registry selections to continue without them.",
+      "activateDenied": "You do not have permission to activate trust profiles. Turn off immediate activation to create a draft.",
+      "responseMismatch": "The server did not confirm the requested trust profile operation. Check the profile list before trying again.",
+      "profileCreated": "This trust profile was created: {{id}}. Check its current state and finish setup before trying again."
+    },
     "revocationWizard": {
       "selectOrganization": "Select an organization to create a revocation profile.",
       "createDenied": "You do not have permission to create revocation profiles in the selected organization.",
