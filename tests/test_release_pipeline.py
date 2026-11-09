@@ -57,7 +57,10 @@ class FakeGitHub:
         self.reads.append("main")
         return {"commit": {"sha": self.main_sha}}
 
-    def response(self, endpoint: str, *, method: str, payload: dict):
+    def response(self, endpoint: str, *, method: str = "GET", payload=None):
+        if method == "GET":
+            assert payload is None
+            return 200, pipeline.transport.encoded(self.json(endpoint))
         assert method == "POST"
         assert endpoint.startswith("repos/ElevenID/marty-ui/actions/workflows/")
         assert endpoint.endswith("/dispatches")
