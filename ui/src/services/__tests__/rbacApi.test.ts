@@ -52,6 +52,7 @@ describe('RBAC permission catalog contract', () => {
     [{ resource: 'team', permissions: [{ ...view, resource: 'role' }] }],
     [{ resource: 'team', permissions: [{ ...view, description: {} }] }],
     [{ resource: 'team', permissions: [view, view] }],
+    [{ resource: 'team', permissions: [view, { ...invite, id: view.id.toUpperCase() }] }],
     [{ resource: 'team', permissions: [view, { ...view, id: invite.id }] }],
   ])('rejects malformed or ambiguous catalog entries instead of exposing blank grants %#', async response => {
     server.use(http.get('*/v1/organizations/:org/permissions', () => HttpResponse.json(response)));

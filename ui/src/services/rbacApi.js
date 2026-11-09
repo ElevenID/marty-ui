@@ -37,10 +37,10 @@ export async function listPermissions(organizationId) {
     if (!permission || typeof permission.id !== 'string' || !uuid.test(permission.id) || !nonempty(permission.action)
       || !nonempty(resource) || (permission.resource != null && permission.resource !== resource)
       || (permission.description != null && typeof permission.description !== 'string')
-      || ids.has(permission.id) || keys.has(`${resource}:${permission.action}`)) {
+      || ids.has(permission.id.toLowerCase()) || keys.has(`${resource}:${permission.action}`)) {
       throw invalid();
     }
-    ids.add(permission.id);
+    ids.add(permission.id.toLowerCase());
     keys.add(`${resource}:${permission.action}`);
     permissions.push({ ...permission, resource });
   };
