@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router';
+import { useTranslation } from 'react-i18next';
 import {
   Alert,
   Box,
@@ -38,6 +39,9 @@ import signingKeysApi from '../../../services/signingKeysApi';
 import { authFieldsForMode, authModeHelp, isAuthComplete, isAuthModeAvailable, serializeAuthReference } from './keyManagementAuth';
 import { useWizard } from '../../../hooks/useWizard';
 import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
+import { useAuth } from '../../../hooks/useAuth';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import {
@@ -207,17 +211,17 @@ function ServiceTypeCard({ definition, selected, onSelect }) {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         {definition.description}
       </Typography>
-      <Typography variant="caption" color="text.secondary" display="block">
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
         Protocol: {definition.protocol}
       </Typography>
-      <Typography variant="caption" color="text.secondary" display="block">
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
         Category: {definition.category}
       </Typography>
     </Paper>
   );
 }
 
-const KeyManagementServiceWizard = () => {
+const KeyManagementServiceWizardContent = ({ browserEntry }) => {
   const navigate = useNavigate();
   const { showNotification } = useNotifications();
   const { activeOrgId } = useConsole();
@@ -229,6 +233,15 @@ const KeyManagementServiceWizard = () => {
   const [preflightChecks, setPreflightChecks] = useState([]);
   const [registeredService, setRegisteredService] = useState(null);
   const [defaultSelectionSynced, setDefaultSelectionSynced] = useState(false);
+  const pending = useRef(false);
+  const startAction = useAsyncActionScope();
+  const startClipboardAction = useAsyncActionScope();
+  const isCurrentBrowserEntry = useCallback(() => browserEntry.href === null || (
+    typeof window !== 'undefined' && window.location.href === browserEntry.href
+      && window.history.state?.key === browserEntry.key
+      && (browserEntry.key || 'default') === browserEntry.routeKey
+  ), [browserEntry]);
+  const canEdit = useCallback(() => !pending.current && isCurrentBrowserEntry(), [isCurrentBrowserEntry]);
 
   const {
     data: configData,
@@ -287,28 +300,41 @@ const KeyManagementServiceWizard = () => {
   }, [serviceCatalog]);
 
   const handleSubmit = useCallback(async (data) => {
-    const newService = createKeyManagementServicePayload({
-      ...data,
-      auth_reference: serializeAuthReference(data.auth_mode, data.auth_fields),
-    }, serviceCatalog);
-    const validation = await signingKeysApi.validateKeyManagementService({
-      ...orgRequestParams,
-      ...newService,
-      live_probe: true,
-    });
-    setPreflightChecks(Array.isArray(validation?.checks) ? validation.checks : []);
-    if (validation?.ok !== true || validation?.basis !== 'live') {
-      throw new Error('Key management service validation failed. Review the checks before registering.');
-    }
-    await signingKeysApi.updateKeyManagementConfig({
-      ...orgRequestParams,
-      ...createKeyManagementRegistrationPayload(currentConfig, newService, data.make_default),
-    });
+    if (!canEdit()) return null;
+    const action = startAction();
+    const isCurrent = () => action.isCurrent() && isCurrentBrowserEntry();
+    pending.current = true;
+    try {
+      const newService = createKeyManagementServicePayload({
+        ...data,
+        auth_reference: serializeAuthReference(data.auth_mode, data.auth_fields),
+      }, serviceCatalog);
+      const validation = await action.run(signingKeysApi.validateKeyManagementService, {
+        ...orgRequestParams,
+        ...newService,
+        live_probe: true,
+      });
+      if (!isCurrent()) return null;
+      setPreflightChecks(Array.isArray(validation?.checks) ? validation.checks : []);
+      if (validation?.ok !== true || validation?.basis !== 'live') {
+        throw new Error('Key management service validation failed. Review the checks before registering.');
+      }
+      await action.run(signingKeysApi.updateKeyManagementConfig, {
+        ...orgRequestParams,
+        ...createKeyManagementRegistrationPayload(currentConfig, newService, data.make_default),
+      });
+      if (!isCurrent()) return null;
 
-    setRegisteredService(newService);
-    showNotification?.('Registered key management service.', 'success');
-    return newService;
-  }, [currentConfig, orgRequestParams, serviceCatalog, showNotification]);
+      setRegisteredService(newService);
+      showNotification?.('Registered key management service.', 'success');
+      return newService;
+    } catch (error) {
+      if (isCurrent()) throw error;
+      return null;
+    } finally {
+      if (isCurrent()) pending.current = false;
+    }
+  }, [canEdit, currentConfig, isCurrentBrowserEntry, orgRequestParams, serviceCatalog, showNotification, startAction]);
 
   const wizard = useWizard({
     steps: STEPS,
@@ -341,16 +367,19 @@ const KeyManagementServiceWizard = () => {
       navigate('/console/org/operator/key-management/services');
     },
   });
-  const updateWizardData = wizard.updateData;
+  const rawUpdateWizardData = wizard.updateData;
+  const updateWizardData = useCallback((updates) => {
+    if (canEdit()) rawUpdateWizardData(updates);
+  }, [canEdit, rawUpdateWizardData]);
 
   useEffect(() => {
-    if (configLoading || defaultSelectionSynced) {
+    if (configLoading || defaultSelectionSynced || !canEdit()) {
       return;
     }
 
     updateWizardData({ make_default: !currentConfig.default_service_id });
     setDefaultSelectionSynced(true);
-  }, [configLoading, currentConfig.default_service_id, defaultSelectionSynced, updateWizardData]);
+  }, [canEdit, configLoading, currentConfig.default_service_id, defaultSelectionSynced, updateWizardData]);
 
   const selectedDefinition = getServiceTypeDefinition(serviceCatalog, wizard.data.service_type);
   const providerRunbook = useMemo(
@@ -361,19 +390,27 @@ const KeyManagementServiceWizard = () => {
   const issuerIdentityCreateUrl = '/console/org/deploy/issuer-identity/new';
 
   const copyText = useCallback(async (text) => {
+    if (!canEdit()) return;
+    const action = startClipboardAction();
+    const isCurrent = () => action.isCurrent() && isCurrentBrowserEntry();
     try {
-      await navigator.clipboard.writeText(text);
-      showNotification?.('Copied to clipboard.', 'success');
+      await action.run(() => navigator.clipboard.writeText(text));
+      if (isCurrent()) showNotification?.('Copied to clipboard.', 'success');
     } catch (error) {
+      if (!isCurrent()) return;
       logKeyManagementWizardError('Failed to copy command:', error);
       showNotification?.('Unable to copy to clipboard.', 'error');
     }
-  }, [showNotification]);
+  }, [canEdit, isCurrentBrowserEntry, showNotification, startClipboardAction]);
 
   const runPreflightChecks = useCallback(async () => {
+    if (!canEdit()) return;
+    const action = startAction();
+    const isCurrent = () => action.isCurrent() && isCurrentBrowserEntry();
+    pending.current = true;
     setPreflightLoading(true);
     try {
-      const response = await signingKeysApi.validateKeyManagementService({
+      const response = await action.run(signingKeysApi.validateKeyManagementService, {
         ...orgRequestParams,
         service_type: wizard.data.service_type,
         name: wizard.data.name,
@@ -388,6 +425,7 @@ const KeyManagementServiceWizard = () => {
         key_aliases: wizard.data.key_aliases,
         algorithms: wizard.data.algorithms,
       });
+      if (!isCurrent()) return;
 
       const checks = Array.isArray(response?.checks)
         ? response.checks.filter((entry) => entry && typeof entry.name === 'string')
@@ -405,6 +443,7 @@ const KeyManagementServiceWizard = () => {
         setPreflightChecks(checks);
       }
     } catch (error) {
+      if (!isCurrent()) return;
       logKeyManagementWizardError('Failed to run preflight checks:', error);
       setPreflightChecks([
         {
@@ -414,13 +453,17 @@ const KeyManagementServiceWizard = () => {
         },
       ]);
     } finally {
-      setPreflightLoading(false);
+      if (isCurrent()) {
+        pending.current = false;
+        setPreflightLoading(false);
+      }
     }
-  }, [orgRequestParams, wizard.data.algorithms, wizard.data.auth_mode, wizard.data.auth_fields, wizard.data.ca_cert_file, wizard.data.endpoint, wizard.data.key_aliases, wizard.data.key_reference, wizard.data.mount, wizard.data.name, wizard.data.namespace, wizard.data.region, wizard.data.service_type]);
+  }, [canEdit, isCurrentBrowserEntry, orgRequestParams, startAction, wizard.data.algorithms, wizard.data.auth_mode, wizard.data.auth_fields, wizard.data.ca_cert_file, wizard.data.endpoint, wizard.data.key_aliases, wizard.data.key_reference, wizard.data.mount, wizard.data.name, wizard.data.namespace, wizard.data.region, wizard.data.service_type]);
 
   const handleSelectServiceType = (definition) => {
+    if (!canEdit()) return;
     setPreflightChecks([]);
-    wizard.updateData({
+    updateWizardData({
       service_type: definition.id,
       auth_mode: definition.auth_modes.find(isAuthModeAvailable) || '',
       auth_fields: {},
@@ -433,6 +476,7 @@ const KeyManagementServiceWizard = () => {
   };
 
   const toggleAlgorithm = (algorithm) => {
+    if (!canEdit()) return;
     const currentAlgorithms = Array.isArray(wizard.data.algorithms) ? wizard.data.algorithms : [];
     const nextAlgorithms = currentAlgorithms.includes(algorithm)
       ? currentAlgorithms.filter((value) => value !== algorithm)
@@ -444,7 +488,7 @@ const KeyManagementServiceWizard = () => {
       normalizedAlgorithms.some((candidateAlgorithm) => isAlgorithmAllowedForPurpose(purpose, candidateAlgorithm))
     ))
 
-    wizard.updateData({
+    updateWizardData({
       algorithms: normalizedAlgorithms,
       key_purposes: compatiblePurposes,
     });
@@ -486,7 +530,7 @@ const KeyManagementServiceWizard = () => {
         helperText={fieldName === 'ca_cert_file'
           ? 'Optional path to a CA certificate file already mounted on the signing server. Leave blank to use the system trust store.'
           : undefined}
-        onChange={(event) => wizard.updateData({ [fieldName]: event.target.value })}
+        onChange={(event) => updateWizardData({ [fieldName]: event.target.value })}
       />
     );
   };
@@ -505,7 +549,7 @@ const KeyManagementServiceWizard = () => {
           required
           label="Service name"
           value={wizard.data.name}
-          onChange={(event) => wizard.updateData({ name: event.target.value })}
+          onChange={(event) => updateWizardData({ name: event.target.value })}
         />
         <TextField
           fullWidth
@@ -513,7 +557,7 @@ const KeyManagementServiceWizard = () => {
           minRows={2}
           label="Description"
           value={wizard.data.description}
-          onChange={(event) => wizard.updateData({ description: event.target.value })}
+          onChange={(event) => updateWizardData({ description: event.target.value })}
         />
         {selectedDefinition.connection_fields.map((fieldName) => renderConnectionField(fieldName))}
         <FormControl fullWidth>
@@ -522,7 +566,7 @@ const KeyManagementServiceWizard = () => {
             labelId="kms-auth-mode-label"
             label="Authentication mode"
             value={wizard.data.auth_mode || selectedDefinition.auth_modes[0] || ''}
-            onChange={(event) => wizard.updateData({ auth_mode: event.target.value, auth_fields: {} })}
+            onChange={(event) => updateWizardData({ auth_mode: event.target.value, auth_fields: {} })}
           >
             {selectedDefinition.auth_modes.map((authMode) => (
               <MenuItem key={authMode} value={authMode} disabled={!isAuthModeAvailable(authMode)}>
@@ -536,7 +580,7 @@ const KeyManagementServiceWizard = () => {
           <TextField
             fullWidth required label="Transit token" type="password" autoComplete="new-password"
             value={wizard.data.auth_fields.token || ''}
-            onChange={(event) => wizard.updateData({ auth_fields: { ...wizard.data.auth_fields, token: event.target.value } })}
+            onChange={(event) => updateWizardData({ auth_fields: { ...wizard.data.auth_fields, token: event.target.value } })}
           />
         )}
         {authFieldsForMode(wizard.data.auth_mode).map((field) => (
@@ -545,7 +589,7 @@ const KeyManagementServiceWizard = () => {
             type={field.secret ? 'password' : 'text'}
             autoComplete={field.secret ? 'new-password' : 'off'}
             value={wizard.data.auth_fields[field.name] || ''}
-            onChange={(event) => wizard.updateData({ auth_fields: { ...wizard.data.auth_fields, [field.name]: event.target.value } })}
+            onChange={(event) => updateWizardData({ auth_fields: { ...wizard.data.auth_fields, [field.name]: event.target.value } })}
           />
         ))}
       </Box>
@@ -553,6 +597,7 @@ const KeyManagementServiceWizard = () => {
   );
 
   const togglePurpose = (purpose) => {
+    if (!canEdit()) return;
     const current = Array.isArray(wizard.data.key_purposes) ? wizard.data.key_purposes : [];
     const selectedAlgorithms = Array.isArray(wizard.data.algorithms) ? wizard.data.algorithms : [];
     const isCompatible = selectedAlgorithms.some((algorithm) => isAlgorithmAllowedForPurpose(purpose, algorithm));
@@ -565,7 +610,7 @@ const KeyManagementServiceWizard = () => {
     const next = current.includes(purpose)
       ? current.filter((p) => p !== purpose)
       : [...current, purpose];
-    wizard.updateData({ key_purposes: next });
+    updateWizardData({ key_purposes: next });
   };
 
   const selectedAlgorithms = Array.isArray(wizard.data.algorithms) ? wizard.data.algorithms : [];
@@ -589,17 +634,17 @@ const KeyManagementServiceWizard = () => {
           required
           label={selectedDefinition.key_reference_label}
           value={wizard.data.key_reference}
-          onChange={(event) => wizard.updateData({ key_reference: event.target.value })}
+          onChange={(event) => updateWizardData({ key_reference: event.target.value })}
         />
         <TextField
           fullWidth
           label="Additional key aliases"
           helperText="Optional comma-separated aliases or secondary references."
           value={wizard.data.key_aliases}
-          onChange={(event) => wizard.updateData({ key_aliases: event.target.value })}
+          onChange={(event) => updateWizardData({ key_aliases: event.target.value })}
         />
         <FormControl component="fieldset">
-          <Typography variant="body2" fontWeight="medium" sx={{ mb: 1 }}>
+          <Typography variant="body2" sx={{ fontWeight: 'medium', mb: 1 }}>
             Supported algorithms
           </Typography>
           <FormGroup row>
@@ -619,7 +664,7 @@ const KeyManagementServiceWizard = () => {
         </FormControl>
 
         <FormControl component="fieldset">
-          <Typography variant="body2" fontWeight="medium" sx={{ mb: 1 }}>
+          <Typography variant="body2" sx={{ fontWeight: 'medium', mb: 1 }}>
             Key purposes
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
@@ -673,7 +718,7 @@ const KeyManagementServiceWizard = () => {
               label="Country code (ISO 3166-1 alpha-2)"
               helperText="Required for VDS-NC, CSCA, and mDoc DSC services."
               value={wizard.data.country_code || ''}
-              onChange={(event) => wizard.updateData({ country_code: event.target.value.toUpperCase() })}
+              onChange={(event) => updateWizardData({ country_code: event.target.value.toUpperCase() })}
               slotProps={{
                 htmlInput: { maxLength: 2 }
               }}
@@ -683,13 +728,13 @@ const KeyManagementServiceWizard = () => {
               label="Authority code"
               helperText="Optional issuing authority identifier."
               value={wizard.data.authority_code || ''}
-              onChange={(event) => wizard.updateData({ authority_code: event.target.value })}
+              onChange={(event) => updateWizardData({ authority_code: event.target.value })}
             />
           </>
         )}
 
         <Divider />
-        <Typography variant="body2" fontWeight="medium">
+        <Typography variant="body2" sx={{ fontWeight: 'medium' }}>
           Rotation policy (optional)
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ mt: -1, display: 'block' }}>
@@ -701,7 +746,7 @@ const KeyManagementServiceWizard = () => {
           label="Rotation interval (days)"
           helperText="How often to rotate this key. Leave blank for manual rotation."
           value={wizard.data.rotation_interval_days || ''}
-          onChange={(event) => wizard.updateData({ rotation_interval_days: event.target.value })}
+          onChange={(event) => updateWizardData({ rotation_interval_days: event.target.value })}
           slotProps={{
             htmlInput: { min: 1 }
           }}
@@ -713,7 +758,7 @@ const KeyManagementServiceWizard = () => {
             label="Key overlap period (days)"
             helperText="How long to keep the old key active after rotation for in-flight verifications."
             value={wizard.data.rotation_overlap_days || '7'}
-            onChange={(event) => wizard.updateData({ rotation_overlap_days: event.target.value })}
+            onChange={(event) => updateWizardData({ rotation_overlap_days: event.target.value })}
             slotProps={{
               htmlInput: { min: 0 }
             }}
@@ -724,7 +769,7 @@ const KeyManagementServiceWizard = () => {
           control={(
             <Switch
               checked={Boolean(wizard.data.make_default)}
-              onChange={(event) => wizard.updateData({ make_default: event.target.checked })}
+              onChange={(event) => updateWizardData({ make_default: event.target.checked })}
             />
           )}
           label="Use as the default signing service"
@@ -800,7 +845,7 @@ const KeyManagementServiceWizard = () => {
       </Paper>
 
       <Paper variant="outlined" sx={{ p: 3, mt: 2 }}>
-        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between" sx={{ mb: 2 }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ justifyContent: 'space-between', mb: 2 }}>
           <Box>
             <Typography variant="h6" sx={{ mb: 0.5 }}>
               Validate connection
@@ -813,7 +858,7 @@ const KeyManagementServiceWizard = () => {
             variant="outlined"
             startIcon={preflightLoading ? <CircularProgress size={16} /> : <VerifiedIcon />}
             onClick={runPreflightChecks}
-            disabled={preflightLoading}
+            disabled={preflightLoading || wizard.loading}
           >
             {preflightLoading ? 'Validating...' : 'Validate connection'}
           </Button>
@@ -911,6 +956,8 @@ const KeyManagementServiceWizard = () => {
     }
   };
 
+  if (!isCurrentBrowserEntry()) return <CircularProgress />;
+
   if (configLoading) {
     return (
       <Container maxWidth="md" sx={{ py: 6 }}>
@@ -932,11 +979,11 @@ const KeyManagementServiceWizard = () => {
     );
   }
 
-  if (wizard.success) {
+  if (wizard.success && registeredService) {
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
         <Paper elevation={3} sx={{ p: 4 }}>
-          <Stack spacing={3} alignItems="center" textAlign="center">
+          <Stack spacing={3} sx={{ alignItems: 'center', textAlign: 'center' }}>
             <CheckCircleIcon color="success" sx={{ fontSize: 64 }} />
             <Box>
               <Typography variant="h5" gutterBottom>
@@ -956,8 +1003,8 @@ const KeyManagementServiceWizard = () => {
 
           {!registeredServiceIsManagedOpenBao && (
             <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="space-between" alignItems={{ sm: 'center' }}>
-                <Box textAlign="left">
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ justifyContent: 'space-between', alignItems: { sm: 'center' } }}>
+                <Box sx={{ textAlign: 'left' }}>
                   <Typography variant="subtitle2">Provider key setup</Typography>
                   <Typography variant="body2" color="text.secondary">
                     Create or verify {wizard.data.key_reference || 'the configured key reference'} before issuer identity setup.
@@ -974,14 +1021,14 @@ const KeyManagementServiceWizard = () => {
             </Paper>
           )}
 
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="center" sx={{ mt: 3 }}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ justifyContent: 'center', mt: 3 }}>
             <Button
               variant="contained"
-              onClick={() => navigate(issuerIdentityCreateUrl)}
+              onClick={() => { if (canEdit()) navigate(issuerIdentityCreateUrl); }}
             >
               Create issuer identity
             </Button>
-            <Button variant="outlined" onClick={() => navigate('/console/org/operator/key-management/services')}>
+            <Button variant="outlined" onClick={() => { if (canEdit()) navigate('/console/org/operator/key-management/services'); }}>
               View key management
             </Button>
           </Stack>
@@ -1017,15 +1064,15 @@ const KeyManagementServiceWizard = () => {
           </Alert>
         )}
 
-        <Box sx={{ minHeight: 420, mb: 4 }}>
+        <Box component="fieldset" disabled={wizard.loading || preflightLoading} sx={{ border: 0, p: 0, m: 0, minWidth: 0, minHeight: 420, mb: 4 }}>
           {renderStepContent()}
         </Box>
 
         <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 2 }}>
           <Button
-            onClick={wizard.isFirstStep ? wizard.cancel : wizard.goBack}
+            onClick={() => { if (canEdit()) (wizard.isFirstStep ? wizard.cancel : wizard.goBack)(); }}
             startIcon={<ArrowBackIcon />}
-            disabled={wizard.loading}
+            disabled={wizard.loading || preflightLoading}
           >
             {wizard.isFirstStep ? 'Cancel' : 'Back'}
           </Button>
@@ -1033,8 +1080,8 @@ const KeyManagementServiceWizard = () => {
           {wizard.isLastStep ? (
             <Button
               variant="contained"
-              onClick={wizard.submit}
-              disabled={!wizard.isStepValid() || wizard.loading}
+              onClick={() => { if (canEdit()) wizard.submit(); }}
+              disabled={!wizard.isStepValid() || wizard.loading || preflightLoading}
               startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
             >
               {wizard.loading ? 'Saving...' : 'Register service'}
@@ -1042,8 +1089,8 @@ const KeyManagementServiceWizard = () => {
           ) : (
             <Button
               variant="contained"
-              onClick={wizard.goNext}
-              disabled={!wizard.isStepValid() || wizard.loading}
+              onClick={() => { if (canEdit()) wizard.goNext(); }}
+              disabled={!wizard.isStepValid() || wizard.loading || preflightLoading}
               endIcon={<ArrowForwardIcon />}
             >
               Next
@@ -1055,4 +1102,44 @@ const KeyManagementServiceWizard = () => {
   );
 };
 
-export default KeyManagementServiceWizard;
+export default function KeyManagementServiceWizard() {
+  const { t } = useTranslation('console');
+  const { activeOrgId } = useConsole();
+  const { user, isAuthenticated } = useAuth();
+  const { can, isLoading } = usePermissions();
+  const location = useLocation();
+  const [returnedEntry, setReturnedEntry] = useState(0);
+  // A replacement organization or grant scope must retain the committed route
+  // entry while the browser has already moved to a suspended destination.
+  const browserEntry = useMemo(() => ({
+    href: typeof window === 'undefined' ? null : window.location.href,
+    key: typeof window === 'undefined' ? undefined : window.history.state?.key,
+    routeKey: location.key,
+    generation: returnedEntry,
+  }), [location, returnedEntry]);
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const entry = { href: window.location.href, key: window.history.state?.key };
+    // Back can cancel a suspended navigation without changing useLocation.
+    // Give the returned entry a fresh form and invalidate its abandoned work.
+    const handlePopState = () => {
+      if (window.location.href === entry.href && window.history.state?.key === entry.key) {
+        setReturnedEntry((value) => value + 1);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [location.key, location.pathname, location.search, location.hash]);
+  const principalId = user?.user_id || user?.sub || user?.id || null;
+  const canView = can('signing-key', 'view');
+  const canCreate = can('signing-key', 'create');
+
+  if (isLoading) return <CircularProgress />;
+  if (typeof activeOrgId !== 'string' || !activeOrgId.trim()) {
+    return <Alert severity="info">{t('deploy.keyManagementWizard.selectOrganization')}</Alert>;
+  }
+  if (!isAuthenticated || !canView) return <Alert severity="error">{t('deploy.keyManagementWizard.readDenied')}</Alert>;
+  if (!canCreate) return <Alert severity="error">{t('deploy.keyManagementWizard.createDenied')}</Alert>;
+  return <KeyManagementServiceWizardContent browserEntry={browserEntry} key={JSON.stringify([activeOrgId, principalId, isAuthenticated,
+    location.key, location.pathname, location.search, location.hash, canView, canCreate, browserEntry.generation])} />;
+}

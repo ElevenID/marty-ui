@@ -38,6 +38,13 @@ vi.mock('../../../../services/presentationPolicyApi', () => ({
   updateTrustProfile: (...args: unknown[]) => updateTrustProfile(...args),
 }))
 
+vi.mock('../../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-1' }),
+}))
+vi.mock('../../../../hooks/usePermissions', () => ({
+  usePermissions: () => ({ isLoading: false, can: () => true }),
+}))
+
 vi.mock('react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router')>()
   return {
@@ -52,6 +59,7 @@ vi.mock('react-router', async (importOriginal) => {
 
 const PROFILE_FIXTURE = {
   id: 'profile-1',
+  organization_id: 'org-1',
   name: 'Production Trust',
   description: 'Main production profile',
   framework: 'custom',

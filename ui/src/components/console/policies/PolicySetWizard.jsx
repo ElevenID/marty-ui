@@ -126,7 +126,7 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsL
       <Typography variant="h6" sx={{ mb: 1.5 }}>Start from a template</Typography>
       <Grid container spacing={1.5} sx={{ mb: 3 }}>
         {templates.map((template) => (
-          <Grid item xs={12} sm={4} key={template.template_id}>
+          <Grid key={template.template_id} size={{ xs: 12, sm: 4 }}>
             <Card variant="outlined" sx={{ height: '100%', borderColor: selectedTemplate === template.template_id ? 'primary.main' : 'divider' }}>
               <CardActionArea disabled={busy || !canValidate} onClick={() => chooseTemplate(template)} sx={{ height: '100%' }}>
                 <CardContent>
@@ -178,10 +178,10 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsL
           ) : (
             <Stack spacing={1}>
               {policies.map((policy) => (
-                <Stack key={policy.policy_id} direction="row" alignItems="center" gap={1.5}>
+                <Stack key={policy.policy_id} direction="row" sx={{ alignItems: "center", gap: 1.5 }}>
                   <CheckIcon color="success" fontSize="small" />
                   <Box sx={{ minWidth: 0, flex: 1 }}>
-                    <Typography variant="body2" fontWeight={600}>{policy.description || policy.policy_id}</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>{policy.description || policy.policy_id}</Typography>
                     <Typography variant="caption" color="text.secondary">{policy.effect} / {policy.policy_id}</Typography>
                   </Box>
                 </Stack>
@@ -191,7 +191,7 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsL
 
           {validation && <Alert severity={validation.valid ? 'success' : 'error'}>{validation.valid ? 'Policy Set is valid.' : validation.errors.join(' ')}</Alert>}
 
-          <Stack direction="row" justifyContent="flex-end" spacing={1.5}>
+          <Stack direction="row" spacing={1.5} sx={{ justifyContent: "flex-end" }}>
             <Button variant="outlined" onClick={runValidation} disabled={!policies.length || busy || !canValidate}>Validate</Button>
             <Button variant="contained" startIcon={<SaveIcon />} onClick={save} disabled={!name.trim() || !policies.length || busy || !canValidate}>Create draft</Button>
           </Stack>

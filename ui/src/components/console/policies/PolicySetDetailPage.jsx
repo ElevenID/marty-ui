@@ -66,25 +66,25 @@ function ScopedPolicySet({ organizationId, policySetId, canView, canActivate, ca
   };
 
   return <Container maxWidth="md" sx={{ py: 4 }}>
-    <Stack direction="row" justifyContent="space-between" sx={{ mb: 2 }}>
+    <Stack direction="row" sx={{ justifyContent: "space-between", mb: 2 }}>
       <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/console/org/policies/sets')}>Policy Sets</Button>
       {canView && <Button disabled={busy || grantsLoading} onClick={() => setRevision((value) => value + 1)}>Refresh</Button>}
     </Stack>
     {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
     {grantsLoading ? <CircularProgress /> : !canView ? <Alert severity="warning">You do not have permission to view Policy Sets in this organization.</Alert>
       : loading ? <Box sx={{ textAlign: 'center', py: 8 }}><CircularProgress /></Box> : policySet && <>
-        <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={2} sx={{ mb: 3 }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: "space-between", gap: 2, mb: 3 }}>
           <Box><Typography variant="h4">{policySet.name}</Typography><Typography color="text.secondary">{policySet.description}</Typography>
-            <Stack direction="row" gap={1} sx={{ mt: 1 }}><Chip label={policySet.status} color={policySet.status === 'ACTIVE' ? 'success' : 'default'} /><Chip label={policySet.policy_type} variant="outlined" /><Chip label={policySet.cedar_schema_version} variant="outlined" /></Stack>
+            <Stack direction="row" sx={{ gap: 1, mt: 1 }}><Chip label={policySet.status} color={policySet.status === 'ACTIVE' ? 'success' : 'default'} /><Chip label={policySet.policy_type} variant="outlined" /><Chip label={policySet.cedar_schema_version} variant="outlined" /></Stack>
           </Box>
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
             {policySet.status === 'DRAFT' && canEdit && <Button disabled={disabled} onClick={() => { setName(policySet.name); setDescription(policySet.description || ''); setAction('edit'); }}>Edit metadata</Button>}
             {policySet.status === 'DRAFT' && canActivate && <Button variant="contained" disabled={disabled} onClick={() => setAction('activate')}>Activate</Button>}
             {policySet.status === 'ACTIVE' && canArchive && <Button variant="outlined" disabled={disabled} onClick={() => setAction('archive')}>Archive</Button>}
           </Stack>
         </Stack>
         <Stack spacing={2}>{policySet.cedar_policies.map((policy) => <Paper key={policy.policy_id} variant="outlined" sx={{ p: 2.5 }}>
-          <Stack direction="row" justifyContent="space-between" alignItems="center"><Typography variant="subtitle1" fontWeight={600}>{policy.description || policy.policy_id}</Typography><Chip label={policy.effect} size="small" color={policy.effect === 'forbid' ? 'error' : 'success'} variant="outlined" /></Stack>
+          <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}><Typography variant="subtitle1" sx={{ fontWeight: 600 }}>{policy.description || policy.policy_id}</Typography><Chip label={policy.effect} size="small" color={policy.effect === 'forbid' ? 'error' : 'success'} variant="outlined" /></Stack>
           <Typography variant="caption" color="text.secondary">{policy.policy_id}</Typography><Box component="pre" sx={{ mt: 2, mb: 0, p: 2, overflow: 'auto', bgcolor: 'grey.50', fontSize: 12, whiteSpace: 'pre-wrap' }}>{policy.cedar_text}</Box>
         </Paper>)}</Stack>
       </>}

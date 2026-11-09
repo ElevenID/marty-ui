@@ -31,7 +31,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
       <Typography variant="h6" gutterBottom>
         {t('wizards.credentialTemplate.reviewStep.title')}
       </Typography>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.credentialTemplate.reviewStep.description')}
       </Typography>
 
@@ -44,7 +44,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         editLabel={t('wizards.credentialTemplate.reviewStep.actions.edit')}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12}>
+            <Grid size={12}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.templateName')}
                 value={data.name}
@@ -53,14 +53,14 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.credentialType')}
                 value={data.credential_type}
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.vct')}
                 value={data.vct}
@@ -69,7 +69,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
             </Grid>
 
             {data.description && (
-              <Grid item xs={12}>
+              <Grid size={12}>
                 <ReviewField
                   label={t('wizards.credentialTemplate.reviewStep.fields.description')}
                   value={data.description}
@@ -128,7 +128,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         editLabel={t('wizards.credentialTemplate.reviewStep.actions.edit')}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.trustProfile')}
                 value={data.trust_profile_id
@@ -138,7 +138,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.complianceProfile')}
                 value={data.compliance_profile_id}
@@ -146,7 +146,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label="Issuer DID"
                 value={data.issuer_did || undefined}
@@ -165,21 +165,21 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         editLabel={t('wizards.credentialTemplate.reviewStep.actions.edit')}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.defaultValidity')}
                 value={`${secondsToDays(data.validity_rules?.ttl_seconds || 31536000)} ${t('wizards.credentialTemplate.reviewStep.values.days')}`}
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.maximumValidity')}
                 value={`${secondsToDays(data.validity_rules?.max_validity_seconds || 63072000)} ${t('wizards.credentialTemplate.reviewStep.values.days')}`}
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.revocation')}
                 value={data.revocation_profile_id}

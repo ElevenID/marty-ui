@@ -42,8 +42,6 @@ import {
 } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import DownloadIcon from '@mui/icons-material/Download';
-import QrCodeIcon from '@mui/icons-material/QrCode';
 import AddIcon from '@mui/icons-material/Add';
 import CheckIcon from '@mui/icons-material/Check';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -132,14 +130,10 @@ function isActionRequired(row) {
 
 /** Status → primary action label. */
 function getActionLabel(row) {
-  if (row.kind === 'credential') {
-    if (row.status === 'expired') return 'Renew';
-    return 'Present';
-  }
+  if (row.kind !== 'application') return null;
   switch (row.status) {
     case 'approved':
     case 'offered':      return hasLiveOffer(row) ? 'Claim' : null;
-    case 'needs_info':   return 'Continue';
     default:             return null;
   }
 }
@@ -642,7 +636,7 @@ function StatusCircle({ status, showLabel = false, size = 'sm' }) {
   if (!showLabel) return circle;
 
   return (
-    <Stack direction="row" alignItems="center" spacing={0.75} sx={{ display: 'inline-flex' }}>
+    <Stack direction="row" spacing={0.75} sx={{ display: 'inline-flex', alignItems: 'center' }}>
       {circle}
       <Typography
         variant={size === 'sm' ? 'body2' : 'body1'}
@@ -834,8 +828,6 @@ function MyIdentityPage() {
     const label = getActionLabel(row);
     if (label === 'Claim') {
       setClaimApp(row);
-    } else if (label === 'Continue' || label === 'Present') {
-      setSelectedApp(row);
     }
   }, []);
 
@@ -855,8 +847,8 @@ function MyIdentityPage() {
     >
       <CardContent sx={{ pb: '12px !important' }}>
         {/* Header: type + status */}
-        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.75 }}>
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ flex: 1, minWidth: 0 }}>
+        <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 0.75 }}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flex: 1, minWidth: 0 }}>
             <Avatar
               src={row.imageUrl || undefined}
               alt={row.type}
@@ -866,7 +858,7 @@ function MyIdentityPage() {
               <WorkspacePremiumIcon fontSize="small" />
             </Avatar>
             <Box sx={{ minWidth: 0 }}>
-              <Typography fontWeight={600} noWrap>{row.type}</Typography>
+              <Typography sx={{ fontWeight: 600 }} noWrap>{row.type}</Typography>
               <Typography variant="caption" color="text.secondary" noWrap>
                 {claimStatusForRow(row)}
               </Typography>
@@ -879,14 +871,14 @@ function MyIdentityPage() {
 
         {/* Inline message */}
         {getStatusMessage(row) && (
-          <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 0.5 }}>
+          <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', mb: 0.5 }}>
             {isActionRequired(row) && (
               <WarningAmberIcon sx={{ fontSize: 14, color: 'warning.main' }} />
             )}
             <Typography
               variant="caption"
               color={isActionRequired(row) ? 'warning.dark' : 'text.secondary'}
-              fontWeight={isActionRequired(row) ? 600 : 400}
+              sx={{ fontWeight: isActionRequired(row) ? 600 : 400 }}
             >
               {getStatusMessage(row)}
             </Typography>
@@ -899,19 +891,13 @@ function MyIdentityPage() {
         </Typography>
 
         {/* Actions */}
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
           {row.kind === 'credential' && (
             <>
               <Tooltip title={t('credentials.actions.viewDetails')}>
                 <IconButton size="small" aria-label={`View ${row.type} details`} onClick={() => setSelectedApp(row)}>
                   <VisibilityIcon fontSize="small" />
                 </IconButton>
-              </Tooltip>
-              <Tooltip title={t('credentials.actions.showQRCode')}>
-                <IconButton size="small" color="primary"><QrCodeIcon fontSize="small" /></IconButton>
-              </Tooltip>
-              <Tooltip title={t('credentials.actions.download')}>
-                <IconButton size="small"><DownloadIcon fontSize="small" /></IconButton>
               </Tooltip>
             </>
           )}
@@ -921,7 +907,6 @@ function MyIdentityPage() {
                 <Button
                   size="small"
                   variant="contained"
-                  color={getActionLabel(row) === 'Continue' ? 'warning' : 'primary'}
                   onClick={() => handlePrimaryAction(row)}
                 >
                   {getActionLabel(row)}
@@ -941,9 +926,9 @@ function MyIdentityPage() {
     <Stack
       key={`${row.kind}-${row.id}`}
       direction="row"
-      alignItems="center"
       spacing={2}
       sx={{
+        alignItems: 'center',
         px: 2,
         py: 1.5,
         borderBottom: '1px solid',
@@ -957,7 +942,7 @@ function MyIdentityPage() {
     >
       {/* Credential name */}
       <Box sx={{ flex: '0 0 200px', minWidth: 0 }}>
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
           <Avatar
             src={row.imageUrl || undefined}
             alt={row.type}
@@ -967,7 +952,7 @@ function MyIdentityPage() {
             <WorkspacePremiumIcon fontSize="small" />
           </Avatar>
           <Box sx={{ minWidth: 0 }}>
-            <Typography fontWeight={500} noWrap>{row.type}</Typography>
+            <Typography sx={{ fontWeight: 500 }} noWrap>{row.type}</Typography>
             <Typography variant="caption" color="text.secondary" noWrap>
               {row.kind === 'credential' ? (row.issuer || 'Credential') : 'Application'} - {claimStatusForRow(row)}
             </Typography>
@@ -982,8 +967,7 @@ function MyIdentityPage() {
           <Typography
             variant="caption"
             color={isActionRequired(row) ? 'warning.dark' : 'text.secondary'}
-            fontWeight={isActionRequired(row) ? 600 : 400}
-            sx={{ display: 'block', mt: 0.25, pl: '22px' }}
+            sx={{ fontWeight: isActionRequired(row) ? 600 : 400, display: 'block', mt: 0.25, pl: '22px' }}
           >
             {getStatusMessage(row)}
           </Typography>
@@ -1006,21 +990,14 @@ function MyIdentityPage() {
                 <VisibilityIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title={t('credentials.actions.showQRCode')}>
-              <IconButton size="small" color="primary"><QrCodeIcon fontSize="small" /></IconButton>
-            </Tooltip>
-            <Tooltip title={t('credentials.actions.download')}>
-              <IconButton size="small"><DownloadIcon fontSize="small" /></IconButton>
-            </Tooltip>
           </>
         )}
         {row.kind === 'application' && (
-          <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+          <Stack direction="row" spacing={0.5} sx={{ justifyContent: 'flex-end' }}>
             {getActionLabel(row) && (
               <Button
                 size="small"
                 variant="contained"
-                color={getActionLabel(row) === 'Continue' ? 'warning' : 'primary'}
                 onClick={() => handlePrimaryAction(row)}
               >
                 {getActionLabel(row)}
@@ -1041,9 +1018,9 @@ function MyIdentityPage() {
     const { highlight = false } = options;
     return (
       <Box sx={{ mb: 3 }}>
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1, px: isMobile ? 0 : 2 }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1, px: isMobile ? 0 : 2 }}>
           {icon}
-          <Typography variant="subtitle2" fontWeight={700} color="text.secondary" textTransform="uppercase" letterSpacing={0.5}>
+          <Typography variant="subtitle2" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
             {title} ({rows.length})
           </Typography>
         </Stack>
@@ -1069,10 +1046,8 @@ function MyIdentityPage() {
       {/* Header */}
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
-        justifyContent="space-between"
-        alignItems={{ xs: 'stretch', sm: 'center' }}
         spacing={{ xs: 1.5, sm: 2 }}
-        sx={{ mb: 2, minWidth: 0 }}
+        sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', sm: 'center' }, mb: 2, minWidth: 0 }}
       >
         <Box>
           <Typography variant="h4" gutterBottom>
@@ -1145,7 +1120,7 @@ function MyIdentityPage() {
               ? t('identity.empty.title', 'No credentials yet')
               : t('identity.empty.filteredTitle', 'Nothing matches this filter')}
           </Typography>
-          <Typography color="text.secondary" paragraph>
+          <Typography color="text.secondary" sx={{ mb: 2 }}>
             {t('identity.empty.message', 'Browse the catalog to apply for your first credential.')}
           </Typography>
           {filter === FILTER_ALL && (
@@ -1172,16 +1147,16 @@ function MyIdentityPage() {
                 mb: 1,
               }}
             >
-              <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ flex: '0 0 200px' }}>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, flex: '0 0 200px' }}>
                 CREDENTIAL
               </Typography>
-              <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ flex: '1 1 200px' }}>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, flex: '1 1 200px' }}>
                 STATUS
               </Typography>
-              <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ flex: '0 0 80px', textAlign: 'right' }}>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, flex: '0 0 80px', textAlign: 'right' }}>
                 UPDATED
               </Typography>
-              <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ flex: '0 0 160px', textAlign: 'right' }}>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, flex: '0 0 160px', textAlign: 'right' }}>
                 ACTIONS
               </Typography>
             </Stack>
@@ -1230,7 +1205,7 @@ function MyIdentityPage() {
         <DialogContent>
           {selectedApp && (
             <Box sx={{ pt: 1 }}>
-              <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2 }}>
+              <Stack direction="row" spacing={2} sx={{ alignItems: 'center', mb: 2 }}>
                 <Avatar
                   src={selectedApp.imageUrl || undefined}
                   alt={selectedApp.type}
@@ -1248,7 +1223,7 @@ function MyIdentityPage() {
               {selectedApp.issuerDid && (
                 <>
                   <Typography variant="subtitle2" color="text.secondary">Issuer DID</Typography>
-                  <Typography paragraph sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
+                  <Typography sx={{ mb: 2, fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
                     {selectedApp.issuerDid}
                   </Typography>
                 </>
@@ -1257,12 +1232,12 @@ function MyIdentityPage() {
               <Typography variant="subtitle2" color="text.secondary">
                 {selectedApp.kind === 'credential' ? 'Issued' : 'Submitted'}
               </Typography>
-              <Typography paragraph>
+              <Typography sx={{ mb: 2 }}>
                 {selectedApp.date ? new Date(selectedApp.date).toLocaleString() : 'Not recorded'}
               </Typography>
 
               <Typography variant="subtitle2" color="text.secondary">Last Updated</Typography>
-              <Typography paragraph>
+              <Typography sx={{ mb: 2 }}>
                 {selectedApp.updatedAt || selectedApp.date
                   ? new Date(selectedApp.updatedAt || selectedApp.date).toLocaleString()
                   : 'Not recorded'}{' '}
@@ -1270,7 +1245,7 @@ function MyIdentityPage() {
               </Typography>
 
               <Typography variant="subtitle2" color="text.secondary">Status</Typography>
-              <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
                 <Chip label={getStatusLabel(selectedApp)} color={getStatusColor(selectedApp)} size="small" />
                 <Chip label={`Claim: ${claimStatusForRow(selectedApp)}`} size="small" variant="outlined" />
                 {selectedApp.deliveryMode && (
@@ -1281,10 +1256,31 @@ function MyIdentityPage() {
                 {getStatusMessage(selectedApp)}
               </Typography>
 
+              {selectedApp.kind === 'credential' && selectedApp.status === 'active' && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  {t('identity.guidance.walletPresentation', 'To present a credential, use the wallet where it is stored.')}
+                </Alert>
+              )}
+              {selectedApp.kind === 'credential' && selectedApp.status === 'expired' && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  {t('identity.guidance.expired', 'This credential has expired. Contact the issuer about renewal.')}
+                </Alert>
+              )}
+              {selectedApp.kind === 'credential' && selectedApp.status === 'revoked' && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  {t('identity.guidance.revoked', 'This credential has been revoked. Contact the issuer for help.')}
+                </Alert>
+              )}
+              {selectedApp.kind === 'application' && selectedApp.status === 'needs_info' && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  {t('identity.guidance.additionalInformation', 'The issuer needs more information. Contact the issuer for instructions on how to provide it.')}
+                </Alert>
+              )}
+
               {canvasDetailsForRow(selectedApp).length > 0 && (
                 <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 1 }} data-testid="identity-canvas-source">
                   <Stack spacing={1.25}>
-                    <Stack direction="row" spacing={1} alignItems="center">
+                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                       <SchoolIcon color="primary" fontSize="small" />
                       <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
                         Canvas course source
@@ -1305,7 +1301,7 @@ function MyIdentityPage() {
               {canvasDeliveriesForRow(selectedApp).length > 0 && (
                 <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 1 }} data-testid="identity-canvas-delivery">
                   <Stack spacing={1.25}>
-                    <Stack direction="row" spacing={1} alignItems="center">
+                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                       <SyncAltIcon color="primary" fontSize="small" />
                       <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
                         Canvas Credentials display
@@ -1313,7 +1309,7 @@ function MyIdentityPage() {
                     </Stack>
                     {canvasDeliveriesForRow(selectedApp).map((delivery) => (
                       <Box key={delivery.id || delivery.external_credential_id || delivery.delivery_target}>
-                        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }} useFlexGap>
                           <Chip
                             label={formatDeliveryStatus(delivery.status)}
                             size="small"

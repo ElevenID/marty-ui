@@ -7,8 +7,15 @@ on:
       - 'deploy/helm/**'
       - 'deploy/k3s/**'
       - 'deploy-config/catalog/kubernetes-secrets.json'
+      - 'deploy-config/catalog/kubernetes-application-tokens.json'
       - 'scripts/prepare_kubernetes_helm_values.py'
       - 'scripts/bootstrap_kubernetes_openbao.py'
+      - 'scripts/stage_kubernetes_application_credentials.py'
+      - 'scripts/inspect_kubernetes_legacy_credentials.py'
+      - 'scripts/recover_kubernetes_legacy_credentials.py'
+      - 'scripts/reload_kubernetes_legacy_workloads.py'
+      - 'scripts/kubernetes_legacy_recovery_sources.py'
+      - 'deploy-config/bundles/selfhost.json'
       - 'scripts/installer_*.py'
       - 'scripts/verify_installer_provenance.py'
       - 'scripts/build_selfhost_image_lock.py'
@@ -23,6 +30,11 @@ on:
       - 'tests/test_marty_helm_chart.py'
       - 'tests/test_prepare_kubernetes_helm_values.py'
       - 'tests/test_bootstrap_kubernetes_openbao.py'
+      - 'tests/test_stage_kubernetes_application_credentials.py'
+      - 'tests/test_inspect_kubernetes_legacy_credentials.py'
+      - 'tests/test_recover_kubernetes_legacy_credentials.py'
+      - 'tests/test_reload_kubernetes_legacy_workloads.py'
+      - 'tests/test_kubernetes_legacy_recovery_sources.py'
       - 'tests/scripts/run-kubernetes-acceptance.cjs'
       - 'tests/scripts/run-kubernetes-acceptance.test.cjs'
       - 'contracts/gateway-routes.json'
@@ -41,7 +53,7 @@ concurrency:
 jobs:
   chart-contract:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -76,4 +88,9 @@ jobs:
           python -m pytest -q -o addopts= \
             tests/test_marty_helm_chart.py \
             tests/test_prepare_kubernetes_helm_values.py \
-            tests/test_bootstrap_kubernetes_openbao.py
+            tests/test_bootstrap_kubernetes_openbao.py \
+            tests/test_stage_kubernetes_application_credentials.py \
+            tests/test_inspect_kubernetes_legacy_credentials.py \
+            tests/test_recover_kubernetes_legacy_credentials.py \
+            tests/test_reload_kubernetes_legacy_workloads.py \
+            tests/test_kubernetes_legacy_recovery_sources.py

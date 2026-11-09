@@ -16,9 +16,14 @@ import BusinessIcon from '@mui/icons-material/Business';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import PendingIcon from '@mui/icons-material/Pending';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import AddIcon from '@mui/icons-material/Add';
 import { Link as RouterLink } from 'react-router';
+import { useTranslation } from 'react-i18next';
+import { ENABLE_ORGANIZATION_CREATION } from '@ui-public-config';
 
 import { membershipHasOrgConsoleAccess } from '../../application/session/authSession';
+import { isOrganizationCreationEnabled } from '../../utils/runtimeConfig';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
 
 const DEFAULT_TITLE = 'My Organizations';
 const DEFAULT_DESCRIPTION = "Organizations you're a member of. Switch to an organization to access its console.";
@@ -74,7 +79,7 @@ function getRoleBadges(roles, hasOrgConsoleAccess) {
   }
 
   return (
-    <Stack direction="row" spacing={1} justifyContent="flex-end" flexWrap="wrap">
+    <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
       {roles.map((role) => {
         const roleName = typeof role === 'string' ? role : role?.name;
         const roleLabel = typeof role === 'string' ? role : role?.display_name || role?.name;
@@ -86,6 +91,7 @@ function getRoleBadges(roles, hasOrgConsoleAccess) {
             label={roleLabel || 'Role'}
             color={roleColors[roleName] || 'default'}
             size="small"
+            sx={{ maxWidth: '100%' }}
           />
         );
       })}
@@ -108,7 +114,20 @@ function OrganizationMembershipHub({
   joinPath = '/organizations/join',
   dataTestId,
 }) {
+  const beginAction = useAsyncActionScope();
+  const { t } = useTranslation('console');
+  const organizationCreationEnabled = isOrganizationCreationEnabled(ENABLE_ORGANIZATION_CREATION);
   const items = Array.isArray(organizations) ? organizations : [];
+  const handleSwitchToOrg = async (organizationId) => {
+    if (!onSwitchToOrg) return;
+    const action = beginAction();
+    try {
+      await action.run(onSwitchToOrg, organizationId);
+    } catch (error) {
+      if (!action.isCurrent() || error?.name === 'AbortError') return;
+      console.error('[OrganizationMembershipHub] Failed to switch organization:', error);
+    }
+  };
 
   if (loading) {
     return (
@@ -131,7 +150,7 @@ function OrganizationMembershipHub({
       {(title || description) && (
         <Box sx={{ mb: 4 }}>
           {title && (
-            <Typography variant={embedded ? 'h6' : 'h4'} gutterBottom fontWeight={embedded ? 500 : 600}>
+            <Typography variant={embedded ? 'h6' : 'h4'} gutterBottom sx={{ fontWeight: embedded ? 500 : 600 }}>
               {title}
             </Typography>
           )}
@@ -153,9 +172,16 @@ function OrganizationMembershipHub({
               No Organizations Yet
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-              You&apos;re not a member of any organizations. Discover organizations or join one with a join code.
+              {organizationCreationEnabled
+                ? t('organizationCreation.emptyDescription')
+                : "You're not a member of any organizations. Discover organizations or join one with a join code."}
             </Typography>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center">
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: 'center' }}>
+              {organizationCreationEnabled && (
+                <Button component={RouterLink} to="/console/organizations/create" variant="outlined" startIcon={<AddIcon />}>
+                  {t('organizationCreation.createAction')}
+                </Button>
+              )}
               <Button component={RouterLink} to={discoverPath} variant="contained">
                 Discover Organizations
               </Button>
@@ -176,7 +202,7 @@ function OrganizationMembershipHub({
               const hasOrgConsoleAccess = membershipHasOrgConsoleAccess(organization);
 
               return (
-                <Grid item xs={12} sm={6} md={embedded ? 6 : 4} key={organization.id || organizationName}>
+                <Grid size={{ xs: 12, sm: 6, md: embedded ? 6 : 4 }} key={organization.id || organizationName}>
                   <Card
                     sx={{
                       height: '100%',
@@ -194,12 +220,12 @@ function OrganizationMembershipHub({
                     <CardContent sx={{ flexGrow: 1 }}>
                       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 2 }}>
                         <BusinessIcon color="action" sx={{ mt: 0.5 }} />
-                        <Box sx={{ flexGrow: 1 }}>
-                          <Typography variant="h6" gutterBottom>
+                        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                          <Typography variant="h6" gutterBottom sx={{ overflowWrap: 'anywhere' }}>
                             {organizationName}
                           </Typography>
                           {organization.description && (
-                            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                            <Typography variant="body2" color="text.secondary" sx={{ mb: 1, overflowWrap: 'anywhere' }}>
                               {organization.description}
                             </Typography>
                           )}
@@ -208,29 +234,42 @@ function OrganizationMembershipHub({
 
                       <Divider sx={{ my: 2 }} />
 
-                      <Stack spacing={1.5}>
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <Typography variant="caption" color="text.secondary">
-                            Role:
-                          </Typography>
+                      <Box
+                        component="dl"
+                        sx={{
+                          m: 0,
+                          display: 'grid',
+                          gridTemplateColumns: 'max-content minmax(0, 1fr)',
+                          columnGap: 1,
+                          rowGap: 1.5,
+                          alignItems: 'center',
+                        }}
+                      >
+                        <Typography component="dt" variant="caption" color="text.secondary">
+                          Role:
+                        </Typography>
+                        <Box component="dd" sx={{ m: 0 }}>
                           {getRoleBadges(roles, hasOrgConsoleAccess)}
                         </Box>
 
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <Typography variant="caption" color="text.secondary">
-                            Status:
-                          </Typography>
+                        <Typography component="dt" variant="caption" color="text.secondary">
+                          Status:
+                        </Typography>
+                        <Box component="dd" sx={{ m: 0 }}>
                           {getStatusBadge(status)}
                         </Box>
 
                         {joinedAt && (
-                          <Box>
-                            <Typography variant="caption" color="text.secondary">
-                              Joined: {new Date(joinedAt).toLocaleDateString()}
+                          <>
+                            <Typography component="dt" variant="caption" color="text.secondary">
+                              Joined:
                             </Typography>
-                          </Box>
+                            <Typography component="dd" variant="caption" color="text.secondary" sx={{ m: 0 }}>
+                              {new Date(joinedAt).toLocaleDateString()}
+                            </Typography>
+                          </>
                         )}
-                      </Stack>
+                      </Box>
 
                       {organization.org_type && (
                         <Box sx={{ mt: 2 }}>
@@ -248,7 +287,7 @@ function OrganizationMembershipHub({
                       <Button
                         fullWidth
                         variant={organization.id === activeOrgId ? 'outlined' : 'contained'}
-                        onClick={() => onSwitchToOrg?.(organization.id)}
+                        onClick={() => handleSwitchToOrg(organization.id)}
                         disabled={status !== 'active' || !hasOrgConsoleAccess || !onSwitchToOrg}
                       >
                         {hasOrgConsoleAccess
@@ -266,11 +305,16 @@ function OrganizationMembershipHub({
             <Stack
               direction={{ xs: 'column', sm: 'row' }}
               spacing={2}
-              justifyContent={embedded ? 'flex-start' : 'center'}
+              sx={{ justifyContent: embedded ? 'flex-start' : 'center' }}
             >
               {showManagePageLink && (
                 <Button component={RouterLink} to={managePath} variant="outlined">
                   View My Organizations
+                </Button>
+              )}
+              {organizationCreationEnabled && (
+                <Button component={RouterLink} to="/console/organizations/create" variant="outlined" startIcon={<AddIcon />}>
+                  {t('organizationCreation.createAction')}
                 </Button>
               )}
               <Button component={RouterLink} to={discoverPath} variant="outlined">

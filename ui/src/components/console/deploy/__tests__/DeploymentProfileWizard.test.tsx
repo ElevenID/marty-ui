@@ -42,6 +42,7 @@ describe('DeploymentProfileWizard', () => {
     vi.clearAllMocks()
     organization.id = 'org-1'
     server.use(
+      http.get('*/v1/organizations/:organizationId/defaults', () => HttpResponse.json({})),
       http.get('http://localhost:8000/v1/credential-templates', () => HttpResponse.json([])),
       http.get('http://localhost:8000/v1/flows/definitions', () => HttpResponse.json([])),
       http.get(PRESENTATION_POLICIES_URL, () => {
@@ -356,6 +357,9 @@ describe('DeploymentProfileWizard', () => {
     expect(submittedData.credential_template_ids).toEqual(['template-1'])
     expect(submittedData.enabled_flow_ids).toEqual(['flow-issue', 'flow-verify'])
     expect(submittedData).not.toHaveProperty('runtime_catalog')
+    expect(submittedData).not.toHaveProperty('_organization_default_template_initialized')
+    expect(submittedData).not.toHaveProperty('_organization_default_template_id')
+    expect(submittedData).not.toHaveProperty('_organization_default_policy')
     expect(submittedData.environment_config).toEqual({ theme: 'light', language: 'en-US' })
     expect(submittedData.feature_flags).toMatchObject({
       enable_qr_code_generation: true,

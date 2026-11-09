@@ -214,6 +214,7 @@ spec:
           secret:
             secretName: {{ include "marty.secretName" (dict "root" . "name" "keycloak-kms") }}
             defaultMode: 0440
+{{- if .Values.keycloak.configurator.enabled }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -280,3 +281,4 @@ spec:
           configMap:
             name: keycloak-setup-scripts
             defaultMode: 0555
+{{- end }}

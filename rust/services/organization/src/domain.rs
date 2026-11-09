@@ -23,6 +23,8 @@ pub const APPLICANT_PERMISSION_KEYS: &[&str] = &[
 pub enum DomainError {
     #[error("can only accept pending invitations")]
     InvitationNotPending,
+    #[error("can only approve pending membership requests")]
+    MembershipNotPending,
     #[error("organization name does not contain a slug-safe character")]
     InvalidOrganizationName,
     #[error("join-code usage counter overflow")]
@@ -558,6 +560,16 @@ impl Member {
     pub fn deactivate(&mut self, now: DateTime<Utc>) {
         self.status = MemberStatus::Deactivated;
         self.updated_at = now;
+    }
+
+    pub fn approve_membership(&mut self, now: DateTime<Utc>) -> Result<(), DomainError> {
+        if self.status != MemberStatus::Pending {
+            return Err(DomainError::MembershipNotPending);
+        }
+        self.status = MemberStatus::Active;
+        self.joined_at = Some(now);
+        self.updated_at = now;
+        Ok(())
     }
 
     #[must_use]

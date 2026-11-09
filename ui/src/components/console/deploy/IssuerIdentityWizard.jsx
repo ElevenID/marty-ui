@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router';
+import { useTranslation } from 'react-i18next';
 import {
   Alert,
   Box,
@@ -8,6 +9,7 @@ import {
   Container,
   FormControl,
   InputLabel,
+  LinearProgress,
   MenuItem,
   Paper,
   Select,
@@ -19,6 +21,8 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 
 import issuerIdentitiesApi from '../../../services/issuerIdentitiesApi';
 import { useAuth } from '../../../hooks/useAuth';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useNotifications } from '../../../hooks/useNotifications';
 
@@ -42,8 +46,9 @@ const organizationSlug = (name, organizationId) => (
     .slice(0, 64)
 );
 
-export default function IssuerIdentityWizard() {
+function IssuerIdentityWizardContent() {
   const navigate = useNavigate();
+  const { t } = useTranslation('console');
   const { organizationName } = useAuth();
   const { activeOrgId, memberships } = useConsole();
   const { showNotification } = useNotifications();
@@ -59,6 +64,17 @@ export default function IssuerIdentityWizard() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const epochRef = useRef(0);
+  const startAction = useAsyncActionScope();
+  const submitBusy = useRef(false);
+  // BrowserRouter publishes history before its React transition commits.
+  const browserEntry = useRef(typeof window === 'undefined' ? null : {
+    href: window.location.href, key: window.history.state?.key,
+  });
+  const isCurrentBrowserEntry = useCallback(() => !browserEntry.current || (
+    typeof window !== 'undefined' && window.location.href === browserEntry.current.href
+      && window.history.state?.key === browserEntry.current.key
+  ), []);
+  const canEditForm = () => !submitBusy.current && isCurrentBrowserEntry();
 
   useLayoutEffect(() => {
     epochRef.current += 1;
@@ -73,9 +89,10 @@ export default function IssuerIdentityWizard() {
     let current = true;
     setSnapshot(null);
     if (activeOrgId) {
-      issuerIdentitiesApi.getIssuerIdentityCapabilities({ organization_id: activeOrgId })
+      const isCurrent = () => current && isCurrentBrowserEntry();
+      issuerIdentitiesApi.getIssuerIdentityCapabilities({ organization_id: activeOrgId }, { isCurrent, singleAttemptReads: true })
         .then((data) => {
-          if (!current) return;
+          if (!isCurrent()) return;
           setSnapshot({ organizationId: activeOrgId, data });
           setSelection((previous) => (previous
             ? data.creation_options.find((option) => sameTuple(option, previous)) || null
@@ -84,11 +101,11 @@ export default function IssuerIdentityWizard() {
             ? `${data.managed_issuer_did_prefix}${organizationSlug(displayName, activeOrgId)}` : ''));
         })
         .catch((loadError) => {
-          if (current) setSnapshot({ organizationId: activeOrgId, error: loadError });
+          if (isCurrent()) setSnapshot({ organizationId: activeOrgId, error: loadError });
         });
     }
     return () => { current = false; };
-  }, [activeOrgId, displayName, refresh]);
+  }, [activeOrgId, displayName, refresh, isCurrentBrowserEntry]);
 
   const capabilities = snapshot?.organizationId === activeOrgId ? snapshot.data : null;
   const options = capabilities?.creation_options || [];
@@ -103,6 +120,7 @@ export default function IssuerIdentityWizard() {
     && option.credential_format === credentialFormat).map((option) => option.algorithm);
 
   const changePurpose = (nextPurpose) => {
+    if (!canEditForm()) return;
     setSelection(options.find((option) => option.key_purpose === nextPurpose
       && option.credential_format === credentialFormat && option.algorithm === algorithm)
       || options.find((option) => option.key_purpose === nextPurpose) || null);
@@ -110,6 +128,7 @@ export default function IssuerIdentityWizard() {
 
   const submit = async (event) => {
     event.preventDefault();
+    if (!canEditForm()) return;
     if (!activeOrgId) {
       setError('Select an organization before creating an issuer identity.');
       return;
@@ -122,12 +141,17 @@ export default function IssuerIdentityWizard() {
       setError('Enter a valid DID. New managed identities currently use a local path-scoped did:web.');
       return;
     }
+    const action = startAction();
+    const epoch = epochRef.current;
+    const isCurrent = () => submitBusy.current && action.isCurrent()
+      && epoch === epochRef.current && isCurrentBrowserEntry();
+    submitBusy.current = true;
     setSubmitting(true);
     setError('');
-    const epoch = epochRef.current;
     try {
-      const current = await issuerIdentitiesApi.getIssuerIdentityCapabilities({ organization_id: activeOrgId });
-      if (epoch !== epochRef.current) return;
+      const current = await action.run(issuerIdentitiesApi.getIssuerIdentityCapabilities,
+        { organization_id: activeOrgId }, { isCurrent, singleAttemptReads: true });
+      if (!isCurrent()) return;
       if (!current.creation_options.some((option) => sameTuple(option, selected))) {
         setSnapshot({ organizationId: activeOrgId, data: current });
         setSelection(null);
@@ -138,21 +162,27 @@ export default function IssuerIdentityWizard() {
         setError('Use the deployment DID prefix shown by the issuer service. Refresh capabilities if publication settings changed.');
         return;
       }
-      const result = await issuerIdentitiesApi.createIssuerIdentity({
+      const result = await action.run(issuerIdentitiesApi.createIssuerIdentity, {
         organization_id: activeOrgId,
         issuer_did: issuerDid.trim(),
         key_purpose: keyPurpose,
         credential_format: credentialFormat,
         algorithm,
-      });
-      if (epoch !== epochRef.current) return;
+      }, { isCurrent });
+      if (!isCurrent()) return;
+      // The native acknowledgment contains the public tuple, not an organization
+      // field. Both newly created and already-existing identities are valid.
+      if (typeof result?.created !== 'boolean' || result.identity?.issuer_did !== issuerDid.trim()
+        || !sameTuple(result.identity, selected) || result.identity.status !== 'active') {
+        throw new Error(t('deploy.issuerIdentityWizard.responseMismatch'));
+      }
       showNotification?.(
         result?.created ? 'Issuer identity created.' : 'Issuer identity already exists.',
         'success',
       );
       navigate('/console/org/deploy/issuer-identity');
     } catch (requestError) {
-      if (epoch !== epochRef.current) return;
+      if (!isCurrent()) return;
       setError(
         requestError?.response?.error?.message
         || requestError?.response?.data?.detail
@@ -161,15 +191,20 @@ export default function IssuerIdentityWizard() {
         || 'Issuer identity creation failed.',
       );
     } finally {
-      if (epoch === epochRef.current) setSubmitting(false);
+      if (isCurrent()) {
+        submitBusy.current = false;
+        setSubmitting(false);
+      }
     }
   };
+
+  if (!isCurrentBrowserEntry()) return <LinearProgress />;
 
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>
       <Button
         startIcon={<ArrowBackIcon />}
-        onClick={() => navigate('/console/org/deploy/issuer-identity')}
+        onClick={() => { if (isCurrentBrowserEntry()) navigate('/console/org/deploy/issuer-identity'); }}
         sx={{ mb: 2 }}
       >
         Back to issuer identities
@@ -196,7 +231,7 @@ export default function IssuerIdentityWizard() {
           {capabilities && options.length === 0 && (
             <Alert severity="warning">No compatible issuer creation options are available for this organization. Ask an operator to check issuer configuration and publication settings.</Alert>
           )}
-          <Button onClick={() => setRefresh((value) => value + 1)} disabled={!activeOrgId || submitting}>
+          <Button onClick={() => { if (canEditForm()) setRefresh((value) => value + 1); }} disabled={!activeOrgId || submitting}>
             Refresh issuer capabilities
           </Button>
 
@@ -206,7 +241,7 @@ export default function IssuerIdentityWizard() {
             label="Issuer DID"
             value={capabilities ? issuerDid : ''}
             disabled={!capabilities || submitting}
-            onChange={(event) => setIssuerDid(event.target.value)}
+            onChange={(event) => { if (canEditForm()) setIssuerDid(event.target.value); }}
             helperText={capabilities?.managed_issuer_did_prefix
               ? `Deployment DID prefix: ${capabilities.managed_issuer_did_prefix}`
               : 'The issuer service supplies the deployment DID prefix.'}
@@ -237,10 +272,10 @@ export default function IssuerIdentityWizard() {
               label="Credential format"
               value={credentialFormat}
               disabled={!selected || submitting}
-              onChange={(event) => setSelection(options.find((option) => option.key_purpose === keyPurpose
+              onChange={(event) => { if (canEditForm()) setSelection(options.find((option) => option.key_purpose === keyPurpose
                 && option.credential_format === event.target.value && option.algorithm === algorithm)
                 || options.find((option) => option.key_purpose === keyPurpose
-                  && option.credential_format === event.target.value) || null)}
+                  && option.credential_format === event.target.value) || null); }}
             >
               {formats.map((format) => <MenuItem key={format} value={format}>{format}</MenuItem>)}
             </Select>
@@ -254,15 +289,15 @@ export default function IssuerIdentityWizard() {
               label="Algorithm"
               value={algorithm}
               disabled={!selected || submitting}
-              onChange={(event) => setSelection(options.find((option) => option.key_purpose === keyPurpose
-                && option.credential_format === credentialFormat && option.algorithm === event.target.value) || null)}
+              onChange={(event) => { if (canEditForm()) setSelection(options.find((option) => option.key_purpose === keyPurpose
+                && option.credential_format === credentialFormat && option.algorithm === event.target.value) || null); }}
             >
               {algorithms.map((value) => <MenuItem key={value} value={value}>{value}</MenuItem>)}
             </Select>
           </FormControl>
 
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="flex-end">
-            <Button onClick={() => navigate('/console/org/deploy/issuer-identity')} disabled={submitting}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: 'flex-end' }}>
+            <Button onClick={() => { if (canEditForm()) navigate('/console/org/deploy/issuer-identity'); }} disabled={submitting}>
               Cancel
             </Button>
             <Button type="submit" variant="contained" disabled={submitting || !activeOrgId || !selected || !capabilities?.managed_issuer_did_prefix}>
@@ -273,4 +308,24 @@ export default function IssuerIdentityWizard() {
       </Paper>
     </Container>
   );
+}
+
+export default function IssuerIdentityWizard() {
+  const { t } = useTranslation('console');
+  const { activeOrgId } = useConsole();
+  const { user, isAuthenticated } = useAuth();
+  const { can, isLoading } = usePermissions();
+  const location = useLocation();
+  const principalId = user?.user_id || user?.sub || user?.id || null;
+  const canView = can('signing-key', 'view');
+  const canCreate = can('signing-key', 'create');
+
+  if (isLoading) return <LinearProgress />;
+  if (typeof activeOrgId !== 'string' || !activeOrgId.trim()) {
+    return <Alert severity="info">{t('deploy.issuerIdentityWizard.selectOrganization')}</Alert>;
+  }
+  if (!canView) return <Alert severity="error">{t('deploy.issuerIdentityWizard.readDenied')}</Alert>;
+  if (!canCreate) return <Alert severity="error">{t('deploy.issuerIdentityWizard.createDenied')}</Alert>;
+  return <IssuerIdentityWizardContent key={JSON.stringify([activeOrgId, principalId, isAuthenticated,
+    location.key, location.pathname, location.search, location.hash, canView, canCreate])} />;
 }

@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 463,
+  "route_count": 466,
   "routes": [
     {
       "include_in_schema": true,
@@ -1712,6 +1712,18 @@
     {
       "include_in_schema": true,
       "method": "GET",
+      "path": "/v1/organizations/{org_id}/defaults",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/organizations/{org_id}/defaults",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
       "path": "/v1/organizations/{org_id}/environment",
       "status_code": 200
     },
@@ -1797,6 +1809,12 @@
       "include_in_schema": true,
       "method": "PATCH",
       "path": "/v1/organizations/{org_id}/members/{member_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{org_id}/members/{member_id}/approve",
       "status_code": 200
     },
     {

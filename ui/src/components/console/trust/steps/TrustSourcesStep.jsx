@@ -480,7 +480,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
           variant="outlined"
         />
       </Box>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.trustProfile.trustSourcesStep.description')}
       </Typography>
       <Alert severity="info" sx={{ mb: 3 }} icon={<InfoIcon />}>
@@ -558,7 +558,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
 
           {/* Examples — conditional per type */}
           <Box sx={{ mb: 3, p: 2, bgcolor: 'grey.50', borderRadius: 1, border: 1, borderColor: 'grey.200' }}>
-            <Typography variant="caption" color="text.secondary" gutterBottom display="block">
+            <Typography variant="caption" color="text.secondary" gutterBottom sx={{ display: 'block' }}>
               {t('wizards.trustProfile.trustSourcesStep.examplesTitle')}
             </Typography>
             {entryType === 'x509' ? (
@@ -850,7 +850,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
                 defaultValue: 'Connect a Marty Trust Registry Sync v1 feed',
               })}
             </Typography>
-            <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
               {t('wizards.trustProfile.trustSourcesStep.registryAlert.description', {
                 defaultValue: 'The service validates and imports this feed through the organization-scoped production API. Native ICAO PKD, EU LoTL, and AAMVA website formats are not treated as compatible feeds.',
               })}
@@ -887,7 +887,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
                         <Typography variant="caption" color="text.secondary" data-testid={`wizard.trustProfile.registryImport.sync.${index}`}>
                           {getRegistrySyncSummary(source)}
                         </Typography>
-                        <Typography variant="caption" color="text.secondary" display="block" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'monospace', wordBreak: 'break-all' }}>
                           {source.url}
                         </Typography>
                       </Box>
@@ -931,7 +931,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
               value={registryUrl}
               onChange={(event) => setRegistryUrl(event.target.value)}
               placeholder="https://registry.example.org/v1/trust-registry/sync"
-              inputProps={{ 'data-testid': 'wizard.trustProfile.registrySelect' }}
+              slotProps={{ htmlInput: { 'data-testid': 'wizard.trustProfile.registrySelect' } }}
               fullWidth
             />
             <TextField
@@ -946,7 +946,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
               type="number"
               value={registryIntervalHours}
               onChange={(event) => setRegistryIntervalHours(event.target.value)}
-              inputProps={{ min: 1, max: 720 }}
+              slotProps={{ htmlInput: { min: 1, max: 720 } }}
               fullWidth
             />
           </Stack>

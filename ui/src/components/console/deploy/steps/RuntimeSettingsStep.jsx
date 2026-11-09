@@ -29,6 +29,8 @@ import { useTranslation } from 'react-i18next';
 import { listPresentationPolicies, listCredentialTemplates } from '../../../../services/presentationPolicyApi';
 import { listFlows } from '../../../../services/flowsApi';
 import { useConsole } from '../../../../contexts/ConsoleContext';
+import { useOrganizationDefaults } from '../../../../hooks/useOrganizationDefaults';
+import { findOrganizationDefault, matchesTrust } from '../../organizationDefaultSelection';
 
 const isActivePolicy = (policy) => (
   String(policy?.status || '').trim().toLowerCase() === 'active'
@@ -59,6 +61,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
   const { activeOrgId } = useConsole();
+  const { defaults, loading: defaultsLoading } = useOrganizationDefaults(activeOrgId);
   const { data: catalog, loading, error, reload } = useAsyncData(
     async () => {
       if (!activeOrgId) {
@@ -69,13 +72,14 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
         loadCatalog(listCredentialTemplates, activeOrgId, 'Credential template'),
         loadCatalog(listFlows, activeOrgId, 'Flow'),
       ]);
-      return { policies, templates, flows };
+      return { organizationId: activeOrgId, policies, templates, flows };
     },
     [activeOrgId]
   );
-  const policies = catalog?.policies || [];
-  const templates = catalog?.templates || [];
-  const flows = catalog?.flows || [];
+  const currentCatalog = activeOrgId && catalog?.organizationId === activeOrgId ? catalog : null;
+  const policies = currentCatalog?.policies || [];
+  const templates = currentCatalog?.templates || [];
+  const flows = currentCatalog?.flows || [];
   const selectedPolicy = policies.find((policy) => policy.id === data.default_policy_id);
   const compatibleFlow = (flow) => (!flow.trust_profile_id || flow.trust_profile_id === selectedPolicy?.trust_profile_id)
     && (!flow.presentation_policy_id || flow.presentation_policy_id === selectedPolicy?.id)
@@ -84,14 +88,53 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
   // Reconcile selections against the current scoped catalogs before allowing review.
   useEffect(() => {
     const updates = {};
-    const ready = Boolean(!loading && !error && catalog);
+    const ready = Boolean(!loading && !error && currentCatalog);
     if (data.runtime_catalog_ready !== ready) updates.runtime_catalog_ready = ready;
     if (ready) {
       if (data.runtime_catalog !== catalog) updates.runtime_catalog = catalog;
-      const policy = selectedPolicy || (policies.length === 1 ? policies[0] : null);
+      let selectedTemplates = (data.credential_template_ids || []).filter((id) => templates.some((template) => template.id === id));
+      const automaticTemplateId = data._organization_default_template_initialized === activeOrgId
+        ? data._organization_default_template_id : null;
+      const explicitTemplates = selectedTemplates.filter((id) => id !== automaticTemplateId)
+        .map((id) => templates.find((template) => template.id === id));
+      const preferredPolicy = findOrganizationDefault(policies, defaults?.default_policy_id, activeOrgId,
+        (policy) => matchesTrust(policy, data.trust_profile_id)
+          && selectedTemplates.every((id) => matchesTrust(templates.find((template) => template.id === id), policy.trust_profile_id)));
+      let policy = selectedPolicy || (!data.default_policy_id && !defaultsLoading
+        ? preferredPolicy || (!defaults?.default_policy_id && policies.length === 1 ? policies[0] : null) : null);
+      const automaticPolicy = data._organization_default_policy && data._organization_default_policy.organizationId === activeOrgId
+        && data._organization_default_policy.id === data.default_policy_id;
+      if (automaticPolicy && policy && explicitTemplates.some((template) => !matchesTrust(template, policy.trust_profile_id))) {
+        policy = null;
+        updates._organization_default_policy = null;
+      } else if (!data.default_policy_id && policy && policy === preferredPolicy) {
+        updates._organization_default_policy = { organizationId: activeOrgId, id: policy.id };
+      }
       if (data.default_policy_id !== (policy?.id || null)) updates.default_policy_id = policy?.id || null;
-      if (data.trust_profile_id !== (policy?.trust_profile_id || null)) updates.trust_profile_id = policy?.trust_profile_id || null;
-      const selectedTemplates = (data.credential_template_ids || []).filter((id) => templates.some((template) => template.id === id));
+      if ((policy || data.default_policy_id) && data.trust_profile_id !== (policy?.trust_profile_id || null)) updates.trust_profile_id = policy?.trust_profile_id || null;
+      if (automaticTemplateId) {
+        const automaticTemplate = templates.find((template) => template.id === automaticTemplateId);
+        if (!automaticTemplate || (policy && !matchesTrust(automaticTemplate, policy.trust_profile_id))
+          || explicitTemplates.some((template) => !matchesTrust(template, automaticTemplate.trust_profile_id))) {
+          selectedTemplates = selectedTemplates.filter((id) => id !== automaticTemplateId);
+          updates._organization_default_template_id = null;
+        }
+      }
+      // Remember initialization in wizard state so returning to this step does not
+      // re-check a template the user deliberately unchecked.
+      if (data._organization_default_template_initialized !== activeOrgId) {
+        if ((data.credential_template_ids || []).length) {
+          updates._organization_default_template_initialized = activeOrgId;
+        } else if (policy && !defaultsLoading) {
+          const preferredTemplate = findOrganizationDefault(templates, defaults?.default_template_id, activeOrgId,
+            (template) => matchesTrust(template, policy.trust_profile_id));
+          if (preferredTemplate) {
+            selectedTemplates.push(preferredTemplate.id);
+            updates._organization_default_template_id = preferredTemplate.id;
+          }
+          updates._organization_default_template_initialized = activeOrgId;
+        }
+      }
       if (JSON.stringify(selectedTemplates) !== JSON.stringify(data.credential_template_ids)) updates.credential_template_ids = selectedTemplates;
       const selectedFlows = (data.enabled_flows || []).filter((id) => flows.some((flow) => flow.id === id && compatibleFlow(flow)));
       if (JSON.stringify(selectedFlows) !== JSON.stringify(data.enabled_flows)) updates.enabled_flows = selectedFlows;
@@ -145,7 +188,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
           {t('wizards.deploymentProfile.runtimeSettingsStep.blocked.title')}
         </Typography>
         
-        <Typography color="text.secondary" paragraph sx={{ maxWidth: 600, mx: 'auto' }}>
+        <Typography color="text.secondary" sx={{ marginBottom: '16px', maxWidth: 600, mx: 'auto' }} component="p">
           {t('wizards.deploymentProfile.runtimeSettingsStep.blocked.description')}
         </Typography>
 
@@ -179,7 +222,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
       <Typography variant="h6" gutterBottom>
         {t('wizards.deploymentProfile.runtimeSettingsStep.title')}
       </Typography>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.deploymentProfile.runtimeSettingsStep.description')}
       </Typography>
 
@@ -194,6 +237,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
             onChange({
               default_policy_id: e.target.value,
               trust_profile_id: selectedPolicy?.trust_profile_id || null,
+              _organization_default_policy: null,
             });
           }}
           label={t('wizards.deploymentProfile.runtimeSettingsStep.fields.defaultPolicy')}
@@ -218,7 +262,9 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
         {templates.map((template) => <FormControlLabel key={template.id} label={template.name}
           control={<Checkbox checked={(data.credential_template_ids || []).includes(template.id)}
             onChange={() => onChange({ credential_template_ids: (data.credential_template_ids || []).includes(template.id)
-              ? data.credential_template_ids.filter((id) => id !== template.id) : [...(data.credential_template_ids || []), template.id] })} />} />)}
+              ? data.credential_template_ids.filter((id) => id !== template.id) : [...(data.credential_template_ids || []), template.id],
+              _organization_default_template_id: data._organization_default_template_id === template.id ? null : data._organization_default_template_id,
+              _organization_default_template_initialized: activeOrgId })} />} />)}
       </FormGroup>
       {!templates.length && <Alert severity="info">No active credential templates are available. A verification-only deployment can continue without one.</Alert>}
 
@@ -226,7 +272,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
       <Typography variant="subtitle2" gutterBottom>
         {t('wizards.deploymentProfile.runtimeSettingsStep.fields.enabledFlows')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" paragraph>
+      <Typography variant="body2" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         Select active flow definitions. Issuance flows require their credential template to be selected; verification flows must use the selected policy and trust profile.
       </Typography>
       

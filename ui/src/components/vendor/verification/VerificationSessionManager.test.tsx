@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@test/utils';
+import { act, render, screen, waitFor, within } from '@test/utils';
 import userEvent from '@testing-library/user-event';
 import { openDeepLink } from '../../../utils/deviceDetection';
 
@@ -308,7 +308,7 @@ describe('VerificationSessionManager', () => {
   it('starts verification with the organization issuer DID and no public profile ID', async () => {
     const user = userEvent.setup();
     mockListPresentationPolicies.mockResolvedValue([
-      { id: 'policy-1', name: 'Employment proof' },
+      { id: 'policy-1', name: 'Employment proof', status: 'active' },
     ]);
     mockStartVerificationFlow.mockResolvedValue({
       instance_id: 'flow-1',
@@ -326,9 +326,14 @@ describe('VerificationSessionManager', () => {
       algorithm: 'ES256',
     });
     await user.click(newVerification);
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+    expect(screen.queryByRole('switch', { name: /ad-hoc/i })).not.toBeInTheDocument();
     await user.click(await screen.findByLabelText('Presentation Policy'));
     await user.click(await screen.findByRole('option', { name: 'Employment proof' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.queryByRole('switch', { name: /inspection/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/InspectionSystem|deep document inspection/i)).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText('Verification Purpose'), 'Employment review');
     await user.click(screen.getByRole('button', { name: 'Start Session' }));
 
     await waitFor(() => {
@@ -338,10 +343,12 @@ describe('VerificationSessionManager', () => {
         presentation_policy_id: 'policy-1',
         trust_profile_id: undefined,
         deployment_profile_id: undefined,
-        external_reference: undefined,
+        external_reference: 'Employment review',
       });
     });
     expect(mockStartVerificationFlow.mock.calls[0][0]).not.toHaveProperty('issuer_profile_id');
+    expect(mockStartVerificationFlow.mock.calls[0][0]).not.toHaveProperty('inline_policy');
+    expect(mockStartVerificationFlow.mock.calls[0][0]).not.toHaveProperty('request_inspection');
   });
 
   it('selects among multiple public issuer DIDs without exposing profile coordinates', async () => {
@@ -363,7 +370,7 @@ describe('VerificationSessionManager', () => {
       ],
     });
     mockListPresentationPolicies.mockResolvedValue([
-      { id: 'policy-1', name: 'Employment proof' },
+      { id: 'policy-1', name: 'Employment proof', status: 'active' },
     ]);
     mockStartVerificationFlow.mockResolvedValue({
       instance_id: 'flow-1',
@@ -396,5 +403,199 @@ describe('VerificationSessionManager', () => {
     expect(request).not.toHaveProperty('issuer_profile_id');
     expect(request).not.toHaveProperty('signing_service_id');
     expect(request).not.toHaveProperty('signing_key_reference');
+  });
+
+  it('keeps Next disabled with a setup action when no active policy can start a session', async () => {
+    const user = userEvent.setup();
+    render(<VerificationSessionManager organizationId="org-1" />);
+    const newVerification = await screen.findByRole('button', { name: 'New Verification' });
+    await waitFor(() => expect(newVerification).toBeEnabled());
+    await user.click(newVerification);
+
+    expect(await screen.findByText('No active presentation policies')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Manage Presentation Policies' })).toHaveAttribute('href', '/console/org/policies/presentation');
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: /ad-hoc/i })).not.toBeInTheDocument();
+    expect(mockStartVerificationFlow).not.toHaveBeenCalled();
+  });
+
+  it('blocks a previously selected policy after a reload error and permits retry recovery', async () => {
+    const user = userEvent.setup();
+    mockListPresentationPolicies.mockResolvedValue([{ id: 'policy-1', name: 'Employment proof', status: 'active' }]);
+    render(<VerificationSessionManager organizationId="org-1" />);
+    const newVerification = await screen.findByRole('button', { name: 'New Verification' });
+    await waitFor(() => expect(newVerification).toBeEnabled());
+    await user.click(newVerification);
+    await user.click(await screen.findByLabelText('Presentation Policy'));
+    await user.click(await screen.findByRole('option', { name: 'Employment proof' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByRole('button', { name: 'Start Session' })).toBeEnabled();
+
+    mockListPresentationPolicies.mockRejectedValueOnce(new Error('Policy service unavailable'));
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    expect(await screen.findByText('Policy service unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+    expect(screen.queryByText('No active presentation policies')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+    expect(mockStartVerificationFlow).not.toHaveBeenCalled();
+  });
+
+  it('closes and resets the configured wizard when the active organization changes', async () => {
+    const user = userEvent.setup();
+    mockListPresentationPolicies.mockResolvedValue([{ id: 'policy-1', name: 'Employment proof', status: 'active' }]);
+    const { rerender } = render(<VerificationSessionManager organizationId="org-1" />);
+    const newVerification = await screen.findByRole('button', { name: 'New Verification' });
+    await waitFor(() => expect(newVerification).toBeEnabled());
+    await user.click(newVerification);
+    await user.click(await screen.findByLabelText('Presentation Policy'));
+    await user.click(await screen.findByRole('option', { name: 'Employment proof' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByRole('button', { name: 'Start Session' })).toBeEnabled();
+
+    mockListPresentationPolicies.mockResolvedValue([]);
+    rerender(<VerificationSessionManager organizationId="org-2" />);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New Verification' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: 'New Verification' }));
+    expect(await screen.findByText('No active presentation policies')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+    expect(mockListPresentationPolicies).toHaveBeenLastCalledWith({ organization_id: 'org-2', limit: 100, offset: 0 });
+    expect(mockStartVerificationFlow).not.toHaveBeenCalled();
+  });
+
+  it('ignores a session creation result from the previous organization', async () => {
+    const user = userEvent.setup();
+    let resolveSession!: (session: unknown) => void;
+    mockStartVerificationFlow.mockReturnValueOnce(new Promise((resolve) => { resolveSession = resolve; }));
+    mockListPresentationPolicies.mockResolvedValue([{ id: 'policy-1', name: 'Employment proof', status: 'active' }]);
+    const { rerender } = render(<VerificationSessionManager organizationId="org-1" />);
+    const newVerification = await screen.findByRole('button', { name: 'New Verification' });
+    await waitFor(() => expect(newVerification).toBeEnabled());
+    await user.click(newVerification);
+    await user.click(await screen.findByLabelText('Presentation Policy'));
+    await user.click(await screen.findByRole('option', { name: 'Employment proof' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Start Session' }));
+    expect(mockStartVerificationFlow).toHaveBeenCalledOnce();
+
+    rerender(<VerificationSessionManager organizationId="org-2" />);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await act(async () => {
+      resolveSession({ instance_id: 'old-org-session', request_uri: 'openid4vp://authorize', status: 'AWAITING_WALLET' });
+    });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'OID4VP QR Code' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New Verification' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: 'New Verification' }));
+    expect(await screen.findByRole('button', { name: 'Next' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Done' })).not.toBeInTheDocument();
+  });
+
+  it('can reopen after closing during creation without a late result replacing the new wizard', async () => {
+    const user = userEvent.setup();
+    let resolveSession!: (session: unknown) => void;
+    mockStartVerificationFlow.mockReturnValueOnce(new Promise((resolve) => { resolveSession = resolve; }));
+    mockListPresentationPolicies.mockResolvedValue([{ id: 'policy-1', name: 'Employment proof', status: 'active' }]);
+    render(<VerificationSessionManager organizationId="org-1" />);
+    const newVerification = await screen.findByRole('button', { name: 'New Verification' });
+    await waitFor(() => expect(newVerification).toBeEnabled());
+    await user.click(newVerification);
+    await user.click(await screen.findByLabelText('Presentation Policy'));
+    await user.click(await screen.findByRole('option', { name: 'Employment proof' }));
+    await waitFor(() => expect(screen.queryByRole('listbox', { hidden: true })).not.toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Start Session' }));
+    expect(mockStartVerificationFlow).toHaveBeenCalledOnce();
+    await user.click(screen.getByLabelText('Verification Purpose'));
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: 'New Verification' }));
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    await user.click(await screen.findByLabelText('Presentation Policy'));
+    await user.click(await screen.findByRole('option', { name: 'Employment proof' }));
+    expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
+    await act(async () => {
+      resolveSession({ instance_id: 'old-wizard-session', request_uri: 'openid4vp://authorize', status: 'AWAITING_WALLET' });
+    });
+    expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
+    expect(screen.queryByRole('img', { name: 'OID4VP QR Code' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Done' })).not.toBeInTheDocument();
+  });
+
+  it('ignores old organization issuer identities before opening the new organization wizard', async () => {
+    const user = userEvent.setup();
+    let resolveOldIdentities!: (identities: unknown) => void;
+    mockListPublicIssuerIdentities
+      .mockReturnValueOnce(new Promise((resolve) => { resolveOldIdentities = resolve; }))
+      .mockResolvedValueOnce({ identities: [{ issuer_did: 'did:web:org-2.example', status: 'active' }] });
+    mockListPresentationPolicies.mockResolvedValue([{ id: 'policy-2', name: 'Org 2 Policy', status: 'active' }]);
+    mockStartVerificationFlow.mockResolvedValue({ instance_id: 'org-2-session', request_uri: 'openid4vp://authorize', status: 'AWAITING_WALLET' });
+    const { rerender } = render(<VerificationSessionManager organizationId="org-1" />);
+    expect(screen.getByRole('button', { name: 'New Verification' })).toBeDisabled();
+    rerender(<VerificationSessionManager organizationId="org-2" />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New Verification' })).toBeEnabled());
+    await act(async () => {
+      resolveOldIdentities({ identities: [{ issuer_did: 'did:web:org-1.example', status: 'active' }] });
+    });
+
+    await user.click(screen.getByRole('button', { name: 'New Verification' }));
+    await user.click(await screen.findByLabelText('Presentation Policy'));
+    await user.click(await screen.findByRole('option', { name: 'Org 2 Policy' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Start Session' }));
+    expect(mockStartVerificationFlow).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: 'org-2', issuer_did: 'did:web:org-2.example', presentation_policy_id: 'policy-2',
+    }));
+  });
+
+  it.each(['success', 'failure'])('ignores a prior organization session-list %s while the current list is loading', async (outcome) => {
+    let resolveOld!: (sessions: unknown[]) => void;
+    let rejectOld!: (error: Error) => void;
+    let resolveCurrent!: (sessions: unknown[]) => void;
+    mockListFlowExecutions
+      .mockReturnValueOnce(new Promise((resolve, reject) => { resolveOld = resolve; rejectOld = reject; }))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveCurrent = resolve; }));
+    const { rerender } = render(<VerificationSessionManager organizationId="org-1" />);
+    rerender(<VerificationSessionManager organizationId="org-2" />);
+    await act(async () => {
+      if (outcome === 'success') {
+        resolveOld([{ id: 'old-session', flow_type: 'oid4vp', status: 'AWAITING_WALLET', purpose: 'Old organization session' }]);
+      } else {
+        rejectOld(new Error('Old organization unavailable'));
+      }
+    });
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.queryByText('Old organization session')).not.toBeInTheDocument();
+    expect(screen.queryByText('Old organization unavailable')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveCurrent([{ id: 'current-session', flow_type: 'oid4vp', status: 'AWAITING_WALLET', purpose: 'Current organization session' }]);
+    });
+    expect(await screen.findByText('Current organization session')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Active (1)' })).toBeInTheDocument();
+    expect(mockListFlowExecutions).toHaveBeenLastCalledWith(null, { organization_id: 'org-2' });
+  });
+
+  it('clears the prior organization list and preserves manual refresh for the new organization', async () => {
+    const user = userEvent.setup();
+    let resolveCurrent!: (sessions: unknown[]) => void;
+    mockListFlowExecutions
+      .mockResolvedValueOnce([{ id: 'old-session', flow_type: 'oid4vp', status: 'AWAITING_WALLET', purpose: 'Old organization session' }])
+      .mockReturnValueOnce(new Promise((resolve) => { resolveCurrent = resolve; }))
+      .mockResolvedValueOnce([{ id: 'refreshed-session', flow_type: 'oid4vp', status: 'AWAITING_WALLET', purpose: 'Refreshed current session' }]);
+    const { rerender } = render(<VerificationSessionManager organizationId="org-1" />);
+    expect(await screen.findByText('Old organization session')).toBeInTheDocument();
+    rerender(<VerificationSessionManager organizationId="org-2" />);
+    expect(screen.queryByText('Old organization session')).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Active (0)' })).toBeInTheDocument();
+    await act(async () => { resolveCurrent([]); });
+    await user.click(within(screen.getByLabelText('Refresh')).getByRole('button'));
+    expect(await screen.findByText('Refreshed current session')).toBeInTheDocument();
+    expect(mockListFlowExecutions).toHaveBeenCalledTimes(3);
+    expect(mockListFlowExecutions).toHaveBeenLastCalledWith(null, { organization_id: 'org-2' });
+    expect(screen.queryByText('Old organization session')).not.toBeInTheDocument();
   });
 });

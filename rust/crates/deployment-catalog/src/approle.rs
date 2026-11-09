@@ -34,6 +34,7 @@ pub enum Role {
     CaRotation,
     Snapshot,
     SnapshotRotator,
+    Application,
 }
 struct Spec {
     mount: &'static str,
@@ -54,11 +55,22 @@ impl Role {
             "ca-rotation" => Ok(Self::CaRotation),
             "snapshot" => Ok(Self::Snapshot),
             "snapshot-rotator" => Ok(Self::SnapshotRotator),
+            "application" => Ok(Self::Application),
             _ => Err(REFUSAL),
         }
     }
     fn spec(self) -> Spec {
         let (mount, role, policy, role_file, secret_file, names_file, leaf, short) = match self {
+            Self::Application => (
+                crate::application_authority::MOUNT,
+                crate::application_authority::ROLE,
+                crate::application_authority::POLICY,
+                crate::application_authority::ROLE_FILE,
+                crate::application_authority::SECRET_FILE,
+                None,
+                None,
+                true,
+            ),
             Self::Audit => (
                 "selfhost-audit",
                 "custody-auditor",
@@ -420,6 +432,7 @@ fn renewal_acl(
 pub fn policy(role: Role, context: &Value) -> Result<String> {
     let spec = role.spec();
     match role {
+        Role::Application => crate::application_authority::policy(),
         Role::Renewal | Role::CaRotation => {
             let names = names(&context["names"])?;
             if role == Role::CaRotation && names.len() != 21 {
@@ -526,7 +539,7 @@ pub fn policy(role: Role, context: &Value) -> Result<String> {
         }
     }
 }
-fn owned_identity(_path: &Path, required: bool) -> Result<()> {
+pub(crate) fn owned_identity(_path: &Path, required: bool) -> Result<()> {
     if required {
         #[cfg(unix)]
         {
@@ -549,6 +562,9 @@ pub async fn login(
     identity: &Path,
     context: &Value,
 ) -> Result<Value> {
+    if role == Role::Application {
+        return crate::application_authority::login(bao, identity, context).await;
+    }
     if !context.is_object() {
         return Err(REFUSAL);
     }
@@ -645,6 +661,7 @@ async fn validated_login(
         }
     }
     match role {
+        Role::Application => return Err(REFUSAL),
         Role::Audit | Role::Evidence => {
             let leaf_policy = if role == Role::Audit {
                 AUDIT_POLICY
@@ -925,7 +942,7 @@ pub async fn rotate(
     context: &Value,
     retiring: bool,
 ) -> Result<()> {
-    if role == Role::CaRotation {
+    if matches!(role, Role::CaRotation | Role::Application) {
         return Err(REFUSAL);
     }
     let identity = private_directory(identity)?;
@@ -1150,6 +1167,9 @@ pub async fn bootstrap(
     output: &Path,
     context: &Value,
 ) -> Result<()> {
+    if role == Role::Application {
+        return crate::application_authority::bootstrap(bao, output, context).await;
+    }
     if !context.is_object() {
         return Err(REFUSAL);
     }

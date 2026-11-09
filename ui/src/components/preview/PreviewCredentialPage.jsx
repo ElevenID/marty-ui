@@ -4,23 +4,39 @@
  * Shows the credential detail view that applicants see before applying.
  */
 
-import { useAsyncData } from '../../hooks/useAsyncData';
-import { useParams } from 'react-router';
-import { PreviewProvider, usePreview } from '../../contexts/PreviewContext';
+import { useEffect, useState } from 'react';
+import { useLocation, useParams, useSearchParams } from 'react-router';
+import { useAuth } from '../../hooks/useAuth';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
+import { usePreview } from '../../contexts/PreviewContext';
+import PreviewPage from './PreviewPage';
 import { Box, Container, Paper, Typography, CircularProgress, Alert } from '@mui/material';
 import PreviewNotFound from './PreviewNotFound';
 import { fetchPreviewCredentialTemplate } from '../../application/vendor';
 
-function PreviewCredentialContent() {
-  const { templateId } = useParams();
+function PreviewCredentialContent({ templateId, organizationId }) {
   const { updateContextLabel } = usePreview();
-  const { data: template, loading, error } = useAsyncData(async () => {
-    const data = await fetchPreviewCredentialTemplate({ templateId });
-    updateContextLabel(`Credential: ${data.name || data.credential_type || 'Unknown'}`);
-    return data;
-  }, [templateId]);
+  const beginLoad = useAsyncActionScope();
+  const [loaded, setLoaded] = useState(null);
 
-  if (loading) {
+  useEffect(() => {
+    const action = beginLoad();
+    (async () => {
+      try {
+        const template = await action.run(fetchPreviewCredentialTemplate, { templateId });
+        if (template?.id !== templateId || !template.organization_id
+          || (organizationId != null && template.organization_id !== organizationId)) {
+          throw new Error('This Credential Template is not available in the selected organization.');
+        }
+        updateContextLabel(`Credential: ${template.name || template.credential_type || 'Unknown'}`);
+        setLoaded({ template });
+      } catch (error) {
+        if (action.isCurrent()) setLoaded({ error });
+      }
+    })();
+  }, [beginLoad, templateId, organizationId, updateContextLabel]);
+
+  if (!loaded) {
     return (
       <Container maxWidth="md" sx={{ py: 4, textAlign: 'center' }}>
         <CircularProgress />
@@ -29,7 +45,7 @@ function PreviewCredentialContent() {
     );
   }
 
-  if (error) {
+  if (loaded.error?.status === 404) {
     return (
       <PreviewNotFound 
         resourceType="credential" 
@@ -37,6 +53,20 @@ function PreviewCredentialContent() {
       />
     );
   }
+  if (loaded.error) {
+    return <Container maxWidth="md" sx={{ py: 4 }}>
+      <Alert severity="error">{loaded.error.message || 'Credential preview could not be loaded.'}</Alert>
+    </Container>;
+  }
+
+  const { template } = loaded;
+  const status = String(template.status || '').toUpperCase();
+  const claims = Array.isArray(template.claims)
+    ? template.claims.filter((claim) => typeof claim?.name === 'string' && claim.name)
+    : [];
+  const requiredClaims = claims.filter((claim) => claim.required === true);
+  const optionalClaims = claims.filter((claim) => claim.required !== true);
+  const claimLabel = (claim) => claim.display?.label || claim.name.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>
@@ -44,20 +74,24 @@ function PreviewCredentialContent() {
         <Typography variant="h4" gutterBottom>
           {template?.name || template?.credential_type || 'Credential'}
         </Typography>
-        <Typography variant="body1" color="text.secondary" paragraph>
+        <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
           {template?.description || 'No description available.'}
         </Typography>
 
         {/* Check for incomplete/draft state */}
-        {template?.status === 'draft' && (
+        {status === 'DRAFT' && (
           <Alert severity="warning" sx={{ mb: 2 }}>
             <strong>Draft Status:</strong> This credential template is in draft status and has not been published. 
             The applicant experience may differ when published.
           </Alert>
         )}
+        {['DEPRECATED', 'ARCHIVED'].includes(status) && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <strong>{status}:</strong> This credential template is no longer active. Its preview shows the saved configuration.
+          </Alert>
+        )}
 
-        {(!template?.required_fields || template.required_fields.length === 0) &&
-          (!template?.optional_fields || template.optional_fields.length === 0) && (
+        {claims.length === 0 && (
           <Alert severity="warning" sx={{ mb: 2 }}>
             <strong>Missing Configuration:</strong> This template has no configured fields. 
             Complete the template configuration before publishing.
@@ -67,11 +101,11 @@ function PreviewCredentialContent() {
         <Typography variant="h6" sx={{ mt: 3, mb: 2 }}>
           Required Information
         </Typography>
-        {template?.required_fields?.length > 0 ? (
-          <Box component="ul" sx={{ pl: 3 }}>
-            {template.required_fields.map((field) => (
-              <Typography component="li" key={field} variant="body2">
-                {field.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
+        {requiredClaims.length > 0 ? (
+          <Box component="ul" aria-label="Required information" sx={{ pl: 3 }}>
+            {requiredClaims.map((claim) => (
+              <Typography component="li" key={claim.name} variant="body2">
+                {claimLabel(claim)}
               </Typography>
             ))}
           </Box>
@@ -80,6 +114,14 @@ function PreviewCredentialContent() {
             No specific requirements configured.
           </Typography>
         )}
+        {optionalClaims.length > 0 && <>
+          <Typography variant="h6" sx={{ mt: 3, mb: 2 }}>Optional Information</Typography>
+          <Box component="ul" aria-label="Optional information" sx={{ pl: 3 }}>
+            {optionalClaims.map((claim) => (
+              <Typography component="li" key={claim.name} variant="body2">{claimLabel(claim)}</Typography>
+            ))}
+          </Box>
+        </>}
       </Paper>
     </Container>
   );
@@ -87,15 +129,24 @@ function PreviewCredentialContent() {
 
 function PreviewCredentialPage() {
   const { templateId } = useParams();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const { user } = useAuth();
+  const organizationId = searchParams.get('organization_id');
+  const scope = JSON.stringify([
+    user?.user_id || user?.sub || user?.id || null,
+    templateId, organizationId, location.key, location.search,
+  ]);
 
   return (
-    <PreviewProvider 
+    <PreviewPage
+      key={scope}
       resourceType="credential" 
       resourceId={templateId}
       returnUrl="/console/org/templates/credentials"
     >
-      <PreviewCredentialContent />
-    </PreviewProvider>
+      <PreviewCredentialContent templateId={templateId} organizationId={organizationId} />
+    </PreviewPage>
   );
 }
 

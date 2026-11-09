@@ -1156,14 +1156,14 @@ function CanvasIntegrationsPage() {
 
           <Paper sx={{ p: 2 }} data-testid="canvas-readiness">
             <Stack spacing={2}>
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between">
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ justifyContent: 'space-between' }}>
                 <Box>
                   <Typography variant="h6">Production readiness</Typography>
                   <Typography variant="body2" color="text.secondary">
                     {selectedPlatform ? selectedPlatform.display_name || selectedPlatform.canvas_base_url : 'Select a Canvas platform.'}
                   </Typography>
                 </Box>
-                <Stack direction="row" spacing={1} alignItems="center">
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                   <Chip
                     label={platformReadiness?.ready ? 'Ready' : 'Action required'}
                     color={platformReadiness?.ready ? 'success' : 'warning'}
@@ -1196,11 +1196,11 @@ function CanvasIntegrationsPage() {
                       key={check.code || check.id || check.name}
                       direction={{ xs: 'column', md: 'row' }}
                       spacing={1}
-                      alignItems={{ xs: 'flex-start', md: 'center' }}
+                      sx={{ alignItems: { xs: 'flex-start', md: 'center' } }}
                     >
                       <Chip size="small" label={readinessLabel} color={passed ? 'success' : check.blocking ? 'error' : 'warning'} variant="outlined" />
                       <Box>
-                        <Typography variant="body2" fontWeight={600}>{check.component || check.name || check.code || check.id}</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{check.component || check.name || check.code || check.id}</Typography>
                         <Typography variant="caption" color="text.secondary">
                           {check.remediation || check.detail || check.message}
                         </Typography>
@@ -1230,7 +1230,7 @@ function CanvasIntegrationsPage() {
                   {(syncJobsError || awardCandidatesError || correctionReviewsError)?.message || 'Some Canvas operations could not be loaded.'}
                 </Alert>
               )}
-              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
                 <Chip label={`Sync jobs: ${syncJobs.length}`} variant="outlined" />
                 <Chip label={`Pending awards: ${awardCandidates.filter((candidate) => candidate.status === 'pending_claim').length}`} color="info" variant="outlined" />
                 <Chip label={`Identity links required: ${awardCandidates.filter((candidate) => candidate.status === 'identity_link_required').length}`} color="warning" variant="outlined" />
@@ -1277,7 +1277,7 @@ function CanvasIntegrationsPage() {
                               </TableCell>
                               <TableCell align="right">
                                 {retryable && (
-                                  <Stack direction="row" spacing={1} justifyContent="flex-end">
+                                  <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end' }}>
                                     <Button
                                       size="small"
                                       disabled={!canEditCanvas || Boolean(portableOperationBusy)}
@@ -1345,14 +1345,14 @@ function CanvasIntegrationsPage() {
                       <Paper key={review.id} variant="outlined" sx={{ p: 1.5 }}
                         data-testid="canvas-correction-review" data-review-id={review.id}
                         data-application-id={review.application_id} data-credential-id={review.credential_id}>
-                        <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} justifyContent="space-between" alignItems={{ xs: 'stretch', md: 'center' }}>
+                        <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', md: 'center' } }}>
                           <Box>
-                            <Typography variant="body2" fontWeight={600}>Credential {review.credential_id || review.id}</Typography>
+                            <Typography variant="body2" sx={{ fontWeight: 600 }}>Credential {review.credential_id || review.id}</Typography>
                             <Typography variant="caption" color="text.secondary">
                               Authoritative Canvas evidence changed from permit to deny. The credential remains active until an administrator acts.
                             </Typography>
                           </Box>
-                          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
                             <Button
                               size="small"
                               disabled={!canEditCanvas || Boolean(portableOperationBusy)}
@@ -1388,14 +1388,14 @@ function CanvasIntegrationsPage() {
 
           <Paper sx={{ p: 2 }} data-testid="canvas-mirror-ops">
             <Stack spacing={2}>
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', md: 'center' }}>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', md: 'center' } }}>
                 <Box>
                   <Typography variant="h6">Canvas mirror ops</Typography>
                   <Typography variant="caption" color="text.secondary">
                     {organizationId}
                   </Typography>
                 </Box>
-                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
                   <Tooltip title="Refresh mirror health">
                     <span>
                       <IconButton onClick={reloadMirrorHealth} disabled={mirrorHealthLoading}>
@@ -1450,7 +1450,7 @@ function CanvasIntegrationsPage() {
                 </Alert>
               )}
 
-              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
                 <Chip
                   size="small"
                   label={`Pending publish: ${healthCount(mirrorHealth?.pending_publish_count)}`}
@@ -1498,8 +1498,8 @@ function CanvasIntegrationsPage() {
                       icon={<WarningAmberIcon fontSize="inherit" />}
                     >
                       <Stack spacing={0.5}>
-                        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-                          <Typography variant="body2" fontWeight={600}>
+                        <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>
                             {alert.message}
                           </Typography>
                           <Chip size="small" label={alert.severity} color={alertSeverityColor(alert.severity)} />
@@ -1526,14 +1526,14 @@ function CanvasIntegrationsPage() {
 
           <Paper sx={{ p: 2 }} data-testid="canvas-credentials-destination">
             <Stack spacing={2}>
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', md: 'center' }}>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', md: 'center' } }}>
                 <Box>
                   <Typography variant="h6">Canvas Credentials destination</Typography>
                   <Typography variant="body2" color="text.secondary">
                     Organization-managed public badge publishing for Canvas Credentials.
                   </Typography>
                 </Box>
-                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
                   <Chip
                     size="small"
                     label={canvasCredentialsReady ? 'Ready' : 'Needs setup'}
@@ -1578,7 +1578,7 @@ function CanvasIntegrationsPage() {
                 </Box>
               </Stack>
 
-              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
                 <Button
                   size="small"
                   variant="outlined"
@@ -1626,7 +1626,7 @@ function CanvasIntegrationsPage() {
                     sx={{ cursor: 'pointer' }}
                   >
                     <TableCell>
-                      <Typography variant="body2" fontWeight={600}>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
                         {platform.display_name || platform.canvas_base_url || platform.canvas_account_id}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
@@ -1635,13 +1635,13 @@ function CanvasIntegrationsPage() {
                     </TableCell>
                     <TableCell>{platform.canvas_account_id}</TableCell>
                     <TableCell>
-                      <Stack direction="row" spacing={1} flexWrap="wrap">
+                      <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
                         <Chip size="small" label={platform.lti_client_id ? 'Client' : 'No client'} variant="outlined" />
                         <Chip size="small" label={platform.lti_jwks_url || platform.lti_jwks_json ? 'JWKS' : 'No JWKS'} variant="outlined" />
                       </Stack>
                     </TableCell>
                     <TableCell>
-                      <Stack spacing={0.5} alignItems="flex-start">
+                      <Stack spacing={0.5} sx={{ alignItems: 'flex-start' }}>
                         <StatusChip status={platform.enabled ? 'active' : 'disabled'} />
                         <Chip
                           size="small"
@@ -1719,14 +1719,14 @@ function CanvasIntegrationsPage() {
                   return (
                     <TableRow key={binding.id} hover>
                       <TableCell>
-                        <Typography variant="body2" fontWeight={600}>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
                           {binding.display_name || binding.canvas_scope?.course_id || binding.id}
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
                           {platformById[binding.platform_id]?.canvas_account_id || binding.canvas_account_id}
                         </Typography>
                         {binding.deployment_profile_id && (
-                          <Typography variant="caption" color="text.secondary" display="block">
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                             {deploymentProfileById[binding.deployment_profile_id]?.name || binding.deployment_profile_id}
                           </Typography>
                         )}
@@ -1757,7 +1757,7 @@ function CanvasIntegrationsPage() {
                         </Stack>
                       </TableCell>
                       <TableCell>
-                        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
                           <Chip size="small" label={binding.delivery_mode} variant="outlined" />
                           {binding.auto_approve_on_evidence && <Chip size="small" label="Auto approve" color="success" variant="outlined" />}
                           {enabledCanvasFeatureLabels(binding.feature_flags).map((label) => (
@@ -1766,7 +1766,7 @@ function CanvasIntegrationsPage() {
                         </Stack>
                       </TableCell>
                       <TableCell>
-                        <Stack spacing={0.5} alignItems="flex-start">
+                        <Stack spacing={0.5} sx={{ alignItems: 'flex-start' }}>
                           <StatusChip status={binding.enabled ? 'active' : 'disabled'} />
                           {readiness && (
                             <Chip size="small" label={readiness.ready ? 'Ready' : 'Blocked'} color={readiness.ready ? 'success' : 'warning'} variant="outlined" />
@@ -2079,7 +2079,7 @@ function CanvasIntegrationsPage() {
                 </Alert>
                 <Paper variant="outlined" sx={{ p: 2 }}>
                   <Stack spacing={1.5}>
-                    <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={1} alignItems={{ xs: 'stretch', md: 'center' }}>
+                    <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', md: 'center' } }}>
                       <Box>
                         <Typography variant="subtitle2">Required evidence rules</Typography>
                         <Typography variant="caption" color="text.secondary">
@@ -2098,7 +2098,7 @@ function CanvasIntegrationsPage() {
                           : storedRequirement;
                         const typeLabel = EVIDENCE_TYPES.find((type) => type.value === requirement.fact_type)?.label || requirement.fact_type || 'Canvas evidence';
                         return (
-                          <Stack key={requirement.requirement_id || `requirement-${index}`} direction="row" spacing={1} alignItems="center">
+                          <Stack key={requirement.requirement_id || `requirement-${index}`} direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                             <Button
                               fullWidth
                               size="small"
@@ -2128,7 +2128,7 @@ function CanvasIntegrationsPage() {
                 </Paper>
                 <Paper variant="outlined" sx={{ p: 2 }}>
                   <Stack spacing={2}>
-                    <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', md: 'center' }}>
+                    <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', md: 'center' } }}>
                       <Box>
                         <Typography variant="subtitle2">Import Canvas activity</Typography>
                         <Typography variant="caption" color="text.secondary">
@@ -2313,7 +2313,7 @@ function CanvasIntegrationsPage() {
                 {bindingForm.delivery_mode === 'wallet_plus_canvas_mirror' && (
                   <Paper variant="outlined" sx={{ p: 2 }}>
                     <Stack spacing={2}>
-                      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', md: 'center' }}>
+                      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', md: 'center' } }}>
                         <Box>
                           <Typography variant="subtitle2">Canvas Credentials provider</Typography>
                           <Typography variant="caption" color="text.secondary">

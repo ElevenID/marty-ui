@@ -649,7 +649,9 @@ function evaluateIntentFlowReadiness(flows, dependencyReadiness, trustDependenci
   if (dependencyReadiness.state !== ReadinessState.READY) {
     return {
       state: ReadinessState.MISSING,
-      message: `Blocked: ${dependencyReadiness.message}`,
+      message: dependencyReadiness.message.startsWith('Blocked:')
+        ? dependencyReadiness.message
+        : `Blocked: ${dependencyReadiness.message}`,
       action: null,
       path: null,
       blockReason: null,

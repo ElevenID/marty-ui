@@ -40,7 +40,7 @@ export default function ApplicationEvidenceEditor({ requirements = [], onChange 
 
   return (
     <Box>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+      <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
         <Typography variant="h6">Evidence</Typography>
         <Button
           startIcon={<AddIcon />}
@@ -56,7 +56,7 @@ export default function ApplicationEvidenceEditor({ requirements = [], onChange 
           return (
             <Paper key={`${requirement.evidence_id}-${index}`} variant="outlined" sx={{ p: 2 }}>
               <Stack spacing={1.5}>
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'center' } }}>
                   <TextField
                     required
                     label="Evidence ID"

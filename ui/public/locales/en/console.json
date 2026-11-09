@@ -1,4 +1,20 @@
 {
+  "membershipReview": {
+    "pending": "Pending",
+    "description": "Review pending memberships and approve access with the roles already assigned.",
+    "signIn": "Sign in to review membership requests.",
+    "selectOrganization": "Select an organization to review membership requests.",
+    "permissionsLoading": "Checking membership permissions",
+    "readDenied": "You do not have permission to view pending memberships for this organization.",
+    "approvalOnly": "You can approve pending memberships here. Rejection is not available.",
+    "viewOnly": "You can view requests, but you do not have permission to approve them.",
+    "applicant": "Applicant",
+    "roles": "Assigned roles",
+    "account": "Account {{id}}",
+    "noRoles": "No roles assigned",
+    "approvalFailed": "Failed to approve membership request.",
+    "loadFailed": "Failed to load membership requests."
+  },
   "dashboard": {
     "title": "Dashboard",
     "welcome": "Welcome back",
@@ -50,7 +66,9 @@
       "error": "Error",
       "unknown": "Unknown",
       "errorBanner": "One or more services are experiencing issues. Click on a service below to view logs.",
-      "warningBanner": "One or more services are degraded. System may experience reduced performance."
+      "warningBanner": "One or more services are degraded. System may experience reduced performance.",
+      "issuanceService": "Issuance Service",
+      "notReported": "This service was not reported by the latest readiness check."
     },
     "environment": {
       "dev": "Dev",
@@ -59,6 +77,9 @@
       "development": "Development",
       "stagingFull": "Staging",
       "production": "Production",
+      "unset": "Not configured",
+      "unsetFull": "Environment not configured",
+      "unsetDescription": "No environment has been configured for this organization.",
       "unknown": "Unknown",
       "unknownFull": "Environment unknown",
       "devDescription": "Development environment for testing",
@@ -119,13 +140,14 @@
       "justNow": "Just now",
       "minutesAgo": "{{minutes}}m ago",
       "hoursAgo": "{{hours}}h ago",
-      "noCriticalEvents": "No critical events in the last 24 hours. All systems operating normally.",
+      "noCriticalEvents": "No critical events were reported in the last 24 hours.",
       "criticalEventsDetected": "{{count}} critical event detected in the last 24 hours",
       "criticalEventsDetected_plural": "{{count}} critical events detected in the last 24 hours"
     },
     "developerQuickStart": {
       "title": "Developer Quick Start",
       "description": "Org-scoped integration details for API development",
+      "loading": "Loading integration metadata...",
       "organizationId": "Organization ID",
       "baseApiUrl": "Base API URL",
       "exampleRequest": "Example API Request (curl)",
@@ -156,26 +178,46 @@
       "issuance": {
         "keysInvalid": "Keys invalid or expired",
         "issuerInactive": "Issuer not active",
-        "operational": "All systems operational",
+        "operational": "Credential issuance is ready",
         "keysReason": "Valid signing keys are required to sign and issue verifiable credentials. Without them, credential issuance cannot proceed.",
         "issuerReason": "The issuer service must be active and properly configured to handle credential issuance requests.",
         "fixSigningKeys": "Fix Signing Keys",
-        "activateIssuer": "Activate Issuer"
+        "activateIssuer": "Activate Issuer",
+        "noDeployments": "No active deployments",
+        "deploymentsReason": "An active deployment profile is required before credentials can be issued.",
+        "configureDeployment": "Configure Deployment",
+        "notReady": "Credential issuance is not ready",
+        "readinessReason": "Review the issuance flow and its required resources before issuing credentials.",
+        "reviewFlows": "Review Issuance Flows",
+        "issuerConfigurationRequired": "Issuer configuration needs review",
+        "issuerConfigurationReason": "Review the issuer identity and the issuer DID referenced by the active credential template before issuing credentials."
       },
       "verification": {
         "noDeployments": "No active deployments",
-        "policyUnreachable": "Policy unreachable",
-        "operational": "All systems operational",
+        "policyUnreachable": "No active presentation policies",
+        "operational": "Credential verification is ready",
         "deploymentsReason": "At least one deployment profile must be active to verify credentials. Deployments define the trust policies and verification rules.",
-        "policyReason": "Presentation policies must be accessible to validate credentials during verification.",
+        "policyReason": "At least one active presentation policy is required before credentials can be verified.",
         "configureDeployment": "Configure Deployment",
-        "fixPolicies": "Fix Policies"
+        "fixPolicies": "Fix Policies",
+        "notReady": "Credential verification is not ready",
+        "readinessReason": "Review the verification configuration before starting a session.",
+        "reviewSetup": "Review Verification Setup"
       },
       "keys": {
         "valid": "Keys are valid and active",
         "needsAttention": "Keys require attention",
         "reason": "Signing keys authenticate your organization as a credential issuer. expired or invalid keys prevent credential issuance and may invalidate issued credentials.",
         "manageKeys": "Manage Keys"
+      },
+      "issuerConfiguration": {
+        "title": "Issuer Configuration",
+        "configured": "Configured",
+        "notConfigured": "Not configured",
+        "configuredDetail": "An active credential template references an issuer DID.",
+        "notConfiguredDetail": "No active credential template references an issuer DID.",
+        "reason": "Credential templates need an issuer DID before they can be used for issuance.",
+        "manage": "Manage Issuer Identities"
       }
     },
     "recentActivity": {
@@ -316,6 +358,53 @@
     "dependencyBlocked": "Complete previous steps first"
   },
   "trust": {
+    "trustProfileWizard": {
+      "selectOrganization": "Select an organization to create a trust profile.",
+      "createDenied": "You do not have permission to create trust profiles in the selected organization.",
+      "issuerDenied": "Adding issuer relationships requires permission to view and create trusted issuers. Remove the issuer selections to continue without them.",
+      "registryDenied": "Synchronizing registry sources requires permission to view trust profiles. Remove the registry selections to continue without them.",
+      "activateDenied": "You do not have permission to activate trust profiles. Turn off immediate activation to create a draft.",
+      "responseMismatch": "The server did not confirm the requested trust profile operation. Check the profile list before trying again.",
+      "profileCreated": "This trust profile was created: {{id}}. Check its current state and finish setup before trying again."
+    },
+    "revocationWizard": {
+      "selectOrganization": "Select an organization to create a revocation profile.",
+      "createDenied": "You do not have permission to create revocation profiles in the selected organization.",
+      "responseMismatch": "The creation response does not confirm a new draft profile for the selected organization. Check the profile list before retrying."
+    },
+    "trustProfilesPage": {
+      "title": "Trust profiles",
+      "description": "Define the credential formats, trust sources, and validation rules your organization accepts.",
+      "selectOrganization": "Select an organization to view its trust profiles.",
+      "readDenied": "You do not have permission to view this organization's trust profiles.",
+      "scopeMismatch": "The catalog response does not match the selected organization or contains an invalid profile.",
+      "loadFailed": "Trust profiles could not be loaded.",
+      "retryProfiles": "Retry loading profiles",
+      "emptyTitle": "No trust profiles configured",
+      "emptyDescription": "Create a trust profile to configure the credential formats, trust sources, and validation rules your organization accepts.",
+      "createProfile": "Create Trust Profile",
+      "pinnedSources": "Pinned issuer sources",
+      "pinnedSourcesHelp": "Pinned sources are part of a profile's trust policy. Open a profile to review its linked issuer relationships.",
+      "allowedAlgorithms": "Allowed algorithms",
+      "name": "Name",
+      "framework": "Framework",
+      "status": "Status",
+      "lastUpdated": "Last updated",
+      "actions": "Actions",
+      "viewDetails": "View details",
+      "edit": "Edit",
+      "consoleBreadcrumb": "Console",
+      "trustBreadcrumb": "Trust"
+    },
+    "trustProfileEdit": {
+      "selectOrganization": "Select an organization before editing a trust profile.",
+      "permissionDenied": "You do not have permission to edit trust profiles.",
+      "scopeMismatch": "Trust profile response does not match the requested profile and selected organization.",
+      "invalidResponse": "Trust profile response is invalid.",
+      "suspendedStatus": "Suspended",
+      "unknownStatus": "Unknown",
+      "notFound": "Trust profile not found."
+    },
     "title": "Trust Management",
     "trustProfiles": "Trust Profiles",
     "trustProfilesDescription": "Define trust frameworks, trusted issuers, and validation rules for credential verification.",
@@ -385,7 +474,83 @@
       },
       "error": "Failed to load revocation profiles"
     },
+    "revocationDetail": {
+      "selectOrganization": "Select an organization to view revocation profiles.",
+      "readDenied": "You do not have permission to view revocation profiles in the selected organization.",
+      "profileScopeMismatch": "The response does not match the requested profile in the selected organization.",
+      "activationScopeMismatch": "The activation response does not confirm an ACTIVE version of the requested profile in the selected organization.",
+      "retryProfile": "Retry profile",
+      "activate": "Activate",
+      "activating": "Activating…",
+      "activationFailed": "Failed to activate the revocation profile.",
+      "loadFailed": "Could not load the revocation profile.",
+      "statusDraft": "Draft",
+      "statusActive": "Active",
+      "statusSuspended": "Suspended",
+      "statusUnknown": "Unknown status",
+      "checkModeTitle": "Revocation Check Policy",
+      "mechanismsTitle": "Revocation Mechanisms",
+      "metadataTitle": "Profile Metadata",
+      "noMechanisms": "No revocation mechanisms returned.",
+      "statusListUrl": "Status List Endpoint",
+      "profileId": "Profile ID",
+      "organization": "Organization",
+      "created": "Created",
+      "updated": "Last Updated",
+      "offlineGrace": "Offline grace period",
+      "cacheTtl": "Cache TTL",
+      "notAvailable": "Not available",
+      "backToList": "Back to Revocation Profiles",
+      "disabledAdvisory": "Credential status checking is disabled for this profile. Use it only when revocation checks are intentionally out of scope.",
+      "checkModes": {
+        "always": "Always check",
+        "alwaysDescription": "Configured to check credential status for every verification.",
+        "cached": "Cached checks",
+        "cachedDescription": "Status checks use the configured cache lifetime.",
+        "offlineGrace": "Offline grace",
+        "offlineGraceDescription": "Offline status checks use the configured grace period.",
+        "disabled": "Disabled",
+        "disabledDescription": "Credential status checking is disabled.",
+        "unknown": "Unknown check policy",
+        "unknownDescription": "The server returned an unrecognized check policy."
+      },
+      "mechanisms": {
+        "statusList2021": "Status List 2021",
+        "bitstringStatusList": "Bitstring Status List",
+        "tokenStatusList": "Token Status List",
+        "ocsp": "OCSP",
+        "crl": "CRL",
+        "unknown": "Unrecognized revocation mechanism"
+      }
+    },
     "trustProfileDetail": {
+      "selectOrganization": "Select an organization to view this trust profile.",
+      "profileReadDenied": "You do not have permission to view trust profiles in this organization.",
+      "issuerReadDenied": "You do not have permission to view issuer relationships in this organization.",
+      "profileScopeMismatch": "This trust profile is not available in the selected organization.",
+      "retryProfile": "Retry profile",
+      "retryIssuers": "Retry issuer list",
+      "issuerScopeMismatch": "The issuer response does not match this profile, organization, or requested DID.",
+      "issuerNotConfirmed": "The accepted issuer relationship could not be confirmed in the current list. Retry reading the issuer list.",
+      "issuerLoadFailed": "The issuer list could not be loaded.",
+      "issuerAddFailed": "The issuer addition could not be confirmed.",
+      "issuerAwaitingReadback": "The link was accepted. Retrying reads the current issuer list without sending the link again.",
+      "statusUnknown": "Unknown",
+      "relationshipStatusLabel": "Trust relationship",
+      "issuerComplianceLabel": "Issuer compliance",
+      "statusDraft": "Draft",
+      "statusActive": "Active",
+      "statusSuspended": "Suspended",
+      "statusArchived": "Archived",
+      "relationshipTrusted": "Trusted",
+      "relationshipDenied": "Denied",
+      "relationshipUnderReview": "Under review",
+      "complianceAccredited": "Accredited",
+      "complianceCompliant": "Compliant",
+      "complianceSuspended": "Suspended",
+      "complianceRevoked": "Revoked",
+      "credentialWalletGuidance": "Wallet profiles are available on credential templates. Review a template’s supported wallet profile; derived configuration does not prove interoperability or successful delivery.",
+      "viewCredentialTemplates": "View credential templates",
       "walletCompatibility": "Wallet Compatibility",
       "supportedCredentialFormats": "Supported Credential Formats",
       "noFormatsConfigured": "No specific formats configured (accepts all)",
@@ -447,10 +612,6 @@
     "rules": "Rules",
     "conditions": "Conditions",
     "failedToLoad": "Failed to load presentation policies",
-    "testActions": {
-      "evaluateVP": "Evaluate VP",
-      "startQRVerification": "Start QR Verification"
-    },
     "holderBinding": {
       "required": "Required",
       "optional": "Optional"
@@ -473,7 +634,8 @@
       "console": "Console",
       "policies": "Policies",
       "presentationPolicies": "Presentation Policies"
-    }
+    },
+    "verificationSessions": "Verification sessions"
   },
   "complianceProfilesPage": {
     "title": "Compliance Profiles",
@@ -681,6 +843,7 @@
       "flowInstances": "Flow Instances"
     },
     "flowDetail": {
+      "lifecycleTitle": "Flow lifecycle",
       "applicantJourney": {
         "title": "Applicant Journey",
         "description": "What the applicant experiences from start to finish",
@@ -697,6 +860,8 @@
         "title": "Applicant Entry Points",
         "description": "Share these with applicants to start the credential issuance process",
         "applicationUrlLabel": "Application URL",
+        "linkUnavailable": "No application link is available for this flow.",
+        "qrUnavailable": "No QR code is available for this flow.",
         "notPublished": "Not published - flow must be published first",
         "copyUrlTooltip": "Copy URL",
         "openInNewTabTooltip": "Open in new tab",
@@ -734,7 +899,11 @@
       },
       "statusChips": {
         "published": "Published",
-        "draft": "Draft"
+        "draft": "Draft",
+        "active": "Active",
+        "paused": "Paused",
+        "archived": "Archived",
+        "unknown": "Unknown status"
       },
       "actions": {
         "copyApplicationLink": "Copy Application Link",
@@ -754,12 +923,26 @@
       "errors": {
         "failedToLoad": "Failed to load flow details",
         "flowNotFound": "Flow not found",
+        "copyFailed": "The link could not be copied. Try again.",
+        "invalidActivation": "The activation response did not match this flow.",
         "serviceUnavailable": "The backend service may be unavailable. Check console for details."
       },
       "loading": "Loading..."
-    }
+    },
+    "flowDefinition": "Flow Definition"
   },
   "deploy": {
+    "keyManagementWizard": {
+      "selectOrganization": "Select an organization to register a signing service.",
+      "readDenied": "You do not have permission to view signing services in the selected organization.",
+      "createDenied": "You do not have permission to register signing services in the selected organization."
+    },
+    "issuerIdentityWizard": {
+      "selectOrganization": "Select an organization to create an issuer identity.",
+      "readDenied": "You do not have permission to view issuer capabilities in the selected organization.",
+      "createDenied": "You do not have permission to create issuer identities in the selected organization.",
+      "responseMismatch": "The server did not confirm the requested issuer identity. Check the issuer identity list before trying again."
+    },
     "title": "Deploy",
     "deploymentProfiles": "Deployment Profiles",
     "deploymentProfilesDescription": "Configure deployment profiles for APIs, kiosks, lanes/devices, and both online and offline environments.",
@@ -2205,6 +2388,14 @@
     }
   },
   "org": {
+    "setup": {
+      "chooseTitle": "Choose an Organization",
+      "chooseDescription": "Select an organization to open its organization console.",
+      "accessTitle": "Organization Console Access",
+      "accessDescriptionWithCreate": "Join or create an organization with console access to continue.",
+      "accessDescription": "Join an organization with console access to continue.",
+      "noMembershipsTitle": "No Console Memberships Yet"
+    },
     "title": "Organization",
     "settings": {
       "title": "Organization Settings",
@@ -2218,16 +2409,35 @@
       "defaultName": "My Organization",
       "defaultDescription": "Digital identity services provider",
       "organizationId": "Organization ID",
+      "organizationRequired": "Select an organization to view its settings.",
+      "loading": "Loading organization details",
       "profile": {
         "title": "Basic Information",
         "name": "Organization Name",
+        "nameHelp": "Use 2–64 lowercase letters, numbers, or hyphens. Start and end with a letter or number.",
         "displayName": "Display Name",
         "description": "Description",
         "contactInfo": "Contact Information",
         "website": "Website",
         "contactEmail": "Contact Email",
+        "contactPhone": "Contact Phone",
         "address": "Address",
         "country": "Country"
+      },
+      "admission": {
+        "title": "Organization Membership",
+        "description": "Choose who can find your organization and how new members join.",
+        "visibility": "Visibility",
+        "private": "Private",
+        "public": "Public",
+        "visibilityHelp": "Public organizations appear in the organization directory.",
+        "joinMethod": "Join Method",
+        "invite": "Invitation",
+        "code": "Join code (existing configuration only)",
+        "open": "Open enrollment",
+        "domain": "Email domain (unavailable)",
+        "requiresApproval": "Require approval for join requests",
+        "openRequiresPublic": "Open enrollment requires public visibility. Choose public visibility or another join method."
       },
       "membership": {
         "title": "Email Domain-Based Membership",
@@ -2283,8 +2493,24 @@
       }
     },
     "team": {
+      "access": {
+        "rolesTitle": "Roles",
+        "signIn": "Sign in to view the team.",
+        "selectOrganization": "Select an organization to view its team.",
+        "readDenied": "You do not have permission to view this team.",
+        "rolesLoadFailed": "Available roles could not be loaded. Try again to invite members or change roles.",
+        "rolesReadRequired": "Viewing available roles is required to invite members or change their roles. Ask an organization administrator for access."
+      },
       "title": "Team",
       "subtitle": "Manage team members, roles, and invitations",
+      "memberships": {
+        "title": "Membership Status",
+        "status": "Status",
+        "pending": "Pending approval",
+        "deactivated": "Deactivated",
+        "unknown": "Status unavailable",
+        "reviewRequests": "View membership requests"
+      },
       "members": {
         "title": "Current Members",
         "count": "{{count}} team member",
@@ -2580,6 +2806,10 @@
       }
     },
     "roleEscalation": {
+      "unavailable": "Role change requests are not available in this console.",
+      "management": "Users with permission to assign roles can update members' roles in Team. The Roles page lists the available roles and their permissions.",
+      "teamLink": "View team",
+      "rolesLink": "View roles",
       "title": "Role Escalation Requests",
       "subtitle": "Review and manage role change requests from organization members",
       "tableHeaders": {
@@ -2616,7 +2846,9 @@
         "defaultCredentialTemplate": "Default Credential Template"
       },
       "values": {
-        "noneManualSelection": "None (manual selection required)"
+        "noneManualSelection": "None (manual selection required)",
+        "unavailable": "Unavailable resource",
+        "detailsUnavailable": "Resource details unavailable"
       },
       "actions": {
         "save": "Save Defaults",
@@ -2625,8 +2857,19 @@
       "messages": {
         "loadFailed": "Failed to load organization defaults",
         "saveFailed": "Failed to save organization defaults",
-        "saveSuccess": "Organization defaults saved successfully"
+        "saveSuccess": "Organization defaults saved successfully",
+        "organizationRequired": "Select an organization before configuring defaults.",
+        "permissionDenied": "You do not have permission to view organization defaults.",
+        "unavailableDefaultsPreserved": "One or more saved defaults are unavailable. They are preserved when you change other defaults. You can replace or clear them if you have permission to edit.",
+        "catalogPermissionRequired": "Some resource details are hidden because you do not have permission to view their catalogs."
       }
     }
+  },
+  "organizationCreation": {
+    "createAction": "Create Organization",
+    "emptyDescription": "You're not a member of any organizations. Create an organization, discover public organizations, or join one with a code.",
+    "discoveryRequired": "Organizations with open or approval-based membership are always discoverable in public organization search.",
+    "discoveryPublic": "This organization can appear in public organization search.",
+    "discoveryPrivate": "This organization does not appear in public organization search."
   }
 }

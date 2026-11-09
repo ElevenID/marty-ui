@@ -12,7 +12,8 @@
       "title": "クイック操作",
       "applyForCredential": "資格情報を申請",
       "viewMyCredentials": "自分の資格情報を見る"
-    }
+    },
+    "loadError": "資格情報の概要を読み込めませんでした。もう一度お試しください。"
   },
   "credentials": {
     "title": "自分の資格情報",
@@ -40,6 +41,38 @@
   "catalog": {
     "title": "資格情報カタログ",
     "description": "利用可能な資格情報を閲覧して申請します",
-    "searchPlaceholder": "資格情報を検索..."
+    "searchPlaceholder": "資格情報を検索...",
+    "searchLabel": "資格情報を検索",
+    "filters": {
+      "clear": "フィルターをクリア"
+    },
+    "errorLoading": "資格情報カタログを読み込めませんでした。もう一度お試しください。問題が解決しない場合は、サポートにお問い合わせください。",
+    "empty": {
+      "launchUnavailable": "このコースの資格情報は現在利用できません。コースの提供元にお問い合わせください。",
+      "title": "利用可能な資格情報はありません",
+      "description": "現在、ご所属の組織で利用できる資格情報はありません。"
+    }
+  },
+  "settings": {
+    "profile": {
+      "loadError": "プロフィールを読み込めませんでした。もう一度お試しください。",
+      "saved": "プロフィールを保存しました。",
+      "save": "プロフィールを保存"
+    },
+    "notifications": {
+      "unavailable": "この環境では通知設定を利用できません。"
+    },
+    "wallets": {
+      "loadError": "利用可能なウォレットを読み込めませんでした。もう一度お試しください。",
+      "savedAutomatically": "ウォレットの選択は、このブラウザに自動的に保存されます。"
+    }
+  },
+  "identity": {
+    "guidance": {
+      "walletPresentation": "資格情報を提示するには、その資格情報を保存しているウォレットを使用してください。",
+      "expired": "この資格情報は有効期限が切れています。更新については発行者にお問い合わせください。",
+      "revoked": "この資格情報は失効しています。発行者にお問い合わせください。",
+      "additionalInformation": "発行者が追加情報を求めています。情報の提供方法については発行者にお問い合わせください。"
+    }
   }
 }

@@ -37,7 +37,7 @@ function StatItem({ icon: Icon, label, value, color = 'primary' }) {
       <Box sx={{ mb: 1 }}>
         <Icon sx={{ fontSize: 40, color: `${color}.main` }} />
       </Box>
-      <Typography variant="h4" fontWeight={600}>
+      <Typography variant="h4" sx={{ fontWeight: 600 }}>
         {value}
       </Typography>
       <Typography variant="body2" color="text.secondary">
@@ -88,7 +88,7 @@ export function ApplicantStatsCard() {
   return (
     <Paper sx={{ p: 3, mb: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h6" fontWeight={600}>
+        <Typography variant="h6" sx={{ fontWeight: 600 }}>
           {t('dashboard.applicantStats.title')}
         </Typography>
         <Button
@@ -102,7 +102,7 @@ export function ApplicantStatsCard() {
       </Box>
 
       <Grid container spacing={3}>
-        <Grid item xs={12} sm={4}>
+        <Grid size={{ xs: 12, sm: 4 }}>
           <StatItem
             icon={PersonAddIcon}
             label={t('dashboard.applicantStats.pendingReview')}
@@ -110,7 +110,7 @@ export function ApplicantStatsCard() {
             color="warning"
           />
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid size={{ xs: 12, sm: 4 }}>
           <StatItem
             icon={CheckCircleIcon}
             label={t('dashboard.applicantStats.approved')}
@@ -118,7 +118,7 @@ export function ApplicantStatsCard() {
             color="success"
           />
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid size={{ xs: 12, sm: 4 }}>
           <StatItem
             icon={BadgeIcon}
             label={t('dashboard.applicantStats.readyToIssue')}

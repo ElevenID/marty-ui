@@ -40,6 +40,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import SearchIcon from '@mui/icons-material/Search';
 
 import { useAuth } from '../../hooks/useAuth';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
 import { SHOW_PUBLIC_DOCUMENTATION_NAV } from '@ui-public-config';
 import { useBranding } from '../../hooks/useBranding';
 import { useConsole } from '../../contexts/ConsoleContext';
@@ -162,6 +163,7 @@ export function getAccountAvatarInitial(user) {
  * Console Header Bar Component
  */
 export function ConsoleHeaderBar({ onMobileMenuToggle }) {
+  const beginAction = useAsyncActionScope();
   const navigate = useNavigate();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -201,8 +203,12 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
   const activeOrgName = activeOrg?.display_name || activeOrg?.name || organizationName || null;
   const compactOrgLabel = getCompactLabel(activeOrgName, 'Org');
 
-  // Determine user role for display
-  const userRole = isAdministrator ? 'Administrator' : isVendor ? 'Vendor' : isApplicant ? 'Person' : 'User';
+  // Display explicit roles or the active console context.
+  const userRole = isAdministrator
+    ? 'Administrator'
+    : mode === 'applicant' && isApplicant
+      ? 'Applicant'
+      : getMembershipRoleSummary(activeOrg) || (isVendor ? 'Organization Console' : isApplicant ? 'Applicant' : 'User');
   const profilePath = isApplicant ? '/console/applicant/profile' : '/console/org/profile';
   const settingsPath = mode === 'org' ? '/console/org/settings' : '/console/applicant/settings';
   const accountDisplayName = getAccountMenuDisplayName(user);
@@ -222,13 +228,26 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
   };
 
   const handleSelectOrganization = async (organization) => {
+    const action = beginAction();
     setOrgMenuAnchor(null);
     setOrgSearch('');
 
     try {
-      await setActiveOrgId(organization.id);
+      await action.run(setActiveOrgId, organization.id);
     } catch (error) {
+      if (!action.isCurrent() || error?.name === 'AbortError') return;
       console.error('[ConsoleHeaderBar] Failed to switch organization:', error);
+    }
+  };
+
+  const handleModeChange = async (_, newMode) => {
+    if (!newMode) return;
+    const action = beginAction();
+    try {
+      await action.run(setMode, newMode);
+    } catch (error) {
+      if (!action.isCurrent() || error?.name === 'AbortError') return;
+      console.error('[ConsoleHeaderBar] Failed to switch console:', error);
     }
   };
 
@@ -310,7 +329,7 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
           <ToggleButtonGroup
             value={mode}
             exclusive
-            onChange={(_, newMode) => { if (newMode) setMode(newMode); }}
+            onChange={handleModeChange}
             size="small"
             sx={{
               bgcolor: 'rgba(255,255,255,0.15)',
@@ -419,14 +438,16 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
             onClose={() => { setOrgMenuAnchor(null); setOrgSearch(''); }}
             transformOrigin={{ horizontal: 'right', vertical: 'top' }}
             anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
-            PaperProps={{
-              elevation: 0,
-              sx: {
-                overflow: 'hidden',
-                filter: 'drop-shadow(0px 2px 8px rgba(0,0,0,0.1))',
-                mt: 1,
-                minWidth: 280,
-                maxWidth: 'calc(100vw - 24px)',
+            slotProps={{
+              paper: {
+                elevation: 0,
+                sx: {
+                  overflow: 'hidden',
+                  filter: 'drop-shadow(0px 2px 8px rgba(0,0,0,0.1))',
+                  mt: 1,
+                  minWidth: 280,
+                  maxWidth: 'calc(100vw - 24px)',
+                },
               },
             }}
           >
@@ -550,13 +571,15 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
           onClick={handleUserMenuClose}
           transformOrigin={{ horizontal: 'right', vertical: 'top' }}
           anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
-          PaperProps={{
-            elevation: 0,
-            sx: {
-              overflow: 'visible',
-              filter: 'drop-shadow(0px 2px 8px rgba(0,0,0,0.1))',
-              mt: 1.5,
-              minWidth: 200,
+          slotProps={{
+            paper: {
+              elevation: 0,
+              sx: {
+                overflow: 'visible',
+                filter: 'drop-shadow(0px 2px 8px rgba(0,0,0,0.1))',
+                mt: 1.5,
+                minWidth: 200,
+              },
             },
           }}
         >

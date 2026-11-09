@@ -298,7 +298,7 @@ function AddressFieldRenderer({ field, value, onChange, error, required }) {
         {field.label || formatFieldLabel(field.name)}
       </Typography>
       <Grid container spacing={2}>
-        <Grid item xs={12}>
+        <Grid size={{ xs: 12 }}>
           <TextField
             fullWidth
             label="Street Address"
@@ -307,7 +307,7 @@ function AddressFieldRenderer({ field, value, onChange, error, required }) {
             required={required}
           />
         </Grid>
-        <Grid item xs={12} sm={6}>
+        <Grid size={{ xs: 12, sm: 6 }}>
           <TextField
             fullWidth
             label="City"
@@ -316,7 +316,7 @@ function AddressFieldRenderer({ field, value, onChange, error, required }) {
             required={required}
           />
         </Grid>
-        <Grid item xs={12} sm={3}>
+        <Grid size={{ xs: 12, sm: 3 }}>
           <FormControl fullWidth required={required}>
             <InputLabel>State</InputLabel>
             <Select
@@ -332,7 +332,7 @@ function AddressFieldRenderer({ field, value, onChange, error, required }) {
             </Select>
           </FormControl>
         </Grid>
-        <Grid item xs={12} sm={3}>
+        <Grid size={{ xs: 12, sm: 3 }}>
           <TextField
             fullWidth
             label="ZIP Code"
@@ -420,7 +420,7 @@ export function DynamicFieldGroup({
         const error = errors?.[fieldName];
 
         return (
-          <Grid item xs={12} sm={6} key={fieldName}>
+          <Grid size={{ xs: 12, sm: 6 }} key={fieldName}>
             <DynamicFieldRenderer
               field={fieldDef}
               value={values[fieldName]}

@@ -31,7 +31,7 @@ const BasicsStep = ({ data, onChange }) => {
       <Typography variant="h6" gutterBottom>
         {t('wizards.credentialTemplate.basicsStep.title')}
       </Typography>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.credentialTemplate.basicsStep.description')}
       </Typography>
 

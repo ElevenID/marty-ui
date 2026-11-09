@@ -359,7 +359,7 @@ export default function CredentialConfigManager() {
       ) : (
         <Grid container spacing={3} data-testid="credential-configs-grid">
           {configs.map((config) => (
-            <Grid item xs={12} md={6} lg={4} key={config.id}>
+            <Grid size={{ xs: 12, md: 6, lg: 4 }} key={config.id}>
               <Card
                 sx={{
                   height: '100%',

@@ -250,10 +250,14 @@ export async function regenerateWebhookSecret(organizationId, webhookId) {
 
 /**
  * Get available webhook event types
+ * @param {string} organizationId - Organization whose webhook permission authorizes the catalog
  * @returns {Promise<Array>} - Array of event type objects with categories
  */
-export async function getAvailableEventTypes() {
-  const response = await get(`${BASE_PATH}/event-types`);
+export async function getAvailableEventTypes(organizationId) {
+  const queryString = buildDefinedQueryString({
+    organization_id: requireOrganizationId(organizationId, 'loading webhook event types'),
+  });
+  const response = await get(withQuery(`${BASE_PATH}/event-types`, queryString));
   const eventTypes = Array.isArray(response?.event_types) ? response.event_types : [];
   const grouped = new Map();
   for (const type of eventTypes) {

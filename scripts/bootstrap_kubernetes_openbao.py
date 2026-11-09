@@ -33,6 +33,7 @@ import zipfile
 sys.dont_write_bytecode = True
 import installer_release as release
 from installer_candidate_authorize import read_record
+from installer_candidate_dispatch import private_file
 from passport_remote_tls import SELFHOST_TLS_FILES, SELFHOST_CERT_FILES, accept_remote_tls
 from prepare_kubernetes_helm_values import prepare
 from provision_selfhost_disposable_tls import verified_key_metadata
@@ -43,6 +44,28 @@ PROFILE = ROOT / "deploy/helm/openbao/values-k3s-dev.yaml"
 UPSTREAM = ROOT / "deploy/helm/openbao/upstream.json"
 NAMESPACE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,255}\Z")
+PUBLICATION_SCHEMA = "marty.kubernetes-secret-publication/v1"
+PUBLICATION_CONTRACT_LIMIT = 128 * 1024
+APPLICATION_TOKEN_SPEC = json.loads(
+    (ROOT / "deploy-config/catalog/kubernetes-application-tokens.json").read_bytes())
+APPLICATION_IDENTITY_FILES = {
+    "application-role-id", "application-secret-id", "application-binding.json",
+}
+APPLICATION_IDENTITY_ARCHIVE_LIMIT = 64 * 1024
+APPLICATION_IDENTITY_LIMITS = {
+    "application-role-id": 1025, "application-secret-id": 1025,
+    "application-binding.json": 4097,
+}
+PRODUCER_DEADLINE_SECONDS = 1200
+NATIVE_EXPORT_DIRECTORIES = {
+    "/tmp/application-identity", "/tmp/application-operation",
+    "/tmp/application-operation/inputs", "/tmp/application-candidate",
+}
+REMOTE_ARCHIVE_COMMAND = (
+    'umask 077; set -C; : > "$3"; trap \'rm -f "$3"\' 0; '
+    'tar -cf "$3" -C "$1" .; size=$(wc -c < "$3"); '
+    '[ "$size" -gt 0 ]; [ "$size" -le "$2" ]; cat "$3"'
+)
 KEYCLOAK_FILES = {
     "keycloak_signing_kms_token", "keycloak_master_rs256_cert", "keycloak_11id_rs256_cert",
     "keycloak_master_cookie_token", "keycloak_master_ciba_token",
@@ -59,26 +82,20 @@ SCALAR_CREDENTIALS = (
     "NOTIFICATION_APPLICANT_EVENT_TOKEN", "FLOW_WEBHOOK_SECRET",
     "FLOW_APPLICATION_EVENT_HMAC_KEY", "CANVAS_CREDENTIALS_SHARED_SECRET",
 )
-# Policy contents remain owned by docker/openbao-init.sh in the signed bundle.
+# Policy contents remain owned by the signed initializer. The native token
+# catalog is the sole inventory of ordinary inputs, policies and lifetimes.
 TOKEN_POLICIES = {
-    "OPENBAO_SERVICE_TOKEN": ("credential-service",),
-    "OPENBAO_BOOTSTRAP_TOKEN": ("kms-bootstrap",),
-    "SIGNING_KEYS_OPENBAO_TOKEN": ("credential-service", "signing-keys-managed"),
-    "DIDCOMM_ISSUANCE_OPENBAO_TOKEN": ("didcomm-issuance",),
-    "NOTIFICATION_OPENBAO_TOKEN": ("notification-webhook-service",),
-    "GATEWAY_SIGN_GRANT_MINT_TOKEN": ("sign-grant-mint-gateway-service",),
-    "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN": ("sign-grant-mint-gateway-issuer-did",),
-    "FLOW_SIGN_GRANT_MINT_TOKEN": ("sign-grant-mint-flow-wallet",),
-    "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN": ("sign-grant-mint-issuance-credential",),
-    "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN": ("sign-grant-mint-issuance-canvas",),
-    "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN": ("sign-grant-mint-issuance-readiness",),
-    "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN": ("sign-grant-mint-issuance-passport",),
-    "SIGNING_KEYS_GRANT_VERIFY_TOKEN": ("sign-grant-verify",),
+    entry["input"]: tuple(entry["policies"]) for entry in APPLICATION_TOKEN_SPEC["tokens"]
 }
+TOKEN_FILES = {entry["input"]: entry["file"] for entry in APPLICATION_TOKEN_SPEC["tokens"]}
 
 
 class BootstrapError(RuntimeError):
     pass
+
+
+class RetainProducerError(BootstrapError):
+    """The bounded pod may hold the only evidence or still be mutating authority."""
 
 
 def require(condition: bool, message: str) -> None:
@@ -199,6 +216,162 @@ def authenticated_bootstrap_inputs(assets: Path, identity: dict) -> tuple[bytes,
     return operator, init_script
 
 
+def unique_json_members(pairs: list[tuple[str, object]]) -> dict:
+    members: dict = {}
+    for key, value in pairs:
+        if key in members:
+            raise ValueError("duplicate metadata member")
+        members[key] = value
+    return members
+
+
+def compiled_contract(operator: Path, command: str, expected: dict, description: str) -> dict:
+    """Compare public compiled metadata without repository, credential or cluster input."""
+    try:
+        result = subprocess.run([str(operator), command],
+            stdin=subprocess.DEVNULL, capture_output=True, check=False, timeout=10, env={})
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise BootstrapError(f"signed operator {description} is unavailable; "
+                             "select a compatible signed runtime") from error
+    require(result.returncode == 0,
+            f"signed operator does not provide the required {description}; "
+            "select a compatible signed runtime")
+    require(0 < len(result.stdout) <= PUBLICATION_CONTRACT_LIMIT,
+            f"signed operator {description} is empty or oversized")
+    try:
+        observed = json.loads(result.stdout, object_pairs_hook=unique_json_members)
+        # Canonical bytes preserve JSON types (in particular true versus 1).
+        # Exact mappings, required inputs, optional destinations and templates
+        # must agree; Secret counts or input names alone are not capabilities.
+        matches = encoded(observed) == encoded(expected)
+    except (ValueError, UnicodeError, RecursionError) as error:
+        raise BootstrapError(f"signed operator {description} is malformed") from error
+    require(matches, f"signed operator {description} differs from this installer; "
+            "select a compatible signed runtime")
+    return observed
+
+
+def publication_contract(operator: Path) -> dict:
+    return compiled_contract(operator, "kubernetes-secrets-contract", {
+        "schema": PUBLICATION_SCHEMA,
+        "catalog": json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes()),
+    }, "Kubernetes publication contract")
+
+
+def application_token_contract(operator: Path) -> dict:
+    return compiled_contract(operator, "kubernetes-application-token-contract",
+                             APPLICATION_TOKEN_SPEC, "Kubernetes application token contract")
+
+
+def remote_archive(transport: Transport, pod: str, directory: str, maximum: int) -> bytes:
+    # A separate successful tar step is required: POSIX sh pipelines otherwise
+    # report only the final reader's status and can mask a failed tar producer.
+    # This private temporary file is outside the fixed exported directories.
+    require(directory in NATIVE_EXPORT_DIRECTORIES and 0 < maximum <= 26 * 1024 * 1024,
+            "private native archive request is invalid")
+    temporary = "/tmp/marty-native-export-" + secrets.token_hex(12) + ".tar"
+    payload = transport.execute(pod, ["/bin/sh", "-ec",
+        REMOTE_ARCHIVE_COMMAND, "--", directory, str(maximum), temporary])
+    require(0 < len(payload) <= maximum, "private native output archive is empty or oversized")
+    return payload
+
+
+def private_archive(payload: bytes, expected: dict[str, int], *, maximum: int,
+                    modes: set[int], directories: set[str], complete: bool,
+                    allow_empty: bool) -> dict[str, tuple[bytes, int]]:
+    """Validate bounded transport custody, including the complete tar terminator.
+
+    A partial native operation may contain partial files. Their bytes remain
+    opaque private evidence; only names, types, modes and bounds are checked.
+    """
+    require(0 < len(payload) <= maximum, "private output archive is empty or oversized")
+    found: dict[str, tuple[bytes, int]] = {}
+    seen: set[str] = set()
+    tail = 0
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+        for entry in archive:
+            name = entry.name.removeprefix("./")
+            if name == "":
+                name = "."
+            require(name not in seen, "private output archive inventory differs")
+            seen.add(name)
+            tail = max(tail, entry.offset_data + ((entry.size + 511) // 512) * 512)
+            if entry.isdir():
+                require(name in directories and entry.mode == 0o700 and entry.size == 0,
+                        "private output archive directory custody differs")
+                continue
+            require(entry.type in (tarfile.REGTYPE, tarfile.AREGTYPE) and name in expected
+                    and entry.mode in modes and 0 <= entry.size <= expected[name]
+                    and (allow_empty or entry.size > 0),
+                    "private output archive inventory or custody differs")
+            stream = archive.extractfile(entry)
+            require(stream is not None, "private output archive member is unreadable")
+            value = stream.read(expected[name] + 1)
+            require(len(value) == entry.size, "private output archive member is truncated")
+            found[name] = (value, entry.mode)
+    require(len(payload) % 512 == 0 and len(payload) >= tail + 1024
+            and not any(payload[tail:]), "private output archive terminator is incomplete")
+    require(not complete or set(found) == set(expected), "private output archive is incomplete")
+    return found
+
+
+def flat_archive(payload: bytes, expected: set[str], *, maximum: int,
+                 modes: set[int], allow_empty: bool = False) -> dict[str, tuple[bytes, int]]:
+    """Check a complete bounded flat inventory before any destination write."""
+    return private_archive(payload, dict.fromkeys(expected, 65536), maximum=maximum,
+        modes=modes, directories={"."}, complete=True, allow_empty=allow_empty)
+
+
+def application_binding(value: object) -> dict[str, str]:
+    require(isinstance(value, dict) and set(value) == {
+        "namespace", "namespaceUid", "openbaoClusterId", "workloadProject",
+    } and all(isinstance(item, str) for item in value.values()),
+            "application authority binding is invalid")
+    require(NAMESPACE.fullmatch(value["namespace"]) is not None
+            and value["namespace"] not in {"default", "kube-system", "kube-public", "kube-node-lease"}
+            and re.fullmatch(r"marty-selfhost-disposable-k8s-[0-9a-f]{12}",
+                             value["workloadProject"]) is not None,
+            "application authority binding is invalid")
+    try:
+        require(all(str(uuid.UUID(value[key])) == value[key]
+                    for key in ("namespaceUid", "openbaoClusterId")),
+                "application authority binding is invalid")
+    except ValueError as error:
+        raise BootstrapError("application authority binding is invalid") from error
+    return dict(value)
+
+
+def check_application_binding(transport: Transport, binding: dict) -> None:
+    binding = application_binding(binding)
+    require(namespace_identity(transport) == {
+        "name": binding["namespace"], "uid": binding["namespaceUid"],
+    }, "Kubernetes namespace differs from application authority binding")
+    require(openbao_cluster_identity(transport) == binding["openbaoClusterId"],
+            "OpenBao cluster differs from application authority binding")
+
+
+def take_application_identity(payload: bytes, output: Path, binding: dict,
+                              root_token: str | None = None, *,
+                              modes: set[int] | None = None) -> None:
+    members = private_archive(payload, APPLICATION_IDENTITY_LIMITS,
+        maximum=APPLICATION_IDENTITY_ARCHIVE_LIMIT, modes=modes or {0o600},
+        directories={"."}, complete=True, allow_empty=False)
+    observed = json.loads(members["application-binding.json"][0],
+                          object_pairs_hook=unique_json_members)
+    require(application_binding(observed) == application_binding(binding),
+            "exported application authority binding differs")
+    identifiers = []
+    for name in ("application-role-id", "application-secret-id"):
+        value = members[name][0].removesuffix(b"\n")
+        require(20 <= len(value) <= 1024 and all(33 <= byte <= 126 for byte in value)
+                and (root_token is None or root_token.encode() not in value),
+                "exported application authority identity is invalid")
+        identifiers.append(value)
+    require(identifiers[0] != identifiers[1], "exported application authority identifiers are shared")
+    for name, (value, mode) in members.items():
+        write_new(output / name, value, mode)
+
+
 def take_tls_outputs(payload: bytes, output: Path) -> None:
     expected = set(SELFHOST_TLS_FILES) | {"selfhost-tls-kms-roles.json"}
     require(len(payload) <= 2 * 1024 * 1024, "TLS output archive is oversized")
@@ -246,11 +419,13 @@ def ordinary_token_requests() -> list[dict]:
     These are requested settings, not observed expiry or live lookup results.
     The same entries drive issuance and the successful bootstrap receipt.
     """
-    return [{"input": name, "requestedPolicies": list(policies),
-             "requestedTtl": "2h" if name == "OPENBAO_BOOTSTRAP_TOKEN" else "8h",
+    return [{"input": entry["input"], "requestedPolicies": list(entry["policies"]),
+             "requestedTtl": (str(entry["ttlSeconds"] // 3600) + "h"
+                              if entry["ttlSeconds"] % 3600 == 0
+                              else str(entry["ttlSeconds"]) + "s"),
              "requestedRenewable": False, "requestedOrphan": True,
              "requestedNoDefaultPolicy": True}
-            for name, policies in TOKEN_POLICIES.items()]
+            for entry in APPLICATION_TOKEN_SPEC["tokens"]]
 
 
 def provision_application_tokens(transport: Transport, root_token: str,
@@ -269,13 +444,13 @@ def provision_application_tokens(transport: Transport, root_token: str,
         token = root_command(transport, root_token, command).strip()
         require(20 <= len(token) <= 1024 and b"\n" not in token and b"\r" not in token
                 and token != root_token.encode(), "OpenBao scoped token output differs")
-        path = credential_dir / name.lower()
+        path = credential_dir / TOKEN_FILES[name]
         write_new(path, token)
         files[name] = path
     return requests
 
 
-def prepare_namespace(transport: Transport, bootstrap_id: str) -> dict[str, str]:
+def prepare_namespace(transport: Transport, bootstrap_id: str, publication: dict) -> dict[str, str]:
     found = transport.kubectl("namespace inspection", "get", "namespace",
                               transport.namespace, "--ignore-not-found", "-o", "json")
     if found.strip():
@@ -283,9 +458,8 @@ def prepare_namespace(transport: Transport, bootstrap_id: str) -> dict[str, str]
             "namespace workload inspection", "get",
             "deployments,statefulsets,jobs,pods,persistentvolumeclaims", "-o", "json"))
         require(not workloads["items"], "namespace must have no existing workloads or PVCs")
-        catalog = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())
-        destinations = {entry["name"] for entry in catalog["secrets"]} | {
-            "marty-openbao-seal", "notification-workload-tls", "notification-tls-kms", "marty-operator",
+        destinations = {entry["name"] for entry in publication["catalog"]["secrets"]} | {
+            "marty-openbao-seal", "marty-operator",
         }
         existing = transport.kubectl("namespace Secret inspection", "get", "secret",
                                     *sorted(destinations), "--ignore-not-found", "-o", "name")
@@ -300,18 +474,16 @@ def prepare_namespace(transport: Transport, bootstrap_id: str) -> dict[str, str]
     return namespace
 
 
-def provision_workload_identity(transport: Transport, *, image: str, operator: Path,
-                               root_token: str, ca: bytes, nonce: str, workload_project: str,
-                               files: dict[str, Path], pull_secrets: list[str]) -> None:
+def create_producer_pod(transport: Transport, *, image: str, nonce: str,
+                        pull_secrets: list[str], purpose: str = "bootstrap") -> str:
     require(re.fullmatch(r"[0-9a-f]{12}", nonce) is not None
-            and workload_project == "marty-selfhost-disposable-k8s-" + nonce,
-            "native producer identity differs from the retained bootstrap project")
-    pod = "marty-kms-bootstrap-" + nonce
+            and purpose in {"bootstrap", "application-stage"}, "native transport identity is invalid")
+    pod = "marty-kms-" + purpose + "-" + nonce
     # A bounded disposable transport pod runs the existing native producers.
     # No authority is present in its spec; private inputs arrive over exec stdin.
     transport.create({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": pod},
         "spec": {
-            "restartPolicy": "Never", "activeDeadlineSeconds": 1200,
+            "restartPolicy": "Never", "activeDeadlineSeconds": PRODUCER_DEADLINE_SECONDS,
             "automountServiceAccountToken": False,
             "securityContext": {"runAsUser": 10001, "runAsGroup": 10001,
                 "fsGroup": 10001, "runAsNonRoot": True,
@@ -328,7 +500,92 @@ def provision_workload_identity(transport: Transport, *, image: str, operator: P
                 "volumeMounts": [{"name": "private", "mountPath": "/tmp"}]}],
             "volumes": [{"name": "private", "emptyDir": {"medium": "Memory", "sizeLimit": "128Mi"}}],
         }})
+    return pod
+
+
+def retain_producer_pointer(transport: Transport, pod: str) -> None:
+    write_new(transport.state / "transport-pod.json", encoded({
+        "schema": "marty.kubernetes-native-transport/v1",
+        "namespace": transport.namespace, "pod": pod,
+        "activeDeadlineSeconds": PRODUCER_DEADLINE_SECONDS,
+        "storage": "memory-backed-emptyDir", "durableRecovery": False,
+        "recoveryWindow": "only the remaining original pod lifetime; native work may still be running",
+    }))
+
+
+def enroll_application_authority(transport: Transport, pod: str, *, root_token: str,
+                                 binding: dict, files: dict[str, Path]) -> dict:
+    binding = application_binding(binding)
+    output = transport.state / "application-identity"
+    private_directory(output)
+    current = "/tmp/application-current"
+    identity = "/tmp/application-identity"
+    transport.execute(pod, ["/bin/sh", "-ec",
+        'umask 077; mkdir "$1" "$2"; chmod 700 "$1" "$2"', "--", current, identity])
+    for entry in APPLICATION_TOKEN_SPEC["tokens"]:
+        path = files[entry["input"]]
+        digest, size = private_file(path, 1025)
+        value = path.read_bytes()
+        require(len(value) == size and hashlib.sha256(value).hexdigest() == digest,
+                "ordinary application input changed before enrollment")
+        transport.upload(pod, current + "/" + entry["file"], value)
+    write_new(transport.state / "application-authority-requested.json", encoded({
+        "schema": "marty.kubernetes-application-authority-request/v1",
+        "binding": binding, "operation": "approle-bootstrap application",
+        "identityDirectory": "application-identity",
+        "transportPod": pod, "transportDeadlineSeconds": PRODUCER_DEADLINE_SECONDS,
+        "ordinaryInputs": [entry["input"] for entry in APPLICATION_TOKEN_SPEC["tokens"]],
+    }))
+    check_application_binding(transport, binding)
+    outcome_uncertain = True
     try:
+        response = transport.execute(pod, ["/tmp/marty-deploy", "operator", "approle-bootstrap",
+            "application", "https://openbao:8200", "/tmp/ca.crt", identity],
+            data=encoded({"root_token": root_token, "binding": binding, "current": current}),
+            timeout=600)
+        outcome_uncertain = False
+        require(len(response) <= 4096 and encoded(json.loads(response,
+                object_pairs_hook=unique_json_members)) == encoded({"ready": True}),
+                "native application authority enrollment did not confirm readiness")
+        take_application_identity(remote_archive(transport, pod, identity,
+            APPLICATION_IDENTITY_ARCHIVE_LIMIT), output, binding, root_token)
+    except Exception as error:
+        # Only this identity directory is exported, never /tmp/root.token. Its
+        # partial native outputs are private recovery material, not a retry plan.
+        try:
+            archive = remote_archive(transport, pod, identity, APPLICATION_IDENTITY_ARCHIVE_LIMIT)
+            private_archive(archive, APPLICATION_IDENTITY_LIMITS,
+                maximum=APPLICATION_IDENTITY_ARCHIVE_LIMIT, modes={0o600},
+                directories={"."}, complete=False, allow_empty=True)
+            write_new(transport.state / "application-authority-recovery.tar", archive)
+        except Exception as export_error:
+            raise RetainProducerError("application authority enrollment requires recovery; "
+                "private evidence export failed and authority may exist; native pod retained only within "
+                "its remaining 1200-second total lifetime; inspect transport-pod.json and do not replay") from export_error
+        if outcome_uncertain:
+            raise RetainProducerError("application authority enrollment outcome is uncertain; "
+                "private evidence is only a snapshot and native work may still be running; "
+                "native pod retained only within its remaining 1200-second total lifetime; "
+                "inspect transport-pod.json and do not replay") from error
+        raise BootstrapError("application authority enrollment requires recovery; "
+            "private evidence retained and authority may exist; do not replay enrollment") from error
+    return {
+        "schema": "marty.kubernetes-application-authority/v1", "binding": binding,
+        "identityDirectory": "application-identity", "files": sorted(APPLICATION_IDENTITY_FILES),
+    }
+
+
+def provision_workload_identity(transport: Transport, *, image: str, operator: Path,
+                               root_token: str, ca: bytes, nonce: str, workload_project: str,
+                               files: dict[str, Path], pull_secrets: list[str], binding: dict) -> dict:
+    require(re.fullmatch(r"[0-9a-f]{12}", nonce) is not None
+            and workload_project == "marty-selfhost-disposable-k8s-" + nonce
+            and binding["workloadProject"] == workload_project,
+            "native producer identity differs from the retained bootstrap project")
+    pod = create_producer_pod(transport, image=image, nonce=nonce, pull_secrets=pull_secrets)
+    retain_pod = False
+    try:
+        retain_producer_pointer(transport, pod)
         transport.kubectl("native producer readiness", "wait", "--for=condition=Ready",
                           "pod/" + pod, "--timeout=300s", timeout=330)
         transport.upload(pod, "/tmp/root.token", root_token.encode())
@@ -375,11 +632,18 @@ def provision_workload_identity(transport: Transport, *, image: str, operator: P
             write_new(path, value.encode())
             files[name.upper()] = path
         require(len(tokens) == len(set(tokens)) == 5, "Keycloak scoped tokens are shared")
+        return enroll_application_authority(transport, pod, root_token=root_token,
+                                            binding=binding, files=files)
+    except RetainProducerError:
+        retain_pod = True
+        raise
     finally:
         # All authority in this pod lives in its memory-backed temporary volume.
-        # Failure to remove it is a visible error, never a successful bootstrap.
-        transport.kubectl("native producer cleanup", "delete", "pod", pod,
-                          "--wait=true", "--timeout=120s", timeout=150)
+        # Keep its remaining bounded lifetime when an exec outcome or evidence
+        # retention is uncertain. This is not durable on-cluster recovery.
+        if not retain_pod:
+            transport.kubectl("native producer cleanup", "delete", "pod", pod,
+                              "--wait=true", "--timeout=120s", timeout=150)
 
 
 def publish_credentials(transport: Transport, operator: Path, files: dict[str, Path]) -> None:
@@ -389,23 +653,10 @@ def publish_credentials(transport: Transport, operator: Path, files: dict[str, P
     transport.run("native Kubernetes credential publication",
         [str(operator), "--repo-root", str(ROOT), "kubernetes-secrets",
          "kubernetes-production", transport.namespace], env=environment)
-    # Two current notification identities and the initial operator login are
-    # absent from the older native Kubernetes catalog. Use kubectl's ordinary
-    # file inputs rather than another template/Secret renderer.
-    additions = {
-        "notification-workload-tls": {
-            "tls.crt": files["NOTIFICATION_WORKLOAD_SERVER_CERT"],
-            "ca.crt": files["MARTY_WORKLOAD_IDENTITY_CA_CERT"],
-        },
-        "notification-tls-kms": {
-            "ca.crt": files["OPENBAO_TLS_CA_CERT"],
-            "token": files["NOTIFICATION_TLS_KMS_TOKEN"],
-        },
-        "marty-operator": {"password": files["MARTY_ORG_ADMIN_PASSWORD"]},
-    }
-    for name, members in additions.items():
-        transport.kubectl("application credential publication", "create", "secret", "generic",
-                          name, *[f"--from-file={key}={path}" for key, path in members.items()])
+    # The initial organization login remains bootstrap-owned. Workload and
+    # OpenBao credentials, including Notification TLS, have one native owner.
+    transport.kubectl("application credential publication", "create", "secret", "generic",
+                      "marty-operator", f"--from-file=password={files['MARTY_ORG_ADMIN_PASSWORD']}")
 
 
 def bootstrap(args: argparse.Namespace) -> None:
@@ -432,6 +683,10 @@ def bootstrap(args: argparse.Namespace) -> None:
     require(identity.returncode == 0
             and identity.stdout.strip().decode() == args.runtime_source_sha + ":" + args.release_tag,
             "signed operator build identity differs")
+    publication = publication_contract(operator)
+    application = application_token_contract(operator)
+    write_new(state / "kubernetes-secret-publication.json", encoded(publication))
+    write_new(state / "kubernetes-application-tokens.json", encoded(application))
     upstream = json.loads(UPSTREAM.read_bytes())
     require(args.chart_package.is_file()
             and hashlib.sha256(args.chart_package.read_bytes()).hexdigest() == upstream["sha256"],
@@ -448,7 +703,7 @@ def bootstrap(args: argparse.Namespace) -> None:
     bootstrap_id = str(uuid.uuid4())
     nonce = secrets.token_hex(6)
     workload_project = "marty-selfhost-disposable-k8s-" + nonce
-    namespace = prepare_namespace(transport, bootstrap_id)
+    namespace = prepare_namespace(transport, bootstrap_id, publication)
     seal = secrets.token_bytes(32)
     write_new(state / "static.key", seal, 0o400)
     transport.create({"apiVersion": "v1", "kind": "Secret",
@@ -514,9 +769,11 @@ def bootstrap(args: argparse.Namespace) -> None:
     operator_password = credential_dir / "marty_org_admin_password"
     write_new(operator_password, ("Aa1!" + secrets.token_hex(24)).encode())
     files["MARTY_ORG_ADMIN_PASSWORD"] = operator_password
-    provision_workload_identity(transport, image=values["images"]["services"],
+    authority = provision_workload_identity(transport, image=values["images"]["services"],
         operator=operator, root_token=root_token, ca=ca, nonce=nonce,
-        workload_project=workload_project, files=files, pull_secrets=args.image_pull_secret)
+        workload_project=workload_project, files=files, pull_secrets=args.image_pull_secret,
+        binding={"namespace": namespace["name"], "namespaceUid": namespace["uid"],
+                 "openbaoClusterId": openbao_cluster_id, "workloadProject": workload_project})
     publish_credentials(transport, operator, files)
     require(namespace_identity(transport) == namespace,
             "Kubernetes namespace changed during bootstrap; completion withheld")
@@ -529,6 +786,10 @@ def bootstrap(args: argparse.Namespace) -> None:
         "openbaoImage": values["images"]["openbao_didcomm"],
         "status": "openbao-and-application-credentials-ready",
         "credentialLifetimeHours": 8, "migrationBootstrapLifetimeHours": 2,
+        "credentialPublication": publication,
+        "applicationTokenContract": application,
+        "applicationAuthority": authority,
+        "imagePullSecrets": list(args.image_pull_secret),
         "credentialLifecycle": {
             "schema": "marty.kubernetes-credential-lifecycle/v1",
             "namespaceUid": namespace["uid"], "producerNonce": nonce,

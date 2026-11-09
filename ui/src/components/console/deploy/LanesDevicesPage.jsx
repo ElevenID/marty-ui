@@ -182,7 +182,7 @@ function LanesDevicesPage() {
                     <TableCell>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         <DevicesIcon color="action" fontSize="small" />
-                        <Typography variant="body2" fontWeight={500}>
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
                           {lane.name}
                         </Typography>
                       </Box>

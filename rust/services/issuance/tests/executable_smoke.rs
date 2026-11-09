@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{process::Child, time::Duration};
 
 use mmf_platform::{KeylessGrpcTransportOptions, OpenBaoTlsIdentityFiles};
 use serde_json::{json, Value};
@@ -20,6 +20,60 @@ use issuance_process::{
 
 #[path = "support/canvas_worker_logging_contract.rs"]
 mod canvas_worker_logging_contract;
+
+/// Read a fixed-size snapshot without moving the child writer's shared file
+/// offset. This is also safe while an unhealthy child remains alive.
+fn bounded_startup_diagnostic(stderr: &std::fs::File) -> std::io::Result<String> {
+    let length = stderr.metadata()?.len();
+    let start = length.saturating_sub(16 * 1024);
+    let mut bytes = vec![0; (length - start) as usize];
+    let mut filled = 0;
+    while filled < bytes.len() {
+        #[cfg(unix)]
+        let count = {
+            use std::os::unix::fs::FileExt;
+            stderr.read_at(&mut bytes[filled..], start + filled as u64)?
+        };
+        #[cfg(windows)]
+        let count = {
+            use std::os::windows::fs::FileExt;
+            stderr.seek_read(&mut bytes[filled..], start + filled as u64)?
+        };
+        if count == 0 {
+            break;
+        }
+        filled += count;
+    }
+    bytes.truncate(filled);
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn retryable_listener_bind_failure(terminal_failure: bool, diagnostic: &str) -> bool {
+    terminal_failure && diagnostic.contains("kind: AddrInUse")
+}
+
+/// A released ephemeral port may be claimed before the child reaches bind.
+/// Keep a bounded diagnostic from a terminal child; callers retry only the
+/// classified collision and report every other failure as before.
+struct TerminalStartupFailure {
+    bind_collision: bool,
+    diagnostic: String,
+}
+
+fn terminal_startup_failure(
+    child: &mut Child,
+    stderr: &std::fs::File,
+) -> Option<TerminalStartupFailure> {
+    let status = child.try_wait().ok().flatten()?;
+    if status.success() {
+        return None;
+    }
+    let diagnostic = bounded_startup_diagnostic(stderr).ok()?;
+    Some(TerminalStartupFailure {
+        bind_collision: retryable_listener_bind_failure(true, &diagnostic),
+        diagnostic,
+    })
+}
 
 async fn wait_for_health(port: u16) -> Option<Value> {
     let client = reqwest::Client::new();
@@ -230,27 +284,47 @@ async fn executable_serves_health_readiness_and_version() {
     let Some(database_url) = smoke_database_url() else {
         return;
     };
-    // Keep both reservations alive while selecting ports: releasing HTTP first
-    // lets the OS hand its port back for gRPC in this same process.
-    let (http_reservation, port) = reserve_port();
-    let (grpc_reservation, grpc_port) = reserve_port();
-    assert_ne!(port, grpc_port);
-    let mut command = smoke_command(port, grpc_port);
-    drop(http_reservation);
-    drop(grpc_reservation);
-    let _child = ChildGuard(
+    // Startup validates or migrates only the dedicated *_test database before
+    // binding. A released ephemeral port can be claimed during that interval.
+    // Keep all service assertions below; repeat only a terminal bind collision.
+    let mut retries = 0;
+    let (_child, port, grpc_port, health) = loop {
+        let (http_reservation, port) = reserve_port();
+        let (grpc_reservation, grpc_port) = reserve_port();
+        assert_ne!(port, grpc_port);
+        let stderr = tempfile::tempfile().expect("owned smoke stderr");
+        let mut command = smoke_command(port, grpc_port);
         command
             .env("DATABASE_URL", &database_url)
             .env(
                 "GRPC_SERVICE_TOKEN",
                 "executable-smoke-service-token-at-least-32-bytes",
             )
-            .spawn()
-            .expect("start issuance candidate"),
-    );
+            .stderr(stderr.try_clone().expect("clone owned smoke stderr"));
+        drop(http_reservation);
+        drop(grpc_reservation);
+        let mut child = ChildGuard(command.spawn().expect("start issuance candidate"));
+        let health = wait_for_health(port).await;
+        if let Some(failure) = terminal_startup_failure(&mut child.0, &stderr) {
+            if retries == 0 && failure.bind_collision {
+                retries += 1;
+                drop(child);
+                continue;
+            }
+            eprintln!("Issuance smoke startup failed: {}", failure.diagnostic);
+        } else if health.is_none() {
+            // A live but unhealthy child is never retried. Preserve the same
+            // actionable startup logs formerly inherited on stderr.
+            eprintln!(
+                "Issuance smoke unhealthy: {}",
+                bounded_startup_diagnostic(&stderr)
+                    .unwrap_or_else(|_| "<stderr unavailable>".into())
+            );
+        }
+        break (child, port, grpc_port, health);
+    };
     let client = reqwest::Client::new();
     let base = format!("http://127.0.0.1:{port}");
-    let health = wait_for_health(port).await;
     let ready = client
         .get(format!("{base}/ready"))
         .send()
@@ -587,4 +661,55 @@ async fn executable_mounts_complete_internal_application_contract() {
     );
 
     drop(child);
+}
+
+#[cfg(test)]
+mod listener_bind_collision_tests {
+    use super::{bounded_startup_diagnostic, retryable_listener_bind_failure};
+    use std::io::Write;
+
+    #[test]
+    fn retries_only_terminal_addr_in_use() {
+        let bind = "Error: Os { code: 98, kind: AddrInUse, message: \"Address already in use\" }";
+        assert!(retryable_listener_bind_failure(true, bind));
+        assert!(!retryable_listener_bind_failure(false, bind));
+        assert!(!retryable_listener_bind_failure(
+            true,
+            "Error: database migration failed"
+        ));
+        assert!(!retryable_listener_bind_failure(
+            true,
+            "timed out waiting for readiness"
+        ));
+    }
+
+    #[test]
+    fn retains_bounded_tail_for_non_bind_failure() {
+        let path = std::env::temp_dir().join(format!(
+            "marty-issuance-stderr-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let mut child_writer = file.try_clone().unwrap();
+        child_writer.write_all(&vec![b'x'; 17 * 1024]).unwrap();
+        child_writer
+            .write_all(b"Error: database migration failed")
+            .unwrap();
+        let diagnostic = bounded_startup_diagnostic(&file).unwrap();
+        assert!(diagnostic.len() <= 16 * 1024);
+        assert!(diagnostic.ends_with("Error: database migration failed"));
+        assert!(!retryable_listener_bind_failure(true, &diagnostic));
+        child_writer.write_all(b"; writer remains at end").unwrap();
+        let later = bounded_startup_diagnostic(&file).unwrap();
+        assert!(later.ends_with("Error: database migration failed; writer remains at end"));
+        drop(child_writer);
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+    }
 }

@@ -66,7 +66,7 @@ function MiniStat({ label, value, icon: Icon, color = 'primary' }) {
         </Box>
       )}
       <Box>
-        <Typography variant="h6" fontWeight="bold">
+        <Typography variant="h6" sx={{ fontWeight: "bold" }}>
           {value}
         </Typography>
         <Typography variant="caption" color="text.secondary">
@@ -183,7 +183,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
               <Typography variant="subtitle2" color="text.secondary" gutterBottom>
                 {t('dashboard.issuance.activeCredentialOffers')}
               </Typography>
-              <Typography variant="h4" fontWeight="bold">
+              <Typography variant="h4" sx={{ fontWeight: "bold" }}>
                 {metrics.activeOffers}
               </Typography>
             </Box>
@@ -250,7 +250,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
         <Divider sx={{ my: 2 }} />
 
         <Grid container spacing={3}>
-          <Grid item xs={6} sm={3}>
+          <Grid size={{ xs: 6, sm: 3 }}>
             <MiniStat
               label={t('dashboard.issuance.activeOffers')}
               value={metrics.activeOffers}
@@ -259,7 +259,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
             />
           </Grid>
           
-          <Grid item xs={6} sm={3}>
+          <Grid size={{ xs: 6, sm: 3 }}>
             <MiniStat
               label={t('dashboard.issuance.totalOffers')}
               value={metrics.totalOffers}
@@ -268,7 +268,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
             />
           </Grid>
           
-          <Grid item xs={6} sm={3}>
+          <Grid size={{ xs: 6, sm: 3 }}>
             <MiniStat
               label={t('dashboard.issuance.totalScans')}
               value={metrics.totalScans}
@@ -277,7 +277,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
             />
           </Grid>
           
-          <Grid item xs={6} sm={3}>
+          <Grid size={{ xs: 6, sm: 3 }}>
             <MiniStat
               label={t('dashboard.issuance.successRate')}
               value={`${metrics.successRate}%`}

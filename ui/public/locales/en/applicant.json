@@ -20,7 +20,8 @@
       "applyDescription": "Browse available credentials and start an application",
       "viewMyCredentials": "View My Credentials",
       "viewDescription": "See your issued digital credentials"
-    }
+    },
+    "loadError": "Your credential summary could not be loaded. Please try again."
   },
   "credentials": {
     "title": "My Credentials",
@@ -141,7 +142,10 @@
       "fullName": "Full Name",
       "email": "Email",
       "emailHelp": "Contact support to change your email",
-      "phone": "Phone Number"
+      "phone": "Phone Number",
+      "loadError": "Your profile could not be loaded. Please try again.",
+      "saved": "Profile saved.",
+      "save": "Save profile"
     },
     "notifications": {
       "title": "Notifications",
@@ -150,11 +154,16 @@
       "applicationUpdates": "Application Updates",
       "applicationUpdatesDescription": "Get notified when your application status changes",
       "expirationReminders": "Expiration Reminders",
-      "expirationRemindersDescription": "Remind me before credentials expire"
+      "expirationRemindersDescription": "Remind me before credentials expire",
+      "unavailable": "Notification preferences are not available in this deployment."
     },
     "actions": {
       "save": "Save Settings",
       "saving": "Saving..."
+    },
+    "wallets": {
+      "loadError": "Available wallets could not be loaded. Please try again.",
+      "savedAutomatically": "Wallet choices are saved automatically in this browser."
     }
   },
   "catalog": {
@@ -171,12 +180,14 @@
       "enterprise": "Enterprise Credentials"
     },
     "filters": {
-      "category": "Category"
+      "category": "Category",
+      "clear": "Clear filters"
     },
     "empty": {
       "title": "No Credentials Available",
       "description": "There are no credentials available for your organization at this time.",
-      "message": "No credentials match your search criteria. Try adjusting your filters."
+      "message": "No credentials match your search criteria. Try adjusting your filters.",
+      "launchUnavailable": "The credential for this course is not currently available. Contact the course provider."
     },
     "card": {
       "free": "Free",
@@ -196,7 +207,9 @@
       "requiredInfo": "Required Information",
       "offeredBy": "Offered by: {{vendorName}}",
       "templateVersion": "Template v{{version}}"
-    }
+    },
+    "searchLabel": "Search credentials",
+    "errorLoading": "We could not load the credential catalog. Try again, or contact support if the problem continues."
   },
   "applicationForm": {
     "title": {
@@ -256,6 +269,14 @@
     },
     "fields": {
       "optional": "(optional)"
+    }
+  },
+  "identity": {
+    "guidance": {
+      "walletPresentation": "To present a credential, use the wallet where it is stored.",
+      "expired": "This credential has expired. Contact the issuer about renewal.",
+      "revoked": "This credential has been revoked. Contact the issuer for help.",
+      "additionalInformation": "The issuer needs more information. Contact the issuer for instructions on how to provide it."
     }
   }
 }

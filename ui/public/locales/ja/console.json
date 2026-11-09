@@ -1,9 +1,210 @@
 {
+  "trust": {
+    "trustProfileWizard": {
+      "selectOrganization": "信頼プロファイルを作成する組織を選択してください。",
+      "createDenied": "選択した組織で信頼プロファイルを作成する権限がありません。",
+      "issuerDenied": "発行者との関係を追加するには、信頼できる発行者を表示および作成する権限が必要です。選択した発行者を削除すると、発行者なしで続行できます。",
+      "registryDenied": "レジストリソースを同期するには、信頼プロファイルを表示する権限が必要です。選択したレジストリを削除すると、レジストリなしで続行できます。",
+      "activateDenied": "信頼プロファイルを有効化する権限がありません。下書きを作成するには、即時有効化をオフにしてください。",
+      "responseMismatch": "要求された信頼プロファイルの操作をサーバーが確認できませんでした。再試行する前にプロファイル一覧を確認してください。",
+      "profileCreated": "この信頼プロファイルは作成されました: {{id}}。再試行する前に現在の状態を確認し、設定を完了してください。"
+    },
+    "revocationWizard": {
+      "selectOrganization": "失効プロファイルを作成する組織を選択してください。",
+      "createDenied": "選択した組織で失効プロファイルを作成する権限がありません。",
+      "responseMismatch": "作成応答から、選択した組織の新しい下書きプロファイルを確認できません。再試行する前にプロファイル一覧を確認してください。"
+    },
+    "trustProfilesPage": {
+      "title": "信頼プロファイル",
+      "description": "組織が受け入れる資格情報の形式、信頼ソース、検証ルールを設定します。",
+      "selectOrganization": "信頼プロファイルを表示する組織を選択してください。",
+      "readDenied": "この組織の信頼プロファイルを表示する権限がありません。",
+      "scopeMismatch": "カタログの応答が選択した組織と一致しないか、無効なプロファイルが含まれています。",
+      "loadFailed": "信頼プロファイルを読み込めませんでした。",
+      "retryProfiles": "プロファイルを再読み込み",
+      "emptyTitle": "信頼プロファイルが設定されていません",
+      "emptyDescription": "信頼プロファイルを作成して、組織が受け入れる資格情報の形式、信頼ソース、検証ルールを設定してください。",
+      "createProfile": "信頼プロファイルを作成",
+      "pinnedSources": "固定された発行者ソース",
+      "pinnedSourcesHelp": "固定されたソースはプロファイルの信頼ポリシーの一部です。リンクされた発行者との関係を確認するには、プロファイルを開いてください。",
+      "allowedAlgorithms": "許可するアルゴリズム",
+      "name": "名前",
+      "framework": "フレームワーク",
+      "status": "状態",
+      "lastUpdated": "最終更新",
+      "actions": "操作",
+      "viewDetails": "詳細を表示",
+      "edit": "編集",
+      "consoleBreadcrumb": "コンソール",
+      "trustBreadcrumb": "信頼"
+    },
+    "trustProfileEdit": {
+      "selectOrganization": "信頼プロファイルを編集する前に組織を選択してください。",
+      "permissionDenied": "信頼プロファイルを編集する権限がありません。",
+      "scopeMismatch": "信頼プロファイルの応答が、要求したプロファイルと選択した組織に一致しません。",
+      "invalidResponse": "信頼プロファイルの応答が無効です。",
+      "suspendedStatus": "停止中",
+      "unknownStatus": "不明",
+      "notFound": "信頼プロファイルが見つかりません。"
+    },
+    "revocationDetail": {
+      "selectOrganization": "失効プロファイルを表示する組織を選択してください。",
+      "readDenied": "選択した組織の失効プロファイルを表示する権限がありません。",
+      "profileScopeMismatch": "応答が、選択した組織で要求されたプロファイルと一致しません。",
+      "activationScopeMismatch": "有効化の応答で、選択した組織の要求されたプロファイルがACTIVEになったことを確認できません。",
+      "retryProfile": "プロファイルを再読み込み",
+      "activate": "有効化",
+      "activating": "有効化中…",
+      "activationFailed": "失効プロファイルを有効化できませんでした。",
+      "loadFailed": "失効プロファイルを読み込めませんでした。",
+      "statusDraft": "下書き",
+      "statusActive": "有効",
+      "statusSuspended": "一時停止",
+      "statusUnknown": "不明な状態",
+      "checkModeTitle": "失効確認ポリシー",
+      "mechanismsTitle": "失効確認方式",
+      "metadataTitle": "プロファイルのメタデータ",
+      "noMechanisms": "失効確認方式が返されませんでした。",
+      "statusListUrl": "ステータスリストのエンドポイント",
+      "profileId": "プロファイルID",
+      "organization": "組織",
+      "created": "作成日時",
+      "updated": "最終更新日時",
+      "offlineGrace": "オフライン猶予期間",
+      "cacheTtl": "キャッシュの有効期間",
+      "notAvailable": "情報なし",
+      "backToList": "失効プロファイルに戻る",
+      "disabledAdvisory": "このプロファイルでは資格情報の状態確認が無効です。失効確認を意図的に対象外とする場合にのみ使用してください。",
+      "checkModes": {
+        "always": "毎回確認",
+        "alwaysDescription": "検証のたびに資格情報の状態を確認する設定です。",
+        "cached": "キャッシュを使用した確認",
+        "cachedDescription": "設定されたキャッシュ有効期間を使用して状態を確認します。",
+        "offlineGrace": "オフライン猶予",
+        "offlineGraceDescription": "オフラインでの状態確認には、設定された猶予期間を使用します。",
+        "disabled": "無効",
+        "disabledDescription": "資格情報の状態確認は無効です。",
+        "unknown": "不明な確認ポリシー",
+        "unknownDescription": "サーバーから認識できない確認ポリシーが返されました。"
+      },
+      "mechanisms": {
+        "statusList2021": "Status List 2021",
+        "bitstringStatusList": "Bitstring Status List",
+        "tokenStatusList": "Token Status List",
+        "ocsp": "OCSP",
+        "crl": "CRL",
+        "unknown": "認識できない失効確認方式"
+      }
+    },
+    "trustProfileDetail": {
+      "selectOrganization": "この信頼プロファイルを表示する組織を選択してください。",
+      "profileReadDenied": "この組織の信頼プロファイルを表示する権限がありません。",
+      "issuerReadDenied": "この組織の発行者との関係を表示する権限がありません。",
+      "profileScopeMismatch": "この信頼プロファイルは選択した組織では利用できません。",
+      "retryProfile": "プロファイルを再読み込み",
+      "retryIssuers": "発行者一覧を再読み込み",
+      "issuerScopeMismatch": "発行者の応答が、このプロファイル、組織、または要求したDIDと一致しません。",
+      "issuerNotConfirmed": "受け付けられた発行者との関係を現在の一覧で確認できませんでした。発行者一覧を再読み込みしてください。",
+      "issuerLoadFailed": "発行者一覧を読み込めませんでした。",
+      "issuerAddFailed": "発行者の追加を確認できませんでした。",
+      "issuerAwaitingReadback": "リンクは受け付けられました。再試行ではリンクを再送信せず、現在の発行者一覧を読み取ります。",
+      "statusUnknown": "不明",
+      "relationshipStatusLabel": "信頼関係",
+      "issuerComplianceLabel": "発行者の準拠状態",
+      "statusDraft": "下書き",
+      "statusActive": "有効",
+      "statusSuspended": "一時停止",
+      "statusArchived": "アーカイブ済み",
+      "relationshipTrusted": "信頼済み",
+      "relationshipDenied": "拒否",
+      "relationshipUnderReview": "審査中",
+      "complianceAccredited": "認定済み",
+      "complianceCompliant": "準拠",
+      "complianceSuspended": "一時停止",
+      "complianceRevoked": "失効",
+      "credentialWalletGuidance": "ウォレットプロファイルは資格情報テンプレートで確認できます。テンプレートが対応するウォレットプロファイルをご確認ください。導出された設定は、相互運用性や配信の成功を証明するものではありません。",
+      "viewCredentialTemplates": "資格情報テンプレートを表示"
+    }
+  },
+  "membershipReview": {
+    "pending": "承認待ち",
+    "description": "保留中のメンバーシップを確認し、割り当て済みのロールでアクセスを承認します。",
+    "signIn": "メンバーシップ申請を確認するにはログインしてください。",
+    "selectOrganization": "メンバーシップ申請を確認する組織を選択してください。",
+    "permissionsLoading": "メンバーシップの権限を確認中",
+    "readDenied": "この組織の保留中のメンバーシップを表示する権限がありません。",
+    "approvalOnly": "ここでは保留中のメンバーシップを承認できます。却下は利用できません。",
+    "viewOnly": "申請を表示できますが、承認する権限はありません。",
+    "applicant": "申請者",
+    "roles": "割り当て済みロール",
+    "account": "アカウント {{id}}",
+    "noRoles": "ロール未割り当て",
+    "approvalFailed": "メンバーシップ申請を承認できませんでした。",
+    "loadFailed": "メンバーシップ申請を読み込めませんでした。"
+  },
 	"dashboard": {
+		"developerQuickStart": {
+			"loading": "連携メタデータを読み込み中..."
+		},
 		"title": "ダッシュボード",
-		"welcome": "お帰りなさい"
+		"welcome": "お帰りなさい",
+		"criticalEvents": {
+			"noCriticalEvents": "過去24時間に重大なイベントは報告されていません。"
+		},
+		"runtimeReadiness": {
+			"issuance": {
+				"noDeployments": "有効なデプロイメントがありません",
+				"deploymentsReason": "資格情報を発行するには、有効なデプロイメントプロファイルが必要です。",
+				"configureDeployment": "デプロイメントを設定",
+				"notReady": "資格情報の発行準備ができていません",
+				"readinessReason": "発行フローと必要なリソースを確認してから、資格情報を発行してください。",
+				"reviewFlows": "発行フローを確認",
+				"operational": "資格情報の発行準備ができています",
+				"issuerConfigurationRequired": "発行者設定の確認が必要です",
+				"issuerConfigurationReason": "資格情報を発行する前に、発行者の識別情報と、有効な資格情報テンプレートが参照する発行者DIDを確認してください。"
+			},
+			"verification": {
+				"notReady": "資格情報の検証準備ができていません",
+				"readinessReason": "セッションを開始する前に、検証設定を確認してください。",
+				"reviewSetup": "検証設定を確認",
+				"operational": "資格情報の検証準備ができています",
+				"policyUnreachable": "有効な提示ポリシーがありません",
+				"policyReason": "資格情報を検証するには、少なくとも1つの有効な提示ポリシーが必要です。"
+			},
+			"issuerConfiguration": {
+				"title": "発行者設定",
+				"configured": "設定済み",
+				"notConfigured": "未設定",
+				"configuredDetail": "有効な資格情報テンプレートが発行者DIDを参照しています。",
+				"notConfiguredDetail": "発行者DIDを参照する有効な資格情報テンプレートがありません。",
+				"reason": "資格情報テンプレートを発行に使用するには、発行者DIDが必要です。",
+				"manage": "発行者の識別情報を管理"
+			}
+		},
+		"systemStatus": {
+			"issuanceService": "発行サービス",
+			"notReported": "直近の準備状況チェックで、このサービスは報告されませんでした。"
+		}
 	},
 	"flows": {
+		"flowDetail": {
+			"lifecycleTitle": "フローのライフサイクル",
+			"statusChips": {
+				"active": "有効",
+				"draft": "下書き",
+				"paused": "一時停止中",
+				"archived": "アーカイブ済み",
+				"unknown": "不明なステータス"
+			},
+			"entryPoints": {
+				"linkUnavailable": "このフローの申請リンクはありません。",
+				"qrUnavailable": "このフローのQRコードはありません。"
+			},
+			"errors": {
+				"copyFailed": "リンクをコピーできませんでした。もう一度お試しください。",
+				"invalidActivation": "有効化の応答がこのフローと一致しませんでした。"
+			}
+		},
 		"title": "フロー",
 		"flowDefinitions": "フロー定義",
 		"flowInstances": "フローインスタンス",
@@ -36,9 +237,21 @@
 			"console": "コンソール",
 			"flows": "フロー",
 			"flowInstances": "フローインスタンス"
-		}
+		},
+		"flowDefinition": "フロー定義"
 	},
 	"deploy": {
+		"keyManagementWizard": {
+			"selectOrganization": "署名サービスを登録する組織を選択してください。",
+			"readDenied": "選択した組織の署名サービスを表示する権限がありません。",
+			"createDenied": "選択した組織に署名サービスを登録する権限がありません。"
+		},
+		"issuerIdentityWizard": {
+			"selectOrganization": "発行者IDを作成する組織を選択してください。",
+			"readDenied": "選択した組織で発行者の機能を表示する権限がありません。",
+			"createDenied": "選択した組織で発行者IDを作成する権限がありません。",
+			"responseMismatch": "要求された発行者IDをサーバーが確認できませんでした。再試行する前に発行者IDの一覧を確認してください。"
+		},
 		"title": "デプロイ",
 		"deploymentProfiles": "デプロイプロファイル",
 		"deploymentProfilesDescription": "API、キオスク、デバイス向けのデプロイプロファイルをオンライン/オフライン環境で構成します。",
@@ -247,7 +460,38 @@
 		}
 	},
 	"org": {
+		"roleEscalation": {
+			"title": "ロール変更の申請",
+			"unavailable": "このコンソールではロール変更を申請できません。",
+			"management": "ロールの割り当て権限があるユーザーは、チーム画面でメンバーのロールを変更できます。ロール画面では、利用可能なロールとその権限を確認できます。",
+			"teamLink": "チームを表示",
+			"rolesLink": "ロールを表示"
+		},
+		"setup": {
+			"chooseTitle": "組織を選択",
+			"chooseDescription": "組織を選択して、その組織のコンソールを開きます。",
+			"accessTitle": "組織コンソールへのアクセス",
+			"accessDescriptionWithCreate": "続行するには、コンソールにアクセスできる組織に参加するか、組織を作成してください。",
+			"accessDescription": "続行するには、コンソールにアクセスできる組織に参加してください。",
+			"noMembershipsTitle": "コンソールにアクセスできる組織への所属はまだありません"
+		},
 		"team": {
+			"access": {
+				"rolesTitle": "ロール",
+				"signIn": "チームを表示するにはサインインしてください。",
+				"selectOrganization": "チームを表示する組織を選択してください。",
+				"readDenied": "このチームを表示する権限がありません。",
+				"rolesLoadFailed": "利用可能なロールを読み込めませんでした。メンバーの招待やロール変更を行うには、もう一度お試しください。",
+				"rolesReadRequired": "メンバーの招待やロール変更には、利用可能なロールを表示する権限が必要です。組織の管理者にアクセス権を依頼してください。"
+			},
+			"memberships": {
+				"title": "メンバーシップの状態",
+				"status": "状態",
+				"pending": "承認待ち",
+				"deactivated": "無効",
+				"unknown": "状態を取得できません",
+				"reviewRequests": "参加申請を表示"
+			},
 			"title": "チーム",
 			"subtitle": "メンバー、ロール、招待を管理"
 		},
@@ -260,7 +504,9 @@
 				"defaultCredentialTemplate": "既定の資格情報テンプレート"
 			},
 			"values": {
-				"noneManualSelection": "なし（手動選択が必要）"
+				"noneManualSelection": "なし（手動選択が必要）",
+				"unavailable": "利用できないリソース",
+				"detailsUnavailable": "リソースの詳細を表示できません"
 			},
 			"actions": {
 				"save": "既定値を保存",
@@ -269,8 +515,22 @@
 			"messages": {
 				"loadFailed": "組織の既定値を読み込めませんでした",
 				"saveFailed": "組織の既定値を保存できませんでした",
-				"saveSuccess": "組織の既定値を保存しました"
+				"saveSuccess": "組織の既定値を保存しました",
+				"organizationRequired": "既定値を設定する前に組織を選択してください。",
+				"permissionDenied": "組織の既定値を閲覧する権限がありません。",
+				"unavailableDefaultsPreserved": "保存済みの既定値の一部が利用できません。他の既定値を変更しても、これらの値は保持されます。編集権限がある場合は、置き換えるか選択を解除できます。",
+				"catalogPermissionRequired": "カタログの閲覧権限がないため、一部のリソースの詳細は表示されません。"
 			}
 		}
+	},
+	"policies": {
+		"verificationSessions": "検証セッション"
+	},
+	"organizationCreation": {
+		"createAction": "組織を作成",
+		"emptyDescription": "まだどの組織にも所属していません。組織を作成するか、公開されている組織を探すか、コードを使って組織に参加してください。",
+		"discoveryRequired": "自由参加または承認制の組織は、公開の組織検索で常に見つけることができます。",
+		"discoveryPublic": "この組織は公開の組織検索に表示される場合があります。",
+		"discoveryPrivate": "この組織は公開の組織検索に表示されません。"
 	}
 }

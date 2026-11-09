@@ -364,11 +364,11 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
                 }}
               >
                 <CardContent sx={{ py: 1.25, '&:last-child': { pb: 1.25 } }}>
-                  <Stack direction="row" spacing={1.25} alignItems="flex-start">
+                  <Stack direction="row" spacing={1.25} sx={{ alignItems: 'flex-start' }}>
                     <Radio checked={selected} size="small" sx={{ p: 0.25, mt: 0.1 }} />
                     <Box sx={{ minWidth: 0, flex: 1 }}>
-                      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-                        <Typography variant="body2" fontWeight={700}>{option.name}</Typography>
+                      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }} useFlexGap>
+                        <Typography variant="body2" sx={{ fontWeight: 700 }}>{option.name}</Typography>
                         <Chip
                           size="small"
                           icon={browserLaunch ? <OpenInNewIcon /> : <PhoneAndroidIcon />}
@@ -394,16 +394,16 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
         </Stack>
 
         {loadingInitialOffer && (
-          <Stack spacing={2} alignItems="center" sx={{ py: 4 }}>
+          <Stack spacing={2} sx={{ alignItems: 'center', py: 4 }}>
             <CircularProgress />
-            <Typography variant="body2" color="text.secondary" textAlign="center">
+            <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
               Preparing your wallet invite...
             </Typography>
           </Stack>
         )}
         {/* ── Error state with retry ── */}
         {canGenerateWalletOffer && error && (
-          <Stack spacing={2} alignItems="center" sx={{ py: 2 }}>
+          <Stack spacing={2} sx={{ alignItems: 'center', py: 2 }}>
             <Alert severity="error" sx={{ width: '100%' }}>{error}</Alert>
             <Button
               variant="contained"
@@ -461,7 +461,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
                 >
                   {selectedWalletId === ANY_OID4VCI_WALLET_ID ? 'Open Wallet' : `Open ${selectedWalletName}`}
                 </Button>
-                <Typography variant="caption" color="text.secondary" textAlign="center">
+                <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>
                   {selectedWalletId === ANY_OID4VCI_WALLET_ID
                     ? 'Your browser will hand this invite to a compatible wallet.'
                     : `${selectedWalletName} will open to receive this credential.`}
@@ -510,7 +510,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
                 </Button>
                 <Collapse in={emailTab}>
                   <Box sx={{ pt: 1, pb: 0.5 }}>
-                    <Stack direction="row" spacing={1} alignItems="center">
+                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                       <Typography
                         variant="body2"
                         sx={{
@@ -552,13 +552,13 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
 
             {/* ── Trust signals ── */}
             <Box sx={{ mt: 2, pt: 1.5, borderTop: 1, borderColor: 'divider' }}>
-              <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="center" sx={{ mb: 0.5 }}>
+              <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', justifyContent: 'center', mb: 0.5 }}>
                 <LockIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
                 <Typography variant="caption" color="text.secondary">
                   Secure issuance via OpenID4VCI
                 </Typography>
               </Stack>
-              <Typography variant="caption" color="text.secondary" display="block" textAlign="center">
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center' }}>
                 The issuer signs the credential before it is delivered to your wallet.
               </Typography>
             </Box>

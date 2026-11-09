@@ -27,6 +27,27 @@ vi.mock('../console/applicant/ClaimCredentialDialog', () => ({
   ),
 }))
 
+function setMobileViewport(mobile: boolean) {
+  vi.mocked(window.matchMedia).mockImplementation((query) => ({
+    matches: mobile,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }))
+}
+
+function expectIdentityLayoutStyles() {
+  const header = screen.getByText('My Identity').closest('.MuiStack-root')
+  expect(header).toHaveStyle({ justifyContent: 'space-between' })
+  expect(document.querySelector(
+    '[justifycontent], [alignitems], [flexwrap], [fontweight], [texttransform], [letterspacing]',
+  )).toBeNull()
+}
+
 describe('MyIdentityPage', () => {
   it('aborts inventory requests before logout submission and stops focus refreshes', async () => {
     mockGetMyCredentials.mockImplementation(() => new Promise(() => {}))
@@ -55,6 +76,7 @@ describe('MyIdentityPage', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    setMobileViewport(false)
     mockGetMyCredentials.mockResolvedValue({ items: [] })
     mockGetMyApplications.mockResolvedValue({
       items: [
@@ -75,6 +97,7 @@ describe('MyIdentityPage', () => {
 
     await screen.findByText('Verified Member Badge')
     expect(screen.queryByRole('button', { name: /claim|receive again/i })).not.toBeInTheDocument()
+    expectIdentityLayoutStyles()
   })
 
   it('shows Canvas course source context in application details', async () => {
@@ -110,6 +133,7 @@ describe('MyIdentityPage', () => {
     expect(screen.getByText('Interoperable Credentials Quiz')).toBeInTheDocument()
     expect(screen.getByText('canvas-real-account-1')).toBeInTheDocument()
     expect(screen.getByText('Delivery: wallet plus canvas mirror')).toBeInTheDocument()
+    expectIdentityLayoutStyles()
   })
 
   it('shows issuer-owned waiting state for an approved blocked application', async () => {
@@ -156,6 +180,8 @@ describe('MyIdentityPage', () => {
     expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument()
     expect(mockGetMyCredentials).toHaveBeenCalledTimes(2)
     expect(mockGetMyApplications).toHaveBeenCalledTimes(2)
+    expect(screen.getByText('Browse the catalog to apply for your first credential.')).toHaveStyle({ marginBottom: '16px' })
+    expectIdentityLayoutStyles()
   })
 
   it('retains successful application data when credential inventory fails', async () => {
@@ -207,5 +233,80 @@ describe('MyIdentityPage', () => {
     expect(screen.getByText('Canvas Credentials display')).toBeInTheDocument()
     expect(screen.getByText('Delivered')).toBeInTheDocument()
     expect(screen.getByText(/canvas-cred-1/)).toBeInTheDocument()
+    expect(screen.getByText('Mirror linked').closest('.MuiStack-root')).toHaveStyle({
+      alignItems: 'center',
+      flexWrap: 'wrap',
+    })
+    expectIdentityLayoutStyles()
+  })
+
+  it.each([false, true])('offers working credential details without inert QR or download controls (mobile=%s)', async (mobile) => {
+    setMobileViewport(mobile)
+    mockGetMyApplications.mockResolvedValue({ items: [] })
+    mockGetMyCredentials.mockResolvedValue({
+      items: [{ id: 'cred-1', credential_display_name: 'Member Credential', status: 'ACTIVE' }],
+    })
+    const { user } = render(<MyIdentityPage />)
+
+    const details = await screen.findByRole('button', { name: 'View Member Credential details' })
+    expect(screen.queryByRole('button', { name: /showQRCode|Show QR Code|download/i })).not.toBeInTheDocument()
+    await user.click(details)
+
+    expect(await screen.findByText('Credential Details')).toBeInTheDocument()
+    expect(screen.getByText('To present a credential, use the wallet where it is stored.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^(Present|Renew)$/ })).not.toBeInTheDocument()
+    expectIdentityLayoutStyles()
+  })
+
+  it.each([
+    ['EXPIRED', 'This credential has expired. Contact the issuer about renewal.'],
+    ['REVOKED', 'This credential has been revoked. Contact the issuer for help.'],
+  ])('provides accurate guidance for a %s credential without a dead-end action', async (status, guidance) => {
+    mockGetMyApplications.mockResolvedValue({ items: [] })
+    mockGetMyCredentials.mockResolvedValue({
+      items: [{ id: 'cred-1', credential_display_name: 'Member Credential', status }],
+    })
+    const { user } = render(<MyIdentityPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'View Member Credential details' }))
+
+    expect(await screen.findByText(guidance)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^(Present|Renew)$/ })).not.toBeInTheDocument()
+    expect(screen.queryByText('To present a credential, use the wallet where it is stored.')).not.toBeInTheDocument()
+  })
+
+  it('shows one Details action for an information request instead of a Continue button that only reopens itself', async () => {
+    mockGetMyApplications.mockResolvedValue({
+      items: [{ id: 'app-info', credential_display_name: 'Member Credential', status: 'NEEDS_INFO' }],
+    })
+    const { user } = render(<MyIdentityPage />)
+
+    await screen.findByText('Member Credential')
+    expect(screen.queryByRole('button', { name: 'Continue' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Details' }))
+
+    expect(await screen.findByText('The issuer needs more information. Contact the issuer for instructions on how to provide it.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Continue' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
+  })
+
+  it.each(['row', 'details'])('preserves the working live-offer Claim action from the %s', async (source) => {
+    mockGetMyApplications.mockResolvedValue({
+      items: [{
+        id: 'app-offer',
+        credential_display_name: 'Member Credential',
+        status: 'APPROVED',
+        claim_state: 'OFFER_READY',
+        credential_offer_uri: 'openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffer',
+        offer_expires_at: new Date(Date.now() + 60000).toISOString(),
+      }],
+    })
+    const { user } = render(<MyIdentityPage />)
+
+    await screen.findByText('Member Credential')
+    if (source === 'details') await user.click(screen.getByRole('button', { name: 'Details' }))
+    await user.click(screen.getByRole('button', { name: 'Claim' }))
+
+    expect(await screen.findByTestId('claim-credential-dialog')).toHaveTextContent('app-offer')
   })
 })

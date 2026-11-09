@@ -11,7 +11,7 @@
  * - Environment setting
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { listTrustProfiles, listCredentialTemplates, listPresentationPolicies, listRevocationProfiles } from '../services/presentationPolicyApi';
 import { listDeploymentProfiles } from '../services/deploymentProfilesApi';
 import { listFlows } from '../services/flowsApi';
@@ -23,6 +23,7 @@ import { listComplianceProfiles } from '../services/complianceProfilesApi';
 import { loadScopedCatalog } from '../services/loadScopedCatalog';
 import { getPhysicalDocumentCapabilities } from '../services/physicalDocumentsApi';
 import { listPublicIssuerIdentities } from '../services/issuerIdentitiesApi';
+import { getSystemHealth } from '../services/healthApi';
 import { 
   getTeamSnapshot, 
   getRuntimeStatus, 
@@ -30,10 +31,11 @@ import {
   getOrganizationEnvironment,
   getOrganizationLifecycle,
 } from '../services/dashboardApi';
-import { useAuth } from './useAuth';
 import { useConsole } from '../contexts/ConsoleContext';
+import { useAuth } from './useAuth';
 
 const SHOULD_LOG_DASHBOARD_HOOK_DIAGNOSTICS = import.meta.env.DEV && import.meta.env.MODE !== 'test';
+const HEALTH_RESOURCE_KEYS = new Set(['trustProfiles', 'templates', 'policies', 'deployments', 'flows']);
 
 function logDashboardHookError(message, error) {
   if (SHOULD_LOG_DASHBOARD_HOOK_DIAGNOSTICS) {
@@ -68,13 +70,20 @@ function createEmptyDashboardData() {
 }
 
 /**
- * Fetch all dashboard data in parallel
+ * Fetch authorized dashboard sections in parallel for the current account.
  * @returns {Object} Dashboard data and loading state
  */
-export function useDashboardData() {
-  const { organizationId: authOrganizationId } = useAuth();
+export function useDashboardData(access = {}, permissionsLoading = false) {
   const { activeOrgId } = useConsole();
+  const { user } = useAuth();
   const organizationId = activeOrgId;
+  const principalId = user?.user_id || user?.sub || user?.id || null;
+  const accessKey = JSON.stringify(access);
+  const scope = useMemo(() => ({ organizationId, principalId, access: JSON.parse(accessKey), permissionsLoading }),
+    [organizationId, principalId, accessKey, permissionsLoading]);
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  const [dataScope, setDataScope] = useState(null);
   const [data, setData] = useState(() => createEmptyDashboardData());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -85,16 +94,30 @@ export function useDashboardData() {
   };
 
   useEffect(() => {
-    if (!organizationId) {
-      setData(createEmptyDashboardData());
-      setError('organization_id is required');
+    setDataScope(scope);
+    setData(createEmptyDashboardData());
+    setError(null);
+    if (!organizationId || !principalId) {
+      setError(!organizationId ? 'organization_id is required' : null);
       setLoading(false);
+      return;
+    }
+    if (scope.permissionsLoading) {
+      setLoading(true);
       return;
     }
 
     let mounted = true;
+    const applies = () => mounted && currentScope.current === scope;
     const controller = new AbortController();
     const catalog = (list) => loadScopedCatalog(list, organizationId, { signal: controller.signal });
+    const permitted = (key, load, empty = null) => scope.access[key] === true
+      ? load()
+      : Promise.resolve(empty);
+    const resource = (key, load, empty = null) => scope.access.setupOverview
+      || (scope.access.healthOverview && HEALTH_RESOURCE_KEYS.has(key))
+      ? permitted(key, load, empty)
+      : Promise.resolve(empty);
 
     const loadDashboardData = async () => {
       try {
@@ -123,28 +146,28 @@ export function useDashboardData() {
           environmentRes,
           lifecycleRes,
         ] = await Promise.allSettled([
-          catalog(listComplianceProfiles),
-          catalog(listTrustProfiles),
-          catalog(listCredentialTemplates),
-          listApplicationTemplates(organizationId),
-          listDeliveryDestinations({ organizationId, activeOnly: true }),
-          listPolicySets(organizationId),
-          getPhysicalDocumentCapabilities(),
-          catalog(listPresentationPolicies),
-          catalog(listRevocationProfiles),
-          catalog(listDeploymentProfiles),
-          catalog(listFlows),
-          listPublicIssuerIdentities({ organization_id: organizationId }),
-          listApiKeys(organizationId),
-          fetch('/health').then((r) => (r.ok ? r.json() : { status: 'error' })),
-          getTeamSnapshot(organizationId),
-          getRuntimeStatus(organizationId),
-          getCriticalEvents(organizationId),
-          getOrganizationEnvironment(organizationId),
-          getOrganizationLifecycle(organizationId),
+          resource('complianceProfiles', () => catalog(listComplianceProfiles), []),
+          resource('trustProfiles', () => catalog(listTrustProfiles), []),
+          resource('templates', () => catalog(listCredentialTemplates), []),
+          resource('applicationTemplates', () => listApplicationTemplates(organizationId), []),
+          resource('deliveryDestinations', () => listDeliveryDestinations({ organizationId, activeOnly: true }), []),
+          resource('policySets', () => listPolicySets(organizationId), []),
+          resource('physicalDocumentCapabilities', () => getPhysicalDocumentCapabilities()),
+          resource('policies', () => catalog(listPresentationPolicies), []),
+          resource('revocationProfiles', () => catalog(listRevocationProfiles), []),
+          resource('deployments', () => catalog(listDeploymentProfiles), []),
+          resource('flows', () => catalog(listFlows), []),
+          resource('issuerIdentities', () => listPublicIssuerIdentities({ organization_id: organizationId }), { identities: [] }),
+          resource('apiKeys', () => listApiKeys(organizationId), []),
+          getSystemHealth({ signal: controller.signal }),
+          permitted('teamData', () => getTeamSnapshot(organizationId)),
+          permitted('runtimeStatus', () => getRuntimeStatus(organizationId)),
+          permitted('criticalEvents', () => getCriticalEvents(organizationId), []),
+          permitted('environment', () => getOrganizationEnvironment(organizationId)),
+          permitted('lifecycle', () => getOrganizationLifecycle(organizationId)),
         ]);
 
-        if (!mounted) return;
+        if (!applies()) return;
 
         const rawIssuerIdentities = issuerIdentitiesRes.status === 'fulfilled'
           ? issuerIdentitiesRes.value
@@ -199,11 +222,11 @@ export function useDashboardData() {
           dashboardErrors,
         });
       } catch (err) {
-        if (!mounted) return;
+        if (!applies()) return;
         logDashboardHookError('Error loading dashboard data:', err);
         setError(err.message || 'Failed to load dashboard data');
       } finally {
-        if (mounted) {
+        if (applies()) {
           setLoading(false);
         }
       }
@@ -214,9 +237,8 @@ export function useDashboardData() {
     // Poll system health every 60 seconds
     const healthInterval = setInterval(async () => {
       try {
-        const healthRes = await fetch('/health');
-        const healthData = healthRes.ok ? await healthRes.json() : { status: 'error' };
-        if (mounted) {
+        const healthData = await getSystemHealth({ signal: controller.signal });
+        if (applies()) {
           setData((prev) => ({ ...prev, systemHealth: healthData }));
         }
       } catch (err) {
@@ -229,7 +251,13 @@ export function useDashboardData() {
       controller.abort();
       clearInterval(healthInterval);
     };
-  }, [organizationId, refetchTrigger]);
+  }, [organizationId, principalId, refetchTrigger, scope]);
 
-  return { data, loading, error, refetch };
+  const scopeCurrent = dataScope === scope;
+  return {
+    data: scopeCurrent ? data : createEmptyDashboardData(),
+    loading: Boolean(organizationId && principalId) && (!scopeCurrent || loading),
+    error: scopeCurrent ? error : null,
+    refetch,
+  };
 }

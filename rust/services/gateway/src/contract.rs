@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 463;
+pub const EXPECTED_ROUTE_COUNT: usize = 466;
 const MDOC_CERTIFICATE_PATHS: [&str; 2] = [
     "/v1/signing-keys/issuer-identities/mdoc-iaca-self-signed-certificate",
     "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate",
@@ -1258,6 +1258,60 @@ mod tests {
         )]);
         assert!(crate::middleware::extract_api_key(&jwt_headers).is_none());
         assert!(description.contains("OAuth access tokens and ID tokens are not accepted"));
+    }
+
+    #[test]
+    fn organization_defaults_have_native_routes_scoped_grants_and_strict_public_schemas() {
+        let contract = GatewayContract::load().unwrap();
+        let table = contract.proxy_route_table().unwrap();
+        let public_path = "/v1/organizations/11111111-1111-1111-1111-111111111111/defaults";
+        for (method, permission) in [
+            (HttpMethod::Get, "organization:view"),
+            (HttpMethod::Patch, "organization:edit"),
+        ] {
+            let route = route_for(&table, method, public_path).unwrap();
+            assert_eq!(route.route.upstream_service, "organizations");
+            assert_eq!(
+                crate::authorization::resolve_action(method_name(method), public_path)
+                    .unwrap()
+                    .permission,
+                permission
+            );
+        }
+        assert!(route_for(&table, HttpMethod::Put, public_path).is_err());
+        assert!(!crate::authorization::skips_tenant_authorization(
+            public_path
+        ));
+        let document = contract.openapi_document("test");
+        let operations = &document["paths"]["/v1/organizations/{org_id}/defaults"];
+        for method in ["get", "patch"] {
+            assert_eq!(
+                operations[method]["responses"]["200"]["content"]["application/json"]["schema"]
+                    ["$ref"],
+                "#/components/schemas/runtime__organization_defaults"
+            );
+        }
+        assert_eq!(
+            operations["patch"]["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__organization_defaults_patch"
+        );
+        let schemas = &document["components"]["schemas"];
+        assert_eq!(
+            schemas["runtime__organization_defaults_patch"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            schemas["runtime__organization_defaults_patch"]["minProperties"],
+            1
+        );
+        assert_eq!(
+            schemas["runtime__organization_defaults"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            schemas["runtime__organization_defaults"]["required"],
+            json!(marty_service_contracts::organization_defaults::FIELDS)
+        );
     }
 
     #[test]
