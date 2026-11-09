@@ -221,7 +221,7 @@ function ServiceTypeCard({ definition, selected, onSelect }) {
   );
 }
 
-const KeyManagementServiceWizardContent = () => {
+const KeyManagementServiceWizardContent = ({ browserEntry }) => {
   const navigate = useNavigate();
   const { showNotification } = useNotifications();
   const { activeOrgId } = useConsole();
@@ -236,14 +236,11 @@ const KeyManagementServiceWizardContent = () => {
   const pending = useRef(false);
   const startAction = useAsyncActionScope();
   const startClipboardAction = useAsyncActionScope();
-  // Browser history changes before a suspended route transition commits.
-  const browserEntry = useRef(typeof window === 'undefined' ? null : {
-    href: window.location.href, key: window.history.state?.key,
-  });
-  const isCurrentBrowserEntry = useCallback(() => !browserEntry.current || (
-    typeof window !== 'undefined' && window.location.href === browserEntry.current.href
-      && window.history.state?.key === browserEntry.current.key
-  ), []);
+  const isCurrentBrowserEntry = useCallback(() => browserEntry.href === null || (
+    typeof window !== 'undefined' && window.location.href === browserEntry.href
+      && window.history.state?.key === browserEntry.key
+      && (browserEntry.key || 'default') === browserEntry.routeKey
+  ), [browserEntry]);
   const canEdit = useCallback(() => !pending.current && isCurrentBrowserEntry(), [isCurrentBrowserEntry]);
 
   const {
@@ -1112,6 +1109,14 @@ export default function KeyManagementServiceWizard() {
   const { can, isLoading } = usePermissions();
   const location = useLocation();
   const [returnedEntry, setReturnedEntry] = useState(0);
+  // A replacement organization or grant scope must retain the committed route
+  // entry while the browser has already moved to a suspended destination.
+  const browserEntry = useMemo(() => ({
+    href: typeof window === 'undefined' ? null : window.location.href,
+    key: typeof window === 'undefined' ? undefined : window.history.state?.key,
+    routeKey: location.key,
+    generation: returnedEntry,
+  }), [location, returnedEntry]);
   useLayoutEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const entry = { href: window.location.href, key: window.history.state?.key };
@@ -1135,6 +1140,6 @@ export default function KeyManagementServiceWizard() {
   }
   if (!isAuthenticated || !canView) return <Alert severity="error">{t('deploy.keyManagementWizard.readDenied')}</Alert>;
   if (!canCreate) return <Alert severity="error">{t('deploy.keyManagementWizard.createDenied')}</Alert>;
-  return <KeyManagementServiceWizardContent key={JSON.stringify([activeOrgId, principalId, isAuthenticated,
-    location.key, location.pathname, location.search, location.hash, canView, canCreate, returnedEntry])} />;
+  return <KeyManagementServiceWizardContent browserEntry={browserEntry} key={JSON.stringify([activeOrgId, principalId, isAuthenticated,
+    location.key, location.pathname, location.search, location.hash, canView, canCreate, browserEntry.generation])} />;
 }
