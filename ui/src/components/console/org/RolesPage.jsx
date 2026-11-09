@@ -129,6 +129,7 @@ function RolesPageContent({ effectiveOrgId, canCreateRoles, canEditRoles, canDel
         listRoles(effectiveOrgId, true),
         listPermissions(effectiveOrgId),
       ]));
+      if (!action.isCurrent()) return;
       setRoles(rolesData.roles || rolesData || []);
       setAllPermissions(permsData);
     } catch (err) {
@@ -185,9 +186,11 @@ function RolesPageContent({ effectiveOrgId, canCreateRoles, canEditRoles, canDel
 
       if (editingRole) {
         await action.run(updateRole, effectiveOrgId, editingRole.id, data);
+        if (!action.isCurrent()) return;
         showNotification(`Role "${formDisplayName || formName}" updated`, 'success');
       } else {
         await action.run(createRole, effectiveOrgId, { ...data, name: formName });
+        if (!action.isCurrent()) return;
         showNotification(`Role "${formDisplayName || formName}" created`, 'success');
       }
 
@@ -217,6 +220,7 @@ function RolesPageContent({ effectiveOrgId, canCreateRoles, canEditRoles, canDel
       // Recheck current membership counts and the explicitly chosen target before
       // deleting; the native transaction remains authoritative for later races.
       const freshData = await action.run(listRoles, effectiveOrgId, true);
+      if (!action.isCurrent()) return;
       const freshRoles = freshData.roles || freshData;
       if (!Array.isArray(freshRoles)) throw new Error('Unable to verify the current roles. Try again.');
       const currentRole = freshRoles.find(role => role.id === deleteDialog.data?.id && role.organization_id === effectiveOrgId);
@@ -232,6 +236,7 @@ function RolesPageContent({ effectiveOrgId, canCreateRoles, canEditRoles, canDel
         throw new Error('The selected replacement role is no longer available. Choose another role.');
       }
       await action.run(deleteRole, effectiveOrgId, currentRole.id, replacementRoleId || undefined);
+      if (!action.isCurrent()) return;
       showNotification(`Role "${deleteDialog.data.display_name || deleteDialog.data.name}" deleted`, 'success');
       await action.run(loadData);
       await action.run(refreshPermissions);

@@ -415,5 +415,26 @@ describe('Roles native permission catalog', () => {
       expect(currentReads).toBe(1);
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
+
+    it.each(['create', 'update', 'delete'] as const)('checks the %s handoff when unmounted in the final-await microtask', async operation => {
+      const view = renderWithRouter(<RolesPage />, { initialEntries: ['/console/org/roles'] });
+      await screen.findByText('Support agents');
+      await view.user.click(screen.getByRole('button', { name: operation === 'create' ? 'Create Role'
+        : operation === 'update' ? 'Edit role Support agents' : 'Delete role Support agents' }));
+      const dialog = within(screen.getByRole('dialog'));
+      if (operation === 'create') await view.user.type(dialog.getByRole('textbox', { name: /^Name/ }), 'reviewer');
+      const pending = deferred();
+      const request = vi.spyOn(rbacApi, operation === 'create' ? 'createRole'
+        : operation === 'update' ? 'updateRole' : 'deleteRole').mockReturnValue(pending.promise);
+      await view.user.click(dialog.getByRole('button', { name: operation === 'create' ? 'Create Role'
+        : operation === 'update' ? 'Save Changes' : 'Delete' }));
+      await waitFor(() => expect(request).toHaveBeenCalledOnce());
+      // The real action.run is already awaiting this promise. Its finally runs
+      // first, this observer unmounts next, then the caller resumes after await.
+      const unmounted = pending.promise.then(() => view.unmount());
+      await act(async () => { pending.resolve(); await unmounted; });
+      expect(state.notify).not.toHaveBeenCalled();
+      expect(state.refreshPermissions).not.toHaveBeenCalled();
+    });
   });
 });
