@@ -36,6 +36,7 @@ test = true
 [dependencies]
 mmf-aws-kms.workspace = true
 marty-mdoc-status-binding = { path = "../../crates/mdoc-status-binding" }
+marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-service-runtime = { path = "../../crates/service-runtime" }
 marty-service-contracts = { path = "../../crates/service-contracts" }
 marty-claim-collection.workspace = true

@@ -11,6 +11,9 @@ pub const RESPONSE_ITEM_DIGEST_DOMAIN: &str = "marty.oid4vp/response-item/v1";
 pub const NONCE_DIGEST_DOMAIN: &str = "marty.oid4vp/nonce/v1";
 pub const AUDIENCE_DIGEST_DOMAIN: &str = "marty.oid4vp/audience/v1";
 pub const REPLAY_KEY_DIGEST_DOMAIN: &str = "marty.oid4vp/replay-key/v1";
+/// Exact server-owned saved policy snapshot. The policy producer defines and
+/// normalizes the snapshot; hashing caller JSON does not authenticate a policy.
+pub const POLICY_SNAPSHOT_DIGEST_DOMAIN: &str = "marty.oid4vp/policy-snapshot/v1";
 
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
@@ -45,6 +48,12 @@ pub fn digest_domain_json<T: Serialize + ?Sized>(
 
 pub fn digest_query_document(value: &Value) -> Result<String, Oid4vpContractError> {
     digest_domain_json(QUERY_DOCUMENT_DIGEST_DOMAIN, value)
+}
+
+pub fn digest_policy_snapshot<T: Serialize + ?Sized>(
+    value: &T,
+) -> Result<String, Oid4vpContractError> {
+    digest_domain_json(POLICY_SNAPSHOT_DIGEST_DOMAIN, value)
 }
 
 pub fn digest_frozen_request(value: &FrozenOid4vpRequestV1) -> Result<String, Oid4vpContractError> {

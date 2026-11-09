@@ -30,6 +30,7 @@ import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
 import CodeIcon from '@mui/icons-material/Code';
 import { useNavigate, Navigate, useSearchParams } from 'react-router';
+import { useTranslation } from 'react-i18next';
 
 import { getMyOrganizations } from '../../../services/organizationsApi';
 import { useConsole } from '../../../contexts/ConsoleContext';
@@ -50,6 +51,7 @@ function logOrgSetupError(message, error) {
  * Organization Setup Page Component
  */
 export function OrgSetupPage() {
+  const { t } = useTranslation('console');
   const organizationCreationEnabled = isOrganizationCreationEnabled(ENABLE_ORGANIZATION_CREATION);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -169,10 +171,16 @@ export function OrgSetupPage() {
       {/* Header */}
       <Box sx={{ mb: 4 }}>
         <Typography variant="h4" gutterBottom fontWeight={600}>
-          Join an Organization
+          {resolvedOrganizations.length > 0
+            ? t('org.setup.chooseTitle', 'Choose an Organization')
+            : t('org.setup.accessTitle', 'Organization Console Access')}
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          You need to join an organization to access credentials and start applying.
+          {resolvedOrganizations.length > 0
+            ? t('org.setup.chooseDescription', 'Select an organization to open its organization console.')
+            : organizationCreationEnabled
+              ? t('org.setup.accessDescriptionWithCreate', 'Join or create an organization with console access to continue.')
+              : t('org.setup.accessDescription', 'Join an organization with console access to continue.')}
         </Typography>
       </Box>
 
@@ -189,7 +197,7 @@ export function OrgSetupPage() {
           <CardContent>
             <BusinessIcon sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
             <Typography variant="h6" gutterBottom>
-              No Organizations Yet
+              {t('org.setup.noMembershipsTitle', 'No Console Memberships Yet')}
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
               {organizationCreationEnabled

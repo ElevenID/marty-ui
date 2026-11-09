@@ -1102,6 +1102,313 @@ fn lifecycle_mutation_request(path: &str, body: Value) -> Request<Body> {
         .expect("request")
 }
 
+mod managed_sd_jwt_status {
+    use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use marty_issuance_service::managed_status::ManagedSdJwtStatusRecord;
+    use marty_oid4vp_contract::managed_status::{
+        digest_sd_jwt_issuer_jws, ManagedCredentialStatusObservationV1,
+        ManagedCredentialStatusRequestV1, ManagedCredentialStatusState,
+        MANAGED_STATUS_OBSERVATION_PATH,
+    };
+
+    #[derive(Clone)]
+    struct ReadOnlyOwner {
+        record: Arc<Mutex<ManagedSdJwtStatusRecord>>,
+        reads: Arc<Mutex<Vec<(String, String)>>>,
+        unavailable: bool,
+    }
+
+    #[async_trait]
+    impl CredentialManagementRepository for ReadOnlyOwner {
+        async fn get(
+            &self,
+            _id: &str,
+        ) -> Result<Option<ManagedCredential>, CredentialManagementPortError> {
+            panic!("managed observation must use the tenant-scoped owner read")
+        }
+
+        async fn get_managed_sd_jwt_status(
+            &self,
+            organization_id: &str,
+            credential_id: &str,
+        ) -> Result<Option<ManagedSdJwtStatusRecord>, CredentialManagementPortError> {
+            self.reads
+                .lock()
+                .unwrap()
+                .push((organization_id.into(), credential_id.into()));
+            if self.unavailable {
+                return Err(CredentialManagementPortError(
+                    "secret database diagnostic".into(),
+                ));
+            }
+            let record = self.record.lock().unwrap().clone();
+            Ok(
+                (record.organization_id == organization_id && record.id == credential_id)
+                    .then_some(record),
+            )
+        }
+
+        async fn persist(
+            &self,
+            _credential: &ManagedCredential,
+            _expected: ManagedCredentialStatus,
+            _audit: &marty_issuance_service::credential_management::CredentialLifecycleAuditRecord,
+        ) -> Result<ManagedCredential, CredentialManagementPortError> {
+            panic!("observation is read-only")
+        }
+
+        async fn synchronize_canvas(
+            &self,
+            _credential: &ManagedCredential,
+            _action: CredentialLifecycleAction,
+            _reason: Option<&str>,
+        ) -> Result<(), marty_issuance_service::credential_management::CanvasLifecycleSyncError>
+        {
+            panic!("observation cannot synchronize external status")
+        }
+    }
+
+    #[async_trait]
+    impl CredentialStatusPublisher for ReadOnlyOwner {
+        async fn publish(
+            &self,
+            _credential: &ManagedCredential,
+            _action: CredentialLifecycleAction,
+            _reason: Option<&str>,
+        ) -> Result<(), CredentialManagementPortError> {
+            panic!("observation cannot publish status")
+        }
+    }
+
+    #[async_trait]
+    impl CredentialLifecycleEventSink for ReadOnlyOwner {
+        async fn emit(&self, _event: CredentialLifecycleEvent) {
+            panic!("observation cannot emit a lifecycle mutation event")
+        }
+    }
+
+    fn fixture(
+        unavailable: bool,
+    ) -> (
+        axum::Router,
+        ManagedCredentialStatusRequestV1,
+        ReadOnlyOwner,
+    ) {
+        let now = Utc::now();
+        let credential_jwt = format!(
+            "{}.{}.{}~",
+            URL_SAFE_NO_PAD.encode(br#"{"typ":"dc+sd-jwt","alg":"EdDSA"}"#),
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&serde_json::json!({
+                "iss": "did:web:issuer.example", "jti": "credential-1", "vct": "EmployeeCredential",
+                "iat": now.timestamp() - 10, "exp": now.timestamp() + 600,
+            })).unwrap()),
+            URL_SAFE_NO_PAD.encode([0_u8; 64]),
+        );
+        let request = ManagedCredentialStatusRequestV1 {
+            organization_id: "org-1".into(),
+            issuer_id: "did:web:issuer.example".into(),
+            credential_id: "credential-1".into(),
+            credential_template_id: "template-1".into(),
+            issuer_jwt_digest: digest_sd_jwt_issuer_jws(&credential_jwt).unwrap(),
+            request_binding_digest: format!("sha256:{}", "a".repeat(64)),
+            max_age_seconds: 30,
+        };
+        let owner = ReadOnlyOwner {
+            record: Arc::new(Mutex::new(ManagedSdJwtStatusRecord {
+                id: request.credential_id.clone(),
+                organization_id: request.organization_id.clone(),
+                credential_template_id: request.credential_template_id.clone(),
+                issuer_did: Some(request.issuer_id.clone()),
+                credential_jwt,
+                status: ManagedCredentialStatus::Active,
+                revoked: false,
+                status_updated_at: now - chrono::Duration::seconds(5),
+                issued_at: now - chrono::Duration::seconds(10),
+                expires_at: Some(now + chrono::Duration::seconds(600)),
+                observed_at: now,
+            })),
+            reads: Arc::new(Mutex::new(Vec::new())),
+            unavailable,
+        };
+        let config =
+            IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>()).unwrap();
+        let runtime = IssuanceRuntime::new(&config).unwrap();
+        let service = CredentialManagementService::new(
+            Arc::new(owner.clone()),
+            Arc::new(owner.clone()),
+            Arc::new(owner.clone()),
+        );
+        let app = router_with_credential_management(
+            runtime.state(),
+            StaticDiscoveryDocuments::new(&config.issuer_base_url, &config.issuer_display_name),
+            TransportPolicy::new(config.cors_allowed_origins),
+            CredentialManagementHttpService::new(service, Some("management-key")),
+        );
+        (app, request, owner)
+    }
+
+    fn wire(body: Value, key: Option<&str>, tenant: Option<&str>) -> Request<Body> {
+        let mut request = Request::post(MANAGED_STATUS_OBSERVATION_PATH)
+            .header("content-type", "application/json");
+        if let Some(key) = key {
+            request = request.header("X-API-Key", key);
+        }
+        if let Some(tenant) = tenant {
+            request = request.header("X-Organization-ID", tenant);
+        }
+        request
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn authentication_tenant_and_strict_request_checks_precede_the_record_read() {
+        let (app, request, owner) = fixture(false);
+        for (key, tenant, expected) in [
+            (None, Some("org-1"), 401),
+            (Some("wrong"), Some("org-1"), 401),
+            (Some("management-key"), None, 403),
+            (Some("management-key"), Some("foreign-org"), 404),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(wire(serde_json::to_value(&request).unwrap(), key, tenant))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        let mut malformed = serde_json::to_value(&request).unwrap();
+        malformed["unchecked"] = serde_json::json!(true);
+        let response = app
+            .clone()
+            .oneshot(wire(malformed, Some("management-key"), Some("org-1")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 422);
+        let mut unbounded = serde_json::to_value(request).unwrap();
+        unbounded["max_age_seconds"] = serde_json::json!(61);
+        let response = app
+            .oneshot(wire(unbounded, Some("management-key"), Some("org-1")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400);
+        assert!(owner.reads.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn observation_is_one_tenant_scoped_read_with_no_lifecycle_side_effects() {
+        let (app, request, owner) = fixture(false);
+        for (stored, expected) in [
+            (
+                ManagedCredentialStatus::Active,
+                ManagedCredentialStatusState::Active,
+            ),
+            (
+                ManagedCredentialStatus::Suspended,
+                ManagedCredentialStatusState::Suspended,
+            ),
+            (
+                ManagedCredentialStatus::Revoked,
+                ManagedCredentialStatusState::Revoked,
+            ),
+        ] {
+            {
+                let mut record = owner.record.lock().unwrap();
+                record.status = stored;
+                record.revoked = stored == ManagedCredentialStatus::Revoked;
+            }
+            let response = app
+                .clone()
+                .oneshot(wire(
+                    serde_json::to_value(&request).unwrap(),
+                    Some("management-key"),
+                    Some("org-1"),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            let value = json_body(response).await;
+            assert!(value.get("credential_jwt").is_none());
+            let observation: ManagedCredentialStatusObservationV1 =
+                serde_json::from_value(value).unwrap();
+            assert_eq!(observation.state, expected);
+            observation
+                .validate_for_request(&request, Utc::now().timestamp())
+                .unwrap();
+        }
+        assert_eq!(
+            *owner.reads.lock().unwrap(),
+            vec![("org-1".into(), "credential-1".into()); 3]
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_artifact_and_owner_scope_mismatches_never_return_active() {
+        let (app, request, owner) = fixture(false);
+        for field in ["issuer_id", "credential_template_id", "issuer_jwt_digest"] {
+            let mut body = serde_json::to_value(&request).unwrap();
+            body[field] = serde_json::json!(if field == "issuer_jwt_digest" {
+                format!("sha256:{}", "b".repeat(64))
+            } else {
+                "foreign-value".into()
+            });
+            let response = app
+                .clone()
+                .oneshot(wire(body, Some("management-key"), Some("org-1")))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 422, "{field}");
+        }
+        for field in ["organization_id", "credential_id"] {
+            let mut body = serde_json::to_value(&request).unwrap();
+            body[field] = serde_json::json!("foreign-value");
+            let tenant = if field == "organization_id" {
+                "foreign-value"
+            } else {
+                "org-1"
+            };
+            let response = app
+                .clone()
+                .oneshot(wire(body, Some("management-key"), Some(tenant)))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 404, "{field}");
+        }
+        owner.record.lock().unwrap().expires_at = Some(Utc::now() - chrono::Duration::seconds(1));
+        let response = app
+            .oneshot(wire(
+                serde_json::to_value(request).unwrap(),
+                Some("management-key"),
+                Some("org-1"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 422);
+        assert_eq!(owner.reads.lock().unwrap().len(), 6);
+    }
+
+    #[tokio::test]
+    async fn repository_failures_are_unavailable_and_do_not_expose_diagnostics() {
+        let (app, request, owner) = fixture(true);
+        let response = app
+            .oneshot(wire(
+                serde_json::to_value(request).unwrap(),
+                Some("management-key"),
+                Some("org-1"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 503);
+        assert_eq!(
+            json_body(response).await,
+            serde_json::json!({"detail":"Managed credential status is temporarily unavailable"})
+        );
+        assert_eq!(owner.reads.lock().unwrap().len(), 1);
+    }
+}
+
 #[tokio::test]
 async fn native_credential_lifecycle_http_routes_preserve_auth_parity_and_one_handler_order() {
     let (app, calls) = credential_lifecycle_app();

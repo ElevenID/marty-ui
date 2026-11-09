@@ -2,7 +2,8 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const crypto=require('node:crypto');
-const {resourceSuccessor,authority,verifyAncillary,mountDigest,CONFIG_DIGEST_SCHEMA}=require('./beta-resource-runtime');
+const fs=require('node:fs');
+const {resourceSuccessor,authority,verifyAncillary,restartAuthority,produceResourceRestart,canonicalSourceDigest,mountDigest,CONFIG_DIGEST_SCHEMA}=require('./beta-resource-runtime');
 const {verifyFunctionalRuntime}=require('./functional-debug-runtime');
 const sha=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const hex=n=>n.toString(16).padStart(64,'0');
@@ -105,6 +106,75 @@ test('v2 live Keycloak config accepts reviewed aliases and refuses path/type/rw 
 test('resource v2 refuses an old unversioned-normalization config proof',()=>{
  const f=fixture();f.values.configs.schema='marty.beta-resource-config-digests/v1';
  assert.throws(()=>authority(f.profile,f.context));
+});
+
+function restartedFixture(){
+ const f=fixture(),role='functional-0',cid=f.values.cap.allRunningRoles[role].id;
+ for(const row of Object.values(f.live)){row.State.Paused=false;row.State.OOMKilled=false;}
+ f.live[f.values.kc.newCid].State.StartedAt='2026-11-05T00:00:00Z';
+ const prior=f.context.expectedRuntime;
+ f.context.expectedRuntime=profile=>profile===f.profile?authority(f.profile,{...f.context,expectedRuntime:prior}).rows:prior(profile);
+ f.live[cid].State.StartedAt='2026-11-08T00:00:00Z';f.live[cid].State.Pid=801;
+ const baseRef={path:'resource-profile',sha256:hex(801)};
+ f.values['resource-profile']=f.profile;
+ const read=args=>args[0]==='info'?JSON.stringify({ID:f.values.engine.engineId}):f.read(args);
+ const produced=produceResourceRestart(baseRef,{...f.context,readDocker:read,
+  observeDocker:row=>({role:row.role,startedAt:f.live[row.requiredContainerId].State.StartedAt,
+   hostPid:f.live[row.requiredContainerId].State.Pid}),validateRuntimeObservation:()=>{}});
+ const successor={schema:f.profile.schema,scope:f.profile.scope,releaseQualified:false,recordingQualified:false,
+  baseProfile:baseRef,resourceRestart:{path:'restart',sha256:hex(802)}};
+ f.values.restart=produced;
+ return {f,read,produced,successor,context:f.context,cid};
+}
+test('resource restart binds a real changed generation while old profile refuses it',()=>{
+ const x=restartedFixture();
+ assert.deepEqual(x.produced.historicalGenerationUnknown,['keycloak']);
+ assert.throws(()=>verifyAncillary(x.f.profile,x.read,x.context),/RESOURCE_GENERATION_CHANGED:functional-0/);
+ const bound=restartAuthority(x.successor,x.context);
+ assert.equal(bound.rows.length,22);assert.equal(bound.generations.size,28);
+ assert.equal(verifyAncillary(x.f.profile,x.read,x.context,bound.generations).rows.length,22);
+});
+test('Keycloak first pin alone cannot qualify a restart',()=>{
+ const x=restartedFixture(),row=x.f.values.restart.roles.find(r=>r.role==='functional-0');
+ row.startedAt=AFTER;row.pid=101;
+ assert.throws(()=>restartAuthority(x.successor,x.context),/RESOURCE_RESTART_NO_CHANGE/);
+});
+test('restart source hash is canonical across LF and CRLF but detects changed code',()=>{
+ const actual=fs.readFileSync(require.resolve('./beta-resource-runtime'));
+ const lf=Buffer.from(actual.toString('utf8').replaceAll('\r\n','\n'));
+ const crlf=Buffer.from(lf.toString('utf8').replaceAll('\n','\r\n'));
+ assert.equal(canonicalSourceDigest(lf),canonicalSourceDigest(crlf));
+ assert.notEqual(canonicalSourceDigest(lf),canonicalSourceDigest(Buffer.concat([lf,Buffer.from('x')])));
+});
+test('resource restart rejects tampered source, ID, generation and unchanged PID',()=>{
+ for(const kind of ['source','cid','oldTime','sameTimeWrongPid']){
+  const x=restartedFixture(),receipt=x.f.values.restart;
+  if(kind==='source')receipt.sourceSha256=hex(1);
+  if(kind==='cid')receipt.roles.find(r=>r.role==='functional-0').cid=hex(1);
+  if(kind==='oldTime')receipt.roles.find(r=>r.role==='functional-0').startedAt=START;
+  if(kind==='sameTimeWrongPid')receipt.roles.find(r=>r.role==='functional-0').startedAt=AFTER;
+  assert.throws(()=>restartAuthority(x.successor,x.context),/RESOURCE_RESTART_/);
+ }
+});
+test('resource restart producer refuses unchanged and foreign live configuration',()=>{
+ const x=restartedFixture();
+ x.f.live[x.cid].State.StartedAt=AFTER;x.f.live[x.cid].State.Pid=101;
+ assert.throws(()=>produceResourceRestart(x.successor.baseProfile,{...x.context,readDocker:x.read,
+  observeDocker:()=>({}),validateRuntimeObservation:()=>{}}),/RESOURCE_RESTART_NO_CHANGE/);
+ for(const field of ['Image','Mounts','HostConfig']){
+  const y=restartedFixture(),row=y.f.live[y.cid];
+  if(field==='Image')row.Image='sha256:'+hex(998);
+  if(field==='Mounts')row.Mounts.push({Type:'bind',Source:'/foreign',Destination:'/foreign',RW:false});
+  if(field==='HostConfig')row.HostConfig.Memory=1;
+  assert.throws(()=>verifyAncillary(y.f.profile,y.read,y.context,restartAuthority(y.successor,y.context).generations));
+ }
+});
+test('resource restart refuses paused or OOM ancillary while preserving generation proof',()=>{
+ for(const state of ['Paused','OOMKilled']){
+  const x=restartedFixture();x.f.live[x.cid].State[state]=true;
+  const bound=restartAuthority(x.successor,x.context);
+  assert.throws(()=>verifyAncillary(x.f.profile,x.read,x.context,bound.generations),/RESOURCE_RESTART_STATE_CHANGED:functional-0/);
+ }
 });
 
 

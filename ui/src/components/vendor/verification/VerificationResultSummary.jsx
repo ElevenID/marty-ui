@@ -13,6 +13,7 @@ import ErrorIcon from '@mui/icons-material/Error';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlined';
 import LinkIcon from '@mui/icons-material/Link';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
+import { hasAsciiControlCharacters } from '../../../utils/hasAsciiControlCharacters.js';
 
 // Current-attempt diagnostics are not credential identity or verified claims.
 export const verificationSessionId = (value) => value?.instance_id || value?.flow_instance_id || value?.id || value?.session_id;
@@ -33,7 +34,7 @@ export function extractPresentationRejection(observation = {}, expectedSession =
     || !['nonce_sha256', 'submission_digest', 'vp_token_sha256'].every((key) => hash(attempt[key]))
     || typeof attempt.observed_at !== 'string' || attempt.observed_at.length > 64 || !Number.isFinite(Date.parse(attempt.observed_at))
     || auth?.format !== 'mso_mdoc' || auth.document_count !== 1
-    || typeof auth.document_type !== 'string' || !auth.document_type || auth.document_type.length > 256 || /[\x00-\x1f\x7f]/.test(auth.document_type)
+    || typeof auth.document_type !== 'string' || !auth.document_type || auth.document_type.length > 256 || hasAsciiControlCharacters(auth.document_type)
     || !['issuer_signature_valid', 'certificate_trust_passed', 'device_authentication_valid'].every((key) => typeof auth[key] === 'boolean')
     || !Array.isArray(auth.certificate_trust_failures) || auth.certificate_trust_failures.length > 3
     || new Set(auth.certificate_trust_failures).size !== auth.certificate_trust_failures.length

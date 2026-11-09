@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Alert,
   Box,
@@ -34,9 +35,16 @@ const DEFAULT_VALUES = {
   membershipMode: 'invite_only',
 };
 
-function buildPayload(values) {
+function getMembershipSettings(values) {
   const isOpenAdmission = values.membershipMode === 'open' || values.membershipMode === 'approval';
-  const isDiscoverable = isOpenAdmission || Boolean(values.isDiscoverable);
+  return {
+    isOpenAdmission,
+    isDiscoverable: isOpenAdmission || Boolean(values.isDiscoverable),
+  };
+}
+
+function buildPayload(values) {
+  const { isOpenAdmission, isDiscoverable } = getMembershipSettings(values);
 
   return {
     name: values.name.trim(),
@@ -59,7 +67,10 @@ function CreateOrganizationForm({
   onSubmit,
   onCancel,
 }) {
+  const { t } = useTranslation('console');
+  const discoveryDescriptionId = useId();
   const [values, setValues] = useState({ ...DEFAULT_VALUES, ...initialValues });
+  const { isOpenAdmission, isDiscoverable } = getMembershipSettings(values);
 
   const updateValue = (field) => (event) => {
     const nextValue = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
@@ -87,7 +98,7 @@ function CreateOrganizationForm({
       </Typography>
 
       <Grid container spacing={2}>
-        <Grid item xs={12} sm={6}>
+        <Grid size={{ xs: 12, sm: 6 }}>
           <TextField
             fullWidth
             required
@@ -98,7 +109,7 @@ function CreateOrganizationForm({
             slotProps={{ htmlInput: { 'aria-label': 'Organization Slug' } }}
           />
         </Grid>
-        <Grid item xs={12} sm={6}>
+        <Grid size={{ xs: 12, sm: 6 }}>
           <TextField
             fullWidth
             required
@@ -109,7 +120,7 @@ function CreateOrganizationForm({
             slotProps={{ htmlInput: { 'aria-label': 'Display Name' } }}
           />
         </Grid>
-        <Grid item xs={12} sm={6}>
+        <Grid size={{ xs: 12, sm: 6 }}>
           <FormControl fullWidth>
             <InputLabel id="create-org-type-label">Organization Type</InputLabel>
             <Select
@@ -129,7 +140,17 @@ function CreateOrganizationForm({
             </Select>
           </FormControl>
         </Grid>
-        <Grid item xs={12}>
+        <Grid size={{ xs: 12, sm: 6 }}>
+          <TextField
+            fullWidth
+            label="Contact Email"
+            type="email"
+            value={values.contactEmail}
+            onChange={updateValue('contactEmail')}
+            helperText="Optional contact address for applicants and administrators"
+          />
+        </Grid>
+        <Grid size={12}>
           <TextField
             fullWidth
             label="Description"
@@ -138,16 +159,6 @@ function CreateOrganizationForm({
             multiline
             rows={2}
             helperText="Optional summary shown in organization discovery and management screens"
-          />
-        </Grid>
-        <Grid item xs={12}>
-          <TextField
-            fullWidth
-            label="Contact Email"
-            type="email"
-            value={values.contactEmail}
-            onChange={updateValue('contactEmail')}
-            helperText="Optional contact address for applicants and administrators"
           />
         </Grid>
       </Grid>
@@ -161,18 +172,27 @@ function CreateOrganizationForm({
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'flex-start', sm: 'center' }} justifyContent="space-between">
           <Stack direction="row" spacing={1.5} alignItems="center">
-            {values.isDiscoverable ? <VisibilityIcon color="primary" /> : <VisibilityOffIcon color="action" />}
+            {isDiscoverable ? <VisibilityIcon color="primary" /> : <VisibilityOffIcon color="action" />}
             <Box>
               <Typography variant="body1">Discoverable</Typography>
-              <Typography variant="body2" color="text.secondary">
-                {values.isDiscoverable
-                  ? 'This organization can appear in public organization search.'
-                  : 'Users need an invitation or join code unless you publish it later.'}
+              <Typography id={discoveryDescriptionId} variant="body2" color="text.secondary">
+                {isOpenAdmission
+                  ? t('organizationCreation.discoveryRequired')
+                  : t(isDiscoverable
+                    ? 'organizationCreation.discoveryPublic'
+                    : 'organizationCreation.discoveryPrivate')}
               </Typography>
             </Box>
           </Stack>
           <FormControlLabel
-            control={<Switch checked={values.isDiscoverable} onChange={updateValue('isDiscoverable')} />}
+            control={(
+              <Switch
+                checked={isDiscoverable}
+                disabled={isOpenAdmission}
+                onChange={updateValue('isDiscoverable')}
+                slotProps={{ input: { 'aria-describedby': discoveryDescriptionId } }}
+              />
+            )}
             label="Discoverable"
             labelPlacement="start"
           />

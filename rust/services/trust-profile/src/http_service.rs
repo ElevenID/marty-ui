@@ -9,6 +9,9 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use marty_oid4vp_contract::trust_authority::{
+    CredentialAuthoritySnapshotRequestV1, CredentialTrustEvaluationRequestV1,
+};
 use mmf_security::ServiceTokenAuthenticator;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Map, Value};
@@ -91,6 +94,14 @@ pub fn trust_profile_router(state: TrustProfileHttpState) -> Router {
         .route(
             "/internal/v1/trust-profiles/{profile_id}",
             get(internal_profile),
+        )
+        .route(
+            "/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot",
+            post(credential_authority_snapshot),
+        )
+        .route(
+            "/internal/v1/trust-profiles/{profile_id}/credential-trust-evaluations",
+            post(credential_trust_evaluation),
         )
         .route(
             "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys",
@@ -1085,6 +1096,88 @@ async fn registry_status(
         "dsc_entries": status.dsc_entries,
         "generated_at": Utc::now(),
     })))
+}
+
+async fn credential_authority_snapshot(
+    State(state): State<TrustProfileHttpState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<Uuid>,
+    Json(request): Json<CredentialAuthoritySnapshotRequestV1>,
+) -> Result<Response, TrustProfileHttpError> {
+    credential_authority_service(&state, &headers)?;
+    request
+        .validate()
+        .map_err(|_| unprocessable("TRUST_PROFILE.INVALID_CREDENTIAL_AUTHORITY_REQUEST"))?;
+    let snapshot = state
+        .repository
+        .credential_authority_snapshot(&request.organization_id, profile_id)
+        .await
+        .map_err(repository_error)?
+        .ok_or_else(|| not_found("Trust Profile not found"))?;
+    // Revision allocation includes unsupported settings; rejection happens only
+    // after that observation is durably recorded by the owner repository.
+    crate::credential_authority::validate_supported_configuration(&snapshot.basis)
+        .map_err(credential_authority_error)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(snapshot),
+    )
+        .into_response())
+}
+
+async fn credential_trust_evaluation(
+    State(state): State<TrustProfileHttpState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<Uuid>,
+    Json(request): Json<CredentialTrustEvaluationRequestV1>,
+) -> Result<Response, TrustProfileHttpError> {
+    credential_authority_service(&state, &headers)?;
+    request
+        .validate()
+        .map_err(|_| unprocessable("TRUST_PROFILE.INVALID_CREDENTIAL_AUTHORITY_REQUEST"))?;
+    if request.expected_profile.id != profile_id.to_string() {
+        return Err(unprocessable(
+            "TRUST_PROFILE.INVALID_CREDENTIAL_AUTHORITY_REQUEST",
+        ));
+    }
+    let snapshot = state
+        .repository
+        .credential_authority_snapshot(&request.organization_id, profile_id)
+        .await
+        .map_err(repository_error)?
+        .ok_or_else(|| not_found("Trust Profile not found"))?;
+    let result =
+        crate::credential_authority::evaluate_credential_authority(&snapshot, &request, Utc::now())
+            .map_err(credential_authority_error)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(result),
+    )
+        .into_response())
+}
+
+fn credential_authority_service(
+    state: &TrustProfileHttpState,
+    headers: &HeaderMap,
+) -> Result<(), TrustProfileHttpError> {
+    if !state.service_authenticator.is_configured() {
+        return Err(unauthorized(
+            "TRUST_PROFILE.SERVICE_AUTHENTICATION_REQUIRED",
+        ));
+    }
+    internal_service(state, headers)
+}
+
+fn credential_authority_error(
+    error: crate::credential_authority::CredentialAuthorityError,
+) -> TrustProfileHttpError {
+    use crate::credential_authority::CredentialAuthorityError;
+    match error {
+        CredentialAuthorityError::InvalidRequest
+        | CredentialAuthorityError::UnsupportedConfiguration => unprocessable(error.to_string()),
+        CredentialAuthorityError::RevisionMismatch => conflict(error.to_string()),
+        CredentialAuthorityError::Unavailable => unavailable(error.to_string()),
+    }
 }
 
 async fn internal_profile(

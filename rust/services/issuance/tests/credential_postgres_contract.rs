@@ -6,7 +6,8 @@ use marty_issuance_service::canvas_issuance_guard::{
 };
 use marty_issuance_service::credential::{
     CredentialAccessTokenGrant, CredentialIssuanceError, CredentialLifecycle, CredentialRepository,
-    CredentialTransaction, CredentialTransactionStatus, IssuedCredential, IssuerContext,
+    CredentialSigningAuthorization, CredentialTransaction, CredentialTransactionStatus,
+    IssuedCredential, IssuerContext,
 };
 use marty_issuance_service::credential_lifecycle::PostgresCredentialLifecycle;
 use marty_issuance_service::credential_management::{
@@ -42,6 +43,203 @@ use url::Url;
 use uuid::Uuid;
 
 static POSTGRES_CONTRACT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[tokio::test]
+async fn managed_sd_jwt_status_reads_exact_tenant_artifact_and_current_lifecycle() {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use marty_issuance_service::{
+        credential_management::{
+            CredentialLifecycleEvent, CredentialLifecycleEventSink, CredentialManagementPortError,
+            CredentialManagementService, CredentialStatusPublisher, ManagedCredential,
+        },
+        managed_status::ManagedStatusError,
+    };
+    use marty_oid4vp_contract::managed_status::{
+        digest_sd_jwt_issuer_jws, ManagedCredentialStatusRequestV1, ManagedCredentialStatusState,
+    };
+    use std::sync::Arc;
+
+    struct NoWrites;
+    #[async_trait::async_trait]
+    impl CredentialStatusPublisher for NoWrites {
+        async fn publish(
+            &self,
+            _credential: &ManagedCredential,
+            _action: CredentialLifecycleAction,
+            _reason: Option<&str>,
+        ) -> Result<(), CredentialManagementPortError> {
+            panic!("status observation cannot publish a lifecycle change")
+        }
+    }
+    #[async_trait::async_trait]
+    impl CredentialLifecycleEventSink for NoWrites {
+        async fn emit(&self, _event: CredentialLifecycleEvent) {
+            panic!("status observation cannot emit a lifecycle mutation")
+        }
+    }
+
+    let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
+        return;
+    };
+    let _database_guard = POSTGRES_CONTRACT_LOCK.lock().await;
+    assert!(url::Url::parse(&database_url)
+        .unwrap()
+        .path()
+        .ends_with("_test"));
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    create_contract_schema(&pool).await;
+    let now = Utc::now();
+    let artifact =
+        format!(
+        "{}.{}.{}~",
+        URL_SAFE_NO_PAD.encode(br#"{"typ":"dc+sd-jwt","alg":"EdDSA"}"#),
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
+            "iss": "did:web:issuer.example", "jti": "owned-sd-jwt", "vct": "EmployeeCredential",
+            "iat": now.timestamp() - 10, "exp": now.timestamp() + 600,
+        })).unwrap()),
+        URL_SAFE_NO_PAD.encode([0_u8; 64]),
+    );
+    sqlx::query(
+        "INSERT INTO issuance_service.issued_credentials
+             (id, transaction_id, organization_id, credential_template_id, issuer_did,
+              credential_jwt, credential_hash, status, status_updated_at, revoked,
+              issued_at, expires_at, status_list_entries)
+         VALUES ('owned-sd-jwt', 'owned-transaction', 'org-managed', 'template-managed',
+                 'did:web:issuer.example', $1, 'full-issued-string-hash-is-not-the-artifact-digest',
+                 'active', $2, false, $3, $4, '[]'::jsonb)",
+    )
+    .bind(&artifact)
+    .bind(now - Duration::seconds(5))
+    .bind(now - Duration::seconds(10))
+    .bind(now + Duration::seconds(300))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let repository = PostgresCredentialManagementRepository::new(pool.clone());
+    assert!(repository
+        .get_managed_sd_jwt_status("foreign-org", "owned-sd-jwt")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(repository
+        .get_managed_sd_jwt_status("org-managed", "missing")
+        .await
+        .unwrap()
+        .is_none());
+    let before_read = Utc::now();
+    let snapshot = repository
+        .get_managed_sd_jwt_status("org-managed", "owned-sd-jwt")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.credential_jwt, artifact);
+    assert_eq!(snapshot.credential_template_id, "template-managed");
+    assert_eq!(
+        snapshot.issuer_did.as_deref(),
+        Some("did:web:issuer.example")
+    );
+    assert!(snapshot.observed_at >= before_read && snapshot.observed_at <= Utc::now());
+    let service = CredentialManagementService::new(
+        Arc::new(repository),
+        Arc::new(NoWrites),
+        Arc::new(NoWrites),
+    );
+    let request = ManagedCredentialStatusRequestV1 {
+        organization_id: "org-managed".into(),
+        issuer_id: "did:web:issuer.example".into(),
+        credential_id: "owned-sd-jwt".into(),
+        credential_template_id: "template-managed".into(),
+        issuer_jwt_digest: digest_sd_jwt_issuer_jws(&artifact).unwrap(),
+        request_binding_digest: format!("sha256:{}", "a".repeat(64)),
+        max_age_seconds: 30,
+    };
+    for (status, revoked, expected) in [
+        ("active", false, ManagedCredentialStatusState::Active),
+        ("suspended", false, ManagedCredentialStatusState::Suspended),
+        ("revoked", true, ManagedCredentialStatusState::Revoked),
+    ] {
+        sqlx::query(
+            "UPDATE issuance_service.issued_credentials
+             SET status = $1, revoked = $2, status_updated_at = clock_timestamp()
+             WHERE id = 'owned-sd-jwt'",
+        )
+        .bind(status)
+        .bind(revoked)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let observation = service.observe_sd_jwt_status(&request).await.unwrap();
+        assert_eq!(observation.state, expected);
+        assert_eq!(
+            observation.credential_expires_at_epoch_seconds,
+            (now + Duration::seconds(300)).timestamp()
+        );
+        observation
+            .validate_for_request(&request, Utc::now().timestamp())
+            .unwrap();
+    }
+    for field in [
+        "organization_id",
+        "credential_id",
+        "issuer_id",
+        "credential_template_id",
+        "issuer_jwt_digest",
+    ] {
+        let mut value = serde_json::to_value(&request).unwrap();
+        value[field] = json!(if field == "issuer_jwt_digest" {
+            format!("sha256:{}", "b".repeat(64))
+        } else {
+            "foreign-value".into()
+        });
+        let different = serde_json::from_value(value).unwrap();
+        let expected = if matches!(field, "organization_id" | "credential_id") {
+            ManagedStatusError::NotFound
+        } else {
+            ManagedStatusError::UnsupportedRecord
+        };
+        assert_eq!(
+            service.observe_sd_jwt_status(&different).await,
+            Err(expected),
+            "{field}"
+        );
+    }
+    sqlx::query(
+        "UPDATE issuance_service.issued_credentials
+         SET status = 'active', revoked = false, expires_at = clock_timestamp()
+         WHERE id = 'owned-sd-jwt'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        service.observe_sd_jwt_status(&request).await,
+        Err(ManagedStatusError::UnsupportedRecord)
+    );
+    sqlx::query("UPDATE issuance_service.issued_credentials SET expires_at = NULL WHERE id = 'owned-sd-jwt'")
+        .execute(&pool).await.unwrap();
+    assert_eq!(
+        service.observe_sd_jwt_status(&request).await,
+        Err(ManagedStatusError::UnsupportedRecord)
+    );
+    sqlx::query(
+        "UPDATE issuance_service.issued_credentials
+         SET expires_at = clock_timestamp() + interval '5 minutes', credential_jwt = 'malformed'
+         WHERE id = 'owned-sd-jwt'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        service.observe_sd_jwt_status(&request).await,
+        Err(ManagedStatusError::UnsupportedRecord)
+    );
+    drop_contract_schema(&pool).await;
+    pool.close().await;
+}
 
 #[tokio::test]
 async fn tenant_discovery_queries_current_status_and_tenant_boundaries() {
@@ -550,9 +748,14 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     .await
     .unwrap();
     let credential_id = "urn:uuid:credential-postgres-contract";
+    let authorization = CredentialSigningAuthorization {
+        transaction: &transaction,
+        authorization_session: None,
+        access_token: &access_token,
+    };
     let (first, second) = tokio::join!(
-        repository.claim_for_signing(&transaction, credential_id),
-        repository.claim_for_signing(&transaction, credential_id)
+        repository.claim_for_signing(&transaction, credential_id, &authorization),
+        repository.claim_for_signing(&transaction, credential_id, &authorization)
     );
     let first = first.unwrap();
     let second = second.unwrap();
@@ -2198,8 +2401,8 @@ async fn assert_existing_issuer_state_authorization_binding(
     assert_eq!(persisted.get::<String, _>("dpop_jkt"), "linked-jkt");
     assert!(matches!(
         repository.resolve_access_token_grant(&access_token).await,
-        Ok(CredentialAccessTokenGrant::Transaction(transaction))
-            if transaction.id == "tx-authorization-linked"
+        Ok(CredentialAccessTokenGrant::LinkedTransaction { transaction, authorization_session })
+            if transaction.id == "tx-authorization-linked" && authorization_session == session
     ));
     let oid4vci = PostgresOid4vciAuthorizationRepository::new(pool.clone(), key);
     assert_eq!(
@@ -2513,9 +2716,14 @@ async fn assert_authorization_only_race(
         .unwrap(),
         1
     );
+    let authorization = CredentialSigningAuthorization {
+        transaction: &first,
+        authorization_session: Some(&session),
+        access_token: &token,
+    };
     let (first_claim, second_claim) = tokio::join!(
-        repository.claim_for_signing(&first, "urn:uuid:auth-only-contract"),
-        repository.claim_for_signing(&second, "urn:uuid:auth-only-contract")
+        repository.claim_for_signing(&first, "urn:uuid:auth-only-contract", &authorization),
+        repository.claim_for_signing(&second, "urn:uuid:auth-only-contract", &authorization)
     );
     assert_ne!(
         first_claim.unwrap().is_some(),
@@ -2785,6 +2993,642 @@ async fn assert_initiation_idempotency_race(repository: &PostgresCredentialRepos
             .await,
         Err(InitiationRepositoryError::IdempotencyConflict)
     );
+}
+
+async fn seed_signing_claim(
+    pool: &sqlx::PgPool,
+    repository: &PostgresCredentialRepository,
+    key: &[u8],
+    id: &str,
+    token: &str,
+) -> CredentialTransaction {
+    sqlx::query(
+        "INSERT INTO issuance_service.issuance_transactions
+            (id, organization_id, credential_template_id, applicant_id, application_id,
+             subject_did, status, pre_auth_code, access_token, access_token_expires_at,
+             c_nonce, claims, credential_type, issuer_profile_id, issuer_did_override,
+             issuer_algorithm, signing_service_id)
+         VALUES ($1, 'org-claim', 'template-claim', 'applicant-claim', 'application-claim',
+                 'did:key:subject-claim', 'authorized', $1, $2,
+                 clock_timestamp() + interval '30 minutes', 'nonce-claim',
+                 '{\"role\":\"member\"}'::jsonb, 'OpenBadgeCredential', 'profile-claim',
+                 'did:web:issuer.example', 'ES256', 'custody-claim')",
+    )
+    .bind(id)
+    .bind(token_digest(key, token))
+    .execute(pool)
+    .await
+    .unwrap();
+    repository
+        .transaction_by_access_token(token)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+async fn assert_claim_not_consumed(pool: &sqlx::PgPool, id: &str) {
+    let row = sqlx::query(
+        "SELECT status, reserved_credential_id FROM issuance_service.issuance_transactions WHERE id = $1"
+    ).bind(id).fetch_one(pool).await.unwrap();
+    assert_eq!(row.get::<String, _>("status"), "authorized", "{id}");
+    assert!(
+        row.get::<Option<String>, _>("reserved_credential_id")
+            .is_none(),
+        "{id}"
+    );
+}
+
+async fn link_signing_claim(
+    pool: &sqlx::PgPool,
+    repository: &PostgresCredentialRepository,
+    id: &str,
+    token: &str,
+) -> (
+    CredentialTransaction,
+    marty_issuance_service::credential::CredentialAuthorizationSession,
+) {
+    sqlx::query(
+        "UPDATE issuance_service.issuance_transactions
+         SET oid4vci_client_id = 'wallet-claim',
+             claims = claims || '{\"_dpop_jkt\":\"jkt-claim\"}'::jsonb WHERE id = $1",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.authorization_sessions
+            (id, client_id, organization_id, issuer_state, credential_configuration_ids,
+             access_token, access_token_expires_at, dpop_jkt)
+         SELECT $1, oid4vci_client_id, organization_id, pre_auth_code,
+                '[\"OpenBadgeCredential#sd-jwt\"]'::jsonb, access_token,
+                access_token_expires_at, claims ->> '_dpop_jkt'
+         FROM issuance_service.issuance_transactions WHERE id = $1",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+    match repository.resolve_access_token_grant(token).await.unwrap() {
+        CredentialAccessTokenGrant::LinkedTransaction {
+            transaction,
+            authorization_session,
+        } => (*transaction, authorization_session),
+        other => panic!("expected linked grant, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn signing_claim_rejects_changed_transaction_and_access_authority() {
+    let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
+        return;
+    };
+    let _database_guard = POSTGRES_CONTRACT_LOCK.lock().await;
+    assert!(Url::parse(&database_url).unwrap().path().ends_with("_test"));
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    create_contract_schema(&pool).await;
+    let key = b"signing-authority-contract-key";
+    let repository = PostgresCredentialRepository::new(pool.clone(), key);
+    for (name, mutation) in [
+        (
+            "tenant",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "organization_id = 'other-tenant'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "dataset",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "claims = '{\"role\":\"administrator\"}'::jsonb",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "applicant",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "applicant_id = 'other-applicant'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "application",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "application_id = 'other-application'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "subject",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "subject_did = 'did:key:other-subject'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "template",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "credential_template_id = 'other-template'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "configuration",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "credential_type = 'OtherCredential'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "format",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "credential_payload_format = 'w3c_vcdm_v2_jwt'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "disclosures",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "selective_disclosure_claims = '[\"role\"]'::jsonb",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "wallet",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "wallet_configs = '[{\"id\":\"other-wallet\"}]'::jsonb",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "validity",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "validity_days = 1",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "issuer",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "issuer_profile_id = 'other-profile'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "nonce",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "c_nonce = 'other-nonce'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "expired",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "expires_at = clock_timestamp() - interval '1 second'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "changed-expiry",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "expires_at = expires_at + interval '1 minute'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "token-removed",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "access_token = NULL",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "token-replaced",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "access_token = 'other-token-hmac'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "token-expired",
+            concat!(
+                "UPDATE issuance_service.issuance_transactions SET ",
+                "access_token_expires_at = clock_timestamp() - interval '1 second'",
+                " WHERE id = $1"
+            ),
+        ),
+    ] {
+        let id = format!("claim-{name}");
+        let token = format!("token-{name}");
+        let admitted = seed_signing_claim(&pool, &repository, key, &id, &token).await;
+        sqlx::query(mutation)
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let authorization = CredentialSigningAuthorization {
+            transaction: &admitted,
+            authorization_session: None,
+            access_token: &token,
+        };
+        assert!(
+            matches!(
+                repository
+                    .claim_for_signing(&admitted, "credential-claim", &authorization)
+                    .await,
+                Err(CredentialIssuanceError::InvalidTransactionState
+                    | CredentialIssuanceError::InvalidAccessToken)
+            ),
+            "{name}"
+        );
+        assert_claim_not_consumed(&pool, &id).await;
+    }
+    // A newly colliding token must fail signing and same-target winner recovery.
+    for status in ["authorized", "signing", "issued"] {
+        let id = format!("claim-collision-{status}");
+        let other_id = format!("other-collision-{status}");
+        let token = format!("token-collision-{status}");
+        let other_token = format!("other-token-{status}");
+        let admitted = seed_signing_claim(&pool, &repository, key, &id, &token).await;
+        seed_signing_claim(&pool, &repository, key, &other_id, &other_token).await;
+        sqlx::query(
+            "UPDATE issuance_service.issuance_transactions SET access_token = $1 WHERE id = $2",
+        )
+        .bind(token_digest(key, &token))
+        .bind(&other_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE issuance_service.issuance_transactions SET status = $1 WHERE id = $2")
+            .bind(status)
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let authorization = CredentialSigningAuthorization {
+            transaction: &admitted,
+            authorization_session: None,
+            access_token: &token,
+        };
+        assert!(
+            matches!(
+                repository
+                    .claim_for_signing(&admitted, "credential-claim", &authorization)
+                    .await,
+                Err(CredentialIssuanceError::InvalidAccessToken)
+            ),
+            "{status}"
+        );
+        let row = sqlx::query("SELECT status, reserved_credential_id FROM issuance_service.issuance_transactions WHERE id = $1")
+            .bind(&id).fetch_one(&pool).await.unwrap();
+        assert_eq!(row.get::<String, _>("status"), status);
+        assert!(row
+            .get::<Option<String>, _>("reserved_credential_id")
+            .is_none());
+    }
+
+    // Selection and a fresh issuer resolution may legitimately enrich the admitted row.
+    let admitted = seed_signing_claim(
+        &pool,
+        &repository,
+        key,
+        "claim-current-issuer",
+        "token-current-issuer",
+    )
+    .await;
+    let mut selected = admitted.clone();
+    selected.issuer_profile_id = Some("current-profile".into());
+    selected.issuer_did = Some("did:web:current.example".into());
+    selected.issuer_algorithm = Some("EdDSA".into());
+    selected.signing_service_id = Some("current-custody".into());
+    let authorization = CredentialSigningAuthorization {
+        transaction: &admitted,
+        authorization_session: None,
+        access_token: "token-current-issuer",
+    };
+    let claimed = repository
+        .claim_for_signing(&selected, "credential-current-issuer", &authorization)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.status, CredentialTransactionStatus::Signing);
+    assert_eq!(claimed.claims, admitted.claims);
+    assert_eq!(claimed.issuer_profile_id, selected.issuer_profile_id);
+    assert_eq!(claimed.issuer_did, selected.issuer_did);
+    assert_eq!(claimed.issuer_algorithm, selected.issuer_algorithm);
+    assert_eq!(claimed.signing_service_id, selected.signing_service_id);
+    drop_contract_schema(&pool).await;
+}
+
+#[tokio::test]
+async fn signing_claim_rejects_changed_linked_authorization_session() {
+    let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
+        return;
+    };
+    let _database_guard = POSTGRES_CONTRACT_LOCK.lock().await;
+    assert!(Url::parse(&database_url).unwrap().path().ends_with("_test"));
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    create_contract_schema(&pool).await;
+    let key = b"signing-session-contract-key";
+    let repository = PostgresCredentialRepository::new(pool.clone(), key);
+    for (name, mutation) in [
+        (
+            "tenant",
+            concat!(
+                "UPDATE issuance_service.authorization_sessions SET ",
+                "organization_id = 'other-tenant'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "client",
+            concat!(
+                "UPDATE issuance_service.authorization_sessions SET ",
+                "client_id = 'other-client'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "issuer-state",
+            concat!(
+                "UPDATE issuance_service.authorization_sessions SET ",
+                "issuer_state = 'other-issuer-state'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "configuration",
+            concat!(
+                "UPDATE issuance_service.authorization_sessions SET ",
+                "credential_configuration_ids = '[\"OtherCredential#sd-jwt\"]'::jsonb",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "proof-key",
+            concat!(
+                "UPDATE issuance_service.authorization_sessions SET ",
+                "dpop_jkt = 'other-jkt'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "expiry",
+            concat!(
+                "UPDATE issuance_service.authorization_sessions SET ",
+                "access_token_expires_at = clock_timestamp() - interval '1 second'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "extended-expiry",
+            concat!(
+                "UPDATE issuance_service.authorization_sessions SET ",
+                "access_token_expires_at = access_token_expires_at + interval '1 minute'",
+                " WHERE id = $1"
+            ),
+        ),
+        (
+            "token",
+            concat!(
+                "UPDATE issuance_service.authorization_sessions SET ",
+                "access_token = 'other-token-hmac'",
+                " WHERE id = $1"
+            ),
+        ),
+    ] {
+        let id = format!("session-claim-{name}");
+        let token = format!("session-token-{name}");
+        seed_signing_claim(&pool, &repository, key, &id, &token).await;
+        let (admitted, session) = link_signing_claim(&pool, &repository, &id, &token).await;
+        sqlx::query(mutation)
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let authorization = CredentialSigningAuthorization {
+            transaction: &admitted,
+            authorization_session: Some(&session),
+            access_token: &token,
+        };
+        assert!(
+            matches!(
+                repository
+                    .claim_for_signing(&admitted, "credential-claim", &authorization)
+                    .await,
+                Err(CredentialIssuanceError::InvalidAccessToken)
+            ),
+            "{name}"
+        );
+        assert_claim_not_consumed(&pool, &id).await;
+    }
+    drop_contract_schema(&pool).await;
+}
+
+#[tokio::test]
+async fn signing_claim_preserves_only_deterministic_legacy_null_client_linkage() {
+    let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
+        return;
+    };
+    let _database_guard = POSTGRES_CONTRACT_LOCK.lock().await;
+    assert!(Url::parse(&database_url).unwrap().path().ends_with("_test"));
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    create_contract_schema(&pool).await;
+    let key = b"signing-legacy-session-contract-key";
+    let repository = PostgresCredentialRepository::new(pool.clone(), key);
+    for (id, session_id, client, allowed) in [
+        (
+            "dca62a6b-abc0-590d-906b-2582303615e5",
+            "authorization-session-race",
+            None,
+            true,
+        ),
+        (
+            "non-deterministic-transaction",
+            "non-deterministic-session",
+            None,
+            false,
+        ),
+        (
+            "8e63872b-80ac-5026-ad0a-146587f73a60",
+            "authorization-session-other",
+            Some("wrong-client"),
+            false,
+        ),
+    ] {
+        let token = format!("legacy-token-{session_id}");
+        seed_signing_claim(&pool, &repository, key, id, &token).await;
+        sqlx::query("UPDATE issuance_service.issuance_transactions SET oid4vci_client_id = $1 WHERE id = $2")
+            .bind(client).bind(id).execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO issuance_service.authorization_sessions
+                (id, client_id, organization_id, issuer_state, credential_configuration_ids,
+                 access_token, access_token_expires_at)
+             SELECT $1, 'wallet-claim', organization_id, pre_auth_code,
+                    '[\"OpenBadgeCredential#sd-jwt\"]'::jsonb, access_token, access_token_expires_at
+             FROM issuance_service.issuance_transactions WHERE id = $2",
+        )
+        .bind(session_id)
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let admitted = repository.transaction_by_id(id).await.unwrap().unwrap();
+        let session = repository
+            .authorization_by_access_token(&token)
+            .await
+            .unwrap()
+            .unwrap();
+        let resolved = repository.resolve_access_token_grant(&token).await;
+        if allowed {
+            assert!(matches!(
+                resolved,
+                Ok(CredentialAccessTokenGrant::LinkedTransaction { .. })
+            ));
+        } else {
+            assert!(matches!(
+                resolved,
+                Err(CredentialIssuanceError::RepositoryUnavailable)
+            ));
+        }
+        let authorization = CredentialSigningAuthorization {
+            transaction: &admitted,
+            authorization_session: Some(&session),
+            access_token: &token,
+        };
+        let claimed = repository
+            .claim_for_signing(&admitted, "credential-legacy", &authorization)
+            .await;
+        if allowed {
+            assert_eq!(
+                claimed.unwrap().unwrap().status,
+                CredentialTransactionStatus::Signing
+            );
+        } else {
+            assert!(matches!(
+                claimed,
+                Err(CredentialIssuanceError::InvalidAccessToken)
+            ));
+            assert_claim_not_consumed(&pool, id).await;
+        }
+    }
+    drop_contract_schema(&pool).await;
+}
+
+#[tokio::test]
+async fn signing_claim_rechecks_concurrent_row_change_and_expiry_after_lock_wait() {
+    let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
+        return;
+    };
+    let _database_guard = POSTGRES_CONTRACT_LOCK.lock().await;
+    assert!(Url::parse(&database_url).unwrap().path().ends_with("_test"));
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    create_contract_schema(&pool).await;
+    let key = b"signing-lock-contract-key";
+    let repository = PostgresCredentialRepository::new(pool.clone(), key);
+    let admitted =
+        seed_signing_claim(&pool, &repository, key, "claim-row-lock", "token-row-lock").await;
+    let authorization = CredentialSigningAuthorization {
+        transaction: &admitted,
+        authorization_session: None,
+        access_token: "token-row-lock",
+    };
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM issuance_service.issuance_transactions WHERE id = $1 FOR UPDATE")
+        .bind(&admitted.id)
+        .fetch_one(&mut *blocker)
+        .await
+        .unwrap();
+    let mut claim =
+        Box::pin(repository.claim_for_signing(&admitted, "credential-claim", &authorization));
+    assert!(
+        tokio::time::timeout(StdDuration::from_millis(100), &mut claim)
+            .await
+            .is_err(),
+        "claim must wait for row lock"
+    );
+    sqlx::query("UPDATE issuance_service.issuance_transactions SET claims = '{\"role\":\"administrator\"}'::jsonb WHERE id = $1")
+        .bind(&admitted.id).execute(&mut *blocker).await.unwrap();
+    blocker.commit().await.unwrap();
+    assert!(matches!(
+        tokio::time::timeout(StdDuration::from_secs(5), claim)
+            .await
+            .unwrap(),
+        Err(CredentialIssuanceError::InvalidTransactionState)
+    ));
+    assert_claim_not_consumed(&pool, &admitted.id).await;
+
+    // Rows are live when the claim reads them, then expire while it waits for
+    // the linked session lock. Both signing and concurrent recovery need a fresh clock.
+    for status in ["authorized", "signing", "issued"] {
+        for (expiry, expire_sql) in [
+            ("transaction", "UPDATE issuance_service.issuance_transactions SET expires_at = clock_timestamp() + interval '1 second' WHERE id = $1"),
+            ("grant", "UPDATE issuance_service.issuance_transactions SET access_token_expires_at = clock_timestamp() + interval '1 second' WHERE id = $1"),
+        ] {
+            let id = format!("claim-session-lock-{status}-{expiry}");
+            let token = format!("token-session-lock-{status}-{expiry}");
+            seed_signing_claim(&pool, &repository, key, &id, &token).await;
+            sqlx::query(expire_sql).bind(&id).execute(&pool).await.unwrap();
+            let (admitted, session) = link_signing_claim(&pool, &repository, &id, &token).await;
+            sqlx::query("UPDATE issuance_service.issuance_transactions SET status = $1 WHERE id = $2")
+                .bind(status).bind(&id).execute(&pool).await.unwrap();
+            let authorization = CredentialSigningAuthorization {
+                transaction: &admitted,
+                authorization_session: Some(&session),
+                access_token: &token,
+            };
+            let mut blocker = pool.begin().await.unwrap();
+            sqlx::query("SELECT id FROM issuance_service.authorization_sessions WHERE id = $1 FOR UPDATE")
+                .bind(&session.id).fetch_one(&mut *blocker).await.unwrap();
+            let mut claim = Box::pin(repository.claim_for_signing(&admitted, "credential-claim", &authorization));
+            assert!(tokio::time::timeout(StdDuration::from_millis(100), &mut claim).await.is_err(),
+                "claim must wait for session lock: {status}/{expiry}");
+            tokio::time::sleep(StdDuration::from_millis(1100)).await;
+            blocker.commit().await.unwrap();
+            assert!(matches!(
+                tokio::time::timeout(StdDuration::from_secs(5), claim).await.unwrap(),
+                Err(CredentialIssuanceError::InvalidAccessToken | CredentialIssuanceError::InvalidTransactionState)
+            ), "{status}/{expiry}");
+            let row = sqlx::query("SELECT status, reserved_credential_id FROM issuance_service.issuance_transactions WHERE id = $1")
+                .bind(&id).fetch_one(&pool).await.unwrap();
+            assert_eq!(row.get::<String, _>("status"), status);
+            assert!(row.get::<Option<String>, _>("reserved_credential_id").is_none());
+        }
+    }
+    drop_contract_schema(&pool).await;
 }
 
 async fn create_contract_schema(pool: &sqlx::PgPool) {

@@ -3,7 +3,7 @@
  * 
  * Displays real-time health status for:
  * - API Gateway
- * - Issuer Metadata Service
+ * - Issuance Service
  * - Verifier Service
  * 
  * Shows prominent banner if any service is in error state.
@@ -33,6 +33,7 @@ import { HealthStatus } from '../../../services/healthApi';
  */
 function ServiceStatusIndicator({ status, label, onClick }) {
   const { t } = useTranslation('console');
+  const statusReported = [HealthStatus.HEALTHY, HealthStatus.WARNING, HealthStatus.ERROR].includes(status);
   const getStatusIcon = () => {
     switch (status) {
       case HealthStatus.HEALTHY:
@@ -76,7 +77,10 @@ function ServiceStatusIndicator({ status, label, onClick }) {
   };
 
   return (
-    <Tooltip title={t('dashboard.systemStatus.clickToViewLogs')} placement="top">
+    <Tooltip
+      title={t(statusReported ? 'dashboard.systemStatus.clickToViewLogs' : 'dashboard.systemStatus.notReported')}
+      placement="top"
+    >
       <Box
         onClick={onClick}
         sx={{
@@ -157,21 +161,21 @@ export function SystemStatusBar({ systemHealth }) {
           </IconButton>
         </Box>
         <Grid container spacing={3}>
-          <Grid item xs={12} sm={4}>
+          <Grid size={{ xs: 12, sm: 4 }}>
             <ServiceStatusIndicator
               status={gateway}
               label={t('dashboard.systemStatus.apiGateway')}
               onClick={() => handleServiceClick('gateway')}
             />
           </Grid>
-          <Grid item xs={12} sm={4}>
+          <Grid size={{ xs: 12, sm: 4 }}>
             <ServiceStatusIndicator
               status={issuer}
-              label={t('dashboard.systemStatus.issuerMetadata')}
-              onClick={() => handleServiceClick('issuer')}
+              label={t('dashboard.systemStatus.issuanceService')}
+              onClick={() => handleServiceClick('issuance')}
             />
           </Grid>
-          <Grid item xs={12} sm={4}>
+          <Grid size={{ xs: 12, sm: 4 }}>
             <ServiceStatusIndicator
               status={verifier}
               label={t('dashboard.systemStatus.verifierService')}

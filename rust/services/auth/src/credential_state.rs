@@ -43,6 +43,10 @@ pub struct CredentialVerifiedPayload {
     pub verified_claims: Map<String, Value>,
     #[serde(default)]
     pub presentation_policy_id: String,
+    /// Optional only for callbacks already queued before revision binding.
+    /// When present it remains part of the signed canonical payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_revision: Option<marty_oid4vp_contract::FrozenPolicyIdentity>,
     #[serde(default)]
     pub completed_at: String,
     pub evidence_digest: String,
@@ -376,6 +380,9 @@ pub fn verify_credential_callback(
         || headers.event_id != payload.flow_instance_id
         || !is_lower_hex_64(&payload.evidence_digest)
         || !is_lower_hex_64(&payload.decision_digest)
+        || payload.policy_revision.as_ref().is_some_and(|revision| {
+            revision.id != payload.presentation_policy_id || revision.validate().is_err()
+        })
     {
         return Err(invalid_callback());
     }
