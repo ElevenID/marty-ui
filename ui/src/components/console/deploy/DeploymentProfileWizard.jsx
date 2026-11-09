@@ -6,7 +6,7 @@
  */
 
 import { useNavigate } from 'react-router';
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Box,
@@ -35,6 +35,7 @@ const DeploymentProfileWizardForm = () => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
   const { activeOrgId } = useConsole();
+  const submissionPending = useRef(false);
 
   const STEPS = [
     t('wizards.deploymentProfile.steps.environment'),
@@ -107,6 +108,15 @@ const DeploymentProfileWizardForm = () => {
     return createDeploymentProfile(payload);
   }, [activeOrgId]);
 
+  const submitReviewedData = useCallback(async (data) => {
+    submissionPending.current = true;
+    try {
+      return await handleSubmit(data);
+    } finally {
+      submissionPending.current = false;
+    }
+  }, [handleSubmit]);
+
   const wizard = useWizard({
     steps: STEPS,
     initialData: {
@@ -144,7 +154,7 @@ const DeploymentProfileWizardForm = () => {
       activate_immediately: true,
     },
     validateStep,
-    onSubmit: handleSubmit,
+    onSubmit: submitReviewedData,
     onComplete: () => {
       navigate('/console/org/flows/definitions');
     },
@@ -153,35 +163,44 @@ const DeploymentProfileWizardForm = () => {
     },
   });
 
+  const { updateData, goToStep } = wizard;
+  const updateFormData = useCallback((updates) => {
+    if (!submissionPending.current) updateData(updates);
+  }, [updateData]);
+
+  const editStep = useCallback((step) => {
+    if (!submissionPending.current) goToStep(step);
+  }, [goToStep]);
+
   const renderStepContent = () => {
     switch (wizard.activeStep) {
       case 0:
         return (
           <EnvironmentStep
             data={wizard.data}
-            onChange={wizard.updateData}
+            onChange={updateFormData}
           />
         );
       case 1:
         return (
           <RuntimeSettingsStep
             data={wizard.data}
-            onChange={wizard.updateData}
+            onChange={updateFormData}
           />
         );
       case 2:
         return (
           <IntegrationStep
             data={wizard.data}
-            onChange={wizard.updateData}
+            onChange={updateFormData}
           />
         );
       case 3:
         return (
           <ReviewStep
             data={wizard.data}
-            onChange={wizard.updateData}
-            onEdit={wizard.goToStep}
+            onChange={updateFormData}
+            onEdit={editStep}
           />
         );
       default:
@@ -243,14 +262,23 @@ const DeploymentProfileWizardForm = () => {
         )}
 
         {/* Step Content */}
-        <Box sx={{ minHeight: 400, mb: 4 }}>
+        <Box
+          component="fieldset"
+          disabled={wizard.loading}
+          aria-label={STEPS[wizard.activeStep]}
+          sx={{ minHeight: 400, minWidth: 0, border: 0, p: 0, m: 0, mb: 4 }}
+        >
           {renderStepContent()}
         </Box>
 
         {/* Navigation Buttons */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 2 }}>
           <Button
-            onClick={wizard.isFirstStep ? wizard.cancel : wizard.goBack}
+            onClick={() => {
+              if (submissionPending.current) return;
+              if (wizard.isFirstStep) wizard.cancel();
+              else wizard.goBack();
+            }}
             startIcon={<ArrowBackIcon />}
             disabled={wizard.loading}
             data-testid={wizard.isFirstStep ? 'wizard.deployment.cancel' : 'wizard.deployment.back'}
@@ -264,7 +292,7 @@ const DeploymentProfileWizardForm = () => {
             {/* Show Skip button for optional Integration step */}
             {wizard.activeStep === 2 && (
               <Button
-                onClick={wizard.goNext}
+                onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
                 disabled={wizard.loading}
                 data-testid="wizard.deployment.skip"
               >
@@ -287,7 +315,7 @@ const DeploymentProfileWizardForm = () => {
             ) : (
               <Button
                 variant="contained"
-                onClick={wizard.goNext}
+                onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
                 disabled={!wizard.isStepValid() || wizard.loading}
                 endIcon={<ArrowForwardIcon />}
                 data-testid="wizard.deployment.next"
