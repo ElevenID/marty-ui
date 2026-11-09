@@ -7,11 +7,16 @@ const CORE='4320b5fa1c6f41231ee0aa2bc57d8008549f67ac';
 const SOURCE='852dbb5cc0cca79cfe0bbbed5cb8fb94cda0ad34';
 const D12_SOURCE='6117cea9290f57406cf109eae56f64f7986e3783';
 const D12_CORE='ffa24febcd0fb3fced15da7f28190af6d61ae0f9';
+const D12_CURRENT_SOURCE='449ab93ca80d147622ae61283f7d8084f7c62884';
+const D12_CURRENT_CORE='11655e38c2dbf69bfa5bc3c873f80c5fad628723';
 const D12_PROFILE='d12-passport-current-functional';
-function closedScope(profile,approvedBefore,approvedEngine){
+function closedScope(profile,approvedBefore,approvedEngine,sourceRevision,coreRevision){
  if(profile===D12_PROFILE){assert(/^[a-f0-9]{64}$/.test(approvedBefore),'D12_APPROVED_DATABASE_PREIMAGE_REQUIRED');
   assert(/^[a-f0-9-]{36}$/.test(approvedEngine),'D12_APPROVED_ENGINE_REQUIRED');
-  return {source:D12_SOURCE,core:D12_CORE,databaseBeforeSha256:approvedBefore,engineId:approvedEngine,stateSchema:'marty.native-d12-current-operation-state/v1'};}
+  const source=sourceRevision===undefined?D12_SOURCE:sourceRevision;
+  const core=coreRevision===undefined?D12_CORE:coreRevision;
+  assert((source===D12_SOURCE&&core===D12_CORE)||(source===D12_CURRENT_SOURCE&&core===D12_CURRENT_CORE),'UNREVIEWED_D12_SOURCE_LINEAGE');
+  return {source,core,databaseBeforeSha256:approvedBefore,engineId:approvedEngine,stateSchema:'marty.native-d12-current-operation-state/v1'};}
  assert(profile==null||profile==='native-devtest-passport-four-role','UNREVIEWED_DATABASE_PROFILE');
  return {source:SOURCE,core:CORE,databaseBeforeSha256:PG_BASE_SHA,engineId:'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341',stateSchema:'marty.native-four-role-operation-state/v1'};
 }
@@ -24,7 +29,7 @@ const CATALOG_SQL_SHA='e7972f5d018100c5288dbe4eca0df2dbaa61ce21f8a34991789a3a173
 const PG_BASE_SHA='7edeffa3c4cbc10d02010dd0bfbd2e84e2cf4cf149e1c8d5bf7e834a5aedf075';
 function observeCatalog(inputs,{readDocker}={}){
  assert.equal(typeof readDocker,'function','ACTUAL_DOCKER_READER_REQUIRED');
- const scope=closedScope(inputs.rolloutProfile,inputs.approvedDatabaseBeforeSha256,inputs.approvedEngineId);
+ const scope=closedScope(inputs.rolloutProfile,inputs.approvedDatabaseBeforeSha256,inputs.approvedEngineId,inputs.sourceRevision,inputs.coreRevision);
  assert.equal(inputs.databaseBefore.sha256,scope.databaseBeforeSha256);const prior=runtime.boundJson(inputs.databaseBefore).databaseIdentity;
  assert.equal(inputs.sql.sha256,CATALOG_SQL_SHA);const sql=runtime.boundBytes(inputs.sql);
  function identity(){
@@ -189,7 +194,7 @@ function orderedOperations(state,proof,commands,{runId,selectionSha256,identity,
 }
 function validateProof(proof,commands,context){
  const {runId,selectionSha256,executorSource}=context;
- const scope=closedScope(context.rolloutProfile,context.approvedDatabaseBeforeSha256,context.approvedEngineId);
+ const scope=closedScope(context.rolloutProfile,context.approvedDatabaseBeforeSha256,context.approvedEngineId,context.sourceRevision,context.coreRevision);
  assert.equal(proof.schema,'marty.native-maintenance-metadata-proof/v1');assert.equal(proof.databaseBefore.sha256,scope.databaseBeforeSha256);
  const identity=runtime.boundJson(proof.databaseBefore).databaseIdentity;
  const state=runtime.boundJson(proof.operationState),rows=orderedOperations(state,proof,commands,{runId,selectionSha256,identity,executorSource,scope});
@@ -212,4 +217,4 @@ function validateProof(proof,commands,context){
  attestation(sqlOutput(runtime.boundBytes(rows.NATIVE_ATTESTATION.stdout),'marty.passport-beta-native-migration-attestation/v1'),epoch,digest,scope.source);
  return {databaseIdentity:identity,fenceEpoch:epoch,sourceCommit:scope.source,operationState:state};
 }
-module.exports={generateStandaloneVerifier,CORE,DATABASE_ORDER,SQL_SOURCES,operationalSql,sessionOptions,orderedOperations,parseSqlOutput,validateProof,observeCatalog,CATALOG_SQL_SHA,PG_BASE_SHA,SOURCE,MIGRATIONS,migrationDigest,catalog,sqlOutput,verifiedSql,fenceReceipt,ownerReceipt,attestation,closedScope,D12_SOURCE,D12_CORE,D12_PROFILE};
+module.exports={generateStandaloneVerifier,CORE,DATABASE_ORDER,SQL_SOURCES,operationalSql,sessionOptions,orderedOperations,parseSqlOutput,validateProof,observeCatalog,CATALOG_SQL_SHA,PG_BASE_SHA,SOURCE,MIGRATIONS,migrationDigest,catalog,sqlOutput,verifiedSql,fenceReceipt,ownerReceipt,attestation,closedScope,D12_SOURCE,D12_CORE,D12_CURRENT_SOURCE,D12_CURRENT_CORE,D12_PROFILE};

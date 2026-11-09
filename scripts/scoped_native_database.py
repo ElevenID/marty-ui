@@ -295,6 +295,7 @@ class NativeDatabasePhase:
     def catalog(self):
         return self.node("catalog", inputs={"runId": self.i["runId"], "databaseBefore": self.i["databaseBefore"],
             "sql": self.i["catalogSql"], "rolloutProfile": self.rollout_profile,
+            "sourceRevision": self.source_revision, "coreRevision": self.core_revision,
             "approvedDatabaseBeforeSha256": self.expected_database_before,
             "approvedEngineId": self.engine_id})
 

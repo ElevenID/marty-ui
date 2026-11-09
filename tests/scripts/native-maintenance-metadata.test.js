@@ -24,6 +24,31 @@ test('current D12 database scope refuses stale source and unbound preimage',()=>
  assert.throws(()=>m.closedScope('foreign-profile',approved));
  assert.equal(m.closedScope().source,m.SOURCE);
 });
+test('D12 metadata selects only the reviewed current source and Core pair',()=>{
+ const approved='a'.repeat(64),engine='11111111-1111-4111-8111-111111111111';
+ const current=m.closedScope(m.D12_PROFILE,approved,engine,m.D12_CURRENT_SOURCE,m.D12_CURRENT_CORE);
+ assert.equal(current.source,m.D12_CURRENT_SOURCE);assert.equal(current.core,m.D12_CURRENT_CORE);
+ assert.equal(m.closedScope(m.D12_PROFILE,approved,engine).source,m.D12_SOURCE);
+ for(const [source,core] of [[m.D12_SOURCE,m.D12_CURRENT_CORE],[m.D12_CURRENT_SOURCE,m.D12_CORE],['0'.repeat(40),m.D12_CURRENT_CORE],[m.D12_CURRENT_SOURCE,undefined]])
+  assert.throws(()=>m.closedScope(m.D12_PROFILE,approved,engine,source,core),/UNREVIEWED_D12_SOURCE_LINEAGE/);
+});
+test('current D12 operation proof reaches ordered journal checks with exact lineage',()=>{
+ const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'marty-current-d12-proof-'));
+ try{
+  const file=path.join(dir,'executor.py'),bytes=Buffer.from('exact reviewed executor');fs.writeFileSync(file,bytes);
+  const executorSource={path:file,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length};
+  const approved='a'.repeat(64),engine='11111111-1111-4111-8111-111111111111';
+  const scope=m.closedScope(m.D12_PROFILE,approved,engine,m.D12_CURRENT_SOURCE,m.D12_CURRENT_CORE);
+  const context={runId:'run',selectionSha256:'b'.repeat(64),identity:{},executorSource,scope};
+  const state={schema:scope.stateSchema,phase:'DATABASE_MAINTENANCE_COMPLETED',runId:'run',
+   sourceRevision:m.D12_CURRENT_SOURCE,coreRevision:m.D12_CURRENT_CORE,
+   selectionSha256:context.selectionSha256,databaseIdentity:{},executorSource,operations:[]};
+  assert.throws(()=>m.orderedOperations(state,{},[],context),/0 !== 15/);
+  assert.throws(()=>m.orderedOperations({...state,sourceRevision:m.D12_SOURCE},{},[],context));
+  assert.throws(()=>m.orderedOperations({...state,coreRevision:m.D12_CORE},{},[],context));
+ }finally{fs.rmSync(dir,{recursive:true});}
+});
 function catalog(){return {schema:'marty.native-maintenance-catalog/v1',control:{database:'marty',databaseOid:'16387',systemIdentifier:'7698090346923700258',fenceTable:'passport_cutover.state',activeMartyConnections:0,activeMigratorConnections:0,roles:['marty','marty_beta_migrator','marty_passport_fence_owner'].map(name=>({name,canLogin:false,superuser:false}))},acl:{appIssuanceCreate:false,appFlowCreate:false},ledgerTables:{issuance:'issuance_service.rust_schema_migrations',flow:'flow_service.rust_schema_versions'},aclTables:{flowIntent:'flow_service.physical_start_intents',cancellationHistory:'issuance_service.passport_job_administrative_cancellations'},ledgers:{issuance:['baseline','0010_passport_start_idempotency','0011_passport_administrative_cancellation'],flow:['rust_flow_0001','rust_flow_0002']},relations:['flow_service.physical_start_intents','flow_service.flow_definitions','flow_service.flow_instances','issuance_service.physical_document_jobs','issuance_service.passport_beta_batch_intents','issuance_service.passport_job_administrative_cancellations','passport_cutover.state','passport_cutover.native_migration_receipt'].map(n=>({schema:n.split('.')[0],name:n.split('.')[1],kind:'r',owner:'marty_passport_fence_owner'}))};}
 test('current unfenced observation cannot become a fenced projection',()=>{const c=catalog();c.control.fenceTable=null;c.control.roles=[{name:'marty',canLogin:true,superuser:false}];assert.throws(()=>m.catalog(c,'BEFORE_SCHEMA'));});
 test('catalog phases enforce real login/count/identity distinctions',()=>{const c=catalog();m.catalog(c,'BEFORE_SCHEMA');assert.throws(()=>m.catalog(c,'BEFORE_START'));c.control.roles[0].canLogin=true;m.catalog(c,'BEFORE_START');c.control.activeMartyConnections=1;assert.throws(()=>m.catalog(c,'BEFORE_START'));});
