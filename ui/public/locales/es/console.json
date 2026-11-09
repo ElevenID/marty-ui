@@ -1,4 +1,20 @@
 {
+  "membershipReview": {
+    "pending": "Pendiente",
+    "description": "Revisa las membresías pendientes y aprueba el acceso con los roles ya asignados.",
+    "signIn": "Inicia sesión para revisar las solicitudes de membresía.",
+    "selectOrganization": "Selecciona una organización para revisar las solicitudes de membresía.",
+    "permissionsLoading": "Comprobando permisos de membresía",
+    "readDenied": "No tienes permiso para ver las membresías pendientes de esta organización.",
+    "approvalOnly": "Aquí puedes aprobar las membresías pendientes. El rechazo no está disponible.",
+    "viewOnly": "Puedes ver las solicitudes, pero no tienes permiso para aprobarlas.",
+    "applicant": "Solicitante",
+    "roles": "Roles asignados",
+    "account": "Cuenta {{id}}",
+    "noRoles": "Sin roles asignados",
+    "approvalFailed": "No se pudo aprobar la solicitud de membresía.",
+    "loadFailed": "No se pudieron cargar las solicitudes de membresía."
+  },
 	"dashboard": {
 		"developerQuickStart": {
 			"loading": "Cargando metadatos de integración..."
@@ -288,6 +304,13 @@
 		}
 	},
 	"org": {
+		"roleEscalation": {
+			"title": "Solicitudes de cambio de rol",
+			"unavailable": "Las solicitudes de cambio de rol no están disponibles en esta consola.",
+			"management": "Los usuarios con permiso para asignar roles pueden cambiar los roles de los miembros en Equipo. La página Roles muestra los roles disponibles y sus permisos.",
+			"teamLink": "Ver equipo",
+			"rolesLink": "Ver roles"
+		},
 		"setup": {
 			"chooseTitle": "Elige una organización",
 			"chooseDescription": "Selecciona una organización para abrir su consola.",
@@ -297,6 +320,14 @@
 			"noMembershipsTitle": "Aún no tienes membresías con acceso a la consola"
 		},
 		"team": {
+			"memberships": {
+				"title": "Estado de las membresías",
+				"status": "Estado",
+				"pending": "Pendiente de aprobación",
+				"deactivated": "Desactivada",
+				"unknown": "Estado no disponible",
+				"reviewRequests": "Ver solicitudes de membresía"
+			},
 			"title": "Equipo",
 			"subtitle": "Gestiona miembros, roles e invitaciones"
 		},

@@ -1,4 +1,20 @@
 {
+  "membershipReview": {
+    "pending": "承認待ち",
+    "description": "保留中のメンバーシップを確認し、割り当て済みのロールでアクセスを承認します。",
+    "signIn": "メンバーシップ申請を確認するにはログインしてください。",
+    "selectOrganization": "メンバーシップ申請を確認する組織を選択してください。",
+    "permissionsLoading": "メンバーシップの権限を確認中",
+    "readDenied": "この組織の保留中のメンバーシップを表示する権限がありません。",
+    "approvalOnly": "ここでは保留中のメンバーシップを承認できます。却下は利用できません。",
+    "viewOnly": "申請を表示できますが、承認する権限はありません。",
+    "applicant": "申請者",
+    "roles": "割り当て済みロール",
+    "account": "アカウント {{id}}",
+    "noRoles": "ロール未割り当て",
+    "approvalFailed": "メンバーシップ申請を承認できませんでした。",
+    "loadFailed": "メンバーシップ申請を読み込めませんでした。"
+  },
 	"dashboard": {
 		"developerQuickStart": {
 			"loading": "連携メタデータを読み込み中..."
@@ -288,6 +304,13 @@
 		}
 	},
 	"org": {
+		"roleEscalation": {
+			"title": "ロール変更の申請",
+			"unavailable": "このコンソールではロール変更を申請できません。",
+			"management": "ロールの割り当て権限があるユーザーは、チーム画面でメンバーのロールを変更できます。ロール画面では、利用可能なロールとその権限を確認できます。",
+			"teamLink": "チームを表示",
+			"rolesLink": "ロールを表示"
+		},
 		"setup": {
 			"chooseTitle": "組織を選択",
 			"chooseDescription": "組織を選択して、その組織のコンソールを開きます。",
@@ -297,6 +320,14 @@
 			"noMembershipsTitle": "コンソールにアクセスできる組織への所属はまだありません"
 		},
 		"team": {
+			"memberships": {
+				"title": "メンバーシップの状態",
+				"status": "状態",
+				"pending": "承認待ち",
+				"deactivated": "無効",
+				"unknown": "状態を取得できません",
+				"reviewRequests": "参加申請を表示"
+			},
 			"title": "チーム",
 			"subtitle": "メンバー、ロール、招待を管理"
 		},

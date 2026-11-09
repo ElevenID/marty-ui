@@ -1,4 +1,20 @@
 {
+  "membershipReview": {
+    "pending": "In afwachting",
+    "description": "Beoordeel openstaande lidmaatschappen en keur toegang goed met de al toegewezen rollen.",
+    "signIn": "Log in om lidmaatschapsaanvragen te beoordelen.",
+    "selectOrganization": "Selecteer een organisatie om lidmaatschapsaanvragen te beoordelen.",
+    "permissionsLoading": "Lidmaatschapsrechten controleren",
+    "readDenied": "Je hebt geen toestemming om openstaande lidmaatschappen van deze organisatie te bekijken.",
+    "approvalOnly": "Je kunt hier openstaande lidmaatschappen goedkeuren. Afwijzen is niet beschikbaar.",
+    "viewOnly": "Je kunt aanvragen bekijken, maar je hebt geen toestemming om ze goed te keuren.",
+    "applicant": "Aanvrager",
+    "roles": "Toegewezen rollen",
+    "account": "Account {{id}}",
+    "noRoles": "Geen rollen toegewezen",
+    "approvalFailed": "De lidmaatschapsaanvraag kon niet worden goedgekeurd.",
+    "loadFailed": "Lidmaatschapsaanvragen konden niet worden geladen."
+  },
   "wizards": {
     "deploymentProfile": {
       "integrationStep": {
@@ -68,6 +84,23 @@
     "discoveryPrivate": "Deze organisatie verschijnt niet in openbare zoekresultaten voor organisaties."
   },
   "org": {
+    "team": {
+      "memberships": {
+        "title": "Lidmaatschapsstatus",
+        "status": "Status",
+        "pending": "In afwachting van goedkeuring",
+        "deactivated": "Gedeactiveerd",
+        "unknown": "Status niet beschikbaar",
+        "reviewRequests": "Lidmaatschapsaanvragen bekijken"
+      }
+    },
+    "roleEscalation": {
+      "title": "Verzoeken om rolwijziging",
+      "unavailable": "Verzoeken om rolwijziging zijn niet beschikbaar in deze console.",
+      "management": "Gebruikers met toestemming om rollen toe te wijzen kunnen de rollen van leden wijzigen onder Team. De pagina Rollen toont de beschikbare rollen en hun rechten.",
+      "teamLink": "Team bekijken",
+      "rolesLink": "Rollen bekijken"
+    },
     "setup": {
       "chooseTitle": "Kies een organisatie",
       "chooseDescription": "Selecteer een organisatie om de organisatieconsole te openen.",

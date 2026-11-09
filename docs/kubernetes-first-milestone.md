@@ -18,6 +18,7 @@ qualification or admit a release to the consumer installation channel.
 | Migration and Keycloak configuration | Kubernetes Jobs and the existing application commands |
 | Workload signing keys, certificates and scoped tokens | Existing native Marty producers and the OpenBao CLI |
 | Application credential publication | Existing native Secret publisher and ordinary `kubectl apply` |
+| Ordinary token replacement authority and candidate staging | Existing native AppRole, OpenBao token roles and credential-generation commands |
 | Release verification | Existing inventory validation, pinned `gh` and `cosign` verifiers |
 | Trial shutdown | A systemd timer with an absolute UTC deadline |
 
@@ -165,15 +166,18 @@ the two pinned verifiers, Helm, and the pinned chart archive. The bootstrap
 performs the full shared verification again before writing to the cluster.
 
 The authenticated `marty-deploy` must support the read-only
-`kubernetes-secrets-contract` command. Before selecting the Kubernetes context
-or creating any resource, bootstrap compares its compiled publication contract
-with this checkout's `deploy-config/catalog/kubernetes-secrets.json`. Schema
+`kubernetes-secrets-contract` and `kubernetes-application-token-contract`
+commands. Before selecting the Kubernetes context or creating any resource,
+bootstrap compares their compiled contracts with this checkout's
+`deploy-config/catalog/kubernetes-secrets.json` and
+`deploy-config/catalog/kubernetes-application-tokens.json`. Schema
 `marty.kubernetes-secret-publication/v1` contains the compiled required inputs,
 Secret names, keys and input mappings used by the native publisher. It contains
 no credential values and requires no repository, kubeconfig or credentials:
 
 ```sh
 /absolute/path/to/authenticated/marty-deploy kubernetes-secrets-contract
+/absolute/path/to/authenticated/marty-deploy kubernetes-application-token-contract
 ```
 
 An unsupported command, malformed contract or different mapping stops bootstrap
@@ -232,7 +236,90 @@ not observed expiration times or proof that a workload has loaded a token.
 Native workload TLS and Keycloak outputs remain separate from this inventory.
 The receipt contains no token values, token hashes, accessors or passwords.
 It preserves initial identity and configuration; it does not authorize replay,
-install renewal, or make runtime credential replacement available.
+install periodic renewal, or establish that replacement credentials are active.
+
+## Stage ordinary application credentials
+
+The ordinary-token inventory is shared by bootstrap and the native replacement
+profile. It contains all 13 initial inputs and permits routine replacement of
+exactly 11 runtime inputs. The two excluded inputs are the initial migration
+token, `OPENBAO_BOOTSTRAP_TOKEN`, and the legacy service alias,
+`OPENBAO_SERVICE_TOKEN`. Their presence in an existing generation does not grant
+the application replacement profile permission to issue them.
+
+Bootstrap enrolls a dedicated OpenBao AppRole through the existing native
+operator. Its private identity contains `application-role-id`,
+`application-secret-id` and `application-binding.json`. Keep this identity with
+the original private bootstrap state. Its binding fixes the Kubernetes
+namespace and UID, OpenBao cluster ID and original workload project. The
+adapter observes the cluster identities again before requesting new authority;
+native code also checks the OpenBao cluster directly.
+
+The application profile can issue only its fixed runtime token bundles.
+Signing Keys requires both of its existing policies. Each replacement is a
+nonrenewable orphan service token without the default policy and with an
+eight-hour maximum lifetime. Native checks compare the observed policy bundle,
+creation route and lifetime with the closed specification. No root credential
+is used for routine replacement.
+
+Use `scripts/stage_kubernetes_application_credentials.py` with a successful
+bootstrap that enrolled this authority and retained both compiled contracts.
+Keep the original signed artifact closure and pinned verifiers available.
+The adapter reauthenticates them and requires the same runtime and chart
+identities as the original bootstrap. It takes the namespace, kubeconfig,
+current credentials and application identity from that retained state.
+The current runtime tokens must still pass OpenBao lookup; stage before their
+expiry. Recovery after expiry is not implemented by this command.
+
+Set these variables from the original bootstrap receipt and choose a new,
+unused operation directory on the same private encrypted operator storage:
+
+```sh
+python3 scripts/stage_kubernetes_application_credentials.py \
+  --state-dir "${BOOTSTRAP_STATE:?}" \
+  --operation-dir "${NEW_OPERATION_DIR:?}" \
+  --assets "${ORIGINAL_ASSETS:?}" \
+  --gh "${PINNED_GH:?}" --cosign "${PINNED_COSIGN:?}" \
+  --runtime-source-sha "${RUNTIME_SOURCE_SHA:?}" \
+  --chart-source-sha "${CHART_SOURCE_SHA:?}" \
+  --release-tag "${RELEASE_TAG:?}" \
+  --build-run-id "${BUILD_RUN_ID:?}" \
+  --build-run-attempt "${BUILD_RUN_ATTEMPT:?}"
+```
+
+Candidate generation is a separate native operation. It requires the complete
+53-file workload TLS, Keycloak and ordinary-token inventory, accepts exactly
+the 11 new runtime token files, and preserves any additional existing inputs.
+Every other byte and file mode stays unchanged. New tokens must be pairwise
+distinct and differ from all existing ordinary, TLS and Keycloak token values;
+adding a newline cannot turn an existing token into a replacement. The current
+generation is rechecked after writing the candidate to detect observed drift.
+
+The staging operation records its attempt before AppRole login and retains
+partial private results when the outcome is uncertain. An existing attempt
+directory is not a retry target. Completion describes a verified candidate
+only after the private export, identity recheck and transport cleanup succeed.
+It does not mean Kubernetes Secrets have changed or workloads have loaded the
+candidate. Preserve an unsuccessful attempt for operator recovery.
+
+The producer pod has the existing fixed 1,200-second active deadline and a
+memory-backed temporary volume. If private evidence cannot be exported, the
+adapter retains the pod and records its identity for recovery instead of
+deleting it. An uncertain mutating command also retains the pod, even if a
+best-effort evidence export succeeds: a local timeout or lost connection does
+not prove that remote issuance has stopped. That provides only the remaining
+execution window: pod termination,
+node loss or the deadline can still make unexported evidence unavailable. The
+adapter does not extend that deadline or treat retained pod memory as durable
+storage. Recover available evidence promptly and never replay uncertain
+enrollment or issuance.
+
+Live activation remains a separate step requiring Kubernetes resource-version
+preconditions, ordinary Secret updates and bounded rollout status checks.
+Workload TLS and Keycloak renewal must also be connected before claiming
+operation beyond the original development credential lifetime. The ordinary
+token candidate alone does not extend those certificates or KMS tokens, install
+a renewal schedule, or qualify a production upgrade.
 
 If bootstrap stops, retain its namespace and private state and diagnose the
 reported step. Do not rerun initialization with a new output path against the

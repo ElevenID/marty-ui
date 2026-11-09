@@ -1,4 +1,20 @@
 {
+  "membershipReview": {
+    "pending": "En attente",
+    "description": "Examinez les adhésions en attente et approuvez l’accès avec les rôles déjà attribués.",
+    "signIn": "Connectez-vous pour examiner les demandes d’adhésion.",
+    "selectOrganization": "Sélectionnez une organisation pour examiner les demandes d’adhésion.",
+    "permissionsLoading": "Vérification des autorisations d’adhésion",
+    "readDenied": "Vous n’avez pas l’autorisation de consulter les adhésions en attente de cette organisation.",
+    "approvalOnly": "Vous pouvez approuver les adhésions en attente ici. Le refus n’est pas disponible.",
+    "viewOnly": "Vous pouvez consulter les demandes, mais vous n’avez pas l’autorisation de les approuver.",
+    "applicant": "Demandeur",
+    "roles": "Rôles attribués",
+    "account": "Compte {{id}}",
+    "noRoles": "Aucun rôle attribué",
+    "approvalFailed": "Impossible d’approuver la demande d’adhésion.",
+    "loadFailed": "Impossible de charger les demandes d’adhésion."
+  },
 	"dashboard": {
 		"developerQuickStart": {
 			"loading": "Chargement des métadonnées d’intégration..."
@@ -288,6 +304,13 @@
 		}
 	},
 	"org": {
+		"roleEscalation": {
+			"title": "Demandes de changement de rôle",
+			"unavailable": "Les demandes de changement de rôle ne sont pas disponibles dans cette console.",
+			"management": "Les utilisateurs autorisés à attribuer des rôles peuvent modifier les rôles des membres dans Équipe. La page Rôles présente les rôles disponibles et leurs autorisations.",
+			"teamLink": "Voir l’équipe",
+			"rolesLink": "Voir les rôles"
+		},
 		"setup": {
 			"chooseTitle": "Choisir une organisation",
 			"chooseDescription": "Sélectionnez une organisation pour ouvrir sa console.",
@@ -297,6 +320,14 @@
 			"noMembershipsTitle": "Aucune adhésion avec accès à la console pour le moment"
 		},
 		"team": {
+			"memberships": {
+				"title": "Statut des adhésions",
+				"status": "Statut",
+				"pending": "En attente d’approbation",
+				"deactivated": "Désactivée",
+				"unknown": "Statut indisponible",
+				"reviewRequests": "Voir les demandes d’adhésion"
+			},
 			"title": "Équipe",
 			"subtitle": "Gérez les membres, rôles et invitations"
 		},

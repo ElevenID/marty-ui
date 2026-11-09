@@ -188,6 +188,130 @@ describe('TeamPage', () => {
     vi.restoreAllMocks()
   })
 
+  it('keeps native active, invited, pending, and deactivated memberships in their correct sections', async () => {
+    mockListMembers.mockResolvedValue([
+      { id: 'active-member', user_id: 'active-user', email: 'active@example.com', status: 'active', roles: [], is_owner: false },
+      { id: 'invited-member', email: 'invited@example.com', status: 'invited', roles: [], is_owner: false },
+      { id: 'pending-member', user_id: 'pending-user', email: 'approval@example.com', status: 'pending', roles: [], is_owner: false },
+      { id: 'deactivated-member', user_id: 'deactivated-user', email: 'deactivated@example.com', status: 'deactivated', roles: [], is_owner: false },
+    ])
+
+    renderWithRouter(<TeamPage />)
+
+    await screen.findByText('org.team.invites.count:1')
+    expect(screen.getByText('org.team.members.count:1')).toBeInTheDocument()
+    const activeTable = screen.getByRole('table', { name: 'org.team.members.title' })
+    const invitationTable = screen.getByRole('table', { name: 'org.team.invites.title' })
+    const statusTable = screen.getByRole('table', { name: 'org.team.memberships.title' })
+    expect(within(activeTable).getAllByText('active@example.com')).toHaveLength(2)
+    expect(within(invitationTable).getByText('invited@example.com')).toBeInTheDocument()
+    expect(within(invitationTable).getByRole('button', { name: 'org.team.invites.actions.revoke' })).toBeInTheDocument()
+    const pendingRow = within(statusTable).getAllByText('approval@example.com')[0].closest('tr') as HTMLElement
+    const deactivatedRow = within(statusTable).getAllByText('deactivated@example.com')[0].closest('tr') as HTMLElement
+    expect(within(pendingRow).getByText('org.team.memberships.pending')).toBeInTheDocument()
+    expect(within(deactivatedRow).getByText('org.team.memberships.deactivated')).toBeInTheDocument()
+    expect(within(statusTable).queryByRole('button')).not.toBeInTheDocument()
+    expect(within(statusTable).queryByText('org.team.members.actions.changeRole')).not.toBeInTheDocument()
+    expect(mockInviteMember).not.toHaveBeenCalled()
+    expect(mockRemoveMember).not.toHaveBeenCalled()
+    expect(mockSetMemberRoles).not.toHaveBeenCalled()
+  })
+
+  it('does not present approval requests or deactivated memberships as revocable invitations', async () => {
+    mockListMembers.mockResolvedValue([
+      { id: 'pending-member', user_id: 'pending-user', email: 'approval@example.com', status: 'pending', roles: [] },
+      { id: 'deactivated-member', user_id: 'deactivated-user', email: 'deactivated@example.com', status: 'deactivated', roles: [] },
+    ])
+
+    renderWithRouter(<TeamPage />)
+
+    await screen.findAllByText('approval@example.com')
+    expect(screen.queryByText('org.team.invites.title')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'org.team.invites.actions.revoke' })).not.toBeInTheDocument()
+    expect(screen.getByText('org.team.memberships.pending')).toBeInTheDocument()
+    expect(screen.getByText('org.team.memberships.deactivated')).toBeInTheDocument()
+  })
+
+  it('keeps unrecognized and missing membership statuses visible without invitation or management actions', async () => {
+    mockListMembers.mockResolvedValue([
+      { id: 'future-member', user_id: 'future-user', email: 'future@example.com', status: 'suspended', roles: [] },
+      { id: 'missing-status-member', user_id: 'missing-user', email: 'missing@example.com', roles: [] },
+    ])
+
+    renderWithRouter(<TeamPage />)
+
+    await screen.findAllByText('future@example.com')
+    expect(screen.queryByText('org.team.invites.title')).not.toBeInTheDocument()
+    const statusTable = screen.getByRole('table', { name: 'org.team.memberships.title' })
+    expect(within(statusTable).getByText('suspended')).toBeInTheDocument()
+    expect(within(statusTable).getByText('org.team.memberships.unknown')).toBeInTheDocument()
+    expect(within(statusTable).getAllByText('missing@example.com')).toHaveLength(2)
+    expect(within(statusTable).queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'org.team.memberships.reviewRequests' })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    { permission: true, loading: false, visible: true },
+    { permission: false, loading: false, visible: false },
+    { permission: true, loading: true, visible: false },
+  ])('links pending approvals only with resolved team:view ($permission, loading=$loading)', async ({ permission, loading, visible }) => {
+    mockHasPermission.mockImplementation((resource: string, action: string) => permission && resource === 'team' && action === 'view')
+    permissionState.isLoading = loading
+    mockListMembers.mockResolvedValue([
+      { id: 'pending-member', user_id: 'pending-user', email: 'approval@example.com', status: 'pending', roles: [] },
+    ])
+
+    const { user } = renderWithRouter(<TeamWithLocation />, { initialEntries: ['/console/org/team'] })
+
+    await screen.findAllByText('approval@example.com')
+    const link = screen.queryByRole('link', { name: 'org.team.memberships.reviewRequests' })
+    if (visible) {
+      expect(link).toHaveAttribute('href', '/console/org/membership-requests')
+      await user.click(link as HTMLElement)
+      expect(screen.getByTestId('current-location')).toHaveTextContent('/console/org/membership-requests')
+    } else {
+      expect(link).not.toBeInTheDocument()
+    }
+    expect(mockRemoveMember).not.toHaveBeenCalled()
+    expect(mockSetMemberRoles).not.toHaveBeenCalled()
+  })
+
+  it('removes the approval link immediately when team:view is lost', async () => {
+    mockListMembers.mockResolvedValue([
+      { id: 'pending-member', user_id: 'pending-user', email: 'approval@example.com', status: 'pending', roles: [] },
+    ])
+    const { rerender } = renderWithRouter(<TeamPage />)
+    await screen.findByRole('link', { name: 'org.team.memberships.reviewRequests' })
+
+    mockHasPermission.mockReturnValue(false)
+    rerender(<TeamPage />)
+
+    expect(screen.queryByRole('link', { name: 'org.team.memberships.reviewRequests' })).not.toBeInTheDocument()
+    expect(screen.getAllByText('approval@example.com')).toHaveLength(2)
+  })
+
+  it('discards prior-scope approval records and links while a different organization loads', async () => {
+    mockListMembers.mockResolvedValueOnce([
+      { id: 'pending-member', user_id: 'pending-user', email: 'approval@example.com', status: 'pending', roles: [] },
+    ])
+    const nextMembers = deferred<unknown[]>()
+    mockListMembers.mockReturnValueOnce(nextMembers.promise)
+    const { rerender } = renderWithRouter(<TeamPage />)
+    await screen.findByRole('link', { name: 'org.team.memberships.reviewRequests' })
+
+    mockUseConsole.mockReturnValue({ activeOrgId: 'next-org' })
+    rerender(<TeamPage />)
+
+    expect(screen.queryByText('approval@example.com')).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'org.team.memberships.reviewRequests' })).not.toBeInTheDocument()
+    await act(async () => nextMembers.resolve([
+      { id: 'next-member', user_id: 'next-user', email: 'next@example.com', status: 'deactivated', roles: [] },
+    ]))
+    await screen.findAllByText('next@example.com')
+    expect(screen.getByText('org.team.memberships.deactivated')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'org.team.memberships.reviewRequests' })).not.toBeInTheDocument()
+  })
+
   it('uses the native session identity for the current member when owner membership omits profile fields', async () => {
     mockUseAuth.mockReturnValue({
       isAuthenticated: true,

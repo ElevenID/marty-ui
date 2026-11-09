@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import {
   Alert,
   Box,
@@ -108,16 +108,28 @@ function memberForDisplay(member, currentUser) {
 function splitMemberships(records) {
   const activeMembers = [];
   const pendingInvites = [];
+  const otherMemberships = [];
 
   for (const record of records) {
     if (record?.status === 'active') {
       activeMembers.push(record);
-    } else {
+    } else if (record?.status === 'invited') {
       pendingInvites.push(record);
+    } else {
+      // Pending approvals and deactivated memberships are not invitations.
+      // Keep unknown future statuses visible without assigning them actions.
+      otherMemberships.push(record);
     }
   }
 
-  return { activeMembers, pendingInvites };
+  return { activeMembers, pendingInvites, otherMemberships };
+}
+
+function membershipStatusLabel(member, t) {
+  if (member.status === 'pending') return t('org.team.memberships.pending');
+  if (member.status === 'deactivated') return t('org.team.memberships.deactivated');
+  return typeof member.status === 'string' && member.status.trim()
+    ? member.status : t('org.team.memberships.unknown');
 }
 
 function RoleChips({ roles = [] }) {
@@ -161,6 +173,7 @@ function TeamContent({ organizationId, currentUser }) {
   const isMartyOrg = effectiveOrgId === MARTY_ORG_ID;
   const canInvite = !permissionsLoading && hasPermission('team', 'invite');
   const canManage = !permissionsLoading && !isMartyOrg && hasPermission('team', 'manage');
+  const canViewRequests = !permissionsLoading && hasPermission('team', 'view');
   currentInviteDialog.current = inviteDialog.isOpen && canInvite
     && inviteDialog.data?.organizationId === effectiveOrgId ? inviteDialog.data : null;
   currentRoleDialog.current = roleDialog.isOpen && canManage
@@ -181,8 +194,9 @@ function TeamContent({ organizationId, currentUser }) {
   }, [effectiveOrgId]);
   const currentTeam = teamData?.organizationId === effectiveOrgId ? teamData : null;
   const loading = dataLoading || Boolean(effectiveOrgId && !currentTeam && !error);
-  const { activeMembers: teamMembers = [], pendingInvites = [], availableRoles = [] } = currentTeam || {};
+  const { activeMembers: teamMembers = [], pendingInvites = [], otherMemberships = [], availableRoles = [] } = currentTeam || {};
   const members = teamMembers.map((member) => memberForDisplay(member, currentUser));
+  const remainingMemberships = otherMemberships.map((member) => memberForDisplay(member, currentUser));
   const teamReady = Boolean(effectiveOrgId && currentTeam && !loading && !error);
   const inviteRequested = searchParams.get('invite') === '1';
   const { open: openInvite, close: closeInvite } = inviteDialog;
@@ -281,7 +295,7 @@ function TeamContent({ organizationId, currentUser }) {
   };
 
   const handleRevokeInvite = async (memberId) => {
-    if (!canManage || !teamReady) return;
+    if (!canManage || !teamReady || !pendingInvites.some((invite) => invite.id === memberId)) return;
     const revokedOrgId = effectiveOrgId;
     const applies = () => active.current && currentOrgId.current === revokedOrgId;
     if (!confirm(t('org.team.invites.actions.confirmRevoke'))) {
@@ -346,7 +360,7 @@ function TeamContent({ organizationId, currentUser }) {
               </Box>
             ) : (
               <TableContainer>
-                <Table>
+                <Table aria-label={t('org.team.members.title')}>
                   <TableHead>
                     <TableRow>
                       <TableCell>{t('org.team.members.tableHeaders.name')}</TableCell>
@@ -386,7 +400,7 @@ function TeamContent({ organizationId, currentUser }) {
           </Paper>
 
           {pendingInvites.length > 0 && (
-            <Paper>
+            <Paper sx={{ mb: 3 }}>
               <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
                 <Typography variant="h6">{t('org.team.invites.title')}</Typography>
                 <Typography variant="body2" color="text.secondary">
@@ -394,7 +408,7 @@ function TeamContent({ organizationId, currentUser }) {
                 </Typography>
               </Box>
               <TableContainer>
-                <Table>
+                <Table aria-label={t('org.team.invites.title')}>
                   <TableHead>
                     <TableRow>
                       <TableCell>{t('org.team.invites.tableHeaders.email')}</TableCell>
@@ -418,15 +432,58 @@ function TeamContent({ organizationId, currentUser }) {
                         </TableCell>
                         <TableCell>-</TableCell>
                         <TableCell align="right">
-                          {hasPermission('team', 'manage') && !isMartyOrg && (
+                          {canManage && teamReady && (
                             <IconButton
                               size="small"
                               onClick={() => handleRevokeInvite(invite.id)}
                               title={t('org.team.invites.actions.revoke')}
+                              aria-label={t('org.team.invites.actions.revoke')}
                             >
                               <CancelIcon fontSize="small" />
                             </IconButton>
                           )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Paper>
+          )}
+
+          {remainingMemberships.length > 0 && (
+            <Paper>
+              <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
+                <Typography variant="h6">{t('org.team.memberships.title')}</Typography>
+                {canViewRequests && remainingMemberships.some((member) => member.status === 'pending') && (
+                  <Button component={Link} to="/console/org/membership-requests" sx={{ mt: 1 }}>
+                    {t('org.team.memberships.reviewRequests')}
+                  </Button>
+                )}
+              </Box>
+              <TableContainer>
+                <Table aria-label={t('org.team.memberships.title')}>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>{t('org.team.members.tableHeaders.name')}</TableCell>
+                      <TableCell>{t('org.team.members.tableHeaders.email')}</TableCell>
+                      <TableCell>{t('org.team.members.tableHeaders.role')}</TableCell>
+                      <TableCell>{t('org.team.memberships.status')}</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {remainingMemberships.map((member) => (
+                      <TableRow key={member.id}>
+                        <TableCell>{getDisplayName(member)}</TableCell>
+                        <TableCell>{member.email || '-'}</TableCell>
+                        <TableCell><RoleChips roles={member.roles} /></TableCell>
+                        <TableCell>
+                          <Chip
+                            label={membershipStatusLabel(member, t)}
+                            size="small"
+                            variant="outlined"
+                            color={member.status === 'pending' ? 'warning' : 'default'}
+                          />
                         </TableCell>
                       </TableRow>
                     ))}

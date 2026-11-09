@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
+    body::Bytes,
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -18,12 +19,13 @@ use uuid::Uuid;
 
 use crate::{
     authenticate_forwarded_http_request, authenticate_http_service, ApiKey, ApiKeyScopeType,
-    CreateApiKeyCommand, CreateOrganizationCommand, ForwardedPrincipal, HttpTrustError,
-    InviteMemberCommand, JoinByCodeCommand, JoinMechanism, JoinOrganizationCommand, Member,
-    MemberStatus, Organization, OrganizationApplication, OrganizationApplicationError,
-    OrganizationAuthorizationContext, OrganizationType, RemoveMemberCommand, RevokeApiKeyCommand,
-    SetMemberRolesCommand, UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch,
-    UpdateOrganizationCommand, UpdateOrganizationPatch, ViewMode,
+    ApproveMemberCommand, CreateApiKeyCommand, CreateOrganizationCommand, DomainError,
+    ForwardedPrincipal, HttpTrustError, InviteMemberCommand, JoinByCodeCommand, JoinMechanism,
+    JoinOrganizationCommand, Member, MemberStatus, Organization, OrganizationApplication,
+    OrganizationApplicationError, OrganizationAuthorizationContext, OrganizationType,
+    RemoveMemberCommand, RevokeApiKeyCommand, SetMemberRolesCommand,
+    UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch, UpdateOrganizationCommand,
+    UpdateOrganizationPatch, ViewMode,
 };
 
 pub const CORE_ORGANIZATION_HTTP_ROUTES: &[&str] = &[
@@ -54,6 +56,7 @@ pub const MEMBERSHIP_API_HTTP_ROUTES: &[&str] = &[
     "POST /v1/organizations/{org_id}/members",
     "PATCH /v1/organizations/{org_id}/members/{member_id}",
     "DELETE /v1/organizations/{org_id}/members/{member_id}",
+    "POST /v1/organizations/{org_id}/members/{member_id}/approve",
     "GET /v1/organizations/{org_id}/api-keys",
     "POST /v1/organizations/{org_id}/api-keys",
     "DELETE /v1/organizations/{org_id}/api-keys/{key_id}",
@@ -126,6 +129,10 @@ pub fn organization_core_router(state: OrganizationHttpState) -> Router {
             patch(update_member).delete(remove_member),
         )
         .route(
+            "/v1/organizations/{organization_id}/members/{member_id}/approve",
+            post(approve_member),
+        )
+        .route(
             "/v1/organizations/{organization_id}/api-keys",
             get(list_api_keys).post(create_api_key),
         )
@@ -176,6 +183,13 @@ struct PaginationQuery {
     search: Option<String>,
     org_type: Option<String>,
     join_mechanism: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MemberPaginationQuery {
+    limit: Option<u32>,
+    offset: Option<u32>,
+    status: Option<MemberStatus>,
 }
 
 #[derive(Serialize)]
@@ -870,29 +884,33 @@ async fn get_team_snapshot(
         .list_members(organization_id)
         .await
         .map_err(application_error)?;
+    Ok(Json(team_snapshot_response(&members)))
+}
+
+fn team_snapshot_response(members: &[Member]) -> TeamSnapshotResponse {
     let active = members
         .iter()
         .filter(|member| member.status == MemberStatus::Active)
         .collect::<Vec<_>>();
     let pending = members
         .iter()
-        .filter(|member| matches!(member.status, MemberStatus::Invited | MemberStatus::Pending))
+        .filter(|member| member.status == MemberStatus::Invited)
         .collect::<Vec<_>>();
-    Ok(Json(TeamSnapshotResponse {
+    TeamSnapshotResponse {
         role_distribution: role_distribution(&active),
         members: active.into_iter().map(team_member_response).collect(),
         pending_invites: pending.into_iter().map(team_member_response).collect(),
-    }))
+    }
 }
 
 async fn list_members(
     State(state): State<OrganizationHttpState>,
     Path(organization_id): Path<Uuid>,
     headers: HeaderMap,
-    Query(query): Query<PaginationQuery>,
+    Query(query): Query<MemberPaginationQuery>,
 ) -> Result<Json<Vec<MemberResponse>>, OrganizationHttpError> {
     authorize_action(&state, &headers, organization_id, "team:view").await?;
-    let (offset, limit) = bounded_page(&query, 500)?;
+    let (offset, limit) = bounded_page(query.limit, query.offset, 500)?;
     let members = state
         .application
         .list_members(organization_id)
@@ -901,6 +919,7 @@ async fn list_members(
     Ok(Json(
         members
             .iter()
+            .filter(|member| query.status.is_none_or(|status| member.status == status))
             .skip(offset)
             .take(limit)
             .map(member_response)
@@ -956,6 +975,30 @@ async fn update_member(
     Ok(Json(member_response(&result.value)))
 }
 
+async fn approve_member(
+    State(state): State<OrganizationHttpState>,
+    Path((organization_id, member_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<MemberResponse>, OrganizationHttpError> {
+    let context = authorize_action(&state, &headers, organization_id, "team:manage").await?;
+    if !body.is_empty() {
+        return Err(invalid_request());
+    }
+    let result = state
+        .application
+        .approve_member(ApproveMemberCommand {
+            organization_id,
+            member_id,
+            approved_by: context.principal_id,
+            approved_by_source: context.source,
+            now: Utc::now(),
+        })
+        .await
+        .map_err(application_error)?;
+    Ok(Json(member_response(&result.value)))
+}
+
 async fn remove_member(
     State(state): State<OrganizationHttpState>,
     Path((organization_id, member_id)): Path<(Uuid, Uuid)>,
@@ -985,7 +1028,7 @@ async fn list_api_keys(
     Query(query): Query<PaginationQuery>,
 ) -> Result<Json<Vec<ApiKeyResponse>>, OrganizationHttpError> {
     authorize_action(&state, &headers, organization_id, "api-key:view").await?;
-    let (offset, limit) = bounded_page(&query, 500)?;
+    let (offset, limit) = bounded_page(query.limit, query.offset, 500)?;
     let api_keys = state
         .application
         .list_api_keys(organization_id)
@@ -1580,16 +1623,14 @@ fn limit(query: &PaginationQuery, maximum: u32) -> u32 {
 }
 
 fn bounded_page(
-    query: &PaginationQuery,
+    limit: Option<u32>,
+    offset: Option<u32>,
     maximum: u32,
 ) -> Result<(usize, usize), OrganizationHttpError> {
-    if query.limit.is_some_and(|limit| limit > maximum) {
+    if limit.is_some_and(|limit| limit > maximum) {
         return Err(invalid_request());
     }
-    Ok((
-        query.offset.unwrap_or(0) as usize,
-        query.limit.unwrap_or(100) as usize,
-    ))
+    Ok((offset.unwrap_or(0) as usize, limit.unwrap_or(100) as usize))
 }
 
 fn default_organization_type() -> String {
@@ -1617,6 +1658,12 @@ fn trust_error(error: HttpTrustError) -> OrganizationHttpError {
 
 pub(crate) fn application_error(error: OrganizationApplicationError) -> OrganizationHttpError {
     match error {
+        OrganizationApplicationError::Domain(DomainError::MembershipNotPending) => {
+            OrganizationHttpError {
+                status: StatusCode::CONFLICT,
+                detail: "ORGANIZATION.MEMBERSHIP_NOT_PENDING",
+            }
+        }
         OrganizationApplicationError::NotFound(_)
         | OrganizationApplicationError::MemberNotFound(_)
         | OrganizationApplicationError::RoleNotFound(_)
@@ -1670,6 +1717,31 @@ pub(crate) const fn not_found(detail: &'static str) -> OrganizationHttpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn team_snapshot_separates_invited_members_from_pending_requests_and_deactivated_members() {
+        let organization_id = Uuid::new_v4();
+        let now = Utc::now();
+        let active = Member::create(organization_id, "active", None, MemberStatus::Active, now);
+        let pending = Member::create(organization_id, "pending", None, MemberStatus::Pending, now);
+        let deactivated = Member::create(
+            organization_id,
+            "deactivated",
+            None,
+            MemberStatus::Deactivated,
+            now,
+        );
+        let invited =
+            Member::create_invitation(organization_id, "invitee@example.test", "reviewer", now);
+        let active_id = active.id.to_string();
+        let invited_id = invited.id.to_string();
+        let snapshot = team_snapshot_response(&[active, pending, deactivated, invited]);
+        assert_eq!(snapshot.members.len(), 1);
+        assert_eq!(snapshot.members[0].id, active_id);
+        assert_eq!(snapshot.pending_invites.len(), 1);
+        assert_eq!(snapshot.pending_invites[0].id, invited_id);
+        assert_eq!(snapshot.pending_invites[0].status, "invited");
+    }
 
     #[test]
     fn organization_readback_omits_absent_optional_membership_metadata() {

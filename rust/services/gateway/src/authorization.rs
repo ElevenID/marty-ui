@@ -549,6 +549,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "role",
         ),
         rule(
+            r"^/v1/organizations/[a-f0-9\-]{36}/members/[^/]+/approve$",
+            &[("POST", "team:manage")],
+            "team",
+        ),
+        rule(
             r"^/v1/organizations/[a-f0-9\-]{36}/members(?:/[^/]+)?$",
             &[
                 ("GET", "team:view"),

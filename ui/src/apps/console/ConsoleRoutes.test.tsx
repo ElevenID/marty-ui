@@ -139,7 +139,7 @@ vi.mock('../../components/console', async () => ({
   RolesPage: () => <div data-testid="roles-page" />,
   NotificationsPage: () => <div data-testid="notifications-page" />,
   MembershipRequestsPage: () => <div data-testid="membership-requests-page" />,
-  RoleEscalationRequestsPage: () => <div data-testid="role-escalation-requests-page" />,
+  RoleEscalationRequestsPage: (await import('../../components/console/org/RoleEscalationRequestsPage')).default,
   SigningKeysPage: () => <div data-testid="signing-keys-page" />,
   WebhooksPage: () => <div data-testid="webhooks-page" />,
   AuditPage: () => <div data-testid="audit-page" />,
@@ -175,6 +175,18 @@ describe('resource navigation through the console route table', () => {
     mockUseAuth.mockReturnValue({ isAuthenticated: true, isLoading: false });
     mockUseConsole.mockReturnValue({ mode: 'org', activeOrgId: 'org-1', memberships: [{ id: 'org-1' }], isLoading: false });
     mockUsePermissions.mockReturnValue({ can: () => true, isLoading: false });
+  });
+
+  it('keeps the retired Role Requests deep link useful without requiring Team access', async () => {
+    mockUsePermissions.mockReturnValue({ can: (resource: string, action: string) => resource === 'role' && action === 'view', isLoading: false });
+    const { user } = renderConsoleRoutes('/console/org/role-requests?source=bookmark');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Role change requests are not available in this console.');
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/role-requests?source=bookmark');
+    expect(screen.queryByRole('link', { name: 'View team' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('link', { name: 'View roles' }));
+    expect(await screen.findByTestId('roles-page')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/roles');
   });
 
   it('opens the operational instances page from the Flow Definitions tab', async () => {

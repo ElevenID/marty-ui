@@ -1,4 +1,20 @@
 {
+  "membershipReview": {
+    "pending": "Ausstehend",
+    "description": "Prüfen Sie ausstehende Mitgliedschaften und genehmigen Sie den Zugriff mit den bereits zugewiesenen Rollen.",
+    "signIn": "Melden Sie sich an, um Mitgliedschaftsanträge zu prüfen.",
+    "selectOrganization": "Wählen Sie eine Organisation aus, um Mitgliedschaftsanträge zu prüfen.",
+    "permissionsLoading": "Mitgliedschaftsberechtigungen werden geprüft",
+    "readDenied": "Sie haben keine Berechtigung, ausstehende Mitgliedschaften dieser Organisation anzuzeigen.",
+    "approvalOnly": "Sie können ausstehende Mitgliedschaften hier genehmigen. Eine Ablehnung ist nicht verfügbar.",
+    "viewOnly": "Sie können Anträge anzeigen, haben aber keine Berechtigung, sie zu genehmigen.",
+    "applicant": "Antragsteller",
+    "roles": "Zugewiesene Rollen",
+    "account": "Konto {{id}}",
+    "noRoles": "Keine Rollen zugewiesen",
+    "approvalFailed": "Der Mitgliedschaftsantrag konnte nicht genehmigt werden.",
+    "loadFailed": "Mitgliedschaftsanträge konnten nicht geladen werden."
+  },
 	"dashboard": {
 		"developerQuickStart": {
 			"loading": "Integrationsmetadaten werden geladen..."
@@ -288,6 +304,13 @@
 		}
 	},
 	"org": {
+		"roleEscalation": {
+			"title": "Anfragen zur Rollenänderung",
+			"unavailable": "Anfragen zur Rollenänderung sind in dieser Konsole nicht verfügbar.",
+			"management": "Benutzer mit der Berechtigung zur Rollenzuweisung können die Rollen von Mitgliedern unter „Team“ ändern. Unter „Rollen“ werden die verfügbaren Rollen und ihre Berechtigungen angezeigt.",
+			"teamLink": "Team anzeigen",
+			"rolesLink": "Rollen anzeigen"
+		},
 		"setup": {
 			"chooseTitle": "Organisation auswählen",
 			"chooseDescription": "Wählen Sie eine Organisation aus, um deren Konsole zu öffnen.",
@@ -297,6 +320,14 @@
 			"noMembershipsTitle": "Noch keine Mitgliedschaften mit Konsolenzugriff"
 		},
 		"team": {
+			"memberships": {
+				"title": "Mitgliedschaftsstatus",
+				"status": "Status",
+				"pending": "Genehmigung ausstehend",
+				"deactivated": "Deaktiviert",
+				"unknown": "Status nicht verfügbar",
+				"reviewRequests": "Mitgliedschaftsanfragen anzeigen"
+			},
 			"title": "Team",
 			"subtitle": "Teammitglieder, Rollen und Einladungen verwalten"
 		},

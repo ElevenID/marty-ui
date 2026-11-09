@@ -12,6 +12,7 @@ use sqlx::{Postgres, Transaction};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::authorization::PrincipalSource;
 use crate::cache::{OrganizationCache, OrganizationCacheError};
 use crate::catalog::{
     materialize_permission_catalog, materialize_system_roles, CatalogError, SeedError,
@@ -102,6 +103,15 @@ pub struct SetMemberRolesCommand {
     pub organization_id: Uuid,
     pub role_ids: Vec<Uuid>,
     pub updated_by: String,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApproveMemberCommand {
+    pub organization_id: Uuid,
+    pub member_id: Uuid,
+    pub approved_by: String,
+    pub approved_by_source: PrincipalSource,
     pub now: DateTime<Utc>,
 }
 
@@ -652,6 +662,68 @@ impl OrganizationApplication {
             .save_member_in_transaction(&mut transaction, &member)
             .await?;
         let event = member_added_event(&member, command.now)?;
+        self.persist_event_in_transaction(&mut transaction, &event)
+            .await?;
+        transaction.commit().await.map_err(RepositoryError::from)?;
+        let warnings = self
+            .invalidate_member_after_commit(&member.user_id, member.organization_id)
+            .await;
+        Ok(MutationResult {
+            value: member,
+            warnings,
+        })
+    }
+
+    pub async fn approve_member(
+        &self,
+        command: ApproveMemberCommand,
+    ) -> Result<MutationResult<Member>, OrganizationApplicationError> {
+        require_non_empty(&command.approved_by, "approved_by is required")?;
+        let mut transaction = self.store.begin_transaction().await?;
+        // Read status only after the row lock, so concurrent decisions cannot both win.
+        let mut member = self
+            .store
+            .member_by_id_for_update_in_transaction(&mut transaction, command.member_id)
+            .await?
+            .ok_or(OrganizationApplicationError::MemberNotFound(
+                command.member_id,
+            ))?;
+        if member.organization_id != command.organization_id {
+            return Err(OrganizationApplicationError::MemberNotFound(
+                command.member_id,
+            ));
+        }
+        // Invitations have no user_id; validate their non-Pending state first.
+        member.approve_membership(command.now)?;
+        require_non_empty(&member.user_id, "pending membership user_id is required")?;
+        let organization_exists = match self
+            .store
+            .lock_organization_for_member_review_in_transaction(
+                &mut transaction,
+                command.organization_id,
+            )
+            .await
+        {
+            Ok(exists) => exists,
+            Err(error) => {
+                // Join retries take organization -> member locks. Never wait on their
+                // parent lock while holding the member, including the later audit FK.
+                transaction
+                    .rollback()
+                    .await
+                    .map_err(RepositoryError::from)?;
+                return Err(error.into());
+            }
+        };
+        if !organization_exists {
+            return Err(OrganizationApplicationError::NotFound(
+                command.organization_id,
+            ));
+        }
+        self.store
+            .save_member_in_transaction(&mut transaction, &member)
+            .await?;
+        let event = member_approved_event(&member, &command)?;
         self.persist_event_in_transaction(&mut transaction, &event)
             .await?;
         transaction.commit().await.map_err(RepositoryError::from)?;
@@ -1708,6 +1780,28 @@ fn member_added_event(
         member.organization_id,
         data,
         now,
+    )
+}
+
+fn member_approved_event(
+    member: &Member,
+    command: &ApproveMemberCommand,
+) -> Result<OrganizationEvent, OrganizationEventError> {
+    let data = serde_json::json!({
+        "member_id": member.id.to_string(),
+        "user_id": member.user_id,
+        "roles": member.role_names(),
+        "approved_by": command.approved_by,
+        "approved_by_type": match command.approved_by_source {
+            PrincipalSource::Session => "user",
+            PrincipalSource::ApiKey => "api_key",
+        },
+    });
+    OrganizationEvent::new(
+        OrganizationEventKind::MemberApproved,
+        member.organization_id,
+        data.as_object().expect("approval event object").clone(),
+        command.now,
     )
 }
 

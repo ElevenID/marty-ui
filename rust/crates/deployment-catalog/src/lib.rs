@@ -772,6 +772,8 @@ mod tests {
 }
 
 pub mod activation_preflight;
+pub mod application_authority;
+pub mod application_tokens;
 pub mod approle;
 pub mod ca_issuer;
 pub mod generation;

@@ -172,7 +172,6 @@ export const ADMIN_VENDOR_NAV = [
       { id: 'team', label: 'Team', path: '/console/org/team', requiredPermission: { resource: 'team', action: 'view' } },
       { id: 'membership-requests', label: 'Membership Requests', path: '/console/org/membership-requests', requiredPermission: { resource: 'team', action: 'view' } },
       { id: 'roles', label: 'Roles', path: '/console/org/roles', requiredPermission: { resource: 'role', action: 'view' } },
-      { id: 'role-requests', label: 'Role Requests', path: '/console/org/role-requests', requiredPermission: { resource: 'role', action: 'view' } },
       { id: 'notifications', label: 'Notifications', path: '/console/org/notifications', requiredPermission: { resource: 'notification', action: 'view' } },
     ],
   },
