@@ -112,8 +112,10 @@ def test_current_executor_reaches_exact_current_22_start_ack_gate(tmp_path, monk
     class Journal:
         def exclusive(self, *args): return barrier
         def state(self, *args): return barrier
+    verification_contexts = []
     class Database:
         identity = {"containerId": "b" * 64}
+        baseline_refs = {"catalog": {"sha256": "c" * 64}, "proof": {"sha256": "d" * 64}, "job": {"sha256": "e" * 64}}
         engine_id = "engine"
         selection = {"binaries": binaries}
         commands = []
@@ -130,6 +132,8 @@ def test_current_executor_reaches_exact_current_22_start_ack_gate(tmp_path, monk
         def run(self): return {"actual": "test-only"}
         def node(self, mode, **kwargs):
             assert mode == "verify"
+            verification_contexts.append(kwargs["context"])
+            assert kwargs["context"]["baseline"] is self.baseline_refs
             return {"sourceCommit": D12_PASSPORT_CURRENT.ui_revision,
                     "databaseIdentity": self.identity}
     plan = {"stopSteps": [{"role": row["role"], "containerId": row["containerId"],
@@ -148,6 +152,9 @@ def test_current_executor_reaches_exact_current_22_start_ack_gate(tmp_path, monk
     monkeypatch.setattr(overlay, "compose_recreate_arguments", lambda *args, **kwargs: ["docker", "create"])
     with pytest.raises(ValueError, match="D12_ALL22_HEALTH_DEADLINE_REQUIRED"):
         executor.run()
+    assert len(verification_contexts) == 1
+    assert verification_contexts[0]["baseline"] == Database.baseline_refs
+    assert verification_contexts[0]["approvedDatabaseBeforeSha256"] == "b" * 64
     assert set(saved["d12-start-acks.private.json"]["acks"]) == D12_CURRENT_RUNTIME_ROLES
     assert "event-stream" in saved["d12-start-acks.private.json"]["acks"]
     assert "canvas-sandbox" not in saved["d12-start-acks.private.json"]["acks"]
