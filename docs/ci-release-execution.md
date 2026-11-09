@@ -29,6 +29,20 @@ credentials and request payloads. If journal finalization also fails, the first
 failure annotation remains and a separate warning identifies the incomplete
 journal; preserve the last saved dispatch record.
 
+Immediately after that durable acknowledgment, only the exact returned child ID
+may receive an initial visibility allowance: at most 60 seconds, five seconds
+between valid HTTP 404 "Not Found" observations, and at most 13 observations.
+The stage deadline and any tighter transport deadline still apply to every read,
+including the protected-main check before each observation. The first visible
+response must pass all existing child identity checks; HTTP 200 with null or
+malformed metadata is not absence. That first visible payload goes through the
+ordinary state, conclusion, title and required-job checks before any later child
+read. Once visible, the allowance is consumed and ordinary polling remains
+strict. Other HTTP errors, malformed absence evidence,
+unknown dispatch outcomes, inherited runs, automatic publisher listings and job
+reads receive no allowance. This never repeats a dispatch or discovers another
+run, and the saved journal records the bounded visibility observations.
+
 This reporting does not change source admission: protected main must still
 match the request throughout the existing release checks. A main advance stops
 the request. Preserve its original child results, and reconcile the release
