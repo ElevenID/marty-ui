@@ -41,6 +41,19 @@ def test_closed_source_and_profile_refuse_old_all29(monkeypatch):
         d12.source_packet(Path("unused.json"), "0" * 64)
 
 
+def test_current_main_three_role_profile_keeps_old_target_and_source_out():
+    scope = build.build_scope(d12.PROFILE)
+    assert scope["uiRevision"] == "449ab93ca80d147622ae61283f7d8084f7c62884"
+    assert scope["coreRevision"] == "11655e38c2dbf69bfa5bc3c873f80c5fad628723"
+    assert scope["roles"] == {"flow": "marty-flow", "gateway": "marty-gateway",
+                              "issuance-native": "marty-issuance-service"}
+    assert scope["volumes"][1] == "marty-d12-current-main-native-target"
+    assert scope["prefix"] == "marty-d12-current-main-"
+    with pytest.raises(ValueError, match="D12_FRESH_OWNED_TARGET_REQUIRED"):
+        d12.target_input({**target(), "volume": "marty-d12-current-native-target"},
+                         run_id=RUN, engine_id=ENGINE)
+
+
 def tiny_repo(tmp_path):
     repo = tmp_path / "repository"
     repo.mkdir()
