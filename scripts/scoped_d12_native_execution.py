@@ -194,6 +194,9 @@ class D12CurrentExecution:
             commands=database.commands, context={"runId": i["runId"],
                 "selectionSha256": i["selection"]["sha256"],
                 "executorSource": i["executorSource"], "rolloutProfile": CURRENT_PROFILE,
+                "sourceRevision": D12_PASSPORT_CURRENT.ui_revision,
+                "coreRevision": D12_PASSPORT_CURRENT.core_revision,
+                "baseline": database.baseline_refs,
                 "approvedDatabaseBeforeSha256": i["databaseBefore"]["sha256"],
                 "approvedEngineId": database.engine_id})
         require(verified_database["sourceCommit"] == D12_PASSPORT_CURRENT.ui_revision
