@@ -1,5 +1,6 @@
 //! Closed native command boundary for the legacy recovery mutation increment.
-//! Kept outside release dispatch until its transaction and transport audits pass.
+//! The commands accept bounded private context on stdin, never credentials or
+//! arbitrary OpenBao endpoints in command-line arguments.
 
 use super::*;
 use serde::de::DeserializeOwned;
@@ -14,7 +15,7 @@ fn decode<T: DeserializeOwned>(request: &[u8]) -> Result<T> {
     serde_json::from_value(value).map_err(|_| REFUSAL)
 }
 
-pub(super) fn contract() -> Value {
+pub fn contract() -> Value {
     json!({"schema":staging::STAGE_SCHEMA,"legacyRuntimeSourceSha":LEGACY_RUNTIME,
         "certificateReplacements":18,"tokenReplacements":33,"replacementFiles":51,
         "existingSecretTargets":34,"maximumReplacementTtlSeconds":TTL,
@@ -22,7 +23,7 @@ pub(super) fn contract() -> Value {
         "qualificationSchema":qualification::SCHEMA,"planLifetimeSeconds":qualification::PLAN_SECONDS})
 }
 
-pub(super) fn targets(request: &[u8]) -> Result<Value> {
+pub fn targets(request: &[u8]) -> Result<Value> {
     let context: Context = decode(request)?;
     let binding = binding(&context)?;
     Ok(
@@ -42,7 +43,7 @@ fn connect(context: &Context) -> Result<OpenBaoHttp> {
     .map_err(|_| REFUSAL)
 }
 
-pub(super) async fn stage(request: &[u8]) -> Result<Value> {
+pub async fn stage(request: &[u8]) -> Result<Value> {
     let stage: staging::Staging = decode(request)?;
     let bao = connect(&stage.context)?;
     tokio::time::timeout(
@@ -53,7 +54,7 @@ pub(super) async fn stage(request: &[u8]) -> Result<Value> {
     .map_err(|_| staging::RECOVERY)?
 }
 
-pub(super) async fn qualify(request: &[u8]) -> Result<Value> {
+pub async fn qualify(request: &[u8]) -> Result<Value> {
     let request: qualification::Qualification = decode(request)?;
     let bao = connect(&request.context)?;
     tokio::time::timeout(

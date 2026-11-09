@@ -334,7 +334,171 @@ def test_activation_exports_all_evidence_and_preimages_before_exact_34_guarded_w
     assert "PRIVATE_" not in public.out + public.err
 
 
-@pytest.mark.parametrize("failure", ["stage-contract", "stage-hash", "plan-hash", "missing-secret", "remote-root-drift"])
+def sealed_reload_fixture(request):
+    """Exercise the real private closure at the isolated caller boundary."""
+    import reload_kubernetes_legacy_workloads as reload
+    evidence = reload.Evidence(request.output)
+    evidence.write("projection-proof-00.json", bootstrap.encoded({"syntheticCallerBoundary": True}))
+    private_evidence = evidence.complete({"schema": reload.SCHEMA, "binding": request.binding,
+        "status": "new-ready-pods-with-matching-projected-credentials",
+        "privatePlanSha256": request.qualified_plan_sha256, "reloadCount": 16,
+        "inMemoryProviderUseProved": False, "fullEnvironmentHealthAssessed": False})
+    return {"schema": reload.SCHEMA, "status": "sixteen-ready-pods-with-matching-projections", "reloadCount": 16,
+            "privateEvidenceWritten": True, "privateEvidence": private_evidence,
+            "fullEnvironmentHealthAssessed": False, "inMemoryProviderUseProved": False}
+
+
+def test_explicit_reload_receives_verified_postimages_after_durable_credential_completion(recovery_flow, monkeypatch, capsys):
+    import reload_kubernetes_legacy_workloads as reload
+    item = recovery_flow
+    activate(item)
+    item.args.reload_owned_workloads = True
+    calls = []
+
+    def run(request, transport, freshness, phase_guard):
+        assert len(item.patch_calls) == 34 and len(item.deletions) == 1
+        assert request.output == item.args.operation_dir / "reload"
+        assert request.original == item.original and request.binding == item.bound
+        assert request.qualified_plan == item.plan_bytes
+        assert request.qualified_plan_sha256 == recovery.sha256(item.plan_bytes)
+        assert {name: json.loads(raw) for name, raw in request.verified_secrets.items()} == item.secrets
+        credential = json.loads((item.args.operation_dir / "recovery-complete.json").read_bytes())
+        assert credential["verifiedSecretCount"] == 34 and credential["workloadsRestarted"] is False
+        freshness.check()
+        phase_guard(SimpleNamespace(namespace=transport.namespace))
+        calls.append(request)
+        return sealed_reload_fixture(request)
+
+    monkeypatch.setattr(reload, "reload_workloads", run)
+    recovery.recover(item.args)
+    assert len(calls) == 1
+    combined = json.loads((item.args.operation_dir / "recovery-reload-complete.json").read_bytes())
+    assert combined["reload"]["reloadCount"] == 16 and combined["fullEnvironmentHealthAssessed"] is False
+    assert combined["credentialCompletionSha256"] == recovery.sha256((item.args.operation_dir / "recovery-complete.json").read_bytes())
+    evidence = combined["reload"]["privateEvidence"]
+    assert evidence["completionSha256"] == recovery.sha256((item.args.operation_dir / "reload/reload-complete.json").read_bytes())
+    reload.verify_completed_evidence(item.args.operation_dir / "reload", combined["reload"], item.bound,
+                                     recovery.sha256(item.plan_bytes))
+    assert "16 new Ready Pods" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mutation", ["proof", "missing-proof", "extra-record", "proof-mode", "completion", "directory-mode"])
+def test_post_return_journal_drift_prevents_the_callers_combined_completion(recovery_flow, monkeypatch, capsys, mutation):
+    import reload_kubernetes_legacy_workloads as reload
+    item = recovery_flow
+    activate(item)
+    item.args.reload_owned_workloads = True
+    state = SimpleNamespace(returned=False, tampered=False)
+
+    def run(request, *_):
+        result = sealed_reload_fixture(request)
+        state.returned = True
+        return result
+
+    original = recovery.inspection.sources.recheck
+
+    def retained(expected):
+        original(expected)
+        if not state.returned or state.tampered:
+            return
+        output = item.args.operation_dir / "reload"
+        proof = output / "projection-proof-00.json"
+        if mutation == "proof":
+            proof.write_bytes(proof.read_bytes() + b"\n")
+        elif mutation == "missing-proof":
+            proof.unlink()
+        elif mutation == "extra-record":
+            bootstrap.write_new(output / "observations/untracked.json", b"{}\n")
+        elif mutation == "proof-mode":
+            proof.chmod(0o644)
+        elif mutation == "completion":
+            completion = output / "reload-complete.json"
+            completion.write_bytes(completion.read_bytes() + b"\n")
+        elif mutation == "directory-mode":
+            (output / "observations").chmod(0o755)
+        state.tampered = True
+
+    monkeypatch.setattr(reload, "reload_workloads", run)
+    monkeypatch.setattr(recovery.inspection.sources, "recheck", retained)
+    with pytest.raises(bootstrap.BootstrapError):
+        recovery.recover(item.args)
+    assert state.returned and state.tampered and len(item.patch_calls) == 34 and len(item.deletions) == 1
+    assert not (item.args.operation_dir / "recovery-reload-complete.json").exists()
+    assert (item.args.operation_dir / "recovery-complete.json").exists()
+    stopped = json.loads((item.args.operation_dir / "recovery-reload-stopped.json").read_bytes())
+    assert stopped["credentialActivationComplete"] is True and stopped["workloadReloadCompletionAccepted"] is False
+    assert stopped["automaticReplay"] is False and "16 new Ready Pods" not in capsys.readouterr().out
+
+
+def test_combined_receipt_write_race_preserves_evidence_and_refuses_success(recovery_flow, monkeypatch, capsys):
+    import reload_kubernetes_legacy_workloads as reload
+    item = recovery_flow
+    activate(item)
+    item.args.reload_owned_workloads = True
+    monkeypatch.setattr(reload, "reload_workloads", lambda request, *_: sealed_reload_fixture(request))
+    original = bootstrap.write_new
+
+    def written(path, raw, *args, **kwargs):
+        original(path, raw, *args, **kwargs)
+        if path == item.args.operation_dir / "recovery-reload-complete.json":
+            proof = item.args.operation_dir / "reload/projection-proof-00.json"
+            proof.write_bytes(proof.read_bytes() + b"\n")
+
+    monkeypatch.setattr(bootstrap, "write_new", written)
+    with pytest.raises(bootstrap.BootstrapError):
+        recovery.recover(item.args)
+    assert (item.args.operation_dir / "recovery-reload-stopped.json").exists()
+    assert (item.args.operation_dir / "recovery-reload-complete.json").exists()
+    assert (item.args.operation_dir / "recovery-complete.json").exists()
+    assert "16 new Ready Pods" not in capsys.readouterr().out
+
+
+def test_reload_failure_keeps_the_completed_credential_receipt_without_claiming_full_recovery(recovery_flow, monkeypatch, capsys):
+    import reload_kubernetes_legacy_workloads as reload
+    item = recovery_flow
+    activate(item)
+    item.args.reload_owned_workloads = True
+
+    def fail(request, transport, freshness, phase_guard):
+        phase_guard(SimpleNamespace(namespace=transport.namespace))
+        bootstrap.private_directory(request.output)
+        bootstrap.write_new(request.output / "reload-stopped.json", bootstrap.encoded({"reloadComplete": False}))
+        raise bootstrap.BootstrapError("synthetic uncertain reload; preserve evidence")
+
+    monkeypatch.setattr(reload, "reload_workloads", fail)
+    with pytest.raises(bootstrap.BootstrapError, match="uncertain reload"):
+        recovery.recover(item.args)
+    credential = json.loads((item.args.operation_dir / "recovery-complete.json").read_bytes())
+    assert credential["activation"] is True and credential["verifiedSecretCount"] == 34
+    assert credential["workloadsRestarted"] is False and len(item.deletions) == 1
+    assert (item.args.operation_dir / "reload/reload-stopped.json").is_file()
+    assert not (item.args.operation_dir / "recovery-reload-complete.json").exists()
+    assert "Verified 34" not in capsys.readouterr().out
+
+
+def test_incomplete_secret_activation_never_calls_workload_reload(recovery_flow, monkeypatch):
+    import reload_kubernetes_legacy_workloads as reload
+    item = recovery_flow
+    activate(item)
+    item.args.reload_owned_workloads = True
+    item.patch_failure, item.patch_failure_index = "timeout-after-write", 1
+    monkeypatch.setattr(reload, "reload_workloads", lambda *_: pytest.fail("partial Secret activation cannot restart workloads"))
+    with pytest.raises(bootstrap.BootstrapError):
+        recovery.recover(item.args)
+    assert not (item.args.operation_dir / "recovery-complete.json").exists()
+    assert not (item.args.operation_dir / "recovery-reload-complete.json").exists()
+
+
+@pytest.mark.parametrize("reload_value", [True, 1, "yes"])
+def test_owned_reload_needs_explicit_secret_activation_before_any_private_attempt(recovery_flow, reload_value):
+    item = recovery_flow
+    item.args.reload_owned_workloads = reload_value
+    with pytest.raises(bootstrap.BootstrapError, match="reload requires explicit existing-Secret activation"):
+        recovery.recover(item.args)
+    assert not item.args.operation_dir.exists() and not item.creates
+
+
+@pytest.mark.parametrize("failure", ["source-mismatch", "stage-contract", "stage-hash", "plan-hash", "missing-secret", "remote-root-drift"])
 def test_contract_hash_target_or_root_failures_prevent_activation(recovery_flow, failure):
     item = recovery_flow
     activate(item)
@@ -343,7 +507,7 @@ def test_contract_hash_target_or_root_failures_prevent_activation(recovery_flow,
         recovery.recover(item.args)
     assert not item.patch_calls
     assert not (item.args.operation_dir / "recovery-complete.json").exists()
-    if failure == "stage-contract":
+    if failure in ("source-mismatch", "stage-contract"):
         assert not item.creates and "openbao-initialization.json" not in item.reads
 
 

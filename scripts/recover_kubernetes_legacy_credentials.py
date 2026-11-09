@@ -3,8 +3,9 @@
 
 The signed native owner inspects, stages same-scope credentials and freshly
 qualifies a closed existing-Secret plan. Private evidence is exported before
-optional activation. Choose --stage-only or --activate-existing-secrets; this
-command has no replay, resume, rollback, enrollment or workload restart mode.
+optional activation. Choose --stage-only or --activate-existing-secrets; the
+latter can explicitly add --reload-owned-workloads. This command has no replay,
+resume, rollback or enrollment mode.
 The original retained state is read-only. Keep the private operation directory
 on encrypted operator storage; it contains credentials and opaque API evidence.
 """
@@ -320,10 +321,15 @@ def verify_patch_reply(raw: bytes, expected: dict, original: dict) -> dict:
 
 def recover_locked(args: argparse.Namespace) -> None:
     state, operation = args.state_dir, args.operation_dir
+    reload_requested = getattr(args, "reload_owned_workloads", False)
     records = inspection.retained_records(state, args.chart_source_sha)
     complete, initialize, metadata, binding, pull_secrets = records
     bound = full_binding(complete, binding, args.chart_source_sha)
     original, selected, operator_bytes = inspection.authenticate(args, complete)
+    source_binding = inspection.sources.authenticate(args.recovery_assets, selected["release"])
+    source_record = bootstrap.encoded({"schema": inspection.sources.SCHEMA,
+        "recoveryRuntime": selected["release"], "files": source_binding})
+    bootstrap.write_new(operation / "source-authenticated.json", source_record)
     stage_contract(operation / "marty-deploy")
     snapshot = private.current_snapshot(state / "credentials")
     bootstrap.require("openbao_tls_ca_cert" in snapshot, "retained OpenBao trust is unavailable")
@@ -351,6 +357,7 @@ def recover_locked(args: argparse.Namespace) -> None:
     bootstrap.write_new(operation / "recovery-requested.json", bootstrap.encoded({
         "schema": "marty.kubernetes-legacy-recovery-request/v1", "binding": bound,
         "mode": "activate-existing-secrets" if args.activate_existing_secrets else "stage-only",
+        "reloadOwnedWorkloads": reload_requested,
         "originalRuntime": original["release"], "recoveryRuntime": selected["release"],
         "openbao": openbao, "pod": expected, "automaticReplay": False,
     }))
@@ -362,8 +369,10 @@ def recover_locked(args: argparse.Namespace) -> None:
     producer_deadline = time.monotonic() + 1200
     completed = False
     retained_outputs = {operation / "kubeconfig": (config, 0o600), operation / "marty-deploy": (operator_bytes, 0o700),
-                        operation / "current-snapshot.tar": (archive, 0o600)}
+                        operation / "current-snapshot.tar": (archive, 0o600),
+                        operation / "source-authenticated.json": (source_record, 0o600)}
     retained_candidate = None
+    verified_postimages = {}
     try:
         created = transport.kubectl("legacy producer creation", "create", "-f", "-", "-o", "json", data=bootstrap.encoded(expected))
         bootstrap.require(0 < len(created) <= 1024 * 1024, "created producer response exceeds private bounds")
@@ -382,6 +391,7 @@ def recover_locked(args: argparse.Namespace) -> None:
         bootstrap.write_new(operation / "producer-admitted.json", bootstrap.encoded({"uid": uid, "spec": baseline}))
 
         def retained_consistency() -> None:
+            inspection.sources.recheck(source_binding)
             bootstrap.require(private.current_snapshot(state / "credentials") == snapshot,
                               "retained original credentials changed during recovery")
             bootstrap.require(private.private_bytes(state / "openbao-initialization.json", 65536, {0o400})[0] == initialization,
@@ -539,21 +549,30 @@ def recover_locked(args: argparse.Namespace) -> None:
                 freshness.check()
                 phase()
                 freshness.remaining()
-                bootstrap.write_new(activation / f"intent-{index:02}.json", bootstrap.encoded({
+                intent = bootstrap.encoded({
                     "schema": "marty.kubernetes-legacy-secret-patch-intent/v1", "binding": bound,
                     "name": entry["name"], "uid": entry["uid"], "resourceVersion": entry["resourceVersion"],
                     "privatePlanSha256": sha256(plan_bytes), "patchSha256": sha256(bootstrap.encoded(entry["patch"])),
                     "validBeforeUnixSeconds": plan["validBeforeUnixSeconds"], "attemptedAtUnixSeconds": int(time.time()),
-                }))
+                })
+                intent_path = activation / f"intent-{index:02}.json"
+                bootstrap.write_new(intent_path, intent)
+                retained_outputs[intent_path] = (intent, 0o600)
                 timeout = min(30, freshness.remaining())
                 progress["activationAttempted"] = True
-                raw = capture_patch(transport, entry["name"], entry["patch"], activation / f"response-{index:02}.json", timeout)
+                response_path = activation / f"response-{index:02}.json"
+                raw = capture_patch(transport, entry["name"], entry["patch"], response_path, timeout)
+                retained_outputs[response_path] = private.private_bytes(response_path, 5 * 1024 * 1024, {0o600})
                 after = verify_patch_reply(raw, expected_after[entry["name"]], originals[entry["name"]])
                 progress["verifiedSecrets"].append(entry["name"])
-                bootstrap.write_new(activation / f"verified-{index:02}.json", bootstrap.encoded({
+                verified_postimages[entry["name"]] = raw
+                verified = bootstrap.encoded({
                     "name": entry["name"], "uid": after["metadata"]["uid"],
                     "resourceVersion": after["metadata"]["resourceVersion"], "responseSha256": sha256(raw),
-                }))
+                })
+                verified_path = activation / f"verified-{index:02}.json"
+                bootstrap.write_new(verified_path, verified)
+                retained_outputs[verified_path] = (verified, 0o600)
                 freshness.check()
             phase()
             freshness.check()
@@ -591,15 +610,52 @@ def recover_locked(args: argparse.Namespace) -> None:
     inspection.namespace_identity(transport, binding)
     inspection.same(inspection.openbao_identity(transport, original["images"]["openbao_didcomm"], uid=openbao["uid"]),
                     openbao, "retained OpenBao pod changed after recovery")
-    bootstrap.write_new(operation / "recovery-complete.json", bootstrap.encoded({
+    credential_completion = bootstrap.encoded({
         "schema": "marty.kubernetes-legacy-recovery-completion/v1", "binding": bound,
         "originalRuntime": original["release"], "recoveryRuntime": selected["release"],
         "status": "existing-secrets-activated" if args.activate_existing_secrets else "staged-and-qualified-not-activated",
         "credentialsIssued": True, "activation": bool(args.activate_existing_secrets),
         "verifiedSecretCount": len(progress["verifiedSecrets"]), "workloadsRestarted": False,
         "privatePlanSha256": sha256(plan_bytes), "podRemoved": True,
-    }))
-    if args.activate_existing_secrets:
+    })
+    bootstrap.write_new(operation / "recovery-complete.json", credential_completion)
+    retained_outputs[operation / "recovery-complete.json"] = (credential_completion, 0o600)
+    if reload_requested:
+        # The producer was deleted after exporting its complete private evidence.
+        # Reload uses only the original images and the verified Secret postimages.
+        from reload_kubernetes_legacy_workloads import ReloadRequest, reload_workloads, verify_completed_evidence
+
+        def reload_phase(_bounded_transport) -> None:
+            # All local reads are bounded. The reload owner itself checks the
+            # namespace and OpenBao through its capped cluster transport.
+            retained_consistency()
+
+        try:
+            result = reload_workloads(ReloadRequest(operation / "reload", original, bound, openbao["uid"],
+                plan_bytes, sha256(plan_bytes), verified_postimages), transport, freshness, reload_phase)
+            verify_completed_evidence(operation / "reload", result, bound, sha256(plan_bytes))
+            retained_consistency()
+            verify_completed_evidence(operation / "reload", result, bound, sha256(plan_bytes))
+            combined = bootstrap.encoded({
+                "schema": "marty.kubernetes-legacy-recovery-reload-completion/v1", "binding": bound,
+                "credentialCompletionSha256": sha256(credential_completion), "privatePlanSha256": sha256(plan_bytes),
+                "reload": result, "fullEnvironmentHealthAssessed": False, "inMemoryProviderUseProved": False,
+            })
+            combined_path = operation / "recovery-reload-complete.json"
+            bootstrap.write_new(combined_path, combined)
+            retained_outputs[combined_path] = (combined, 0o600)
+            retained_consistency()
+            verify_completed_evidence(operation / "reload", result, bound, sha256(plan_bytes))
+        except Exception:
+            bootstrap.write_new(operation / "recovery-reload-stopped.json", bootstrap.encoded({
+                "schema": "marty.kubernetes-legacy-recovery-reload-stopped/v1", "binding": bound,
+                "credentialActivationComplete": True, "workloadReloadCompletionAccepted": False,
+                "status": "incomplete-preserve-private-evidence", "automaticReplay": False,
+            }))
+            raise
+        print("Verified 34 existing Secret updates and 16 new Ready Pods with matching credential projections. "
+              "Full-environment health and end-to-end checks remain separate.")
+    elif args.activate_existing_secrets:
         print("Verified 34 existing Secret updates. Private recovery evidence is retained; workload restart remains a separate step.")
     else:
         print("Staged and qualified 51 same-scope replacements. Private recovery evidence is retained; activation was not requested.")
@@ -609,6 +665,9 @@ def recover(args: argparse.Namespace) -> None:
     bootstrap.require(os.name == "posix", "this private recovery transport requires Linux")
     bootstrap.require(type(args.stage_only) is bool and type(args.activate_existing_secrets) is bool
                       and args.stage_only != args.activate_existing_secrets, "choose exactly one explicit recovery mode")
+    reload_requested = getattr(args, "reload_owned_workloads", False)
+    bootstrap.require(type(reload_requested) is bool and (not reload_requested or args.activate_existing_secrets),
+                      "owned workload reload requires explicit existing-Secret activation")
     bootstrap.require(not args.operation_dir.is_relative_to(args.state_dir)
                       and not args.state_dir.is_relative_to(args.operation_dir),
                       "operation directory must be separate from retained state")
@@ -628,6 +687,8 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--stage-only", action="store_true")
     mode.add_argument("--activate-existing-secrets", action="store_true")
+    parser.add_argument("--reload-owned-workloads", action="store_true",
+                        help="after complete Secret activation, reload only the 16 original credential consumers")
     try:
         recover(parser.parse_args(argv))
     except (bootstrap.BootstrapError, ValueError, OSError, KeyError, TypeError,

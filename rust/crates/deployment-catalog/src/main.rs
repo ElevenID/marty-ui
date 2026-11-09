@@ -741,6 +741,44 @@ fn run() -> Result<(), String> {
                 .map_err(|_| REFUSAL)
             }
             #[cfg(target_os = "linux")]
+            Some("kubernetes-legacy-recovery-stage-contract") if args.len() == 2 => {
+                serde_json::to_writer(
+                    std::io::stdout(),
+                    &marty_deployment_catalog::kubernetes_legacy_recovery::stage_contract(),
+                )
+                .map_err(|_| REFUSAL)
+            }
+            #[cfg(target_os = "linux")]
+            Some(
+                command @ ("kubernetes-legacy-recovery-targets"
+                | "kubernetes-legacy-recovery-stage"
+                | "kubernetes-legacy-recovery-qualify"),
+            ) if args.len() == 2 => {
+                use marty_deployment_catalog::kubernetes_legacy_recovery as recovery;
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(512 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 512 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let summary = if command == "kubernetes-legacy-recovery-targets" {
+                    recovery::secret_targets(&input)?
+                } else {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|_| REFUSAL)?;
+                    if command == "kubernetes-legacy-recovery-stage" {
+                        runtime.block_on(recovery::stage_candidate(&input))?
+                    } else {
+                        runtime.block_on(recovery::qualify_candidate(&input))?
+                    }
+                };
+                serde_json::to_writer(std::io::stdout(), &summary).map_err(|_| REFUSAL)
+            }
+            #[cfg(target_os = "linux")]
             Some("kubernetes-legacy-recovery-target") if args.len() == 4 => {
                 let summary = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -1427,6 +1465,8 @@ fn main() {
             marty_deployment_catalog::keycloak::RECOVERY,
             marty_deployment_catalog::ca_issuer::RECOVERY,
             marty_deployment_catalog::beta_rehearsal::RECOVERY,
+            #[cfg(target_os = "linux")]
+            marty_deployment_catalog::kubernetes_legacy_recovery::RECOVERY,
         ]
         .contains(&error.as_str())
         {

@@ -1,6 +1,6 @@
 //! Bounded staging after an independently retained inspection. No Kubernetes
 //! write, enrollment, key/CA/role/ACL mutation or original-generation edit.
-//! Initially compiled only by tests; no release CLI dispatch exists yet.
+//! Called only through the closed native command boundary after inspection.
 
 use super::*;
 use crate::{application_authority::legacy_recovery_leaf, operator_http::builder};

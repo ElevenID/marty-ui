@@ -29,6 +29,7 @@ import tarfile
 import uuid
 
 import bootstrap_kubernetes_openbao as bootstrap
+import kubernetes_legacy_recovery_sources as sources
 import stage_kubernetes_application_credentials as private
 
 
@@ -320,6 +321,10 @@ def inspect_locked(args: argparse.Namespace) -> None:
     state, operation = args.state_dir, args.operation_dir
     complete, initialize, metadata, binding, pull_secrets = retained_records(state, args.chart_source_sha)
     original, recovery, operator_bytes = authenticate(args, complete)
+    source_binding = sources.authenticate(args.recovery_assets, recovery["release"])
+    bootstrap.write_new(operation / "source-authenticated.json", bootstrap.encoded({
+        "schema": sources.SCHEMA, "recoveryRuntime": recovery["release"], "files": source_binding,
+    }))
     snapshot = private.current_snapshot(state / "credentials")
     bootstrap.require("openbao_tls_ca_cert" in snapshot, "retained OpenBao trust is unavailable")
     archive = private.archive_snapshot(snapshot)
@@ -373,6 +378,7 @@ def inspect_locked(args: argparse.Namespace) -> None:
         bootstrap.write_new(operation / "producer-admitted.json", bootstrap.encoded({"uid": uid, "spec": baseline}))
 
         def phase() -> dict:
+            sources.recheck(source_binding)
             observed_namespace = namespace_identity(transport, binding)
             same(openbao_identity(transport, original["images"]["openbao_didcomm"], uid=openbao["uid"]), openbao,
                  "retained OpenBao pod changed during inspection")
@@ -457,6 +463,7 @@ def inspect_locked(args: argparse.Namespace) -> None:
                       "retained credentials changed during inspection")
     bootstrap.require(private.private_bytes(state / "openbao-initialization.json", 65536, {0o400})[0] == initialization,
                       "retained initialization changed during inspection")
+    sources.recheck(source_binding)
     namespace_identity(transport, binding)
     same(openbao_identity(transport, original["images"]["openbao_didcomm"], uid=openbao["uid"]), openbao,
          "retained OpenBao pod changed during inspection")

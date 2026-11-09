@@ -238,12 +238,35 @@ merged change therefore needs a matching signed nightly or stable release
 before this adapter can run against an installation. The installed application
 images remain the original runtime during credential recovery.
 
-## Mutation checkpoint and private evidence
+The recovery helper scripts, their actual local Python import closure and the
+two Kubernetes catalogs are explicit assets of that existing selfhost bundle.
+After the normal signature/provenance verification, the adapter compares its
+local helper and catalog bytes with the bundle bound by the verified installer
+inventory. Missing, duplicated, aliased or changed source files prevent access
+to retained root authority. The source hashes are retained privately and checked
+again through the operation. This is consistency with the existing authenticated
+inventory, not an alternate bundle acceptance path; the initial operator
+invocation and Python interpreter remain trusted inputs. Packaged import tests
+exercise the helpers from an isolated extracted source tree without a checkout
+fallback, and native packaging tests verify the asset bytes, marker and ZIP.
 
-The next native checkpoint contains staging, candidate qualification and a pure
-Secret planner under test-only module wiring. It adds no release dispatch yet.
-The separate mutation increment requires its own independent audits before that
-wiring is enabled and a signed recovery artifact is produced.
+## Native staging and private evidence
+
+The native boundary provides four explicit commands: the public
+`kubernetes-legacy-recovery-stage-contract`, the closed Secret inventory
+`kubernetes-legacy-recovery-targets`, `kubernetes-legacy-recovery-stage`, and
+`kubernetes-legacy-recovery-qualify`. The Kubernetes adapter supplies their
+bounded private context through stdin. These commands accept no extra path,
+credential, endpoint or lifetime arguments. The stage and qualification commands
+retain their fixed ten-minute and five-minute operation bounds respectively.
+Neither command performs a Kubernetes write. An incomplete native staging or
+qualification attempt exits with the existing recovery-required status code 3.
+
+The original inspection contract remains read-only: its `mutationAvailable`
+field describes inspection itself. Production dispatch, the activation caller
+and their packaged source closure require two independent audits and a matching
+signed release before live use; test-only approval of an earlier checkpoint is
+not approval of that dispatch boundary.
 
 Staging has a fixed inventory of **18 certificates and 33 tokens**. Every leaf
 retains its subject, SANs, key usage, extended key usage, issuer and signer SPKI.
@@ -308,6 +331,83 @@ responses, oversized/truncated bodies, incorrect returned credentials, drift
 after issuance, stale private evidence and Secret state, and refusal to replay
 a completed or partial operation. These checks do not constitute a live cluster
 recovery result.
+
+## Explicit activation and bounded workload reload
+
+`recover_kubernetes_legacy_credentials.py` requires either `--stage-only` or
+`--activate-existing-secrets`. Stage-only still issues the bounded replacements
+and preserves its candidate; it does not update Kubernetes Secrets. Both modes
+require the same original and selected signed artifact closures and exact source
+and run identities shown by `--help`. There is no resume, replay or rollback flag.
+
+`--reload-owned-workloads` is accepted only with explicit Secret activation.
+The caller first verifies all 34 Secret update responses, exports the complete
+native evidence, removes the bounded producer and writes the credential
+completion receipt. It then calls the narrow reload adapter while retaining the
+original state lock. A reload failure leaves that credential completion receipt
+and the reload's partial or uncertain evidence intact. It does not reissue
+credentials, roll back Secrets or repeat a Deployment patch automatically.
+
+The reload inventory is exactly these existing Deployments: `auth`,
+`organization`, `credential-template`, `gateway`, `verification`, `notification`,
+`compliance-profile`, `presentation-policy`, `deployment-profile`, `flow`,
+`revocation-profile`, `event-stream`, `issuance-native`, `signing-keys`,
+`canvas-sync-worker` and `keycloak`. Original authenticated image references,
+Helm ownership, release annotations, Deployment UIDs/resource versions and full
+Pod templates are admitted before the first restart. Only a unique annotation
+under each Pod template changes. OpenBao, PostgreSQL, Redis, unrelated workloads,
+Jobs, Helm releases and migration or enrollment state are not changed.
+
+The five-minute qualification deadline must remain valid before every restart
+patch. Its remaining wall-clock and monotonic time is recomputed after the final
+journal scan and command preparation, immediately before dispatch, and caps
+that request together with the current reload budget. One separate 600-second
+monotonic budget bounds the active reload owner
+through completion sealing and return, including admission, guards, cluster
+calls, readiness waits and credential probes. The adapter follows each new Pod through its ReplicaSet to the original
+Deployment, refuses concurrent rollout or injected configuration, and requires
+one new Ready replica. It rechecks all 34 Secret UID/resource-version/data
+bindings and the selected controller/Pod inventory around each probe.
+
+The reload journal is a closed private inventory. Every intent, opaque reply,
+observation and projection proof is bound to its exact bytes and original file
+identity. Before and after cluster calls, the adapter checks the complete file
+set, caller ownership, private modes, single links, directory identity and
+immutable file timestamps. It rereads all SHA-256 bindings before later restart
+patches, accepting projection proofs and sealing completion. Missing, changed,
+additional or unsafe records stop continuation. A newly returned opaque patch
+reply is retained before checking earlier records when the original private
+directories remain safe; it is never written through a changed directory.
+
+The private reload receipt binds the complete preceding journal. Its exact
+receipt hash and file binding are returned to the caller, which verifies the
+entire closed journal after return and again around writing the combined
+completion receipt. The private receipt states the unchanged 600-second active
+reload budget, 8,192-observation and 96-MiB limits, plus the closed 16,600-file
+ceiling. Inventory scans and full hash reads within the active reload owner
+check that same monotonic deadline. The caller's later local verification
+passes retain the 96-MiB and 16,600-record bounds but do not share that elapsed
+time cap; they make no additional cluster calls or workload mutations. The
+final receipt and a stopped record have reserved byte capacity.
+A failure preserves the completed credential receipt and
+records that reload completion was not accepted. A write-time race can leave a
+completion file alongside the stopped record; that attempt is incomplete, and
+the stopped record and failed hash/custody checks must not be ignored. These
+are bindings for the active private attempt, not a replay or restore mechanism.
+
+The probes hash only changed Secret-mounted files and exact changed
+`secretKeyRef` environment values inside the new Pods. The command checks for
+`sha256sum` and `printenv` and fails if they are unavailable. Values never appear
+in command arguments or public output. The private result proves matching
+projected bytes and stable observed Pod/container identities. It does not prove
+an application's in-memory provider state or equate runtime imageID formatting
+with the authenticated published image digest.
+
+Credential completion, reload completion and full environment health are
+distinct results. The combined completion receipt appears only after all 16
+replacement Pods meet the reload checks. Independent service health and
+end-to-end application/UX checks are still required before calling the
+development environment recovered.
 
 ## Later enrollment and runtime upgrade boundary
 

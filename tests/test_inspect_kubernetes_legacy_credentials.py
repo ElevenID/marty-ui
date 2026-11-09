@@ -265,6 +265,20 @@ def flow(tmp_path, monkeypatch):
 
     monkeypatch.setattr(bootstrap, "prepare", prepare)
     monkeypatch.setattr(bootstrap, "authenticated_bootstrap_inputs", authenticated)
+    def authenticated_sources(assets, identity):
+        assert item.auth_calls == 2 and assets == args.recovery_assets and identity == recovery["release"]
+        item.events.append("authenticated-source-match")
+        if item.failure == "source-mismatch":
+            raise bootstrap.BootstrapError("synthetic authenticated source mismatch")
+        return {"synthetic-reviewed-source": "a" * 64}
+
+    def source_recheck(expected):
+        assert expected == {"synthetic-reviewed-source": "a" * 64}
+        if item.drift == "source-after-target" and item.target_calls:
+            raise bootstrap.BootstrapError("synthetic source drift after target admission")
+
+    monkeypatch.setattr(inspection.sources, "authenticate", authenticated_sources)
+    monkeypatch.setattr(inspection.sources, "recheck", source_recheck)
     monkeypatch.setattr(inspection.subprocess, "run", process)
     monkeypatch.setattr(inspection.shutil, "which", lambda name: "/synthetic/kubectl")
     monkeypatch.setattr(bootstrap.secrets, "token_hex", lambda length: "abcdef012345")
@@ -295,7 +309,7 @@ def test_inspection_authenticates_both_closures_probes_before_root_and_preserves
     assert ROOT_TOKEN.decode() not in public and hashlib.sha256(ROOT_TOKEN).hexdigest() not in public
 
 
-@pytest.mark.parametrize("failure", ["authenticate-1", "authenticate-2", "build-identity"])
+@pytest.mark.parametrize("failure", ["authenticate-1", "authenticate-2", "build-identity", "source-mismatch"])
 def test_artifact_authentication_or_build_identity_failure_precedes_cluster_or_root_access(flow, failure):
     flow.failure = failure
     with pytest.raises((ValueError, bootstrap.BootstrapError)):
@@ -356,6 +370,15 @@ def test_wrong_cluster_confirmation_blocks_private_upload(flow):
         inspection.inspect(flow.args)
     assert not flow.imports and inspection.REMOTE_ROOT not in dict(flow.uploads)
     assert flow.native_calls == 0 and len(flow.deletions) == 1
+
+
+def test_source_drift_after_target_admission_blocks_authority_upload(flow):
+    flow.drift = "source-after-target"
+    with pytest.raises(bootstrap.BootstrapError):
+        inspection.inspect(flow.args)
+    assert flow.target_calls == 1 and flow.native_calls == 0
+    assert not flow.imports and inspection.REMOTE_ROOT not in dict(flow.uploads)
+    assert not (flow.args.operation_dir / "inspection-complete.json").exists()
 
 
 def test_live_openbao_digest_must_match_authenticated_original(flow):

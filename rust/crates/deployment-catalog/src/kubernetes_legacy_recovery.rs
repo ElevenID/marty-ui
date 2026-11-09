@@ -723,22 +723,20 @@ pub fn contract() -> Value {
 #[path = "kubernetes_legacy_recovery_tests.rs"]
 mod tests;
 
-// The staging increment remains unavailable to a release binary until its own
-// transaction/failure tests and independent audits are complete.
-#[cfg(test)]
 #[path = "kubernetes_legacy_recovery_stage.rs"]
 mod staging;
 
-#[cfg(test)]
 #[path = "kubernetes_legacy_recovery_activation.rs"]
 mod activation;
 
-#[cfg(test)]
 #[path = "kubernetes_legacy_recovery_qualify.rs"]
 mod qualification;
 
-// Native command implementations remain test-only in this checkpoint. Release
-// dispatch is a separate reviewed change after the mutation increment audits.
-#[cfg(test)]
 #[path = "kubernetes_legacy_recovery_commands.rs"]
 mod recovery_commands;
+
+pub use recovery_commands::{
+    contract as stage_contract, qualify as qualify_candidate, stage as stage_candidate,
+    targets as secret_targets,
+};
+pub const RECOVERY: &str = staging::RECOVERY;

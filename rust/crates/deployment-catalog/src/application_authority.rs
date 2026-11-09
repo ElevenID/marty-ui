@@ -555,7 +555,7 @@ fn auth_metadata(auth: &Value, policies: &[String], ttl: u64, leaf: bool) -> Res
 
 /// The explicit legacy recovery path uses the same bounded leaf proof owner,
 /// without changing AppRole enrollment or routine replacement admission.
-#[cfg(test)]
+#[cfg(target_os = "linux")]
 pub(crate) fn legacy_recovery_leaf(
     created: &Value,
     lookup: &Value,
