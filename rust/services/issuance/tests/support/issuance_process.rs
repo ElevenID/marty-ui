@@ -28,29 +28,6 @@ pub(super) fn reserve_port() -> (TcpListener, u16) {
     (listener, port)
 }
 
-/// A released ephemeral port may be claimed before the child reaches bind.
-/// Keep a bounded diagnostic from a terminal child; callers retry only the
-/// classified collision and report every other failure as before.
-pub(super) struct TerminalStartupFailure {
-    pub(super) bind_collision: bool,
-    pub(super) diagnostic: String,
-}
-
-pub(super) fn terminal_startup_failure(
-    child: &mut Child,
-    stderr: &std::fs::File,
-) -> Option<TerminalStartupFailure> {
-    let status = child.try_wait().ok().flatten()?;
-    if status.success() {
-        return None;
-    }
-    let diagnostic = bounded_startup_diagnostic(stderr).ok()?;
-    Some(TerminalStartupFailure {
-        bind_collision: retryable_listener_bind_failure(true, &diagnostic),
-        diagnostic,
-    })
-}
-
 /// Read a fixed-size snapshot without moving the child writer's shared file
 /// offset. This is also safe while an unhealthy child remains alive.
 pub(super) fn bounded_startup_diagnostic(stderr: &std::fs::File) -> std::io::Result<String> {
@@ -78,7 +55,7 @@ pub(super) fn bounded_startup_diagnostic(stderr: &std::fs::File) -> std::io::Res
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-fn retryable_listener_bind_failure(terminal_failure: bool, diagnostic: &str) -> bool {
+pub(super) fn retryable_listener_bind_failure(terminal_failure: bool, diagnostic: &str) -> bool {
     terminal_failure && diagnostic.contains("kind: AddrInUse")
 }
 

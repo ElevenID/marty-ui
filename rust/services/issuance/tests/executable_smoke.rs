@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{process::Child, time::Duration};
 
 use mmf_platform::{KeylessGrpcTransportOptions, OpenBaoTlsIdentityFiles};
 use serde_json::{json, Value};
@@ -15,11 +15,34 @@ mod issuance_process;
 
 use issuance_process::{
     bounded_http_client, bounded_startup_diagnostic, isolated_smoke_command, reserve_port,
-    smoke_command, terminal_startup_failure, wait_for_health_with_client, ChildGuard,
+    retryable_listener_bind_failure, smoke_command, wait_for_health_with_client, ChildGuard,
 };
 
 #[path = "support/canvas_worker_logging_contract.rs"]
 mod canvas_worker_logging_contract;
+
+/// A released ephemeral port may be claimed before the child reaches bind.
+/// Keep a bounded diagnostic from a terminal child; callers retry only the
+/// classified collision and report every other failure as before.
+struct TerminalStartupFailure {
+    bind_collision: bool,
+    diagnostic: String,
+}
+
+fn terminal_startup_failure(
+    child: &mut Child,
+    stderr: &std::fs::File,
+) -> Option<TerminalStartupFailure> {
+    let status = child.try_wait().ok().flatten()?;
+    if status.success() {
+        return None;
+    }
+    let diagnostic = bounded_startup_diagnostic(stderr).ok()?;
+    Some(TerminalStartupFailure {
+        bind_collision: retryable_listener_bind_failure(true, &diagnostic),
+        diagnostic,
+    })
+}
 
 async fn wait_for_health(port: u16) -> Option<Value> {
     let client = reqwest::Client::new();
