@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import {
   Alert, Box, Button, Chip, CircularProgress, Container, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, Paper, Stack, Typography,
@@ -12,6 +12,8 @@ import PreviewIcon from '@mui/icons-material/Preview';
 import RuleIcon from '@mui/icons-material/Rule';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { usePermissions } from '../../../hooks/usePermissions';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
+import { publicEntryHref } from '../../../application/routing/publicEntry';
 import {
   activateApplicationTemplate,
   deleteApplicationTemplate,
@@ -29,52 +31,57 @@ function evidenceLabel(requirement) {
   return requirement?.label || requirement?.evidence_type || requirement?.check_type || 'Configured evidence';
 }
 
-function ApplicationTemplateDetailContent({ organizationId, templateId, can }) {
+function checkedValidation(value) {
+  if (!value || typeof value.valid !== 'boolean' || !Array.isArray(value.errors)
+    || value.valid !== (value.errors.length === 0)
+    || value.errors.some((item) => !item || ['section', 'field', 'code', 'message'].some((key) => typeof item[key] !== 'string'))) {
+    throw new Error('The validation response is invalid. Try validating again.');
+  }
+  return value;
+}
+
+function ApplicationTemplateDetailContent({ organizationId, templateId, canCreate, canEdit, canDelete }) {
   const navigate = useNavigate();
-  const alive = useRef(false);
+  const beginLoad = useAsyncActionScope();
+  const beginAction = useAsyncActionScope();
+  const busyRef = useRef(false);
   const [template, setTemplate] = useState(null);
   const [validation, setValidation] = useState(null);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [confirmation, setConfirmation] = useState(null);
   const inScope = useCallback((value) => value?.id === templateId && value.organization_id === organizationId, [templateId, organizationId]);
-  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
-  const validate = useCallback(async () => {
-    if (!can('application-template', 'create')) return null;
+  const load = useCallback(async () => {
+    const action = beginLoad();
+    busyRef.current = true;
+    setLoading(true);
     setBusy(true);
+    setTemplate(null);
+    setValidation(null);
     setError('');
     try {
-      const result = await validateApplicationTemplate(templateId);
-      if (!alive.current) return null;
-      setValidation(result);
-      return result;
-    } catch (reason) {
-      if (alive.current) setError(reason.message || String(reason));
-      return null;
-    } finally {
-      if (alive.current) setBusy(false);
-    }
-  }, [templateId, can]);
-
-  useEffect(() => {
-    let current = true;
-    (async () => {
-      try {
-        const result = await getApplicationTemplate(templateId, organizationId);
-        if (!current) return;
-        if (!inScope(result)) throw new Error('This Application Template is not available in the selected organization.');
-        setTemplate(result);
-        if (statusOf(result) === 'DRAFT' && can('application-template', 'create')) {
-          const validationResult = await validateApplicationTemplate(templateId);
-          if (current) setValidation(validationResult);
-        }
-      } catch (reason) {
-        if (current) { setTemplate(null); setError(reason.message || String(reason)); }
+      const result = await action.run(getApplicationTemplate, templateId, organizationId);
+      if (!action.isCurrent()) return;
+      if (!inScope(result)) throw new Error('This Application Template is not available in the selected organization.');
+      setTemplate(result);
+      if (statusOf(result) === 'DRAFT' && canCreate) {
+        const validationResult = await action.run(validateApplicationTemplate, templateId);
+        if (action.isCurrent()) setValidation(checkedValidation(validationResult));
       }
-    })();
-    return () => { current = false; };
-  }, [templateId, organizationId, inScope, can]);
+    } catch (reason) {
+      if (action.isCurrent()) setError(reason.message || String(reason));
+    } finally {
+      if (action.isCurrent()) {
+        busyRef.current = false;
+        setBusy(false);
+        setLoading(false);
+      }
+    }
+  }, [beginLoad, templateId, organizationId, inScope, canCreate]);
+
+  useEffect(() => { load(); }, [load]);
 
   const errorsBySection = useMemo(() => {
     const groups = new Map();
@@ -85,7 +92,7 @@ function ApplicationTemplateDetailContent({ organizationId, templateId, can }) {
     return [...groups.entries()];
   }, [validation]);
 
-  if (!template && !error) {
+  if (!template && loading) {
     return <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}><CircularProgress /></Box>;
   }
 
@@ -93,54 +100,73 @@ function ApplicationTemplateDetailContent({ organizationId, templateId, can }) {
   const isDraft = status === 'DRAFT';
   const isActive = status === 'ACTIVE';
 
-  const activate = async () => {
-    if (!inScope(template) || !can('application-template', 'create')) return;
-    const result = await validate();
-    if (!result?.valid) return;
+  const runAction = async (operation) => {
+    if (busyRef.current) return;
+    const action = beginAction();
+    busyRef.current = true;
     setBusy(true);
+    setError('');
     try {
-      const result = await activateApplicationTemplate(templateId);
-      if (!alive.current) return;
-      if (!inScope(result)) throw new Error('The API returned an Application Template outside the selected organization.');
+      await operation(action);
+    } catch (reason) {
+      if (action.isCurrent()) setError(reason.message || String(reason));
+    } finally {
+      if (action.isCurrent()) {
+        busyRef.current = false;
+        setBusy(false);
+      }
+    }
+  };
+
+  const validate = async () => {
+    if (!inScope(template) || !isDraft || !canCreate) return;
+    await runAction(async (action) => {
+      setValidation(null);
+      const result = await action.run(validateApplicationTemplate, templateId);
+      if (action.isCurrent()) setValidation(checkedValidation(result));
+    });
+  };
+
+  const activate = async () => {
+    if (!inScope(template) || !isDraft || !canCreate || validation?.valid !== true) return;
+    await runAction(async (action) => {
+      setValidation(null);
+      const validationResult = await action.run(validateApplicationTemplate, templateId);
+      if (!action.isCurrent()) return;
+      const checked = checkedValidation(validationResult);
+      setValidation(checked);
+      if (!checked.valid) return;
+      const result = await action.run(activateApplicationTemplate, templateId);
+      if (!action.isCurrent()) return;
+      if (!inScope(result) || statusOf(result) !== 'ACTIVE') throw new Error('The activation response did not match this Application Template and its active lifecycle.');
       setTemplate(result);
       setValidation(null);
-    } catch (reason) {
-      if (alive.current) setError(reason.message || String(reason));
-    } finally {
-      if (alive.current) setBusy(false);
-    }
+    });
   };
 
   const remove = async () => {
-    if (!inScope(template) || !can('application-template', 'delete')) return;
-    setBusy(true);
-    try {
-      await deleteApplicationTemplate(templateId);
-      if (alive.current) navigate('/console/org/templates/applications');
-    } catch (reason) {
-      if (alive.current) { setError(reason.message || String(reason)); setBusy(false); }
-    }
+    if (!inScope(template) || !isDraft || !canDelete || confirmation !== 'delete') return;
+    await runAction(async (action) => {
+      await action.run(deleteApplicationTemplate, templateId);
+      if (action.isCurrent()) navigate('/console/org/templates/applications');
+    });
   };
 
   const deprecate = async () => {
-    if (!inScope(template) || !can('application-template', 'create')) return;
-    setBusy(true);
-    try {
-      const result = await deprecateApplicationTemplate(templateId);
-      if (!alive.current) return;
-      if (!inScope(result)) throw new Error('The API returned an Application Template outside the selected organization.');
+    if (!inScope(template) || !isActive || !canCreate || confirmation !== 'deprecate') return;
+    await runAction(async (action) => {
+      const result = await action.run(deprecateApplicationTemplate, templateId);
+      if (!action.isCurrent()) return;
+      if (!inScope(result) || statusOf(result) !== 'DEPRECATED') throw new Error('The deprecation response did not match this Application Template and its deprecated lifecycle.');
       setTemplate(result);
       setConfirmation(null);
-    } catch (reason) {
-      if (alive.current) setError(reason.message || String(reason));
-    } finally {
-      if (alive.current) setBusy(false);
-    }
+    });
   };
 
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {error && !confirmation && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {!template && !loading && <Button onClick={load}>Retry loading template</Button>}
       {template && <Stack spacing={3}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: 'space-between' }}>
           <Box>
@@ -151,12 +177,12 @@ function ApplicationTemplateDetailContent({ organizationId, templateId, can }) {
             <Typography color="text.secondary">{template.description}</Typography>
           </Box>
           <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-            {isDraft && can('application-template', 'edit') && <Button component={Link} to={`/console/org/templates/applications/${templateId}/edit`} startIcon={<EditIcon />}>Edit</Button>}
-            <Button component="a" href={`/applicant/preview/applications/${templateId}?organization_id=${encodeURIComponent(organizationId)}`} target="_blank" startIcon={<PreviewIcon />}>Preview</Button>
-            {isDraft && can('application-template', 'create') && <Button startIcon={<RuleIcon />} disabled={busy} onClick={validate}>Validate</Button>}
-            {isDraft && can('application-template', 'create') && validation?.valid && <Button variant="contained" startIcon={<CheckIcon />} disabled={busy} onClick={activate}>Activate</Button>}
-            {isDraft && can('application-template', 'delete') && <Button color="error" startIcon={<DeleteIcon />} disabled={busy} onClick={() => setConfirmation('delete')}>Delete</Button>}
-            {isActive && can('application-template', 'create') && <Button color="warning" startIcon={<ArchiveIcon />} disabled={busy} onClick={() => setConfirmation('deprecate')}>Deprecate</Button>}
+            {isDraft && canEdit && <Button component={Link} to={`/console/org/templates/applications/${encodeURIComponent(templateId)}/edit`} startIcon={<EditIcon />}>Edit</Button>}
+            <Button component="a" href={publicEntryHref(`/applicant/preview/applications/${encodeURIComponent(templateId)}?organization_id=${encodeURIComponent(organizationId)}`)} target="_blank" rel="noopener noreferrer" startIcon={<PreviewIcon />}>Preview</Button>
+            {isDraft && canCreate && <Button startIcon={<RuleIcon />} disabled={busy} onClick={validate}>Validate</Button>}
+            {isDraft && canCreate && validation?.valid && <Button variant="contained" startIcon={<CheckIcon />} disabled={busy} onClick={activate}>Activate</Button>}
+            {isDraft && canDelete && <Button color="error" startIcon={<DeleteIcon />} disabled={busy} onClick={() => { setError(''); setConfirmation('delete'); }}>Delete</Button>}
+            {isActive && canCreate && <Button color="warning" startIcon={<ArchiveIcon />} disabled={busy} onClick={() => { setError(''); setConfirmation('deprecate'); }}>Deprecate</Button>}
           </Stack>
         </Stack>
 
@@ -193,15 +219,21 @@ function ApplicationTemplateDetailContent({ organizationId, templateId, can }) {
         </Paper>
       </Stack>}
 
-      <Dialog open={confirmation === 'delete'} onClose={() => setConfirmation(null)} fullWidth>
+      <Dialog open={confirmation === 'delete'} onClose={() => { if (!busy) setConfirmation(null); }} fullWidth>
         <DialogTitle>Delete Application Template?</DialogTitle>
-        <DialogContent>This draft and its applicant form configuration will be permanently deleted.</DialogContent>
-        <DialogActions><Button onClick={() => setConfirmation(null)}>Cancel</Button><Button color="error" disabled={busy} onClick={remove}>Delete</Button></DialogActions>
+        <DialogContent>
+          This draft and its applicant form configuration will be permanently deleted.
+          {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+        </DialogContent>
+        <DialogActions><Button disabled={busy} onClick={() => setConfirmation(null)}>Cancel</Button><Button color="error" disabled={busy} onClick={remove}>Delete</Button></DialogActions>
       </Dialog>
-      <Dialog open={confirmation === 'deprecate'} onClose={() => setConfirmation(null)} fullWidth>
+      <Dialog open={confirmation === 'deprecate'} onClose={() => { if (!busy) setConfirmation(null); }} fullWidth>
         <DialogTitle>Deprecate Application Template?</DialogTitle>
-        <DialogContent>New applications will no longer use this template. Existing applications and their history are preserved.</DialogContent>
-        <DialogActions><Button onClick={() => setConfirmation(null)}>Cancel</Button><Button color="warning" disabled={busy} onClick={deprecate}>Deprecate</Button></DialogActions>
+        <DialogContent>
+          New applications will no longer use this template. Existing applications and their history are preserved.
+          {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+        </DialogContent>
+        <DialogActions><Button disabled={busy} onClick={() => setConfirmation(null)}>Cancel</Button><Button color="warning" disabled={busy} onClick={deprecate}>Deprecate</Button></DialogActions>
       </Dialog>
     </Container>
   );
@@ -210,9 +242,16 @@ function ApplicationTemplateDetailContent({ organizationId, templateId, can }) {
 export default function ApplicationTemplateDetailPage() {
   const { activeOrgId } = useConsole();
   const { templateId } = useParams();
+  const location = useLocation();
   const { can, isLoading } = usePermissions();
   if (!activeOrgId) return <Alert severity="error">Select an organization before opening Application Templates.</Alert>;
   if (isLoading) return <CircularProgress />;
   if (!can('application-template', 'view')) return <Alert severity="error">You do not have permission to view Application Templates.</Alert>;
-  return <ApplicationTemplateDetailContent key={`${activeOrgId}:${templateId}`} organizationId={activeOrgId} templateId={templateId} can={can} />;
+  const canCreate = can('application-template', 'create');
+  const canEdit = can('application-template', 'edit');
+  const canDelete = can('application-template', 'delete');
+  return <ApplicationTemplateDetailContent
+    key={JSON.stringify([activeOrgId, templateId, location.key, location.pathname, location.search, location.hash, canCreate, canEdit, canDelete])}
+    organizationId={activeOrgId} templateId={templateId} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete}
+  />;
 }

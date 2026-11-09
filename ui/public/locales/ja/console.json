@@ -1,4 +1,117 @@
 {
+  "trust": {
+    "trustProfilesPage": {
+      "title": "信頼プロファイル",
+      "description": "組織が受け入れる資格情報の形式、信頼ソース、検証ルールを設定します。",
+      "selectOrganization": "信頼プロファイルを表示する組織を選択してください。",
+      "readDenied": "この組織の信頼プロファイルを表示する権限がありません。",
+      "scopeMismatch": "カタログの応答が選択した組織と一致しないか、無効なプロファイルが含まれています。",
+      "loadFailed": "信頼プロファイルを読み込めませんでした。",
+      "retryProfiles": "プロファイルを再読み込み",
+      "emptyTitle": "信頼プロファイルが設定されていません",
+      "emptyDescription": "信頼プロファイルを作成して、組織が受け入れる資格情報の形式、信頼ソース、検証ルールを設定してください。",
+      "createProfile": "信頼プロファイルを作成",
+      "pinnedSources": "固定された発行者ソース",
+      "pinnedSourcesHelp": "固定されたソースはプロファイルの信頼ポリシーの一部です。リンクされた発行者との関係を確認するには、プロファイルを開いてください。",
+      "allowedAlgorithms": "許可するアルゴリズム",
+      "name": "名前",
+      "framework": "フレームワーク",
+      "status": "状態",
+      "lastUpdated": "最終更新",
+      "actions": "操作",
+      "viewDetails": "詳細を表示",
+      "edit": "編集",
+      "consoleBreadcrumb": "コンソール",
+      "trustBreadcrumb": "信頼"
+    },
+    "trustProfileEdit": {
+      "selectOrganization": "信頼プロファイルを編集する前に組織を選択してください。",
+      "permissionDenied": "信頼プロファイルを編集する権限がありません。",
+      "scopeMismatch": "信頼プロファイルの応答が、要求したプロファイルと選択した組織に一致しません。",
+      "invalidResponse": "信頼プロファイルの応答が無効です。",
+      "suspendedStatus": "停止中",
+      "unknownStatus": "不明",
+      "notFound": "信頼プロファイルが見つかりません。"
+    },
+    "revocationDetail": {
+      "selectOrganization": "失効プロファイルを表示する組織を選択してください。",
+      "readDenied": "選択した組織の失効プロファイルを表示する権限がありません。",
+      "profileScopeMismatch": "応答が、選択した組織で要求されたプロファイルと一致しません。",
+      "activationScopeMismatch": "有効化の応答で、選択した組織の要求されたプロファイルがACTIVEになったことを確認できません。",
+      "retryProfile": "プロファイルを再読み込み",
+      "activate": "有効化",
+      "activating": "有効化中…",
+      "activationFailed": "失効プロファイルを有効化できませんでした。",
+      "loadFailed": "失効プロファイルを読み込めませんでした。",
+      "statusDraft": "下書き",
+      "statusActive": "有効",
+      "statusSuspended": "一時停止",
+      "statusUnknown": "不明な状態",
+      "checkModeTitle": "失効確認ポリシー",
+      "mechanismsTitle": "失効確認方式",
+      "metadataTitle": "プロファイルのメタデータ",
+      "noMechanisms": "失効確認方式が返されませんでした。",
+      "statusListUrl": "ステータスリストのエンドポイント",
+      "profileId": "プロファイルID",
+      "organization": "組織",
+      "created": "作成日時",
+      "updated": "最終更新日時",
+      "offlineGrace": "オフライン猶予期間",
+      "cacheTtl": "キャッシュの有効期間",
+      "notAvailable": "情報なし",
+      "backToList": "失効プロファイルに戻る",
+      "disabledAdvisory": "このプロファイルでは資格情報の状態確認が無効です。失効確認を意図的に対象外とする場合にのみ使用してください。",
+      "checkModes": {
+        "always": "毎回確認",
+        "alwaysDescription": "検証のたびに資格情報の状態を確認する設定です。",
+        "cached": "キャッシュを使用した確認",
+        "cachedDescription": "設定されたキャッシュ有効期間を使用して状態を確認します。",
+        "offlineGrace": "オフライン猶予",
+        "offlineGraceDescription": "オフラインでの状態確認には、設定された猶予期間を使用します。",
+        "disabled": "無効",
+        "disabledDescription": "資格情報の状態確認は無効です。",
+        "unknown": "不明な確認ポリシー",
+        "unknownDescription": "サーバーから認識できない確認ポリシーが返されました。"
+      },
+      "mechanisms": {
+        "statusList2021": "Status List 2021",
+        "bitstringStatusList": "Bitstring Status List",
+        "tokenStatusList": "Token Status List",
+        "ocsp": "OCSP",
+        "crl": "CRL",
+        "unknown": "認識できない失効確認方式"
+      }
+    },
+    "trustProfileDetail": {
+      "selectOrganization": "この信頼プロファイルを表示する組織を選択してください。",
+      "profileReadDenied": "この組織の信頼プロファイルを表示する権限がありません。",
+      "issuerReadDenied": "この組織の発行者との関係を表示する権限がありません。",
+      "profileScopeMismatch": "この信頼プロファイルは選択した組織では利用できません。",
+      "retryProfile": "プロファイルを再読み込み",
+      "retryIssuers": "発行者一覧を再読み込み",
+      "issuerScopeMismatch": "発行者の応答が、このプロファイル、組織、または要求したDIDと一致しません。",
+      "issuerNotConfirmed": "受け付けられた発行者との関係を現在の一覧で確認できませんでした。発行者一覧を再読み込みしてください。",
+      "issuerLoadFailed": "発行者一覧を読み込めませんでした。",
+      "issuerAddFailed": "発行者の追加を確認できませんでした。",
+      "issuerAwaitingReadback": "リンクは受け付けられました。再試行ではリンクを再送信せず、現在の発行者一覧を読み取ります。",
+      "statusUnknown": "不明",
+      "relationshipStatusLabel": "信頼関係",
+      "issuerComplianceLabel": "発行者の準拠状態",
+      "statusDraft": "下書き",
+      "statusActive": "有効",
+      "statusSuspended": "一時停止",
+      "statusArchived": "アーカイブ済み",
+      "relationshipTrusted": "信頼済み",
+      "relationshipDenied": "拒否",
+      "relationshipUnderReview": "審査中",
+      "complianceAccredited": "認定済み",
+      "complianceCompliant": "準拠",
+      "complianceSuspended": "一時停止",
+      "complianceRevoked": "失効",
+      "credentialWalletGuidance": "ウォレットプロファイルは資格情報テンプレートで確認できます。テンプレートが対応するウォレットプロファイルをご確認ください。導出された設定は、相互運用性や配信の成功を証明するものではありません。",
+      "viewCredentialTemplates": "資格情報テンプレートを表示"
+    }
+  },
   "membershipReview": {
     "pending": "承認待ち",
     "description": "保留中のメンバーシップを確認し、割り当て済みのロールでアクセスを承認します。",
@@ -60,6 +173,24 @@
 		}
 	},
 	"flows": {
+		"flowDetail": {
+			"lifecycleTitle": "フローのライフサイクル",
+			"statusChips": {
+				"active": "有効",
+				"draft": "下書き",
+				"paused": "一時停止中",
+				"archived": "アーカイブ済み",
+				"unknown": "不明なステータス"
+			},
+			"entryPoints": {
+				"linkUnavailable": "このフローの申請リンクはありません。",
+				"qrUnavailable": "このフローのQRコードはありません。"
+			},
+			"errors": {
+				"copyFailed": "リンクをコピーできませんでした。もう一度お試しください。",
+				"invalidActivation": "有効化の応答がこのフローと一致しませんでした。"
+			}
+		},
 		"title": "フロー",
 		"flowDefinitions": "フロー定義",
 		"flowInstances": "フローインスタンス",
@@ -348,7 +479,9 @@
 				"defaultCredentialTemplate": "既定の資格情報テンプレート"
 			},
 			"values": {
-				"noneManualSelection": "なし（手動選択が必要）"
+				"noneManualSelection": "なし（手動選択が必要）",
+				"unavailable": "利用できないリソース",
+				"detailsUnavailable": "リソースの詳細を表示できません"
 			},
 			"actions": {
 				"save": "既定値を保存",
@@ -357,7 +490,11 @@
 			"messages": {
 				"loadFailed": "組織の既定値を読み込めませんでした",
 				"saveFailed": "組織の既定値を保存できませんでした",
-				"saveSuccess": "組織の既定値を保存しました"
+				"saveSuccess": "組織の既定値を保存しました",
+				"organizationRequired": "既定値を設定する前に組織を選択してください。",
+				"permissionDenied": "組織の既定値を閲覧する権限がありません。",
+				"unavailableDefaultsPreserved": "保存済みの既定値の一部が利用できません。他の既定値を変更しても、これらの値は保持されます。編集権限がある場合は、置き換えるか選択を解除できます。",
+				"catalogPermissionRequired": "カタログの閲覧権限がないため、一部のリソースの詳細は表示されません。"
 			}
 		}
 	},

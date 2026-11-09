@@ -42,6 +42,7 @@ import DirectionsCarIcon from '@mui/icons-material/DirectionsCar';
 import PersonIcon from '@mui/icons-material/Person';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useAuth } from '../../hooks/useAuth';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
 import useWalletPreferences from '../../hooks/useWalletPreferences';
 import { usePreview } from '../../contexts/PreviewContext';
 import { get } from '../../services/api';
@@ -215,6 +216,27 @@ function formatEvidenceRequirement(requirement) {
 }
 
 export default function ApplicationForm({ previewContext = null } = {}) {
+  const { credentialType } = useParams();
+  const location = useLocation();
+  const { user, organizationId } = useAuth();
+  const { isPreview } = usePreview?.() || { isPreview: false };
+  // Router parameter/query changes reuse the same route component. Every
+  // application entry needs its own draft, launch context and async lifetime.
+  const scope = JSON.stringify([
+    user?.user_id || user?.sub || user?.id || null,
+    organizationId,
+    credentialType,
+    location.key,
+    location.pathname,
+    location.search,
+    Boolean(isPreview),
+    previewContext?.applicationTemplate?.id,
+    previewContext?.credential?.id,
+  ]);
+  return <ApplicationFormSession key={scope} previewContext={previewContext} />;
+}
+
+function ApplicationFormSession({ previewContext }) {
   const { t } = useTranslation('applicant');
   const { credentialType: credentialConfigId } = useParams();
   const navigate = useNavigate();
@@ -224,6 +246,11 @@ export default function ApplicationForm({ previewContext = null } = {}) {
   const hasRegisteredWallet = preferredWallets.length > 0;
   const { isPreview } = usePreview?.() || { isPreview: false };
   const fileInputRefs = useRef({});
+  const beginConfigLoad = useAsyncActionScope();
+  const beginSubmission = useAsyncActionScope();
+  const beginCanvasSync = useAsyncActionScope();
+  const submissionPending = useRef(false);
+  const canvasSyncPending = useRef(false);
   const [initialApplyState] = useState(() => (
     isPreview && previewContext ? previewContext : location.state || readStoredApplyLocationState()
   ));
@@ -318,10 +345,10 @@ export default function ApplicationForm({ previewContext = null } = {}) {
   const getCredentialTemplate = async (templateId) => get(`/v1/credential-templates/${templateId}`);
   const getApplicationTemplate = async (templateId) => get(`/v1/application-templates/${templateId}`);
 
-  const resolveApplicantId = async () => resolveApplicantIdForApplication({
+  const resolveApplicantId = async (action) => resolveApplicantIdForApplication({
     user,
-    getApplicant: () => getMyApplicantProfile(),
-    getApplicantByUser: () => getMyApplicantProfile(),
+    getApplicant: () => action.run(getMyApplicantProfile),
+    getApplicantByUser: () => action.run(getMyApplicantProfile),
   });
 
   const readFileAsBase64 = (file) =>
@@ -341,6 +368,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
     });
 
   useEffect(() => {
+    const action = beginConfigLoad();
     const fetchCredentialConfig = async () => {
       if (isCanvasLtiApplication) {
         const canvasCredentialTemplateId = credentialConfigId
@@ -368,14 +396,14 @@ export default function ApplicationForm({ previewContext = null } = {}) {
       }
       setConfigLoading(true);
       try {
-        const result = await loadCredentialApplicationConfig({
+        const result = await action.run(loadCredentialApplicationConfig, {
           credentialConfigId,
           credentialConfig,
           organizationId: applicationOrganizationId,
-          getCredentialTemplate,
+          getCredentialTemplate: (id) => action.run(getCredentialTemplate, id),
           applicationTemplateId: canvasApplicationTemplateId || null,
-          getApplicationTemplate,
-          listApplicationTemplates,
+          getApplicationTemplate: (id) => action.run(getApplicationTemplate, id),
+          listApplicationTemplates: (id) => action.run(listApplicationTemplates, id),
         });
         setCredentialConfig(result.credentialConfig);
         if (result.applicationTemplate) {
@@ -383,14 +411,16 @@ export default function ApplicationForm({ previewContext = null } = {}) {
         }
         setError(result.error);
       } catch (err) {
+        if (!action.isCurrent()) return;
         setError(err.message);
       } finally {
-        setConfigLoading(false);
+        if (action.isCurrent()) setConfigLoading(false);
       }
     };
 
     fetchCredentialConfig();
   }, [
+    beginConfigLoad,
     credentialConfigId,
     credentialConfig,
     applicationOrganizationId,
@@ -625,34 +655,41 @@ export default function ApplicationForm({ previewContext = null } = {}) {
   const shouldShowStepper = !(isCanvasLtiApplication && steps.length === 1);
 
   const handleAutoApply = async () => {
+    if (submissionPending.current) return;
     if (isPreview) { setSubmitted(true); return; }
+    const action = beginSubmission();
+    submissionPending.current = true;
     setAutoApplying(true);
     setError(null);
     try {
-      const result = await autoApplyForCredential({
+      const result = await action.run(autoApplyForCredential, {
         organizationId: applicationOrganizationId,
         user,
         credentialConfig,
         applicationTemplate,
         credentialConfigId,
         hasRegisteredWallet,
-        resolveApplicantId,
-        createApplicant: upsertMyApplicantProfile,
-        updateApplicantProfile: (_applicantId, data) => upsertMyApplicantProfile(data),
-        createApplication: createApplicationApi,
-        submitApplication: submitApplicationApi,
-        generateIssuanceOffer,
-        listApplications: listApplicationsApi,
+        resolveApplicantId: () => resolveApplicantId(action),
+        createApplicant: (data) => action.run(upsertMyApplicantProfile, data),
+        updateApplicantProfile: (_applicantId, data) => action.run(upsertMyApplicantProfile, data),
+        createApplication: (data) => action.run(createApplicationApi, data),
+        submitApplication: (id) => action.run(submitApplicationApi, id),
+        generateIssuanceOffer: (id) => action.run(generateIssuanceOffer, id),
+        listApplications: (params) => action.run(listApplicationsApi, params),
       });
       setApplicationId(result.applicationId);
       setApplicationReference(result.applicationReference || null);
       setAutoOfferData(result.offerData);
       setClaimDialogOpen(true);
     } catch (err) {
+      if (!action.isCurrent()) return;
       console.error('Auto-apply error:', err);
       setError(getWalletOfferDialogError(err));
     } finally {
-      setAutoApplying(false);
+      if (action.isCurrent()) {
+        submissionPending.current = false;
+        setAutoApplying(false);
+      }
     }
   };
 
@@ -689,12 +726,15 @@ export default function ApplicationForm({ previewContext = null } = {}) {
   };
 
   const submitApplicationForm = async (duplicateApplicationAction = null) => {
+    if (submissionPending.current) return;
     if (isPreview) { setSubmitted(true); return; }
+    const action = beginSubmission();
+    submissionPending.current = true;
     setSubmitting(true);
     setError(null);
 
     try {
-      const result = await submitCredentialApplication({
+      const result = await action.run(submitCredentialApplication, {
         organizationId: applicationOrganizationId,
         user,
         formData,
@@ -702,18 +742,18 @@ export default function ApplicationForm({ previewContext = null } = {}) {
         credentialConfigId,
         canvasLtiContext: canvasLtiApplicationContext,
         allFields,
-        resolveApplicantId,
-        createApplicant: upsertMyApplicantProfile,
-        updateApplicantProfile: (_applicantId, data) => upsertMyApplicantProfile(data),
-        getApplicantByUser: () => getMyApplicantProfile(),
-        createApplication: createApplicationApi,
-        submitApplicationEvidence: submitApplicationEvidenceApi,
-        submitApplication: submitApplicationApi,
-        listApplicantApplications: () => listApplicationsApi({ limit: 100 }).then((page) => page.items),
-        supersedeApplication: withdrawApplication,
+        resolveApplicantId: () => resolveApplicantId(action),
+        createApplicant: (data) => action.run(upsertMyApplicantProfile, data),
+        updateApplicantProfile: (_applicantId, data) => action.run(upsertMyApplicantProfile, data),
+        getApplicantByUser: () => action.run(getMyApplicantProfile),
+        createApplication: (data) => action.run(createApplicationApi, data),
+        submitApplicationEvidence: (id, data) => action.run(submitApplicationEvidenceApi, id, data),
+        submitApplication: (id) => action.run(submitApplicationApi, id),
+        listApplicantApplications: () => action.run(listApplicationsApi, { limit: 100 }).then((page) => page.items),
+        supersedeApplication: (id, data) => action.run(withdrawApplication, id, data),
         duplicateApplicationAction,
-        enrollBiometric: (_applicantId, data) => enrollMyBiometric(data),
-        readFileAsBase64,
+        enrollBiometric: (_applicantId, data) => action.run(enrollMyBiometric, data),
+        readFileAsBase64: (file) => action.run(readFileAsBase64, file),
       });
 
       if (result.duplicateApplicationConflict) {
@@ -726,10 +766,14 @@ export default function ApplicationForm({ previewContext = null } = {}) {
       setSubmitted(result.submitted);
       setDuplicateConflict(null);
     } catch (err) {
+      if (!action.isCurrent()) return;
       console.error('Error submitting application:', err);
       setError(err.message);
     } finally {
-      setSubmitting(false);
+      if (action.isCurrent()) {
+        submissionPending.current = false;
+        setSubmitting(false);
+      }
     }
   };
 
@@ -739,16 +783,23 @@ export default function ApplicationForm({ previewContext = null } = {}) {
   };
 
   const handleCanvasEvidenceRefresh = async () => {
+    if (canvasSyncPending.current) return;
+    const action = beginCanvasSync();
+    canvasSyncPending.current = true;
     setCanvasSyncLoading(true);
     setCanvasSyncError(null);
     try {
-      const status = await enqueueCurrentCanvasLtiEvidenceSync();
+      const status = await action.run(enqueueCurrentCanvasLtiEvidenceSync);
       setCanvasEvidenceStatus(status);
       setCanvasSyncPollVersion((version) => version + 1);
     } catch (err) {
+      if (!action.isCurrent()) return;
       setCanvasSyncError(err?.message || 'Canvas evidence synchronization could not be queued.');
     } finally {
-      setCanvasSyncLoading(false);
+      if (action.isCurrent()) {
+        canvasSyncPending.current = false;
+        setCanvasSyncLoading(false);
+      }
     }
   };
 

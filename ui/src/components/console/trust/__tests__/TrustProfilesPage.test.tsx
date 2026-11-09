@@ -8,11 +8,12 @@ const listRevocationProfiles = vi.fn();
 const listPublicIssuerIdentities = vi.fn();
 let organizationId: string | undefined = 'org-1';
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, options: Record<string, unknown> = {}) => String(options.defaultValue || ({
+vi.mock('react-i18next', () => {
+  const t = (key: string, options: Record<string, unknown> = {}) => String(options.defaultValue || ({
       'trust.trustProfiles': 'Trust Profiles',
       'trust.trustProfilesDescription': 'Manage trust profiles.',
+      'trust.trustProfilesPage.title': 'Trust Profiles',
+      'trust.trustProfilesPage.emptyTitle': 'No trust profiles',
       'trust.tableHeaders.name': 'Name',
       'trust.tableHeaders.framework': 'Framework',
       'trust.tableHeaders.status': 'Status',
@@ -22,12 +23,16 @@ vi.mock('react-i18next', () => ({
       'trust.tableHeaders.actions': 'Actions',
       'trust.actions.viewDetails': 'View details',
       'trust.actions.edit': 'Edit',
-    }[key] || key)),
-  }),
-}));
+    }[key] || key));
+  return { useTranslation: () => ({ t }) };
+});
 
 vi.mock('../../../../contexts/ConsoleContext', () => ({
   useConsole: () => ({ activeOrgId: organizationId }),
+}));
+
+vi.mock('../../../../hooks/usePermissions', () => ({
+  usePermissions: () => ({ isLoading: false, can: () => true }),
 }));
 
 vi.mock('../../../../services/presentationPolicyApi', () => ({
@@ -63,9 +68,10 @@ describe('TrustProfilesPage', () => {
     listPublicIssuerIdentities.mockResolvedValue({ identities: [] });
   });
 
-  it('loads trust records and public issuer identities without KMS/profile APIs', async () => {
+  it('loads trust records without unrelated issuer or revocation APIs', async () => {
     listTrustProfiles.mockResolvedValue([{
       id: 'profile-1',
+      organization_id: 'org-1',
       name: 'Production Trust',
       framework: 'custom',
       status: 'active',
@@ -77,18 +83,20 @@ describe('TrustProfilesPage', () => {
     renderWithRouter(<TrustProfilesPage />);
     expect(await screen.findByText('Production Trust')).toBeInTheDocument();
     expect(listTrustProfiles).toHaveBeenCalledWith({ organization_id: 'org-1', limit: 100, offset: 0 });
-    expect(listPublicIssuerIdentities).toHaveBeenCalledWith({ organization_id: 'org-1' });
-    expect(listRevocationProfiles).toHaveBeenCalledWith({ organization_id: 'org-1', limit: 1 });
+    expect(listPublicIssuerIdentities).not.toHaveBeenCalled();
+    expect(listRevocationProfiles).not.toHaveBeenCalled();
   });
 
-  it('uses managed issuer identity readiness rather than raw signing keys', async () => {
+  it('shows the empty catalog without inventing setup prerequisites', async () => {
     listTrustProfiles.mockResolvedValue([]);
     listPublicIssuerIdentities.mockResolvedValue({ identities: [{ issuer_did: 'did:web:issuer.example' }] });
     renderWithRouter(<TrustProfilesPage />);
 
     expect(await screen.findByText('No trust profiles')).toBeInTheDocument();
-    expect(screen.getByText('Issuer Identity:ready')).toBeInTheDocument();
-    expect(screen.getByText('Revocation Profile:missing')).toBeInTheDocument();
+    expect(screen.queryByText('Issuer Identity:ready')).not.toBeInTheDocument();
+    expect(screen.queryByText('Revocation Profile:missing')).not.toBeInTheDocument();
+    expect(listPublicIssuerIdentities).not.toHaveBeenCalled();
+    expect(listRevocationProfiles).not.toHaveBeenCalled();
   });
 
   it('does not call tenant APIs without an active organization', async () => {

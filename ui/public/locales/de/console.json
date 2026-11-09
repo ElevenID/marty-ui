@@ -1,4 +1,117 @@
 {
+  "trust": {
+    "trustProfilesPage": {
+      "title": "Vertrauensprofile",
+      "description": "Legen Sie fest, welche Nachweisformate, Vertrauensquellen und Validierungsregeln Ihre Organisation akzeptiert.",
+      "selectOrganization": "Wählen Sie eine Organisation aus, um deren Vertrauensprofile anzuzeigen.",
+      "readDenied": "Keine Berechtigung zum Anzeigen der Vertrauensprofile dieser Organisation.",
+      "scopeMismatch": "Die Katalogantwort gehört nicht zur ausgewählten Organisation oder enthält ein ungültiges Profil.",
+      "loadFailed": "Die Vertrauensprofile konnten nicht geladen werden.",
+      "retryProfiles": "Profile erneut laden",
+      "emptyTitle": "Keine Vertrauensprofile konfiguriert",
+      "emptyDescription": "Erstellen Sie ein Vertrauensprofil, um akzeptierte Nachweisformate, Vertrauensquellen und Validierungsregeln festzulegen.",
+      "createProfile": "Vertrauensprofil erstellen",
+      "pinnedSources": "Fest hinterlegte Ausstellerquellen",
+      "pinnedSourcesHelp": "Fest hinterlegte Quellen gehören zur Vertrauensrichtlinie eines Profils. Öffnen Sie ein Profil, um seine verknüpften Ausstellerbeziehungen zu prüfen.",
+      "allowedAlgorithms": "Zulässige Algorithmen",
+      "name": "Name",
+      "framework": "Rahmenwerk",
+      "status": "Status",
+      "lastUpdated": "Zuletzt aktualisiert",
+      "actions": "Aktionen",
+      "viewDetails": "Details anzeigen",
+      "edit": "Bearbeiten",
+      "consoleBreadcrumb": "Konsole",
+      "trustBreadcrumb": "Vertrauen"
+    },
+    "trustProfileEdit": {
+      "selectOrganization": "Wählen Sie eine Organisation aus, bevor Sie ein Vertrauensprofil bearbeiten.",
+      "permissionDenied": "Sie haben keine Berechtigung, Vertrauensprofile zu bearbeiten.",
+      "scopeMismatch": "Die Antwort zum Vertrauensprofil stimmt nicht mit dem angeforderten Profil und der ausgewählten Organisation überein.",
+      "invalidResponse": "Die Antwort zum Vertrauensprofil ist ungültig.",
+      "suspendedStatus": "Ausgesetzt",
+      "unknownStatus": "Unbekannt",
+      "notFound": "Vertrauensprofil nicht gefunden."
+    },
+    "revocationDetail": {
+      "selectOrganization": "Wählen Sie eine Organisation aus, um Sperrprofile anzuzeigen.",
+      "readDenied": "Sie haben keine Berechtigung, Sperrprofile der ausgewählten Organisation anzuzeigen.",
+      "profileScopeMismatch": "Die Antwort stimmt nicht mit dem angeforderten Profil in der ausgewählten Organisation überein.",
+      "activationScopeMismatch": "Die Aktivierungsantwort bestätigt keine AKTIVE Version des angeforderten Profils in der ausgewählten Organisation.",
+      "retryProfile": "Profil erneut laden",
+      "activate": "Aktivieren",
+      "activating": "Wird aktiviert…",
+      "activationFailed": "Das Sperrprofil konnte nicht aktiviert werden.",
+      "loadFailed": "Das Sperrprofil konnte nicht geladen werden.",
+      "statusDraft": "Entwurf",
+      "statusActive": "Aktiv",
+      "statusSuspended": "Ausgesetzt",
+      "statusUnknown": "Unbekannter Status",
+      "checkModeTitle": "Richtlinie zur Sperrprüfung",
+      "mechanismsTitle": "Sperrmechanismen",
+      "metadataTitle": "Profilmetadaten",
+      "noMechanisms": "Es wurden keine Sperrmechanismen zurückgegeben.",
+      "statusListUrl": "Statuslisten-Endpunkt",
+      "profileId": "Profil-ID",
+      "organization": "Organisation",
+      "created": "Erstellt",
+      "updated": "Zuletzt aktualisiert",
+      "offlineGrace": "Offline-Toleranzzeit",
+      "cacheTtl": "Cache-TTL",
+      "notAvailable": "Nicht verfügbar",
+      "backToList": "Zurück zu den Sperrprofilen",
+      "disabledAdvisory": "Die Statusprüfung für Nachweise ist in diesem Profil deaktiviert. Verwenden Sie es nur, wenn Sperrprüfungen bewusst ausgeschlossen sind.",
+      "checkModes": {
+        "always": "Immer prüfen",
+        "alwaysDescription": "Für jede Verifizierung ist eine Prüfung des Nachweisstatus konfiguriert.",
+        "cached": "Prüfung mit Cache",
+        "cachedDescription": "Statusprüfungen verwenden die konfigurierte Cache-Gültigkeitsdauer.",
+        "offlineGrace": "Offline-Toleranz",
+        "offlineGraceDescription": "Offline-Statusprüfungen verwenden die konfigurierte Toleranzzeit.",
+        "disabled": "Deaktiviert",
+        "disabledDescription": "Die Statusprüfung für Nachweise ist deaktiviert.",
+        "unknown": "Unbekannte Prüfrichtlinie",
+        "unknownDescription": "Der Server hat eine unbekannte Prüfrichtlinie zurückgegeben."
+      },
+      "mechanisms": {
+        "statusList2021": "Status List 2021",
+        "bitstringStatusList": "Bitstring Status List",
+        "tokenStatusList": "Token Status List",
+        "ocsp": "OCSP",
+        "crl": "CRL",
+        "unknown": "Unbekannter Sperrmechanismus"
+      }
+    },
+    "trustProfileDetail": {
+      "selectOrganization": "Wählen Sie eine Organisation aus, um dieses Vertrauensprofil anzuzeigen.",
+      "profileReadDenied": "Sie haben keine Berechtigung, Vertrauensprofile dieser Organisation anzuzeigen.",
+      "issuerReadDenied": "Sie haben keine Berechtigung, Ausstellerbeziehungen dieser Organisation anzuzeigen.",
+      "profileScopeMismatch": "Dieses Vertrauensprofil ist in der ausgewählten Organisation nicht verfügbar.",
+      "retryProfile": "Profil erneut laden",
+      "retryIssuers": "Ausstellerliste erneut laden",
+      "issuerScopeMismatch": "Die Ausstellerantwort stimmt nicht mit diesem Profil, dieser Organisation oder der angeforderten DID überein.",
+      "issuerNotConfirmed": "Die bestätigte Ausstellerbeziehung konnte in der aktuellen Liste nicht gefunden werden. Laden Sie die Ausstellerliste erneut.",
+      "issuerLoadFailed": "Die Ausstellerliste konnte nicht geladen werden.",
+      "issuerAddFailed": "Das Hinzufügen des Ausstellers konnte nicht bestätigt werden.",
+      "issuerAwaitingReadback": "Die Verknüpfung wurde angenommen. Beim erneuten Versuch wird die aktuelle Ausstellerliste gelesen, ohne die Verknüpfung erneut zu senden.",
+      "statusUnknown": "Unbekannt",
+      "relationshipStatusLabel": "Vertrauensbeziehung",
+      "issuerComplianceLabel": "Ausstellerkonformität",
+      "statusDraft": "Entwurf",
+      "statusActive": "Aktiv",
+      "statusSuspended": "Ausgesetzt",
+      "statusArchived": "Archiviert",
+      "relationshipTrusted": "Vertrauenswürdig",
+      "relationshipDenied": "Abgelehnt",
+      "relationshipUnderReview": "In Prüfung",
+      "complianceAccredited": "Akkreditiert",
+      "complianceCompliant": "Konform",
+      "complianceSuspended": "Ausgesetzt",
+      "complianceRevoked": "Widerrufen",
+      "credentialWalletGuidance": "Wallet-Profile sind bei den Anmeldeinformationsvorlagen verfügbar. Prüfen Sie das unterstützte Wallet-Profil einer Vorlage. Die abgeleitete Konfiguration belegt weder Interoperabilität noch eine erfolgreiche Zustellung.",
+      "viewCredentialTemplates": "Anmeldeinformationsvorlagen anzeigen"
+    }
+  },
   "membershipReview": {
     "pending": "Ausstehend",
     "description": "Prüfen Sie ausstehende Mitgliedschaften und genehmigen Sie den Zugriff mit den bereits zugewiesenen Rollen.",
@@ -60,6 +173,24 @@
 		}
 	},
 	"flows": {
+		"flowDetail": {
+			"lifecycleTitle": "Ablaufstatus",
+			"statusChips": {
+				"active": "Aktiv",
+				"draft": "Entwurf",
+				"paused": "Pausiert",
+				"archived": "Archiviert",
+				"unknown": "Status unbekannt"
+			},
+			"entryPoints": {
+				"linkUnavailable": "Für diesen Ablauf ist kein Antragslink verfügbar.",
+				"qrUnavailable": "Für diesen Ablauf ist kein QR-Code verfügbar."
+			},
+			"errors": {
+				"copyFailed": "Der Link konnte nicht kopiert werden. Versuchen Sie es erneut.",
+				"invalidActivation": "Die Aktivierungsantwort gehört nicht zu diesem Ablauf."
+			}
+		},
 		"title": "Abläufe",
 		"flowDefinitions": "Ablaufdefinitionen",
 		"flowInstances": "Ablaufinstanzen",
@@ -348,7 +479,9 @@
 				"defaultCredentialTemplate": "Standard-Nachweisvorlage"
 			},
 			"values": {
-				"noneManualSelection": "Keine (manuelle Auswahl erforderlich)"
+				"noneManualSelection": "Keine (manuelle Auswahl erforderlich)",
+				"unavailable": "Nicht verfügbare Ressource",
+				"detailsUnavailable": "Ressourcendetails nicht verfügbar"
 			},
 			"actions": {
 				"save": "Standards speichern",
@@ -357,7 +490,11 @@
 			"messages": {
 				"loadFailed": "Organisationsstandards konnten nicht geladen werden",
 				"saveFailed": "Organisationsstandards konnten nicht gespeichert werden",
-				"saveSuccess": "Organisationsstandards erfolgreich gespeichert"
+				"saveSuccess": "Organisationsstandards erfolgreich gespeichert",
+				"organizationRequired": "Wählen Sie eine Organisation aus, bevor Sie Standardwerte konfigurieren.",
+				"permissionDenied": "Sie haben keine Berechtigung, die Standardwerte der Organisation anzuzeigen.",
+				"unavailableDefaultsPreserved": "Ein oder mehrere gespeicherte Standardwerte sind nicht verfügbar. Sie bleiben erhalten, wenn Sie andere Standardwerte ändern. Wenn Sie die Berechtigung zum Bearbeiten haben, können Sie sie ersetzen oder die Auswahl aufheben.",
+				"catalogPermissionRequired": "Einige Ressourcendetails werden ausgeblendet, da Sie keine Berechtigung haben, die zugehörigen Kataloge anzuzeigen."
 			}
 		}
 	},

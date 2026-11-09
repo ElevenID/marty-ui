@@ -358,6 +358,39 @@
     "dependencyBlocked": "Complete previous steps first"
   },
   "trust": {
+    "trustProfilesPage": {
+      "title": "Trust profiles",
+      "description": "Define the credential formats, trust sources, and validation rules your organization accepts.",
+      "selectOrganization": "Select an organization to view its trust profiles.",
+      "readDenied": "You do not have permission to view this organization's trust profiles.",
+      "scopeMismatch": "The catalog response does not match the selected organization or contains an invalid profile.",
+      "loadFailed": "Trust profiles could not be loaded.",
+      "retryProfiles": "Retry loading profiles",
+      "emptyTitle": "No trust profiles configured",
+      "emptyDescription": "Create a trust profile to configure the credential formats, trust sources, and validation rules your organization accepts.",
+      "createProfile": "Create Trust Profile",
+      "pinnedSources": "Pinned issuer sources",
+      "pinnedSourcesHelp": "Pinned sources are part of a profile's trust policy. Open a profile to review its linked issuer relationships.",
+      "allowedAlgorithms": "Allowed algorithms",
+      "name": "Name",
+      "framework": "Framework",
+      "status": "Status",
+      "lastUpdated": "Last updated",
+      "actions": "Actions",
+      "viewDetails": "View details",
+      "edit": "Edit",
+      "consoleBreadcrumb": "Console",
+      "trustBreadcrumb": "Trust"
+    },
+    "trustProfileEdit": {
+      "selectOrganization": "Select an organization before editing a trust profile.",
+      "permissionDenied": "You do not have permission to edit trust profiles.",
+      "scopeMismatch": "Trust profile response does not match the requested profile and selected organization.",
+      "invalidResponse": "Trust profile response is invalid.",
+      "suspendedStatus": "Suspended",
+      "unknownStatus": "Unknown",
+      "notFound": "Trust profile not found."
+    },
     "title": "Trust Management",
     "trustProfiles": "Trust Profiles",
     "trustProfilesDescription": "Define trust frameworks, trusted issuers, and validation rules for credential verification.",
@@ -427,7 +460,83 @@
       },
       "error": "Failed to load revocation profiles"
     },
+    "revocationDetail": {
+      "selectOrganization": "Select an organization to view revocation profiles.",
+      "readDenied": "You do not have permission to view revocation profiles in the selected organization.",
+      "profileScopeMismatch": "The response does not match the requested profile in the selected organization.",
+      "activationScopeMismatch": "The activation response does not confirm an ACTIVE version of the requested profile in the selected organization.",
+      "retryProfile": "Retry profile",
+      "activate": "Activate",
+      "activating": "Activating…",
+      "activationFailed": "Failed to activate the revocation profile.",
+      "loadFailed": "Could not load the revocation profile.",
+      "statusDraft": "Draft",
+      "statusActive": "Active",
+      "statusSuspended": "Suspended",
+      "statusUnknown": "Unknown status",
+      "checkModeTitle": "Revocation Check Policy",
+      "mechanismsTitle": "Revocation Mechanisms",
+      "metadataTitle": "Profile Metadata",
+      "noMechanisms": "No revocation mechanisms returned.",
+      "statusListUrl": "Status List Endpoint",
+      "profileId": "Profile ID",
+      "organization": "Organization",
+      "created": "Created",
+      "updated": "Last Updated",
+      "offlineGrace": "Offline grace period",
+      "cacheTtl": "Cache TTL",
+      "notAvailable": "Not available",
+      "backToList": "Back to Revocation Profiles",
+      "disabledAdvisory": "Credential status checking is disabled for this profile. Use it only when revocation checks are intentionally out of scope.",
+      "checkModes": {
+        "always": "Always check",
+        "alwaysDescription": "Configured to check credential status for every verification.",
+        "cached": "Cached checks",
+        "cachedDescription": "Status checks use the configured cache lifetime.",
+        "offlineGrace": "Offline grace",
+        "offlineGraceDescription": "Offline status checks use the configured grace period.",
+        "disabled": "Disabled",
+        "disabledDescription": "Credential status checking is disabled.",
+        "unknown": "Unknown check policy",
+        "unknownDescription": "The server returned an unrecognized check policy."
+      },
+      "mechanisms": {
+        "statusList2021": "Status List 2021",
+        "bitstringStatusList": "Bitstring Status List",
+        "tokenStatusList": "Token Status List",
+        "ocsp": "OCSP",
+        "crl": "CRL",
+        "unknown": "Unrecognized revocation mechanism"
+      }
+    },
     "trustProfileDetail": {
+      "selectOrganization": "Select an organization to view this trust profile.",
+      "profileReadDenied": "You do not have permission to view trust profiles in this organization.",
+      "issuerReadDenied": "You do not have permission to view issuer relationships in this organization.",
+      "profileScopeMismatch": "This trust profile is not available in the selected organization.",
+      "retryProfile": "Retry profile",
+      "retryIssuers": "Retry issuer list",
+      "issuerScopeMismatch": "The issuer response does not match this profile, organization, or requested DID.",
+      "issuerNotConfirmed": "The accepted issuer relationship could not be confirmed in the current list. Retry reading the issuer list.",
+      "issuerLoadFailed": "The issuer list could not be loaded.",
+      "issuerAddFailed": "The issuer addition could not be confirmed.",
+      "issuerAwaitingReadback": "The link was accepted. Retrying reads the current issuer list without sending the link again.",
+      "statusUnknown": "Unknown",
+      "relationshipStatusLabel": "Trust relationship",
+      "issuerComplianceLabel": "Issuer compliance",
+      "statusDraft": "Draft",
+      "statusActive": "Active",
+      "statusSuspended": "Suspended",
+      "statusArchived": "Archived",
+      "relationshipTrusted": "Trusted",
+      "relationshipDenied": "Denied",
+      "relationshipUnderReview": "Under review",
+      "complianceAccredited": "Accredited",
+      "complianceCompliant": "Compliant",
+      "complianceSuspended": "Suspended",
+      "complianceRevoked": "Revoked",
+      "credentialWalletGuidance": "Wallet profiles are available on credential templates. Review a template’s supported wallet profile; derived configuration does not prove interoperability or successful delivery.",
+      "viewCredentialTemplates": "View credential templates",
       "walletCompatibility": "Wallet Compatibility",
       "supportedCredentialFormats": "Supported Credential Formats",
       "noFormatsConfigured": "No specific formats configured (accepts all)",
@@ -720,6 +829,7 @@
       "flowInstances": "Flow Instances"
     },
     "flowDetail": {
+      "lifecycleTitle": "Flow lifecycle",
       "applicantJourney": {
         "title": "Applicant Journey",
         "description": "What the applicant experiences from start to finish",
@@ -736,6 +846,8 @@
         "title": "Applicant Entry Points",
         "description": "Share these with applicants to start the credential issuance process",
         "applicationUrlLabel": "Application URL",
+        "linkUnavailable": "No application link is available for this flow.",
+        "qrUnavailable": "No QR code is available for this flow.",
         "notPublished": "Not published - flow must be published first",
         "copyUrlTooltip": "Copy URL",
         "openInNewTabTooltip": "Open in new tab",
@@ -773,7 +885,11 @@
       },
       "statusChips": {
         "published": "Published",
-        "draft": "Draft"
+        "draft": "Draft",
+        "active": "Active",
+        "paused": "Paused",
+        "archived": "Archived",
+        "unknown": "Unknown status"
       },
       "actions": {
         "copyApplicationLink": "Copy Application Link",
@@ -793,6 +909,8 @@
       "errors": {
         "failedToLoad": "Failed to load flow details",
         "flowNotFound": "Flow not found",
+        "copyFailed": "The link could not be copied. Try again.",
+        "invalidActivation": "The activation response did not match this flow.",
         "serviceUnavailable": "The backend service may be unavailable. Check console for details."
       },
       "loading": "Loading..."
@@ -2703,7 +2821,9 @@
         "defaultCredentialTemplate": "Default Credential Template"
       },
       "values": {
-        "noneManualSelection": "None (manual selection required)"
+        "noneManualSelection": "None (manual selection required)",
+        "unavailable": "Unavailable resource",
+        "detailsUnavailable": "Resource details unavailable"
       },
       "actions": {
         "save": "Save Defaults",
@@ -2712,7 +2832,11 @@
       "messages": {
         "loadFailed": "Failed to load organization defaults",
         "saveFailed": "Failed to save organization defaults",
-        "saveSuccess": "Organization defaults saved successfully"
+        "saveSuccess": "Organization defaults saved successfully",
+        "organizationRequired": "Select an organization before configuring defaults.",
+        "permissionDenied": "You do not have permission to view organization defaults.",
+        "unavailableDefaultsPreserved": "One or more saved defaults are unavailable. They are preserved when you change other defaults. You can replace or clear them if you have permission to edit.",
+        "catalogPermissionRequired": "Some resource details are hidden because you do not have permission to view their catalogs."
       }
     }
   },

@@ -1,4 +1,117 @@
 {
+  "trust": {
+    "trustProfilesPage": {
+      "title": "Vertrouwensprofielen",
+      "description": "Bepaal welke credentialformaten, vertrouwensbronnen en validatieregels uw organisatie accepteert.",
+      "selectOrganization": "Selecteer een organisatie om de vertrouwensprofielen te bekijken.",
+      "readDenied": "U hebt geen toestemming om de vertrouwensprofielen van deze organisatie te bekijken.",
+      "scopeMismatch": "Het catalogusantwoord hoort niet bij de geselecteerde organisatie of bevat een ongeldig profiel.",
+      "loadFailed": "De vertrouwensprofielen konden niet worden geladen.",
+      "retryProfiles": "Profielen opnieuw laden",
+      "emptyTitle": "Geen vertrouwensprofielen geconfigureerd",
+      "emptyDescription": "Maak een vertrouwensprofiel om de geaccepteerde credentialformaten, vertrouwensbronnen en validatieregels te configureren.",
+      "createProfile": "Vertrouwensprofiel maken",
+      "pinnedSources": "Vastgelegde uitgeversbronnen",
+      "pinnedSourcesHelp": "Vastgelegde bronnen maken deel uit van het vertrouwensbeleid van een profiel. Open een profiel om de gekoppelde uitgeversrelaties te bekijken.",
+      "allowedAlgorithms": "Toegestane algoritmen",
+      "name": "Naam",
+      "framework": "Raamwerk",
+      "status": "Status",
+      "lastUpdated": "Laatst bijgewerkt",
+      "actions": "Acties",
+      "viewDetails": "Details bekijken",
+      "edit": "Bewerken",
+      "consoleBreadcrumb": "Console",
+      "trustBreadcrumb": "Vertrouwen"
+    },
+    "trustProfileEdit": {
+      "selectOrganization": "Selecteer een organisatie voordat u een vertrouwensprofiel bewerkt.",
+      "permissionDenied": "U hebt geen toestemming om vertrouwensprofielen te bewerken.",
+      "scopeMismatch": "Het antwoord voor het vertrouwensprofiel komt niet overeen met het aangevraagde profiel en de geselecteerde organisatie.",
+      "invalidResponse": "Het antwoord voor het vertrouwensprofiel is ongeldig.",
+      "suspendedStatus": "Opgeschort",
+      "unknownStatus": "Onbekend",
+      "notFound": "Vertrouwensprofiel niet gevonden."
+    },
+    "revocationDetail": {
+      "selectOrganization": "Selecteer een organisatie om intrekkingsprofielen te bekijken.",
+      "readDenied": "Je hebt geen toestemming om intrekkingsprofielen van de geselecteerde organisatie te bekijken.",
+      "profileScopeMismatch": "Het antwoord komt niet overeen met het gevraagde profiel in de geselecteerde organisatie.",
+      "activationScopeMismatch": "Het activeringsantwoord bevestigt geen ACTIEVE versie van het gevraagde profiel in de geselecteerde organisatie.",
+      "retryProfile": "Profiel opnieuw laden",
+      "activate": "Activeren",
+      "activating": "Activeren…",
+      "activationFailed": "Het intrekkingsprofiel kon niet worden geactiveerd.",
+      "loadFailed": "Het intrekkingsprofiel kon niet worden geladen.",
+      "statusDraft": "Concept",
+      "statusActive": "Actief",
+      "statusSuspended": "Opgeschort",
+      "statusUnknown": "Onbekende status",
+      "checkModeTitle": "Beleid voor intrekkingscontrole",
+      "mechanismsTitle": "Intrekkingsmechanismen",
+      "metadataTitle": "Profielmetadata",
+      "noMechanisms": "Er zijn geen intrekkingsmechanismen teruggegeven.",
+      "statusListUrl": "Statuslijsteindpunt",
+      "profileId": "Profiel-ID",
+      "organization": "Organisatie",
+      "created": "Aangemaakt",
+      "updated": "Laatst bijgewerkt",
+      "offlineGrace": "Offline respijtperiode",
+      "cacheTtl": "Cache-TTL",
+      "notAvailable": "Niet beschikbaar",
+      "backToList": "Terug naar intrekkingsprofielen",
+      "disabledAdvisory": "Controle van de credentialstatus is uitgeschakeld voor dit profiel. Gebruik het alleen wanneer intrekkingscontroles bewust buiten de scope vallen.",
+      "checkModes": {
+        "always": "Altijd controleren",
+        "alwaysDescription": "Ingesteld om bij elke verificatie de credentialstatus te controleren.",
+        "cached": "Controle met cache",
+        "cachedDescription": "Statuscontroles gebruiken de ingestelde geldigheidsduur van de cache.",
+        "offlineGrace": "Offline respijt",
+        "offlineGraceDescription": "Offline statuscontroles gebruiken de ingestelde respijtperiode.",
+        "disabled": "Uitgeschakeld",
+        "disabledDescription": "Controle van de credentialstatus is uitgeschakeld.",
+        "unknown": "Onbekend controlebeleid",
+        "unknownDescription": "De server heeft een onbekend controlebeleid teruggegeven."
+      },
+      "mechanisms": {
+        "statusList2021": "Status List 2021",
+        "bitstringStatusList": "Bitstring Status List",
+        "tokenStatusList": "Token Status List",
+        "ocsp": "OCSP",
+        "crl": "CRL",
+        "unknown": "Onbekend intrekkingsmechanisme"
+      }
+    },
+    "trustProfileDetail": {
+      "selectOrganization": "Selecteer een organisatie om dit vertrouwensprofiel te bekijken.",
+      "profileReadDenied": "U hebt geen toestemming om vertrouwensprofielen van deze organisatie te bekijken.",
+      "issuerReadDenied": "U hebt geen toestemming om relaties met uitgevers van deze organisatie te bekijken.",
+      "profileScopeMismatch": "Dit vertrouwensprofiel is niet beschikbaar in de geselecteerde organisatie.",
+      "retryProfile": "Profiel opnieuw laden",
+      "retryIssuers": "Uitgeverslijst opnieuw laden",
+      "issuerScopeMismatch": "Het antwoord van de uitgever komt niet overeen met dit profiel, deze organisatie of de gevraagde DID.",
+      "issuerNotConfirmed": "De geaccepteerde relatie met de uitgever kon niet worden bevestigd in de huidige lijst. Lees de uitgeverslijst opnieuw.",
+      "issuerLoadFailed": "De uitgeverslijst kon niet worden geladen.",
+      "issuerAddFailed": "Het toevoegen van de uitgever kon niet worden bevestigd.",
+      "issuerAwaitingReadback": "De koppeling is geaccepteerd. Opnieuw proberen leest de huidige uitgeverslijst zonder de koppeling opnieuw te versturen.",
+      "statusUnknown": "Onbekend",
+      "relationshipStatusLabel": "Vertrouwensrelatie",
+      "issuerComplianceLabel": "Conformiteit van uitgever",
+      "statusDraft": "Concept",
+      "statusActive": "Actief",
+      "statusSuspended": "Opgeschort",
+      "statusArchived": "Gearchiveerd",
+      "relationshipTrusted": "Vertrouwd",
+      "relationshipDenied": "Geweigerd",
+      "relationshipUnderReview": "In beoordeling",
+      "complianceAccredited": "Geaccrediteerd",
+      "complianceCompliant": "Conform",
+      "complianceSuspended": "Opgeschort",
+      "complianceRevoked": "Ingetrokken",
+      "credentialWalletGuidance": "Walletprofielen zijn beschikbaar bij de credentialtemplates. Bekijk het ondersteunde walletprofiel van een template; de afgeleide configuratie bewijst geen interoperabiliteit of geslaagde aflevering.",
+      "viewCredentialTemplates": "Credentialtemplates bekijken"
+    }
+  },
   "membershipReview": {
     "pending": "In afwachting",
     "description": "Beoordeel openstaande lidmaatschappen en keur toegang goed met de al toegewezen rollen.",
@@ -29,6 +142,24 @@
     }
   },
   "flows": {
+    "flowDetail": {
+      "lifecycleTitle": "Levenscyclus van flow",
+      "statusChips": {
+        "active": "Actief",
+        "draft": "Concept",
+        "paused": "Gepauzeerd",
+        "archived": "Gearchiveerd",
+        "unknown": "Onbekende status"
+      },
+      "entryPoints": {
+        "linkUnavailable": "Er is geen aanvraaglink beschikbaar voor deze flow.",
+        "qrUnavailable": "Er is geen QR-code beschikbaar voor deze flow."
+      },
+      "errors": {
+        "copyFailed": "De link kon niet worden gekopieerd. Probeer het opnieuw.",
+        "invalidActivation": "Het antwoord op de activering komt niet overeen met deze flow."
+      }
+    },
     "flowDefinition": "Flowdefinitie"
   },
   "policies": {
@@ -116,6 +247,33 @@
       "accessDescriptionWithCreate": "Word lid van een organisatie met consoletoegang of maak er een aan om verder te gaan.",
       "accessDescription": "Word lid van een organisatie met consoletoegang om verder te gaan.",
       "noMembershipsTitle": "Nog geen lidmaatschappen met consoletoegang"
+    },
+    "defaultsSection": {
+      "title": "Standaardinstellingen van de organisatie",
+      "description": "Stel standaardresources in die automatisch worden geselecteerd bij het aanmaken van nieuwe flows en configuraties.",
+      "fields": {
+        "defaultTrustProfile": "Standaardvertrouwensprofiel",
+        "defaultPresentationPolicy": "Standaardpresentatiebeleid",
+        "defaultCredentialTemplate": "Standaardsjabloon voor credentials"
+      },
+      "values": {
+        "noneManualSelection": "Geen (handmatige selectie vereist)",
+        "unavailable": "Resource niet beschikbaar",
+        "detailsUnavailable": "Resourcegegevens niet beschikbaar"
+      },
+      "actions": {
+        "save": "Standaardinstellingen opslaan",
+        "saving": "Bezig met opslaan..."
+      },
+      "messages": {
+        "loadFailed": "De standaardinstellingen van de organisatie konden niet worden geladen",
+        "saveFailed": "De standaardinstellingen van de organisatie konden niet worden opgeslagen",
+        "saveSuccess": "De standaardinstellingen van de organisatie zijn opgeslagen",
+        "organizationRequired": "Selecteer een organisatie voordat u de standaardinstellingen configureert.",
+        "permissionDenied": "U hebt geen rechten om de standaardinstellingen van de organisatie te bekijken.",
+        "unavailableDefaultsPreserved": "Een of meer opgeslagen standaardwaarden zijn niet beschikbaar. Ze blijven behouden wanneer u andere standaardwaarden wijzigt. Met bewerkingsrechten kunt u ze vervangen of de selectie wissen.",
+        "catalogPermissionRequired": "Sommige resourcegegevens zijn verborgen omdat u geen rechten hebt om de bijbehorende catalogi te bekijken."
+      }
     }
   }
 }
