@@ -1,13 +1,13 @@
 use async_trait::async_trait;
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::DateTime;
 use marty_verification::credential_format::DetectedCredentialFormat;
 use marty_verification::mdoc::{
-    MdocDocumentVerificationEvidence, MdocPresentationVerificationResult, disclosed_claims,
-    verify_mdoc_presentation,
+    disclosed_claims, verify_mdoc_presentation, MdocDocumentVerificationEvidence,
+    MdocPresentationVerificationResult,
 };
 use marty_verification::open_badges::is_retired_ob2;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::verification::OB2_RETIRED;
@@ -46,10 +46,8 @@ impl ResolvingCredentialKernel {
                 // Resolve the exact credential the Open Badge verifier will consume,
                 // including its supported VP wrapper. Never inspect
                 // an outer envelope or reinterpret a field inside the selected VC.
-                vec![
-                    open_badge_credential(&context.token)
-                        .map_err(|_| "Invalid Open Badge credential selection")?,
-                ]
+                vec![open_badge_credential(&context.token)
+                    .map_err(|_| "Invalid Open Badge credential selection")?]
             }
             DetectedCredentialFormat::W3cVcdmDi => {
                 let document = context
@@ -1896,13 +1894,11 @@ mod tests {
             "https://issuer.example/org/acme",
             "https://issuer.example/Org/Acme/",
         ] {
-            assert!(
-                governed_issuer_key(
-                    &context(override_profile.clone()),
-                    &compact_jwt(other, &kid)
-                )
-                .is_none()
-            );
+            assert!(governed_issuer_key(
+                &context(override_profile.clone()),
+                &compact_jwt(other, &kid)
+            )
+            .is_none());
         }
     }
 

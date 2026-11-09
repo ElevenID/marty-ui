@@ -2,11 +2,11 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use marty_verification::credential_format::{DetectedCredentialFormat, detect_credential_format};
+use marty_verification::credential_format::{detect_credential_format, DetectedCredentialFormat};
 use marty_verification::open_badges::is_retired_ob2;
 use mmf_security::{CredentialVerificationAuthorizationFacts, CredentialVerificationPolicyEngine};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
 use crate::{
