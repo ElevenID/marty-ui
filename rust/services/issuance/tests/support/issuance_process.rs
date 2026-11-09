@@ -82,57 +82,6 @@ fn retryable_listener_bind_failure(terminal_failure: bool, diagnostic: &str) -> 
     terminal_failure && diagnostic.contains("kind: AddrInUse")
 }
 
-#[cfg(test)]
-mod listener_bind_collision_tests {
-    use super::{bounded_startup_diagnostic, retryable_listener_bind_failure};
-    use std::io::Write;
-
-    #[test]
-    fn retries_only_terminal_addr_in_use() {
-        let bind = "Error: Os { code: 98, kind: AddrInUse, message: \"Address already in use\" }";
-        assert!(retryable_listener_bind_failure(true, bind));
-        assert!(!retryable_listener_bind_failure(false, bind));
-        assert!(!retryable_listener_bind_failure(
-            true,
-            "Error: database migration failed"
-        ));
-        assert!(!retryable_listener_bind_failure(
-            true,
-            "timed out waiting for readiness"
-        ));
-    }
-
-    #[test]
-    fn retains_bounded_tail_for_non_bind_failure() {
-        let path = std::env::temp_dir().join(format!(
-            "marty-issuance-stderr-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .read(true)
-            .create_new(true)
-            .open(&path)
-            .unwrap();
-        let mut child_writer = file.try_clone().unwrap();
-        child_writer.write_all(&vec![b'x'; 17 * 1024]).unwrap();
-        child_writer
-            .write_all(b"Error: database migration failed")
-            .unwrap();
-        let diagnostic = bounded_startup_diagnostic(&file).unwrap();
-        assert!(diagnostic.len() <= 16 * 1024);
-        assert!(diagnostic.ends_with("Error: database migration failed"));
-        assert!(!retryable_listener_bind_failure(true, &diagnostic));
-        child_writer.write_all(b"; writer remains at end").unwrap();
-        let later = bounded_startup_diagnostic(&file).unwrap();
-        assert!(later.ends_with("Error: database migration failed; writer remains at end"));
-        drop(child_writer);
-        drop(file);
-        std::fs::remove_file(path).unwrap();
-    }
-}
-
 /// Cargo only exposes a package's binary path to that package's integration
 /// tests. Cross-service acceptance receives the exact built artifact from CI.
 pub(super) fn issuance_binary() -> PathBuf {
@@ -297,4 +246,55 @@ pub(super) async fn wait_for_health_with_client(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     None
+}
+
+#[cfg(test)]
+mod listener_bind_collision_tests {
+    use super::{bounded_startup_diagnostic, retryable_listener_bind_failure};
+    use std::io::Write;
+
+    #[test]
+    fn retries_only_terminal_addr_in_use() {
+        let bind = "Error: Os { code: 98, kind: AddrInUse, message: \"Address already in use\" }";
+        assert!(retryable_listener_bind_failure(true, bind));
+        assert!(!retryable_listener_bind_failure(false, bind));
+        assert!(!retryable_listener_bind_failure(
+            true,
+            "Error: database migration failed"
+        ));
+        assert!(!retryable_listener_bind_failure(
+            true,
+            "timed out waiting for readiness"
+        ));
+    }
+
+    #[test]
+    fn retains_bounded_tail_for_non_bind_failure() {
+        let path = std::env::temp_dir().join(format!(
+            "marty-issuance-stderr-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let mut child_writer = file.try_clone().unwrap();
+        child_writer.write_all(&vec![b'x'; 17 * 1024]).unwrap();
+        child_writer
+            .write_all(b"Error: database migration failed")
+            .unwrap();
+        let diagnostic = bounded_startup_diagnostic(&file).unwrap();
+        assert!(diagnostic.len() <= 16 * 1024);
+        assert!(diagnostic.ends_with("Error: database migration failed"));
+        assert!(!retryable_listener_bind_failure(true, &diagnostic));
+        child_writer.write_all(b"; writer remains at end").unwrap();
+        let later = bounded_startup_diagnostic(&file).unwrap();
+        assert!(later.ends_with("Error: database migration failed; writer remains at end"));
+        drop(child_writer);
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+    }
 }
