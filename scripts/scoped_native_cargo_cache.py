@@ -52,18 +52,84 @@ def metadata_git_sources(metadata: bytes) -> dict[str, str]:
     return dict(sorted(found.items()))
 
 
-def render_fetch_script(lock_sha256: str, expected_sources: dict[str, str]) -> bytes:
+def _local_import_lines(expected_sources: dict[str, str], local_objects: dict) -> str:
+    """Import exact Git objects through read-only mounts with network disabled."""
+    if set(local_objects) != set(expected_sources) | {"rdfGitlink"}:
+        raise ValueError("NATIVE_CACHE_LOCAL_SOURCE_SET_CHANGED")
+    lines = []
+    imported = set()
+    for key in sorted(expected_sources):
+        repo, revision = key.split("@", 1)
+        row = local_objects[key]
+        name, tree = row.get("cargoDbName"), row.get("tree")
+        bare = row.get("bare")
+        if (row.get("revision") != revision
+                or not re.fullmatch(re.escape(repo) + r"-[0-9a-f]{16}", name or "")
+                or not re.fullmatch(r"[a-f0-9]{40}", tree or "")
+                or type(bare) is not bool or (repo != "marty-core" and bare is not True)):
+            raise ValueError("NATIVE_CACHE_LOCAL_OBJECT_PROOF_CHANGED")
+        if name in imported:
+            continue
+        imported.add(name)
+        revisions = [(k.split("@", 1)[1], local_objects[k]["tree"])
+                     for k in sorted(expected_sources) if local_objects[k]["cargoDbName"] == name]
+        lines += [f"test -d /seed/{name}",
+                  f"test \"$(git --git-dir=/seed/{name} rev-parse --is-bare-repository)\" = {'true' if bare else 'false'}",
+                  f"test -d /cargo/git/db/{name} || git init --bare -q /cargo/git/db/{name}",
+                  f"test \"$(git --git-dir=/cargo/git/db/{name} rev-parse --is-bare-repository)\" = true"]
+        for rev, expected_tree in revisions:
+            if not re.fullmatch(r"[a-f0-9]{40}", expected_tree or ""):
+                raise ValueError("NATIVE_CACHE_LOCAL_TREE_PROOF_CHANGED")
+            lines += [f"test \"$(git --git-dir=/seed/{name} cat-file -t {rev})\" = commit",
+                      f"test \"$(git --git-dir=/seed/{name} rev-parse {rev}^{{tree}})\" = {expected_tree}",
+                      f"git --git-dir=/cargo/git/db/{name} fetch -q --no-tags --no-recurse-submodules /seed/{name} {rev}",
+                      f"test \"$(git --git-dir=/cargo/git/db/{name} rev-parse {rev}^{{tree}})\" = {expected_tree}"]
+    rdf = local_objects["rdfGitlink"]
+    rdf_name, rdf_rev, rdf_tree = (rdf.get(k) for k in ("cargoDbName", "revision", "tree"))
+    if (not re.fullmatch(r"rdf-dataset-canonicalization-[0-9a-f]{16}", rdf_name or "")
+            or not re.fullmatch(r"[a-f0-9]{40}", rdf_rev or "")
+            or not re.fullmatch(r"[a-f0-9]{40}", rdf_tree or "")
+            or rdf.get("parentSource") not in expected_sources):
+        raise ValueError("NATIVE_CACHE_RDF_OBJECT_PROOF_CHANGED")
+    lines += [f"test \"$(git --git-dir=/seed/{rdf_name} cat-file -t {rdf_rev})\" = commit",
+              f"test \"$(git --git-dir=/seed/{rdf_name} rev-parse {rdf_rev}^{{tree}})\" = {rdf_tree}",
+              f"test -d /cargo/git/db/{rdf_name} || git init --bare -q /cargo/git/db/{rdf_name}",
+              f"test \"$(git --git-dir=/cargo/git/db/{rdf_name} rev-parse --is-bare-repository)\" = true",
+              f"git --git-dir=/cargo/git/db/{rdf_name} fetch -q --no-tags --no-recurse-submodules /seed/{rdf_name} {rdf_rev}",
+              f"test \"$(git --git-dir=/cargo/git/db/{rdf_name} rev-parse {rdf_rev}^{{tree}})\" = {rdf_tree}"]
+    parent = local_objects[rdf["parentSource"]]
+    ssi_name, ssi_rev = parent["cargoDbName"], parent["revision"]
+    checkout = f"/cargo/git/checkouts/{ssi_name}/{ssi_rev[:7]}"
+    lines += [f"test \"$(git --git-dir=/cargo/git/db/{ssi_name} ls-tree {ssi_rev} crates/rdf/canonicalization | cut -f1 | awk '{{print $3}}')\" = {rdf_rev}",
+              f"if [ ! -d {checkout} ]; then",
+              f"  mkdir -p /cargo/git/checkouts/{ssi_name}",
+              f"  git clone -q --no-hardlinks --no-checkout /cargo/git/db/{ssi_name} {checkout}",
+              f"  git -C {checkout} checkout -q --detach {ssi_rev}",
+              f"  git -C {checkout} config submodule.crates/rdf/canonicalization.url /cargo/git/db/{rdf_name}",
+              f"  git -C {checkout} -c protocol.file.allow=always submodule update --init --recursive",
+              f"  touch {checkout}/.cargo-ok",
+              "fi",
+              f"python3 /build/cache_guard.py verify-one-checkout {checkout} {ssi_rev} /out/ssi-gitlink-preproof.json"]
+    return "\n".join(lines) + "\n"
+
+
+def render_fetch_script(lock_sha256: str, expected_sources: dict[str, str],
+                        local_objects: dict | None = None) -> bytes:
     if re.fullmatch(r"[0-9a-f]{64}", lock_sha256) is None:
         raise ValueError("NATIVE_CACHE_LOCK_DIGEST_REQUIRED")
     # This is the *unlocalized* committed lock. Core path localization belongs
     # to the later offline compiler and has its own guarded lock boundary.
     expected_json = json.dumps(expected_sources, sort_keys=True)
+    import_lines = _local_import_lines(expected_sources, local_objects) if local_objects is not None else ""
+    fetch = ("CARGO_NET_OFFLINE=true cargo fetch --offline --locked --manifest-path /src/ui/rust/Cargo.toml > /out/fetch.log 2>&1\n"
+             if local_objects is not None else
+             "CARGO_NET_OFFLINE=false cargo fetch --locked --manifest-path /src/ui/rust/Cargo.toml > /out/fetch.log 2>&1\n")
     return ("#!/bin/sh\nset -eu\n"
             "export CARGO_HOME=/cargo CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0\n"
             "sha256sum /src/ui/rust/Cargo.lock > /out/original-lock-before.sha256\n"
             f"printf '%s  %s\\n' '{lock_sha256}' '/src/ui/rust/Cargo.lock' > /out/expected-lock.sha256\n"
             "cmp /out/original-lock-before.sha256 /out/expected-lock.sha256\n"
-            "CARGO_NET_OFFLINE=false cargo fetch --locked --manifest-path /src/ui/rust/Cargo.toml > /out/fetch.log 2>&1\n"
+            + import_lines + fetch +
             "sha256sum /src/ui/rust/Cargo.lock > /out/original-lock-after.sha256\n"
             "cmp /out/original-lock-before.sha256 /out/original-lock-after.sha256\n"
             "CARGO_NET_OFFLINE=true cargo fetch --offline --locked --manifest-path /src/ui/rust/Cargo.toml > /out/offline-fetch.log 2>&1\n"
@@ -79,6 +145,95 @@ def _git(path: Path, *args: str) -> bytes:
     if result.returncode != 0 or result.stderr:
         raise ValueError("NATIVE_CACHE_GIT_CHECKOUT_UNREADABLE")
     return result.stdout.strip()
+
+
+def _git_dir(path: Path, *args: str) -> bytes:
+    """Read exact local Git objects without using a remote or credential helper."""
+    result = subprocess.run(["git", "--git-dir", str(path), *args],
+                            capture_output=True, timeout=30)
+    if result.returncode != 0 or result.stderr:
+        raise ValueError("NATIVE_CACHE_LOCAL_GIT_OBJECT_UNREADABLE")
+    return result.stdout.strip()
+
+
+def verified_local_objects(original_lock: bytes, sources: dict) -> dict:
+    """Bind local read-only object directories to every original lock Git source.
+
+    `sources` is private operator input, never a replacement for Cargo.lock URLs.
+    The rdf gitlink is derived from the exact SSI parent tree rather than supplied
+    as another Cargo dependency.
+    """
+    expected = git_sources(original_lock)
+    if set(sources) != set(expected) | {"rdfGitlink"}:
+        raise ValueError("NATIVE_CACHE_LOCAL_SOURCE_SET_CHANGED")
+    result = {}
+    mounted_names = {}
+    for key, source in expected.items():
+        repo, revision = key.split("@", 1)
+        row = sources[key]
+        if (set(row) != {"gitDirectory", "cargoDbName", "checkoutDirectory"}
+                or source != f"git+https://github.com/ElevenID/{repo}?rev={revision}#{revision}"):
+            raise ValueError("NATIVE_CACHE_LOCAL_SOURCE_CHANGED")
+        directory = Path(row["gitDirectory"])
+        if (not directory.is_absolute() or not directory.is_dir() or directory.is_symlink()
+                or directory.is_junction()
+                or not re.fullmatch(re.escape(repo) + r"-[0-9a-f]{16}", row["cargoDbName"])):
+            raise ValueError("NATIVE_CACHE_LOCAL_OBJECT_DIRECTORY_CHANGED")
+        resolved = str(directory.resolve())
+        if (row["cargoDbName"] in mounted_names
+                and mounted_names[row["cargoDbName"]] != resolved):
+            raise ValueError("NATIVE_CACHE_LOCAL_SHARED_DB_CHANGED")
+        mounted_names[row["cargoDbName"]] = resolved
+        bare = _git_dir(directory, "rev-parse", "--is-bare-repository") == b"true"
+        if (repo != "marty-core" and not bare):
+            raise ValueError("NATIVE_CACHE_LOCAL_SEED_NOT_BARE")
+        if (_git_dir(directory, "cat-file", "-t", revision) != b"commit"
+                or _git_dir(directory, "rev-parse", revision + "^{tree}") == b""):
+            raise ValueError("NATIVE_CACHE_LOCAL_COMMIT_MISSING")
+        checkout = row["checkoutDirectory"]
+        if checkout is not None:
+            checked = Path(checkout)
+            proof = _clean_checkout(checked, revision)
+            if checked.parent.name != row["cargoDbName"] or proof["revision"] != revision:
+                raise ValueError("NATIVE_CACHE_LOCAL_CHECKOUT_CHANGED")
+        result[key] = {"gitDirectory": resolved,
+                       "cargoDbName": row["cargoDbName"],
+                       "revision": revision,
+                       "tree": _git_dir(directory, "rev-parse", revision + "^{tree}").decode(),
+                       "bare": bare,
+                       "checkout": checkout}
+    ssi = [key for key in expected if key.startswith("ssi-elevenid@") and
+           _git_dir(Path(result[key]["gitDirectory"]), "ls-tree", result[key]["revision"],
+                    "crates/rdf/canonicalization")]
+    if len(ssi) != 1:
+        raise ValueError("NATIVE_CACHE_RDF_GITLINK_SCOPE_CHANGED")
+    parent = result[ssi[0]]
+    parent_dir = Path(parent["gitDirectory"])
+    gitlink = _git_dir(parent_dir, "ls-tree", parent["revision"],
+                       "crates/rdf/canonicalization").decode().split()
+    if (len(gitlink) != 4 or gitlink[0] != "160000" or gitlink[1] != "commit"
+            or gitlink[3] != "crates/rdf/canonicalization"
+            or b"url = https://github.com/w3c-ccg/rdf-dataset-canonicalization"
+                not in _git_dir(parent_dir, "show", parent["revision"] + ":.gitmodules")):
+        raise ValueError("NATIVE_CACHE_RDF_GITLINK_CHANGED")
+    rdf_row = sources["rdfGitlink"]
+    if set(rdf_row) != {"gitDirectory", "cargoDbName"}:
+        raise ValueError("NATIVE_CACHE_RDF_OBJECT_SOURCE_CHANGED")
+    rdf_dir = Path(rdf_row["gitDirectory"])
+    if (not rdf_dir.is_absolute() or not rdf_dir.is_dir() or rdf_dir.is_symlink()
+            or rdf_dir.is_junction()
+            or not re.fullmatch(r"rdf-dataset-canonicalization-[0-9a-f]{16}",
+                                rdf_row["cargoDbName"])
+            or _git_dir(rdf_dir, "rev-parse", "--is-bare-repository") != b"true"
+            or _git_dir(rdf_dir, "cat-file", "-t", gitlink[2]) != b"commit"):
+        raise ValueError("NATIVE_CACHE_RDF_OBJECT_MISSING")
+    result["rdfGitlink"] = {"gitDirectory": str(rdf_dir.resolve()),
+                            "cargoDbName": rdf_row["cargoDbName"],
+                            "revision": gitlink[2],
+                            "tree": _git_dir(rdf_dir, "rev-parse", gitlink[2] + "^{tree}").decode(),
+                            "bare": True,
+                            "parentSource": ssi[0]}
+    return result
 
 
 def _clean_checkout(path: Path, expected_revision: str) -> dict:
@@ -156,6 +311,11 @@ def validate_receipt(plan: dict, receipt: dict, original_lock: bytes,
     resolved = metadata_git_sources(offline_metadata)
     checkout = json.loads(checkout_proof)
     core_rev = plan["sources"]["core"]["revision"]
+    local_objects = plan.get("localObjects")
+    if local_objects is not None:
+        if (receipt.get("cacheMode") != "LOCAL_OFFLINE_OBJECTS"
+                or receipt.get("localObjects") != local_objects):
+            raise ValueError("NATIVE_CACHE_LOCAL_OBJECT_RECEIPT_CHANGED")
     if "marty-core@" + core_rev not in expected:
         raise ValueError("NATIVE_CACHE_FROZEN_CORE_LOCK_CHANGED")
     if not (receipt.get("state") == "LOCKED_FETCH_AND_OFFLINE_READBACK_PASSED"
@@ -237,12 +397,17 @@ def hydrate(plan: dict, helper, journal) -> dict:
             "NATIVE_CACHE_FRESH_SOURCE_OUTPUT_REQUIRED")
     digest = sha(lock)
     expected_sources = git_sources(lock.read_bytes())
+    local_objects = plan.get("localObjects")
+    if local_objects is not None:
+        require(plan.get("cacheMode") == "LOCAL_OFFLINE_OBJECTS"
+                and verified_local_objects(lock.read_bytes(), plan["localObjectSources"]) == local_objects,
+                "NATIVE_CACHE_LOCAL_SOURCE_CHANGED")
     require("marty-core@" + plan["sources"]["core"]["revision"] in expected_sources,
             "NATIVE_CACHE_FROZEN_CORE_LOCK_CHANGED")
     script = Path(plan["cacheScript"]["path"]).resolve(strict=True)
     guard = Path(plan["cacheGuard"]["path"]).resolve(strict=True)
     require(sha(script) == plan["cacheScript"]["sha256"]
-            and script.read_bytes() == render_fetch_script(digest, expected_sources)
+            and script.read_bytes() == render_fetch_script(digest, expected_sources, local_objects)
             and guard == Path(__file__).resolve()
             and sha(guard) == plan["cacheGuard"]["sha256"],
             "NATIVE_CACHE_EXACT_SCRIPT_REQUIRED")
@@ -276,15 +441,26 @@ def hydrate(plan: dict, helper, journal) -> dict:
               "compilerStarted": False}
     proof = journal.exclusive("build-apply-intent.json", intent)
     require(durable_barrier(proof), "NATIVE_CACHE_DURABLE_INTENT_REQUIRED")
+    local_mounts = []
+    if local_objects is not None:
+        for key in sorted(local_objects):
+            source_row = local_objects[key]
+            mount_name = source_row["cargoDbName"]
+            if mount_name not in {row["name"] for row in local_mounts}:
+                local_mounts.append({"name": mount_name, "path": source_row["gitDirectory"]})
     args = ["docker", "--context", "desktop-linux", "create", "--pull=never", "--name", name,
             "--label", "elevenid.owner=native-cargo-cache", "--label", "elevenid.run=" + run_id,
-            "--network", "bridge", "--memory", "2g", "--memory-swap", "4g", "--cpus", "1",
+            "--network", "none" if local_objects is not None else "bridge",
+            "--memory", "2g", "--memory-swap", "4g", "--cpus", "1",
             "--pids-limit", "64", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--mount", "type=bind,src=" + daemon_source(source) + ",dst=/src/ui,readonly",
             "--mount", "type=bind,src=" + daemon_source(output) + ",dst=/out",
             "--mount", "type=bind,src=" + daemon_source(script) + ",dst=/fetch.sh,readonly",
             "--mount", "type=bind,src=" + daemon_source(guard) + ",dst=/build/cache_guard.py,readonly",
             "--mount", "type=volume,src=ui-canvas-cargo,dst=/cargo",
+            *[arg for source_row in local_mounts for arg in
+              ("--mount", "type=bind,src=" + daemon_source(source_row["path"])
+               + ",dst=/seed/" + source_row["name"] + ",readonly")],
             "--entrypoint", "/bin/sh", image["Id"], "/fetch.sh"]
     cid = helper.run(*args).stdout.strip()
     require(re.fullmatch(r"[a-f0-9]{64}", cid), "NATIVE_CACHE_CREATED_CID_UNKNOWN")
@@ -296,12 +472,14 @@ def hydrate(plan: dict, helper, journal) -> dict:
             and row["State"]["Status"] == "created"
             and row["Config"]["Labels"]["elevenid.owner"] == "native-cargo-cache"
             and row["Config"]["Labels"]["elevenid.run"] == run_id
-            and host["NetworkMode"] == "bridge" and host["Memory"] == 2 * 1024 ** 3
+            and host["NetworkMode"] == ("none" if local_objects is not None else "bridge")
+            and host["Memory"] == 2 * 1024 ** 3
             and host["MemorySwap"] == 4 * 1024 ** 3 and host["PidsLimit"] == 64
             and host["NanoCpus"] == 10 ** 9
             and host["Privileged"] is False and "ALL" in host["CapDrop"]
-            and len(row["Mounts"]) == len(mounts) == 5
+            and len(row["Mounts"]) == len(mounts) == 5 + len(local_mounts)
             and set(mounts) == {"/src/ui", "/out", "/fetch.sh", "/build/cache_guard.py", "/cargo"}
+                | {"/seed/" + source_row["name"] for source_row in local_mounts}
             and mounts["/src/ui"]["RW"] is False and mounts["/fetch.sh"]["RW"] is False
             and mounts["/build/cache_guard.py"]["RW"] is False
             and mounts["/out"]["RW"] is True and mounts["/cargo"]["RW"] is True
@@ -311,6 +489,11 @@ def hydrate(plan: dict, helper, journal) -> dict:
             and daemon_source(mounts["/fetch.sh"]["Source"]) == daemon_source(script)
             and daemon_source(mounts["/build/cache_guard.py"]["Source"]) == daemon_source(guard),
             "NATIVE_CACHE_CREATED_IDENTITY_CHANGED")
+    for source_row in local_mounts:
+        mount = mounts["/seed/" + source_row["name"]]
+        require(mount["Type"] == "bind" and mount["RW"] is False
+                and daemon_source(mount["Source"]) == daemon_source(source_row["path"]),
+                "NATIVE_CACHE_LOCAL_MOUNT_CHANGED")
     require(durable_barrier(journal.state({**intent, "state": "CACHE_FETCH_START_INTENT", "containerId": cid})),
             "NATIVE_CACHE_START_DURABILITY_REQUIRED")
     helper.run("docker", "--context", "desktop-linux", "start", cid)
@@ -352,11 +535,23 @@ def hydrate(plan: dict, helper, journal) -> dict:
                "checkoutProofRef": ref(output / "checkout-proof.json"),
                "uiTree": plan["sources"]["ui"]["tree"], "journalBackend": plan["journalBackend"],
                "uiInventorySha256": plan["sources"]["ui"]["inventory"]["sha256"]}
+    if local_objects is not None:
+        receipt["cacheMode"] = "LOCAL_OFFLINE_OBJECTS"
+        receipt["localObjects"] = local_objects
     journal.exclusive("build-receipt.json", receipt)
     return receipt
 
 
 def main() -> None:
+    if len(sys.argv) == 5 and sys.argv[1] == "verify-one-checkout":
+        revision = sys.argv[3]
+        if not re.fullmatch(r"[a-f0-9]{40}", revision):
+            raise ValueError("NATIVE_CACHE_EXACT_CHECKOUT_REVISION_REQUIRED")
+        proof = _clean_checkout(Path(sys.argv[2]), revision)
+        with Path(sys.argv[4]).open("x", encoding="utf-8") as stream:
+            json.dump(proof, stream, sort_keys=True)
+            stream.write("\n")
+        return
     parser = argparse.ArgumentParser(description="Verify exact Cargo Git checkout bytes")
     parser.add_argument("command", choices=("verify-checkouts",))
     parser.add_argument("expected", type=Path)
