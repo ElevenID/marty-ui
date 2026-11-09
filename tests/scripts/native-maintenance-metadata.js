@@ -43,19 +43,22 @@ function currentDatabaseBaseline(refs,approvedBefore,approvedEngine){
  assert(/^[1-9][0-9]{0,9}$/.test(control.databaseOid));
  return {database:'marty',systemIdentifier:control.systemIdentifier,databaseOid:control.databaseOid};
 }
-function closedScope(profile,approvedBefore,approvedEngine,sourceRevision,coreRevision,baseline){
+function sourceScope(profile,approvedBefore,approvedEngine,sourceRevision,coreRevision){
  if(profile===D12_PROFILE){assert(/^[a-f0-9]{64}$/.test(approvedBefore),'D12_APPROVED_DATABASE_PREIMAGE_REQUIRED');
   assert(/^[a-f0-9-]{36}$/.test(approvedEngine),'D12_APPROVED_ENGINE_REQUIRED');
   const source=sourceRevision===undefined?D12_SOURCE:sourceRevision;
   const core=coreRevision===undefined?D12_CORE:coreRevision;
   assert((source===D12_SOURCE&&core===D12_CORE)||(source===D12_CURRENT_SOURCE&&core===D12_CURRENT_CORE),'UNREVIEWED_D12_SOURCE_LINEAGE');
-  assert(source===D12_CURRENT_SOURCE||baseline===undefined,'HISTORICAL_D12_BASELINE_CHANGED');
-  const target=source===D12_CURRENT_SOURCE?currentDatabaseBaseline(baseline,approvedBefore,approvedEngine):
-   {database:'marty',systemIdentifier:'7698090346923700258',databaseOid:'16387'};
-  return {source,core,databaseBeforeSha256:approvedBefore,engineId:approvedEngine,target,stateSchema:'marty.native-d12-current-operation-state/v1'};}
+  return {source,core,databaseBeforeSha256:approvedBefore,engineId:approvedEngine,stateSchema:'marty.native-d12-current-operation-state/v1'};}
  assert(profile==null||profile==='native-devtest-passport-four-role','UNREVIEWED_DATABASE_PROFILE');
- assert(baseline===undefined,'HISTORICAL_FOUR_ROLE_BASELINE_CHANGED');
- return {source:SOURCE,core:CORE,databaseBeforeSha256:PG_BASE_SHA,engineId:'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341',target:{database:'marty',systemIdentifier:'7698090346923700258',databaseOid:'16387'},stateSchema:'marty.native-four-role-operation-state/v1'};
+ return {source:SOURCE,core:CORE,databaseBeforeSha256:PG_BASE_SHA,engineId:'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341',stateSchema:'marty.native-four-role-operation-state/v1'};
+}
+function closedScope(profile,approvedBefore,approvedEngine,sourceRevision,coreRevision,baseline){
+ const source=sourceScope(profile,approvedBefore,approvedEngine,sourceRevision,coreRevision);
+ if(profile===D12_PROFILE&&source.source===D12_CURRENT_SOURCE)
+  return {...source,target:currentDatabaseBaseline(baseline,approvedBefore,approvedEngine)};
+ assert(baseline===undefined,profile===D12_PROFILE?'HISTORICAL_D12_BASELINE_CHANGED':'HISTORICAL_FOUR_ROLE_BASELINE_CHANGED');
+ return {...source,target:{database:'marty',systemIdentifier:'7698090346923700258',databaseOid:'16387'}};
 }
 const same=(a,b,code)=>assert(util.isDeepStrictEqual(a,b),code);
 const MIGRATIONS=Object.freeze([
@@ -66,7 +69,11 @@ const CATALOG_SQL_SHA='e7972f5d018100c5288dbe4eca0df2dbaa61ce21f8a34991789a3a173
 const PG_BASE_SHA='7edeffa3c4cbc10d02010dd0bfbd2e84e2cf4cf149e1c8d5bf7e834a5aedf075';
 function observeCatalog(inputs,{readDocker}={}){
  assert.equal(typeof readDocker,'function','ACTUAL_DOCKER_READER_REQUIRED');
- const scope=closedScope(inputs.rolloutProfile,inputs.approvedDatabaseBeforeSha256,inputs.approvedEngineId,inputs.sourceRevision,inputs.coreRevision,inputs.baseline);
+ // A first read-only observation establishes the target; fenced execution
+ // separately requires the reviewed baseline through closedScope.
+ const scope=inputs.baseline===undefined?
+  sourceScope(inputs.rolloutProfile,inputs.approvedDatabaseBeforeSha256,inputs.approvedEngineId,inputs.sourceRevision,inputs.coreRevision):
+  closedScope(inputs.rolloutProfile,inputs.approvedDatabaseBeforeSha256,inputs.approvedEngineId,inputs.sourceRevision,inputs.coreRevision,inputs.baseline);
  assert.equal(inputs.databaseBefore.sha256,scope.databaseBeforeSha256);const prior=runtime.boundJson(inputs.databaseBefore).databaseIdentity;
  assert.equal(inputs.sql.sha256,CATALOG_SQL_SHA);const sql=runtime.boundBytes(inputs.sql);
  function identity(){

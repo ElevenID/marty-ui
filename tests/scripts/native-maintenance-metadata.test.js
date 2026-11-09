@@ -36,7 +36,7 @@ function withCurrentBaseline(body,{runId='d12-db-readonly-ui7af-r1',operatorRevi
   const job=write('job.json',{schema:'marty.windows-job-result/v1',state:'COMPLETE',exitCode:0,jobClosed:true,
    terminalActiveProcesses:0,forcedTermination:false,hostMarginBreached:false,timedOut:false,
    jobMemoryBytes:1024**3,hostMarginBytes:1024**3,assignedBeforeResume:true,processCreatedSuspended:true});
-  return body({engine,before,baseline:{catalog:observation,proof,job},write});
+  return body({engine,before,sqlRef,baseline:{catalog:observation,proof,job},write});
  }finally{fs.rmSync(dir,{recursive:true});}
 }
 test('current D12 database scope refuses stale source and unbound preimage',()=>{
@@ -73,6 +73,32 @@ test('a second reviewed baseline run binds its own Git source and catalog receip
  withCurrentBaseline(({engine,before,baseline})=>{
   assert.throws(()=>m.closedScope(m.D12_PROFILE,before.sha256,engine,m.D12_CURRENT_SOURCE,m.D12_CURRENT_CORE,baseline),/D12_BASELINE_OPERATOR_GIT_REVISION_REQUIRED/);
  },{runId:'d12-db-readonly-fresh-r3',operatorRevision:'not-a-git-revision'});
+});
+test('current-source read-only catalog establishes a first baseline without authorizing fenced execution',()=>{
+ withCurrentBaseline(({engine,before,sqlRef})=>{
+  const identity=JSON.parse(require('node:fs').readFileSync(before.path)).databaseIdentity;
+  const row={Id:identity.containerId,Image:identity.imageId,
+   State:{Running:true,StartedAt:identity.startedAt,Pid:identity.hostPid},
+   Config:{Labels:{'com.docker.compose.project':'elevenid-beta','com.docker.compose.service':'postgres'}}};
+  const calls=[];
+  const readDocker=argv=>{calls.push(argv);
+   if(argv[0]==='info')return JSON.stringify({ID:engine});
+   if(argv[0]==='inspect')return JSON.stringify([row]);
+   if(argv[0]==='exec')return JSON.stringify({schema:'marty.native-maintenance-catalog/v1',
+    control:{database:'marty',systemIdentifier:'7702258360779493410',databaseOid:'16387'}})+'\n';
+   throw Error('UNREVIEWED_DOCKER_COMMAND');};
+  const input={runId:'fresh-current-observation',rolloutProfile:m.D12_PROFILE,
+   sourceRevision:m.D12_CURRENT_SOURCE,coreRevision:m.D12_CURRENT_CORE,
+   approvedDatabaseBeforeSha256:before.sha256,approvedEngineId:engine,databaseBefore:before,sql:sqlRef};
+  const observed=m.observeCatalog(input,{readDocker});
+  assert.equal(observed.runId,input.runId);assert.equal(observed.projection.control.systemIdentifier,'7702258360779493410');
+  assert.deepEqual(calls.map(argv=>argv[0]),['info','inspect','exec','info','inspect']);
+  assert(calls[2].includes('PGOPTIONS=-c default_transaction_read_only=on -c statement_timeout=5000'));
+  assert.throws(()=>m.closedScope(m.D12_PROFILE,before.sha256,engine,m.D12_CURRENT_SOURCE,m.D12_CURRENT_CORE));
+  assert.throws(()=>m.observeCatalog({...input,approvedDatabaseBeforeSha256:'0'.repeat(64)},{readDocker}));
+  assert.throws(()=>m.observeCatalog({...input,approvedEngineId:'22222222-2222-4222-8222-222222222222'},{readDocker}));
+  assert.throws(()=>m.observeCatalog({...input,coreRevision:m.D12_CORE},{readDocker}),/UNREVIEWED_D12_SOURCE_LINEAGE/);
+ });
 });
 test('current D12 operation proof reaches ordered journal checks with exact lineage',()=>{
  const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
