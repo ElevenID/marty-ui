@@ -28,37 +28,6 @@ pub(super) fn reserve_port() -> (TcpListener, u16) {
     (listener, port)
 }
 
-/// Read a fixed-size snapshot without moving the child writer's shared file
-/// offset. This is also safe while an unhealthy child remains alive.
-pub(super) fn bounded_startup_diagnostic(stderr: &std::fs::File) -> std::io::Result<String> {
-    let length = stderr.metadata()?.len();
-    let start = length.saturating_sub(16 * 1024);
-    let mut bytes = vec![0; (length - start) as usize];
-    let mut filled = 0;
-    while filled < bytes.len() {
-        #[cfg(unix)]
-        let count = {
-            use std::os::unix::fs::FileExt;
-            stderr.read_at(&mut bytes[filled..], start + filled as u64)?
-        };
-        #[cfg(windows)]
-        let count = {
-            use std::os::windows::fs::FileExt;
-            stderr.seek_read(&mut bytes[filled..], start + filled as u64)?
-        };
-        if count == 0 {
-            break;
-        }
-        filled += count;
-    }
-    bytes.truncate(filled);
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-pub(super) fn retryable_listener_bind_failure(terminal_failure: bool, diagnostic: &str) -> bool {
-    terminal_failure && diagnostic.contains("kind: AddrInUse")
-}
-
 /// Cargo only exposes a package's binary path to that package's integration
 /// tests. Cross-service acceptance receives the exact built artifact from CI.
 pub(super) fn issuance_binary() -> PathBuf {

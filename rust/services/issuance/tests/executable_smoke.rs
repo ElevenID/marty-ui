@@ -14,12 +14,43 @@ use marty_issuance_service::issuance_proto::{
 mod issuance_process;
 
 use issuance_process::{
-    bounded_http_client, bounded_startup_diagnostic, isolated_smoke_command, reserve_port,
-    retryable_listener_bind_failure, smoke_command, wait_for_health_with_client, ChildGuard,
+    bounded_http_client, isolated_smoke_command, reserve_port, smoke_command,
+    wait_for_health_with_client, ChildGuard,
 };
 
 #[path = "support/canvas_worker_logging_contract.rs"]
 mod canvas_worker_logging_contract;
+
+/// Read a fixed-size snapshot without moving the child writer's shared file
+/// offset. This is also safe while an unhealthy child remains alive.
+fn bounded_startup_diagnostic(stderr: &std::fs::File) -> std::io::Result<String> {
+    let length = stderr.metadata()?.len();
+    let start = length.saturating_sub(16 * 1024);
+    let mut bytes = vec![0; (length - start) as usize];
+    let mut filled = 0;
+    while filled < bytes.len() {
+        #[cfg(unix)]
+        let count = {
+            use std::os::unix::fs::FileExt;
+            stderr.read_at(&mut bytes[filled..], start + filled as u64)?
+        };
+        #[cfg(windows)]
+        let count = {
+            use std::os::windows::fs::FileExt;
+            stderr.seek_read(&mut bytes[filled..], start + filled as u64)?
+        };
+        if count == 0 {
+            break;
+        }
+        filled += count;
+    }
+    bytes.truncate(filled);
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn retryable_listener_bind_failure(terminal_failure: bool, diagnostic: &str) -> bool {
+    terminal_failure && diagnostic.contains("kind: AddrInUse")
+}
 
 /// A released ephemeral port may be claimed before the child reaches bind.
 /// Keep a bounded diagnostic from a terminal child; callers retry only the
