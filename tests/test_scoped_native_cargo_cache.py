@@ -247,3 +247,74 @@ def test_retirement_requires_successful_exact_daemon_census(census, expected):
     else:
         with pytest.raises(ValueError, match=expected):
             subject.confirm_retired(Helper(), "5" * 64, "engine-control")
+
+
+def _registry_control_lock(crate: bytes) -> bytes:
+    checksum = hashlib.sha256(crate).hexdigest()
+    return (f'[[package]]\nname = "strum"\nversion = "0.28.0"\n'
+            f'source = "{subject.REGISTRY_SOURCE}"\nchecksum = "{checksum}"\n').encode()
+
+
+def test_locked_registry_archive_import_reuses_exact_file_without_replacement(tmp_path):
+    crate = b"small locked crate control\n"
+    lock = _registry_control_lock(crate)
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "strum-0.28.0.crate").write_bytes(crate)
+    destination = tmp_path / "cargo/registry/cache" / subject.REGISTRY_CACHE
+    first = subject.import_registry_archives(lock, seed, destination, tmp_path / "proof-one.json")
+    assert first["copied"] == 1 and first["reused"] == 0
+    assert (destination / "strum-0.28.0.crate").read_bytes() == crate
+    second = subject.import_registry_archives(lock, seed, destination, tmp_path / "proof-two.json")
+    assert second["copied"] == 0 and second["reused"] == 1
+    assert (destination / "strum-0.28.0.crate").read_bytes() == crate
+
+
+def test_locked_registry_archive_refuses_bad_seed_and_existing_mismatch(tmp_path):
+    crate = b"locked archive"
+    lock = _registry_control_lock(crate)
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    source = seed / "strum-0.28.0.crate"
+    source.write_bytes(b"different bytes")
+    destination = tmp_path / "cargo/registry/cache" / subject.REGISTRY_CACHE
+    with pytest.raises(ValueError, match="NATIVE_CACHE_REGISTRY_ARCHIVE_CHANGED"):
+        subject.import_registry_archives(lock, seed, destination, tmp_path / "proof.json")
+    assert not destination.exists()
+    source.write_bytes(crate)
+    destination.mkdir(parents=True)
+    target = destination / source.name
+    target.write_bytes(b"foreign data")
+    with pytest.raises(ValueError, match="NATIVE_CACHE_REGISTRY_EXISTING_MISMATCH"):
+        subject.import_registry_archives(lock, seed, destination, tmp_path / "proof.json")
+    assert target.read_bytes() == b"foreign data"
+    assert not (tmp_path / "proof.json").exists()
+
+
+def test_existing_registry_proof_refuses_before_cache_directory_creation(tmp_path):
+    crate = b"locked archive"
+    lock = _registry_control_lock(crate)
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "strum-0.28.0.crate").write_bytes(crate)
+    proof = tmp_path / "proof.json"
+    proof.write_text("prior attempt")
+    destination = tmp_path / "cargo/registry/cache" / subject.REGISTRY_CACHE
+    with pytest.raises(ValueError, match="NATIVE_CACHE_REGISTRY_PROOF_ALREADY_EXISTS"):
+        subject.import_registry_archives(lock, seed, destination, proof)
+    assert not destination.exists() and proof.read_text() == "prior attempt"
+
+
+def test_local_script_imports_registry_before_offline_fetch_and_networked_default_is_unchanged():
+    lock, sources, *_ = setup()
+    local = {key: {"revision": key.split("@", 1)[1], "tree": "a" * 40,
+                   "cargoDbName": key.split("@", 1)[0] + "-0123456789abcdef",
+                   "bare": key.split("@", 1)[0] != "marty-core"} for key in sources}
+    local["rdfGitlink"] = {"revision": "b" * 40, "tree": "c" * 40,
+                            "cargoDbName": "rdf-dataset-canonicalization-0123456789abcdef",
+                            "parentSource": next(key for key in sources if key.startswith("ssi-elevenid@"))}
+    script = subject.render_fetch_script(hashlib.sha256(lock).hexdigest(), sources, local).decode()
+    assert script.index("import-registry") < script.index("cargo fetch --offline --locked")
+    assert "/seed/registry" in script and "CARGO_NET_OFFLINE=false" not in script
+    default = subject.render_fetch_script(hashlib.sha256(lock).hexdigest(), sources).decode()
+    assert "import-registry" not in default and "CARGO_NET_OFFLINE=false cargo fetch --locked" in default

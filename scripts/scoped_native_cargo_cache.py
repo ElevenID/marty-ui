@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -18,6 +19,8 @@ import time
 
 
 REV = re.compile(r"git\+https://github\.com/ElevenID/([A-Za-z0-9_-]+)\?rev=([0-9a-f]{40})#([0-9a-f]{40})\Z")
+REGISTRY_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
+REGISTRY_CACHE = "index.crates.io-1949cf8c6b5b557f"
 
 
 def git_sources(original_lock: bytes) -> dict[str, str]:
@@ -36,6 +39,109 @@ def git_sources(original_lock: bytes) -> dict[str, str]:
     if not found:
         raise ValueError("NATIVE_CACHE_GIT_SOURCES_MISSING")
     return dict(sorted(found.items()))
+
+
+def registry_archives(original_lock: bytes) -> dict[str, str]:
+    """Derive every exact crates.io archive checksum from the original lock."""
+    rows = tomllib.loads(original_lock.decode("utf-8"))["package"]
+    result = {}
+    for row in rows:
+        source = row.get("source", "")
+        if not source.startswith("registry+"):
+            continue
+        name, version, checksum = (row.get(key) for key in ("name", "version", "checksum"))
+        if (source != REGISTRY_SOURCE or not isinstance(name, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", name)
+                or not isinstance(version, str)
+                or not re.fullmatch(r"[A-Za-z0-9.+-]{1,64}", version)
+                or not isinstance(checksum, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", checksum)):
+            raise ValueError("NATIVE_CACHE_REGISTRY_SOURCE_CHANGED")
+        filename = f"{name}-{version}.crate"
+        if filename in result and result[filename] != checksum:
+            raise ValueError("NATIVE_CACHE_REGISTRY_ARCHIVE_CONFLICT")
+        result[filename] = checksum
+    if not result:
+        raise ValueError("NATIVE_CACHE_REGISTRY_ARCHIVES_MISSING")
+    return dict(sorted(result.items()))
+
+
+def registry_set_sha256(archives: dict[str, str]) -> str:
+    return hashlib.sha256(json.dumps(archives, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verified_registry_seed(original_lock: bytes, directory: Path) -> dict[str, str]:
+    archives = registry_archives(original_lock)
+    if (not directory.is_dir() or directory.is_symlink()
+            or getattr(directory, "is_junction", lambda: False)()):
+        raise ValueError("NATIVE_CACHE_REGISTRY_SEED_CHANGED")
+    for filename, checksum in archives.items():
+        file = directory / filename
+        if (not file.is_file() or file.is_symlink() or file.stat().st_size > 128 * 1024 ** 2
+                or _file_sha256(file) != checksum):
+            raise ValueError("NATIVE_CACHE_REGISTRY_ARCHIVE_CHANGED:" + filename)
+    return archives
+
+
+def import_registry_archives(original_lock: bytes, seed: Path, destination: Path,
+                             proof_output: Path) -> dict:
+    """Copy locked archives into owned Cargo cache with atomic no-replace links."""
+    archives = verified_registry_seed(original_lock, seed)
+    for part in (destination.parent.parent, destination.parent, destination):
+        if part.exists() and (not part.is_dir() or part.is_symlink()):
+            raise ValueError("NATIVE_CACHE_REGISTRY_DESTINATION_CHANGED")
+    if proof_output.exists() or proof_output.is_symlink():
+        raise ValueError("NATIVE_CACHE_REGISTRY_PROOF_ALREADY_EXISTS")
+    destination.mkdir(parents=True, exist_ok=True)
+    copied = reused = 0
+    for filename, checksum in archives.items():
+        target = destination / filename
+        if target.exists() or target.is_symlink():
+            if (not target.is_file() or target.is_symlink()
+                    or _file_sha256(target) != checksum):
+                raise ValueError("NATIVE_CACHE_REGISTRY_EXISTING_MISMATCH:" + filename)
+            reused += 1
+            continue
+        staged = destination / (".marty-local-import-" + str(os.getpid()) + "-" + filename)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(staged, flags, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as output, (seed / filename).open("rb") as source:
+                shutil.copyfileobj(source, output, length=1024 * 1024)
+                output.flush()
+                os.fsync(output.fileno())
+            if _file_sha256(staged) != checksum:
+                raise ValueError("NATIVE_CACHE_REGISTRY_STAGE_CHANGED:" + filename)
+            try:
+                os.link(staged, target)
+                copied += 1
+            except FileExistsError:
+                if (not target.is_file() or target.is_symlink()
+                        or _file_sha256(target) != checksum):
+                    raise ValueError("NATIVE_CACHE_REGISTRY_RACED_MISMATCH:" + filename) from None
+                reused += 1
+        finally:
+            staged.unlink(missing_ok=True)
+        if _file_sha256(target) != checksum:
+            raise ValueError("NATIVE_CACHE_REGISTRY_PROMOTION_CHANGED:" + filename)
+    proof = {"state": "EXACT_LOCK_REGISTRY_ARCHIVES_READBACK", "count": len(archives),
+             "copied": copied, "reused": reused,
+             "archiveSetSha256": registry_set_sha256(archives),
+             "originalLockSha256": hashlib.sha256(original_lock).hexdigest()}
+    with proof_output.open("x", encoding="utf-8") as stream:
+        json.dump(proof, stream, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    return proof
 
 
 def metadata_git_sources(metadata: bytes) -> dict[str, str]:
@@ -121,6 +227,9 @@ def render_fetch_script(lock_sha256: str, expected_sources: dict[str, str],
     # to the later offline compiler and has its own guarded lock boundary.
     expected_json = json.dumps(expected_sources, sort_keys=True)
     import_lines = _local_import_lines(expected_sources, local_objects) if local_objects is not None else ""
+    registry_line = ("python3 /build/cache_guard.py import-registry /src/ui/rust/Cargo.lock "
+                     "/seed/registry /cargo/registry/cache/" + REGISTRY_CACHE
+                     + " /out/registry-proof.json\n") if local_objects is not None else ""
     fetch = ("CARGO_NET_OFFLINE=true cargo fetch --offline --locked --manifest-path /src/ui/rust/Cargo.toml > /out/fetch.log 2>&1\n"
              if local_objects is not None else
              "CARGO_NET_OFFLINE=false cargo fetch --locked --manifest-path /src/ui/rust/Cargo.toml > /out/fetch.log 2>&1\n")
@@ -129,7 +238,7 @@ def render_fetch_script(lock_sha256: str, expected_sources: dict[str, str],
             "sha256sum /src/ui/rust/Cargo.lock > /out/original-lock-before.sha256\n"
             f"printf '%s  %s\\n' '{lock_sha256}' '/src/ui/rust/Cargo.lock' > /out/expected-lock.sha256\n"
             "cmp /out/original-lock-before.sha256 /out/expected-lock.sha256\n"
-            + import_lines + fetch +
+            + import_lines + registry_line + fetch +
             "sha256sum /src/ui/rust/Cargo.lock > /out/original-lock-after.sha256\n"
             "cmp /out/original-lock-before.sha256 /out/original-lock-after.sha256\n"
             "CARGO_NET_OFFLINE=true cargo fetch --offline --locked --manifest-path /src/ui/rust/Cargo.toml > /out/offline-fetch.log 2>&1\n"
@@ -316,6 +425,17 @@ def validate_receipt(plan: dict, receipt: dict, original_lock: bytes,
         if (receipt.get("cacheMode") != "LOCAL_OFFLINE_OBJECTS"
                 or receipt.get("localObjects") != local_objects):
             raise ValueError("NATIVE_CACHE_LOCAL_OBJECT_RECEIPT_CHANGED")
+        registry = receipt.get("registryArchiveProof", {})
+        archives = registry_archives(original_lock)
+        if (registry.get("state") != "EXACT_LOCK_REGISTRY_ARCHIVES_READBACK"
+                or registry.get("count") != len(archives)
+                or registry.get("archiveSetSha256") != registry_set_sha256(archives)
+                or registry.get("originalLockSha256") != digest
+                or type(registry.get("copied")) is not int
+                or type(registry.get("reused")) is not int
+                or registry["copied"] < 0 or registry["reused"] < 0
+                or registry["copied"] + registry["reused"] != len(archives)):
+            raise ValueError("NATIVE_CACHE_REGISTRY_RECEIPT_CHANGED")
     if "marty-core@" + core_rev not in expected:
         raise ValueError("NATIVE_CACHE_FROZEN_CORE_LOCK_CHANGED")
     if not (receipt.get("state") == "LOCKED_FETCH_AND_OFFLINE_READBACK_PASSED"
@@ -379,6 +499,15 @@ def validate_bound_receipt(plan: dict, receipt_path: Path, receipt_sha256: str) 
             or checkout_path.stat().st_size > 1024 * 1024
             or checkout_ref.get("sha256") != hashlib.sha256(checkout_path.read_bytes()).hexdigest()):
         raise ValueError("NATIVE_CACHE_CHECKOUT_PROOF_CHANGED")
+    if plan.get("localObjects") is not None:
+        registry_ref = receipt.get("registryArchiveProofRef", {})
+        registry_path = Path(registry_ref.get("path", "")).resolve()
+        if (not registry_path.is_relative_to(receipt_path.parent.resolve())
+                or not registry_path.is_file() or registry_path.is_symlink()
+                or registry_path.stat().st_size > 1024 * 1024
+                or registry_ref.get("sha256") != hashlib.sha256(registry_path.read_bytes()).hexdigest()
+                or json.loads(registry_path.read_bytes()) != receipt.get("registryArchiveProof")):
+            raise ValueError("NATIVE_CACHE_REGISTRY_PROOF_CHANGED")
     validate_receipt(plan, receipt, lock_path.read_bytes(), metadata_path.read_bytes(), checkout_path.read_bytes())
 
 
@@ -410,10 +539,16 @@ def hydrate(plan: dict, helper, journal) -> dict:
     expected_sources = git_sources(lock.read_bytes())
     local_objects = plan.get("localObjects")
     budget = cache_budget(local_objects is not None)
+    registry_root = None
+    registry_expected = None
     if local_objects is not None:
         require(plan.get("cacheMode") == "LOCAL_OFFLINE_OBJECTS"
                 and verified_local_objects(lock.read_bytes(), plan["localObjectSources"]) == local_objects,
                 "NATIVE_CACHE_LOCAL_SOURCE_CHANGED")
+        registry_root = (Path.home() / ".cargo/registry/cache" / REGISTRY_CACHE).resolve(strict=True)
+        if registry_root != Path.home() / ".cargo/registry/cache" / REGISTRY_CACHE:
+            raise ValueError("NATIVE_CACHE_REGISTRY_HOST_ROOT_CHANGED")
+        registry_expected = verified_registry_seed(lock.read_bytes(), registry_root)
     require("marty-core@" + plan["sources"]["core"]["revision"] in expected_sources,
             "NATIVE_CACHE_FROZEN_CORE_LOCK_CHANGED")
     script = Path(plan["cacheScript"]["path"]).resolve(strict=True)
@@ -451,6 +586,9 @@ def hydrate(plan: dict, helper, journal) -> dict:
               "builderImage": image["Id"], "cargoVolume": "ui-canvas-cargo",
               "cargoVolumeCreatedAt": volumes[0]["CreatedAt"], "targetMounted": False,
               "compilerStarted": False}
+    if registry_expected is not None:
+        intent["registryArchiveSetSha256"] = registry_set_sha256(registry_expected)
+        intent["registryArchiveCount"] = len(registry_expected)
     proof = journal.exclusive("build-apply-intent.json", intent)
     require(durable_barrier(proof), "NATIVE_CACHE_DURABLE_INTENT_REQUIRED")
     local_mounts = []
@@ -470,6 +608,8 @@ def hydrate(plan: dict, helper, journal) -> dict:
             "--mount", "type=bind,src=" + daemon_source(script) + ",dst=/fetch.sh,readonly",
             "--mount", "type=bind,src=" + daemon_source(guard) + ",dst=/build/cache_guard.py,readonly",
             "--mount", "type=volume,src=ui-canvas-cargo,dst=/cargo",
+            *(["--mount", "type=bind,src=" + daemon_source(registry_root)
+               + ",dst=/seed/registry,readonly"] if registry_root is not None else []),
             *[arg for source_row in local_mounts for arg in
               ("--mount", "type=bind,src=" + daemon_source(source_row["path"])
                + ",dst=/seed/" + source_row["name"] + ",readonly")],
@@ -489,9 +629,10 @@ def hydrate(plan: dict, helper, journal) -> dict:
             and host["MemorySwap"] == budget["swapBytes"] and host["PidsLimit"] == 64
             and host["NanoCpus"] == 10 ** 9
             and host["Privileged"] is False and "ALL" in host["CapDrop"]
-            and len(row["Mounts"]) == len(mounts) == 5 + len(local_mounts)
+            and len(row["Mounts"]) == len(mounts) == 5 + len(local_mounts) + (1 if registry_root else 0)
             and set(mounts) == {"/src/ui", "/out", "/fetch.sh", "/build/cache_guard.py", "/cargo"}
                 | {"/seed/" + source_row["name"] for source_row in local_mounts}
+                | ({"/seed/registry"} if registry_root else set())
             and mounts["/src/ui"]["RW"] is False and mounts["/fetch.sh"]["RW"] is False
             and mounts["/build/cache_guard.py"]["RW"] is False
             and mounts["/out"]["RW"] is True and mounts["/cargo"]["RW"] is True
@@ -506,6 +647,11 @@ def hydrate(plan: dict, helper, journal) -> dict:
         require(mount["Type"] == "bind" and mount["RW"] is False
                 and daemon_source(mount["Source"]) == daemon_source(source_row["path"]),
                 "NATIVE_CACHE_LOCAL_MOUNT_CHANGED")
+    if registry_root is not None:
+        registry_mount = mounts["/seed/registry"]
+        require(registry_mount["Type"] == "bind" and registry_mount["RW"] is False
+                and daemon_source(registry_mount["Source"]) == daemon_source(registry_root),
+                "NATIVE_CACHE_REGISTRY_MOUNT_CHANGED")
     require(durable_barrier(journal.state({**intent, "state": "CACHE_FETCH_START_INTENT", "containerId": cid})),
             "NATIVE_CACHE_START_DURABILITY_REQUIRED")
     helper.run("docker", "--context", "desktop-linux", "start", cid)
@@ -519,6 +665,18 @@ def hydrate(plan: dict, helper, journal) -> dict:
     require(row["Id"] == cid and type(row["State"]["ExitCode"]) is int
             and row["State"]["ExitCode"] == 0 and row["State"]["OOMKilled"] is False,
             "NATIVE_CACHE_FETCH_FAILED_RETAIN_HELPER")
+    registry_proof = None
+    if registry_expected is not None:
+        registry_proof = json.loads((output / "registry-proof.json").read_bytes())
+        require(registry_proof == {"state": "EXACT_LOCK_REGISTRY_ARCHIVES_READBACK",
+                "count": len(registry_expected), "copied": registry_proof.get("copied"),
+                "reused": registry_proof.get("reused"),
+                "archiveSetSha256": registry_set_sha256(registry_expected),
+                "originalLockSha256": digest}
+                and type(registry_proof["copied"]) is int and type(registry_proof["reused"]) is int
+                and registry_proof["copied"] >= 0 and registry_proof["reused"] >= 0
+                and registry_proof["copied"] + registry_proof["reused"] == len(registry_expected),
+                "NATIVE_CACHE_REGISTRY_READBACK_CHANGED_RETAIN_HELPER")
     metadata = (output / "original-lock-offline-metadata.json").read_bytes()
     resolved = metadata_git_sources(metadata)
     require(set(resolved.items()).issubset(set(expected_sources.items())),
@@ -550,11 +708,21 @@ def hydrate(plan: dict, helper, journal) -> dict:
     if local_objects is not None:
         receipt["cacheMode"] = "LOCAL_OFFLINE_OBJECTS"
         receipt["localObjects"] = local_objects
+        receipt["registryArchiveProof"] = registry_proof
+        receipt["registryArchiveProofRef"] = ref(output / "registry-proof.json")
     journal.exclusive("build-receipt.json", receipt)
     return receipt
 
 
 def main() -> None:
+    if len(sys.argv) == 6 and sys.argv[1] == "import-registry":
+        if sys.argv[2:] != ["/src/ui/rust/Cargo.lock", "/seed/registry",
+                            "/cargo/registry/cache/" + REGISTRY_CACHE,
+                            "/out/registry-proof.json"]:
+            raise ValueError("NATIVE_CACHE_REGISTRY_IMPORT_SCOPE_CHANGED")
+        import_registry_archives(Path(sys.argv[2]).read_bytes(), Path(sys.argv[3]),
+                                 Path(sys.argv[4]), Path(sys.argv[5]))
+        return
     if len(sys.argv) == 5 and sys.argv[1] == "verify-one-checkout":
         revision = sys.argv[3]
         if not re.fullmatch(r"[a-f0-9]{40}", revision):
