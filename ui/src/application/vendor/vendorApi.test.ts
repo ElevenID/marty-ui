@@ -269,10 +269,11 @@ describe('vendorApi', () => {
 
   // ── Preview ──────────────────────────────────────────────────
 
-  it('fetchPreviewFlow calls GET', async () => {
+  it('fetchPreviewFlow reads the encoded native definition without starting a flow', async () => {
     get.mockResolvedValue({ name: 'Test Flow' });
-    await fetchPreviewFlow({ flowId: 'f-1' });
-    expect(get).toHaveBeenCalledWith(expect.stringContaining('/flows/f-1?preview=true'));
+    await fetchPreviewFlow({ flowId: 'f/1 ?' });
+    expect(get).toHaveBeenCalledWith('/v1/flows/definitions/f%2F1%20%3F');
+    expect(post).not.toHaveBeenCalled();
   });
 
   it('fetchPreviewCredentialTemplate calls GET', async () => {
