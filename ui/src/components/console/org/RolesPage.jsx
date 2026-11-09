@@ -43,7 +43,6 @@ import { TableSkeleton } from '../../common/skeletons';
 import ErrorState from '../../common/ErrorState';
 import EmptyState from '../../common/EmptyState';
 import { listRoles, createRole, updateRole, deleteRole, listPermissions } from '../../../services/rbacApi';
-import { useAuth } from '../../../hooks/useAuth';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { useDialog } from '../../../hooks/useDialog';
 import { usePermissions } from '../../../hooks/usePermissions';
@@ -85,7 +84,6 @@ function groupPermissions(permissions) {
  */
 function RolesPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
   const { activeOrgId } = useConsole();
   const { showNotification } = useNotifications();
   const { can, refresh: refreshPermissions } = usePermissions();
@@ -134,18 +132,7 @@ function RolesPage() {
         listPermissions(effectiveOrgId),
       ]);
       setRoles(rolesData.roles || rolesData || []);
-      // permsData is grouped by resource — flatten to a flat list
-      const flat = [];
-      if (permsData.resources) {
-        for (const group of permsData.resources) {
-          for (const perm of group.permissions) {
-            flat.push({ ...perm, resource: group.resource });
-          }
-        }
-      } else if (Array.isArray(permsData)) {
-        flat.push(...permsData);
-      }
-      setAllPermissions(flat);
+      setAllPermissions(permsData);
     } catch (err) {
       console.error('Failed to load roles:', err);
       setError('Failed to load roles. Please try again.');
@@ -160,6 +147,7 @@ function RolesPage() {
 
   // Open create dialog
   const handleCreate = () => {
+    if (loading || error || !effectiveOrgId || !canCreateRoles) return;
     setEditingRole(null);
     setFormName('');
     setFormDisplayName('');
@@ -185,7 +173,6 @@ function RolesPage() {
     setSaving(true);
     try {
       const data = {
-        name: formName,
         display_name: formDisplayName || null,
         description: formDescription || null,
         permission_ids: Array.from(formPermissionIds),
@@ -196,7 +183,7 @@ function RolesPage() {
         await updateRole(effectiveOrgId, editingRole.id, data);
         showNotification(`Role "${formDisplayName || formName}" updated`, 'success');
       } else {
-        await createRole(effectiveOrgId, data);
+        await createRole(effectiveOrgId, { ...data, name: formName });
         showNotification(`Role "${formDisplayName || formName}" created`, 'success');
       }
 
@@ -281,6 +268,7 @@ function RolesPage() {
             variant="contained"
             startIcon={<AddIcon />}
             onClick={handleCreate}
+            disabled={loading || !!error || !effectiveOrgId}
           >
             Create Role
           </Button>
@@ -322,10 +310,10 @@ function RolesPage() {
                 <TableRow key={role.id} hover>
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Typography variant="body1" fontWeight={500}>
+                      <Typography variant="body1" sx={{ fontWeight: 500 }}>
                         {role.display_name || role.name}
                       </Typography>
-                      {role.is_system && (
+                      {role.is_system_role && (
                         <Chip label="System" size="small" color="default" variant="outlined" />
                       )}
                     </Box>
@@ -360,22 +348,28 @@ function RolesPage() {
                     ) : '—'}
                   </TableCell>
                   <TableCell align="right">
-                    {role.is_system ? (
+                    {role.is_system_role ? (
                       <Tooltip title="System roles cannot be edited">
                         <span>
-                          <IconButton disabled>
+                          <IconButton disabled aria-label={`System role ${role.display_name || role.name} is read-only`}>
                             <LockIcon fontSize="small" />
                           </IconButton>
                         </span>
                       </Tooltip>
                     ) : (canEditRoles || canDeleteRoles) ? (
                       <>
-                        <IconButton size="small" onClick={() => handleEdit(role)} disabled={!canEditRoles}>
+                        <IconButton
+                          size="small"
+                          aria-label={`Edit role ${role.display_name || role.name}`}
+                          onClick={() => handleEdit(role)}
+                          disabled={!canEditRoles}
+                        >
                           <EditIcon fontSize="small" />
                         </IconButton>
                         <IconButton
                           size="small"
                           color="error"
+                          aria-label={`Delete role ${role.display_name || role.name}`}
                           onClick={() => deleteDialog.open(role)}
                           disabled={!canDeleteRoles}
                         >
@@ -454,6 +448,7 @@ function RolesPage() {
                       indeterminate={someSelected && !allSelected}
                       onChange={() => toggleResourceGroup(perms)}
                       onClick={(e) => e.stopPropagation()}
+                      slotProps={{ input: { 'aria-label': `Select all ${getResourceLabel(resource)} permissions` } }}
                       size="small"
                     />
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
