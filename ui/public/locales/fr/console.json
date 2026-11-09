@@ -60,6 +60,24 @@
 		}
 	},
 	"flows": {
+		"flowDetail": {
+			"lifecycleTitle": "Cycle de vie du flux",
+			"statusChips": {
+				"active": "Actif",
+				"draft": "Brouillon",
+				"paused": "En pause",
+				"archived": "Archivé",
+				"unknown": "Statut inconnu"
+			},
+			"entryPoints": {
+				"linkUnavailable": "Aucun lien de demande n’est disponible pour ce flux.",
+				"qrUnavailable": "Aucun code QR n’est disponible pour ce flux."
+			},
+			"errors": {
+				"copyFailed": "Le lien n’a pas pu être copié. Réessayez.",
+				"invalidActivation": "La réponse d’activation ne correspond pas à ce flux."
+			}
+		},
 		"title": "Flux",
 		"flowDefinitions": "Définitions de flux",
 		"flowInstances": "Instances de flux",

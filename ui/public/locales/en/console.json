@@ -720,6 +720,7 @@
       "flowInstances": "Flow Instances"
     },
     "flowDetail": {
+      "lifecycleTitle": "Flow lifecycle",
       "applicantJourney": {
         "title": "Applicant Journey",
         "description": "What the applicant experiences from start to finish",
@@ -736,6 +737,8 @@
         "title": "Applicant Entry Points",
         "description": "Share these with applicants to start the credential issuance process",
         "applicationUrlLabel": "Application URL",
+        "linkUnavailable": "No application link is available for this flow.",
+        "qrUnavailable": "No QR code is available for this flow.",
         "notPublished": "Not published - flow must be published first",
         "copyUrlTooltip": "Copy URL",
         "openInNewTabTooltip": "Open in new tab",
@@ -773,7 +776,11 @@
       },
       "statusChips": {
         "published": "Published",
-        "draft": "Draft"
+        "draft": "Draft",
+        "active": "Active",
+        "paused": "Paused",
+        "archived": "Archived",
+        "unknown": "Unknown status"
       },
       "actions": {
         "copyApplicationLink": "Copy Application Link",
@@ -793,6 +800,8 @@
       "errors": {
         "failedToLoad": "Failed to load flow details",
         "flowNotFound": "Flow not found",
+        "copyFailed": "The link could not be copied. Try again.",
+        "invalidActivation": "The activation response did not match this flow.",
         "serviceUnavailable": "The backend service may be unavailable. Check console for details."
       },
       "loading": "Loading..."

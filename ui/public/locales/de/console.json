@@ -60,6 +60,24 @@
 		}
 	},
 	"flows": {
+		"flowDetail": {
+			"lifecycleTitle": "Ablaufstatus",
+			"statusChips": {
+				"active": "Aktiv",
+				"draft": "Entwurf",
+				"paused": "Pausiert",
+				"archived": "Archiviert",
+				"unknown": "Status unbekannt"
+			},
+			"entryPoints": {
+				"linkUnavailable": "Für diesen Ablauf ist kein Antragslink verfügbar.",
+				"qrUnavailable": "Für diesen Ablauf ist kein QR-Code verfügbar."
+			},
+			"errors": {
+				"copyFailed": "Der Link konnte nicht kopiert werden. Versuchen Sie es erneut.",
+				"invalidActivation": "Die Aktivierungsantwort gehört nicht zu diesem Ablauf."
+			}
+		},
 		"title": "Abläufe",
 		"flowDefinitions": "Ablaufdefinitionen",
 		"flowInstances": "Ablaufinstanzen",

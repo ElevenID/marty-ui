@@ -29,6 +29,24 @@
     }
   },
   "flows": {
+    "flowDetail": {
+      "lifecycleTitle": "Levenscyclus van flow",
+      "statusChips": {
+        "active": "Actief",
+        "draft": "Concept",
+        "paused": "Gepauzeerd",
+        "archived": "Gearchiveerd",
+        "unknown": "Onbekende status"
+      },
+      "entryPoints": {
+        "linkUnavailable": "Er is geen aanvraaglink beschikbaar voor deze flow.",
+        "qrUnavailable": "Er is geen QR-code beschikbaar voor deze flow."
+      },
+      "errors": {
+        "copyFailed": "De link kon niet worden gekopieerd. Probeer het opnieuw.",
+        "invalidActivation": "Het antwoord op de activering komt niet overeen met deze flow."
+      }
+    },
     "flowDefinition": "Flowdefinitie"
   },
   "policies": {

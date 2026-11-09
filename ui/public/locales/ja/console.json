@@ -60,6 +60,24 @@
 		}
 	},
 	"flows": {
+		"flowDetail": {
+			"lifecycleTitle": "フローのライフサイクル",
+			"statusChips": {
+				"active": "有効",
+				"draft": "下書き",
+				"paused": "一時停止中",
+				"archived": "アーカイブ済み",
+				"unknown": "不明なステータス"
+			},
+			"entryPoints": {
+				"linkUnavailable": "このフローの申請リンクはありません。",
+				"qrUnavailable": "このフローのQRコードはありません。"
+			},
+			"errors": {
+				"copyFailed": "リンクをコピーできませんでした。もう一度お試しください。",
+				"invalidActivation": "有効化の応答がこのフローと一致しませんでした。"
+			}
+		},
 		"title": "フロー",
 		"flowDefinitions": "フロー定義",
 		"flowInstances": "フローインスタンス",
