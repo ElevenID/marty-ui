@@ -57,6 +57,7 @@ hmac.workspace = true
 redis.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 tower.workspace = true
 
 [build-dependencies]

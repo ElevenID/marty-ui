@@ -77,7 +77,7 @@ const BasicsStep = ({ data, onChange }) => {
       <Typography variant="h6" gutterBottom>
         {t('wizards.trustProfile.basicsStep.title')}
       </Typography>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.trustProfile.basicsStep.description')}
       </Typography>
 

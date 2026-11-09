@@ -99,7 +99,7 @@ function StatusCard({
       <CardContent>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
           <Icon color={getStatusColor()} />
-          <Typography variant="subtitle2" fontWeight={600}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
             {label}
           </Typography>
         </Box>
@@ -254,7 +254,7 @@ export function RuntimeReadinessPanel({ runtimeStatus, error = null, onRetry }) 
       <Typography variant="h6" gutterBottom>
         {t('dashboard.runtimeReadiness.title')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" paragraph>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         {t('dashboard.runtimeReadiness.description')}
       </Typography>
 

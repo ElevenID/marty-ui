@@ -162,7 +162,7 @@ function PresentationPoliciesPage() {
                 return (
                   <TableRow key={policy.id} hover>
                     <TableCell>
-                      <Typography variant="body2" fontWeight={500}>
+                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
                         {policy.name}
                       </Typography>
                     </TableCell>

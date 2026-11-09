@@ -49,6 +49,7 @@ async function openAutomaticTemplate() {
 async function finishFromClaims(user: ReturnType<typeof render>['user']) {
   await user.click(screen.getByTestId('wizard.policy.next'));
   await user.click(screen.getByTestId('wizard.policy.next'));
+  expect((await screen.findByText('Required')).closest('p')).toBeNull();
   await user.click(screen.getByTestId('wizard.policy.submit'));
   await waitFor(() => expect(submitted).toBeDefined());
 }

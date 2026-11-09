@@ -1,7 +1,7 @@
 /**
  * Profile Page Component
  *
- * Shows user profile information from OIDC claims.
+ * Shows user profile information from the authenticated account response.
  * Supports viewing and uploading a profile picture.
  * Available to all authenticated users.
  */
@@ -60,7 +60,7 @@ function ProfilePage() {
 
   if (!user) {
     return (
-      <Box display="flex" alignItems="center" justifyContent="center" minHeight="40vh">
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '40vh' }}>
         <CircularProgress />
       </Box>
     );
@@ -76,9 +76,12 @@ function ProfilePage() {
   };
 
   const displayPicture = previewUrl || user.picture || undefined;
-  const userInitial = (user.given_name || user.name || user.email || 'U')[0].toUpperCase();
+  const fullName = user.name?.trim()
+    || [user.given_name, user.family_name].map((name) => name?.trim()).filter(Boolean).join(' ');
+  const displayName = fullName || user.username?.trim() || user.preferred_username?.trim() || user.email || 'User';
+  const userInitial = displayName[0].toUpperCase();
   const accountReference = pickOfficialReference({
-    rawId: user.id || user.subject,
+    rawId: user.user_id || user.id || user.subject,
     kind: 'account',
   });
   const applicantReference = pickOfficialReference({
@@ -141,7 +144,7 @@ function ProfilePage() {
 
       <Grid container spacing={3}>
         {/* Profile Card */}
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <Card>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
               {/* Avatar with camera overlay */}
@@ -223,7 +226,7 @@ function ProfilePage() {
               )}
 
               <Typography variant="h5" gutterBottom>
-                {user.name || 'User'}
+                {displayName}
               </Typography>
 
               <Typography variant="body2" color="textSecondary" gutterBottom>
@@ -243,7 +246,7 @@ function ProfilePage() {
         </Grid>
 
         {/* Details Card */}
-        <Grid item xs={12} md={8}>
+        <Grid size={{ xs: 12, md: 8 }}>
           <Card>
             <CardContent>
               <Typography variant="h6" gutterBottom>
@@ -255,7 +258,7 @@ function ProfilePage() {
                   <ListItemIcon>
                     <PersonIcon />
                   </ListItemIcon>
-                  <ListItemText primary="Full Name" secondary={user.name || 'Not provided'} />
+                  <ListItemText primary="Full Name" secondary={fullName || 'Not provided'} />
                 </ListItem>
 
                 <ListItem>
@@ -285,7 +288,7 @@ function ProfilePage() {
                   <ListItemText
                     primary="Account Reference"
                     secondary={
-                      <Typography variant="body2" fontFamily="monospace">
+                      <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                         {accountReference}
                       </Typography>
                     }
@@ -339,7 +342,7 @@ function ProfilePage() {
                     <ListItemText
                       primary="Applicant Reference"
                       secondary={
-                        <Typography variant="body2" fontFamily="monospace">
+                        <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                           {applicantReference}
                         </Typography>
                       }
@@ -366,7 +369,7 @@ function ProfilePage() {
           </Card>
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Card>
             <CardContent>
               <OrganizationMembershipHub

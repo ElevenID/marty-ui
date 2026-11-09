@@ -38,7 +38,7 @@ const ReviewStep = ({ capabilities, data }) => {
           <Typography variant="overline" color="text.secondary">Definition</Typography>
           <Typography variant="h6">{data.name}</Typography>
           <Typography variant="body2" color="text.secondary">{data.description || 'No description'}</Typography>
-          <Stack direction="row" gap={1} sx={{ mt: 1 }}>
+          <Stack direction="row" sx={{ gap: 1, mt: 1 }}>
             <Chip label={titleize(data.flowType)} size="small" />
             <Chip label={data.approvalStrategy} size="small" variant="outlined" />
             <Chip label="DRAFT" size="small" color="warning" variant="outlined" />
@@ -48,7 +48,7 @@ const ReviewStep = ({ capabilities, data }) => {
         <Divider />
 
         <Box>
-          <Stack direction="row" alignItems="center" gap={1}>
+          <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
             <AccountTreeIcon color="action" />
             <Typography variant="subtitle2">Resolved sequence</Typography>
           </Stack>

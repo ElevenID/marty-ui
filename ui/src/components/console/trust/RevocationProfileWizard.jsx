@@ -177,7 +177,7 @@ function RevocationProfileWizard() {
       )}
 
       <Paper sx={{ p: 3, mb: 3 }}>
-        <Typography variant="h6" fontWeight={600} gutterBottom>
+        <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
           {t('trust.revocationWizard.basicInfoTitle', 'Basic Information')}
         </Typography>
 
@@ -220,7 +220,7 @@ function RevocationProfileWizard() {
             {CHECK_MODES.map((mode) => (
               <MenuItem key={mode.value} value={mode.value}>
                 <Box>
-                  <Typography variant="body2" fontWeight={500}>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
                     {mode.label}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
@@ -285,7 +285,7 @@ function RevocationProfileWizard() {
       </Paper>
 
       <Paper sx={{ p: 3, mb: 3 }}>
-        <Typography variant="h6" fontWeight={600} gutterBottom>
+        <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
           {t('trust.revocationWizard.timingTitle', 'Timing Configuration')}
         </Typography>
 

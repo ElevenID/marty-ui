@@ -61,7 +61,6 @@ import {
   filterCredentialCatalogItems,
   getCredentialCatalogCategories,
   loadCredentialCatalogItems,
-  loadExistingCredentialApplications,
   scopeCredentialCatalogItemsForCanvasLaunch,
 } from '../../application/applications';
 
@@ -193,7 +192,8 @@ const CredentialCatalog = () => {
     let alive = true;
 
     async function loadCanvasLtiSession() {
-      if (!canvasLtiState || canvasLtiSession) {
+      if (!canvasLtiState || canvasLtiSession || location.state?.canvasLtiSession) {
+        setCanvasLtiLoading(false);
         return;
       }
 
@@ -216,7 +216,7 @@ const CredentialCatalog = () => {
     return () => {
       alive = false;
     };
-  }, [canvasLtiState, canvasLtiSession]);
+  }, [canvasLtiState, canvasLtiSession, location.state?.canvasLtiSession]);
 
   const listCredentialTemplates = useCallback((currentOrganizationId) => {
     const normalizedOrganizationId = normalizeOrganizationIdCandidate(currentOrganizationId);
@@ -239,6 +239,8 @@ const CredentialCatalog = () => {
     const request = ++catalogRequest.current;
     setLoading(true);
     setCredentials([]);
+    setSelectedCredential(null);
+    setDetailsOpen(false);
     setCatalogLoadError(null);
     setCatalogMissingOrganization(false);
     if (!effectiveOrganizationId) {
@@ -337,6 +339,13 @@ const CredentialCatalog = () => {
     () => getLtiSessionValue(canvasLtiSession, 'application_template_id'),
     [canvasLtiSession]
   );
+  useLayoutEffect(() => {
+    // Details belong to the selected account, organization, and course launch.
+    // A same-organization Canvas transition can change the offered template
+    // without refetching the catalog, so invalidate its dialog separately.
+    setSelectedCredential(null);
+    setDetailsOpen(false);
+  }, [effectiveOrganizationId, user?.user_id, canvasLtiState, canvasLtiCredentialTemplateId, canvasLtiApplicationTemplateId]);
   const canvasScopedCredentials = useMemo(() => {
     return scopeCredentialCatalogItemsForCanvasLaunch(credentials, {
       credentialTemplateIds: canvasLtiCredentialTemplateId ? [canvasLtiCredentialTemplateId] : [],
@@ -363,6 +372,7 @@ const CredentialCatalog = () => {
    * Handle credential application
    */
   const handleApply = (credential) => {
+    if (loading || canvasLtiLoading || catalogLoadError || !canvasScopedCredentials.includes(credential)) return;
     try {
       const navigation = buildCredentialApplicationNavigationState(credential, {
         currentPathname: location.pathname,
@@ -447,7 +457,7 @@ const CredentialCatalog = () => {
           <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
             Application Status
           </Typography>
-          <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+          <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }} useFlexGap>
             {counts.pending > 0 && (
               <Chip
                 icon={<PendingIcon />}
@@ -513,7 +523,7 @@ const CredentialCatalog = () => {
       </Box>
       {/* Search and Filters */}
       <Paper sx={{ p: 2, mb: 3 }} data-testid="catalog-filters">
-        <Grid container spacing={2} alignItems="center">
+        <Grid container spacing={2} sx={{ alignItems: 'center' }}>
           <Grid size={{ xs: 12, md: 6 }}>
             <TextField
               fullWidth
@@ -558,7 +568,7 @@ const CredentialCatalog = () => {
           </Grid>
           <Grid size={{ xs: 12, md: 2 }}>
             {!loading && !canvasLtiLoading && !catalogLoadError && (
-              <Typography variant="body2" color="text.secondary" textAlign="center" data-testid="credentials-count">
+              <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }} data-testid="credentials-count">
                 {t('catalog.resultsCount', { count: filteredCredentials.length })}
               </Typography>
             )}
@@ -724,7 +734,7 @@ const CredentialCatalog = () => {
               </Box>
             </DialogTitle>
             <DialogContent>
-              <Typography variant="body1" paragraph>
+              <Typography variant="body1" sx={{ mb: 2 }}>
                 {selectedCredential.description}
               </Typography>
 
@@ -745,14 +755,14 @@ const CredentialCatalog = () => {
               <Divider sx={{ my: 2 }} />
               
               {selectedCredential.walletRequirements && (
-                <Typography variant="body2" color="text.secondary" paragraph>{selectedCredential.walletRequirements}</Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{selectedCredential.walletRequirements}</Typography>
               )}
               {selectedCredential.validityLabel && (
                 <>
                   <Typography variant="subtitle2" gutterBottom>
                     {t('catalog.detailsDialog.validity', { defaultValue: 'Credential validity' })}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary" paragraph>{selectedCredential.validityLabel}</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{selectedCredential.validityLabel}</Typography>
                 </>
               )}
               
@@ -775,7 +785,7 @@ const CredentialCatalog = () => {
                   <Typography variant="subtitle2" gutterBottom sx={{ mt: 2 }}>
                     {t('catalog.detailsDialog.instructions')}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary" paragraph>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                     {selectedCredential.submissionInstructions}
                   </Typography>
                 </>

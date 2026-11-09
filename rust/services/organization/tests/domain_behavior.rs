@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use marty_organization::{
-    scim, ApiKey, ApiKeySpec, JoinCode, Member, MemberStatus, Permission, Role,
+    scim, ApiKey, ApiKeySpec, DomainError, JoinCode, Member, MemberStatus, Permission, Role,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -269,10 +269,11 @@ fn frozen_surface_is_unique_and_complete() {
         .iter()
         .map(|route| route.as_str().expect("route must be a string"))
         .collect();
-    assert_eq!(routes.len(), 64);
+    assert_eq!(routes.len(), 65);
     assert_eq!(unique_routes.len(), routes.len());
     assert!(unique_routes.contains("GET /v1/organizations/{org_id}/defaults"));
     assert!(unique_routes.contains("PATCH /v1/organizations/{org_id}/defaults"));
+    assert!(unique_routes.contains("POST /v1/organizations/{org_id}/members/{member_id}/approve"));
     assert_eq!(
         fixture["grpc_methods"]
             .as_array()
@@ -294,4 +295,61 @@ fn frozen_surface_is_unique_and_complete() {
             .len(),
         4
     );
+}
+
+#[test]
+fn approval_activates_only_pending_members_and_preserves_identity_and_roles() {
+    let created_at = fixed_now();
+    let approved_at = created_at + Duration::hours(2);
+    let mut member = Member::create(
+        Uuid::new_v4(),
+        "applicant-1",
+        Some("applicant@example.test".into()),
+        MemberStatus::Pending,
+        created_at,
+    );
+    member.roles = vec![role(
+        "viewer",
+        &[serde_json::json!("organization:view")],
+        created_at,
+    )];
+    let original = member.clone();
+    member.approve_membership(approved_at).unwrap();
+    assert_eq!(member.status, MemberStatus::Active);
+    assert_eq!(member.joined_at, Some(approved_at));
+    assert_eq!(member.updated_at, approved_at);
+    member.status = original.status;
+    member.joined_at = original.joined_at;
+    member.updated_at = original.updated_at;
+    assert_eq!(
+        member, original,
+        "approval must not replace identity or role assignments"
+    );
+
+    for status in [
+        MemberStatus::Active,
+        MemberStatus::Invited,
+        MemberStatus::Deactivated,
+    ] {
+        let mut member = if status == MemberStatus::Invited {
+            Member::create_invitation(
+                original.organization_id,
+                "invitee@example.test",
+                "reviewer",
+                created_at,
+            )
+        } else {
+            original.clone()
+        };
+        member.status = status;
+        let before = member.clone();
+        assert_eq!(
+            member.approve_membership(approved_at),
+            Err(DomainError::MembershipNotPending)
+        );
+        assert_eq!(
+            member, before,
+            "rejected approval must leave every field unchanged"
+        );
+    }
 }

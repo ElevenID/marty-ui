@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 465;
+pub const EXPECTED_ROUTE_COUNT: usize = 466;
 const MDOC_CERTIFICATE_PATHS: [&str; 2] = [
     "/v1/signing-keys/issuer-identities/mdoc-iaca-self-signed-certificate",
     "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate",

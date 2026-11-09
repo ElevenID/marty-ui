@@ -85,7 +85,7 @@ function CheckModePanel({ checkMode }) {
     <Paper sx={{ p: 3, mb: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <SecurityIcon color="primary" />
-        <Typography variant="h6" fontWeight={600}>
+        <Typography variant="h6" sx={{ fontWeight: 600 }}>
           {t('trust.revocationDetail.checkModeTitle', 'Revocation Check Policy')}
         </Typography>
       </Box>
@@ -130,7 +130,7 @@ function MechanismsPanel({ mechanisms, statusListUrl }) {
     <Paper sx={{ p: 3, mb: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <LayersIcon color="primary" />
-        <Typography variant="h6" fontWeight={600}>
+        <Typography variant="h6" sx={{ fontWeight: 600 }}>
           {t('trust.revocationDetail.mechanismsTitle', 'Revocation Mechanisms')}
         </Typography>
       </Box>
@@ -150,7 +150,7 @@ function MechanismsPanel({ mechanisms, statusListUrl }) {
                 </ListItemIcon>
                 <ListItemText
                   primary={
-                    <Typography variant="body2" fontWeight={500}>
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
                       {mechanism}
                     </Typography>
                   }
@@ -240,21 +240,20 @@ function MetadataPanel({ profile }) {
     <Paper sx={{ p: 3, mb: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <ScheduleIcon color="primary" />
-        <Typography variant="h6" fontWeight={600}>
+        <Typography variant="h6" sx={{ fontWeight: 600 }}>
           {t('trust.revocationDetail.metadataTitle', 'Profile Metadata')}
         </Typography>
       </Box>
 
       <Grid container spacing={2}>
         {rows.map(({ label, value, mono }) => (
-          <Grid item xs={12} sm={6} key={label}>
+          <Grid size={{ xs: 12, sm: 6 }} key={label}>
             <Typography variant="body2" color="text.secondary" gutterBottom>
               {label}
             </Typography>
             <Typography
               variant="body2"
-              fontWeight={500}
-              sx={mono ? { fontFamily: 'monospace', fontSize: '0.75rem', wordBreak: 'break-all' } : undefined}
+              sx={[{ fontWeight: 500 }, mono && { fontFamily: 'monospace', fontSize: '0.75rem', wordBreak: 'break-all' }]}
             >
               {value}
             </Typography>
@@ -262,7 +261,7 @@ function MetadataPanel({ profile }) {
         ))}
 
         {profile.description && (
-          <Grid item xs={12}>
+          <Grid size={12}>
             <Divider sx={{ my: 1 }} />
             <Typography variant="body2" color="text.secondary" gutterBottom>
               {t('trust.revocationDetail.description', 'Description')}

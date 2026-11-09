@@ -249,7 +249,7 @@ const PresentationPolicyWizard = () => {
           <Typography variant="h5" gutterBottom>
             {t('wizards.presentationPolicy.success.title')}
           </Typography>
-          <Typography color="text.secondary" paragraph>
+          <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
             {wizard.data.activateImmediately 
               ? t('wizards.presentationPolicy.success.messageActive', { name: wizard.data.policyConfig.name })
               : t('wizards.presentationPolicy.success.messageDraft', { name: wizard.data.policyConfig.name })}

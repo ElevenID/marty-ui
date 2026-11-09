@@ -120,6 +120,16 @@ pub fn schemas() -> Value {
             .expect("organization defaults schemas")
             .clone(),
     );
+    let organization_membership: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/organization-membership-http-schemas.json"
+    ))
+    .expect("native organization membership HTTP schemas");
+    schemas.as_object_mut().expect("schemas").extend(
+        organization_membership
+            .as_object()
+            .expect("organization membership schemas")
+            .clone(),
+    );
     schemas
 }
 pub fn protocol_revision() -> &'static str {
@@ -137,6 +147,12 @@ fn schema(name: &str) -> Value {
 
 pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
     use HttpMethod::{Get, Patch, Post};
+    if (method == Get && path == "/v1/organizations/{org_id}/members")
+        || (method == Post && path == "/v1/organizations/{org_id}/members/{member_id}/approve")
+    {
+        describe_membership_review(operation, method, status);
+        return;
+    }
     if path == "/v1/organizations/{org_id}/defaults" {
         operation["summary"] = json!(if method == Patch {
             "Update organization resource defaults"
@@ -442,6 +458,60 @@ pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str,
         describe_organization_collection(operation, path, status);
     }
     describe_trust_readback(operation, method, path, status);
+}
+
+fn describe_membership_review(operation: &mut Value, method: HttpMethod, status: u16) {
+    let member = json!({"$ref":"#/components/schemas/runtime__organization_member"});
+    let response = if method == HttpMethod::Get {
+        operation["summary"] = json!("List organization members");
+        operation["description"] = json!(
+            "Requires team:view. Optional status is applied before limit and offset. Returns a stable created_at/id ordered array without a total count. Pending means a join request awaiting approval; invited is a separate invitation state."
+        );
+        let mut parameters = operation["parameters"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        parameters.extend([
+            json!({"name":"status","in":"query","required":false,"schema":{"type":"string","enum":["active","pending","invited","deactivated"]}}),
+            json!({"name":"limit","in":"query","required":false,"description":"Page size; zero is accepted and values above 500 are rejected.","schema":{"type":"integer","minimum":0,"maximum":500,"default":100}}),
+            json!({"name":"offset","in":"query","required":false,"schema":{"type":"integer","minimum":0,"maximum":u32::MAX,"default":0}}),
+        ]);
+        operation["parameters"] = json!(parameters);
+        json!({"type":"array","items":member})
+    } else {
+        operation["summary"] = json!("Approve a pending organization membership");
+        operation["description"] = json!(
+            "Requires team:manage in the selected organization. No request body or role assignment is accepted. Only a persisted pending membership can become active. Existing user, email and roles are preserved; joined_at records activation. The decision, reviewer-attributed audit and outbox event commit atomically. Repeated or non-pending approvals return 409 without another decision event. Invited and deactivated memberships cannot be activated through this operation."
+        );
+        operation
+            .as_object_mut()
+            .expect("operation")
+            .remove("requestBody");
+        operation["responses"]["409"] = json!({"description":"ORGANIZATION.MEMBERSHIP_NOT_PENDING: the membership is no longer pending."});
+        json!({"allOf":[member,{"type":"object","required":["joined_at"],"properties":{"status":{"const":"active"}}}]})
+    };
+    operation["responses"][status.to_string()]["content"] =
+        json!({"application/json":{"schema":response}});
+    for (code, description) in [
+        (400, if method == HttpMethod::Get { "Invalid member status or pagination parameter." } else { "Approval request body must be empty." }),
+        (401, "Authentication required."),
+        (
+            403,
+            "Selected organization membership or required team permission is not authorized.",
+        ),
+        (
+            404,
+            "Membership does not exist in the selected organization.",
+        ),
+        (
+            503,
+            "Organization storage or transactional audit/outbox is unavailable, or membership review is temporarily busy. Retry after contention clears.",
+        ),
+    ] {
+        operation["responses"][code.to_string()] = json!({"description":description});
+    }
+    operation["x-marty-request-schema-documented"] = json!(true);
+    operation["x-marty-response-schema-documented"] = json!(true);
 }
 
 fn describe_organization_collection(operation: &mut Value, path: &str, status: u16) {
@@ -902,6 +972,74 @@ mod tests {
         );
     }
     use super::*;
+
+    #[test]
+    fn membership_review_documents_pending_filter_and_scoped_transition() {
+        let mut list = json!({"parameters":[{"name":"org_id","in":"path"}]});
+        describe_operation(
+            &mut list,
+            HttpMethod::Get,
+            "/v1/organizations/{org_id}/members",
+            200,
+        );
+        assert_eq!(list["x-marty-response-schema-documented"], true);
+        assert_eq!(
+            list["responses"]["200"]["content"]["application/json"]["schema"]["type"],
+            "array"
+        );
+        assert_eq!(list["parameters"][0]["name"], "org_id");
+        assert_eq!(
+            list["parameters"][1]["schema"]["enum"],
+            json!(["active", "pending", "invited", "deactivated"])
+        );
+        assert_eq!(list["parameters"][2]["schema"]["maximum"], 500);
+        assert!(list["description"].as_str().unwrap().contains("team:view"));
+        assert!(list["description"]
+            .as_str()
+            .unwrap()
+            .contains("before limit and offset"));
+
+        let mut approve = json!({"requestBody":{"content":{}}});
+        describe_operation(
+            &mut approve,
+            HttpMethod::Post,
+            "/v1/organizations/{org_id}/members/{member_id}/approve",
+            200,
+        );
+        assert!(approve.get("requestBody").is_none());
+        assert_eq!(approve["x-marty-request-schema-documented"], true);
+        assert_eq!(approve["x-marty-response-schema-documented"], true);
+        assert!(approve["description"]
+            .as_str()
+            .unwrap()
+            .contains("team:manage"));
+        assert!(approve["responses"]["409"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("MEMBERSHIP_NOT_PENDING"));
+        assert_eq!(
+            approve["responses"]["200"]["content"]["application/json"]["schema"]["allOf"][1]
+                ["properties"]["status"]["const"],
+            "active"
+        );
+        let schema = schemas();
+        let member = &schema["runtime__organization_member"];
+        assert_eq!(member["additionalProperties"], false);
+        for field in [
+            "id",
+            "organization_id",
+            "roles",
+            "status",
+            "permissions",
+            "has_org_console_access",
+            "is_owner",
+        ] {
+            assert!(member["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(field)));
+        }
+    }
     #[test]
     fn organization_collections_document_native_arrays_and_query_boundaries() {
         let document = crate::contract::GatewayContract::load()

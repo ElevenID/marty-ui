@@ -548,4 +548,71 @@ describe('CredentialCatalog', () => {
     expect(screen.getByTestId('credential-card-cfg-1')).toHaveAttribute('data-credential-status', 'available');
     expect(screen.queryByText('Application Status')).not.toBeInTheDocument();
   });
+
+  it.each(['organization', 'account', 'Canvas launch'])('closes credential details when the %s scope changes', async (scope) => {
+    const { user, rerender } = render(<CredentialCatalog />);
+    const originalCard = await screen.findByTestId('credential-card-cfg-1');
+    await user.click(within(originalCard).getByTestId('credential-details-btn'));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('Member Login Credential');
+
+    if (scope === 'organization') {
+      mockAuthState.organizationId = 'org-2';
+    } else if (scope === 'account') {
+      mockAuthState.user = { user_id: 'user-2' };
+    } else {
+      mockSearch = '?canvas_lti_state=another-course';
+      mockLocationState = { canvasLtiSession: {
+        organization_id: 'org-1',
+        credential_template_id: 'cfg-2',
+        application_template_id: 'app-tpl-2',
+      } };
+    }
+    rerender(<CredentialCatalog />);
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(mockNavigate).not.toHaveBeenCalled();
+    const currentCard = await screen.findByTestId(`credential-card-${scope === 'Canvas launch' ? 'cfg-2' : 'cfg-1'}`);
+    await user.click(within(currentCard).getByTestId('credential-details-btn'));
+    const currentDialog = await screen.findByRole('dialog');
+    expect(currentDialog).toHaveTextContent(scope === 'Canvas launch' ? 'Digital Passport' : 'Member Login Credential');
+    if (scope !== 'Canvas launch') {
+      await user.click(within(currentDialog).getByRole('button', { name: 'catalog.card.actions.apply' }));
+      expect(mockNavigate).toHaveBeenCalledWith('/apply/cfg-1', {
+        state: expect.objectContaining({ applicationTemplate: expect.objectContaining({
+          organization_id: scope === 'organization' ? 'org-2' : 'org-1',
+        }) }),
+      });
+    }
+  });
+
+  it('uses new route-provided Canvas context while a previous lookup is still pending', async () => {
+    const previousLaunch = deferred<any>();
+    const defaultGet = mockGet.getMockImplementation()!;
+    mockSearch = '?canvas_lti_state=previous-course';
+    mockGet.mockImplementation((endpoint: string) => endpoint.includes('/v1/integrations/canvas/lti/experience-sessions/current')
+      ? previousLaunch.promise
+      : defaultGet(endpoint));
+    const { rerender } = render(<CredentialCatalog />);
+    await waitFor(() => expect(mockGet.mock.calls.some(([endpoint]) => endpoint === '/v1/integrations/canvas/lti/experience-sessions/current')).toBe(true));
+
+    mockSearch = '?canvas_lti_state=current-course';
+    mockLocationState = { canvasLtiSession: {
+      organization_id: 'org-1',
+      credential_template_id: 'cfg-2',
+      application_template_id: 'app-tpl-2',
+    } };
+    rerender(<CredentialCatalog />);
+
+    expect(await screen.findByTestId('credential-card-cfg-2')).toBeInTheDocument();
+    expect(screen.queryByTestId('credential-card-cfg-1')).not.toBeInTheDocument();
+    expect(screen.getByTestId('credentials-count')).toHaveTextContent('catalog.resultsCount:1');
+    await act(async () => previousLaunch.resolve({
+      organization_id: 'previous-org', credential_template_id: 'cfg-1', application_template_id: 'app-tpl-1',
+    }));
+
+    expect(screen.getByTestId('credential-card-cfg-2')).toBeInTheDocument();
+    expect(screen.queryByTestId('credential-card-cfg-1')).not.toBeInTheDocument();
+    expect(mockGet.mock.calls.filter(([endpoint]) => String(endpoint).includes('/v1/integrations/canvas/lti/experience-sessions/current'))).toHaveLength(1);
+    expect(mockGet).not.toHaveBeenCalledWith('/v1/credential-templates?organization_id=previous-org&status=active');
+  });
 });

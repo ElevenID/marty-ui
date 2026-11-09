@@ -120,9 +120,9 @@ function TrustFrameworkCard({ framework, active, onSelect, trustProfile, onViewD
       }}
     >
       <CardContent>
-        <Grid container spacing={2} alignItems="center">
+        <Grid container spacing={2} sx={{ alignItems: 'center' }}>
           {/* Icon and Name */}
-          <Grid item xs={12} md={4}>
+          <Grid size={{ xs: 12, md: 4 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
               <Box sx={{ color: framework.color }}>
                 {framework.icon}
@@ -139,7 +139,7 @@ function TrustFrameworkCard({ framework, active, onSelect, trustProfile, onViewD
           </Grid>
 
           {/* Status */}
-          <Grid item xs={12} md={4}>
+          <Grid size={{ xs: 12, md: 4 }}>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
               {!active ? (
                 <Chip
@@ -188,7 +188,7 @@ function TrustFrameworkCard({ framework, active, onSelect, trustProfile, onViewD
           </Grid>
 
           {/* Actions */}
-          <Grid item xs={12} md={4}>
+          <Grid size={{ xs: 12, md: 4 }}>
             <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
               {active ? (
                 <>
@@ -336,7 +336,7 @@ function TrustRegistryContent() {
         <TabPanel value={currentTab} index={0}>
           <Grid container spacing={3}>
             {/* Current Framework */}
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <Paper sx={{ p: 3, bgcolor: 'grey.50' }}>
                 <Typography variant="h6" gutterBottom>
                   {t('trustRegistry.overview.activeFramework')}
@@ -344,7 +344,7 @@ function TrustRegistryContent() {
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
                   {TRUST_FRAMEWORKS.find(f => f.id === selectedFramework)?.icon}
                   <Box>
-                    <Typography variant="body1" fontWeight="bold">
+                    <Typography variant="body1" sx={{ fontWeight: 'bold' }}>
                       {TRUST_FRAMEWORKS.find(f => f.id === selectedFramework)?.name}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
@@ -363,7 +363,7 @@ function TrustRegistryContent() {
             </Grid>
 
             {/* Quick Stats */}
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <Paper sx={{ p: 3, bgcolor: 'grey.50' }}>
                 <Typography variant="h6" gutterBottom>
                   {t('trustRegistry.overview.trustStatus')}
@@ -406,7 +406,7 @@ function TrustRegistryContent() {
             </Grid>
 
             {/* Health Checklist */}
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <Typography variant="h6" gutterBottom>
                 {t('trustRegistry.overview.healthChecks')}
               </Typography>
@@ -432,7 +432,7 @@ function TrustRegistryContent() {
 
           <Grid container spacing={3}>
             {TRUST_FRAMEWORKS.map((framework) => (
-              <Grid item xs={12} key={framework.id}>
+              <Grid size={{ xs: 12 }} key={framework.id}>
                 <TrustFrameworkCard
                   framework={framework}
                   active={selectedFramework === framework.id}
@@ -466,7 +466,7 @@ function TrustRegistryContent() {
 
           {healthStatus?.warnings && healthStatus.warnings.length > 0 && (
             <Alert severity="warning" sx={{ mt: 3 }}>
-              <Typography variant="body2" fontWeight="bold" gutterBottom>
+              <Typography variant="body2" sx={{ fontWeight: 'bold' }} gutterBottom>
                 {t('trustRegistry.certificates.warnings')}
               </Typography>
               <ul style={{ margin: 0, paddingLeft: 20 }}>
@@ -479,7 +479,7 @@ function TrustRegistryContent() {
 
           {healthStatus?.errors && healthStatus.errors.length > 0 && (
             <Alert severity="error" sx={{ mt: 3 }}>
-              <Typography variant="body2" fontWeight="bold" gutterBottom>
+              <Typography variant="body2" sx={{ fontWeight: 'bold' }} gutterBottom>
                 {t('trustRegistry.certificates.errors')}
               </Typography>
               <ul style={{ margin: 0, paddingLeft: 20 }}>
@@ -509,7 +509,7 @@ function TrustRegistryContent() {
 
           {trustProfile?.verifierKeys && trustProfile.verifierKeys.length > 0 && (
             <Paper sx={{ p: 3, mt: 3 }}>
-              <Typography variant="subtitle1" gutterBottom fontWeight="bold">
+              <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold' }}>
                 {t('trustRegistry.keys.verifierKeys')}
               </Typography>
               {trustProfile.verifierKeys.map((key, index) => (
@@ -528,7 +528,7 @@ function TrustRegistryContent() {
 
           {trustProfile?.issuerKeys && trustProfile.issuerKeys.length > 0 && (
             <Paper sx={{ p: 3, mt: 3 }}>
-              <Typography variant="subtitle1" gutterBottom fontWeight="bold">
+              <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold' }}>
                 {t('trustRegistry.keys.issuerKeys')}
               </Typography>
               {trustProfile.issuerKeys.map((key, index) => (

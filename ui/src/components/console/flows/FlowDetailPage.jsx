@@ -73,7 +73,7 @@ function ApplicantJourney({ flow }) {
   return (
     <Card elevation={0} sx={{ bgcolor: 'primary.50', border: 1, borderColor: 'primary.100' }}>
       <CardContent>
-        <Typography variant="h6" gutterBottom fontWeight={600}>
+        <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
           Resolved flow sequence
         </Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom>
@@ -112,7 +112,7 @@ function EntryPoints({ flow, publicUrl, onCopy }) {
   return (
     <Card>
       <CardContent>
-        <Typography variant="h6" gutterBottom fontWeight={600}>
+        <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
           {t('flows.flowDetail.entryPoints.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 3 }}>
@@ -238,7 +238,7 @@ function ConfigurationSummary({ flow }) {
   return (
     <Card>
       <CardContent>
-        <Typography variant="h6" gutterBottom fontWeight={600}>
+        <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
           {t('flows.flowDetail.configuration.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 2 }}>
@@ -308,7 +308,7 @@ function RuntimeOverview({ flow }) {
   return (
     <Card>
       <CardContent>
-        <Typography variant="h6" gutterBottom fontWeight={600}>
+        <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
           {t('flows.flowDetail.runtime.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 3 }}>
@@ -317,9 +317,9 @@ function RuntimeOverview({ flow }) {
 
         <Grid container spacing={3}>
           {stats.map((stat) => (
-            <Grid item xs={12} sm={6} md={3} key={stat.label}>
+            <Grid key={stat.label} size={{ xs: 12, sm: 6, md: 3 }}>
               <Box sx={{ textAlign: 'center' }}>
-                <Typography variant="h3" fontWeight={700} color={`${stat.color}.main`}>
+                <Typography variant="h3" color={`${stat.color}.main`} sx={{ fontWeight: 700 }}>
                   {stat.value}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
@@ -386,7 +386,7 @@ function LifecycleActions({ flow, onActivated }) {
 
   return (
     <Paper variant="outlined" sx={{ p: 2.5, mb: 3 }}>
-      <Typography variant="subtitle1" fontWeight={600} gutterBottom>Draft lifecycle</Typography>
+      <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>Draft lifecycle</Typography>
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
         <Button startIcon={<RuleIcon />} variant="outlined" disabled={Boolean(busy)} onClick={() => run('Validation', () => validateFlow(flow.id))}>Validate</Button>
         <Button startIcon={<ScienceIcon />} variant="outlined" disabled={Boolean(busy)} onClick={() => run('Dry run', () => testFlow(flow.id))}>Test</Button>
@@ -474,7 +474,7 @@ function FlowDetailPage() {
               >
                 <ArrowBackIcon />
               </IconButton>
-              <Typography variant="h4" fontWeight={700}>
+              <Typography variant="h4" sx={{ fontWeight: 700 }}>
                 {displayedFlow.name}
               </Typography>
             </Box>
@@ -554,7 +554,7 @@ function FlowDetailPage() {
       {/* Main Content Grid */}
       <Grid container spacing={3}>
         {/* Left Column */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Stack spacing={3}>
             <EntryPoints
               flow={displayedFlow}
@@ -565,7 +565,7 @@ function FlowDetailPage() {
         </Grid>
 
         {/* Right Column */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Stack spacing={3}>
             <ConfigurationSummary flow={displayedFlow} />
             <RuntimeOverview flow={displayedFlow} />

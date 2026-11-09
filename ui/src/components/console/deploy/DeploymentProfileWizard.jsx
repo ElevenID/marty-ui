@@ -198,7 +198,7 @@ const DeploymentProfileWizardForm = () => {
           <Typography variant="h5" gutterBottom>
             {t('wizards.deploymentProfile.success.title')}
           </Typography>
-          <Typography color="text.secondary" paragraph>
+          <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
             {wizard.data.activate_immediately
               ? t('wizards.deploymentProfile.success.messageActive', { name: wizard.data.name })
               : t('wizards.deploymentProfile.success.messageDraft', { name: wizard.data.name })}

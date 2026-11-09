@@ -277,7 +277,7 @@ function ApiKeysContent({ organizationId }) {
       const [keysResult, webhooksResult, eventCatalogResult] = await Promise.allSettled([
         listApiKeys(organizationId),
         listWebhooks(organizationId),
-        getAvailableEventTypes(),
+        getAvailableEventTypes(organizationId),
       ]);
 
       if (keysResult.status === 'rejected') {
@@ -518,7 +518,7 @@ function ApiKeysContent({ organizationId }) {
             <Grid size={{ xs: 12, md: 4 }}>
               <Card variant="outlined" sx={{ height: '100%' }}>
                 <CardContent>
-                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
                     <VpnKeyIcon color="primary" fontSize="small" />
                     <Typography variant="subtitle2">Active gateway keys</Typography>
                   </Stack>
@@ -532,7 +532,7 @@ function ApiKeysContent({ organizationId }) {
             <Grid size={{ xs: 12, md: 4 }}>
               <Card variant="outlined" sx={{ height: '100%' }}>
                 <CardContent>
-                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
                     <NotificationsActiveIcon color="primary" fontSize="small" />
                     <Typography variant="subtitle2">Associated callbacks</Typography>
                   </Stack>
@@ -546,7 +546,7 @@ function ApiKeysContent({ organizationId }) {
             <Grid size={{ xs: 12, md: 4 }}>
               <Card variant="outlined" sx={{ height: '100%' }}>
                 <CardContent>
-                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
                     <LinkIcon color="primary" fontSize="small" />
                     <Typography variant="subtitle2">Audit-capable callbacks</Typography>
                   </Stack>
@@ -611,13 +611,13 @@ function ApiKeysContent({ organizationId }) {
                       return (
                         <TableRow key={apiKey.id} hover>
                           <TableCell>
-                            <Typography variant="body2" fontWeight={600}>{apiKey.name}</Typography>
+                            <Typography variant="body2" sx={{ fontWeight: 600 }}>{apiKey.name}</Typography>
                             {apiKey.description && (
                               <Typography variant="caption" color="text.secondary">{apiKey.description}</Typography>
                             )}
                           </TableCell>
                           <TableCell>
-                            <Stack direction="row" spacing={1} alignItems="center">
+                            <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                               <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                                 {apiKey.maskedKey || apiKey.keyPrefix || 'Unavailable'}
                               </Typography>

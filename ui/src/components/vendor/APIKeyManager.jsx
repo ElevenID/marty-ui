@@ -445,12 +445,12 @@ export default function APIKeyManager() {
               return (
               <TableRow key={apiKey.id} hover>
                 <TableCell>
-                  <Typography variant="body2" fontWeight="medium">
+                  <Typography variant="body2" sx={{ fontWeight: 'medium' }}>
                     {apiKey.name}
                   </Typography>
                 </TableCell>
                 <TableCell>
-                  <Typography variant="body2" fontFamily="monospace" color="textSecondary">
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace' }} color="textSecondary">
                     {getDisplayKey(apiKey)}
                   </Typography>
                 </TableCell>

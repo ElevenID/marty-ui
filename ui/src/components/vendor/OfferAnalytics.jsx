@@ -271,7 +271,7 @@ export default function OfferAnalytics() {
       {/* Summary Metrics */}
       {summary && (
         <Grid container spacing={3} sx={{ mb: 4 }}>
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <MetricCard
               title={t('offerAnalytics.metrics.totalOffers')}
               value={summary.total_offers}
@@ -280,7 +280,7 @@ export default function OfferAnalytics() {
               subtitle={t('offerAnalytics.metrics.totalOffersSubtitle', { count: summary.active_offers })}
             />
           </Grid>
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <MetricCard
               title={t('offerAnalytics.metrics.totalScans')}
               value={summary.total_scans}
@@ -289,7 +289,7 @@ export default function OfferAnalytics() {
               subtitle={t('offerAnalytics.metrics.totalScansSubtitle', { avg: summary.avg_scans_per_offer.toFixed(1) })}
             />
           </Grid>
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <MetricCard
               title={t('offerAnalytics.metrics.successRate')}
               value={`${summary.success_rate}%`}
@@ -297,7 +297,7 @@ export default function OfferAnalytics() {
               color="success"
             />
           </Grid>
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <MetricCard
               title={t('offerAnalytics.metrics.uniqueWallets')}
               value={summary.unique_wallets}
@@ -312,7 +312,7 @@ export default function OfferAnalytics() {
       {summary && (
         <Grid container spacing={3} sx={{ mb: 4 }}>
           {/* Top Wallet Types */}
-          <Grid item xs={12} md={6}>
+          <Grid size={{ xs: 12, md: 6 }}>
             <Card>
               <CardContent>
                 <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -326,7 +326,7 @@ export default function OfferAnalytics() {
                       <Box key={index}>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                           <Typography variant="body2">{formatWalletType(item.wallet_type, t)}</Typography>
-                          <Typography variant="body2" fontWeight="medium">{item.count}</Typography>
+                          <Typography variant="body2" sx={{ fontWeight: 'medium' }}>{item.count}</Typography>
                         </Box>
                         <Box sx={{ width: '100%', bgcolor: 'grey.200', borderRadius: 1, height: 8 }}>
                           <Box
@@ -349,7 +349,7 @@ export default function OfferAnalytics() {
           </Grid>
 
           {/* Recent Activity */}
-          <Grid item xs={12} md={6}>
+          <Grid size={{ xs: 12, md: 6 }}>
             <Card>
               <CardContent>
                 <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -483,7 +483,7 @@ export default function OfferAnalytics() {
                 scans.map((scan) => (
                   <TableRow key={scan.id} hover>
                     <TableCell>
-                      <Typography variant="body2" fontSize="0.875rem">
+                      <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
                         {formatDate(scan.accessed_at, t)}
                       </Typography>
                     </TableCell>
@@ -513,14 +513,14 @@ export default function OfferAnalytics() {
                     
                     <TableCell>
                       <Tooltip title={formatTransactionReference(scan.transaction_id)}>
-                        <Typography variant="body2" fontFamily="monospace" fontSize="0.75rem">
+                        <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
                           {formatTransactionReference(scan.transaction_id)}
                         </Typography>
                       </Tooltip>
                     </TableCell>
                     
                     <TableCell>
-                      <Typography variant="body2" fontSize="0.75rem">
+                      <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
                         {scan.ip_address || 'N/A'}
                       </Typography>
                     </TableCell>

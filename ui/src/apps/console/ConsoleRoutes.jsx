@@ -86,11 +86,13 @@ import { renderCommerceConsoleRoutes } from '../../extensions/commerce';
 function GuardLoadingState({ message }) {
   return (
     <Box
-      display="flex"
-      flexDirection="column"
-      alignItems="center"
-      justifyContent="center"
-      minHeight="50vh"
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '50vh',
+      }}
     >
       <CircularProgress size={48} />
       <Typography variant="body1" color="text.secondary" sx={{ mt: 2 }}>

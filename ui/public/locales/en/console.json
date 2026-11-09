@@ -1,4 +1,20 @@
 {
+  "membershipReview": {
+    "pending": "Pending",
+    "description": "Review pending memberships and approve access with the roles already assigned.",
+    "signIn": "Sign in to review membership requests.",
+    "selectOrganization": "Select an organization to review membership requests.",
+    "permissionsLoading": "Checking membership permissions",
+    "readDenied": "You do not have permission to view pending memberships for this organization.",
+    "approvalOnly": "You can approve pending memberships here. Rejection is not available.",
+    "viewOnly": "You can view requests, but you do not have permission to approve them.",
+    "applicant": "Applicant",
+    "roles": "Assigned roles",
+    "account": "Account {{id}}",
+    "noRoles": "No roles assigned",
+    "approvalFailed": "Failed to approve membership request.",
+    "loadFailed": "Failed to load membership requests."
+  },
   "dashboard": {
     "title": "Dashboard",
     "welcome": "Welcome back",
@@ -131,6 +147,7 @@
     "developerQuickStart": {
       "title": "Developer Quick Start",
       "description": "Org-scoped integration details for API development",
+      "loading": "Loading integration metadata...",
       "organizationId": "Organization ID",
       "baseApiUrl": "Base API URL",
       "exampleRequest": "Example API Request (curl)",
@@ -2333,8 +2350,24 @@
       }
     },
     "team": {
+      "access": {
+        "rolesTitle": "Roles",
+        "signIn": "Sign in to view the team.",
+        "selectOrganization": "Select an organization to view its team.",
+        "readDenied": "You do not have permission to view this team.",
+        "rolesLoadFailed": "Available roles could not be loaded. Try again to invite members or change roles.",
+        "rolesReadRequired": "Viewing available roles is required to invite members or change their roles. Ask an organization administrator for access."
+      },
       "title": "Team",
       "subtitle": "Manage team members, roles, and invitations",
+      "memberships": {
+        "title": "Membership Status",
+        "status": "Status",
+        "pending": "Pending approval",
+        "deactivated": "Deactivated",
+        "unknown": "Status unavailable",
+        "reviewRequests": "View membership requests"
+      },
       "members": {
         "title": "Current Members",
         "count": "{{count}} team member",
@@ -2630,6 +2663,10 @@
       }
     },
     "roleEscalation": {
+      "unavailable": "Role change requests are not available in this console.",
+      "management": "Users with permission to assign roles can update members' roles in Team. The Roles page lists the available roles and their permissions.",
+      "teamLink": "View team",
+      "rolesLink": "View roles",
       "title": "Role Escalation Requests",
       "subtitle": "Review and manage role change requests from organization members",
       "tableHeaders": {

@@ -223,6 +223,49 @@ def test_keycloak_has_real_entrypoint_safe_realm_and_private_health(rendered: li
         assert (CHART / "files/keycloak" / name).read_bytes() == (ROOT / "scripts" / name).read_bytes()
 
 
+def test_disabling_keycloak_configurator_removes_only_its_job(
+    tmp_path: Path, rendered: list[dict],
+) -> None:
+    job = resources(rendered, "Job")["marty-keycloak-1"]
+    assert "helm.sh/hook" not in job["metadata"].get("annotations", {})
+    values = installation_values()
+    values["keycloak"] = {"configurator": {"enabled": False}}
+    without_configurator = render(tmp_path, values)
+    assert without_configurator == [doc for doc in rendered if doc is not job]
+
+
+def test_keycloak_configurator_rejects_a_string_boolean(tmp_path: Path) -> None:
+    values = installation_values()
+    values["keycloak"] = {"configurator": {"enabled": "false"}}
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert re.search(r"keycloak[./]configurator[./]enabled", result.stderr)
+    assert "boolean" in result.stderr
+
+
+def test_existing_ui_replay_preserves_explicit_issuer_without_setup_jobs(tmp_path: Path) -> None:
+    values = installation_values()
+    existing_did = "did:web:192.0.2.20%3A8443:orgs:existing-tenant"
+    organization_id = "9ae932be-89ad-4cf7-9b4d-de41edd9d0da"
+    values["organization"].update(id=organization_id, slug="existing-tenant", did=existing_did)
+    values.update(publicHost="192.0.2.21", publicOrigin="https://192.0.2.21:8443")
+    values["keycloak"] = {"configurator": {"enabled": False}}
+    values["migrations"] = {"enabled": False}
+    values["ui"] = {"development": {"enabled": True, "checkoutPath": "/opt/marty-ux"}}
+    documents = render(tmp_path, values)
+    assert not resources(documents, "Job")
+    assert not resources(documents, "Secret")
+    assert "keycloak" in resources(documents, "Deployment")
+    config = resources(documents, "ConfigMap")["marty-config"]["data"]
+    assert config["MARTY_ORG_ID"] == organization_id
+    for name in ("MARTY_ISSUER_DID", "OID4VP_ISSUER_DID", "CREDENTIAL_LOGIN_ISSUER_DID"):
+        assert config[name] == existing_did
+    assert config["UI_BASE_URL"] == values["publicOrigin"]
+    assert config["KC_HOSTNAME"] == values["publicOrigin"]
+
+
 def test_production_redis_tls_preserves_public_trust_and_confines_private_key(rendered: list[dict]) -> None:
     config = resources(rendered, "ConfigMap")["marty-config"]["data"]
     assert config["ENVIRONMENT"] == "production"
@@ -422,6 +465,35 @@ def test_mutable_image_tags_are_rejected(tmp_path: Path, role: str) -> None:
     result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
     assert result.returncode != 0
     assert "sha256" in result.stderr
+
+
+@pytest.mark.parametrize("development", [False, True], ids=["normal", "ui-development"])
+def test_idle_event_stream_has_a_dedicated_bounded_proxy_timeout(tmp_path: Path, development: bool) -> None:
+    values = installation_values()
+    if development:
+        values["ui"] = {"development": {"enabled": True, "checkoutPath": "/opt/marty-ux"}}
+    documents = render(tmp_path, values)
+    nginx = resources(documents, "ConfigMap")["nginx-prod-config"]["data"]["default.conf"]
+    stream = re.search(r"(?ms)^    location = /v1/notifications/events/push \{\n(.*?)^    \}", nginx)
+    assert stream is not None, "Idle SSE must not inherit the ordinary API read timeout"
+    directives = stream.group(1)
+    assert "proxy_pass http://gateway:8000;" in directives
+    assert "proxy_read_timeout 3600s;" in directives
+    assert "proxy_buffering off;" in directives
+    # A location-level header list would replace the server's forwarding headers.
+    assert "proxy_set_header" not in directives
+
+    server_directives = "\n".join(re.findall(r"(?m)^    proxy_[^\n]+$", nginx))
+    assert "proxy_http_version 1.1;" in server_directives
+    assert "proxy_set_header Host $http_host;" in server_directives
+    assert "proxy_set_header X-Forwarded-Proto https;" in server_directives
+    assert "proxy_set_header X-Forwarded-Port $marty_forwarded_port;" in server_directives
+    assert "proxy_read_timeout" not in server_directives
+    api = re.search(r"(?ms)^    location ~ \^/\(api\|auth\|v1\|.*?\{\n(.*?)^    \}", nginx)
+    assert api is not None
+    assert "proxy_pass http://gateway:8000;" in api.group(1)
+    assert "proxy_read_timeout" not in api.group(1)
+    assert "proxy_buffering" not in api.group(1)
 
 
 def test_development_ui_keeps_backend_tls_routes_and_public_ports_unchanged(tmp_path: Path) -> None:

@@ -3,6 +3,16 @@ import { render, screen } from '@test/utils';
 import { CriticalEventsPanel } from './CriticalEventsPanel';
 
 describe('CriticalEventsPanel', () => {
+  it('renders structured critical-event details without invalid paragraph nesting', () => {
+    const { container } = render(<CriticalEventsPanel events={[{
+      id: 'critical-1', type: 'flow_failed', title: 'Issuance failed',
+      timestamp: new Date().toISOString(), details: { operation: 'issue', retryable: true },
+    }]} />);
+    expect(screen.getByRole('listitem')).toHaveTextContent('Issuance failed');
+    expect(screen.getByRole('listitem')).toHaveTextContent('"retryable":true');
+    expect(container.querySelector('p div')).toBeNull();
+  });
+
   it('reports an empty audit result without declaring the system healthy', () => {
     render(<CriticalEventsPanel events={[]} />);
     expect(screen.getByRole('alert')).toHaveTextContent('No critical events were reported in the last 24 hours.');

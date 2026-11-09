@@ -98,7 +98,7 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
       <Typography variant="h6" gutterBottom>
         {t('wizards.presentationPolicy.freshnessBindingStep.title')}
       </Typography>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
         {t('wizards.presentationPolicy.freshnessBindingStep.description')}
       </Typography>
       {/* Holder Binding */}
@@ -108,7 +108,7 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
             {t('wizards.presentationPolicy.freshnessBindingStep.sections.holderBinding')}
           </Typography>
 
-          <Typography variant="body2" color="text.secondary" paragraph>
+          <Typography variant="body2" color="text.secondary" component="p" sx={{ mb: "16px" }}>
             {t('wizards.presentationPolicy.freshnessBindingStep.helpers.holderBinding')}
           </Typography>
 
@@ -171,7 +171,7 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
             {t('wizards.presentationPolicy.freshnessBindingStep.sections.freshness')}
           </Typography>
 
-          <Typography variant="body2" color="text.secondary" paragraph>
+          <Typography variant="body2" color="text.secondary" component="p" sx={{ mb: "16px" }}>
             {t('wizards.presentationPolicy.freshnessBindingStep.helpers.freshness')}
           </Typography>
 
@@ -219,7 +219,7 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
               </Box>
             }
           />
-          <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 4 }}>
             {t('wizards.presentationPolicy.freshnessBindingStep.helpers.revocationCheck')}
           </Typography>
         </CardContent>
@@ -231,7 +231,7 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
             {t('wizards.presentationPolicy.freshnessBindingStep.sections.compliance')}
           </Typography>
 
-          <Typography variant="body2" color="text.secondary" paragraph>
+          <Typography variant="body2" color="text.secondary" component="p" sx={{ mb: "16px" }}>
             {t('wizards.presentationPolicy.freshnessBindingStep.helpers.compliance')}
           </Typography>
 

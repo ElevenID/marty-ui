@@ -134,7 +134,7 @@ const ClaimsStep = ({ data, onChange }) => {
       <Typography variant="h6" gutterBottom>
         {t('wizards.credentialTemplate.claimsStep.title')}
       </Typography>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.credentialTemplate.claimsStep.description')}
       </Typography>
 
@@ -147,7 +147,7 @@ const ClaimsStep = ({ data, onChange }) => {
         <Typography variant="subtitle2" gutterBottom>
           {t('wizards.credentialTemplate.claimsStep.quickStart.title')}
         </Typography>
-        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
           {t('wizards.credentialTemplate.claimsStep.quickStart.description')}
         </Typography>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>

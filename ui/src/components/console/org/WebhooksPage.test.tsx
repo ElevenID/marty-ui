@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { MemoryRouter } from 'react-router'
+import { http, HttpResponse } from 'msw'
 import { act, screen, waitFor, within } from '@testing-library/react'
 import { renderWithoutRouter, renderWithRouter } from '../../../test/utils'
+import { server } from '../../../test/mocks/server'
 import WebhooksPage from './WebhooksPage'
 
 const {
@@ -124,6 +126,38 @@ describe('WebhooksPage', () => {
     expect(screen.getByText('Primary audit receiver')).toBeInTheDocument()
     expect(screen.getByText('audit.security_event')).toBeInTheDocument()
     expect(screen.getByText('Active')).toBeInTheDocument()
+    expect(screen.getByText('Async callback endpoints').parentElement).toHaveStyle({ alignItems: 'center' })
+    expect(document.querySelector('[alignitems]')).toBeNull()
+  })
+
+  it('loads native event options in the selected owner organization rather than the session default', async () => {
+    const actual = await vi.importActual<typeof import('../../../services/webhooksApi')>('../../../services/webhooksApi')
+    mockGetAvailableEventTypes.mockImplementation(actual.getAvailableEventTypes)
+    mockUseAuth.mockReturnValue({ isAuthenticated: true, user: { user_id: 'user-123' }, organizationId: 'org-applicant' })
+    const organizations: Array<string | null> = []
+    server.use(http.get('http://localhost:8000/v1/webhooks/event-types', ({ request }) => {
+      const organizationId = new URL(request.url).searchParams.get('organization_id')
+      organizations.push(organizationId)
+      return organizationId === 'org-123' || organizationId === 'org-456'
+        ? HttpResponse.json({ event_types: [organizationId === 'org-123' ? 'credential.offered' : 'application.approved'] })
+        : HttpResponse.json({ error: 'forbidden', error_description: 'Missing required permission: webhook:view' }, { status: 403 })
+    }))
+
+    const { user, rerender } = renderWithRouter(<WebhooksPage />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /add webhook/i })).toBeEnabled())
+    await user.click(await screen.findByRole('button', { name: /add webhook/i }))
+    expect(await screen.findByRole('checkbox', { name: /credential offered/i })).toBeInTheDocument()
+    expect(screen.queryByText(/Missing required permission/)).not.toBeInTheDocument()
+
+    mockUseConsole.mockReturnValue({ activeOrgId: 'org-456' })
+    rerender(<WebhooksPage />)
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('button', { name: /add webhook/i })).toBeEnabled())
+    await user.click(await screen.findByRole('button', { name: /add webhook/i }))
+    expect(await screen.findByRole('checkbox', { name: /application approved/i })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /credential offered/i })).not.toBeInTheDocument()
+    expect(organizations).toEqual(['org-123', 'org-456'])
+    expect(mockCreateWebhook).not.toHaveBeenCalled()
   })
 
   it('opens and confirms webhook delete confirmation dialog', async () => {

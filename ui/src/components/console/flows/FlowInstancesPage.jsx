@@ -160,7 +160,7 @@ function RelatedRecord({ icon: Icon, label, value, path }) {
   if (!value) return null;
   return (
     <Box sx={{ minWidth: 0 }}>
-      <Stack direction="row" spacing={1} alignItems="center">
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
         <Icon color="action" fontSize="small" />
         <Typography variant="caption" color="text.secondary">{label}</Typography>
       </Stack>
@@ -212,7 +212,7 @@ function InstanceTimeline({ instance }) {
             primary={String(event.label).replaceAll('_', ' ')}
             secondary={[event.detail, event.timestamp ? formatDate(event.timestamp) : null].filter(Boolean).join(' | ')}
             slotProps={{
-              primary: { variant: 'body2', fontWeight: 600, textTransform: 'capitalize' },
+              primary: { variant: 'body2', sx: { fontWeight: 600, textTransform: 'capitalize' } },
               secondary: { variant: 'caption' }
             }} />
         </ListItem>
@@ -243,7 +243,7 @@ function InstanceDetail({ instance, organizationId, loading, error, reload }) {
         <Stack spacing={3}>
           <ExecutionActions instance={instance} organizationId={organizationId} loading={loading} reload={reload} />
           <Paper variant="outlined" sx={{ p: 3 }}>
-            <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={2}>
+            <Stack direction={{ xs: 'column', md: 'row' }} sx={{ justifyContent: "space-between", gap: 2 }}>
               <Box>
                 <Typography variant="overline" color="text.secondary">Current step</Typography>
                 <Typography variant="h6">{instance.currentStep?.replaceAll('_', ' ') || 'Waiting to start'}</Typography>
@@ -365,7 +365,7 @@ function ScopedFlowInstancesPage({ instanceId, organizationId }) {
               ) : filteredInstances.map((instance) => (
                 <TableRow key={instance.id} hover>
                   <TableCell><Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{instance.id}</Typography></TableCell>
-                  <TableCell><MuiLink component={Link} to={instance.flowId ? `/console/org/flows/definitions/${instance.flowId}` : '#'}>{instance.flowName}</MuiLink><Typography variant="caption" display="block" color="text.secondary">{instance.flowType.replaceAll('_', ' ')}</Typography></TableCell>
+                  <TableCell><MuiLink component={Link} to={instance.flowId ? `/console/org/flows/definitions/${instance.flowId}` : '#'}>{instance.flowName}</MuiLink><Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{instance.flowType.replaceAll('_', ' ')}</Typography></TableCell>
                   <TableCell><Typography variant="body2">{instance.currentStep?.replaceAll('_', ' ') || 'Waiting'}</Typography>{instance.currentStepNumber && instance.totalSteps && <Typography variant="caption" color="text.secondary">Step {instance.currentStepNumber} of {instance.totalSteps}</Typography>}</TableCell>
                   <TableCell>{instance.applicationId ? <Chip size="small" label="Application" /> : instance.credentialId ? <Chip size="small" label="Credential" /> : instance.physicalJob ? <Chip size="small" label={`Physical: ${instance.physicalJob.status || 'pending'}`} /> : <Typography variant="caption" color="text.secondary">None</Typography>}</TableCell>
                   <TableCell>{formatDate(instance.startedAt)}</TableCell>

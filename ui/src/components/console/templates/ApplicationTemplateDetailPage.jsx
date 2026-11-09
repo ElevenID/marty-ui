@@ -142,15 +142,15 @@ function ApplicationTemplateDetailContent({ organizationId, templateId, can }) {
     <Container maxWidth="md" sx={{ py: 4 }}>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {template && <Stack spacing={3}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={2}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: 'space-between' }}>
           <Box>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
               <Typography variant="h4">{template.name}</Typography>
               <Chip label={status} color={isActive ? 'success' : 'default'} />
             </Stack>
             <Typography color="text.secondary">{template.description}</Typography>
           </Box>
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
             {isDraft && can('application-template', 'edit') && <Button component={Link} to={`/console/org/templates/applications/${templateId}/edit`} startIcon={<EditIcon />}>Edit</Button>}
             <Button component="a" href={`/applicant/preview/applications/${templateId}?organization_id=${encodeURIComponent(organizationId)}`} target="_blank" startIcon={<PreviewIcon />}>Preview</Button>
             {isDraft && can('application-template', 'create') && <Button startIcon={<RuleIcon />} disabled={busy} onClick={validate}>Validate</Button>}
@@ -164,7 +164,7 @@ function ApplicationTemplateDetailContent({ organizationId, templateId, can }) {
           validation.valid
             ? <Alert severity="success">This draft is valid and can be activated.</Alert>
             : <Alert severity="warning">
-              <Typography fontWeight={600} sx={{ mb: 1 }}>Resolve validation issues before activation.</Typography>
+              <Typography sx={{ fontWeight: 600, mb: 1 }}>Resolve validation issues before activation.</Typography>
               <Stack spacing={1}>
                 {errorsBySection.map(([section, items]) => (
                   <Box key={section}>

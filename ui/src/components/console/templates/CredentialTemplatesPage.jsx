@@ -219,7 +219,7 @@ function CredentialTemplatesPage() {
         icon={<InfoOutlinedIcon />}
         sx={{ mb: 3 }}
       >
-        <Typography variant="body2" fontWeight={600} gutterBottom>
+        <Typography variant="body2" gutterBottom sx={{ fontWeight: 600 }}>
           {t('templates.guardrailTitle')}
         </Typography>
         <Typography variant="body2">
@@ -258,7 +258,7 @@ function CredentialTemplatesPage() {
               {templates.map((template) => (
                   <TableRow key={template.id} hover>
                     <TableCell>
-                      <Typography variant="body2" fontWeight={500}>
+                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
                         {template.name}
                       </Typography>
                     </TableCell>

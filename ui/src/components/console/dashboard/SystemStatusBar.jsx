@@ -78,7 +78,9 @@ function ServiceStatusIndicator({ status, label, onClick }) {
 
   return (
     <Tooltip
-      title={t(statusReported ? 'dashboard.systemStatus.clickToViewLogs' : 'dashboard.systemStatus.notReported')}
+      title={statusReported
+        ? onClick ? t('dashboard.systemStatus.clickToViewLogs') : ''
+        : t('dashboard.systemStatus.notReported')}
       placement="top"
     >
       <Box
@@ -87,7 +89,7 @@ function ServiceStatusIndicator({ status, label, onClick }) {
           display: 'flex',
           alignItems: 'center',
           gap: 1,
-          cursor: 'pointer',
+          cursor: onClick ? 'pointer' : 'default',
           '&:hover': {
             opacity: 0.8,
           },
@@ -95,7 +97,7 @@ function ServiceStatusIndicator({ status, label, onClick }) {
       >
         {getStatusIcon()}
         <Box>
-          <Typography variant="body2" fontWeight={500}>
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>
             {label}
           </Typography>
           <Typography
@@ -113,7 +115,7 @@ function ServiceStatusIndicator({ status, label, onClick }) {
 /**
  * System Status Bar Component
  */
-export function SystemStatusBar({ systemHealth }) {
+export function SystemStatusBar({ systemHealth, canViewAudit = false }) {
   const { t } = useTranslation('console');
   
   if (!systemHealth) {
@@ -125,6 +127,7 @@ export function SystemStatusBar({ systemHealth }) {
   const hasWarning = [gateway, issuer, verifier].includes(HealthStatus.WARNING);
 
   const handleServiceClick = (serviceName) => {
+    if (!canViewAudit) return;
     // Navigate to audit logs filtered by service
     window.location.href = `/console/org/audit?service=${serviceName}`;
   };
@@ -151,35 +154,35 @@ export function SystemStatusBar({ systemHealth }) {
           <Typography variant="h6">
             {t('dashboard.systemStatus.title')}
           </Typography>
-          <IconButton
+          {canViewAudit && <IconButton
             size="small"
             component={Link}
             to="/console/org/audit"
             title={t('dashboard.systemStatus.viewAllLogs')}
           >
             <OpenInNewIcon fontSize="small" />
-          </IconButton>
+          </IconButton>}
         </Box>
         <Grid container spacing={3}>
           <Grid size={{ xs: 12, sm: 4 }}>
             <ServiceStatusIndicator
               status={gateway}
               label={t('dashboard.systemStatus.apiGateway')}
-              onClick={() => handleServiceClick('gateway')}
+              onClick={canViewAudit ? () => handleServiceClick('gateway') : undefined}
             />
           </Grid>
           <Grid size={{ xs: 12, sm: 4 }}>
             <ServiceStatusIndicator
               status={issuer}
               label={t('dashboard.systemStatus.issuanceService')}
-              onClick={() => handleServiceClick('issuance')}
+              onClick={canViewAudit ? () => handleServiceClick('issuance') : undefined}
             />
           </Grid>
           <Grid size={{ xs: 12, sm: 4 }}>
             <ServiceStatusIndicator
               status={verifier}
               label={t('dashboard.systemStatus.verifierService')}
-              onClick={() => handleServiceClick('verifier')}
+              onClick={canViewAudit ? () => handleServiceClick('verifier') : undefined}
             />
           </Grid>
         </Grid>

@@ -366,10 +366,10 @@ function IssuancePage() {
         >
           <Stack spacing={2}>
             <Box>
-              <Typography variant="overline" color="primary.main" fontWeight={700}>
+              <Typography variant="overline" color="primary.main" sx={{ fontWeight: 700 }}>
                 Selected credential
               </Typography>
-              <Typography variant="h5" fontWeight={700}>
+              <Typography variant="h5" sx={{ fontWeight: 700 }}>
                 {spotlightCredential.credential_template_id
                   ? templateNameById.get(spotlightCredential.credential_template_id)
                     || spotlightCredential.type
@@ -393,11 +393,11 @@ function IssuancePage() {
               </Box>
               <Box>
                 <Typography variant="subtitle2" color="text.secondary">Relationship</Typography>
-                <Typography fontWeight={600}>{getLifecycleRelationship(spotlightCredential)}</Typography>
+                <Typography sx={{ fontWeight: 600 }}>{getLifecycleRelationship(spotlightCredential)}</Typography>
               </Box>
               <Box>
                 <Typography variant="subtitle2" color="text.secondary">Verification policy cue</Typography>
-                <Typography fontWeight={600}>{getVerificationExpectation(spotlightCredential)}</Typography>
+                <Typography sx={{ fontWeight: 600 }}>{getVerificationExpectation(spotlightCredential)}</Typography>
               </Box>
             </Box>
           </Stack>
@@ -444,7 +444,7 @@ function IssuancePage() {
                 >
                   <TableCell>
                     <Stack spacing={0.25}>
-                      <Typography variant="body2" fontWeight={600}>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
                         {credential.credential_template_id
                           ? templateNameById.get(credential.credential_template_id)
                             || credential.type
@@ -470,7 +470,7 @@ function IssuancePage() {
                     </Stack>
                   </TableCell>
                   <TableCell>
-                    <Typography variant="body2" fontWeight={600}>{getHolderLabel(credential)}</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>{getHolderLabel(credential)}</Typography>
                     {getHolderSecondaryLabel(credential) && (
                       <Typography variant="caption" color="text.secondary">
                         {getHolderSecondaryLabel(credential)}
@@ -489,7 +489,7 @@ function IssuancePage() {
                     <StatusChip status={credential.status} showIcon />
                   </TableCell>
                   <TableCell align="right">
-                    <Stack direction="row" spacing={0.75} justifyContent="flex-end" flexWrap="wrap" useFlexGap>
+                    <Stack direction="row" spacing={0.75} useFlexGap sx={{ justifyContent: "flex-end", flexWrap: "wrap" }}>
                       <Button
                         size="small"
                         startIcon={<VisibilityIcon />}
@@ -623,7 +623,7 @@ function IssuancePage() {
                     The offer link is ready for secure delivery. Use Copy offer link or Open offer when needed.
                   </Typography>
                   {latestOffer.expires_at && (
-                    <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+                    <Typography variant="caption" sx={{ display: "block", mt: 1 }}>
                       Expires: {new Date(latestOffer.expires_at).toLocaleString()}
                     </Typography>
                   )}

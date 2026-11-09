@@ -40,6 +40,14 @@ function setMobileViewport(mobile: boolean) {
   }))
 }
 
+function expectIdentityLayoutStyles() {
+  const header = screen.getByText('My Identity').closest('.MuiStack-root')
+  expect(header).toHaveStyle({ justifyContent: 'space-between' })
+  expect(document.querySelector(
+    '[justifycontent], [alignitems], [flexwrap], [fontweight], [texttransform], [letterspacing]',
+  )).toBeNull()
+}
+
 describe('MyIdentityPage', () => {
   it('aborts inventory requests before logout submission and stops focus refreshes', async () => {
     mockGetMyCredentials.mockImplementation(() => new Promise(() => {}))
@@ -89,6 +97,7 @@ describe('MyIdentityPage', () => {
 
     await screen.findByText('Verified Member Badge')
     expect(screen.queryByRole('button', { name: /claim|receive again/i })).not.toBeInTheDocument()
+    expectIdentityLayoutStyles()
   })
 
   it('shows Canvas course source context in application details', async () => {
@@ -124,6 +133,7 @@ describe('MyIdentityPage', () => {
     expect(screen.getByText('Interoperable Credentials Quiz')).toBeInTheDocument()
     expect(screen.getByText('canvas-real-account-1')).toBeInTheDocument()
     expect(screen.getByText('Delivery: wallet plus canvas mirror')).toBeInTheDocument()
+    expectIdentityLayoutStyles()
   })
 
   it('shows issuer-owned waiting state for an approved blocked application', async () => {
@@ -170,6 +180,8 @@ describe('MyIdentityPage', () => {
     expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument()
     expect(mockGetMyCredentials).toHaveBeenCalledTimes(2)
     expect(mockGetMyApplications).toHaveBeenCalledTimes(2)
+    expect(screen.getByText('Browse the catalog to apply for your first credential.')).toHaveStyle({ marginBottom: '16px' })
+    expectIdentityLayoutStyles()
   })
 
   it('retains successful application data when credential inventory fails', async () => {
@@ -221,6 +233,11 @@ describe('MyIdentityPage', () => {
     expect(screen.getByText('Canvas Credentials display')).toBeInTheDocument()
     expect(screen.getByText('Delivered')).toBeInTheDocument()
     expect(screen.getByText(/canvas-cred-1/)).toBeInTheDocument()
+    expect(screen.getByText('Mirror linked').closest('.MuiStack-root')).toHaveStyle({
+      alignItems: 'center',
+      flexWrap: 'wrap',
+    })
+    expectIdentityLayoutStyles()
   })
 
   it.each([false, true])('offers working credential details without inert QR or download controls (mobile=%s)', async (mobile) => {
@@ -238,6 +255,7 @@ describe('MyIdentityPage', () => {
     expect(await screen.findByText('Credential Details')).toBeInTheDocument()
     expect(screen.getByText('To present a credential, use the wallet where it is stored.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^(Present|Renew)$/ })).not.toBeInTheDocument()
+    expectIdentityLayoutStyles()
   })
 
   it.each([

@@ -57,7 +57,7 @@ function ApplicantDashboard() {
       <Typography variant="h4" gutterBottom>
         {user?.name ? t('dashboard.titleWithName', { name: user.name }) : t('dashboard.title')}
       </Typography>
-      <Typography variant="body1" color="text.secondary" paragraph>
+      <Typography variant="body1" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('dashboard.description')}
       </Typography>
 

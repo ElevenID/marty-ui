@@ -405,14 +405,14 @@ export default function DidIdentitiesPage() {
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
-      <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={2} sx={{ mb: 3 }}>
+      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ justifyContent: 'space-between', mb: 3 }}>
         <Box>
           <Typography variant="h4" gutterBottom>Issuer identities</Typography>
           <Typography color="text.secondary">
             Public DID identities authorized for this organization. Custody profiles, services, and key references remain internal.
           </Typography>
         </Box>
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
           <Tooltip title="Reload identities">
             <span>
               <IconButton onClick={load} disabled={loading || !activeOrgId} aria-label="Reload identities">
@@ -465,8 +465,8 @@ export default function DidIdentitiesPage() {
             {!loading && identities.map((identity) => (
               <TableRow key={identityKey(identity)} hover>
                 <TableCell sx={{ maxWidth: 440 }}>
-                  <Stack direction="row" alignItems="center" spacing={1}>
-                    <Typography fontFamily="monospace" sx={{ overflowWrap: 'anywhere' }}>{identity.issuer_did}</Typography>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                    <Typography sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>{identity.issuer_did}</Typography>
                     <Tooltip title="Copy DID">
                       <IconButton size="small" onClick={() => copyDid(identity.issuer_did)} aria-label="Copy issuer DID">
                         <ContentCopyIcon fontSize="inherit" />
@@ -545,7 +545,7 @@ export default function DidIdentitiesPage() {
             <Alert severity="info">
               The selected issuer profile holds the signing key in managed custody. This ceremony returns public certificate material only.
             </Alert>
-            <Typography fontFamily="monospace" sx={{ overflowWrap: 'anywhere' }}>{issuing?.issuer_did}</Typography>
+            <Typography sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>{issuing?.issuer_did}</Typography>
             {issuing?.key_purpose === 'csca' ? (
               <TextField label="CSCA certificate ID" required value={issueForm.certificate_id}
                 onChange={(event) => setIssueForm((current) => ({ ...current, certificate_id: event.target.value }))} />
@@ -612,7 +612,7 @@ export default function DidIdentitiesPage() {
                 : 'Upload the signed DSC and optional chain for this passport issuer. Marty verifies the certificate public key against the issuer’s managed KMS identity; no private key is uploaded.'}
             </Alert>
             {certifying && (
-              <Typography fontFamily="monospace" sx={{ overflowWrap: 'anywhere' }}>{certifying.issuer_did}</Typography>
+              <Typography sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>{certifying.issuer_did}</Typography>
             )}
             <Typography variant="subtitle2">Generate a KMS-backed certificate request</Typography>
             {certifying && !csrSupported && (
@@ -696,7 +696,7 @@ export default function DidIdentitiesPage() {
             New signing operations for this DID, purpose, format, and algorithm will stop immediately. Existing credentials remain verifiable.
           </Typography>
           {retiring && (
-            <Typography fontFamily="monospace" sx={{ mt: 2, overflowWrap: 'anywhere' }}>{retiring.issuer_did}</Typography>
+            <Typography sx={{ fontFamily: 'monospace', mt: 2, overflowWrap: 'anywhere' }}>{retiring.issuer_did}</Typography>
           )}
         </DialogContent>
         <DialogActions>
@@ -714,7 +714,7 @@ export default function DidIdentitiesPage() {
             Marty will validate the compatible default signing service and publish its public key to this DID before changing active custody. Existing verification methods remain published so credentials already issued by this DID stay verifiable.
           </Typography>
           {rebinding && (
-            <Typography fontFamily="monospace" sx={{ mt: 2, overflowWrap: 'anywhere' }}>{rebinding.issuer_did}</Typography>
+            <Typography sx={{ fontFamily: 'monospace', mt: 2, overflowWrap: 'anywhere' }}>{rebinding.issuer_did}</Typography>
           )}
         </DialogContent>
         <DialogActions>

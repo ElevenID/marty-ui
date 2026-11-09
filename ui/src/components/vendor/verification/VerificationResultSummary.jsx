@@ -306,7 +306,7 @@ function CheckLine({ label, value, uncheckedLabel }) {
   const ok = Boolean(value);
   const unchecked = known && !ok && Boolean(uncheckedLabel);
   return (
-    <Stack direction="row" spacing={1} alignItems="center">
+    <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
       {known && !unchecked ? (
         ok ? <CheckCircleIcon color="success" fontSize="small" /> : <ErrorIcon color="error" fontSize="small" />
       ) : (
@@ -386,7 +386,7 @@ function VerificationResultSummary({ session }) {
       data-verification-decision={summary.verificationDecision}
     >
       <Stack spacing={2}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'flex-start', sm: 'center' }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: { xs: 'flex-start', sm: 'center' } }}>
           <Avatar
             src={typeof summary.image === 'string' ? summary.image : undefined}
             alt={summary.badgeName}
@@ -396,7 +396,7 @@ function VerificationResultSummary({ session }) {
             <WorkspacePremiumIcon />
           </Avatar>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }} useFlexGap>
               <Typography variant="h6" sx={{ fontWeight: 800, overflowWrap: 'anywhere' }}>
                 {summary.badgeName}
               </Typography>
@@ -474,7 +474,7 @@ function VerificationResultSummary({ session }) {
           <>
             <Divider />
             <Box data-testid="verification-canvas-mirror-result">
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
                 <LinkIcon color="primary" fontSize="small" />
                 <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
                   Canvas Credentials mirror

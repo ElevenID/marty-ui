@@ -207,10 +207,10 @@ function ServiceTypeCard({ definition, selected, onSelect }) {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         {definition.description}
       </Typography>
-      <Typography variant="caption" color="text.secondary" display="block">
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
         Protocol: {definition.protocol}
       </Typography>
-      <Typography variant="caption" color="text.secondary" display="block">
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
         Category: {definition.category}
       </Typography>
     </Paper>
@@ -599,7 +599,7 @@ const KeyManagementServiceWizard = () => {
           onChange={(event) => wizard.updateData({ key_aliases: event.target.value })}
         />
         <FormControl component="fieldset">
-          <Typography variant="body2" fontWeight="medium" sx={{ mb: 1 }}>
+          <Typography variant="body2" sx={{ fontWeight: 'medium', mb: 1 }}>
             Supported algorithms
           </Typography>
           <FormGroup row>
@@ -619,7 +619,7 @@ const KeyManagementServiceWizard = () => {
         </FormControl>
 
         <FormControl component="fieldset">
-          <Typography variant="body2" fontWeight="medium" sx={{ mb: 1 }}>
+          <Typography variant="body2" sx={{ fontWeight: 'medium', mb: 1 }}>
             Key purposes
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
@@ -689,7 +689,7 @@ const KeyManagementServiceWizard = () => {
         )}
 
         <Divider />
-        <Typography variant="body2" fontWeight="medium">
+        <Typography variant="body2" sx={{ fontWeight: 'medium' }}>
           Rotation policy (optional)
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ mt: -1, display: 'block' }}>
@@ -800,7 +800,7 @@ const KeyManagementServiceWizard = () => {
       </Paper>
 
       <Paper variant="outlined" sx={{ p: 3, mt: 2 }}>
-        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between" sx={{ mb: 2 }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ justifyContent: 'space-between', mb: 2 }}>
           <Box>
             <Typography variant="h6" sx={{ mb: 0.5 }}>
               Validate connection
@@ -936,7 +936,7 @@ const KeyManagementServiceWizard = () => {
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
         <Paper elevation={3} sx={{ p: 4 }}>
-          <Stack spacing={3} alignItems="center" textAlign="center">
+          <Stack spacing={3} sx={{ alignItems: 'center', textAlign: 'center' }}>
             <CheckCircleIcon color="success" sx={{ fontSize: 64 }} />
             <Box>
               <Typography variant="h5" gutterBottom>
@@ -956,8 +956,8 @@ const KeyManagementServiceWizard = () => {
 
           {!registeredServiceIsManagedOpenBao && (
             <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="space-between" alignItems={{ sm: 'center' }}>
-                <Box textAlign="left">
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ justifyContent: 'space-between', alignItems: { sm: 'center' } }}>
+                <Box sx={{ textAlign: 'left' }}>
                   <Typography variant="subtitle2">Provider key setup</Typography>
                   <Typography variant="body2" color="text.secondary">
                     Create or verify {wizard.data.key_reference || 'the configured key reference'} before issuer identity setup.
@@ -974,7 +974,7 @@ const KeyManagementServiceWizard = () => {
             </Paper>
           )}
 
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="center" sx={{ mt: 3 }}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ justifyContent: 'center', mt: 3 }}>
             <Button
               variant="contained"
               onClick={() => navigate(issuerIdentityCreateUrl)}

@@ -28,6 +28,7 @@ import {
   Tooltip,
   CircularProgress,
   Switch,
+  MenuItem,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -43,9 +44,9 @@ import { TableSkeleton } from '../../common/skeletons';
 import ErrorState from '../../common/ErrorState';
 import EmptyState from '../../common/EmptyState';
 import { listRoles, createRole, updateRole, deleteRole, listPermissions } from '../../../services/rbacApi';
-import { useAuth } from '../../../hooks/useAuth';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { useDialog } from '../../../hooks/useDialog';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { getResourceLabel } from '../../../config/permissions';
 import { useConsole } from '../../../contexts/ConsoleContext';
@@ -70,7 +71,7 @@ const getBreadcrumbs = (t) => [
  * Group permissions by resource for the permission picker dialog
  */
 function groupPermissions(permissions) {
-  const groups = {};
+  const groups = Object.create(null);
   for (const perm of permissions) {
     if (!groups[perm.resource]) {
       groups[perm.resource] = [];
@@ -83,13 +84,11 @@ function groupPermissions(permissions) {
 /**
  * Role Management Page
  */
-function RolesPage() {
+function RolesPageContent({ effectiveOrgId, canCreateRoles, canEditRoles, canDeleteRoles, refreshPermissions }) {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
-  const { activeOrgId } = useConsole();
   const { showNotification } = useNotifications();
-  const { can, refresh: refreshPermissions } = usePermissions();
-  const effectiveOrgId = activeOrgId;
+  const beginLoad = useAsyncActionScope();
+  const beginMutation = useAsyncActionScope();
 
   // Data state
   const [roles, setRoles] = useState([]);
@@ -102,6 +101,7 @@ function RolesPage() {
   const [editingRole, setEditingRole] = useState(null);
   const deleteDialog = useDialog();
   const [saving, setSaving] = useState(false);
+  const [replacementRoleId, setReplacementRoleId] = useState('');
 
   // Form state
   const [formName, setFormName] = useState('');
@@ -110,49 +110,36 @@ function RolesPage() {
   const [formPermissionIds, setFormPermissionIds] = useState(new Set());
   const [formIsDefault, setFormIsDefault] = useState(false);
 
-  const canCreateRoles = can('role', 'create');
-  const canEditRoles = can('role', 'edit');
-  const canDeleteRoles = can('role', 'delete');
+  const deletingRole = roles.find(role => role.id === deleteDialog.data?.id) || deleteDialog.data;
+  const needsReplacement = deletingRole?.member_count > 0 || deletingRole?.is_default_for_new_members;
   const replacementRoleOptions = useMemo(
-    () => roles.filter((role) => role.id !== deleteDialog.data?.id),
-    [deleteDialog.data?.id, roles]
+    () => roles.filter((role) => role.id !== deleteDialog.data?.id && role.organization_id === effectiveOrgId),
+    [deleteDialog.data?.id, effectiveOrgId, roles]
   );
+  const selectedReplacement = replacementRoleOptions.find(role => role.id === replacementRoleId);
 
   // Load data
   const loadData = useCallback(async () => {
-    if (!effectiveOrgId) {
-      setRoles([]);
-      setAllPermissions([]);
-      setLoading(false);
-      return;
-    }
+    const action = beginLoad();
+    if (!action.isCurrent()) return;
     setLoading(true);
     setError(null);
     try {
-      const [rolesData, permsData] = await Promise.all([
+      const [rolesData, permsData] = await action.run(() => Promise.all([
         listRoles(effectiveOrgId, true),
         listPermissions(effectiveOrgId),
-      ]);
+      ]));
+      if (!action.isCurrent()) return;
       setRoles(rolesData.roles || rolesData || []);
-      // permsData is grouped by resource — flatten to a flat list
-      const flat = [];
-      if (permsData.resources) {
-        for (const group of permsData.resources) {
-          for (const perm of group.permissions) {
-            flat.push({ ...perm, resource: group.resource });
-          }
-        }
-      } else if (Array.isArray(permsData)) {
-        flat.push(...permsData);
-      }
-      setAllPermissions(flat);
+      setAllPermissions(permsData);
     } catch (err) {
+      if (!action.isCurrent() || err?.name === 'AbortError') return;
       console.error('Failed to load roles:', err);
       setError('Failed to load roles. Please try again.');
     } finally {
-      setLoading(false);
+      if (action.isCurrent()) setLoading(false);
     }
-  }, [effectiveOrgId]);
+  }, [beginLoad, effectiveOrgId]);
 
   useEffect(() => {
     loadData();
@@ -160,6 +147,7 @@ function RolesPage() {
 
   // Open create dialog
   const handleCreate = () => {
+    if (loading || error || !effectiveOrgId || !canCreateRoles) return;
     setEditingRole(null);
     setFormName('');
     setFormDisplayName('');
@@ -171,6 +159,7 @@ function RolesPage() {
 
   // Open edit dialog
   const handleEdit = (role) => {
+    if (loading || error || saving || !canEditRoles || role.is_system_role) return;
     setEditingRole(role);
     setFormName(role.name);
     setFormDisplayName(role.display_name || '');
@@ -182,56 +171,82 @@ function RolesPage() {
 
   // Save (create or update)
   const handleSave = async () => {
+    if (saving || loading || error
+      || (editingRole ? !canEditRoles || editingRole.is_system_role : !canCreateRoles)) return;
+    const action = beginMutation();
+    if (!action.isCurrent()) return;
     setSaving(true);
     try {
       const data = {
-        name: formName,
-        display_name: formDisplayName || null,
-        description: formDescription || null,
+        display_name: formDisplayName.trim() || editingRole?.name || null,
+        // Native PATCH treats null as omitted; an empty string clears the text.
+        description: editingRole ? formDescription : formDescription || null,
         permission_ids: Array.from(formPermissionIds),
         is_default_for_new_members: formIsDefault,
       };
 
       if (editingRole) {
-        await updateRole(effectiveOrgId, editingRole.id, data);
-        showNotification(`Role "${formDisplayName || formName}" updated`, 'success');
+        await action.run(updateRole, effectiveOrgId, editingRole.id, data);
+        if (!action.isCurrent()) return;
+        showNotification(`Role "${data.display_name || formName}" updated`, 'success');
       } else {
-        await createRole(effectiveOrgId, data);
-        showNotification(`Role "${formDisplayName || formName}" created`, 'success');
+        await action.run(createRole, effectiveOrgId, { ...data, name: formName });
+        if (!action.isCurrent()) return;
+        showNotification(`Role "${data.display_name || formName}" created`, 'success');
       }
 
       setDialogOpen(false);
-      await loadData();
-      await refreshPermissions();
+      await action.run(loadData);
+      await action.run(refreshPermissions);
     } catch (err) {
+      if (!action.isCurrent() || err?.name === 'AbortError') return;
       console.error('Failed to save role:', err);
       showNotification(err.message || 'Failed to save role', 'error');
     } finally {
-      setSaving(false);
+      if (action.isCurrent()) setSaving(false);
     }
   };
 
   // Delete
   const handleDeleteConfirm = async () => {
+    if (saving || !canDeleteRoles) return;
+    const action = beginMutation();
+    if (!action.isCurrent()) return;
     setSaving(true);
     try {
-      const replacementRoleId = deleteDialog.data?.member_count > 0
-        ? (replacementRoleOptions.find((role) => role.is_default_for_new_members)?.id || replacementRoleOptions[0]?.id)
-        : undefined;
-
-      if (deleteDialog.data?.member_count > 0 && !replacementRoleId) {
-        throw new Error('This role still has members assigned and there is no replacement role available.');
+      if (needsReplacement && !replacementRoleId) {
+        throw new Error('Choose a replacement role before deleting this role.');
       }
 
-      await deleteRole(effectiveOrgId, deleteDialog.data.id, replacementRoleId);
+      // Recheck current membership counts and the explicitly chosen target before
+      // deleting; the native transaction remains authoritative for later races.
+      const freshData = await action.run(listRoles, effectiveOrgId, true);
+      if (!action.isCurrent()) return;
+      const freshRoles = freshData.roles || freshData;
+      if (!Array.isArray(freshRoles)) throw new Error('Unable to verify the current roles. Try again.');
+      const currentRole = freshRoles.find(role => role.id === deleteDialog.data?.id && role.organization_id === effectiveOrgId);
+      if (!currentRole || currentRole.is_system_role) throw new Error('This role is no longer available for deletion.');
+      const currentNeedsReplacement = currentRole.member_count > 0 || currentRole.is_default_for_new_members;
+      setRoles(freshRoles.filter(role => role.organization_id === effectiveOrgId));
+      if (currentNeedsReplacement && !replacementRoleId) {
+        throw new Error('Choose a replacement role before deleting this role.');
+      }
+      if (replacementRoleId && !freshRoles.some(role => role.id === replacementRoleId
+        && role.id !== currentRole.id && role.organization_id === effectiveOrgId)) {
+        setReplacementRoleId('');
+        throw new Error('The selected replacement role is no longer available. Choose another role.');
+      }
+      await action.run(deleteRole, effectiveOrgId, currentRole.id, replacementRoleId || undefined);
+      if (!action.isCurrent()) return;
       showNotification(`Role "${deleteDialog.data.display_name || deleteDialog.data.name}" deleted`, 'success');
-      await loadData();
-      await refreshPermissions();
+      await action.run(loadData);
+      await action.run(refreshPermissions);
     } catch (err) {
+      if (!action.isCurrent() || err?.name === 'AbortError') return;
       showNotification(err.message || 'Failed to delete role', 'error');
       throw err;
     } finally {
-      setSaving(false);
+      if (action.isCurrent()) setSaving(false);
     }
   };
 
@@ -281,6 +296,7 @@ function RolesPage() {
             variant="contained"
             startIcon={<AddIcon />}
             onClick={handleCreate}
+            disabled={loading || !!error || !effectiveOrgId}
           >
             Create Role
           </Button>
@@ -322,10 +338,10 @@ function RolesPage() {
                 <TableRow key={role.id} hover>
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Typography variant="body1" fontWeight={500}>
+                      <Typography variant="body1" sx={{ fontWeight: 500 }}>
                         {role.display_name || role.name}
                       </Typography>
-                      {role.is_system && (
+                      {role.is_system_role && (
                         <Chip label="System" size="small" color="default" variant="outlined" />
                       )}
                     </Box>
@@ -360,23 +376,29 @@ function RolesPage() {
                     ) : '—'}
                   </TableCell>
                   <TableCell align="right">
-                    {role.is_system ? (
+                    {role.is_system_role ? (
                       <Tooltip title="System roles cannot be edited">
                         <span>
-                          <IconButton disabled>
+                          <IconButton disabled aria-label={`System role ${role.display_name || role.name} is read-only`}>
                             <LockIcon fontSize="small" />
                           </IconButton>
                         </span>
                       </Tooltip>
                     ) : (canEditRoles || canDeleteRoles) ? (
                       <>
-                        <IconButton size="small" onClick={() => handleEdit(role)} disabled={!canEditRoles}>
+                        <IconButton
+                          size="small"
+                          aria-label={`Edit role ${role.display_name || role.name}`}
+                          onClick={() => handleEdit(role)}
+                          disabled={!canEditRoles}
+                        >
                           <EditIcon fontSize="small" />
                         </IconButton>
                         <IconButton
                           size="small"
                           color="error"
-                          onClick={() => deleteDialog.open(role)}
+                          aria-label={`Delete role ${role.display_name || role.name}`}
+                          onClick={() => { setReplacementRoleId(''); deleteDialog.open(role); }}
                           disabled={!canDeleteRoles}
                         >
                           <DeleteIcon fontSize="small" />
@@ -394,7 +416,7 @@ function RolesPage() {
       {/* Create / Edit Dialog */}
       <Dialog
         open={dialogOpen}
-        onClose={() => setDialogOpen(false)}
+        onClose={() => !saving && setDialogOpen(false)}
         maxWidth="md"
         fullWidth
       >
@@ -416,6 +438,7 @@ function RolesPage() {
               label="Display Name"
               value={formDisplayName}
               onChange={(e) => setFormDisplayName(e.target.value)}
+              helperText="Leave blank to use the role name."
               fullWidth
             />
             <TextField
@@ -454,6 +477,7 @@ function RolesPage() {
                       indeterminate={someSelected && !allSelected}
                       onChange={() => toggleResourceGroup(perms)}
                       onClick={(e) => e.stopPropagation()}
+                      slotProps={{ input: { 'aria-label': `Select all ${getResourceLabel(resource)} permissions` } }}
                       size="small"
                     />
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -499,7 +523,7 @@ function RolesPage() {
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => setDialogOpen(false)} disabled={saving}>Cancel</Button>
           <Button
             variant="contained"
             onClick={handleSave}
@@ -519,16 +543,63 @@ function RolesPage() {
         title="Delete Role"
         itemName={deleteDialog.data?.display_name || deleteDialog.data?.name}
         warning={
-          deleteDialog.data?.member_count > 0 ? (
-            <Alert severity="warning" sx={{ mt: 2 }}>
-              This role is currently assigned to {deleteDialog.data.member_count} member(s).
-              They will be reassigned to the default role.
-            </Alert>
+          needsReplacement ? (
+            <Box sx={{ mt: 2 }}>
+              <Alert severity="warning" sx={{ mb: 2 }}>
+                This role is assigned to {deletingRole.member_count} member(s).
+                {deletingRole.is_default_for_new_members && ' It is also the default for new members.'}
+                {' Choose a replacement role before deleting it.'}
+              </Alert>
+              <TextField
+                select
+                label="Replacement role"
+                value={replacementRoleId}
+                onChange={(event) => setReplacementRoleId(event.target.value)}
+                disabled={saving || replacementRoleOptions.length === 0}
+                helperText={replacementRoleOptions.length ? 'No role is selected automatically.' : 'Create another role before deleting this role.'}
+                fullWidth
+              >
+                {replacementRoleOptions.map(role => (
+                  <MenuItem key={role.id} value={role.id}>{role.display_name || role.name}</MenuItem>
+                ))}
+              </TextField>
+              {selectedReplacement && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  Members who would otherwise have no roles will receive "{selectedReplacement.display_name || selectedReplacement.name}".
+                  {deletingRole.is_default_for_new_members && ' This choice will also become the default for new members.'}
+                </Alert>
+              )}
+            </Box>
           ) : null
         }
       />
     </ResourcePage>
   );
+}
+
+function RolesPage() {
+  const { activeOrgId } = useConsole();
+  const { can, isLoading, refresh } = usePermissions();
+  if (!activeOrgId) {
+    return <EmptyState title="Select an organization" description="Choose an organization to manage its roles." />;
+  }
+  if (isLoading) return <CircularProgress aria-label="Checking role permissions" />;
+  if (!can('role', 'view')) {
+    return <ErrorState title="Access denied" message="You do not have permission to view roles in this organization." showSupport={false} />;
+  }
+  const canCreateRoles = can('role', 'create');
+  const canEditRoles = can('role', 'edit');
+  const canDeleteRoles = can('role', 'delete');
+  // Organization or grant changes discard forms and invalidate every captured
+  // loader/mutation. The surrounding ConsoleProvider owns account lifetimes.
+  return <RolesPageContent
+    key={JSON.stringify([activeOrgId, canCreateRoles, canEditRoles, canDeleteRoles])}
+    effectiveOrgId={activeOrgId}
+    canCreateRoles={canCreateRoles}
+    canEditRoles={canEditRoles}
+    canDeleteRoles={canDeleteRoles}
+    refreshPermissions={refresh}
+  />;
 }
 
 export default RolesPage;
