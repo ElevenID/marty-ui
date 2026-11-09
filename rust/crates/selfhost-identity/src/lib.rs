@@ -2,6 +2,7 @@
 
 pub mod acme_http01;
 pub mod origin;
+pub mod tls;
 
 pub struct SelfhostRole {
     pub name: &'static str,

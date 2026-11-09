@@ -54,6 +54,7 @@ const CredentialTemplateWizard = () => {
   const organizationEpoch = useRef(0);
   const creation = useMemo(() => createTemplateCreationOperation(activeOrgId, principalId), [activeOrgId, principalId]);
   const [createdDraft, setCreatedDraft] = useState(null);
+  const submissionPending = useRef(false);
 
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {
@@ -108,6 +109,17 @@ const CredentialTemplateWizard = () => {
     return result;
   }, [effectiveOrganizationId, t, creation]);
 
+  const submitReviewedData = useCallback(async (data) => {
+    const epoch = organizationEpoch.current;
+    // Lock edits before the first await, including events before loading renders.
+    submissionPending.current = true;
+    try {
+      return await handleSubmit(data);
+    } finally {
+      if (epoch === organizationEpoch.current) submissionPending.current = false;
+    }
+  }, [handleSubmit]);
+
   const wizard = useWizard({
     scopeKey: `${activeOrgId}:${principalId}`,
     steps: getSteps(t),
@@ -129,15 +141,23 @@ const CredentialTemplateWizard = () => {
       activate_immediately: true,
     },
     validateStep,
-    onSubmit: handleSubmit,
+    onSubmit: submitReviewedData,
     onCancel: () => {
       navigate('/console/org/templates/credentials');
     },
   });
 
   const updateWizardData = wizard.updateData;
+  const updateFormData = useCallback((updates) => {
+    if (!submissionPending.current) updateWizardData(updates);
+  }, [updateWizardData]);
+  const goToWizardStep = wizard.goToStep;
+  const editStep = useCallback((step) => {
+    if (!submissionPending.current) goToWizardStep(step);
+  }, [goToWizardStep]);
   useLayoutEffect(() => {
     organizationEpoch.current += 1;
+    submissionPending.current = false;
     setCreatedDraft(null);
     updateWizardData({ trust_profile_id: null, compliance_profile_id: null, issuer_did: null,
       revocation_profile_id: null, credential_payload_format: undefined, supported_formats: undefined,
@@ -151,36 +171,36 @@ const CredentialTemplateWizard = () => {
         return (
           <BasicsStep
             data={wizard.data}
-            onChange={wizard.updateData}
+            onChange={updateFormData}
           />
         );
       case 1:
         return (
           <ClaimsStep
             data={wizard.data}
-            onChange={wizard.updateData}
+            onChange={updateFormData}
           />
         );
       case 2:
         return (
           <TrustComplianceStep
             data={wizard.data}
-            onChange={wizard.updateData}
+            onChange={updateFormData}
           />
         );
       case 3:
         return (
           <CryptoValidityStep
             data={wizard.data}
-            onChange={wizard.updateData}
+            onChange={updateFormData}
           />
         );
       case 4:
         return (
           <ReviewStep
             data={wizard.data}
-            onChange={wizard.updateData}
-            onEdit={wizard.goToStep}
+            onChange={updateFormData}
+            onEdit={editStep}
           />
         );
       default:
@@ -282,14 +302,15 @@ const CredentialTemplateWizard = () => {
         )}
 
         {/* Step Content */}
-        <Box sx={{ minHeight: 400, mb: 4 }}>
+        <Box component="fieldset" disabled={wizard.loading} aria-label={getSteps(t)[wizard.activeStep]}
+          sx={{ border: 0, p: 0, m: 0, minWidth: 0, minHeight: 400, mb: 4 }}>
           {renderStepContent()}
         </Box>
 
         {/* Navigation Buttons */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 2 }}>
           <Button
-            onClick={wizard.isFirstStep ? wizard.cancel : wizard.goBack}
+            onClick={() => { if (!submissionPending.current) (wizard.isFirstStep ? wizard.cancel : wizard.goBack)(); }}
             startIcon={<ArrowBackIcon />}
             disabled={wizard.loading}
             data-testid={wizard.isFirstStep ? 'wizard.template.cancel' : 'wizard.template.back'}
@@ -301,7 +322,7 @@ const CredentialTemplateWizard = () => {
             {/* Show Skip button for optional step (Crypto & Validity) */}
             {wizard.activeStep === 3 && (
               <Button
-                onClick={wizard.goNext}
+                onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
                 disabled={wizard.loading}
                 data-testid="wizard.template.skip"
               >
@@ -322,7 +343,7 @@ const CredentialTemplateWizard = () => {
             ) : (
               <Button
                 variant="contained"
-                onClick={wizard.goNext}
+                onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
                 disabled={!wizard.isStepValid() || wizard.loading}
                 endIcon={<ArrowForwardIcon />}
                 data-testid="wizard.template.next"

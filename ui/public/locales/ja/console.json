@@ -1,5 +1,19 @@
 {
   "trust": {
+    "trustProfileWizard": {
+      "selectOrganization": "信頼プロファイルを作成する組織を選択してください。",
+      "createDenied": "選択した組織で信頼プロファイルを作成する権限がありません。",
+      "issuerDenied": "発行者との関係を追加するには、信頼できる発行者を表示および作成する権限が必要です。選択した発行者を削除すると、発行者なしで続行できます。",
+      "registryDenied": "レジストリソースを同期するには、信頼プロファイルを表示する権限が必要です。選択したレジストリを削除すると、レジストリなしで続行できます。",
+      "activateDenied": "信頼プロファイルを有効化する権限がありません。下書きを作成するには、即時有効化をオフにしてください。",
+      "responseMismatch": "要求された信頼プロファイルの操作をサーバーが確認できませんでした。再試行する前にプロファイル一覧を確認してください。",
+      "profileCreated": "この信頼プロファイルは作成されました: {{id}}。再試行する前に現在の状態を確認し、設定を完了してください。"
+    },
+    "revocationWizard": {
+      "selectOrganization": "失効プロファイルを作成する組織を選択してください。",
+      "createDenied": "選択した組織で失効プロファイルを作成する権限がありません。",
+      "responseMismatch": "作成応答から、選択した組織の新しい下書きプロファイルを確認できません。再試行する前にプロファイル一覧を確認してください。"
+    },
     "trustProfilesPage": {
       "title": "信頼プロファイル",
       "description": "組織が受け入れる資格情報の形式、信頼ソース、検証ルールを設定します。",
@@ -227,6 +241,17 @@
 		"flowDefinition": "フロー定義"
 	},
 	"deploy": {
+		"keyManagementWizard": {
+			"selectOrganization": "署名サービスを登録する組織を選択してください。",
+			"readDenied": "選択した組織の署名サービスを表示する権限がありません。",
+			"createDenied": "選択した組織に署名サービスを登録する権限がありません。"
+		},
+		"issuerIdentityWizard": {
+			"selectOrganization": "発行者IDを作成する組織を選択してください。",
+			"readDenied": "選択した組織で発行者の機能を表示する権限がありません。",
+			"createDenied": "選択した組織で発行者IDを作成する権限がありません。",
+			"responseMismatch": "要求された発行者IDをサーバーが確認できませんでした。再試行する前に発行者IDの一覧を確認してください。"
+		},
 		"title": "デプロイ",
 		"deploymentProfiles": "デプロイプロファイル",
 		"deploymentProfilesDescription": "API、キオスク、デバイス向けのデプロイプロファイルをオンライン/オフライン環境で構成します。",

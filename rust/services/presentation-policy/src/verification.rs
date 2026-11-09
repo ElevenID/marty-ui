@@ -2,11 +2,11 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use marty_verification::credential_format::{detect_credential_format, DetectedCredentialFormat};
+use marty_verification::credential_format::{DetectedCredentialFormat, detect_credential_format};
 use marty_verification::open_badges::is_retired_ob2;
 use mmf_security::{CredentialVerificationAuthorizationFacts, CredentialVerificationPolicyEngine};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::{
@@ -287,7 +287,7 @@ impl VerifiedFactsOrchestrator {
         request: &EvaluatePresentationRequest,
     ) -> Result<VerifiedPolicyMaterial, PresentationVerificationError> {
         let token = canonical_token(&request.vp_token)?;
-        let format = detect_credential_format(&token);
+        let format = credential_format_for_token(&token);
         if format == DetectedCredentialFormat::Unknown {
             let reason = if is_retired_ob2(&request.vp_token)
                 || request.vp_token.get("assertion").is_some()
@@ -961,4 +961,47 @@ fn rejected_facts(
 
 fn system_epoch_seconds() -> u64 {
     u64::try_from(Utc::now().timestamp()).unwrap_or_default()
+}
+
+// Detection selects a kernel only. Preserve the complete outer token for
+// authentication; the bounded inner hint is never proof or trust evidence.
+fn credential_format_for_token(token: &str) -> DetectedCredentialFormat {
+    let inner = marty_oid4vci::presented_jwt_vc(token).ok();
+    detect_credential_format(inner.as_deref().unwrap_or(token))
+}
+
+#[cfg(test)]
+mod vc_jwt_format_tests {
+    use super::*;
+    use base64::Engine;
+    fn unverified(claims: Value) -> String {
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        format!(
+            "{}.{}.{}",
+            b64.encode(br#"{"alg":"ES256"}"#),
+            b64.encode(claims.to_string()),
+            b64.encode([0u8; 64])
+        )
+    }
+    #[test]
+    fn bounded_inner_hint_routes_badge_profile_but_is_not_acceptance() {
+        let inner = unverified(
+            json!({"vc":{"@context":["https://www.w3.org/ns/credentials/v2","https://purl.imsglobal.org/spec/ob/v3p0/context.json"],"type":["VerifiableCredential","OpenBadgeCredential"]}}),
+        );
+        assert_eq!(
+            credential_format_for_token(&inner),
+            DetectedCredentialFormat::OpenbadgeV3
+        );
+        let outer = unverified(json!({"vp":{"verifiableCredential":[inner]}}));
+        assert_eq!(
+            credential_format_for_token(&outer),
+            DetectedCredentialFormat::OpenbadgeV3
+        );
+        // Multiple credentials cannot inherit the first credential's profile.
+        let ambiguous = unverified(json!({"vp":{"verifiableCredential":[inner,inner]}}));
+        assert_ne!(
+            credential_format_for_token(&ambiguous),
+            DetectedCredentialFormat::OpenbadgeV3
+        );
+    }
 }

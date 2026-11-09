@@ -1,5 +1,19 @@
 {
   "trust": {
+    "trustProfileWizard": {
+      "selectOrganization": "Selecciona una organización para crear un perfil de confianza.",
+      "createDenied": "No tienes permiso para crear perfiles de confianza en la organización seleccionada.",
+      "issuerDenied": "Para añadir relaciones con emisores se necesitan permisos para ver y crear emisores de confianza. Elimina los emisores seleccionados para continuar sin ellos.",
+      "registryDenied": "Para sincronizar fuentes de registros se necesita permiso para ver perfiles de confianza. Elimina los registros seleccionados para continuar sin ellos.",
+      "activateDenied": "No tienes permiso para activar perfiles de confianza. Desactiva la activación inmediata para crear un borrador.",
+      "responseMismatch": "El servidor no confirmó la operación solicitada para el perfil de confianza. Revisa la lista de perfiles antes de volver a intentarlo.",
+      "profileCreated": "Este perfil de confianza se ha creado: {{id}}. Comprueba su estado actual y completa la configuración antes de volver a intentarlo."
+    },
+    "revocationWizard": {
+      "selectOrganization": "Selecciona una organización para crear un perfil de revocación.",
+      "createDenied": "No tienes permiso para crear perfiles de revocación en la organización seleccionada.",
+      "responseMismatch": "La respuesta no confirma un nuevo perfil en borrador para la organización seleccionada. Revisa la lista de perfiles antes de volver a intentarlo."
+    },
     "trustProfilesPage": {
       "title": "Perfiles de confianza",
       "description": "Defina los formatos de credenciales, las fuentes de confianza y las reglas de validación que acepta su organización.",
@@ -227,6 +241,17 @@
 		"flowDefinition": "Definición de flujo"
 	},
 	"deploy": {
+		"keyManagementWizard": {
+			"selectOrganization": "Seleccione una organización para registrar un servicio de firma.",
+			"readDenied": "No tiene permiso para ver los servicios de firma de la organización seleccionada.",
+			"createDenied": "No tiene permiso para registrar servicios de firma en la organización seleccionada."
+		},
+		"issuerIdentityWizard": {
+			"selectOrganization": "Selecciona una organización para crear una identidad de emisor.",
+			"readDenied": "No tienes permiso para ver las capacidades de los emisores en la organización seleccionada.",
+			"createDenied": "No tienes permiso para crear identidades de emisor en la organización seleccionada.",
+			"responseMismatch": "El servidor no confirmó la identidad de emisor solicitada. Revisa la lista de identidades de emisor antes de volver a intentarlo."
+		},
 		"title": "Despliegue",
 		"deploymentProfiles": "Perfiles de despliegue",
 		"deploymentProfilesDescription": "Configura perfiles de despliegue para APIs, quioscos y dispositivos en entornos en línea y fuera de línea.",

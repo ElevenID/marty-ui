@@ -1,13 +1,13 @@
 use async_trait::async_trait;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::DateTime;
 use marty_verification::credential_format::DetectedCredentialFormat;
 use marty_verification::mdoc::{
-    disclosed_claims, verify_mdoc_presentation, MdocDocumentVerificationEvidence,
-    MdocPresentationVerificationResult,
+    MdocDocumentVerificationEvidence, MdocPresentationVerificationResult, disclosed_claims,
+    verify_mdoc_presentation,
 };
 use marty_verification::open_badges::is_retired_ob2;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::verification::OB2_RETIRED;
@@ -46,8 +46,10 @@ impl ResolvingCredentialKernel {
                 // Resolve the exact credential the Open Badge verifier will consume,
                 // including its supported VP wrapper. Never inspect
                 // an outer envelope or reinterpret a field inside the selected VC.
-                vec![open_badge_credential(&context.token)
-                    .map_err(|_| "Invalid Open Badge credential selection")?]
+                vec![
+                    open_badge_credential(&context.token)
+                        .map_err(|_| "Invalid Open Badge credential selection")?,
+                ]
             }
             DetectedCredentialFormat::W3cVcdmDi => {
                 let document = context
@@ -290,7 +292,15 @@ impl CredentialVerificationKernel for ResolvingCredentialKernel {
                 | DetectedCredentialFormat::OpenbadgeV3
                 | DetectedCredentialFormat::SdJwt
         ) {
-            if let Some(token) = context.token.as_str() {
+            if let Some(outer_token) = context.token.as_str() {
+                // Only a bounded untrusted selection hint. The complete VP is
+                // authenticated later; its holder key is never an issuer key.
+                let inner_token = if context.format != DetectedCredentialFormat::SdJwt {
+                    marty_oid4vci::presented_jwt_vc(outer_token).ok()
+                } else {
+                    None
+                };
+                let token = inner_token.as_deref().unwrap_or(outer_token);
                 if let Some((issuer, kid)) = jwt_selector(token) {
                     let sources: Vec<_> = context
                         .trust_profile
@@ -427,7 +437,7 @@ fn verify_mdoc(
         None => {
             return Ok(rejected_mdoc(
                 "Verifier-owned mdoc session transcript is required",
-            ))
+            ));
         }
     };
     if context.audience.as_deref().is_some_and(|audience| {
@@ -706,12 +716,74 @@ async fn verify_vc_jwt(
     context: &CredentialVerificationContext,
     open_badge_v3: bool,
 ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
-    let token = token_string(&context.token)?;
-    let mut request = json!({"token": token});
+    let outer_token = token_string(&context.token)?;
+    let selected_inner = marty_oid4vci::presented_jwt_vc(outer_token).ok();
+    let selection_token = selected_inner.as_deref().unwrap_or(outer_token);
     let issuer_key = context
         .resolved_issuer_key
         .clone()
-        .or_else(|| governed_issuer_key(context, token));
+        .or_else(|| governed_issuer_key(context, selection_token));
+    let transaction = match vc_jwt_transaction(context) {
+        Ok(value) => value,
+        Err(_) => {
+            return Ok(rejected(
+                "VC-JWT presentation requires a complete verifier transaction",
+            ));
+        }
+    };
+    let signed_inner = if let Some((nonce, audience)) = transaction {
+        let Some(key) = issuer_key.as_ref() else {
+            return Ok(rejected(
+                "VC-JWT presentation requires governed issuer verification material",
+            ));
+        };
+        let Some((issuer, kid)) = jwt_selector(selection_token) else {
+            return Ok(rejected("VC-JWT issuer selection is invalid"));
+        };
+        if issuer != key.issuer_id {
+            return Ok(rejected("VC-JWT issuer authority does not match"));
+        }
+        let algorithm = match jwt_algorithm(selection_token).as_deref() {
+            Some("ES256") => marty_oid4vci::types::SigningAlgorithm::ES256,
+            Some("ES384") => marty_oid4vci::types::SigningAlgorithm::ES384,
+            Some("EdDSA") => marty_oid4vci::types::SigningAlgorithm::EdDSA,
+            Some("RS256") => marty_oid4vci::types::SigningAlgorithm::RS256,
+            _ => return Ok(rejected("VC-JWT issuer algorithm is unsupported")),
+        };
+        let keys = marty_oid4vci::TrustedSdJwtIssuerKeys::new(vec![
+            marty_oid4vci::ResolvedSdJwtIssuerKey::new(
+                issuer,
+                kid,
+                algorithm,
+                serde_json::to_string(&key.public_jwk)
+                    .map_err(|_| invalid_native("Issuer public JWK is invalid"))?,
+            ),
+        ]);
+        let Ok(keys) = keys else {
+            return Ok(rejected("VC-JWT issuer verification binding is invalid"));
+        };
+        let authenticated = if open_badge_v3 {
+            marty_oid4vci::verify_open_badge_presentation(outer_token, &keys, nonce, audience)
+                .map(|proof| proof.credential_jwt().to_owned())
+        } else {
+            marty_oid4vci::verify_jwt_vc_presentation(outer_token, &keys, nonce, audience)
+                .map(|proof| proof.credential_jwt().to_owned())
+        };
+        let Ok(inner) = authenticated else {
+            return Ok(rejected("VC-JWT presentation authentication failed"));
+        };
+        Some(inner)
+    } else {
+        // Credential-only evidence retains the existing saved-policy decision
+        // owner and never sets holder/presentation flags. A VP without its
+        // transaction is not silently reinterpreted as a credential.
+        if selected_inner.is_some() {
+            return Ok(rejected("VC-JWT presentation transaction is absent"));
+        }
+        None
+    };
+    let token = signed_inner.as_deref().unwrap_or(outer_token);
+    let mut request = json!({"token": token});
     if let Some(key) = &issuer_key {
         request["issuer_public_jwk"] = key.public_jwk.clone();
     }
@@ -769,7 +841,32 @@ async fn verify_vc_jwt(
     evidence.algorithm = jwt_algorithm(token);
     evidence.validity_checked = true;
     evidence.is_expired = Some(false);
+    if signed_inner.is_some() {
+        evidence.presentation_verified = true;
+        evidence.holder_binding_verified = true;
+        evidence.holder_binding_method = Some("DEVICE_KEY".into());
+        evidence.proof_profile = Some("OID4VP_VERIFIABLE_PRESENTATION".into());
+        evidence.challenge_verified = true;
+        evidence.audience_verified = true;
+    }
     Ok(evidence)
+}
+
+fn vc_jwt_transaction(
+    context: &CredentialVerificationContext,
+) -> Result<Option<(&str, &str)>, &'static str> {
+    let required = context.nonce.is_some()
+        || context.audience.is_some()
+        || context.verifier_context.get("oid4vp_verifier_context") == Some(&Value::Bool(true));
+    if !required {
+        return Ok(None);
+    }
+    match (context.nonce.as_deref(), context.audience.as_deref()) {
+        (Some(nonce), Some(audience)) if !nonce.is_empty() && !audience.is_empty() => {
+            Ok(Some((nonce, audience)))
+        }
+        _ => Err("Complete nonce and audience required"),
+    }
 }
 
 fn data_integrity_document(
@@ -1607,6 +1704,41 @@ mod tests {
     use crate::ResolvedTrustProfile;
     use uuid::Uuid;
 
+    #[test]
+    fn vc_jwt_credential_only_evidence_cannot_remove_a_trusted_transaction() {
+        let mut c = context(json!({"status":"active"}));
+        assert_eq!(vc_jwt_transaction(&c), Ok(None));
+        c.verifier_context
+            .insert("oid4vp_verifier_context".into(), json!(true));
+        assert!(vc_jwt_transaction(&c).is_err());
+        c.nonce = Some("nonce".into());
+        assert!(vc_jwt_transaction(&c).is_err());
+        c.audience = Some("https://verifier.example".into());
+        assert_eq!(
+            vc_jwt_transaction(&c),
+            Ok(Some(("nonce", "https://verifier.example")))
+        );
+        c.nonce = Some(String::new());
+        assert!(vc_jwt_transaction(&c).is_err());
+    }
+
+    #[tokio::test]
+    async fn vc_jwt_trusted_context_refuses_a_bare_credential_before_acceptance() {
+        let mut c = context(json!({"status":"active"}));
+        c.format = DetectedCredentialFormat::W3cVc;
+        c.token = json!(compact_jwt(
+            "did:web:issuer.example",
+            "did:web:issuer.example#key"
+        ));
+        c.nonce = Some("nonce".into());
+        c.audience = Some("https://verifier.example".into());
+        c.verifier_context
+            .insert("oid4vp_verifier_context".into(), json!(true));
+        let e = verify_vc_jwt(&c, false).await.unwrap();
+        assert!(!e.verified);
+        assert!(!e.holder_binding_verified);
+    }
+
     fn mdoc_contract() -> Value {
         serde_json::from_str(include_str!(
             "../../../../contracts/presentation-mdoc-verification-behavior.json"
@@ -1764,11 +1896,13 @@ mod tests {
             "https://issuer.example/org/acme",
             "https://issuer.example/Org/Acme/",
         ] {
-            assert!(governed_issuer_key(
-                &context(override_profile.clone()),
-                &compact_jwt(other, &kid)
-            )
-            .is_none());
+            assert!(
+                governed_issuer_key(
+                    &context(override_profile.clone()),
+                    &compact_jwt(other, &kid)
+                )
+                .is_none()
+            );
         }
     }
 

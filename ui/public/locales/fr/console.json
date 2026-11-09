@@ -1,5 +1,19 @@
 {
   "trust": {
+    "trustProfileWizard": {
+      "selectOrganization": "Sélectionnez une organisation pour créer un profil de confiance.",
+      "createDenied": "Vous ne disposez pas de l’autorisation de créer des profils de confiance dans l’organisation sélectionnée.",
+      "issuerDenied": "L’ajout de relations avec des émetteurs nécessite les autorisations de consulter et de créer des émetteurs de confiance. Retirez les émetteurs sélectionnés pour continuer sans eux.",
+      "registryDenied": "La synchronisation des sources de registres nécessite l’autorisation de consulter les profils de confiance. Retirez les registres sélectionnés pour continuer sans eux.",
+      "activateDenied": "Vous ne disposez pas de l’autorisation d’activer les profils de confiance. Désactivez l’activation immédiate pour créer un brouillon.",
+      "responseMismatch": "Le serveur n’a pas confirmé l’opération demandée pour le profil de confiance. Consultez la liste des profils avant de réessayer.",
+      "profileCreated": "Ce profil de confiance a été créé : {{id}}. Vérifiez son état actuel et terminez sa configuration avant de réessayer."
+    },
+    "revocationWizard": {
+      "selectOrganization": "Sélectionnez une organisation pour créer un profil de révocation.",
+      "createDenied": "Vous n’avez pas l’autorisation de créer des profils de révocation dans l’organisation sélectionnée.",
+      "responseMismatch": "La réponse ne confirme pas la création d’un nouveau profil à l’état de brouillon pour l’organisation sélectionnée. Consultez la liste des profils avant de réessayer."
+    },
     "trustProfilesPage": {
       "title": "Profils de confiance",
       "description": "Définissez les formats d’attestations, les sources de confiance et les règles de validation acceptés par votre organisation.",
@@ -227,6 +241,17 @@
 		"flowDefinition": "Définition de flux"
 	},
 	"deploy": {
+		"keyManagementWizard": {
+			"selectOrganization": "Sélectionnez une organisation pour enregistrer un service de signature.",
+			"readDenied": "Vous n’avez pas l’autorisation de consulter les services de signature de l’organisation sélectionnée.",
+			"createDenied": "Vous n’avez pas l’autorisation d’enregistrer des services de signature dans l’organisation sélectionnée."
+		},
+		"issuerIdentityWizard": {
+			"selectOrganization": "Sélectionnez une organisation pour créer une identité d’émetteur.",
+			"readDenied": "Vous ne disposez pas de l’autorisation de consulter les capacités des émetteurs dans l’organisation sélectionnée.",
+			"createDenied": "Vous ne disposez pas de l’autorisation de créer des identités d’émetteur dans l’organisation sélectionnée.",
+			"responseMismatch": "Le serveur n’a pas confirmé l’identité d’émetteur demandée. Consultez la liste des identités d’émetteur avant de réessayer."
+		},
 		"title": "Déploiement",
 		"deploymentProfiles": "Profils de déploiement",
 		"deploymentProfilesDescription": "Configurez des profils de déploiement pour API, bornes et appareils en ligne/hors ligne.",
