@@ -241,6 +241,12 @@
 		"flowDefinition": "フロー定義"
 	},
 	"deploy": {
+		"issuerIdentityWizard": {
+			"selectOrganization": "発行者IDを作成する組織を選択してください。",
+			"readDenied": "選択した組織で発行者の機能を表示する権限がありません。",
+			"createDenied": "選択した組織で発行者IDを作成する権限がありません。",
+			"responseMismatch": "要求された発行者IDをサーバーが確認できませんでした。再試行する前に発行者IDの一覧を確認してください。"
+		},
 		"title": "デプロイ",
 		"deploymentProfiles": "デプロイプロファイル",
 		"deploymentProfilesDescription": "API、キオスク、デバイス向けのデプロイプロファイルをオンライン/オフライン環境で構成します。",

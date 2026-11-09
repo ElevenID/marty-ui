@@ -241,6 +241,12 @@
 		"flowDefinition": "Ablaufdefinition"
 	},
 	"deploy": {
+		"issuerIdentityWizard": {
+			"selectOrganization": "Wählen Sie eine Organisation aus, um eine Ausstelleridentität zu erstellen.",
+			"readDenied": "Sie sind nicht berechtigt, die Ausstellerfunktionen in der ausgewählten Organisation anzuzeigen.",
+			"createDenied": "Sie sind nicht berechtigt, Ausstelleridentitäten in der ausgewählten Organisation zu erstellen.",
+			"responseMismatch": "Der Server hat die angeforderte Ausstelleridentität nicht bestätigt. Prüfen Sie die Liste der Ausstelleridentitäten, bevor Sie es erneut versuchen."
+		},
 		"title": "Bereitstellung",
 		"deploymentProfiles": "Bereitstellungsprofile",
 		"deploymentProfilesDescription": "Konfigurieren Sie Bereitstellungsprofile für APIs, Kioske und Geräte in Online-/Offline-Szenarien.",

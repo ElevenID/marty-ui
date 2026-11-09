@@ -1,4 +1,12 @@
 {
+	"deploy": {
+		"issuerIdentityWizard": {
+			"selectOrganization": "Selecteer een organisatie om een uitgeversidentiteit te maken.",
+			"readDenied": "Je hebt geen toestemming om de mogelijkheden voor uitgevers in de geselecteerde organisatie te bekijken.",
+			"createDenied": "Je hebt geen toestemming om uitgeversidentiteiten te maken in de geselecteerde organisatie.",
+			"responseMismatch": "De server heeft de gevraagde uitgeversidentiteit niet bevestigd. Controleer de lijst met uitgeversidentiteiten voordat je het opnieuw probeert."
+		}
+	},
   "trust": {
     "trustProfileWizard": {
       "selectOrganization": "Selecteer een organisatie om een vertrouwensprofiel te maken.",
