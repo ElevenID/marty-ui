@@ -381,6 +381,134 @@ def test_ip_ingress_omits_disallowed_hosts_and_preserves_https_port(tmp_path: Pa
     assert config["MARTY_ISSUER_DID"] == "did:web:192.0.2.20%3A8443:orgs:marty"
 
 
+@pytest.mark.parametrize("public_host, public_origin", [
+    ("marty.example.test", "https://another.example.test"),
+    ("192.0.2.20", "https://192.0.2.21:8443"),
+])
+def test_public_origin_must_use_the_installation_host(
+    tmp_path: Path, public_host: str, public_origin: str,
+) -> None:
+    values = installation_values()
+    values.update(publicHost=public_host, publicOrigin=public_origin)
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "publicOrigin must use publicHost" in result.stderr
+    assert "kind: " not in result.stdout
+
+
+@pytest.mark.parametrize("public_host", [
+    "marty.example.test:8443", "192.0.2.20:8443", "2001:db8::1",
+    "[2001:db8::1]", "marty..example.test", "-marty.example.test",
+    "256.0.2.20", "192.00.2.20", "a" * 64 + ".example.test",
+])
+def test_public_host_rejects_invalid_or_unsupported_endpoint_shapes(
+    tmp_path: Path, public_host: str,
+) -> None:
+    values = installation_values()
+    values["publicHost"] = public_host
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "publicHost" in result.stderr
+
+
+@pytest.mark.parametrize("public_origin", [
+    "https://operator@marty.example.test", "https://marty.example.test:0",
+    "https://marty.example.test:65536", "https://marty.example.test:",
+    "https://marty.example.test/path", "http://marty.example.test",
+])
+def test_public_origin_rejects_unusable_authorities_and_ports(
+    tmp_path: Path, public_origin: str,
+) -> None:
+    values = installation_values()
+    values["publicOrigin"] = public_origin
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "publicOrigin" in result.stderr
+
+
+@pytest.mark.parametrize("public_origin, selected_origin", [
+    ("", "https://Marty.Example.Test"),
+    ("https://MARTY.EXAMPLE.TEST:08443", "https://MARTY.EXAMPLE.TEST:08443"),
+    ("https://Marty.Example.Test:443", "https://Marty.Example.Test:443"),
+])
+def test_equivalent_dns_hosts_preserve_selected_origin_and_issuer_identity(
+    tmp_path: Path, public_origin: str, selected_origin: str,
+) -> None:
+    values = installation_values()
+    values.update(publicHost="Marty.Example.Test", publicOrigin=public_origin)
+    values["ui"] = {"development": {"enabled": True, "checkoutPath": "/opt/marty-ux"}}
+    documents = render(tmp_path, values)
+    config = resources(documents, "ConfigMap")["marty-config"]["data"]
+    for key in ("PUBLIC_API_URL", "UI_BASE_URL", "KC_HOSTNAME", "CORS_ORIGINS", "ISSUER_BASE_URL"):
+        assert config[key] == selected_origin
+    assert config["OIDC_REDIRECT_URI"] == selected_origin + "/v1/auth/callback"
+    assert config["MARTY_ORG_DOMAIN"] == "Marty.Example.Test"
+    # URI equivalence does not authorize a change to an existing issuer ID.
+    authority = selected_origin.removeprefix("https://").replace(":", "%3A")
+    for key in ("MARTY_ISSUER_DID", "OID4VP_ISSUER_DID", "CREDENTIAL_LOGIN_ISSUER_DID"):
+        assert config[key] == f"did:web:{authority}:orgs:marty"
+    ingress = resources(documents, "Ingress")["marty"]["spec"]
+    assert ingress["rules"][0]["host"] == "marty.example.test"
+    assert ingress["tls"][0]["hosts"] == ["marty.example.test"]
+    pod = resources(documents, "Deployment")["ui"]["spec"]["template"]["spec"]
+    for container in (pod["initContainers"][0], pod["containers"][1]):
+        env = {item["name"]: item["value"] for item in container["env"]}
+        assert env["VITE_DEV_PUBLIC_ORIGIN"] == selected_origin
+
+
+@pytest.mark.parametrize("ingress_host", [
+    "192.0.2.20", "proxy.example.test:8443", "proxy..example.test", "*.192.0.2.20",
+])
+def test_ingress_host_must_be_a_valid_dns_rule(tmp_path: Path, ingress_host: str) -> None:
+    values = installation_values()
+    values["ingress"]["host"] = ingress_host
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "ingress.host" in result.stderr
+
+
+@pytest.mark.parametrize("ingress_host", ["proxy.example.test", "*.example.test"])
+def test_explicit_proxy_dns_ingress_host_preserves_the_public_origin(
+    tmp_path: Path, ingress_host: str,
+) -> None:
+    values = installation_values()
+    values["ingress"]["host"] = ingress_host.upper()
+    documents = render(tmp_path, values)
+    ingress = resources(documents, "Ingress")["marty"]["spec"]
+    assert ingress["rules"][0]["host"] == ingress_host
+    assert ingress["tls"][0]["hosts"] == [ingress_host]
+    config = resources(documents, "ConfigMap")["marty-config"]["data"]
+    assert config["KC_HOSTNAME"] == "https://marty.example.test"
+
+
+@pytest.mark.parametrize("length", [253, 254, 255])
+def test_wildcard_ingress_length_includes_the_wildcard_prefix(
+    tmp_path: Path, length: int,
+) -> None:
+    values = installation_values()
+    host = "*." + ".".join(["a" * 63, "b" * 63, "c" * 63, "d" * (length - 194)])
+    assert len(host) == length
+    values["ingress"]["host"] = host
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    if length > 253:
+        assert result.returncode != 0
+        assert "ingress.host" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        documents = list(yaml.load_all(result.stdout, Loader=UniqueLoader))
+        assert resources(documents, "Ingress")["marty"]["spec"]["rules"][0]["host"] == host
+
+
 @pytest.mark.parametrize("public_origin", [None, "https://192.0.2.20:8443"])
 def test_canvas_worker_inherits_complete_public_urls(tmp_path: Path, public_origin: str | None) -> None:
     values = installation_values()

@@ -150,13 +150,35 @@ can observe the schema-validating applications and migration completion
 without a post-install-hook deadlock. Kubernetes may restart application
 containers while their prerequisites initialize.
 
-For an IP endpoint, set `publicHost` to the raw IP and `publicOrigin` to, for
+`publicHost` accepts a DNS hostname or a raw IPv4 address, without a scheme,
+port or path. `publicOrigin` defaults to `https://<publicHost>` and must use
+that same host. Rendering fails before installation for a mismatched host,
+invalid address or unusable port. Host comparison ignores DNS casing, while
+the selected origin and its port spelling are preserved so an update does not
+change the default issuer DID. That same origin supplies the default application
+URLs, Keycloak callbacks, CORS and the development UI. An
+explicit `organization.did` is preserved; retain it when changing the origin
+of an existing installation. IPv6 public endpoints are not supported by this
+chart and are rejected instead of producing an invalid default URL.
+
+For an IPv4 endpoint, set `publicHost` to the raw IP and `publicOrigin` to, for
 example, `https://192.0.2.20:8443`. The chart omits the Ingress rule host and TLS
 hosts, because Kubernetes does not allow IP literals there. The certificate
 must contain that IP SAN. For clients which omit TLS SNI, configure the
 Ingress controller's default certificate separately (Traefik uses a
 `TLSStore`); a portable Ingress cannot select that default. Normal DNS names
 produce a host-specific rule and TLS host.
+
+An explicit `ingress.host` may select a different DNS name or wildcard DNS rule
+when an external reverse proxy rewrites the Host header. It does not change the
+public application origin. IP literals, ports and malformed DNS rules are
+rejected in this field.
+
+SMTP credentials remain in the existing `marty-secrets` Secret, using its
+`SMTP_PASSWORD` key; `existingSecrets.marty-secrets` may rename that Secret.
+Do not put `SMTP_PASSWORD` or `KEYCLOAK_SMTP_PASSWORD` in `config`: these keys
+are rejected so a credential cannot be written into the ConfigMap or
+Helm values history.
 
 The generated ConfigMap also sets the Canvas worker's `ISSUER_BASE_URL` to the
 installation origin and `CANVAS_OAUTH_COMPLETION_REDIRECT_URL` to that origin

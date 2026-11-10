@@ -260,13 +260,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "marty.secretName" (dict "root" . "name" "marty-operator") }}
                   key: password
-            {{- range $name := list "KEYCLOAK_ADMIN" "KEYCLOAK_ADMIN_PASSWORD" "MARTY_API_CLIENT_SECRET" "GOOGLE_CLIENT_ID" "GOOGLE_CLIENT_SECRET" }}
+            {{- range $name := list "KEYCLOAK_ADMIN" "KEYCLOAK_ADMIN_PASSWORD" "MARTY_API_CLIENT_SECRET" "GOOGLE_CLIENT_ID" "GOOGLE_CLIENT_SECRET" "SMTP_PASSWORD" }}
             - name: {{ $name }}
               valueFrom:
                 secretKeyRef:
                   name: {{ include "marty.secretName" (dict "root" $ "name" "marty-secrets") }}
                   key: {{ $name }}
-                  {{- if hasPrefix "GOOGLE_" $name }}
+                  {{- if or (hasPrefix "GOOGLE_" $name) (eq $name "SMTP_PASSWORD") }}
                   optional: true
                   {{- end }}
             {{- end }}
