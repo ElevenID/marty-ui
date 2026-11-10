@@ -385,6 +385,66 @@ describe('KeyManagementServiceWizard', () => {
     expect(mockUpdateKeyManagementConfig).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['endpoint', 'Service URL', 'https://updated-kms.example.test', { endpoint: 'https://updated-kms.example.test' }, true],
+    ['authentication', 'Transit token', 'updated-fixture-token', { auth_reference: 'updated-fixture-token' }, true],
+    ['key reference', 'Key reference', 'replacement-key', { key_reference: 'replacement-key' }, true],
+    ['CA certificate path', 'TLS CA certificate file', '/run/secrets/replacement-ca.pem', { ca_cert_file: '/run/secrets/replacement-ca.pem' }, true],
+    ['key purpose', 'VC JWT / SD-JWT issuer', 'vc_jwt_issuer', { key_purposes: ['vc_jwt_issuer'] }, true],
+    ['service name', 'Service name', 'Renamed transit signer', { name: 'Renamed transit signer' }, false],
+  ] as const)('updates preflight feedback when editing %s after a successful probe', async (field, label, value, expectedProbe, invalidates) => {
+    mockGetKeyManagementConfig.mockResolvedValue({ services: [], default_service_id: null, service_type_catalog: [] })
+    const { user } = renderWithRouter(<KeyManagementServiceWizard />, {
+      initialEntries: ['/console/org/deploy/signing-keys/services/new'],
+    })
+    await user.click(await screen.findByRole('button', { name: 'Custom Transit-Compatible Service key management service' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.type(screen.getByLabelText(/Service name/i), 'Reviewed transit signer')
+    await user.type(screen.getByLabelText(/Service URL/i), 'https://kms.example.test')
+    await user.type(screen.getByLabelText(/Transit token/i), 'fixture-token')
+    await user.type(screen.getByLabelText(/TLS CA certificate file/i), '/run/secrets/original-ca.pem')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.type(screen.getByLabelText(/Key reference/i), 'reviewed-key')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.click(screen.getByRole('button', { name: 'Validate connection' }))
+    await screen.findByText('Connected to signer endpoint.')
+    expect(screen.getByText('Pass', { exact: true })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    const editsKeyAccess = field === 'key reference' || field === 'key purpose'
+    if (!editsKeyAccess) await user.click(screen.getByRole('button', { name: 'Back' }))
+    if (field === 'key purpose') {
+      await user.click(screen.getByRole('checkbox', { name: new RegExp(label, 'i') }))
+    } else {
+      const input = screen.getByLabelText(new RegExp(label, 'i'))
+      await user.clear(input)
+      await user.type(input, value)
+    }
+    if (!editsKeyAccess) await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    if (invalidates) {
+      expect(screen.queryByText('Connected to signer endpoint.')).not.toBeInTheDocument()
+      expect(screen.queryByText('Pass', { exact: true })).not.toBeInTheDocument()
+      expect(screen.getByText('No preflight checks run yet.')).toBeInTheDocument()
+    } else {
+      expect(screen.getByText('Connected to signer endpoint.')).toBeInTheDocument()
+      expect(screen.getByText('Pass', { exact: true })).toBeInTheDocument()
+    }
+    expect(screen.queryByText('fixture-token')).not.toBeInTheDocument()
+    expect(screen.queryByText('updated-fixture-token')).not.toBeInTheDocument()
+    expect(mockValidateKeyManagementService).toHaveBeenCalledTimes(1)
+    expect(mockUpdateKeyManagementConfig).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Register service' }))
+    await waitFor(() => expect(mockUpdateKeyManagementConfig).toHaveBeenCalledTimes(1))
+    expect(mockValidateKeyManagementService).toHaveBeenCalledTimes(2)
+    expect(mockValidateKeyManagementService.mock.calls[1][0]).toMatchObject({
+      ...expectedProbe, live_probe: true,
+    })
+    expect(mockUpdateKeyManagementConfig.mock.calls[0][0].services.at(-1)).toMatchObject(expectedProbe)
+  })
+
   it('runs backend validation checks in the review step', async () => {
     const { user } = renderWithRouter(<KeyManagementServiceWizard />, {
       initialEntries: ['/console/org/deploy/signing-keys/services/new'],
