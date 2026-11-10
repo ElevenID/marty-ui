@@ -84,6 +84,7 @@ import { listApplicationTemplates } from '../../../services/applicationTemplates
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 import { listDeploymentProfiles } from '../../../services/deploymentProfilesApi';
 import { listDeliveryDestinations } from '../../../services/deliveryDestinationsApi';
+import { operationStatusUnknownMessage } from '../../../services/idempotency';
 import CanvasMirrorProvenanceLookup from '../../canvas/CanvasMirrorProvenanceLookup';
 import { ResourcePage, EmptyState, StatusChip } from '../../common';
 
@@ -410,6 +411,11 @@ function CanvasIntegrationsPage() {
   const [bindingRequirementIndex, setBindingRequirementIndex] = useState(0);
   const [bindingWizardStep, setBindingWizardStep] = useState(0);
   const [saveError, setSaveError] = useState(null);
+  const [platformSaveError, setPlatformSaveError] = useState(null);
+  const [platformSaving, setPlatformSaving] = useState(false);
+  const [platformSavedDraft, setPlatformSavedDraft] = useState(false);
+  const [platformCreationUncertainties, setPlatformCreationUncertainties] = useState({});
+  const platformSaveOwner = useRef(null);
   const [platformArchiveError, setPlatformArchiveError] = useState(null);
   const [bindingArchiveError, setBindingArchiveError] = useState(null);
   const platformArchiveOwner = useRef(null);
@@ -435,6 +441,20 @@ function CanvasIntegrationsPage() {
   const [bindingActionBusy, setBindingActionBusy] = useState('');
   const [portableOperationBusy, setPortableOperationBusy] = useState('');
   const [bindingReadiness, setBindingReadiness] = useState({});
+  const platformCreationUncertainty = platformCreationUncertainties[organizationId];
+  const platformCreationUncertain = !editingPlatform && Boolean(platformCreationUncertainty);
+
+  useLayoutEffect(() => {
+    // A changed scope cannot resume an old Add dialog after its write settles.
+    platformSaveOwner.current = null;
+    setPlatformDialogOpen(false);
+    setEditingPlatform(null);
+    setPlatformForm(platformFormFrom());
+    setPlatformSaveError(null);
+    setPlatformSaving(false);
+    setPlatformSavedDraft(false);
+    return () => { platformSaveOwner.current = null; };
+  }, [organizationId, canViewCanvas, canCreateCanvas, canEditCanvas]);
 
   // Archive feedback belongs only to the inventory and grants that started it.
   useLayoutEffect(() => {
@@ -637,20 +657,43 @@ function CanvasIntegrationsPage() {
 
   const openCreatePlatform = () => {
     if (!canCreateCanvas) return;
+    platformSaveOwner.current = { saving: false };
     setEditingPlatform(null);
-    setPlatformForm(platformFormFrom());
-    setSaveError(null);
+    setPlatformForm(platformFormFrom(platformCreationUncertainty?.draft));
+    setPlatformSaveError(null);
+    setPlatformSavedDraft(false);
+    setOauthAuthorizationUrl('');
+    setOauthError(null);
     setPlatformDialogOpen(true);
   };
 
   const openEditPlatform = (platform) => {
     if (!canEditCanvas) return;
+    platformSaveOwner.current = { saving: false };
     setEditingPlatform(platform);
     setPlatformForm(platformFormFrom(platform));
-    setSaveError(null);
+    setPlatformSaveError(null);
+    setPlatformSavedDraft(false);
     setOauthAuthorizationUrl('');
     setOauthError(null);
     setPlatformDialogOpen(true);
+  };
+
+  const closePlatformDialog = () => {
+    if (platformSaving) return;
+    platformSaveOwner.current = null;
+    setPlatformDialogOpen(false);
+  };
+
+  const startSeparatePlatformDraft = () => {
+    if (!canCreateCanvas || editingPlatform || platformSaveOwner.current?.saving) return;
+    setPlatformCreationUncertainties((current) => {
+      const remaining = { ...current };
+      delete remaining[organizationId];
+      return remaining;
+    });
+    setPlatformForm(platformFormFrom());
+    setPlatformSaveError(null);
   };
 
   const showRegistrationConfig = async (platform) => {
@@ -697,16 +740,20 @@ function CanvasIntegrationsPage() {
   };
 
   const savePlatform = async () => {
+    const owner = platformSaveOwner.current;
+    const isCurrent = () => Boolean(owner && platformSaveOwner.current === owner);
     const canSave = editingPlatform ? canEditCanvas : canCreateCanvas;
-    if (!organizationId || !canSave) return;
+    if (!organizationId || !canSave || !isCurrent() || owner.saving || platformCreationUncertain) return;
+    const wasCreating = !editingPlatform;
     const ltiClientId = platformForm.lti_client_id.trim();
     const ltiDeploymentId = platformForm.lti_deployment_id.trim();
     if (Boolean(ltiClientId) !== Boolean(ltiDeploymentId)) {
-      setSaveError(new Error('Enter both the Canvas LTI client ID and deployment ID, or leave both blank for a draft.'));
+      setPlatformSaveError(new Error('Enter both the Canvas LTI client ID and deployment ID, or leave both blank for a draft.'));
       return;
     }
-    setSaving(true);
-    setSaveError(null);
+    owner.saving = true;
+    setPlatformSaving(true);
+    setPlatformSaveError(null);
     const payload = {
       display_name: platformForm.display_name,
       canvas_base_url: platformForm.canvas_base_url,
@@ -714,23 +761,61 @@ function CanvasIntegrationsPage() {
       lti_deployment_id: ltiDeploymentId || null,
       enabled: editingPlatform ? platformForm.enabled : false,
     };
+    let saved = null;
+    let creationUnconfirmed = false;
     try {
-      const saved = editingPlatform
+      const response = editingPlatform
         ? await updateCanvasPlatform(editingPlatform.id, payload)
-        : await createCanvasPlatform(payload, { organizationId });
-      if (ltiClientId && ltiDeploymentId) {
+        : await createCanvasPlatform(payload, { organizationId, isCurrent });
+      if (!isCurrent()) return;
+      const savedId = editingPlatform?.id || response?.id;
+      if (typeof savedId !== 'string' || !savedId.trim() || (response?.id && response.id !== savedId)) {
+        creationUnconfirmed = wasCreating;
+        throw new Error('The platform save could not be confirmed. Refresh the inventory before creating another platform.');
+      }
+      saved = { ...editingPlatform, ...response, id: savedId };
+      setEditingPlatform(saved);
+      if (wasCreating) {
+        setPlatformSavedDraft(true);
+        setPlatformForm((current) => ({ ...current, enabled: false }));
+      }
+      if (ltiClientId && ltiDeploymentId && canEditCanvas) {
         await finalizeCanvasLtiInstallation(saved.id, {
           lti_client_id: ltiClientId,
           lti_deployment_id: ltiDeploymentId,
         });
       }
-      setSelectedPlatformId(saved.id);
-      setPlatformDialogOpen(false);
+      if (!isCurrent()) return;
       await reloadPlatforms();
+      if (!isCurrent()) return;
+      setSelectedPlatformId(saved.id);
+      if (!wasCreating || canEditCanvas) setPlatformDialogOpen(false);
     } catch (error) {
-      setSaveError(error);
+      if (!isCurrent()) return;
+      if (wasCreating && !saved && (creationUnconfirmed || error?.operationStatusUnknown)) {
+        setPlatformCreationUncertainties((current) => ({
+          ...current,
+          [organizationId]: {
+            message: operationStatusUnknownMessage(error, 'Platform creation status unknown'),
+            draft: {
+              display_name: platformForm.display_name,
+              canvas_base_url: platformForm.canvas_base_url,
+              lti_client_id: platformForm.lti_client_id,
+              lti_deployment_id: platformForm.lti_deployment_id,
+              enabled: platformForm.enabled,
+            },
+          },
+        }));
+      } else setPlatformSaveError(error);
+      if (saved) {
+        await reloadPlatforms();
+        if (isCurrent()) setSelectedPlatformId(saved.id);
+      }
     } finally {
-      setSaving(false);
+      if (isCurrent()) {
+        owner.saving = false;
+        setPlatformSaving(false);
+      }
     }
   };
 
@@ -1875,11 +1960,21 @@ function CanvasIntegrationsPage() {
           </TableContainer>
         </Stack>
       </ResourcePage>
-      <Dialog open={platformDialogOpen} onClose={() => setPlatformDialogOpen(false)} fullWidth maxWidth="md">
-        <DialogTitle>{editingPlatform ? 'Edit Canvas platform' : 'Add Canvas platform'}</DialogTitle>
+      <Dialog open={platformDialogOpen} onClose={platformSaving ? undefined : closePlatformDialog} fullWidth maxWidth="md">
+        <DialogTitle>{platformSavedDraft && !canEditCanvas ? 'Canvas platform draft saved' : editingPlatform ? 'Edit Canvas platform' : 'Add Canvas platform'}</DialogTitle>
         <DialogContent>
-          {saveError && <Alert severity="error" sx={{ mb: 2 }}>{saveError?.message || String(saveError)}</Alert>}
-          <Stack spacing={2} sx={{ mt: 1 }}>
+          {platformSavedDraft && <Alert severity="info" sx={{ mb: 2 }}>Platform saved as a disabled draft.{!canEditCanvas && ' Edit permission is required to finish LTI installation.'}</Alert>}
+          {platformCreationUncertain && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              <Stack spacing={1}>
+                <Typography variant="body2">{platformCreationUncertainty.message}</Typography>
+                <Typography variant="body2">A previous request may already have created a Canvas platform. Review the installed platforms and any reference key shown. Refreshing the list does not confirm that the request failed. Starting a separate draft may create a duplicate.</Typography>
+                <Button onClick={startSeparatePlatformDraft} disabled={platformSaving || !canCreateCanvas} sx={{ alignSelf: 'flex-start' }}>Start a separate draft</Button>
+              </Stack>
+            </Alert>
+          )}
+          {platformSaveError && <Alert severity="error" sx={{ mb: 2 }}>{platformSaveError?.message || String(platformSaveError)}</Alert>}
+          <Stack component="fieldset" disabled={platformSaving || (editingPlatform ? !canEditCanvas : !canCreateCanvas)} spacing={2} sx={{ mt: 1, p: 0, border: 0, minWidth: 0 }}>
             {!editingPlatform && (
               <Alert severity="info">New Canvas platforms are saved as disabled drafts until installation and readiness checks succeed.</Alert>
             )}
@@ -1958,12 +2053,13 @@ function CanvasIntegrationsPage() {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setPlatformDialogOpen(false)}>Cancel</Button>
+          <Button onClick={closePlatformDialog} disabled={platformSaving}>{platformSavedDraft && !canEditCanvas ? 'Close' : 'Cancel'}</Button>
           <Button
             startIcon={<SaveIcon />}
             variant="contained"
             disabled={
-              saving
+              platformSaving
+              || platformCreationUncertain
               || (editingPlatform ? !canEditCanvas : !canCreateCanvas)
               || !platformForm.display_name
               || !platformForm.canvas_base_url

@@ -61,7 +61,8 @@ export async function createCanvasPlatform(data, params = {}) {
   const queryString = buildDefinedQueryString({ organization_id: organizationId });
   return postWithIdempotency(
     withQuery(`${API_BASE}/platforms`, queryString),
-    pickDefined(data, PLATFORM_WRITE_FIELDS)
+    pickDefined(data, PLATFORM_WRITE_FIELDS),
+    { isCurrent: params.isCurrent }
   );
 }
 
