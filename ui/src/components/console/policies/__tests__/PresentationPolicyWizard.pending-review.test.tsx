@@ -215,14 +215,18 @@ describe('presentation policy pending review intent', () => {
     expect(sessionStorage.getItem('marty:policy-create:v1:org-1')).toBeNull();
   });
 
-  it('restores review editing after a definitive rejection and uses the revised intent on explicit retry', async () => {
+  it('dismisses a definitive rejection without discarding the review and uses revised intent on explicit retry', async () => {
     const requests = installRequests();
     const { user } = renderWithoutRouter(<BrowserRouter><PresentationPolicyWizard /></BrowserRouter>);
     await reachReview(user); requests.arm();
     await user.click(screen.getByTestId('wizard.policy.submit'));
     await waitFor(() => expect(requests.writes).toHaveLength(1));
     await requests.settle(HttpResponse.json({ error: { message: 'Policy validation rejected the request' } }, { status: 422 }));
-    await screen.findByText(/Policy validation rejected the request/);
+    const error = await screen.findByText(/Policy validation rejected the request/);
+    await user.click(within(error.closest('[role="alert"]')!).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByText(/Policy validation rejected the request/)).not.toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Review' })).toBeInTheDocument();
+    expect(requests.writes).toHaveLength(1);
     const toggle = screen.getByRole('switch', { name: /Activate immediately/i });
     expect(toggle).toBeEnabled();
     for (const edit of screen.getAllByRole('button', { name: 'Edit' })) expect(edit).toBeEnabled();
@@ -235,14 +239,16 @@ describe('presentation policy pending review intent', () => {
     expect(requests.writes[1].body).toEqual(requests.writes[0].body);
   });
 
-  it('retains the acknowledged draft and retries activation without another create', async () => {
+  it('dismisses the activation error while retaining the acknowledged draft and retrying without another create', async () => {
     const requests = installRequests('activate');
     const { user } = renderWithoutRouter(<BrowserRouter><PresentationPolicyWizard /></BrowserRouter>);
     await reachReview(user); requests.arm();
     await user.click(screen.getByTestId('wizard.policy.submit'));
     await waitFor(() => expect(requests.isHeld()).toBe(true));
     await requests.settle(HttpResponse.json({ error: { message: 'Activation temporarily unavailable' } }, { status: 503 }));
-    await screen.findByText(/was created, but activation is incomplete/);
+    const error = await screen.findByText(/was created, but activation is incomplete/);
+    await user.click(within(error.closest('[role="alert"]')!).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByText(/was created, but activation is incomplete/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open created draft' })).toBeEnabled();
     expect(screen.getByRole('switch', { name: /Activate immediately/i })).toBeEnabled();
     expect(JSON.parse(sessionStorage.getItem('marty:policy-create:v1:org-1')!).resourceId).toBe(POLICY_ID);

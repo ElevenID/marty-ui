@@ -148,6 +148,7 @@ fn signed_payload(claims: Value) -> (CredentialVerifiedPayload, CredentialCallba
         presentation_policy_id: "policy-1".into(),
         completed_at: now().to_rfc3339(),
         policy_revision: None,
+        verification_receipt: None,
         evidence_digest: "a".repeat(64),
         decision_digest: String::new(),
     };

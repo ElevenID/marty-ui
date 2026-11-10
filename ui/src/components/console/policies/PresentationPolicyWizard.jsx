@@ -346,7 +346,7 @@ const PresentationPolicyWizard = () => {
           <Button onClick={() => navigate(`/console/org/policies/presentation/${encodeURIComponent(createdDraft.id)}`)}>Open created draft</Button>
         </Alert>}
         {(wizard.error || apiError) && (
-          <Alert severity="error" sx={{ mb: 3 }} onClose={() => { setApiError(null); }}>
+          <Alert severity="error" sx={{ mb: 3 }} onClose={() => { wizard.clearError(); setApiError(null); }}>
             {wizard.error || apiError}
           </Alert>
         )}

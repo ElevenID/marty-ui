@@ -64,7 +64,7 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsL
   }, [organizationId, canCreate, grantsLoading, revision]);
 
   const chooseTemplate = (template) => {
-    if (!applies() || saving || validating) return;
+    if (!applies() || saving || validating || selectedTemplate === template.template_id) return;
     setSelectedTemplate(template.template_id);
     setPolicyType(template.policy_type);
     setName(template.name);

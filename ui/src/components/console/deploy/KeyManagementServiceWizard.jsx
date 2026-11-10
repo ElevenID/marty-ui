@@ -461,7 +461,7 @@ const KeyManagementServiceWizardContent = ({ browserEntry }) => {
   }, [canEdit, isCurrentBrowserEntry, orgRequestParams, startAction, wizard.data.algorithms, wizard.data.auth_mode, wizard.data.auth_fields, wizard.data.ca_cert_file, wizard.data.endpoint, wizard.data.key_aliases, wizard.data.key_reference, wizard.data.mount, wizard.data.name, wizard.data.namespace, wizard.data.region, wizard.data.service_type]);
 
   const handleSelectServiceType = (definition) => {
-    if (!canEdit()) return;
+    if (!canEdit() || wizard.data.service_type === definition.id) return;
     setPreflightChecks([]);
     updateWizardData({
       service_type: definition.id,

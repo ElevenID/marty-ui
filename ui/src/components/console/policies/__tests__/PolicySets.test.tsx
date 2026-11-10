@@ -223,6 +223,58 @@ describe('Policy Set scoped consumer journeys', () => {
     } }])
   })
 
+  it.each([false, true])('preserves an authored policy draft on same-template reselection and resets for a different template (change: %s)', async (changeTemplate) => {
+    const extraPolicy = { ...policies[0], policy_id: 'write', description: 'Writer updates' }
+    const otherTemplate = { template_id: 'custom_forbid', name: 'Restricted access', description: 'A different preset',
+      policy_type: 'CUSTOM', cedar_policies: [{ ...policies[0], policy_id: 'deny', effect: 'forbid', cedar_text: 'forbid (principal, action, resource);' }] }
+    const validations: unknown[] = []
+    server.use(
+      http.get('*/v1/policy-sets/templates', () => HttpResponse.json([
+        { ...template, cedar_policies: [...policies, extraPolicy] }, otherTemplate,
+      ])),
+      http.post('*/v1/policy-sets/validate', async ({ request }) => {
+        validations.push(await request.json())
+        return HttpResponse.json({ valid: true, errors: [] })
+      }),
+    )
+    const { user } = renderPage('/new')
+    await user.click(await screen.findByRole('button', { name: /Read-only access/ }))
+    await user.clear(screen.getByRole('textbox', { name: /Name/ }))
+    await user.type(screen.getByRole('textbox', { name: /Name/ }), 'Reviewed access')
+    await user.clear(screen.getByRole('textbox', { name: 'Description' }))
+    await user.type(screen.getByRole('textbox', { name: 'Description' }), 'Keep authored restrictions')
+    await user.click(screen.getByLabelText('Advanced Cedar editor'))
+    await user.click(screen.getByRole('button', { name: 'Delete read', exact: true }))
+    await user.type(screen.getByRole('textbox', { name: 'Policy ID' }), '-reviewed')
+    const authoredCedar = 'permit (principal, action, resource) when { principal == resource.owner };'
+    await user.clear(screen.getByRole('textbox', { name: 'Cedar policy' }))
+    await user.paste(authoredCedar)
+    await user.click(screen.getByRole('button', { name: 'Validate', exact: true }))
+    await screen.findByText('Policy Set is valid.')
+
+    await user.click(screen.getByRole('button', { name: changeTemplate ? /Restricted access/ : /Read-only access/ }))
+    const expectedName = changeTemplate ? otherTemplate.name : 'Reviewed access'
+    const expectedDescription = changeTemplate ? otherTemplate.description : 'Keep authored restrictions'
+    const expectedPolicies = changeTemplate ? otherTemplate.cedar_policies
+      : [{ ...extraPolicy, policy_id: 'write-reviewed', cedar_text: authoredCedar }]
+    expect(screen.getByRole('textbox', { name: /Name/ })).toHaveValue(expectedName)
+    expect(screen.getByRole('textbox', { name: 'Description' })).toHaveValue(expectedDescription)
+    expect(screen.getAllByRole('textbox', { name: 'Policy ID' })).toHaveLength(1)
+    expect(screen.getByRole('textbox', { name: 'Policy ID' })).toHaveValue(expectedPolicies[0].policy_id)
+    expect(screen.getByRole('textbox', { name: 'Cedar policy' })).toHaveValue(expectedPolicies[0].cedar_text)
+    if (changeTemplate) expect(screen.queryByText('Policy Set is valid.')).not.toBeInTheDocument()
+    else expect(screen.getByText('Policy Set is valid.')).toBeInTheDocument()
+    expect(writes).toEqual([])
+
+    await user.click(screen.getByRole('button', { name: 'Create draft' }))
+    await screen.findByRole('heading', { name: expectedName })
+    expect(validations.at(-1)).toEqual({ cedar_policies: expectedPolicies })
+    expect(writes).toEqual([{ method: 'POST', path: '/v1/policy-sets', org: 'org-1', body: {
+      name: expectedName, description: expectedDescription,
+      policy_type: changeTemplate ? otherTemplate.policy_type : template.policy_type, cedar_policies: expectedPolicies,
+    } }])
+  })
+
   it('preserves the remaining policy editor when an earlier row is deleted', async () => {
     const secondPolicy = { ...policies[0], policy_id: 'write', description: 'Writer updates' }
     server.use(http.get('*/v1/policy-sets/templates', () => HttpResponse.json([

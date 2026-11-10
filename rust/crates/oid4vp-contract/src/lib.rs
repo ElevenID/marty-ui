@@ -8,6 +8,7 @@
 
 mod callback;
 mod digest;
+mod flow_receipt;
 pub mod haip_key;
 pub mod managed_status;
 mod rejection;
@@ -18,6 +19,7 @@ mod validation;
 
 pub use callback::build_verification_callback_payload;
 pub use digest::*;
+pub use flow_receipt::*;
 pub use types::*;
 pub use validation::Oid4vpContractError;
 
