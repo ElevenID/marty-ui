@@ -1,4 +1,27 @@
 {
+  "operate": {
+    "applications": {
+      "signIn": "Connectez-vous pour consulter les demandes.",
+      "selectOrganization": "Sélectionnez une organisation pour consulter les demandes.",
+      "permissionsLoading": "Vérification des autorisations des demandes",
+      "readDenied": "Vous n’avez pas l’autorisation de consulter les demandes de cette organisation.",
+      "reissueSucceeded": "Une nouvelle invitation au portefeuille a été générée. Le demandeur peut à nouveau récupérer son justificatif.",
+      "actionFailed": "Impossible de mettre à jour la demande. Veuillez réessayer.",
+      "clearFilters": "Effacer les filtres",
+      "notReported": "Non communiqué",
+      "actions": {
+        "issue": "Générer une invitation au portefeuille",
+        "reissue": "Renvoyer l’invitation au portefeuille"
+      },
+      "filters": {
+        "underReview": "En cours d’examen",
+        "pendingInformation": "En attente d’informations"
+      },
+      "tableHeaders": {
+        "applicationReference": "Référence de la demande"
+      }
+    }
+  },
   "trust": {
     "trustProfileWizard": {
       "selectOrganization": "Sélectionnez une organisation pour créer un profil de confiance.",

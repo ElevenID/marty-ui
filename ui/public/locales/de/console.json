@@ -1,4 +1,27 @@
 {
+  "operate": {
+    "applications": {
+      "signIn": "Melden Sie sich an, um Anträge anzuzeigen.",
+      "selectOrganization": "Wählen Sie eine Organisation aus, um Anträge anzuzeigen.",
+      "permissionsLoading": "Antragsberechtigungen werden geprüft",
+      "readDenied": "Sie haben keine Berechtigung, Anträge für diese Organisation anzuzeigen.",
+      "reissueSucceeded": "Eine neue Wallet-Einladung wurde erstellt. Die antragstellende Person kann ihren Nachweis erneut abrufen.",
+      "actionFailed": "Der Antrag konnte nicht aktualisiert werden. Bitte versuchen Sie es erneut.",
+      "clearFilters": "Filter löschen",
+      "notReported": "Nicht gemeldet",
+      "actions": {
+        "issue": "Wallet-Einladung erstellen",
+        "reissue": "Wallet-Einladung erneut senden"
+      },
+      "filters": {
+        "underReview": "In Prüfung",
+        "pendingInformation": "Informationen ausstehend"
+      },
+      "tableHeaders": {
+        "applicationReference": "Antragsreferenz"
+      }
+    }
+  },
   "trust": {
     "trustProfileWizard": {
       "selectOrganization": "Wählen Sie eine Organisation aus, um ein Vertrauensprofil zu erstellen.",

@@ -1,8 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import {
+  Alert,
   Menu,
   List,
   ListItem,
+  ListItemButton,
   ListItemText,
   ListItemIcon,
   Typography,
@@ -38,17 +40,25 @@ const isConsoleLink = (value) => typeof value === 'string' && /^\/console(?:\/|$
  * @param {Object} anchorEl - Menu anchor element
  * @param {boolean} open - Whether the menu is open
  * @param {function} onClose - Close callback
- * @param {function} onMarkAllRead - Mark all as read callback
  * @param {function} onCountChange - Callback when unread count changes
  */
-function ScopedNotificationDropdown({ organizationId, recipientId, anchorEl, open, onClose, onMarkAllRead, onCountChange }) {
-  const { t } = useTranslation('common');
+function ScopedNotificationDropdown({ organizationId, recipientId, anchorEl, open, onClose, onCountChange }) {
+  const { t } = useTranslation(['common', 'console']);
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
-  const mounted = useRef(false);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const [actionError, setActionError] = useState('');
+  const [actionPending, setActionPending] = useState(false);
+  const session = useRef(0);
+  const pending = useRef(false);
+  useLayoutEffect(() => {
+    session.current += 1;
+    pending.current = false;
+    setActionPending(false);
+    setActionError('');
+    return () => { session.current += 1; };
+  }, [open]);
   useEffect(() => {
     let current = true;
     if (!open) return () => { current = false; };
@@ -59,13 +69,25 @@ function ScopedNotificationDropdown({ organizationId, recipientId, anchorEl, ope
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
   }, [open, organizationId, recipientId, attempt]);
-  const handleMarkAsRead = async (notificationId) => {
+  const acknowledge = async (operation) => {
+    if (!open || loading || pending.current) return;
+    const currentSession = session.current;
+    pending.current = true;
+    setActionPending(true);
+    setActionError('');
     try {
-      await notificationsApi.markAsRead(notificationId, organizationId);
-      if (!mounted.current) return;
+      await operation();
+      if (currentSession !== session.current) return;
       setAttempt((value) => value + 1);
       onCountChange?.();
-    } catch (failure) { if (mounted.current) setError(failure?.message || 'Notification could not be updated.'); }
+    } catch (failure) {
+      if (currentSession === session.current) setActionError(failure?.message || 'Notifications could not be updated. Please try again.');
+    } finally {
+      if (currentSession === session.current) {
+        pending.current = false;
+        setActionPending(false);
+      }
+    }
   };
 
   const getSeverityIcon = (severity) => {
@@ -112,13 +134,15 @@ function ScopedNotificationDropdown({ organizationId, recipientId, anchorEl, ope
       <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Typography variant="h6">{t('notifications.title')}</Typography>
         {notifications.some(n => !n.read) && (
-          <Button size="small" onClick={onMarkAllRead}>
+          <Button size="small" disabled={actionPending || loading}
+            onClick={() => acknowledge(() => notificationsApi.markAllAsRead(organizationId, recipientId))}>
             {t('notifications.markAllRead')}
           </Button>
         )}
       </Box>
       <Divider />
 
+      {actionError && <Alert severity="error" sx={{ m: 2 }}>{actionError}</Alert>}
       {error && <Box sx={{ p: 2 }}><Typography color="error">{error}</Typography><Button onClick={() => setAttempt((value) => value + 1)}>Retry notifications</Button></Box>}
       {/* Content */}
       {error ? null : loading ? (
@@ -138,43 +162,49 @@ function ScopedNotificationDropdown({ organizationId, recipientId, anchorEl, ope
           {notifications.map((notification) => (
             <ListItem
               key={notification.id}
+              disablePadding
               sx={{
                 borderLeft: 4,
                 borderColor: notification.read ? 'transparent' : getSeverityColor(notification.severity),
                 bgcolor: notification.read ? 'transparent' : 'action.hover',
                 '&:hover': { bgcolor: 'action.selected' },
-                cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'flex-start',
               }}
-              onClick={() => !notification.read && handleMarkAsRead(notification.id)}
             >
-              <ListItemIcon sx={{ minWidth: 40, mt: 0.5 }}>
-                {getSeverityIcon(notification.severity)}
-              </ListItemIcon>
-              <ListItemText
-                slotProps={{ secondary: { component: 'div' } }}
-                primary={
-                  <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-                    <Typography variant="body2" sx={{ fontWeight: notification.read ? 400 : 600, flex: 1 }}>
-                      {notification.title}
-                    </Typography>
-                    {!notification.read && (
-                      <Chip label={t('notifications.newBadge')} size="small" color="primary" sx={{ ml: 1, height: 20 }} />
-                    )}
-                  </Box>
-                }
-                secondary={
-                  <>
-                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                      {notification.body}
-                    </Typography>
-                    <Typography variant="caption" color="text.disabled" sx={{ mt: 0.5, display: 'block' }}>
-                      {formatDistanceToNow(new Date(notification.created_at), { addSuffix: true })}
-                    </Typography>
-                  </>
-                }
-              />
+              <ListItemButton
+                disabled={notification.read || actionPending}
+                aria-label={`${t('console:org.notifications.notificationsTab.actions.markAsRead')}: ${notification.title}`}
+                onClick={() => acknowledge(() => notificationsApi.markAsRead(notification.id, organizationId))}
+                sx={{ alignItems: 'flex-start', minWidth: 0, '&.Mui-disabled': { opacity: 1 } }}
+              >
+                <ListItemIcon sx={{ minWidth: 40, mt: 0.5 }}>
+                  {getSeverityIcon(notification.severity)}
+                </ListItemIcon>
+                <ListItemText
+                  slotProps={{ primary: { component: 'div' }, secondary: { component: 'div' } }}
+                  primary={
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                      <Typography variant="body2" sx={{ fontWeight: notification.read ? 400 : 600, flex: 1 }}>
+                        {notification.title}
+                      </Typography>
+                      {!notification.read && (
+                        <Chip label={t('notifications.newBadge')} size="small" color="primary" sx={{ ml: 1, height: 20 }} />
+                      )}
+                    </Box>
+                  }
+                  secondary={
+                    <>
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                        {notification.body}
+                      </Typography>
+                      <Typography variant="caption" color="text.disabled" sx={{ mt: 0.5, display: 'block' }}>
+                        {formatDistanceToNow(new Date(notification.created_at), { addSuffix: true })}
+                      </Typography>
+                    </>
+                  }
+                />
+              </ListItemButton>
               {isConsoleLink(notification.link) && (
                 <IconButton
                   size="small"
@@ -185,7 +215,7 @@ function ScopedNotificationDropdown({ organizationId, recipientId, anchorEl, ope
                     e.stopPropagation();
                     onClose();
                   }}
-                  sx={{ ml: 1 }}
+                  sx={{ mr: 1, mt: 1 }}
                 >
                   <OpenInNewIcon fontSize="small" />
                 </IconButton>
