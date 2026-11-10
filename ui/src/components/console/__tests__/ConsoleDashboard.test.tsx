@@ -18,24 +18,32 @@ import ConsoleDashboard from '../ConsoleDashboard'
 import * as dashboardApi from '../../../services/dashboardApi'
 
 const mockNavigate = vi.fn()
+const mockUseSSE = vi.fn()
 let mockActiveOrgId = 'org_123'
 let mockCanEditOrganization = true
+let mockGrants: Set<string> | null = null
+let mockPermissionsLoading = false
+let mockPrincipalId = 'account-a'
+let mockIsAdministrator = true
+let mockRoles: Array<{ name: string, display_name: string }> = []
 
 vi.mock('../../../hooks/usePermissions', () => ({
   usePermissions: () => ({
-    can: (resource: string, action: string) => resource === 'organization' && action === 'edit' ? mockCanEditOrganization : true,
-    isLoading: false,
+    can: (resource: string, action: string) => (resource !== 'organization' || action !== 'edit' || mockCanEditOrganization)
+      && (mockGrants === null || mockGrants.has(`${resource}:${action}`)),
+    roles: mockRoles,
+    isLoading: mockPermissionsLoading,
   }),
 }));
 
 // Mock auth hook
 vi.mock('@hooks/useAuth', () => ({
   useAuth: () => ({
-    user: { id: 1, name: 'Admin User', capabilities: { 'admin:platform': true } },
+    user: { user_id: mockPrincipalId, id: 1, name: 'Admin User', capabilities: { 'admin:platform': mockIsAdministrator } },
     organizationName: 'Test Organization',
     organizationId: 'org_123',
-    isAdministrator: true,
-    isVendor: false,
+    isAdministrator: mockIsAdministrator,
+    isVendor: !mockIsAdministrator,
   }),
 }))
 
@@ -51,7 +59,7 @@ vi.mock('../../../contexts/ConsoleContext', () => ({
 
 // Mock SSE (not needed for rendering tests)
 vi.mock('@hooks/useSSE', () => ({
-  useSSE: () => ({ isConnected: false }),
+  useSSE: (...args: unknown[]) => { mockUseSSE(...args); return { isConnected: false } },
 }))
 
 vi.mock('react-router', async () => {
@@ -211,6 +219,11 @@ describe('ConsoleDashboard', () => {
     mockNavigate.mockReset()
     mockActiveOrgId = 'org_123'
     mockCanEditOrganization = true
+    mockGrants = null
+    mockPermissionsLoading = false
+    mockPrincipalId = 'account-a'
+    mockIsAdministrator = true
+    mockRoles = []
     mockDashboardReturn = { data: fullDashboardData, loading: false, error: null, refetch: vi.fn() }
     server.use(
       http.get('http://localhost:8000/v1/organizations/:orgId/dashboard/applicant-stats', () => HttpResponse.json({
@@ -243,6 +256,94 @@ describe('ConsoleDashboard', () => {
         },
       })),
     )
+  })
+
+  describe('Dashboard permissions', () => {
+    it('waits for current permissions before mounting data panels or opening a stream', () => {
+      mockPermissionsLoading = true
+      render(<ConsoleDashboard />)
+
+      expect(screen.getByRole('progressbar')).toBeInTheDocument()
+      expect(screen.queryByText('Applicant Lifecycle')).not.toBeInTheDocument()
+      expect(screen.queryByText('Recent Activity')).not.toBeInTheDocument()
+      expect(mockUseSSE).toHaveBeenLastCalledWith(null, 'account-a', [])
+    })
+
+    it('shows only authorized sections and the actual membership role for a limited reader', async () => {
+      mockGrants = new Set(['organization:view'])
+      mockIsAdministrator = false
+      mockRoles = [{ name: 'custom_reader', display_name: 'Organization Reader' }]
+      const blockedRequests = vi.fn(() => HttpResponse.json({
+        error: 'forbidden', error_description: 'Missing required permission',
+      }, { status: 403 }))
+      server.use(
+        http.get('*/v1/organizations/:orgId/dashboard/applicant-stats', blockedRequests),
+        http.get('*/v1/organizations/:orgId/audit-events', blockedRequests),
+        http.get('*/v1/organizations/:orgId/integration-info', () => HttpResponse.json({
+          org_id: 'org_123', base_url: 'https://api.example.com', example_request: 'GET /v1/organizations/org_123',
+        })),
+      )
+      render(<ConsoleDashboard />)
+
+      expect(screen.getByText('Role: Organization Reader')).toBeVisible()
+      expect(screen.queryByText('Role: Vendor')).not.toBeInTheDocument()
+      expect(screen.getByText(/This dashboard shows the sections available to your role/)).toBeVisible()
+      for (const title of ['Applicant Lifecycle', 'Team', 'Recent Activity', 'Runtime Operational Status', 'Critical Signals (24h)']) {
+        expect(screen.queryByText(title)).not.toBeInTheDocument()
+      }
+      expect(screen.queryByText(/Setup Readiness/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/Organization is Operational/)).not.toBeInTheDocument()
+      await waitFor(() => expect(screen.queryByText('Loading integration metadata...')).not.toBeInTheDocument())
+      expect(screen.queryByRole('link', { name: 'Manage API Keys' })).not.toBeInTheDocument()
+      expect(blockedRequests).not.toHaveBeenCalled()
+      expect(mockUseSSE).toHaveBeenLastCalledWith(null, 'account-a', [])
+    })
+
+    it('does not describe an unauthorized environment as unconfigured', () => {
+      mockGrants = new Set(['team:view'])
+      mockDashboardReturn = { ...mockDashboardReturn, data: { ...fullDashboardData, environment: null } }
+      render(<ConsoleDashboard />)
+
+      expect(screen.getByText('Team')).toBeVisible()
+      expect(screen.queryByText('Not configured')).not.toBeInTheDocument()
+      expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
+    })
+
+    it('retains applicant-review statistics independently of setup and audit access', async () => {
+      mockGrants = new Set(['organization:view', 'application:review'])
+      render(<ConsoleDashboard />)
+
+      expect(await screen.findByText('Applicant Lifecycle')).toBeVisible()
+      expect(screen.queryByText('Recent Activity')).not.toBeInTheDocument()
+      expect(screen.queryByText(/Setup Readiness/)).not.toBeInTheDocument()
+      expect(mockUseSSE).toHaveBeenLastCalledWith(null, 'account-a', [])
+    })
+
+    it('requires the native notification grant and current principal for dashboard streaming', () => {
+      mockGrants = new Set(['organization:view', 'audit:view'])
+      const { rerender } = render(<ConsoleDashboard />)
+      expect(mockUseSSE).toHaveBeenLastCalledWith(null, 'account-a', expect.any(Array))
+
+      mockGrants = new Set([...mockGrants, 'notification:view'])
+      rerender(<ConsoleDashboard />)
+      expect(mockUseSSE).toHaveBeenLastCalledWith('org_123', 'account-a', expect.arrayContaining(['credential.issued']))
+
+      mockPrincipalId = 'account-b'
+      rerender(<ConsoleDashboard />)
+      expect(mockUseSSE).toHaveBeenLastCalledWith('org_123', 'account-b', expect.any(Array))
+    })
+
+    it('does not offer Hosted Pilot purge without organization edit permission', () => {
+      mockCanEditOrganization = false
+      mockDashboardReturn = { ...mockDashboardReturn, data: { ...fullDashboardData, lifecycle: {
+        ...hostedPilotLifecycle,
+        pilotRetention: { ...hostedPilotLifecycle.pilotRetention, eligibleForPurge: { total: 4 } },
+      } } }
+      render(<ConsoleDashboard />)
+
+      expect(screen.getByText('Hosted Pilot retention')).toBeVisible()
+      expect(screen.queryByRole('button', { name: 'Purge now' })).not.toBeInTheDocument()
+    })
   })
 
   describe('Empty Organization State', () => {

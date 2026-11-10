@@ -1,5 +1,174 @@
 {
+  "operate": {
+    "applications": {
+      "signIn": "Melden Sie sich an, um Anträge anzuzeigen.",
+      "selectOrganization": "Wählen Sie eine Organisation aus, um Anträge anzuzeigen.",
+      "permissionsLoading": "Antragsberechtigungen werden geprüft",
+      "readDenied": "Sie haben keine Berechtigung, Anträge für diese Organisation anzuzeigen.",
+      "reissueSucceeded": "Eine neue Wallet-Einladung wurde erstellt. Die antragstellende Person kann ihren Nachweis erneut abrufen.",
+      "actionFailed": "Der Antrag konnte nicht aktualisiert werden. Bitte versuchen Sie es erneut.",
+      "clearFilters": "Filter löschen",
+      "notReported": "Nicht gemeldet",
+      "actions": {
+        "issue": "Wallet-Einladung erstellen",
+        "reissue": "Wallet-Einladung erneut senden"
+      },
+      "filters": {
+        "underReview": "In Prüfung",
+        "pendingInformation": "Informationen ausstehend"
+      },
+      "tableHeaders": {
+        "applicationReference": "Antragsreferenz"
+      }
+    }
+  },
+  "trust": {
+    "trustProfileWizard": {
+      "selectOrganization": "Wählen Sie eine Organisation aus, um ein Vertrauensprofil zu erstellen.",
+      "createDenied": "Sie sind nicht berechtigt, Vertrauensprofile in der ausgewählten Organisation zu erstellen.",
+      "issuerDenied": "Zum Hinzufügen von Ausstellerbeziehungen benötigen Sie die Berechtigung, vertrauenswürdige Aussteller anzuzeigen und zu erstellen. Entfernen Sie die ausgewählten Aussteller, um ohne sie fortzufahren.",
+      "registryDenied": "Zum Synchronisieren von Registrierungsquellen benötigen Sie die Berechtigung, Vertrauensprofile anzuzeigen. Entfernen Sie die ausgewählten Registrierungen, um ohne sie fortzufahren.",
+      "activateDenied": "Sie sind nicht berechtigt, Vertrauensprofile zu aktivieren. Deaktivieren Sie die sofortige Aktivierung, um einen Entwurf zu erstellen.",
+      "responseMismatch": "Der Server hat den angeforderten Vorgang für das Vertrauensprofil nicht bestätigt. Prüfen Sie die Profilliste, bevor Sie es erneut versuchen.",
+      "profileCreated": "Dieses Vertrauensprofil wurde erstellt: {{id}}. Prüfen Sie den aktuellen Status und schließen Sie die Einrichtung ab, bevor Sie es erneut versuchen."
+    },
+    "revocationWizard": {
+      "selectOrganization": "Wählen Sie eine Organisation aus, um ein Sperrprofil zu erstellen.",
+      "createDenied": "Sie haben keine Berechtigung, Sperrprofile in der ausgewählten Organisation zu erstellen.",
+      "responseMismatch": "Die Antwort bestätigt kein neues Profil im Entwurfsstatus für die ausgewählte Organisation. Prüfen Sie die Profilliste, bevor Sie es erneut versuchen."
+    },
+    "trustProfilesPage": {
+      "title": "Vertrauensprofile",
+      "description": "Legen Sie fest, welche Nachweisformate, Vertrauensquellen und Validierungsregeln Ihre Organisation akzeptiert.",
+      "selectOrganization": "Wählen Sie eine Organisation aus, um deren Vertrauensprofile anzuzeigen.",
+      "readDenied": "Keine Berechtigung zum Anzeigen der Vertrauensprofile dieser Organisation.",
+      "scopeMismatch": "Die Katalogantwort gehört nicht zur ausgewählten Organisation oder enthält ein ungültiges Profil.",
+      "loadFailed": "Die Vertrauensprofile konnten nicht geladen werden.",
+      "retryProfiles": "Profile erneut laden",
+      "emptyTitle": "Keine Vertrauensprofile konfiguriert",
+      "emptyDescription": "Erstellen Sie ein Vertrauensprofil, um akzeptierte Nachweisformate, Vertrauensquellen und Validierungsregeln festzulegen.",
+      "createProfile": "Vertrauensprofil erstellen",
+      "pinnedSources": "Fest hinterlegte Ausstellerquellen",
+      "pinnedSourcesHelp": "Fest hinterlegte Quellen gehören zur Vertrauensrichtlinie eines Profils. Öffnen Sie ein Profil, um seine verknüpften Ausstellerbeziehungen zu prüfen.",
+      "allowedAlgorithms": "Zulässige Algorithmen",
+      "name": "Name",
+      "framework": "Rahmenwerk",
+      "status": "Status",
+      "lastUpdated": "Zuletzt aktualisiert",
+      "actions": "Aktionen",
+      "viewDetails": "Details anzeigen",
+      "edit": "Bearbeiten",
+      "consoleBreadcrumb": "Konsole",
+      "trustBreadcrumb": "Vertrauen"
+    },
+    "trustProfileEdit": {
+      "selectOrganization": "Wählen Sie eine Organisation aus, bevor Sie ein Vertrauensprofil bearbeiten.",
+      "permissionDenied": "Sie haben keine Berechtigung, Vertrauensprofile zu bearbeiten.",
+      "scopeMismatch": "Die Antwort zum Vertrauensprofil stimmt nicht mit dem angeforderten Profil und der ausgewählten Organisation überein.",
+      "invalidResponse": "Die Antwort zum Vertrauensprofil ist ungültig.",
+      "suspendedStatus": "Ausgesetzt",
+      "unknownStatus": "Unbekannt",
+      "notFound": "Vertrauensprofil nicht gefunden."
+    },
+    "revocationDetail": {
+      "selectOrganization": "Wählen Sie eine Organisation aus, um Sperrprofile anzuzeigen.",
+      "readDenied": "Sie haben keine Berechtigung, Sperrprofile der ausgewählten Organisation anzuzeigen.",
+      "profileScopeMismatch": "Die Antwort stimmt nicht mit dem angeforderten Profil in der ausgewählten Organisation überein.",
+      "activationScopeMismatch": "Die Aktivierungsantwort bestätigt keine AKTIVE Version des angeforderten Profils in der ausgewählten Organisation.",
+      "retryProfile": "Profil erneut laden",
+      "activate": "Aktivieren",
+      "activating": "Wird aktiviert…",
+      "activationFailed": "Das Sperrprofil konnte nicht aktiviert werden.",
+      "loadFailed": "Das Sperrprofil konnte nicht geladen werden.",
+      "statusDraft": "Entwurf",
+      "statusActive": "Aktiv",
+      "statusSuspended": "Ausgesetzt",
+      "statusUnknown": "Unbekannter Status",
+      "checkModeTitle": "Richtlinie zur Sperrprüfung",
+      "mechanismsTitle": "Sperrmechanismen",
+      "metadataTitle": "Profilmetadaten",
+      "noMechanisms": "Es wurden keine Sperrmechanismen zurückgegeben.",
+      "statusListUrl": "Statuslisten-Endpunkt",
+      "profileId": "Profil-ID",
+      "organization": "Organisation",
+      "created": "Erstellt",
+      "updated": "Zuletzt aktualisiert",
+      "offlineGrace": "Offline-Toleranzzeit",
+      "cacheTtl": "Cache-TTL",
+      "notAvailable": "Nicht verfügbar",
+      "backToList": "Zurück zu den Sperrprofilen",
+      "disabledAdvisory": "Die Statusprüfung für Nachweise ist in diesem Profil deaktiviert. Verwenden Sie es nur, wenn Sperrprüfungen bewusst ausgeschlossen sind.",
+      "checkModes": {
+        "always": "Immer prüfen",
+        "alwaysDescription": "Für jede Verifizierung ist eine Prüfung des Nachweisstatus konfiguriert.",
+        "cached": "Prüfung mit Cache",
+        "cachedDescription": "Statusprüfungen verwenden die konfigurierte Cache-Gültigkeitsdauer.",
+        "offlineGrace": "Offline-Toleranz",
+        "offlineGraceDescription": "Offline-Statusprüfungen verwenden die konfigurierte Toleranzzeit.",
+        "disabled": "Deaktiviert",
+        "disabledDescription": "Die Statusprüfung für Nachweise ist deaktiviert.",
+        "unknown": "Unbekannte Prüfrichtlinie",
+        "unknownDescription": "Der Server hat eine unbekannte Prüfrichtlinie zurückgegeben."
+      },
+      "mechanisms": {
+        "statusList2021": "Status List 2021",
+        "bitstringStatusList": "Bitstring Status List",
+        "tokenStatusList": "Token Status List",
+        "ocsp": "OCSP",
+        "crl": "CRL",
+        "unknown": "Unbekannter Sperrmechanismus"
+      }
+    },
+    "trustProfileDetail": {
+      "selectOrganization": "Wählen Sie eine Organisation aus, um dieses Vertrauensprofil anzuzeigen.",
+      "profileReadDenied": "Sie haben keine Berechtigung, Vertrauensprofile dieser Organisation anzuzeigen.",
+      "issuerReadDenied": "Sie haben keine Berechtigung, Ausstellerbeziehungen dieser Organisation anzuzeigen.",
+      "profileScopeMismatch": "Dieses Vertrauensprofil ist in der ausgewählten Organisation nicht verfügbar.",
+      "retryProfile": "Profil erneut laden",
+      "retryIssuers": "Ausstellerliste erneut laden",
+      "issuerScopeMismatch": "Die Ausstellerantwort stimmt nicht mit diesem Profil, dieser Organisation oder der angeforderten DID überein.",
+      "issuerNotConfirmed": "Die bestätigte Ausstellerbeziehung konnte in der aktuellen Liste nicht gefunden werden. Laden Sie die Ausstellerliste erneut.",
+      "issuerLoadFailed": "Die Ausstellerliste konnte nicht geladen werden.",
+      "issuerAddFailed": "Das Hinzufügen des Ausstellers konnte nicht bestätigt werden.",
+      "issuerAwaitingReadback": "Die Verknüpfung wurde angenommen. Beim erneuten Versuch wird die aktuelle Ausstellerliste gelesen, ohne die Verknüpfung erneut zu senden.",
+      "statusUnknown": "Unbekannt",
+      "relationshipStatusLabel": "Vertrauensbeziehung",
+      "issuerComplianceLabel": "Ausstellerkonformität",
+      "statusDraft": "Entwurf",
+      "statusActive": "Aktiv",
+      "statusSuspended": "Ausgesetzt",
+      "statusArchived": "Archiviert",
+      "relationshipTrusted": "Vertrauenswürdig",
+      "relationshipDenied": "Abgelehnt",
+      "relationshipUnderReview": "In Prüfung",
+      "complianceAccredited": "Akkreditiert",
+      "complianceCompliant": "Konform",
+      "complianceSuspended": "Ausgesetzt",
+      "complianceRevoked": "Widerrufen",
+      "credentialWalletGuidance": "Wallet-Profile sind bei den Anmeldeinformationsvorlagen verfügbar. Prüfen Sie das unterstützte Wallet-Profil einer Vorlage. Die abgeleitete Konfiguration belegt weder Interoperabilität noch eine erfolgreiche Zustellung.",
+      "viewCredentialTemplates": "Anmeldeinformationsvorlagen anzeigen"
+    }
+  },
+  "membershipReview": {
+    "pending": "Ausstehend",
+    "description": "Prüfen Sie ausstehende Mitgliedschaften und genehmigen Sie den Zugriff mit den bereits zugewiesenen Rollen.",
+    "signIn": "Melden Sie sich an, um Mitgliedschaftsanträge zu prüfen.",
+    "selectOrganization": "Wählen Sie eine Organisation aus, um Mitgliedschaftsanträge zu prüfen.",
+    "permissionsLoading": "Mitgliedschaftsberechtigungen werden geprüft",
+    "readDenied": "Sie haben keine Berechtigung, ausstehende Mitgliedschaften dieser Organisation anzuzeigen.",
+    "approvalOnly": "Sie können ausstehende Mitgliedschaften hier genehmigen. Eine Ablehnung ist nicht verfügbar.",
+    "viewOnly": "Sie können Anträge anzeigen, haben aber keine Berechtigung, sie zu genehmigen.",
+    "applicant": "Antragsteller",
+    "roles": "Zugewiesene Rollen",
+    "account": "Konto {{id}}",
+    "noRoles": "Keine Rollen zugewiesen",
+    "approvalFailed": "Der Mitgliedschaftsantrag konnte nicht genehmigt werden.",
+    "loadFailed": "Mitgliedschaftsanträge konnten nicht geladen werden."
+  },
 	"dashboard": {
+		"developerQuickStart": {
+			"loading": "Integrationsmetadaten werden geladen..."
+		},
 		"title": "Dashboard",
 		"welcome": "Willkommen zurück",
 		"criticalEvents": {
@@ -41,6 +210,24 @@
 		}
 	},
 	"flows": {
+		"flowDetail": {
+			"lifecycleTitle": "Ablaufstatus",
+			"statusChips": {
+				"active": "Aktiv",
+				"draft": "Entwurf",
+				"paused": "Pausiert",
+				"archived": "Archiviert",
+				"unknown": "Status unbekannt"
+			},
+			"entryPoints": {
+				"linkUnavailable": "Für diesen Ablauf ist kein Antragslink verfügbar.",
+				"qrUnavailable": "Für diesen Ablauf ist kein QR-Code verfügbar."
+			},
+			"errors": {
+				"copyFailed": "Der Link konnte nicht kopiert werden. Versuchen Sie es erneut.",
+				"invalidActivation": "Die Aktivierungsantwort gehört nicht zu diesem Ablauf."
+			}
+		},
 		"title": "Abläufe",
 		"flowDefinitions": "Ablaufdefinitionen",
 		"flowInstances": "Ablaufinstanzen",
@@ -77,6 +264,17 @@
 		"flowDefinition": "Ablaufdefinition"
 	},
 	"deploy": {
+		"keyManagementWizard": {
+			"selectOrganization": "Wählen Sie eine Organisation aus, um einen Signaturdienst zu registrieren.",
+			"readDenied": "Sie haben keine Berechtigung, Signaturdienste in der ausgewählten Organisation anzuzeigen.",
+			"createDenied": "Sie haben keine Berechtigung, Signaturdienste in der ausgewählten Organisation zu registrieren."
+		},
+		"issuerIdentityWizard": {
+			"selectOrganization": "Wählen Sie eine Organisation aus, um eine Ausstelleridentität zu erstellen.",
+			"readDenied": "Sie sind nicht berechtigt, die Ausstellerfunktionen in der ausgewählten Organisation anzuzeigen.",
+			"createDenied": "Sie sind nicht berechtigt, Ausstelleridentitäten in der ausgewählten Organisation zu erstellen.",
+			"responseMismatch": "Der Server hat die angeforderte Ausstelleridentität nicht bestätigt. Prüfen Sie die Liste der Ausstelleridentitäten, bevor Sie es erneut versuchen."
+		},
 		"title": "Bereitstellung",
 		"deploymentProfiles": "Bereitstellungsprofile",
 		"deploymentProfilesDescription": "Konfigurieren Sie Bereitstellungsprofile für APIs, Kioske und Geräte in Online-/Offline-Szenarien.",
@@ -276,7 +474,9 @@
 			"loadFailed": "Benachrichtigungseinstellungen konnten nicht geladen werden",
 			"saveSuccess": "Benachrichtigungseinstellungen wurden gespeichert",
 			"saveFailed": "Benachrichtigungseinstellungen konnten nicht gespeichert werden",
-			"emailDisabledNote": "Hinweis: E-Mail ist in der oben gewählten Methode derzeit deaktiviert."
+			"emailDisabledNote": "Hinweis: E-Mail ist in der oben gewählten Methode derzeit deaktiviert.",
+			"unsupported": "Die Benachrichtigungs-API unterstützt keine Benachrichtigungseinstellungen.",
+			"unsupportedDetails": "Diese Installation bietet keine Möglichkeit, Benachrichtigungseinstellungen abzurufen oder zu ändern. Es wurden keine Änderungen an den Einstellungen gespeichert."
 		}
 	},
 	"wizards": {
@@ -285,6 +485,13 @@
 		}
 	},
 	"org": {
+		"roleEscalation": {
+			"title": "Anfragen zur Rollenänderung",
+			"unavailable": "Anfragen zur Rollenänderung sind in dieser Konsole nicht verfügbar.",
+			"management": "Benutzer mit der Berechtigung zur Rollenzuweisung können die Rollen von Mitgliedern unter „Team“ ändern. Unter „Rollen“ werden die verfügbaren Rollen und ihre Berechtigungen angezeigt.",
+			"teamLink": "Team anzeigen",
+			"rolesLink": "Rollen anzeigen"
+		},
 		"setup": {
 			"chooseTitle": "Organisation auswählen",
 			"chooseDescription": "Wählen Sie eine Organisation aus, um deren Konsole zu öffnen.",
@@ -294,6 +501,22 @@
 			"noMembershipsTitle": "Noch keine Mitgliedschaften mit Konsolenzugriff"
 		},
 		"team": {
+			"access": {
+				"rolesTitle": "Rollen",
+				"signIn": "Melden Sie sich an, um das Team anzuzeigen.",
+				"selectOrganization": "Wählen Sie eine Organisation aus, um deren Team anzuzeigen.",
+				"readDenied": "Sie haben keine Berechtigung, dieses Team anzuzeigen.",
+				"rolesLoadFailed": "Verfügbare Rollen konnten nicht geladen werden. Versuchen Sie es erneut, um Mitglieder einzuladen oder Rollen zu ändern.",
+				"rolesReadRequired": "Um Mitglieder einzuladen oder ihre Rollen zu ändern, benötigen Sie Zugriff auf die verfügbaren Rollen. Wenden Sie sich an einen Organisationsadministrator."
+			},
+			"memberships": {
+				"title": "Mitgliedschaftsstatus",
+				"status": "Status",
+				"pending": "Genehmigung ausstehend",
+				"deactivated": "Deaktiviert",
+				"unknown": "Status nicht verfügbar",
+				"reviewRequests": "Mitgliedschaftsanfragen anzeigen"
+			},
 			"title": "Team",
 			"subtitle": "Teammitglieder, Rollen und Einladungen verwalten"
 		},
@@ -306,7 +529,9 @@
 				"defaultCredentialTemplate": "Standard-Nachweisvorlage"
 			},
 			"values": {
-				"noneManualSelection": "Keine (manuelle Auswahl erforderlich)"
+				"noneManualSelection": "Keine (manuelle Auswahl erforderlich)",
+				"unavailable": "Nicht verfügbare Ressource",
+				"detailsUnavailable": "Ressourcendetails nicht verfügbar"
 			},
 			"actions": {
 				"save": "Standards speichern",
@@ -315,7 +540,11 @@
 			"messages": {
 				"loadFailed": "Organisationsstandards konnten nicht geladen werden",
 				"saveFailed": "Organisationsstandards konnten nicht gespeichert werden",
-				"saveSuccess": "Organisationsstandards erfolgreich gespeichert"
+				"saveSuccess": "Organisationsstandards erfolgreich gespeichert",
+				"organizationRequired": "Wählen Sie eine Organisation aus, bevor Sie Standardwerte konfigurieren.",
+				"permissionDenied": "Sie haben keine Berechtigung, die Standardwerte der Organisation anzuzeigen.",
+				"unavailableDefaultsPreserved": "Ein oder mehrere gespeicherte Standardwerte sind nicht verfügbar. Sie bleiben erhalten, wenn Sie andere Standardwerte ändern. Wenn Sie die Berechtigung zum Bearbeiten haben, können Sie sie ersetzen oder die Auswahl aufheben.",
+				"catalogPermissionRequired": "Einige Ressourcendetails werden ausgeblendet, da Sie keine Berechtigung haben, die zugehörigen Kataloge anzuzeigen."
 			}
 		}
 	},

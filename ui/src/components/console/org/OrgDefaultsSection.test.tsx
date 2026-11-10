@@ -5,6 +5,7 @@ import OrgDefaultsSection from './OrgDefaultsSection';
 
 const {
   scope,
+  permissionState,
   mockCan,
   mockGetDefaults,
   mockUpdateDefaults,
@@ -13,6 +14,7 @@ const {
   mockListTemplates,
 } = vi.hoisted(() => ({
   scope: { activeOrgId: 'org-a' as string | null },
+  permissionState: { isLoading: false },
   mockCan: vi.fn(),
   mockGetDefaults: vi.fn(),
   mockUpdateDefaults: vi.fn(),
@@ -22,7 +24,7 @@ const {
 }));
 
 vi.mock('../../../contexts/ConsoleContext', () => ({ useConsole: () => scope }));
-vi.mock('../../../hooks/usePermissions', () => ({ usePermissions: () => ({ can: mockCan }) }));
+vi.mock('../../../hooks/usePermissions', () => ({ usePermissions: () => ({ can: mockCan, ...permissionState }) }));
 vi.mock('../../../services/organizationsApi', () => ({
   getOrganizationDefaults: mockGetDefaults,
   updateOrganizationDefaults: mockUpdateDefaults,
@@ -78,6 +80,7 @@ describe('OrgDefaultsSection', () => {
     [mockCan, mockGetDefaults, mockUpdateDefaults, mockListTrustProfiles, mockListPolicies, mockListTemplates]
       .forEach(mock => mock.mockReset());
     scope.activeOrgId = 'org-a';
+    permissionState.isLoading = false;
     mockCan.mockReturnValue(true);
     mockGetDefaults.mockImplementation(async organizationId => defaultsFor(organizationId));
     mockUpdateDefaults.mockImplementation(async (organizationId, patch) => ({ ...defaultsFor(organizationId), ...patch }));
@@ -191,7 +194,7 @@ describe('OrgDefaultsSection', () => {
   });
 
   it('shows loaded defaults read-only when the member cannot edit organizations', async () => {
-    mockCan.mockReturnValue(false);
+    mockCan.mockImplementation((_resource, action) => action === 'view');
     render(<OrgDefaultsSection />);
 
     expect(await screen.findByRole('combobox', { name: trustLabel })).toHaveTextContent('org-a trust');
@@ -201,6 +204,80 @@ describe('OrgDefaultsSection', () => {
     expect(mockCan).toHaveBeenCalledWith('organization', 'edit');
     expect(screen.queryByRole('button', { name: 'Save Defaults' })).not.toBeInTheDocument();
     expect(mockUpdateDefaults).not.toHaveBeenCalled();
+  });
+
+  it('waits for current permissions and does not request defaults without organization view', async () => {
+    permissionState.isLoading = true;
+    mockCan.mockReturnValue(false);
+    const view = render(<OrgDefaultsSection />);
+
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    for (const request of [mockGetDefaults, mockListTrustProfiles, mockListPolicies, mockListTemplates]) {
+      expect(request).not.toHaveBeenCalled();
+    }
+
+    permissionState.isLoading = false;
+    view.rerender(<OrgDefaultsSection />);
+    expect(screen.getByRole('alert')).toHaveTextContent('You do not have permission to view organization defaults.');
+    expect(mockGetDefaults).not.toHaveBeenCalled();
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  });
+
+  it('lets an access administrator read defaults and clear one without catalog view grants', async () => {
+    mockCan.mockImplementation((resource) => resource === 'organization');
+    for (const catalog of [mockListTrustProfiles, mockListPolicies, mockListTemplates]) {
+      catalog.mockRejectedValue(new Error('Forbidden'));
+    }
+    const { user } = render(<OrgDefaultsSection />);
+
+    await user.click(await screen.findByRole('combobox', { name: trustLabel }));
+    await user.click(screen.getByRole('option', { name: noneLabel }));
+    await user.click(screen.getByRole('button', { name: 'Save Defaults' }));
+
+    expect(await screen.findByText(saveSuccess)).toBeInTheDocument();
+    expect(mockUpdateDefaults).toHaveBeenCalledWith('org-a', { default_trust_profile_id: null });
+    expect(screen.queryByText(loadError)).not.toBeInTheDocument();
+    for (const catalog of [mockListTrustProfiles, mockListPolicies, mockListTemplates]) {
+      expect(catalog).not.toHaveBeenCalled();
+    }
+  });
+
+  it('saves an allowed resource without replacing inaccessible or inactive untouched defaults', async () => {
+    mockCan.mockImplementation((resource) => resource !== 'credential-template');
+    mockGetDefaults.mockResolvedValue({ ...defaultsFor('org-a'), default_trust_profile_id: 'retired-trust' });
+    mockListTemplates.mockRejectedValue(new Error('Forbidden'));
+    mockUpdateDefaults.mockImplementation(async (_organizationId, patch) => ({
+      ...defaultsFor('org-a'), default_trust_profile_id: 'retired-trust', ...patch,
+    }));
+    const { user } = render(<OrgDefaultsSection />);
+
+    await user.click(await screen.findByRole('combobox', { name: policyLabel }));
+    await user.click(screen.getByRole('option', { name: 'org-a other policy' }));
+    expect(screen.getByRole('button', { name: 'Save Defaults' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Save Defaults' }));
+
+    expect(await screen.findByText(saveSuccess)).toBeInTheDocument();
+    expect(mockUpdateDefaults).toHaveBeenCalledWith('org-a', { default_policy_id: 'org-a-policy-other' });
+    expect(mockListTemplates).not.toHaveBeenCalled();
+  });
+
+  it('discards a pending save and draft when organization edit permission is withdrawn', async () => {
+    const pendingSave = deferred<Defaults>();
+    mockUpdateDefaults.mockReturnValue(pendingSave.promise);
+    const view = render(<OrgDefaultsSection />);
+    await view.user.click(await screen.findByRole('combobox', { name: trustLabel }));
+    await view.user.click(screen.getByRole('option', { name: 'org-a other trust' }));
+    await view.user.click(screen.getByRole('button', { name: 'Save Defaults' }));
+
+    mockCan.mockImplementation((_resource, action) => action === 'view');
+    view.rerender(<OrgDefaultsSection />);
+    expect(await screen.findByRole('combobox', { name: trustLabel })).toHaveTextContent('org-a trust');
+    await act(async () => pendingSave.resolve({ ...defaultsFor('org-a'), default_trust_profile_id: 'org-a-trust-other' }));
+
+    expect(screen.getByRole('combobox', { name: trustLabel })).toHaveTextContent('org-a trust');
+    expect(screen.getByRole('combobox', { name: trustLabel })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByText(saveSuccess)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save Defaults' })).not.toBeInTheDocument();
   });
 
   it.each(['before', 'after'])('discards the previous organization load when it completes %s the current load', async order => {

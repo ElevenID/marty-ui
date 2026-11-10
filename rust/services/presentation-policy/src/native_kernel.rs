@@ -562,6 +562,7 @@ fn project_authenticated_mdoc(
     let issuer_id = format!("x509-sha256:{}", document.issuer_certificate_sha256);
     CredentialVerificationEvidence {
         verified: true,
+        credential_types: vec![document.document_type.clone()],
         claims,
         issuer_id: Some(issuer_id),
         issued_at_epoch_seconds,
@@ -765,6 +766,7 @@ async fn verify_vc_jwt(
         1,
     );
     evidence.authenticated_issuer = authenticated;
+    evidence.authenticated_document = Some(Value::Object(claims.clone()));
     bind_authenticated_jwt_credential_id(&mut evidence, claims);
     evidence.algorithm = jwt_algorithm(token);
     evidence.validity_checked = true;
@@ -926,21 +928,43 @@ fn verify_sd_jwt(
             "No governed issuer public JWK is available for SD-JWT",
         ));
     };
+    let Some(algorithm) = jwt_algorithm(token) else {
+        return Ok(rejected("SD-JWT signature algorithm is missing"));
+    };
+    let Some(issuer_algorithm) = sd_jwt_algorithm(&algorithm) else {
+        return Ok(rejected("SD-JWT signature algorithm is unsupported"));
+    };
+    let allowed_algorithms = match sd_jwt_allowed_algorithms(context) {
+        Ok(allowed) if allowed.contains(&issuer_algorithm) => allowed,
+        _ => {
+            return Ok(rejected(
+                "SD-JWT algorithm is not allowed by the Trust Profile",
+            ))
+        }
+    };
     let (claims, authenticated_sd_jwt_query) = if let Some(query) = &context.sd_jwt_dcql {
-        match query.verify(&issuer_key, token) {
+        match query.verify(&issuer_key, token, &allowed_algorithms) {
             Ok((claims, evidence)) => (claims, Some(evidence)),
             Err(reason) => return Ok(rejected(reason)),
         }
     } else {
-        let verified = marty_oid4vci::formats::sd_jwt::verify_sd_jwt(
+        let policy = marty_oid4vci::formats::sd_jwt::SdJwtVerificationPolicy {
+            expected_issuer: issuer_key.issuer_id.clone(),
+            issuer_algorithm,
+            holder_algorithms: allowed_algorithms,
+        };
+        let verified = marty_oid4vci::formats::sd_jwt::verify_sd_jwt_with_policy(
             token,
             &issuer_key.public_jwk.to_string(),
+            &policy,
             context.audience.clone(),
             context.nonce.clone(),
         );
         match verified {
-            Ok(Value::Object(claims)) => (claims, None),
-            Ok(_) => return Err(invalid_native("SD-JWT verifier returned non-object claims")),
+            Ok(authenticated) => match authenticated.into_claims() {
+                Value::Object(claims) => (claims, None),
+                _ => return Err(invalid_native("SD-JWT verifier returned non-object claims")),
+            },
             Err(_) => return Ok(rejected("SD-JWT verification rejected the credential")),
         }
     };
@@ -990,6 +1014,14 @@ fn verify_sd_jwt(
     Ok(CredentialVerificationEvidence {
         verified: true,
         authenticated_sd_jwt_query,
+        credential_types: claims
+            .get("vct")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .into_iter()
+            .collect(),
+        authenticated_document: Some(Value::Object(claims.clone())),
         credential_id: credential_id.clone(),
         credential_status_ids: credential_id.into_iter().collect(),
         claims: disclosed,
@@ -997,6 +1029,9 @@ fn verify_sd_jwt(
         authenticated_issuer: Some(authenticated),
         issued_at_epoch_seconds: issued_at,
         algorithm: jwt_algorithm(token),
+        holder_algorithm: bound
+            .then(|| token.rsplit('~').next().and_then(jwt_algorithm))
+            .flatten(),
         validity_checked: true,
         is_expired: Some(false),
         presentation_verified: bound,
@@ -1008,6 +1043,49 @@ fn verify_sd_jwt(
         audience_verified: context.audience.is_some(),
         ..Default::default()
     })
+}
+
+fn sd_jwt_algorithm(value: &str) -> Option<marty_oid4vci::types::SigningAlgorithm> {
+    use marty_oid4vci::types::SigningAlgorithm;
+    match value {
+        "ES256" => Some(SigningAlgorithm::ES256),
+        "ES384" => Some(SigningAlgorithm::ES384),
+        "EdDSA" => Some(SigningAlgorithm::EdDSA),
+        "RS256" => Some(SigningAlgorithm::RS256),
+        _ => None,
+    }
+}
+
+fn sd_jwt_allowed_algorithms(
+    context: &CredentialVerificationContext,
+) -> Result<Vec<marty_oid4vci::types::SigningAlgorithm>, ()> {
+    let Some(profile) = &context.trust_profile else {
+        // No Trust Profile means no configured restriction. These are the
+        // algorithms supported by Core's explicit SD-JWT verification policy.
+        return Ok(["ES256", "ES384", "EdDSA", "RS256"]
+            .into_iter()
+            .filter_map(sd_jwt_algorithm)
+            .collect());
+    };
+    let values = profile
+        .document
+        .get("allowed_algorithms")
+        .or_else(|| {
+            profile
+                .document
+                .pointer("/validation_rules/allowed_algorithms")
+        })
+        .and_then(Value::as_array)
+        .filter(|values| !values.is_empty())
+        .ok_or(())?;
+    let mut allowed = Vec::new();
+    for value in values {
+        let algorithm = sd_jwt_algorithm(value.as_str().ok_or(())?).ok_or(())?;
+        if !allowed.contains(&algorithm) {
+            allowed.push(algorithm);
+        }
+    }
+    Ok(allowed)
 }
 
 async fn verify_open_badge(
@@ -1136,6 +1214,8 @@ fn credential_evidence(
     CredentialVerificationEvidence {
         verified: true,
         credential_id,
+        credential_types: authenticated_credential_types(credential),
+        authenticated_document: Some(Value::Object(credential.clone())),
         credential_status_ids: status_ids,
         claims,
         issuer_id: verified_issuer
@@ -1145,6 +1225,21 @@ fn credential_evidence(
         presentation_verified,
         presentation_count: Some(credential_count),
         ..Default::default()
+    }
+}
+
+fn authenticated_credential_types(credential: &Map<String, Value>) -> Vec<String> {
+    match credential.get("type") {
+        Some(Value::String(value)) if !value.is_empty() => vec![value.clone()],
+        Some(Value::Array(values)) => values
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -1880,7 +1975,7 @@ mod tests {
                 URL_SAFE_NO_PAD.encode(signer.sign(input.as_bytes()).to_bytes())
             )
         };
-        let mut context = context(json!({"status":"active"}));
+        let mut context = context(json!({"status":"active", "allowed_algorithms":["EdDSA"]}));
         let mut selected = resolved_did_key(
             issuer,
             public_key,

@@ -129,7 +129,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
         {t('wizards.presentationPolicy.claimsConfigurationStep.title')}
       </Typography>
       
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
         {t('wizards.presentationPolicy.claimsConfigurationStep.description')}
       </Typography>
 
@@ -181,7 +181,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
             {t('wizards.presentationPolicy.claimsConfigurationStep.sections.acceptedCredentialTypes')}
           </Typography>
 
-          <Typography variant="body2" color="text.secondary" paragraph>
+          <Typography variant="body2" color="text.secondary" component="p" sx={{ mb: "16px" }}>
             {t('wizards.presentationPolicy.claimsConfigurationStep.helpers.credentialTypesQuestion')}
           </Typography>
 
@@ -356,7 +356,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
             }
             label={t('wizards.presentationPolicy.claimsConfigurationStep.labels.preferPredicateProofs')}
           />
-          <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4, mb: 2 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 4, mb: 2 }}>
             {t('wizards.presentationPolicy.claimsConfigurationStep.captions.preferPredicates')}
           </Typography>
 
@@ -369,7 +369,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
             }
             label={t('wizards.presentationPolicy.claimsConfigurationStep.labels.singlePresentation')}
           />
-          <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 4 }}>
             {t('wizards.presentationPolicy.claimsConfigurationStep.captions.singlePresentation')}
           </Typography>
         </CardContent>

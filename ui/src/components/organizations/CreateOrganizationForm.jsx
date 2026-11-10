@@ -93,7 +93,7 @@ function CreateOrganizationForm({
         </Alert>
       )}
 
-      <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 2 }}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
         Organization Details
       </Typography>
 
@@ -165,13 +165,13 @@ function CreateOrganizationForm({
 
       <Divider sx={{ my: 3 }} />
 
-      <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 2 }}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
         Discovery and Membership
       </Typography>
 
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'flex-start', sm: 'center' }} justifyContent="space-between">
-          <Stack direction="row" spacing={1.5} alignItems="center">
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: { xs: 'flex-start', sm: 'center' }, justifyContent: "space-between" }}>
+          <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
             {isDiscoverable ? <VisibilityIcon color="primary" /> : <VisibilityOffIcon color="action" />}
             <Box>
               <Typography variant="body1">Discoverable</Typography>
@@ -210,9 +210,9 @@ function CreateOrganizationForm({
               control={<Radio />}
               label={
                 <Box>
-                  <Stack direction="row" spacing={1} alignItems="center">
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                     <LockIcon fontSize="small" color="action" />
-                    <Typography fontWeight={500}>Invite Only</Typography>
+                    <Typography sx={{ fontWeight: 500 }}>Invite Only</Typography>
                   </Stack>
                   <Typography variant="body2" color="text.secondary">
                     Users can join only through an invitation or join code.
@@ -231,9 +231,9 @@ function CreateOrganizationForm({
               control={<Radio />}
               label={
                 <Box>
-                  <Stack direction="row" spacing={1} alignItems="center">
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                     <HowToRegIcon fontSize="small" color="warning" />
-                    <Typography fontWeight={500}>Approval Required</Typography>
+                    <Typography sx={{ fontWeight: 500 }}>Approval Required</Typography>
                   </Stack>
                   <Typography variant="body2" color="text.secondary">
                     Users can request access and administrators approve requests.
@@ -252,9 +252,9 @@ function CreateOrganizationForm({
               control={<Radio />}
               label={
                 <Box>
-                  <Stack direction="row" spacing={1} alignItems="center">
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                     <LockOpenIcon fontSize="small" color="success" />
-                    <Typography fontWeight={500}>Open</Typography>
+                    <Typography sx={{ fontWeight: 500 }}>Open</Typography>
                   </Stack>
                   <Typography variant="body2" color="text.secondary">
                     Authenticated users can join directly without approval.
@@ -267,7 +267,7 @@ function CreateOrganizationForm({
         </RadioGroup>
       </FormControl>
 
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="flex-end" sx={{ mt: 3 }}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ justifyContent: "flex-end", mt: 3 }}>
         {onCancel && (
           <Button variant="outlined" onClick={onCancel} disabled={submitting}>
             {cancelLabel}

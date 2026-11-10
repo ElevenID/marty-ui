@@ -5,11 +5,12 @@
  * Handles user session, capability detection, organization membership, and auth status.
  */
 
-import { createContext, useState, useEffect, useCallback, useMemo } from 'react';
+import { createContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { getCurrentUser, initiateLogin, initiateRegister, initiateLogout } from '../services/authApi';
 import { getMyOrganizations } from '../services/organizationsApi';
 import i18n from '../i18n';
 import { getPublicEntryCanonicalOrigin } from '../application/routing/publicEntry';
+import { exchangeAuthCallbackCode } from '../application/routing/authCallback';
 import {
   createEnrichedUser,
   getAuthFlags,
@@ -50,6 +51,7 @@ import {
  * @property {function} register - Initiate registration flow
  * @property {function} logout - Initiate logout flow
  * @property {function} refreshUser - Refresh user info from server
+ * @property {function} completeLoginCallback - Share the current callback exchange and session refresh across console remounts
  */
 
 const defaultContextValue = {
@@ -70,6 +72,7 @@ const defaultContextValue = {
   register: () => {},
   logout: () => {},
   refreshUser: async () => {},
+  completeLoginCallback: async () => { throw new Error('Authentication provider is unavailable.'); },
 };
 
 const AuthContext = createContext(defaultContextValue);
@@ -88,17 +91,22 @@ function logAuthContextError(message, error) {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(() => !getPublicEntryCanonicalOrigin());
+  const authRequestGeneration = useRef(0);
+  const callbackAttempt = useRef(null);
 
   // Fetch current user on mount
   const fetchUser = useCallback(async () => {
+    const generation = ++authRequestGeneration.current;
+    const applies = () => authRequestGeneration.current === generation;
     if (getPublicEntryCanonicalOrigin()) {
       setUser(null);
       setIsLoading(false);
-      return;
+      return null;
     }
     try {
       setIsLoading(true);
       const result = await getCurrentUser();
+      if (!applies()) return undefined;
 
       if (result.authenticated && result.user) {
         const rawUser = result.user;
@@ -107,21 +115,26 @@ export function AuthProvider({ children }) {
         try {
           userOrganizations = await getMyOrganizations();
         } catch (orgError) {
-          logAuthContextError('Error fetching user organizations:', orgError);
+          if (applies()) logAuthContextError('Error fetching user organizations:', orgError);
         }
+        if (!applies()) return undefined;
 
         const storedOrgId = window.localStorage.getItem('activeOrgId');
         const enrichedUser = createEnrichedUser(rawUser, userOrganizations, storedOrgId);
 
         setUser(enrichedUser);
+        return enrichedUser;
       } else {
         setUser(null);
+        return null;
       }
     } catch (error) {
+      if (!applies()) return undefined;
       logAuthContextError('Error fetching user:', error);
       setUser(null);
+      return null;
     } finally {
-      setIsLoading(false);
+      if (applies()) setIsLoading(false);
     }
   }, []);
 
@@ -158,6 +171,39 @@ export function AuthProvider({ children }) {
     await fetchUser();
   }, [fetchUser]);
 
+  // The console subtree remounts when authentication changes. Keep the one-use
+  // code exchange and its refresh here so replacement callback pages can await
+  // the same operation. Retain only the latest callback route, code and state.
+  const completeLoginCallback = useCallback(({ code, state, routeKey }) => {
+    const key = JSON.stringify([routeKey, code, state]);
+    if (callbackAttempt.current?.key === key) return callbackAttempt.current.promise;
+
+    const attempt = { key, promise: null };
+    callbackAttempt.current = attempt;
+    const assertCurrent = () => {
+      if (callbackAttempt.current !== attempt) {
+        const error = new Error('The authentication callback changed.');
+        error.name = 'AbortError';
+        throw error;
+      }
+    };
+    attempt.promise = (async () => {
+      await exchangeAuthCallbackCode({ code, state });
+      assertCurrent();
+      const refreshedUser = await fetchUser();
+      assertCurrent();
+      if (refreshedUser === undefined) {
+        const error = new Error('The authentication request changed.');
+        error.name = 'AbortError';
+        throw error;
+      }
+      const principalId = refreshedUser?.user_id || refreshedUser?.sub || refreshedUser?.id;
+      if (!principalId) throw new Error('Authentication could not be confirmed. Please sign in again.');
+      return { principalId };
+    })();
+    return attempt.promise;
+  }, [fetchUser]);
+
   // Computed values - derive role booleans and organization info
   const contextValue = useMemo(() => {
     const { isAdministrator, isVendor, isApplicant, capabilities } = getAuthFlags(user);
@@ -183,8 +229,9 @@ export function AuthProvider({ children }) {
       register,
       logout,
       refreshUser,
+      completeLoginCallback,
     };
-  }, [user, isLoading, login, register, logout, refreshUser]);
+  }, [user, isLoading, login, register, logout, refreshUser, completeLoginCallback]);
 
   return (
     <AuthContext.Provider value={contextValue}>

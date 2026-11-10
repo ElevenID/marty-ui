@@ -5,7 +5,7 @@
  * Includes search and filtering by organization type and join mechanism.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Box,
   Container,
@@ -38,22 +38,50 @@ import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import EmailIcon from '@mui/icons-material/Email';
 import PublicIcon from '@mui/icons-material/Public';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 
+import { useAuth } from '../../hooks/useAuth';
+import { getErrorMessage, isAuthError } from '../../services/api';
 import { discoverOrganizations } from '../../services/organizationsApi';
 
-/**
- * Discover Organizations Page Component
- */
-export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) {
+function DiscoveryFrame({ children }) {
+  return (
+    <Container maxWidth="lg" sx={{ py: 4 }}>
+      <Box sx={{ mb: 4 }}>
+        <Typography variant="h4" gutterBottom fontWeight={600}>
+          Discover Organizations
+        </Typography>
+        <Typography variant="body1" color="text.secondary">
+          Find and join publicly available organizations.
+        </Typography>
+      </Box>
+      {children}
+    </Container>
+  );
+}
+
+function DiscoverySignIn({ onSignIn, message = 'Sign in to discover and join organizations.' }) {
+  return (
+    <Alert severity="info" action={<Button color="inherit" onClick={onSignIn}>Sign in</Button>}>
+      {message}
+    </Alert>
+  );
+}
+
+function DiscoveryContent({ joinPath, onSignIn }) {
   const navigate = useNavigate();
   
-  const [organizations, setOrganizations] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [orgTypeFilter, setOrgTypeFilter] = useState('');
   const [joinMechanismFilter, setJoinMechanismFilter] = useState('');
+  const [loadVersion, setLoadVersion] = useState(0);
+  const [result, setResult] = useState({ key: null, organizations: [], error: null });
+  const searchTerm = searchQuery.trim();
+  const requestKey = JSON.stringify([searchTerm, orgTypeFilter, joinMechanismFilter, loadVersion]);
+  const loading = result.key !== requestKey;
+  const organizations = loading ? [] : result.organizations;
+  const error = loading ? null : result.error;
+  const hasFilters = Boolean(searchTerm || orgTypeFilter || joinMechanismFilter);
   
   // Join code dialog state
   const [joinCodeDialog, setJoinCodeDialog] = useState(false);
@@ -64,31 +92,36 @@ export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) 
   /**
    * Load discoverable organizations
    */
-  const loadOrganizations = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const orgs = await discoverOrganizations({
-        search: searchQuery || undefined,
-        orgType: orgTypeFilter || undefined,
-        joinMechanism: joinMechanismFilter || undefined,
-        limit: 100,
-      });
-      setOrganizations(orgs || []);
-    } catch (err) {
-      console.error('Failed to load organizations:', err);
-      setError(err.message || 'Failed to load organizations');
-    } finally {
-      setLoading(false);
-    }
-  }, [searchQuery, orgTypeFilter, joinMechanismFilter]);
-
-  /**
-   * Load organizations on mount and when filters change
-   */
   useEffect(() => {
+    let active = true;
+    const loadOrganizations = async () => {
+      try {
+        const orgs = await discoverOrganizations({
+          search: searchTerm || undefined,
+          orgType: orgTypeFilter || undefined,
+          joinMechanism: joinMechanismFilter || undefined,
+          limit: 100,
+        });
+        if (active) setResult({ key: requestKey, organizations: orgs || [], error: null });
+      } catch (err) {
+        if (active) {
+          setResult({
+            key: requestKey,
+            organizations: [],
+            error: err || new Error('Failed to load organizations'),
+          });
+        }
+      }
+    };
     loadOrganizations();
-  }, [loadOrganizations]);
+    return () => { active = false; };
+  }, [searchTerm, orgTypeFilter, joinMechanismFilter, requestKey]);
+
+  const clearFilters = () => {
+    setSearchQuery('');
+    setOrgTypeFilter('');
+    setJoinMechanismFilter('');
+  };
 
   /**
    * Handle join by code
@@ -154,25 +187,28 @@ export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) 
     navigate(`${joinPath}?orgId=${encodeURIComponent(org.id)}`);
   };
 
+  if (error && isAuthError(error)) {
+    return (
+      <DiscoveryFrame>
+        <DiscoverySignIn
+          onSignIn={onSignIn}
+          message={`${getErrorMessage(error)} Sign in again to discover organizations.`}
+        />
+      </DiscoveryFrame>
+    );
+  }
+
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
-      {/* Header */}
-      <Box sx={{ mb: 4 }}>
-        <Typography variant="h4" gutterBottom fontWeight={600}>
-          Discover Organizations
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Find and join publicly available organizations.
-        </Typography>
-      </Box>
+    <DiscoveryFrame>
       {/* Filters */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Grid container spacing={2}>
             {/* Search */}
-            <Grid item xs={12} md={4}>
+            <Grid size={{ xs: 12, md: 4 }}>
               <TextField
                 fullWidth
+                label="Search organizations"
                 placeholder="Search by name..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -189,10 +225,11 @@ export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) 
             </Grid>
 
             {/* Organization Type Filter */}
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
               <FormControl fullWidth>
-                <InputLabel>Organization Type</InputLabel>
+                <InputLabel id="discover-org-type-label">Organization Type</InputLabel>
                 <Select
+                  labelId="discover-org-type-label"
                   value={orgTypeFilter}
                   label="Organization Type"
                   onChange={(e) => setOrgTypeFilter(e.target.value)}
@@ -208,10 +245,11 @@ export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) 
             </Grid>
 
             {/* Join Mechanism Filter */}
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
               <FormControl fullWidth>
-                <InputLabel>Join Method</InputLabel>
+                <InputLabel id="discover-join-method-label">Join Method</InputLabel>
                 <Select
+                  labelId="discover-join-method-label"
                   value={joinMechanismFilter}
                   label="Join Method"
                   onChange={(e) => setJoinMechanismFilter(e.target.value)}
@@ -226,7 +264,7 @@ export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) 
             </Grid>
 
             {/* Join by Code Button */}
-            <Grid item xs={12} md={2}>
+            <Grid size={{ xs: 12, md: 2 }}>
               <Button
                 fullWidth
                 variant="contained"
@@ -238,39 +276,48 @@ export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) 
               </Button>
             </Grid>
           </Grid>
+          {hasFilters && (
+            <Button onClick={clearFilters} sx={{ mt: 2 }}>Clear filters</Button>
+          )}
         </CardContent>
       </Card>
       {/* Error Alert */}
       {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+        <Alert
+          severity="error"
+          sx={{ mb: 3 }}
+          action={<Button color="inherit" onClick={() => setLoadVersion((version) => version + 1)}>Retry</Button>}
+        >
+          Unable to load organizations. {getErrorMessage(error) || 'Failed to load organizations'}
         </Alert>
       )}
       {/* Loading State */}
       {loading && (
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 400 }}>
-          <CircularProgress />
+          <CircularProgress aria-label="Loading organizations" />
         </Box>
       )}
       {/* Empty State */}
-      {!loading && organizations.length === 0 && (
+      {!loading && !error && organizations.length === 0 && (
         <Card sx={{ textAlign: 'center', py: 6 }}>
           <CardContent>
             <SearchIcon sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
             <Typography variant="h6" gutterBottom>
-              No Organizations Found
+              {hasFilters ? 'No Organizations Found' : 'No Organizations Available'}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Try adjusting your search criteria or using a join code.
+              {hasFilters
+                ? 'No organizations match your filters. Clear the filters to see all available organizations.'
+                : 'There are no public organizations available to discover right now. If you have a join code, use it to join an organization.'}
             </Typography>
           </CardContent>
         </Card>
       )}
       {/* Organizations Grid */}
-      {!loading && organizations.length > 0 && (
+      {!loading && !error && organizations.length > 0 && (
         <Grid container spacing={3}>
           {organizations.map((org) => (
-            <Grid item xs={12} sm={6} md={4} key={org.id}>
+            <Grid size={{ xs: 12, sm: 6, md: 4 }} key={org.id}>
               <Card
                 sx={{
                   height: '100%',
@@ -421,8 +468,31 @@ export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) 
           </Button>
         </DialogActions>
       </Dialog>
-    </Container>
+    </DiscoveryFrame>
   );
+}
+
+export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) {
+  const { user, isAuthenticated, isLoading, login } = useAuth();
+  const location = useLocation();
+  const onSignIn = () => login(`${location.pathname}${location.search}${location.hash}`);
+
+  if (isLoading) {
+    return (
+      <DiscoveryFrame>
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 400 }}>
+          <CircularProgress aria-label="Checking authentication" />
+        </Box>
+      </DiscoveryFrame>
+    );
+  }
+  if (!isAuthenticated) {
+    return <DiscoveryFrame><DiscoverySignIn onSignIn={onSignIn} /></DiscoveryFrame>;
+  }
+
+  // A new account must not inherit another account's results or expired session.
+  const principalId = user?.user_id || user?.sub || user?.id || 'authenticated';
+  return <DiscoveryContent key={principalId} joinPath={joinPath} onSignIn={onSignIn} />;
 }
 
 export default DiscoverOrganizationsPage;

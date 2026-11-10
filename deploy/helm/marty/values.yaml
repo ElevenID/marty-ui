@@ -144,6 +144,7 @@ keycloak:
       memory: 1536Mi
   javaOptsAppend: -Xms256m -Xmx768m
   configurator:
+    enabled: true
     activeDeadlineSeconds: 900
     backoffLimit: 5
 ui:

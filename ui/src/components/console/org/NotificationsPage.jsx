@@ -3,6 +3,7 @@ import { Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogT
   Paper, Stack, Tab, Tabs, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import { ResourcePage } from '../../common';
 import notificationsApi from '../../../services/notificationsApi';
+import { publishNotificationChange, subscribeToNotificationChanges } from '../../../services/notificationEvents';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useAuth } from '../../../hooks/useAuth';
@@ -55,8 +56,12 @@ function NotificationInbox({ organizationId, recipientId }) {
   const [state, setState] = useState({ loading: true, items: [], error: '' });
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [deleteError, setDeleteError] = useState('');
   const [deleting, setDeleting] = useState(null);
   const [details, setDetails] = useState(null);
+  useEffect(() => subscribeToNotificationChanges(
+    { organizationId, recipientId }, () => setAttempt((value) => value + 1),
+  ), [organizationId, recipientId]);
   useEffect(() => {
     let current = true;
     setState({ loading: true, items: [], error: '' });
@@ -66,14 +71,18 @@ function NotificationInbox({ organizationId, recipientId }) {
     }).catch((error) => { if (current) setState({ loading: false, items: [], error: error?.message || 'Notifications could not be loaded.' }); });
     return () => { current = false; };
   }, [organizationId, recipientId, page, unread, attempt]);
-  const mutate = async (operation) => {
+  const closeDeleteDialog = () => {
     if (busy) return;
-    setBusy(true); setActionError('');
+    setDeleting(null); setDeleteError('');
+  };
+  const mutate = async (operation, setError = setActionError) => {
+    if (busy) return;
+    setBusy(true); setActionError(''); setDeleteError('');
     try {
       await operation();
       if (!mounted.current) return;
-      setDeleting(null); setAttempt((value) => value + 1);
-    } catch (error) { if (mounted.current) setActionError(error?.message || 'Notification could not be updated.'); }
+      setDeleting(null); publishNotificationChange({ organizationId, recipientId });
+    } catch (error) { if (mounted.current) setError(error?.message || 'Notification could not be updated.'); }
     finally { if (mounted.current) setBusy(false); }
   };
   return <ResourcePage title={t('org.notifications.title')} description="Your notification inbox in the selected organization.">
@@ -103,7 +112,7 @@ function NotificationInbox({ organizationId, recipientId }) {
             {!item.read && <Button disabled={busy} onClick={() => mutate(() => notificationsApi.markAsRead(item.id, organizationId))}>{t('org.notifications.notificationsTab.actions.markAsRead')}</Button>}
             {item.read && <Button disabled={busy} onClick={() => mutate(() => notificationsApi.markAsUnread(item.id, organizationId))}>{t('org.notifications.notificationsTab.actions.markAsUnread', { defaultValue: 'Mark as unread' })}</Button>}
             <Button onClick={() => setDetails(item)}>Delivery results</Button>
-            <Button disabled={busy} onClick={() => setDeleting(item)}>{t('org.notifications.notificationsTab.actions.delete')}</Button>
+            <Button disabled={busy} onClick={() => { setDeleteError(''); setDeleting(item); }}>{t('org.notifications.notificationsTab.actions.delete')}</Button>
           </Stack></TableCell>
         </TableRow>)}</TableBody>
       </Table></Paper> : <Typography>No notifications on this page.</Typography>)}
@@ -111,10 +120,12 @@ function NotificationInbox({ organizationId, recipientId }) {
         <Typography sx={{ alignSelf: 'center' }}>Page {page + 1}</Typography>
         <Button disabled={busy || state.loading || Boolean(state.error) || state.items.length < PAGE_SIZE} onClick={() => setPage((value) => value + 1)}>Next page</Button></Stack>
     </Stack>}
-    <Dialog open={Boolean(deleting)} onClose={() => !busy && setDeleting(null)}>
-      <DialogTitle>Delete notification?</DialogTitle><DialogContent>{deleting?.title}</DialogContent>
-      <DialogActions><Button disabled={busy} onClick={() => setDeleting(null)}>Cancel</Button>
-        <Button disabled={busy} onClick={() => mutate(() => notificationsApi.deleteNotification(deleting.id, organizationId))}>Confirm deletion</Button></DialogActions>
+    <Dialog open={Boolean(deleting)} onClose={closeDeleteDialog}>
+      <DialogTitle>Delete notification?</DialogTitle><DialogContent>{deleting?.title}
+        {deleteError && <Alert severity="error" sx={{ mt: 2 }}>{deleteError}</Alert>}
+      </DialogContent>
+      <DialogActions><Button disabled={busy} onClick={closeDeleteDialog}>Cancel</Button>
+        <Button disabled={busy} onClick={() => mutate(() => notificationsApi.deleteNotification(deleting.id, organizationId), setDeleteError)}>Confirm deletion</Button></DialogActions>
     </Dialog>
     <Dialog open={Boolean(details)} onClose={() => setDetails(null)} fullWidth maxWidth="sm">
       <DialogTitle>Delivery results</DialogTitle><DialogContent>{details && <Box sx={{ py: 1 }}><DeliveryResults key={details.id} notificationId={details.id} organizationId={organizationId} /></Box>}</DialogContent>

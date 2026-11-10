@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderWithRouter, screen, waitFor } from '@test/utils';
+import { act, renderWithRouter, screen, waitFor } from '@test/utils';
 import PreviewApplicationPage from './PreviewApplicationPage';
 
 const { getTemplate, getCredential, route } = vi.hoisted(() => ({
   getTemplate: vi.fn(), getCredential: vi.fn(), route: { id: 'application-1', org: 'org-1' },
 }));
+vi.mock('../../hooks/useAuth', () => ({ useAuth: () => ({ user: { user_id: 'operator-1' } }) }));
 vi.mock('react-router', async () => ({
   ...await vi.importActual('react-router'),
   useParams: () => ({ applicationTemplateId: route.id }),
@@ -56,7 +57,9 @@ describe('Application Template preview binding', () => {
     getTemplate.mockResolvedValue({ ...template, id: 'application-2', name: 'Current application' });
     rerender(<PreviewApplicationPage />);
     expect(await screen.findByTestId('actual-template-form')).toHaveTextContent('Current application');
-    resolveOld(template);
-    await waitFor(() => expect(screen.getByTestId('actual-template-form')).not.toHaveTextContent(template.name));
+    const linkedReads = getCredential.mock.calls.length;
+    await act(async () => resolveOld(template));
+    expect(screen.getByTestId('actual-template-form')).not.toHaveTextContent(template.name);
+    expect(getCredential).toHaveBeenCalledTimes(linkedReads);
   });
 });

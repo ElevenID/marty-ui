@@ -9,6 +9,27 @@ import {
   submitCredentialApplication,
 } from './applicationFormUseCases';
 
+function submissionDependencies() {
+  return {
+    organizationId: 'org-1',
+    user: { user_id: 'user-1', email: 'user@example.com' },
+    formData: {},
+    credentialConfig: { id: 'cfg-1', application_template_id: 'app-template-1' },
+    allFields: [],
+    resolveApplicantId: vi.fn().mockResolvedValue('app-1'),
+    createApplicant: vi.fn(),
+    updateApplicantProfile: vi.fn().mockResolvedValue({ id: 'app-1' }),
+    getApplicantByUser: vi.fn(),
+    listApplicantApplications: vi.fn().mockResolvedValue([]),
+    supersedeApplication: vi.fn().mockResolvedValue({ id: 'existing-1', status: 'WITHDRAWN' }),
+    createApplication: vi.fn().mockResolvedValue({ id: 'application-1' }),
+    submitApplicationEvidence: vi.fn().mockResolvedValue({ id: 'evidence-1' }),
+    submitApplication: vi.fn().mockResolvedValue({ id: 'application-1' }),
+    enrollBiometric: vi.fn().mockResolvedValue({ id: 'biometric-1' }),
+    readFileAsBase64: vi.fn().mockResolvedValue('cG9ydHJhaXQ='),
+  };
+}
+
 describe('applicationForm use cases', () => {
   it('loads and normalizes credential config', async () => {
     await expect(loadCredentialApplicationConfig({
@@ -285,7 +306,7 @@ describe('applicationForm use cases', () => {
     const createApplication = vi.fn().mockResolvedValue({ id: 'application-1', reference_number: 'APP-20260317-CREATED' });
     const submitApplication = vi.fn().mockResolvedValue({ id: 'submitted-1', reference_number: 'APP-20260317-SUBMIT' });
     const enrollBiometric = vi.fn().mockResolvedValue({ id: 'bio-1' });
-    const file = { name: 'portrait.png' };
+    const file = new File(['portrait'], 'portrait.png', { type: 'image/png' });
 
     await expect(submitCredentialApplication({
       organizationId: 'org-1',
@@ -301,7 +322,7 @@ describe('applicationForm use cases', () => {
       createApplication,
       submitApplication,
       enrollBiometric,
-      readFileAsBase64: vi.fn().mockResolvedValue('image-base64'),
+      readFileAsBase64: vi.fn().mockResolvedValue('cG9ydHJhaXQ='),
     })).resolves.toEqual({
       applicationId: 'submitted-1',
       applicationReference: 'APP-20260317-SUBMIT',
@@ -314,17 +335,22 @@ describe('applicationForm use cases', () => {
       form_data: expect.objectContaining({ documentNumber: '1234' }),
     }));
     expect(submitApplication).toHaveBeenCalledWith('application-1');
-    expect(enrollBiometric).toHaveBeenCalledWith('app-1', expect.objectContaining({
+    // BiometricRequest denies unknown fields, including is_live_capture.
+    expect(enrollBiometric).toHaveBeenCalledWith('app-1', {
       biometric_type: 'FACIAL',
-      image_data_base64: 'image-base64',
-      template_data_base64: 'image-base64',
-    }));
+      image_data_base64: 'cG9ydHJhaXQ=',
+      template_data_base64: 'cG9ydHJhaXQ=',
+      capture_device_id: 'web-form',
+    });
+    expect(enrollBiometric.mock.invocationCallOrder[0]).toBeLessThan(createApplication.mock.invocationCallOrder[0]);
+    expect(enrollBiometric.mock.invocationCallOrder[0]).toBeLessThan(submitApplication.mock.invocationCallOrder[0]);
   });
 
   it('uploads required evidence through the public application path before submission', async () => {
     const createApplication = vi.fn().mockResolvedValue({ id: 'application-1' });
     const submitApplicationEvidence = vi.fn().mockResolvedValue({ id: 'evidence-1', status: 'ACTIVE' });
     const submitApplication = vi.fn().mockResolvedValue({ id: 'application-1', reference_number: 'APP-EVIDENCE' });
+    const enrollBiometric = vi.fn();
     const evidenceFile = {
       name: 'identity.png',
       type: 'image/png',
@@ -358,7 +384,7 @@ describe('applicationForm use cases', () => {
       createApplication,
       submitApplicationEvidence,
       submitApplication,
-      enrollBiometric: vi.fn(),
+      enrollBiometric,
       readFileAsBase64: vi.fn().mockResolvedValue('aWRlbnRpdHk='),
     })).resolves.toEqual({
       applicationId: 'application-1',
@@ -378,6 +404,106 @@ describe('applicationForm use cases', () => {
     expect(submitApplicationEvidence.mock.invocationCallOrder[0]).toBeLessThan(
       submitApplication.mock.invocationCallOrder[0]
     );
+    expect(enrollBiometric).not.toHaveBeenCalled();
+  });
+
+  it('uses the explicit portrait when an ordinary document field comes first', async () => {
+    const dependencies = submissionDependencies();
+    const identityScan = new File(['document'], 'identity.png', { type: 'image/png' });
+    const portrait = new File(['portrait'], 'portrait.png', { type: 'image/png' });
+    dependencies.readFileAsBase64.mockImplementation(async file => file === portrait ? 'cG9ydHJhaXQ=' : 'ZG9jdW1lbnQ=');
+    await submitCredentialApplication({
+      ...dependencies,
+      formData: { identity_scan: identityScan, portrait },
+      credentialConfig: {
+        ...dependencies.credentialConfig,
+        evidence_requirements: [{ evidence_id: 'identity_scan', evidence_type: 'DOCUMENT_SCAN', required: true }],
+      },
+      allFields: [{ name: 'identity_scan', type: 'file' }, { name: 'portrait', type: 'file' }],
+    });
+
+    expect(dependencies.enrollBiometric).toHaveBeenCalledExactlyOnceWith('app-1', {
+      biometric_type: 'FACIAL', template_data_base64: 'cG9ydHJhaXQ=', image_data_base64: 'cG9ydHJhaXQ=', capture_device_id: 'web-form',
+    });
+    expect(dependencies.submitApplicationEvidence).toHaveBeenCalledWith('application-1', expect.objectContaining({ content_base64: 'ZG9jdW1lbnQ=' }));
+  });
+
+  it('reads a portrait used as evidence once and finishes enrollment before replacing a request', async () => {
+    const dependencies = submissionDependencies();
+    dependencies.listApplicantApplications.mockResolvedValue([{ id: 'existing-1', credential_template_id: 'cfg-1', status: 'SUBMITTED' }]);
+    const portrait = new File(['portrait'], 'portrait.png', { type: 'image/png' });
+    await submitCredentialApplication({
+      ...dependencies,
+      duplicateApplicationAction: 'replace',
+      formData: { portrait },
+      credentialConfig: { ...dependencies.credentialConfig, evidence_requirements: [{ evidence_id: 'portrait', evidence_type: 'SELFIE', required: true }] },
+      allFields: [{ name: 'portrait', type: 'file', required: true }],
+    });
+
+    expect(dependencies.readFileAsBase64).toHaveBeenCalledExactlyOnceWith(portrait);
+    const { readFileAsBase64, enrollBiometric, supersedeApplication, createApplication, submitApplicationEvidence, submitApplication } = dependencies;
+    const order = [readFileAsBase64, enrollBiometric, supersedeApplication, createApplication, submitApplicationEvidence, submitApplication]
+      .map(operation => operation.mock.invocationCallOrder[0]);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(submitApplicationEvidence).toHaveBeenCalledWith('application-1', expect.objectContaining({ content_base64: 'cG9ydHJhaXQ=' }));
+  });
+
+  it.each(['missing portrait', 'missing text', 'missing evidence', 'empty portrait', 'unreadable portrait', 'unreadable evidence', 'cancelled portrait', 'enrollment failure'])(
+    'preserves the previous request and avoids partial submission on %s', async failure => {
+      const dependencies = submissionDependencies();
+      dependencies.listApplicantApplications.mockResolvedValue([{ id: 'existing-1', credential_template_id: 'cfg-1', status: 'SUBMITTED' }]);
+      const portrait = new File(['portrait'], 'portrait.png', { type: 'image/png' });
+      const usesEvidence = failure.includes('evidence');
+      const fieldName = usesEvidence ? 'identity_scan' : failure === 'missing text' ? 'member_number' : 'portrait';
+      const formData = failure.startsWith('missing') ? {} : { [fieldName]: portrait };
+      if (failure === 'empty portrait' || failure === 'unreadable evidence') dependencies.readFileAsBase64.mockResolvedValue(null);
+      if (failure === 'unreadable portrait') dependencies.readFileAsBase64.mockRejectedValue(new Error('File read failed'));
+      if (failure === 'cancelled portrait') dependencies.readFileAsBase64.mockRejectedValue(Object.assign(new Error('The view or action changed.'), { name: 'AbortError' }));
+      if (failure === 'enrollment failure') dependencies.enrollBiometric.mockRejectedValue(new Error('Enrollment unavailable'));
+      const messages: Record<string, string> = {
+        'missing portrait': 'portrait is required.',
+        'missing text': 'member_number is required.',
+        'missing evidence': 'Upload Identity scan before submitting.',
+        'empty portrait': 'Unable to read portrait.',
+        'unreadable portrait': 'Unable to read portrait.',
+        'unreadable evidence': 'Unable to read Identity scan.',
+        'cancelled portrait': 'The view or action changed.',
+        'enrollment failure': 'Enrollment unavailable',
+      };
+
+      await expect(submitCredentialApplication({
+        ...dependencies,
+        duplicateApplicationAction: 'replace',
+        formData,
+        credentialConfig: {
+          ...dependencies.credentialConfig,
+          evidence_requirements: usesEvidence ? [{ evidence_id: 'identity_scan', evidence_type: 'DOCUMENT_SCAN', description: 'Identity scan', required: true }] : [],
+        },
+        allFields: usesEvidence ? [] : [{ name: fieldName, type: failure === 'missing text' ? 'text' : 'file', required: true }],
+      })).rejects.toThrow(messages[failure]);
+
+      expect(dependencies.supersedeApplication).not.toHaveBeenCalled();
+      expect(dependencies.createApplication).not.toHaveBeenCalled();
+      expect(dependencies.submitApplicationEvidence).not.toHaveBeenCalled();
+      expect(dependencies.submitApplication).not.toHaveBeenCalled();
+      if (failure !== 'enrollment failure') expect(dependencies.enrollBiometric).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['continue', null])('does not require fresh uploads when resolving an existing request with %s', async duplicateApplicationAction => {
+    const dependencies = submissionDependencies();
+    dependencies.listApplicantApplications.mockResolvedValue([{ id: 'existing-1', credential_template_id: 'cfg-1', status: 'SUBMITTED' }]);
+    const result = await submitCredentialApplication({
+      ...dependencies, duplicateApplicationAction,
+      allFields: [{ name: 'portrait', type: 'file', required: true }],
+      credentialConfig: { ...dependencies.credentialConfig, evidence_requirements: [{ evidence_id: 'identity_scan', evidence_type: 'DOCUMENT_SCAN', required: true }] },
+    });
+
+    if (duplicateApplicationAction === 'continue') expect(result).toMatchObject({ applicationId: 'existing-1', existingApplication: true });
+    else expect(result).toMatchObject({ duplicateApplicationConflict: { existingApplication: { id: 'existing-1' } } });
+    for (const operation of [dependencies.readFileAsBase64, dependencies.enrollBiometric, dependencies.supersedeApplication, dependencies.createApplication, dependencies.submitApplication]) {
+      expect(operation).not.toHaveBeenCalled();
+    }
   });
 
   it('detects active duplicate applications for the same credential', () => {

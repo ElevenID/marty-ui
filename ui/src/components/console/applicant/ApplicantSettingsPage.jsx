@@ -202,7 +202,7 @@ function ApplicantSettingsPage() {
       <Typography variant="h4" gutterBottom>
         {t('settings.title')}
       </Typography>
-      <Typography variant="body1" color="text.secondary" paragraph>
+      <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
         {t('settings.description')}
       </Typography>
 
@@ -297,7 +297,7 @@ function ApplicantSettingsPage() {
         sx={{ p: 3, mb: 3, scrollMarginTop: { xs: 80, sm: 96 } }}
         data-testid="wallet-selection-section"
       >
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
           <AccountBalanceWalletIcon color="primary" />
           <Typography variant="h6">My Wallets</Typography>
         </Stack>

@@ -72,7 +72,7 @@ const CryptoValidityStep = ({ data, onChange }) => {
         <VpnKeyIcon />
         {t('wizards.credentialTemplate.cryptoValidityStep.title')}
       </Typography>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.credentialTemplate.cryptoValidityStep.description')}
       </Typography>
       {revocationProfilesError && (
@@ -95,13 +95,13 @@ const CryptoValidityStep = ({ data, onChange }) => {
       <Typography variant="subtitle2" gutterBottom>
         {t('wizards.credentialTemplate.cryptoValidityStep.validity.title')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" paragraph>
+      <Typography variant="body2" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.credentialTemplate.cryptoValidityStep.validity.description')}
       </Typography>
       <Alert severity="info" sx={{ mb: 2 }}>Validity and maximum lifetime are stored in whole days. Seconds-based durations round up to the next day; the not-before offset stays in seconds.</Alert>
       <Grid container spacing={3}>
         {/* TTL (Time to Live) */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <TextField
             fullWidth
             type="number"
@@ -116,7 +116,7 @@ const CryptoValidityStep = ({ data, onChange }) => {
         </Grid>
 
         {/* Max Validity */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <TextField
             fullWidth
             type="number"
@@ -131,7 +131,7 @@ const CryptoValidityStep = ({ data, onChange }) => {
         </Grid>
 
         {/* Not Before Offset */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <TextField
             fullWidth
             type="number"

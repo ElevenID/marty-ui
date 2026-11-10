@@ -150,6 +150,7 @@ export function getFallbackOrganizations(rawUser, parsedClaim = parseOrganizatio
 const APPLICANT_ONLY_PERMISSIONS = new Set([
   'organization:view',
   'credential-template:view',
+  'wallet:view',
   'application-template:view',
   'application:view',
   'issuance:view',
@@ -182,7 +183,7 @@ function isCanvasLtiLearnerOnly(rawUser) {
 function applicantOnlyMembership() {
   return {
     roles: [{ name: 'applicant' }],
-    permissions: ['organization:view', 'credential-template:view', 'application-template:view', 'application:view', 'issuance:view'],
+    permissions: [...APPLICANT_ONLY_PERMISSIONS],
     has_org_console_access: false,
   };
 }

@@ -82,7 +82,11 @@ export async function listOrganizationApplications(organizationId, params = {}) 
     limit: params.limit,
     offset: params.offset,
   });
-  return normalizePage(await get(withQuery(orgApplicantsPath(organizationId), query)), params);
+  const response = await get(withQuery(orgApplicantsPath(organizationId), query));
+  if (!Array.isArray(response) && !Array.isArray(response?.items)) {
+    throw new Error('Application inventory returned an invalid response.');
+  }
+  return normalizePage(response, params);
 }
 
 export async function getOrganizationApplication(organizationId, applicationId) {

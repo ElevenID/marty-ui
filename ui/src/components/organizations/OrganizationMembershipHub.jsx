@@ -23,6 +23,7 @@ import { ENABLE_ORGANIZATION_CREATION } from '@ui-public-config';
 
 import { membershipHasOrgConsoleAccess } from '../../application/session/authSession';
 import { isOrganizationCreationEnabled } from '../../utils/runtimeConfig';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
 
 const DEFAULT_TITLE = 'My Organizations';
 const DEFAULT_DESCRIPTION = "Organizations you're a member of. Switch to an organization to access its console.";
@@ -78,7 +79,7 @@ function getRoleBadges(roles, hasOrgConsoleAccess) {
   }
 
   return (
-    <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+    <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
       {roles.map((role) => {
         const roleName = typeof role === 'string' ? role : role?.name;
         const roleLabel = typeof role === 'string' ? role : role?.display_name || role?.name;
@@ -113,9 +114,20 @@ function OrganizationMembershipHub({
   joinPath = '/organizations/join',
   dataTestId,
 }) {
+  const beginAction = useAsyncActionScope();
   const { t } = useTranslation('console');
   const organizationCreationEnabled = isOrganizationCreationEnabled(ENABLE_ORGANIZATION_CREATION);
   const items = Array.isArray(organizations) ? organizations : [];
+  const handleSwitchToOrg = async (organizationId) => {
+    if (!onSwitchToOrg) return;
+    const action = beginAction();
+    try {
+      await action.run(onSwitchToOrg, organizationId);
+    } catch (error) {
+      if (!action.isCurrent() || error?.name === 'AbortError') return;
+      console.error('[OrganizationMembershipHub] Failed to switch organization:', error);
+    }
+  };
 
   if (loading) {
     return (
@@ -138,7 +150,7 @@ function OrganizationMembershipHub({
       {(title || description) && (
         <Box sx={{ mb: 4 }}>
           {title && (
-            <Typography variant={embedded ? 'h6' : 'h4'} gutterBottom fontWeight={embedded ? 500 : 600}>
+            <Typography variant={embedded ? 'h6' : 'h4'} gutterBottom sx={{ fontWeight: embedded ? 500 : 600 }}>
               {title}
             </Typography>
           )}
@@ -164,7 +176,7 @@ function OrganizationMembershipHub({
                 ? t('organizationCreation.emptyDescription')
                 : "You're not a member of any organizations. Discover organizations or join one with a join code."}
             </Typography>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center">
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: 'center' }}>
               {organizationCreationEnabled && (
                 <Button component={RouterLink} to="/console/organizations/create" variant="outlined" startIcon={<AddIcon />}>
                   {t('organizationCreation.createAction')}
@@ -275,7 +287,7 @@ function OrganizationMembershipHub({
                       <Button
                         fullWidth
                         variant={organization.id === activeOrgId ? 'outlined' : 'contained'}
-                        onClick={() => onSwitchToOrg?.(organization.id)}
+                        onClick={() => handleSwitchToOrg(organization.id)}
                         disabled={status !== 'active' || !hasOrgConsoleAccess || !onSwitchToOrg}
                       >
                         {hasOrgConsoleAccess
@@ -293,7 +305,7 @@ function OrganizationMembershipHub({
             <Stack
               direction={{ xs: 'column', sm: 'row' }}
               spacing={2}
-              justifyContent={embedded ? 'flex-start' : 'center'}
+              sx={{ justifyContent: embedded ? 'flex-start' : 'center' }}
             >
               {showManagePageLink && (
                 <Button component={RouterLink} to={managePath} variant="outlined">

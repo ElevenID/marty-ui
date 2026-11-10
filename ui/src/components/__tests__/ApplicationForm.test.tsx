@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@test/utils';
+import { act, fireEvent, render, renderWithRouter, screen, waitFor } from '@test/utils';
+import { Link, Route, Routes } from 'react-router';
 
 import ApplicationForm from '../applicant/ApplicationForm';
 import { storeCanvasLtiSession } from '../../services/canvasLtiExperience';
@@ -44,6 +45,7 @@ const {
   mockAuthState: { organizationId: 'org-1' },
   mockPreview: { isPreview: false },
   mockLocationState: {
+    liveRouter: false,
     params: { credentialType: undefined as string | undefined },
     location: {
       state: {
@@ -79,9 +81,9 @@ vi.mock('react-router', async () => {
   const actual = await vi.importActual<typeof import('react-router')>('react-router');
   return {
     ...actual,
-    useParams: () => mockLocationState.params,
-    useNavigate: () => mockNavigate,
-    useLocation: () => mockLocationState.location,
+    useParams: () => mockLocationState.liveRouter ? actual.useParams() : mockLocationState.params,
+    useNavigate: () => mockLocationState.liveRouter ? actual.useNavigate() : mockNavigate,
+    useLocation: () => mockLocationState.liveRouter ? actual.useLocation() : mockLocationState.location,
   };
 });
 
@@ -202,6 +204,16 @@ function canvasClaimStatus(claimed = false) {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('ApplicationForm', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -212,6 +224,7 @@ describe('ApplicationForm', () => {
       expires_at: '2099-01-01T00:00:00.000Z',
     });
     mockLocationState.params = { credentialType: undefined };
+    mockLocationState.liveRouter = false;
     mockLocationState.location = {
       state: {
         credential: {
@@ -740,5 +753,157 @@ describe('ApplicationForm', () => {
     expect(mockSubmitApplicationEvidence.mock.invocationCallOrder[0]).toBeLessThan(
       mockSubmitApplication.mock.invocationCallOrder[0],
     );
+  });
+
+  it.each(['credential route', 'application template query'])('resets the application and draft after a real %s navigation', async change => {
+    mockLocationState.liveRouter = true;
+    mockGet.mockImplementation(async (url: string) => {
+      if (url.startsWith('/v1/credential-templates/')) {
+        const id = url.split('/').at(-1);
+        return { id, name: id, credential_type: 'EmployeeCredential', application_template_id: id === 'cfg-a' ? 'tpl-a' : 'tpl-b', claims: [] };
+      }
+      const id = url.split('/').at(-1);
+      return {
+        id, name: id === 'tpl-a' ? 'Application A' : 'Application B', status: 'ACTIVE', organization_id: 'org-1',
+        credential_template_id: change === 'credential route' && id === 'tpl-b' ? 'cfg-b' : 'cfg-a',
+        form_fields: [{ field_id: 'member_number', label: 'Member number', field_type: 'TEXT', required: true }],
+      };
+    });
+    const destination = change === 'credential route'
+      ? '/console/applicant/apply/cfg-b'
+      : '/console/applicant/apply/cfg-a?application_template_id=tpl-b';
+    const { user } = renderWithRouter(
+      <Routes>
+        <Route path="/console/applicant/apply/:credentialType" element={
+          <><Link to={destination}>Choose another application</Link><ApplicationForm /></>
+        } />
+      </Routes>,
+      { initialEntries: ['/console/applicant/apply/cfg-a'] },
+    );
+    await user.type(await screen.findByRole('textbox', { name: /member number/i }), 'DRAFT-A');
+    await user.click(screen.getByTestId('next-step-btn'));
+    await user.click(screen.getByTestId('accept-terms-checkbox'));
+    await user.click(screen.getByRole('link', { name: 'Choose another application' }));
+
+    expect(await screen.findByText('Application B')).toBeInTheDocument();
+    expect(screen.queryByText('Application A')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /member number/i })).toHaveValue('');
+    expect(screen.queryByText('DRAFT-A')).not.toBeInTheDocument();
+    expect(mockCreateApplication).not.toHaveBeenCalled();
+  });
+
+  it.each(['profile', 'duplicate lookup', 'failed duplicate lookup', 'creation', 'submission'])('stops one-click follow-up operations after leaving during %s', async phase => {
+    const pending = deferred<any>();
+    const request = phase === 'profile' ? mockGetApplicant
+      : phase.includes('duplicate') ? mockListApplications
+      : phase === 'creation' ? mockCreateApplication : mockSubmitApplication;
+    request.mockReturnValueOnce(pending.promise);
+    const view = render(<ApplicationForm />);
+    await view.user.click(screen.getByRole('button', { name: 'Add to Wallet' }));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    // ConsoleProvider replaces its whole child tree when the auth principal
+    // or auth loading session changes; its unmount must stop these writes too.
+    view.unmount();
+    await act(async () => {
+      if (phase === 'failed duplicate lookup') pending.reject(new Error('Old lookup failed'));
+      else pending.resolve(phase.includes('duplicate') ? { items: [] } : { id: phase === 'profile' ? 'app-1' : 'application-1' });
+    });
+
+    if (phase === 'profile') expect(mockCreateApplicant).not.toHaveBeenCalled();
+    if (phase === 'profile' || phase.includes('duplicate')) expect(mockCreateApplication).not.toHaveBeenCalled();
+    if (phase !== 'submission') expect(mockSubmitApplication).not.toHaveBeenCalled();
+    expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('claim-credential-dialog')).not.toBeInTheDocument();
+  });
+
+  it('does not load an old linked template after its credential read completes on another route', async () => {
+    mockLocationState.liveRouter = true;
+    const oldCredential = deferred<any>();
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/credential-templates/cfg-a') return oldCredential.promise;
+      if (url === '/v1/credential-templates/cfg-b') {
+        return { id: 'cfg-b', name: 'Credential B', credential_type: 'EmployeeCredential', application_template_id: 'tpl-b', claims: [] };
+      }
+      return { id: 'tpl-b', name: 'Application B', credential_template_id: 'cfg-b', status: 'ACTIVE', form_fields: [] };
+    });
+    const { user } = renderWithRouter(
+      <Routes>
+        <Route path="/console/applicant/apply/:credentialType" element={
+          <><Link to="/console/applicant/apply/cfg-b">Choose B</Link><ApplicationForm /></>
+        } />
+      </Routes>,
+      { initialEntries: ['/console/applicant/apply/cfg-a'] },
+    );
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith('/v1/credential-templates/cfg-a'));
+    await user.click(screen.getByRole('link', { name: 'Choose B' }));
+    expect(await screen.findByText('Application B')).toBeInTheDocument();
+    await act(async () => oldCredential.resolve({
+      id: 'cfg-a', name: 'Credential A', credential_type: 'EmployeeCredential', application_template_id: 'tpl-a', claims: [],
+    }));
+
+    expect(mockGet).not.toHaveBeenCalledWith('/v1/application-templates/tpl-a');
+    expect(screen.getByText('Application B')).toBeInTheDocument();
+    expect(screen.queryByText('Credential A')).not.toBeInTheDocument();
+  });
+
+  it('keeps a current failed one-click request retryable', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockCreateApplication.mockRejectedValueOnce(new Error('Create unavailable'));
+    try {
+      const { user } = render(<ApplicationForm />);
+      await user.click(screen.getByRole('button', { name: 'Add to Wallet' }));
+      expect(await screen.findByText('Create unavailable')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Add to Wallet' })).toBeEnabled();
+      await user.click(screen.getByRole('button', { name: 'Add to Wallet' }));
+
+      expect(await screen.findByTestId('claim-credential-dialog')).toHaveTextContent('issued-1:openid-credential-offer://offer');
+      expect(mockCreateApplication).toHaveBeenCalledTimes(2);
+      expect(mockSubmitApplication).toHaveBeenCalledTimes(1);
+      expect(mockGenerateIssuanceOffer).toHaveBeenCalledTimes(1);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it('does not submit or enroll biometrics after leaving during an evidence upload', async () => {
+    mockLocationState.location.state.credential.credential_type = 'EmployeeCredential';
+    mockLocationState.location.state.applicationTemplate = {
+      id: 'app-template-1', credential_template_id: 'cfg-1', form_fields: [],
+      evidence_requirements: [{ evidence_id: 'identity_scan', evidence_type: 'DOCUMENT_SCAN', description: 'Identity scan', required: true, accepted_formats: ['image/png'] }],
+    };
+    const evidence = deferred<any>();
+    mockSubmitApplicationEvidence.mockReturnValueOnce(evidence.promise);
+    const view = render(<ApplicationForm />);
+    await view.user.upload(view.container.querySelector('input[type="file"]')!, new File(['identity'], 'identity.png', { type: 'image/png' }));
+    await view.user.click(screen.getByTestId('next-step-btn'));
+    await view.user.click(screen.getByTestId('accept-terms-checkbox'));
+    await view.user.click(screen.getByTestId('submit-application-btn'));
+    await waitFor(() => expect(mockSubmitApplicationEvidence).toHaveBeenCalledTimes(1));
+    view.unmount();
+    await act(async () => evidence.resolve({ id: 'evidence-1', status: 'ACTIVE' }));
+
+    expect(mockSubmitApplication).not.toHaveBeenCalled();
+    expect(mockEnrollBiometric).not.toHaveBeenCalled();
+  });
+
+  it('does not create a replacement request after leaving while duplicate withdrawal is pending', async () => {
+    mockLocationState.location.state.credential.credential_type = 'EmployeeCredential';
+    mockLocationState.location.state.applicationTemplate.form_fields = [];
+    mockListApplications.mockResolvedValue({ items: [{ id: 'existing-application', credential_template_id: 'cfg-1', status: 'SUBMITTED' }] });
+    const withdrawal = deferred<any>();
+    mockSupersedeApplication.mockReturnValueOnce(withdrawal.promise);
+    const view = render(<ApplicationForm />);
+    await view.user.click(screen.getByTestId('accept-terms-checkbox'));
+    await view.user.click(screen.getByTestId('submit-application-btn'));
+    await view.user.click(await screen.findByRole('button', { name: 'Retire Previous and Submit' }));
+    await waitFor(() => expect(mockSupersedeApplication).toHaveBeenCalledWith('existing-application', { reason: 'superseded_by_reapplication' }));
+
+    view.unmount();
+    await act(async () => withdrawal.resolve({ id: 'existing-application', status: 'WITHDRAWN' }));
+
+    expect(mockCreateApplication).not.toHaveBeenCalled();
+    expect(mockSubmitApplication).not.toHaveBeenCalled();
+    expect(mockSubmitApplicationEvidence).not.toHaveBeenCalled();
+    expect(mockEnrollBiometric).not.toHaveBeenCalled();
   });
 });

@@ -117,6 +117,37 @@ kubectl -n "$MARTY_DEV_NAMESPACE" rollout status deployment/ui --timeout=600s
 Keycloak themes and backend services retain their existing deployment
 lifecycle; this overlay watches the UI checkout only.
 
+## Resume an existing development installation
+
+For a UI-only replay with unchanged backend images and schemas, an existing
+installation can disable the regular setup Jobs with `migrations.enabled=false`
+and `keycloak.configurator.enabled=false`. Both default to `true`; record these
+overrides in the installation values and review them before a later runtime
+upgrade. The Keycloak switch removes only its configurator Job; Keycloak itself
+continues to run. This avoids replaying the two-hour migration credential or
+resetting the operator password from the initial Secret. Keep all existing
+credentials, organization settings and image pins, and do not rerun bootstrap.
+
+If the node's public IP changed, retain a backup of the installation values and
+certificate manifest. Preserve the currently installed `MARTY_ISSUER_DID` from
+`marty-config` as an explicit `organization.did`, then update `publicHost` and
+the exact `publicOrigin`, including its port. Update the existing public
+Certificate's IP SAN and wait for cert-manager to issue a valid certificate for
+the new address. Apply the live-reload Helm upgrade with both setup Jobs disabled.
+
+Reconcile only the existing `marty-ui` Keycloak client's `redirectUris`,
+`webOrigins` and `attributes.post.logout.redirect.uris` to the new origin through
+the existing Admin CLI/API. Authenticate with the existing administrator
+credentials inside the Keycloak container, keep authentication output private,
+and remove any temporary CLI session file. Read back those three public fields
+and verify HTTPS and login. Do not invoke the full configurator: it reapplies
+the initial operator password even for an existing user.
+
+This preserves the issuer DID and its existing records. A DID or issuer profile
+that still names the previous address remains unsuitable for an issuance or
+credential-login qualification at the new origin. This UI replay does not renew
+the eight-hour workload identities or extend the node's agreed stop time.
+
 ## Return to the installed static UI
 
 ```sh

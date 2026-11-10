@@ -356,7 +356,7 @@ const FlowManager = ({ hideHeader = false }) => {
 
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
         <CircularProgress />
       </Box>
     );
@@ -365,7 +365,7 @@ const FlowManager = ({ hideHeader = false }) => {
   return (
     <Box>
       {!hideHeader && (
-        <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
           <Typography variant="h4">{t('flowManager.title')}</Typography>
           <Button
             variant="contained"
@@ -400,7 +400,7 @@ const FlowManager = ({ hideHeader = false }) => {
 
         {/* Flows Tab */}
         {activeTab === 0 && (
-          <Box p={2}>
+          <Box sx={{ p: 2 }}>
             {flows.length === 0 ? (
               <EmptyState
                 icon={AccountTreeIcon}
@@ -459,7 +459,7 @@ const FlowManager = ({ hideHeader = false }) => {
                       onClick={() => navigate(`/console/org/flows/definitions/${flow.id}`)}
                     >
                       <TableCell>
-                        <Typography variant="body2" fontWeight={500}>
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
                           {flow.name}
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
@@ -565,8 +565,8 @@ const FlowManager = ({ hideHeader = false }) => {
 
         {/* Executions Tab */}
         {activeTab === 1 && (
-          <Box p={2}>
-            <Box display="flex" justifyContent="flex-end" mb={2}>
+          <Box sx={{ p: 2 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
               <Button
                 startIcon={<RefreshIcon />}
                 onClick={loadExecutions}
@@ -617,8 +617,8 @@ const FlowManager = ({ hideHeader = false }) => {
 
         {/* Approval Queue Tab */}
         {activeTab === 2 && (
-          <Box p={2}>
-            <Typography variant="body2" color="text.secondary" mb={2}>
+          <Box sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
               Executions awaiting manual approval
             </Typography>
             <TableContainer>
@@ -679,8 +679,8 @@ const FlowManager = ({ hideHeader = false }) => {
 
         {/* Credentials Tab */}
         {activeTab === 3 && (
-          <Box p={2}>
-            <Box display="flex" justifyContent="space-between" mb={2}>
+          <Box sx={{ p: 2 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
               <Typography variant="body2" color="text.secondary">
                 {selectedCredentials.length} credential(s) selected
               </Typography>
@@ -751,8 +751,8 @@ const FlowManager = ({ hideHeader = false }) => {
 
         {/* Revocation Batches Tab */}
         {activeTab === 4 && (
-          <Box p={2}>
-            <Box display="flex" justifyContent="flex-end" mb={2}>
+          <Box sx={{ p: 2 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
               <Button startIcon={<RefreshIcon />} onClick={loadRevocationBatches}>
                 Refresh
               </Button>
@@ -815,7 +815,7 @@ const FlowManager = ({ hideHeader = false }) => {
               by grouping revocations together.
             </Typography>
           </Alert>
-          <Typography variant="body2" color="text.secondary" mt={2}>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
             Choose revocation strategy:
           </Typography>
         </DialogContent>

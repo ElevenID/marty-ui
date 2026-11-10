@@ -188,7 +188,7 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
         {t('wizards.presentationPolicy.templateSelectionStep.title')}
       </Typography>
       
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
         {t('wizards.presentationPolicy.templateSelectionStep.description')}
       </Typography>
 
@@ -208,7 +208,7 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
 
       <Grid container spacing={2}>
         {allSelectableTemplates.map((template) => (
-          <Grid item xs={12} sm={6} md={4} key={template.id}>
+          <Grid key={template.id} size={{ xs: 12, sm: 6, md: 4 }}>
             <Card
               sx={{
                 height: '100%',
@@ -242,8 +242,8 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
                   <Typography
                     variant="body2"
                     color="text.secondary"
-                    paragraph
-                    sx={{ flex: 1, minHeight: 60 }}
+                    component="p"
+                    sx={{ mb: "16px", flex: 1, minHeight: 60 }}
                   >
                     {template.description}
                   </Typography>

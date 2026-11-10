@@ -20,7 +20,102 @@ use uuid::Uuid;
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
+#[tokio::test]
+async fn membership_approval_requires_trusted_tenant_scoped_manage_permission() {
+    let organization_id = Uuid::from_u128(1);
+    let path = format!(
+        "/v1/organizations/{organization_id}/members/{}/approve",
+        Uuid::from_u128(2)
+    );
+    let response = router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&path)
+                .header("x-user-id", "forged-reviewer")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    for (principal_org, permission) in [
+        (Uuid::from_u128(3), "team:manage"),
+        (organization_id, "team:invite"),
+        (organization_id, "team:view"),
+    ] {
+        let response = router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&path)
+                    .header("x-service-token", TOKEN)
+                    .header("x-user-id", "api_key:reviewer-key")
+                    .header("x-api-key-id", "reviewer-key")
+                    .header("x-organization-id", principal_org.to_string())
+                    .header("x-required-permission", permission)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    let response = router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&path)
+                .header("x-service-token", TOKEN)
+                .header("x-user-id", "api_key:reviewer-key")
+                .header("x-api-key-id", "reviewer-key")
+                .header("x-organization-id", organization_id.to_string())
+                .header("x-required-permission", "team:manage")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"role_ids":["owner"],"status":"active"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "approval cannot accept role/status assignment payloads"
+    );
+}
+
+#[tokio::test]
+async fn member_status_query_is_typed_and_does_not_change_the_view_permission() {
+    let organization_id = Uuid::from_u128(1);
+    for (query, expected) in [
+        ("status=unknown", StatusCode::BAD_REQUEST),
+        ("status=pending&limit=1&offset=2", StatusCode::FORBIDDEN),
+    ] {
+        let response = router()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/organizations/{organization_id}/members?{query}"
+                    ))
+                    .header("x-service-token", TOKEN)
+                    .header("x-user-id", "api_key:reviewer-key")
+                    .header("x-api-key-id", "reviewer-key")
+                    .header("x-organization-id", organization_id.to_string())
+                    .header("x-required-permission", "team:manage")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+}
+
 fn router() -> axum::Router {
+    router_with_auth(true)
+}
+
+fn router_with_auth(configured: bool) -> axum::Router {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgresql://unused:unused@127.0.0.1:1/unused")
         .expect("lazy PostgreSQL URL");
@@ -34,11 +129,33 @@ fn router() -> axum::Router {
     organization_core_router(OrganizationHttpState {
         application: Arc::new(application),
         service_authenticator: Arc::new(
-            ServiceTokenAuthenticator::new(Some(TOKEN.into()), true).unwrap(),
+            ServiceTokenAuthenticator::new(configured.then(|| TOKEN.into()), configured).unwrap(),
         ),
         organization_creation_enabled: true,
         marty_organization_id: None,
     })
+}
+
+#[tokio::test]
+async fn internal_policy_source_requires_configured_service_authority_before_storage() {
+    for (configured, token) in [(false, Some(TOKEN)), (true, None), (true, Some("invalid"))] {
+        let mut request = Request::builder()
+            .uri(format!(
+                "/internal/v1/organizations/{}/policy-sets/{}",
+                Uuid::from_u128(1),
+                Uuid::from_u128(2)
+            ))
+            .header("x-user-id", "forwarded-user")
+            .header("x-organization-id", Uuid::from_u128(1).to_string());
+        if let Some(token) = token {
+            request = request.header("x-service-token", token);
+        }
+        let response = router_with_auth(configured)
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 }
 
 #[test]

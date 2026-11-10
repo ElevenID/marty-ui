@@ -82,6 +82,7 @@ const PresentationPolicyWizard = () => {
   const creation = useMemo(() => createPolicyCreationOperation(activeOrgId, principalId), [activeOrgId, principalId]);
   const [createdDraft, setCreatedDraft] = useState(null);
   const [apiError, setApiError] = useState(null);
+  const submissionPending = useRef(false);
 
   // Validation function for each step
   const validateStep = useCallback((stepIndex, stepData) => {
@@ -132,12 +133,23 @@ const PresentationPolicyWizard = () => {
     }
   }, [activeOrgId, creation]);
 
+  const submitReviewedData = useCallback(async (data) => {
+    const epoch = scopeEpoch.current;
+    // Lock edits before the first await, including events before loading renders.
+    submissionPending.current = true;
+    try {
+      return await handleSubmit(data);
+    } finally {
+      if (epoch === scopeEpoch.current) submissionPending.current = false;
+    }
+  }, [handleSubmit]);
+
   const wizard = useWizard({
     scopeKey: `${activeOrgId}:${principalId}`,
     steps: getSteps(t),
     initialData: INITIAL_DATA,
     validateStep,
-    onSubmit: handleSubmit,
+    onSubmit: submitReviewedData,
     onComplete: () => {
       navigate('/console/org/deploy/profiles');
     },
@@ -146,9 +158,18 @@ const PresentationPolicyWizard = () => {
     },
   });
 
+  const updateWizardData = wizard.updateData;
+  const updateFormData = useCallback((updates) => {
+    if (!submissionPending.current) updateWizardData(updates);
+  }, [updateWizardData]);
+  const goToWizardStep = wizard.goToStep;
+  const editStep = useCallback((step) => {
+    if (!submissionPending.current) goToWizardStep(step);
+  }, [goToWizardStep]);
   const resetWizard = wizard.reset;
   useLayoutEffect(() => {
     scopeEpoch.current += 1;
+    submissionPending.current = false;
     resetWizard();
     setCreatedDraft(null);
     setApiError(null);
@@ -182,7 +203,7 @@ const PresentationPolicyWizard = () => {
       }
     }
     
-    wizard.updateData(updates);
+    updateFormData(updates);
   };
 
   const handleTrustProfileSelect = (profile) => {
@@ -192,7 +213,7 @@ const PresentationPolicyWizard = () => {
       updates.selectedTemplate = null;
       updates.policyConfig = clearAutomaticTemplateConfig(wizard.data.policyConfig, wizard.data.selectedTemplate);
     }
-    wizard.updateData(updates);
+    updateFormData(updates);
   };
 
   // Render current step content
@@ -217,22 +238,22 @@ const PresentationPolicyWizard = () => {
         return (
           <ClaimsConfigurationStep
             policyConfig={wizard.data.policyConfig}
-            onConfigChange={(config) => wizard.updateData({ policyConfig: config })}
+            onConfigChange={(config) => updateFormData({ policyConfig: config })}
           />
         );
       case 3:
         return (
           <FreshnessBindingStep
             policyConfig={wizard.data.policyConfig}
-            onConfigChange={(config) => wizard.updateData({ policyConfig: config })}
+            onConfigChange={(config) => updateFormData({ policyConfig: config })}
           />
         );
       case 4:
         return (
           <ReviewStep
             data={wizard.data}
-            onEdit={(step) => wizard.goToStep(step)}
-            onToggleActivation={(value) => wizard.updateData({ activateImmediately: value })}
+            onEdit={editStep}
+            onToggleActivation={(value) => updateFormData({ activateImmediately: value })}
           />
         );
       default:
@@ -249,7 +270,7 @@ const PresentationPolicyWizard = () => {
           <Typography variant="h5" gutterBottom>
             {t('wizards.presentationPolicy.success.title')}
           </Typography>
-          <Typography color="text.secondary" paragraph>
+          <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
             {wizard.data.activateImmediately 
               ? t('wizards.presentationPolicy.success.messageActive', { name: wizard.data.policyConfig.name })
               : t('wizards.presentationPolicy.success.messageDraft', { name: wizard.data.policyConfig.name })}
@@ -297,14 +318,20 @@ const PresentationPolicyWizard = () => {
         )}
 
         {/* Step Content */}
-        <Box sx={{ minHeight: 400, mb: 4 }}>
+        <Box component="fieldset" disabled={wizard.loading} aria-label={getSteps(t)[wizard.activeStep].label}
+          sx={{ border: 0, p: 0, m: 0, minWidth: 0, minHeight: 400, mb: 4 }}>
           {renderStepContent()}
         </Box>
 
         {/* Navigation Buttons */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 2 }}>
           <Button
-            onClick={wizard.activeStep === 0 ? () => navigate('/console/org/policies/presentation') : wizard.goBack}
+            onClick={() => {
+              if (!submissionPending.current) {
+                if (wizard.activeStep === 0) navigate('/console/org/policies/presentation');
+                else wizard.goBack();
+              }
+            }}
             startIcon={<ArrowBackIcon />}
             disabled={wizard.loading}
             data-testid={wizard.activeStep === 0 ? 'wizard.policy.cancel' : 'wizard.policy.back'}
@@ -316,7 +343,7 @@ const PresentationPolicyWizard = () => {
             {/* Skip button for optional steps */}
             {getSteps(t)[wizard.activeStep].optional && (
               <Button
-                onClick={wizard.goNext}
+                onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
                 disabled={wizard.loading}
                 data-testid="wizard.policy.skip"
               >
@@ -337,7 +364,7 @@ const PresentationPolicyWizard = () => {
             ) : (
               <Button
                 variant="contained"
-                onClick={wizard.goNext}
+                onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
                 disabled={wizard.loading || !wizard.isStepValid()}
                 endIcon={<ArrowForwardIcon />}
                 data-testid="wizard.policy.next"

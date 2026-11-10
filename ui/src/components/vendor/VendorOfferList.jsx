@@ -300,7 +300,7 @@ function QRCodeDialog({ open, offer, onClose }) {
               </Typography>
               <Divider sx={{ my: 1 }} />
               <Stack spacing={1}>
-                <Box display="flex" justifyContent="space-between">
+                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                   <Typography variant="body2" color="text.secondary">{t('vendorOfferList.qrDialog.status')}:</Typography>
                   <Chip
                     label={STATUS_LABELS[offer.status] || offer.status}
@@ -308,28 +308,28 @@ function QRCodeDialog({ open, offer, onClose }) {
                     color={STATUS_COLORS[offer.status] || 'default'}
                   />
                 </Box>
-                <Box display="flex" justifyContent="space-between">
+                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                   <Typography variant="body2" color="text.secondary">Transaction Reference:</Typography>
-                  <Typography variant="body2" fontFamily="monospace" fontSize="0.75rem">
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
                     {formatTransactionReference(offer.transaction_id)}
                   </Typography>
                 </Box>
                 {timeRemaining && (
-                  <Box display="flex" justifyContent="space-between">
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                     <Typography variant="body2" color="text.secondary">{t('vendorOfferList.qrDialog.timeRemaining')}:</Typography>
-                    <Typography variant="body2" fontWeight="medium">
+                    <Typography variant="body2" sx={{ fontWeight: 'medium' }}>
                       {timeRemaining}
                     </Typography>
                   </Box>
                 )}
-                <Box display="flex" justifyContent="space-between">
+                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                   <Typography variant="body2" color="text.secondary">{t('vendorOfferList.qrDialog.accessCount')}:</Typography>
                   <Typography variant="body2">{offer.access_count}</Typography>
                 </Box>
                 {offer.accessed_at && (
-                  <Box display="flex" justifyContent="space-between">
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                     <Typography variant="body2" color="text.secondary">{t('vendorOfferList.qrDialog.lastAccessed')}:</Typography>
-                    <Typography variant="body2" fontSize="0.75rem">
+                    <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
                       {formatDate(offer.accessed_at)}
                     </Typography>
                   </Box>
@@ -594,7 +594,7 @@ export default function VendorOfferList() {
   return (
     <Box>
       {/* Header */}
-      <Box sx={{ display: 'flex', justifyContent: 'between', alignItems: 'center', mb: 3 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Box>
           <Typography variant="h6">{t('vendorOfferList.title')}</Typography>
           <Typography variant="body2" color="text.secondary">
@@ -684,7 +684,7 @@ export default function VendorOfferList() {
                 <TableRow key={offer.offer_id} hover>
                   {/* Created At */}
                   <TableCell>
-                    <Typography variant="body2" fontSize="0.875rem">
+                    <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
                       {formatDate(offer.created_at)}
                     </Typography>
                   </TableCell>
@@ -692,7 +692,7 @@ export default function VendorOfferList() {
                   {/* Transaction Reference */}
                   <TableCell>
                     <Tooltip title={formatTransactionReference(offer.transaction_id)}>
-                      <Typography variant="body2" fontFamily="monospace" fontSize="0.75rem">
+                      <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
                         {formatTransactionReference(offer.transaction_id)}
                       </Typography>
                     </Tooltip>
@@ -719,7 +719,7 @@ export default function VendorOfferList() {
                   
                   {/* Time Remaining */}
                   <TableCell>
-                    <Typography variant="body2" fontSize="0.875rem">
+                    <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
                       {getTimeRemaining(offer.expires_at)}
                     </Typography>
                   </TableCell>

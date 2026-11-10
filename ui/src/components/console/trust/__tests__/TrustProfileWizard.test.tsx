@@ -148,6 +148,10 @@ vi.mock('../../../../contexts/ConsoleContext', () => ({
   useConsole: () => ({ activeOrgId: 'org-1' }),
 }))
 
+vi.mock('../../../../hooks/usePermissions', () => ({
+  usePermissions: () => ({ isLoading: false, can: () => true }),
+}))
+
 vi.mock('../../../../services/walletRegistryApi', () => ({
   listWallets: (...args) => mockListWallets(...args),
 }))
@@ -189,7 +193,7 @@ describe('TrustProfileWizard', () => {
         lastTrustProfileRequestBody = body
         return HttpResponse.json({
           id: 'trust-profile-1',
-          status: 'active',
+          status: 'DRAFT',
           created_at: '2024-01-01T00:00:00Z',
           updated_at: '2024-01-01T00:00:00Z',
           ...body,
@@ -199,6 +203,7 @@ describe('TrustProfileWizard', () => {
         activatedTrustProfileId = params.id as string
         return HttpResponse.json({
           id: params.id,
+          organization_id: 'org-1',
           status: 'active',
           created_at: '2024-01-01T00:00:00Z',
           updated_at: '2024-01-01T00:00:00Z',
@@ -905,9 +910,9 @@ describe('TrustProfileWizard', () => {
       })
 
       server.use(
-        http.post('https://beta.elevenidllc.com/v1/trust-profiles', async () => {
+        http.post(`${MSW_BASE}/v1/trust-profiles`, async () => {
           await requestPromise
-          return HttpResponse.json({ id: 'trust-profile-1', name: 'Test' }, { status: 201 })
+          return HttpResponse.json({ id: 'trust-profile-1', organization_id: 'org-1', name: 'Test', status: 'DRAFT' }, { status: 201 })
         })
       )
 

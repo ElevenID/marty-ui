@@ -55,13 +55,13 @@ import { get } from '../../services/api';
 import { getCurrentCanvasLtiExperience } from '../../services/canvasLtiExperience';
 import { listApplications } from '../../services/applicantApi';
 import { listApplicationTemplates } from '../../services/applicationTemplatesApi';
+import { hasAsciiControlCharacters } from '../../utils/hasAsciiControlCharacters';
 import {
   buildCredentialApplicationNavigationState,
   extractApplicationStatusInfo,
   filterCredentialCatalogItems,
   getCredentialCatalogCategories,
   loadCredentialCatalogItems,
-  loadExistingCredentialApplications,
   scopeCredentialCatalogItemsForCanvasLaunch,
 } from '../../application/applications';
 
@@ -144,13 +144,28 @@ function createEmptyApplicationStatusInfo() {
   };
 }
 
+function previewOrganizationScope(isPreview, search) {
+  const values = isPreview ? new URLSearchParams(search || '').getAll('organization_id') : [];
+  if (values.length === 0) return { explicit: false, id: null };
+  const id = values.length === 1 && !hasAsciiControlCharacters(values[0])
+    ? normalizeOrganizationIdCandidate(values[0]) : null;
+  return { explicit: true, id };
+}
+
 const CredentialCatalog = () => {
   const { t } = useTranslation('applicant');
   const categoryLabelId = React.useId();
   const navigate = useNavigate();
   const location = useLocation();
-  const { organizationId, organizationName, user } = useAuth();
+  const { organizationId, organizationName: authenticatedOrganizationName, user } = useAuth();
   const { isPreview } = usePreview?.() || { isPreview: false };
+  const previewOrganization = useMemo(
+    () => previewOrganizationScope(isPreview, location.search),
+    [isPreview, location.search],
+  );
+  const organizationName = previewOrganization.explicit
+    && (!previewOrganization.id || previewOrganization.id !== resolveEffectiveOrganizationId(organizationId, user))
+    ? null : authenticatedOrganizationName;
   
   const CATEGORIES = useMemo(() => getCredentialCatalogCategories(t), [t]);
   
@@ -166,34 +181,43 @@ const CredentialCatalog = () => {
   const [existingApplications, setExistingApplications] = useState([]);
   const [appStatusInfo, setAppStatusInfo] = useState(createEmptyApplicationStatusInfo);
   const [canvasLtiSession, setCanvasLtiSession] = useState(() => location.state?.canvasLtiSession || null);
+  // An explicitly scoped catalog preview must not inherit another launch's
+  // organization, template restrictions or navigation state.
+  const activeCanvasLtiSession = previewOrganization.explicit ? null : canvasLtiSession;
   const [canvasLtiLoading, setCanvasLtiLoading] = useState(false);
   const catalogRequest = useRef(0);
   const applicationsRequest = useRef(0);
 
   const canvasLtiState = useMemo(
-    () => new URLSearchParams(location.search || '').get('canvas_lti_state') || '',
-    [location.search]
+    () => previewOrganization.explicit ? '' : new URLSearchParams(location.search || '').get('canvas_lti_state') || '',
+    [location.search, previewOrganization.explicit]
   );
   const canvasLtiOrganizationId = useMemo(
-    () => getLtiSessionValue(canvasLtiSession, 'organization_id'),
-    [canvasLtiSession]
+    () => getLtiSessionValue(activeCanvasLtiSession, 'organization_id'),
+    [activeCanvasLtiSession]
   );
   const effectiveOrganizationId = useMemo(
-    () => canvasLtiOrganizationId || resolveEffectiveOrganizationId(organizationId, user),
-    [canvasLtiOrganizationId, organizationId, user]
+    () => previewOrganization.explicit ? previewOrganization.id
+      : canvasLtiOrganizationId || resolveEffectiveOrganizationId(organizationId, user),
+    [previewOrganization.explicit, previewOrganization.id, canvasLtiOrganizationId, organizationId, user]
   );
 
   useEffect(() => {
+    if (previewOrganization.explicit) {
+      setCanvasLtiSession(null);
+      return;
+    }
     if (location.state?.canvasLtiSession) {
       setCanvasLtiSession(location.state.canvasLtiSession);
     }
-  }, [location.state]);
+  }, [location.state, previewOrganization.explicit]);
 
   useEffect(() => {
     let alive = true;
 
     async function loadCanvasLtiSession() {
-      if (!canvasLtiState || canvasLtiSession) {
+      if (!canvasLtiState || canvasLtiSession || location.state?.canvasLtiSession) {
+        setCanvasLtiLoading(false);
         return;
       }
 
@@ -216,7 +240,7 @@ const CredentialCatalog = () => {
     return () => {
       alive = false;
     };
-  }, [canvasLtiState, canvasLtiSession]);
+  }, [canvasLtiState, canvasLtiSession, location.state?.canvasLtiSession]);
 
   const listCredentialTemplates = useCallback((currentOrganizationId) => {
     const normalizedOrganizationId = normalizeOrganizationIdCandidate(currentOrganizationId);
@@ -239,6 +263,8 @@ const CredentialCatalog = () => {
     const request = ++catalogRequest.current;
     setLoading(true);
     setCredentials([]);
+    setSelectedCredential(null);
+    setDetailsOpen(false);
     setCatalogLoadError(null);
     setCatalogMissingOrganization(false);
     if (!effectiveOrganizationId) {
@@ -330,13 +356,20 @@ const CredentialCatalog = () => {
    * Filter credentials based on search and category
    */
   const canvasLtiCredentialTemplateId = useMemo(
-    () => getLtiSessionValue(canvasLtiSession, 'credential_template_id'),
-    [canvasLtiSession]
+    () => getLtiSessionValue(activeCanvasLtiSession, 'credential_template_id'),
+    [activeCanvasLtiSession]
   );
   const canvasLtiApplicationTemplateId = useMemo(
-    () => getLtiSessionValue(canvasLtiSession, 'application_template_id'),
-    [canvasLtiSession]
+    () => getLtiSessionValue(activeCanvasLtiSession, 'application_template_id'),
+    [activeCanvasLtiSession]
   );
+  useLayoutEffect(() => {
+    // Details belong to the selected account, organization, and course launch.
+    // A same-organization Canvas transition can change the offered template
+    // without refetching the catalog, so invalidate its dialog separately.
+    setSelectedCredential(null);
+    setDetailsOpen(false);
+  }, [effectiveOrganizationId, user?.user_id, canvasLtiState, canvasLtiCredentialTemplateId, canvasLtiApplicationTemplateId]);
   const canvasScopedCredentials = useMemo(() => {
     return scopeCredentialCatalogItemsForCanvasLaunch(credentials, {
       credentialTemplateIds: canvasLtiCredentialTemplateId ? [canvasLtiCredentialTemplateId] : [],
@@ -352,24 +385,25 @@ const CredentialCatalog = () => {
     }
     return {
       state: canvasLtiState,
-      canvas_program_binding_id: getLtiSessionValue(canvasLtiSession, 'canvas_program_binding_id'),
-      canvas_platform_id: getLtiSessionValue(canvasLtiSession, 'canvas_platform_id'),
+      canvas_program_binding_id: getLtiSessionValue(activeCanvasLtiSession, 'canvas_program_binding_id'),
+      canvas_platform_id: getLtiSessionValue(activeCanvasLtiSession, 'canvas_platform_id'),
       application_template_id: canvasLtiApplicationTemplateId,
       credential_template_id: canvasLtiCredentialTemplateId,
     };
-  }, [canvasLtiApplicationTemplateId, canvasLtiCredentialTemplateId, canvasLtiSession, canvasLtiState]);
+  }, [canvasLtiApplicationTemplateId, canvasLtiCredentialTemplateId, activeCanvasLtiSession, canvasLtiState]);
 
   /**
    * Handle credential application
    */
   const handleApply = (credential) => {
+    if (loading || canvasLtiLoading || catalogLoadError || !canvasScopedCredentials.includes(credential)) return;
     try {
       const navigation = buildCredentialApplicationNavigationState(credential, {
         currentPathname: location.pathname,
         isPreview,
         organizationId: effectiveOrganizationId,
         canvasLtiContext: canvasLtiNavigationContext,
-        canvasLtiSession,
+        canvasLtiSession: activeCanvasLtiSession,
       });
       navigate(navigation.path, { state: navigation.state });
     } catch (error) {
@@ -418,7 +452,9 @@ const CredentialCatalog = () => {
   const { counts } = appStatusInfo;
   const hasAnyApplications = counts.pending + counts.approved + counts.offered + counts.rejected + counts.credentialed > 0;
   const catalogLoadAlertMessage = catalogLoadError
-    ? catalogMissingOrganization
+    ? previewOrganization.explicit && !previewOrganization.id
+      ? 'This preview link does not identify a single organization. Open a new preview link for the organization you want to inspect.'
+      : catalogMissingOrganization
       ? 'We could not determine your organization yet. Refresh after sign-in, or choose or join an organization before browsing credentials.'
       : t('catalog.errorLoading', 'We could not load the credential catalog. Try again, or contact support if the problem continues.')
     : null;
@@ -447,7 +483,7 @@ const CredentialCatalog = () => {
           <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
             Application Status
           </Typography>
-          <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+          <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }} useFlexGap>
             {counts.pending > 0 && (
               <Chip
                 icon={<PendingIcon />}
@@ -513,7 +549,7 @@ const CredentialCatalog = () => {
       </Box>
       {/* Search and Filters */}
       <Paper sx={{ p: 2, mb: 3 }} data-testid="catalog-filters">
-        <Grid container spacing={2} alignItems="center">
+        <Grid container spacing={2} sx={{ alignItems: 'center' }}>
           <Grid size={{ xs: 12, md: 6 }}>
             <TextField
               fullWidth
@@ -558,7 +594,7 @@ const CredentialCatalog = () => {
           </Grid>
           <Grid size={{ xs: 12, md: 2 }}>
             {!loading && !canvasLtiLoading && !catalogLoadError && (
-              <Typography variant="body2" color="text.secondary" textAlign="center" data-testid="credentials-count">
+              <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }} data-testid="credentials-count">
                 {t('catalog.resultsCount', { count: filteredCredentials.length })}
               </Typography>
             )}
@@ -724,7 +760,7 @@ const CredentialCatalog = () => {
               </Box>
             </DialogTitle>
             <DialogContent>
-              <Typography variant="body1" paragraph>
+              <Typography variant="body1" sx={{ mb: 2 }}>
                 {selectedCredential.description}
               </Typography>
 
@@ -745,14 +781,14 @@ const CredentialCatalog = () => {
               <Divider sx={{ my: 2 }} />
               
               {selectedCredential.walletRequirements && (
-                <Typography variant="body2" color="text.secondary" paragraph>{selectedCredential.walletRequirements}</Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{selectedCredential.walletRequirements}</Typography>
               )}
               {selectedCredential.validityLabel && (
                 <>
                   <Typography variant="subtitle2" gutterBottom>
                     {t('catalog.detailsDialog.validity', { defaultValue: 'Credential validity' })}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary" paragraph>{selectedCredential.validityLabel}</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{selectedCredential.validityLabel}</Typography>
                 </>
               )}
               
@@ -775,7 +811,7 @@ const CredentialCatalog = () => {
                   <Typography variant="subtitle2" gutterBottom sx={{ mt: 2 }}>
                     {t('catalog.detailsDialog.instructions')}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary" paragraph>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                     {selectedCredential.submissionInstructions}
                   </Typography>
                 </>

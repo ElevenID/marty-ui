@@ -182,7 +182,7 @@ const ComplianceProfileManager = () => {
 
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
         <CircularProgress />
       </Box>
     );
@@ -190,7 +190,7 @@ const ComplianceProfileManager = () => {
 
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Box>
           <Typography variant="h4">{t('complianceProfiles.title')}</Typography>
           <Typography variant="body2" color="text.secondary">
@@ -215,15 +215,15 @@ const ComplianceProfileManager = () => {
 
       {/* System Presets */}
       <Paper sx={{ mb: 3, p: 2 }}>
-        <Box display="flex" alignItems="center" mb={2}>
+        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
           <SecurityIcon sx={{ mr: 1 }} />
           <Typography variant="h6">{t('complianceProfiles.systemPresets.title')}</Typography>
           <Chip label={t('complianceProfiles.systemPresets.immutable')} size="small" sx={{ ml: 2 }} />
         </Box>
-        <Typography variant="body2" color="text.secondary" mb={2}>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {t('complianceProfiles.systemPresets.description')}
         </Typography>
-        <Box display="flex" flexWrap="wrap" gap={2}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
           {COMPLIANCE_CODES.map((preset) => (
             <Paper
               key={preset.value}
@@ -236,11 +236,11 @@ const ComplianceProfileManager = () => {
                 '&:hover': { borderColor: 'primary.main' },
               }}
             >
-              <Box display="flex" alignItems="center" mb={1}>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
                 <VerifiedUserIcon color="primary" sx={{ mr: 1 }} />
                 <Typography variant="subtitle1">{preset.label}</Typography>
               </Box>
-              <Typography variant="body2" color="text.secondary" mb={1}>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                 {preset.description}
               </Typography>
               <Divider sx={{ my: 1 }} />
@@ -254,8 +254,8 @@ const ComplianceProfileManager = () => {
 
       {/* Custom Profiles */}
       <Paper>
-        <Box p={2}>
-          <Typography variant="h6" mb={2}>{t('complianceProfiles.customProfiles.title')}</Typography>
+        <Box sx={{ p: 2 }}>
+          <Typography variant="h6" sx={{ mb: 2 }}>{t('complianceProfiles.customProfiles.title')}</Typography>
           <TableContainer>
             <Table>
               <TableHead>
@@ -380,7 +380,7 @@ const ComplianceProfileManager = () => {
                   </Select>
                 </FormControl>
 
-                <Typography variant="subtitle2" mb={1}>{t('complianceProfiles.dialog.supportedFormats')}</Typography>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('complianceProfiles.dialog.supportedFormats')}</Typography>
                 <FormGroup>
                   {CREDENTIAL_FORMATS.map((fmt) => (
                     <FormControlLabel
@@ -435,7 +435,7 @@ const ComplianceProfileManager = () => {
                   label={t('complianceProfiles.dialog.enforceConsistency')}
                 />
 
-                <Typography variant="subtitle2" mt={2} mb={1}>{t('complianceProfiles.dialog.allowedDidMethods')}</Typography>
+                <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>{t('complianceProfiles.dialog.allowedDidMethods')}</Typography>
                 <FormGroup>
                   {['did:web', 'did:key', 'did:jwk'].map((method) => (
                     <FormControlLabel

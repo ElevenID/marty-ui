@@ -141,7 +141,7 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
           {t('wizards.presentationPolicy.trustProfileStep.blocked.title')}
         </Typography>
         
-        <Typography color="text.secondary" paragraph sx={{ maxWidth: 600, mx: 'auto' }}>
+        <Typography color="text.secondary" sx={{ mb: "16px", maxWidth: 600, mx: 'auto' }} component="p">
           {t('wizards.presentationPolicy.trustProfileStep.blocked.description')}
         </Typography>
 
@@ -171,7 +171,7 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
         {t('wizards.presentationPolicy.trustProfileStep.title')}
       </Typography>
       
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
         {t('wizards.presentationPolicy.trustProfileStep.description')}
       </Typography>
 
@@ -238,7 +238,7 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
                       )}
                     </Box>
 
-                    <Typography variant="body2" color="text.secondary" paragraph>
+                    <Typography variant="body2" color="text.secondary" component="p" sx={{ mb: "16px" }}>
                       {profile.description || t(`wizards.presentationPolicy.trustProfileStep.frameworkDescriptions.${framework.key}`)}
                     </Typography>
 

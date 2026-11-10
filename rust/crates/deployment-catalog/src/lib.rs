@@ -107,6 +107,8 @@ pub mod installer_uninstall;
 pub mod installer_validation;
 pub mod installer_verify;
 pub mod kubernetes_application;
+#[cfg(target_os = "linux")]
+pub mod kubernetes_legacy_recovery;
 pub mod kubernetes_renewal;
 pub mod kubernetes_renewal_activation;
 pub mod kubernetes_secrets;

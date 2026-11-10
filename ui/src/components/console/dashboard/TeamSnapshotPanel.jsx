@@ -74,7 +74,7 @@ function RoleCard({ role, count }) {
             {config.label}
           </Typography>
         </Box>
-        <Typography variant="h4" fontWeight={600}>
+        <Typography variant="h4" sx={{ fontWeight: 600 }}>
           {count}
         </Typography>
       </CardContent>
@@ -207,7 +207,7 @@ export function TeamSnapshotPanel({ teamData, error = null, onRetry }) {
 
       {!error && totalMembers === 0 && (
         <Box sx={{ textAlign: 'center', py: 3 }}>
-          <Typography variant="body2" color="text.secondary" paragraph>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             {t('dashboard.team.noMembersYet')}
           </Typography>
           {canInvite && <Button

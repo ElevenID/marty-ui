@@ -45,7 +45,7 @@ function StatCard({ icon: Icon, label, count, color = 'primary' }) {
             {label}
           </Typography>
         </Box>
-        <Typography variant="h4" fontWeight={600}>
+        <Typography variant="h4" sx={{ fontWeight: 600 }}>
           {count}
         </Typography>
       </CardContent>

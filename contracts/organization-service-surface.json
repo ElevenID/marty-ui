@@ -4,6 +4,7 @@
   "http_routes": [
     "GET /api/onboarding/status",
     "GET /internal/v1/organizations/{org_id}/lifecycle",
+    "GET /internal/v1/organizations/{organization_id}/policy-sets/{policy_set_id}",
     "PATCH /internal/v1/organizations/{org_id}/settings",
     "GET /v1/me/preferences",
     "PUT /v1/me/preferences",
@@ -31,6 +32,7 @@
     "POST /v1/organizations/{org_id}/members",
     "DELETE /v1/organizations/{org_id}/members/{member_id}",
     "PATCH /v1/organizations/{org_id}/members/{member_id}",
+    "POST /v1/organizations/{org_id}/members/{member_id}/approve",
     "GET /v1/organizations/{org_id}/team/snapshot",
     "GET /v1/organizations/{organization_id}/members/me/permissions",
     "PUT /v1/organizations/{organization_id}/members/{member_id}/roles",
@@ -92,6 +94,7 @@
     "organization.created",
     "organization.updated",
     "member.added",
+    "member.approved",
     "member.removed",
     "member.invited",
     "api_key.created",
