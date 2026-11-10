@@ -254,14 +254,14 @@ describe('ApiKeysPage', () => {
       expect(mockCreateApiKey).toHaveBeenCalledWith('org-123', expect.objectContaining({
         name: 'Gateway Partner',
         scopes: expect.arrayContaining(['flows:execute']),
-      }))
+      }), expect.objectContaining({ isCurrent: expect.any(Function) }))
     })
 
     expect(mockCreateWebhook).toHaveBeenCalledWith('org-123', expect.objectContaining({
       url: 'https://partner.example.com/callbacks',
       eventTypes: expect.arrayContaining(['application.approved']),
       description: expect.stringContaining('[api-key:key-new]'),
-    }))
+    }), expect.objectContaining({ isCurrent: expect.any(Function) }))
 
     await waitFor(() => {
       expect(screen.getByText('Integration provisioned')).toBeInTheDocument()
@@ -348,7 +348,7 @@ describe('ApiKeysPage', () => {
       expect(mockCreateApiKey).toHaveBeenCalledWith('org-123', expect.objectContaining({
         name: 'Gateway Partner',
         scopes: expect.arrayContaining(['flows:execute']),
-      }))
+      }), expect.objectContaining({ isCurrent: expect.any(Function) }))
     })
 
     expect(mockCreateWebhook).not.toHaveBeenCalled()
@@ -533,6 +533,64 @@ describe('ApiKeysPage', () => {
     expect(mockRevokeApiKey).not.toHaveBeenCalled()
   })
 
+  it('loads API keys without requesting callback information outside the current grants', async () => {
+    setPermissions(['api-key:view'])
+    mockListApiKeys.mockResolvedValue([{ id: 'key-1', name: 'Limited partner', key_prefix: 'fixture_', status: 'active' }])
+    renderWithRouter(<ApiKeysPage />)
+
+    const row = await screen.findByRole('row', { name: /Limited partner/ })
+    expect(mockListWebhooks).not.toHaveBeenCalled()
+    expect(mockGetAvailableEventTypes).not.toHaveBeenCalled()
+    expect(within(row).getByText('Unavailable')).toBeInTheDocument()
+    expect(within(row).queryByText('No paired callback')).not.toBeInTheDocument()
+    expect(screen.getByText(/Webhook viewing permission is required/)).toBeInTheDocument()
+    expect(screen.queryByText(/Callback status could not be loaded/)).not.toBeInTheDocument()
+  })
+
+  it('keeps key creation usable when webhook creation is allowed without webhook viewing', async () => {
+    setPermissions(['api-key:view', 'api-key:create', 'webhook:create'])
+    const { user } = renderWithRouter(<ApiKeysPage />)
+    await user.click(await screen.findByRole('button', { name: createAction }))
+    expect(screen.getByLabelText('Provision associated callback')).toBeDisabled()
+    expect(screen.getByLabelText('Provision associated callback')).not.toBeChecked()
+    expect(screen.queryByLabelText('Callback URL')).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('Key name'), 'Key-only partner')
+    await user.click(screen.getByRole('button', { name: 'Create integration key' }))
+
+    expect(await screen.findByLabelText('API key')).toHaveValue('pk_live_secret')
+    expect(mockCreateApiKey).toHaveBeenCalledTimes(1)
+    expect(mockCreateWebhook).not.toHaveBeenCalled()
+    expect(mockListWebhooks).not.toHaveBeenCalled()
+    expect(mockGetAvailableEventTypes).not.toHaveBeenCalled()
+  })
+
+  it('withdraws loaded callback information when viewing permission changes and restores it after reauthorization', async () => {
+    mockListApiKeys.mockResolvedValue([{ id: 'key-1', name: 'Partner', status: 'active' }])
+    mockListWebhooks.mockResolvedValue([{
+      id: 'wh-1', url: 'https://partner.example.com/private-callback',
+      description: 'Partner callback [api-key:key-1]', event_types: ['credential.issued'], enabled: true,
+    }])
+    const { rerender } = renderWithRouter(<ApiKeysPage />)
+    await screen.findByText('https://partner.example.com/private-callback')
+    expect(mockListWebhooks).toHaveBeenCalledTimes(1)
+    expect(mockGetAvailableEventTypes).toHaveBeenCalledTimes(1)
+
+    setPermissions(['api-key:view', 'api-key:create'])
+    rerender(<ApiKeysPage />)
+    expect(screen.queryByText('https://partner.example.com/private-callback')).not.toBeInTheDocument()
+    expect(screen.getByText(/Webhook viewing permission is required/)).toBeInTheDocument()
+    await screen.findByRole('row', { name: /Partner/ })
+    expect(mockListWebhooks).toHaveBeenCalledTimes(1)
+    expect(mockGetAvailableEventTypes).toHaveBeenCalledTimes(1)
+
+    setPermissions(['api-key:view', 'api-key:create', 'webhook:view'])
+    rerender(<ApiKeysPage />)
+    await screen.findByText('https://partner.example.com/private-callback')
+    expect(mockListWebhooks).toHaveBeenCalledTimes(2)
+    expect(mockGetAvailableEventTypes).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(/Webhook viewing permission is required/)).not.toBeInTheDocument()
+  })
+
   it('lets a key creator without webhook-create permission create a key without a callback', async () => {
     setPermissions(['api-key:view', 'api-key:create', 'webhook:view'])
     const { user } = renderWithRouter(<ApiKeysPage />)
@@ -546,7 +604,7 @@ describe('ApiKeysPage', () => {
     await user.click(screen.getByRole('button', { name: 'Create integration key' }))
 
     expect(await screen.findByLabelText('API key')).toHaveValue('pk_live_secret')
-    expect(mockCreateApiKey).toHaveBeenCalledWith('org-123', expect.objectContaining({ name: 'Key-only partner' }))
+    expect(mockCreateApiKey).toHaveBeenCalledWith('org-123', expect.objectContaining({ name: 'Key-only partner' }), expect.objectContaining({ isCurrent: expect.any(Function) }))
     expect(mockCreateWebhook).not.toHaveBeenCalled()
   })
 

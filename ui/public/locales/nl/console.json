@@ -1,4 +1,27 @@
 {
+  "operate": {
+    "applications": {
+      "signIn": "Meld u aan om aanvragen te bekijken.",
+      "selectOrganization": "Selecteer een organisatie om aanvragen te bekijken.",
+      "permissionsLoading": "Aanvraagrechten worden gecontroleerd",
+      "readDenied": "U hebt geen toestemming om aanvragen voor deze organisatie te bekijken.",
+      "reissueSucceeded": "Er is een nieuwe walletuitnodiging aangemaakt. De aanvrager kan het digitale bewijs opnieuw ophalen.",
+      "actionFailed": "De aanvraag kon niet worden bijgewerkt. Probeer het opnieuw.",
+      "clearFilters": "Filters wissen",
+      "notReported": "Niet gemeld",
+      "actions": {
+        "issue": "Walletuitnodiging aanmaken",
+        "reissue": "Walletuitnodiging opnieuw verzenden"
+      },
+      "filters": {
+        "underReview": "In beoordeling",
+        "pendingInformation": "Wacht op informatie"
+      },
+      "tableHeaders": {
+        "applicationReference": "Aanvraagreferentie"
+      }
+    }
+  },
 	"deploy": {
 		"keyManagementWizard": {
 			"selectOrganization": "Selecteer een organisatie om een ondertekeningsservice te registreren.",

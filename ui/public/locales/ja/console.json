@@ -1,4 +1,27 @@
 {
+  "operate": {
+    "applications": {
+      "signIn": "申請を表示するにはサインインしてください。",
+      "selectOrganization": "申請を表示する組織を選択してください。",
+      "permissionsLoading": "申請のアクセス権限を確認しています",
+      "readDenied": "この組織の申請を表示する権限がありません。",
+      "reissueSucceeded": "新しいウォレット招待を生成しました。申請者は資格情報を再度受け取ることができます。",
+      "actionFailed": "申請を更新できませんでした。もう一度お試しください。",
+      "clearFilters": "フィルターをクリア",
+      "notReported": "未報告",
+      "actions": {
+        "issue": "ウォレット招待を生成",
+        "reissue": "ウォレット招待を再送信"
+      },
+      "filters": {
+        "underReview": "審査中",
+        "pendingInformation": "追加情報待ち"
+      },
+      "tableHeaders": {
+        "applicationReference": "申請参照番号"
+      }
+    }
+  },
   "trust": {
     "trustProfileWizard": {
       "selectOrganization": "信頼プロファイルを作成する組織を選択してください。",

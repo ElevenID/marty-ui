@@ -31,13 +31,6 @@ function ScopedNotificationBell({ organizationId, recipientId }) {
     return () => { mounted.current = false; clearInterval(interval); };
   }, [loadUnreadCount]);
   const handleClose = () => { setAnchorEl(null); loadUnreadCount(); };
-  const handleMarkAllRead = async () => {
-    try {
-      await notificationsApi.markAllAsRead(organizationId, recipientId);
-      if (!mounted.current) return;
-      setUnreadCount(0); loadUnreadCount();
-    } catch (error) { if (mounted.current) console.error('Failed to mark all as read:', error); }
-  };
   const open = Boolean(anchorEl);
   return <>
     <Tooltip title={unreadCount > 0 ? t('notifications.unreadCount', { count: unreadCount }) : t('notifications.title')}>
@@ -48,7 +41,7 @@ function ScopedNotificationBell({ organizationId, recipientId }) {
       </IconButton>
     </Tooltip>
     <NotificationDropdown organizationId={organizationId} recipientId={recipientId} anchorEl={anchorEl} open={open}
-      onClose={handleClose} onMarkAllRead={handleMarkAllRead} onCountChange={loadUnreadCount} />
+      onClose={handleClose} onCountChange={loadUnreadCount} />
   </>;
 }
 export default function NotificationBell() {

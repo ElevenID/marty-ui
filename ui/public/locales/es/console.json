@@ -1,4 +1,27 @@
 {
+  "operate": {
+    "applications": {
+      "signIn": "Inicia sesión para ver las solicitudes.",
+      "selectOrganization": "Selecciona una organización para ver las solicitudes.",
+      "permissionsLoading": "Comprobando permisos de solicitudes",
+      "readDenied": "No tienes permiso para ver las solicitudes de esta organización.",
+      "reissueSucceeded": "Se ha generado una nueva invitación a la billetera. La persona solicitante puede volver a obtener su credencial.",
+      "actionFailed": "No se pudo actualizar la solicitud. Inténtalo de nuevo.",
+      "clearFilters": "Borrar filtros",
+      "notReported": "No informado",
+      "actions": {
+        "issue": "Generar invitación a la billetera",
+        "reissue": "Reenviar invitación a la billetera"
+      },
+      "filters": {
+        "underReview": "En revisión",
+        "pendingInformation": "Esperando información"
+      },
+      "tableHeaders": {
+        "applicationReference": "Referencia de la solicitud"
+      }
+    }
+  },
   "trust": {
     "trustProfileWizard": {
       "selectOrganization": "Selecciona una organización para crear un perfil de confianza.",

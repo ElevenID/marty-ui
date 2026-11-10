@@ -1174,7 +1174,9 @@
         "pendingReview": "Pending Review",
         "documentsPending": "Documents Pending",
         "approved": "Approved",
-        "rejected": "Rejected"
+        "rejected": "Rejected",
+        "underReview": "Under Review",
+        "pendingInformation": "Awaiting Information"
       },
       "tableHeaders": {
         "applicationId": "Application ID",
@@ -1184,7 +1186,8 @@
         "documents": "Documents",
         "verification": "Verification",
         "status": "Status",
-        "actions": "Actions"
+        "actions": "Actions",
+        "applicationReference": "Application Reference"
       },
       "documents": {
         "uploaded": "Uploaded",
@@ -1198,10 +1201,20 @@
       "actions": {
         "viewDetails": "View Details",
         "approve": "Approve",
-        "reject": "Reject"
+        "reject": "Reject",
+        "issue": "Generate wallet invite",
+        "reissue": "Resend wallet invite"
       },
       "noMatchingApplications": "No applications match your filters. Try adjusting your search.",
-      "errorLoading": "Failed to load applications"
+      "errorLoading": "Failed to load applications",
+      "signIn": "Sign in to view applications.",
+      "selectOrganization": "Select an organization to view applications.",
+      "permissionsLoading": "Checking application permissions",
+      "readDenied": "You do not have permission to view applications for this organization.",
+      "reissueSucceeded": "New wallet invite generated — the applicant can now re-claim their credential.",
+      "actionFailed": "Unable to update the application. Please try again.",
+      "clearFilters": "Clear filters",
+      "notReported": "Not reported"
     },
     "tabs": {
       "issuance": "Issued Credentials",

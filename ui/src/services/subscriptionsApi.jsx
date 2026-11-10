@@ -25,7 +25,7 @@ export async function createSubscription(organizationId, {
   filter = {},
   retryPolicy,
   enabled = true,
-}) {
+}, options = {}) {
   const organization_id = requireOrganizationId(organizationId, 'creating webhook subscriptions');
   return postWithIdempotency(BASE_PATH, {
     organization_id,
@@ -37,7 +37,7 @@ export async function createSubscription(organizationId, {
     filter,
     ...(retryPolicy ? { retry_policy: retryPolicy } : {}),
     enabled,
-  });
+  }, options);
 }
 
 export async function updateSubscription(organizationId, subscriptionId, updates) {
