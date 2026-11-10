@@ -6,13 +6,12 @@ use super::*;
 use crate::{application_authority::legacy_recovery_leaf, operator_http::builder};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use spki::{
-    der::{asn1::AnyRef, Decode, DecodePem},
-    AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned,
+    der::{asn1::AnyRef, Decode, DecodePem, Tag, Tagged},
+    AlgorithmIdentifierOwned, ObjectIdentifier, SubjectPublicKeyInfoOwned,
 };
-use std::{os::unix::fs::DirBuilderExt, str::FromStr};
+use std::os::unix::fs::DirBuilderExt;
 use x509_cert::{
     ext::pkix::{name::GeneralName, ExtendedKeyUsage, SubjectAltName},
-    name::Name,
     request::CertReq,
 };
 
@@ -347,8 +346,22 @@ fn names(certificate: &Certificate) -> Result<BTreeSet<String>> {
 
 pub(super) fn retained_profile(leaf: &Leaf, bytes: &[u8]) -> Result<()> {
     let certificate = certificate(bytes)?;
-    if certificate.tbs_certificate.subject
-        != Name::from_str(&format!("CN={}", leaf.common_name)).map_err(|_| REFUSAL)?
+    let [rdn] = certificate.tbs_certificate.subject.0.as_slice() else {
+        return Err(REFUSAL);
+    };
+    if rdn.0.len() != 1 {
+        return Err(REFUSAL);
+    }
+    let common_name = rdn.0.get(0).ok_or(REFUSAL)?;
+    // OpenBao encodes these fixed ASCII names as PrintableString; the native
+    // fixtures also use UTF8String. Accept only those encodings of the exact CN.
+    // Replacement validation below still preserves the retained subject's DER.
+    if common_name.oid != ObjectIdentifier::new_unwrap("2.5.4.3")
+        || !matches!(
+            common_name.value.tag(),
+            Tag::PrintableString | Tag::Utf8String
+        )
+        || common_name.value.value() != leaf.common_name.as_bytes()
     {
         return Err(REFUSAL);
     }

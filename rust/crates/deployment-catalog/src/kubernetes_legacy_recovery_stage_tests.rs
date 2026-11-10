@@ -4,9 +4,14 @@ use super::super::staging::{self, Leaf, StageApi, Staging};
 use super::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ring::signature::{RsaKeyPair, RSA_PKCS1_SHA256};
-use spki::der::{asn1::Ia5String, Decode};
+use spki::der::{
+    asn1::{Any, Ia5String},
+    Decode, Tag,
+};
 use x509_cert::{
+    attr::AttributeTypeAndValue,
     ext::pkix::{name::GeneralName, ExtendedKeyUsage, SubjectAltName},
+    name::RdnSequence,
     request::{CertReq, CertReqInfo, Version},
     serial_number::SerialNumber,
 };
@@ -93,8 +98,21 @@ struct FullFixture {
     next: BTreeMap<String, Vec<u8>>,
 }
 
+fn encoded_subject(common_name: &str, tag: Tag) -> Name {
+    RdnSequence(vec![vec![AttributeTypeAndValue {
+        oid: ObjectIdentifier::new_unwrap("2.5.4.3"),
+        value: Any::new(tag, common_name.as_bytes()).unwrap(),
+    }]
+    .try_into()
+    .unwrap()])
+}
+
 impl FullFixture {
     fn new() -> Self {
+        Self::with_subject_tag(Tag::Utf8String)
+    }
+
+    fn with_subject_tag(subject_tag: Tag) -> Self {
         let mut base = Fixture::new();
         let (leaves, _) = staging::inventory(&binding(&base.context).unwrap()).unwrap();
         let mut keys = BTreeMap::new();
@@ -105,7 +123,7 @@ impl FullFixture {
                 &base.certificates.ec.tbs_certificate.subject_public_key_info,
             );
             let mut retained = base.certificates.ec.clone();
-            let subject = Name::from_str(&format!("CN={}", leaf.common_name)).unwrap();
+            let subject = encoded_subject(&leaf.common_name, subject_tag);
             retained.tbs_certificate.subject = subject.clone();
             retained.tbs_certificate.subject_public_key_info = key.public.clone();
             retained.tbs_certificate.serial_number =
@@ -464,22 +482,93 @@ async fn stage_preserves_original_state_and_only_replaces_the_closed_inventory()
 }
 
 #[tokio::test]
+async fn printable_string_subjects_stage_without_changing_retained_identity() {
+    // OpenBao's Go X.509 encoder uses PrintableString for these ASCII names.
+    let fixture = FullFixture::with_subject_tag(Tag::PrintableString);
+    let producer = fixture.producer();
+    let stage = stage_request(&fixture, &producer).await;
+    let before = generation(&stage.context.current).unwrap();
+    let result = staging::stage_with(&producer, &stage).await.unwrap();
+    assert_eq!(result["status"], "staged-not-activated");
+    assert_eq!(result["replacementCount"], 51);
+    assert_eq!(result["activation"], false);
+    assert_eq!(generation(&stage.context.current).unwrap(), before);
+    let candidate = generation(&stage.output.join("candidate")).unwrap();
+    for leaf in &fixture.leaves {
+        let retained = certificate(&before[&leaf.file].0).unwrap();
+        let replacement = certificate(&candidate[&leaf.file].0).unwrap();
+        assert_eq!(
+            replacement.tbs_certificate.subject,
+            retained.tbs_certificate.subject
+        );
+        assert_eq!(
+            replacement.tbs_certificate.extensions,
+            retained.tbs_certificate.extensions
+        );
+    }
+    assert_eq!(producer.posts.lock().unwrap().len(), 120);
+    assert_eq!(producer.minted.lock().unwrap().len(), 33);
+    assert!(stage.output.join("complete.json").is_file());
+}
+
+#[tokio::test]
+async fn a_replacement_cannot_change_the_retained_subject_encoding() {
+    let mut fixture = FullFixture::with_subject_tag(Tag::PrintableString);
+    let leaf = &fixture.leaves[0];
+    let mut replacement = certificate(&fixture.next[&leaf.file]).unwrap();
+    replacement.tbs_certificate.subject = encoded_subject(&leaf.common_name, Tag::Utf8String);
+    fixture.next.insert(
+        leaf.file.clone(),
+        pem(&sign(replacement, &fixture.base.certificates.key)),
+    );
+    let producer = fixture.producer();
+    let stage = stage_request(&fixture, &producer).await;
+    let before = generation(&stage.context.current).unwrap();
+    assert_eq!(
+        staging::stage_with(&producer, &stage).await.unwrap_err(),
+        staging::RECOVERY
+    );
+    assert_eq!(producer.posts.lock().unwrap().len(), 2);
+    assert!(stage.output.join("attempt.json").is_file());
+    assert!(stage.output.join("request-001.json").is_file());
+    assert!(!stage.output.join("complete.json").exists());
+    assert_eq!(generation(&stage.context.current).unwrap(), before);
+}
+
+#[tokio::test]
 async fn invalid_retained_identity_and_inspection_drift_refuse_before_a_post() {
-    for identity_drift in [true, false] {
+    for drift in [
+        "name",
+        "extra-rdn",
+        "extra-attribute",
+        "wrong-oid",
+        "string-type",
+        "inspection",
+    ] {
         let fixture = FullFixture::new();
         let producer = fixture.producer();
-        let stage = stage_request(&fixture, &producer).await;
-        if identity_drift {
-            let path = stage.context.current.join(&fixture.leaves[0].file);
+        if drift != "inspection" {
+            let path = fixture.base.context.current.join(&fixture.leaves[0].file);
             let mut retained = certificate(&fs::read(&path).unwrap()).unwrap();
-            retained.tbs_certificate.subject =
-                Name::from_str("CN=unexpected-retained-name").unwrap();
+            let name = &fixture.leaves[0].common_name;
+            retained.tbs_certificate.subject = match drift {
+                "name" => Name::from_str("CN=unexpected-retained-name").unwrap(),
+                "extra-rdn" => Name::from_str(&format!("CN={name},O=unexpected")).unwrap(),
+                "extra-attribute" => Name::from_str(&format!("CN={name}+OU=unexpected")).unwrap(),
+                "wrong-oid" => Name::from_str(&format!("OU={name}")).unwrap(),
+                "string-type" => encoded_subject(name, Tag::Ia5String),
+                _ => unreachable!(),
+            };
             write(
                 &path,
                 &pem(&sign(retained, &fixture.base.certificates.key)),
                 0o644,
             );
-        } else {
+        }
+        // Inspection deliberately precedes the stricter staging identity check.
+        // Bind the altered certificate so these cases cannot pass on stale inputs.
+        let stage = stage_request(&fixture, &producer).await;
+        if drift == "inspection" {
             let mut report: Value =
                 serde_json::from_slice(&fs::read(&stage.inspection).unwrap()).unwrap();
             report["observed"]["policies"]["credential-service"]["policy"] = json!("changed");
@@ -489,9 +578,13 @@ async fn invalid_retained_identity_and_inspection_drift_refuse_before_a_post() {
                 0o600,
             );
         }
-        assert!(staging::stage_with(&producer, &stage).await.is_err());
-        assert!(producer.posts.lock().unwrap().is_empty());
-        assert!(!stage.output.join("attempt.json").exists());
+        assert_eq!(
+            staging::stage_with(&producer, &stage).await.unwrap_err(),
+            REFUSAL,
+            "{drift}"
+        );
+        assert!(producer.posts.lock().unwrap().is_empty(), "{drift}");
+        assert!(!stage.output.join("attempt.json").exists(), "{drift}");
     }
 }
 
