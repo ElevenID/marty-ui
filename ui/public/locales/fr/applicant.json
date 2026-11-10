@@ -68,6 +68,12 @@
     }
   },
   "identity": {
+    "details": {
+      "linkedCredentials": "Justificatifs émis",
+      "viewApplication": "Voir les détails de la demande",
+      "applicationStatus": "Statut de la demande",
+      "credentialId": "ID du justificatif"
+    },
     "guidance": {
       "walletPresentation": "Pour présenter un justificatif, utilisez le portefeuille dans lequel il est enregistré.",
       "expired": "Ce justificatif a expiré. Contactez l’émetteur pour le renouveler.",

@@ -27,6 +27,7 @@ import bootstrap_kubernetes_openbao as bootstrap
 import kubernetes_application_state as selection
 import stage_kubernetes_application_credentials as staging
 from test_stage_kubernetes_application_credentials import archive, flow as stage_flow, unpack
+from test_bootstrap_kubernetes_openbao import assert_private_directory_command, capture_private_directory_commands
 
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Linux private activation contract")
@@ -764,6 +765,13 @@ def proof_flow(tmp_path, monkeypatch):
         "values": {"images": {"services": "services@sha256:" + "1" * 64}}}
     monkeypatch.setattr(activation.time, "monotonic", lambda: world.clock)
     return world
+
+
+def test_application_activation_private_directories_clear_inherited_setgid(proof_flow, tmp_path, monkeypatch):
+    commands = capture_private_directory_commands(monkeypatch, type(proof_flow.transport))
+    activation.fresh_proof(proof_flow.context, proof_flow.current, proof_flow.candidate)
+    assert len(commands) == 1
+    assert_private_directory_command(commands[0], tmp_path)
 
 
 def test_fresh_proof_uses_actual_closed_export_and_preserves_private_evidence(proof_flow, capsys):

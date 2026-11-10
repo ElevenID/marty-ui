@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 
 import { listCredentialTemplates } from '../../../../services/presentationPolicyApi';
 import { useConsole } from '../../../../contexts/ConsoleContext';
+import { hasAcceptedClaimType, hasClaimName } from '../policyClaimsValidation';
 
 const credentialTypeForTemplate = (template) => (
   template?.vct
@@ -38,7 +39,7 @@ const credentialTypeForTemplate = (template) => (
   || ''
 );
 
-const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
+const ClaimsConfigurationStep = ({ policyConfig, onConfigChange, validationError }) => {
   const { t } = useTranslation('console');
   const { activeOrgId } = useConsole();
   const { data } = useAsyncData(
@@ -105,10 +106,11 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
   };
 
   const handleAddCredentialType = (newType) => {
-    if (newType && !policyConfig.accepted_credential_types.includes(newType)) {
+    const type = typeof newType === 'string' ? newType.trim() : '';
+    if (type && !policyConfig.accepted_credential_types.includes(type)) {
       onConfigChange({
         ...policyConfig,
-        accepted_credential_types: [...policyConfig.accepted_credential_types, newType],
+        accepted_credential_types: [...policyConfig.accepted_credential_types, type],
       });
     }
   };
@@ -132,6 +134,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
       <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
         {t('wizards.presentationPolicy.claimsConfigurationStep.description')}
       </Typography>
+      {validationError && <Alert severity="error" sx={{ mb: 2 }}>{validationError}</Alert>}
 
       {/* Basic Information */}
       <Card sx={{ mb: 3 }}>
@@ -257,6 +260,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
                   </Typography>
                   <IconButton
                     size="small"
+                    aria-label={t('wizards.presentationPolicy.claimsConfigurationStep.labels.removeClaim', { index: index + 1 })}
                     onClick={() => handleRemoveClaim(index)}
                     color="error"
                   >
@@ -277,7 +281,8 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
                       {...params}
                       label={t('wizards.presentationPolicy.claimsConfigurationStep.fields.claimName')}
                       required
-                      helperText={t('wizards.presentationPolicy.claimsConfigurationStep.helpers.claimName')}
+                      error={!hasClaimName(claim)}
+                      helperText={t(`wizards.presentationPolicy.claimsConfigurationStep.${hasClaimName(claim) ? 'helpers.claimName' : 'validation.claimName'}`)}
                       onChange={(e) => handleClaimChange(index, 'claim_name', e.target.value)}
                     />
                   )}
@@ -293,7 +298,8 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
                       {...params}
                       label={t('wizards.presentationPolicy.claimsConfigurationStep.fields.fromCredentialType')}
                       required
-                      helperText={t('wizards.presentationPolicy.claimsConfigurationStep.helpers.fromCredentialType')}
+                      error={!hasAcceptedClaimType(claim, policyConfig.accepted_credential_types)}
+                      helperText={t(`wizards.presentationPolicy.claimsConfigurationStep.${hasAcceptedClaimType(claim, policyConfig.accepted_credential_types) ? 'helpers.fromCredentialType' : 'validation.credentialType'}`)}
                     />
                   )}
                   sx={{ mb: 2 }}
@@ -329,7 +335,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
                 <TextField
                   fullWidth
                   label={t('wizards.presentationPolicy.claimsConfigurationStep.fields.requiredValue')}
-                  value={claim.required_value || ''}
+                  value={claim.required_value ?? ''}
                   onChange={(e) => handleClaimChange(index, 'required_value', e.target.value || null)}
                   helperText={t('wizards.presentationPolicy.claimsConfigurationStep.helpers.requiredValue')}
                   size="small"

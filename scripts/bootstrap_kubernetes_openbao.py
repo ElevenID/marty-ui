@@ -547,6 +547,8 @@ def create_producer_pod(transport: Transport, *, image: str, nonce: str,
     pod = "marty-kms-" + purpose + "-" + nonce
     # A bounded disposable transport pod runs the existing native producers.
     # No authority is present in its spec; private inputs arrive over exec stdin.
+    # fsGroup makes the volume setgid. Numeric chmod 700 preserves that bit on
+    # GNU systems, so explicitly clear special bits before native custody checks.
     transport.create({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": pod},
         "spec": {
             "restartPolicy": "Never", "activeDeadlineSeconds": PRODUCER_DEADLINE_SECONDS,
@@ -558,7 +560,7 @@ def create_producer_pod(transport: Transport, *, image: str, nonce: str,
             "containers": [{"name": "native-producers", "image": image,
                 "imagePullPolicy": "IfNotPresent",
                 "command": ["/bin/sh", "-ec",
-                    "umask 077; mkdir /tmp/workload-tls; chmod 700 /tmp/workload-tls; exec sleep 1200"],
+                    "umask 077; mkdir /tmp/workload-tls; chmod u=rwx,go=,a-s,a-t /tmp/workload-tls; exec sleep 1200"],
                 "resources": {"requests": {"cpu": "50m", "memory": "64Mi"},
                               "limits": {"cpu": "750m", "memory": "512Mi"}},
                 "securityContext": {"allowPrivilegeEscalation": False,
@@ -587,7 +589,7 @@ def enroll_application_authority(transport: Transport, pod: str, *, root_token: 
     current = "/tmp/application-current"
     identity = "/tmp/application-identity"
     transport.execute(pod, ["/bin/sh", "-ec",
-        'umask 077; mkdir "$1" "$2"; chmod 700 "$1" "$2"', "--", current, identity])
+        'umask 077; mkdir "$1" "$2"; chmod u=rwx,go=,a-s,a-t "$1" "$2"', "--", current, identity])
     for entry in APPLICATION_TOKEN_SPEC["tokens"]:
         path = files[entry["input"]]
         digest, size = private_file(path, 1025)
@@ -658,7 +660,7 @@ def enroll_renewal_authority(transport: Transport, pod: str, *, root_token: str,
     require(set(SELFHOST_TLS_FILES) | KEYCLOAK_FILES <= set(snapshot),
             "initial renewal generation is incomplete")
     transport.execute(pod, ["/bin/sh", "-ec",
-        'umask 077; mkdir "$1" "$2" "$3"; chmod 700 "$1" "$2" "$3"',
+        'umask 077; mkdir "$1" "$2" "$3"; chmod u=rwx,go=,a-s,a-t "$1" "$2" "$3"',
         "--", current, identity, evidence])
     transport.execute(pod, ["tar", "-xf", "-", "-C", current], data=archive_snapshot(snapshot))
     write_new(transport.state / "renewal-authority-requested.json", encoded({

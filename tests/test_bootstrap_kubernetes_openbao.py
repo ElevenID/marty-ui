@@ -6,7 +6,9 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import stat
+import subprocess
 import sys
 import tarfile
 from types import SimpleNamespace
@@ -19,6 +21,74 @@ import bootstrap_kubernetes_openbao as bootstrap
 
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Linux bootstrap file contract")
+REAL_RUN = subprocess.run
+
+
+def capture_private_directory_commands(monkeypatch, transport_class):
+    """Keep the commands emitted by a real adapter before its cluster double."""
+    commands = []
+    execute = transport_class.execute
+
+    def captured(self, pod, command, **kwargs):
+        if command[:2] == ["/bin/sh", "-ec"] and "mkdir " in command[2]:
+            assert kwargs.get("data") is None
+            commands.append(command)
+        return execute(self, pod, command, **kwargs)
+
+    monkeypatch.setattr(transport_class, "execute", captured)
+    return commands
+
+
+def assert_private_directory_command(command, tmp_path):
+    """Run the actual mkdir/chmod command on the fsGroup-style filesystem."""
+    volume = tmp_path / "setgid volume"
+    volume.mkdir(mode=0o700)
+    volume.chmod(0o2770)
+    inherited = volume / "inheritance-probe"
+    inherited.mkdir(mode=0o700)
+    assert stat.S_IMODE(inherited.stat().st_mode) == 0o2700
+    inherited.rmdir()
+
+    assert command[:2] == ["/bin/sh", "-ec"]
+    script = command[2]
+    if len(command) == 3:
+        # The pod's bounded sleep is unrelated to directory creation.
+        assert script.endswith("; exec sleep 1200")
+        script = script.removesuffix("; exec sleep 1200")
+        destinations = ["/tmp/workload-tls"]
+        script = script.replace(destinations[0], shlex.quote(str(volume / "workload-tls")))
+        arguments = []
+    else:
+        assert command[3] == "--"
+        destinations = command[4:]
+        arguments = ["--", *(str(volume / Path(path).relative_to("/tmp")) for path in destinations)]
+    result = REAL_RUN(["/bin/sh", "-ec", script, *arguments], capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr.decode()
+    for path in destinations:
+        directory = volume / Path(path).relative_to("/tmp")
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700, str(path)
+        assert directory.stat().st_uid == os.geteuid()
+        child = directory / "native-child"
+        child.mkdir(mode=0o700)
+        assert stat.S_IMODE(child.stat().st_mode) == 0o700
+        child.rmdir()
+        archive = REAL_RUN(["tar", "-cf", "-", "-C", str(directory), "."],
+                           capture_output=True, check=True, timeout=10).stdout
+        names = {"."} | {str(item.relative_to(directory)) for item in directory.rglob("*")}
+        assert bootstrap.private_archive(archive, {}, maximum=64 * 1024, modes={0o600},
+            directories=names, complete=True, allow_empty=True) == {}
+    assert stat.S_IMODE(volume.stat().st_mode) == 0o2770
+
+
+def test_real_directory_archive_still_rejects_setgid_custody(tmp_path):
+    directory = tmp_path / "private"
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o2700)
+    archive = REAL_RUN(["tar", "-cf", "-", "-C", str(directory), "."],
+                       capture_output=True, check=True, timeout=10).stdout
+    with pytest.raises(bootstrap.BootstrapError, match="directory custody differs"):
+        bootstrap.private_archive(archive, {}, maximum=64 * 1024, modes={0o600},
+            directories={"."}, complete=True, allow_empty=True)
 
 
 def expected_publication_contract():
@@ -472,10 +542,10 @@ def bootstrap_flow(tmp_path, monkeypatch):
             if command[:2] == ["/bin/sh", "-ec"]:
                 if len(command) == 3 and command[2].startswith("for attempt in"):
                     return b'{"initialized":false,"type":"static"}'
-                if command[2] == 'umask 077; mkdir "$1" "$2"; chmod 700 "$1" "$2"':
+                if command[2] == 'umask 077; mkdir "$1" "$2"; chmod u=rwx,go=,a-s,a-t "$1" "$2"':
                     assert command[4:] == ["/tmp/application-current", "/tmp/application-identity"]
                     return b""
-                if command[2] == 'umask 077; mkdir "$1" "$2" "$3"; chmod 700 "$1" "$2" "$3"':
+                if command[2] == 'umask 077; mkdir "$1" "$2" "$3"; chmod u=rwx,go=,a-s,a-t "$1" "$2" "$3"':
                     assert command[4:] == ["/tmp/renewal-current", "/tmp/renewal-identity",
                                            "/tmp/renewal-enrollment"]
                     return b""
@@ -639,6 +709,17 @@ def test_incompatible_compiled_publisher_refused_before_cluster_access(bootstrap
         assert not (flow.args.state_dir / name).exists()
     captured = capsys.readouterr()
     assert "PRIVATE_" not in str(failure.value) + captured.out + captured.err
+
+
+@pytest.mark.parametrize("site", ["workload", "application", "renewal"])
+def test_bootstrap_private_directories_clear_inherited_setgid(bootstrap_flow, tmp_path, monkeypatch, site):
+    commands = capture_private_directory_commands(monkeypatch, bootstrap.Transport)
+    bootstrap.bootstrap(bootstrap_flow.args)
+    pod = next(resource for resource in bootstrap_flow.resources if resource["kind"] == "Pod")
+    assert len(commands) == 2
+    selected = {"workload": pod["spec"]["containers"][0]["command"],
+                "application": commands[0], "renewal": commands[1]}
+    assert_private_directory_command(selected[site], tmp_path)
 
 
 def test_compiled_publication_preflight_retained_before_cluster_and_owns_notification(bootstrap_flow):

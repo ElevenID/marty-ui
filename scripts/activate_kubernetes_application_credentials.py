@@ -570,7 +570,7 @@ def fresh_proof(context: dict, current: dict, candidate: dict) -> float:
                           "--timeout=300s", timeout=330)
         bootstrap.check_application_binding(transport, context["binding"])
         transport.execute(pod, ["/bin/sh", "-ec",
-            'umask 077; for path in "$@"; do mkdir "$path"; chmod 700 "$path"; done', "--",
+            'umask 077; for path in "$@"; do mkdir "$path"; chmod u=rwx,go=,a-s,a-t "$path"; done', "--",
             REMOTE_CURRENT, REMOTE_CANDIDATE, REMOTE_IDENTITY, REMOTE_PROOF])
         remote_ready = True
         transport.upload(pod, REMOTE_OPERATOR, context["operatorBytes"], executable=True)

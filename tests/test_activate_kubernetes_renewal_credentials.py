@@ -33,6 +33,7 @@ from test_activate_kubernetes_application_credentials import (
     apply_patch, owner, put, rendered_workloads, resource_metadata, workload_children,
 )
 from test_stage_kubernetes_renewal_credentials import archive, flow as renewal_flow, unpack
+from test_bootstrap_kubernetes_openbao import assert_private_directory_command, capture_private_directory_commands
 
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Linux private activation contract")
@@ -399,6 +400,13 @@ def no_selection(flow):
     assert not (flow.args.state_dir / selection.SELECTOR).exists()
     assert (flow.args.state_dir / selection.PENDING).is_file()
     assert not (flow.args.operation_dir / activation.COMPLETE).exists()
+
+
+def test_renewal_activation_private_directories_clear_inherited_setgid(flow, tmp_path, monkeypatch):
+    commands = capture_private_directory_commands(monkeypatch, bootstrap.Transport)
+    activation.activate(flow.args)
+    assert len(commands) == 1
+    assert_private_directory_command(commands[0], tmp_path)
 
 
 def test_complete_activation_publishes_all_33_before_18_rollouts_and_selects_delivery_proof(flow, capsys):

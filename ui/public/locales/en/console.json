@@ -739,6 +739,9 @@
       "console": "Console",
       "templates": "Templates",
       "applicationTemplates": "Application Templates"
+    },
+    "validation": {
+      "validityDays": "Enter a whole number from 1 to 3650 days."
     }
   },
   "createTemplateDrawer": {
@@ -1693,6 +1696,11 @@
           "none": "None (no revocation)",
           "statusListComingSoon": "Status List 2021 (Coming Soon)",
           "helper": "Optional: Select a revocation mechanism for credentials issued from this template"
+        },
+        "validation": {
+          "daysRange": "Enter a whole number of days from 1 to {{max}}.",
+          "offsetRange": "Enter a whole number of seconds from {{min}} to {{max}}.",
+          "reviewSettings": "Review the highlighted validity settings before creating the template."
         }
       },
       "reviewStep": {
@@ -1860,11 +1868,23 @@
           "claim": "Claim {{index}}",
           "acceptPredicateProof": "Accept Predicate Proof",
           "preferPredicateProofs": "Prefer Predicate Proofs (Privacy-First)",
-          "singlePresentation": "Require Single Presentation"
+          "singlePresentation": "Require Single Presentation",
+          "removeClaim": "Remove claim {{index}}"
         },
         "captions": {
           "preferPredicates": "When enabled, predicates are preferred over raw values whenever possible",
           "singlePresentation": "All claims must come from a single credential (more restrictive)"
+        },
+        "validation": {
+          "claimName": "Enter a claim name.",
+          "credentialType": "Select one of the accepted credential types.",
+          "completeClaims": "Complete the policy name, purpose, accepted credential types, and every required claim before continuing.",
+          "templateRequirementsMismatch": "These requirements do not match the selected credential template. Reselect the template or start a new Custom Policy.",
+          "templateIncomplete": "The selected credential template is incomplete. Reselect the template before continuing.",
+          "templateTypeMismatch": "This policy is bound to the selected credential template. Use its credential type, or start a new Custom Policy to configure different types.",
+          "templateDuplicateClaim": "Request “{{claimName}}” only once in this policy.",
+          "templateUnknownClaim": "“{{claimName}}” is not a claim in the selected credential template. Select a template claim or start a new Custom Policy.",
+          "templateValueConflict": "The required value for “{{claimName}}” conflicts with a constraint from the selected template."
         }
       },
       "freshnessBindingStep": {
@@ -1938,6 +1958,7 @@
           "purposeStatement": "Purpose Statement",
           "acceptedCredentialTypes": "Accepted Credential Types",
           "requiredClaims": "Required Claims ({{count}})",
+          "requiredValue": "Required value",
           "holderBinding": "Holder Binding",
           "revocationCheck": "Revocation Check",
           "maxCredentialAge": "Max Credential Age",

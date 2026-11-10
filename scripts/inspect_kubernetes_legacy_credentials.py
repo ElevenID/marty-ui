@@ -387,7 +387,7 @@ def inspect_locked(args: argparse.Namespace) -> None:
 
         phase()
         transport.execute(pod, ["/bin/sh", "-ec",
-            'umask 077; for path in "$@"; do mkdir "$path"; chmod 700 "$path"; done', "--",
+            'umask 077; for path in "$@"; do mkdir "$path"; chmod u=rwx,go=,a-s,a-t "$path"; done', "--",
             REMOTE_PUBLIC, REMOTE_CURRENT, REMOTE_IDENTITY, REMOTE_OPERATION])
         remote_ready = True
         phase()

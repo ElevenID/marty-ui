@@ -35,6 +35,7 @@ import CryptoValidityStep from './steps/CryptoValidityStep';
 import ReviewStep from './steps/ReviewStep';
 import issuerIdentitiesApi from '../../../services/issuerIdentitiesApi';
 import { templateIssuerRequest, templateIssuerRequirementsSatisfied, validTemplateIssuerSelection } from './templateIssuerSelection';
+import { buildWizardValidityRules, credentialTemplateValidity, INITIAL_TEMPLATE_VALIDITY } from './credentialTemplateValidity';
 
 const getSteps = (t) => [
   t('wizards.credentialTemplate.steps.basics'),
@@ -68,10 +69,12 @@ const CredentialTemplateWizard = () => {
       case 2: // Trust & Compliance
         return validTemplateIssuerSelection(data, effectiveOrganizationId);
       case 3: // Crypto & Validity (optional)
-        return data._issuer_selection?.requirements?.revocation_profile === false
-          ? !data.revocation_profile_id : Boolean(data.revocation_profile_id);
+        return credentialTemplateValidity(data.validity_rules).valid
+          && (data._issuer_selection?.requirements?.revocation_profile === false
+            ? !data.revocation_profile_id : Boolean(data.revocation_profile_id));
       case 4: // Review
         return validTemplateIssuerSelection(data, effectiveOrganizationId)
+          && credentialTemplateValidity(data.validity_rules).valid
           && (data._issuer_selection?.requirements?.revocation_profile === false ? !data.revocation_profile_id : Boolean(data.revocation_profile_id));
       default:
         return false;
@@ -85,9 +88,15 @@ const CredentialTemplateWizard = () => {
       }));
     }
 
+    if (!credentialTemplateValidity(data.validity_rules).valid) {
+      throw new Error(t('wizards.credentialTemplate.cryptoValidityStep.validation.reviewSettings', {
+        defaultValue: 'Review the highlighted validity settings before creating the template.',
+      }));
+    }
     const { _organization_default_trust: _defaultTrust, ...templateData } = data;
     const payload = {
       ...templateData,
+      validity_rules: buildWizardValidityRules(data.validity_rules),
       organization_id: effectiveOrganizationId,
     };
     const epoch = organizationEpoch.current;
@@ -132,11 +141,7 @@ const CredentialTemplateWizard = () => {
       trust_profile_id: null,
       compliance_profile_id: null,
       issuer_did: null,
-      validity_rules: {
-        ttl_seconds: 31536000, // 1 year
-        not_before_offset: 0,
-        max_validity_seconds: 63072000, // 2 years
-      },
+      validity_rules: { ...INITIAL_TEMPLATE_VALIDITY },
       revocation_profile_id: null,
       activate_immediately: true,
     },
@@ -323,7 +328,7 @@ const CredentialTemplateWizard = () => {
             {wizard.activeStep === 3 && (
               <Button
                 onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
-                disabled={wizard.loading}
+                disabled={!wizard.isStepValid() || wizard.loading}
                 data-testid="wizard.template.skip"
               >
                 {t('wizards.credentialTemplate.buttons.skip')}

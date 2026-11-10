@@ -289,7 +289,7 @@ def _stage_locked(args: argparse.Namespace, held: application_state.LockedState)
                           "pod/" + pod, "--timeout=300s", timeout=330)
         bootstrap.check_application_binding(transport, binding)
         transport.execute(pod, ["/bin/sh", "-ec",
-            'umask 077; for path in "$@"; do mkdir "$path"; chmod 700 "$path"; done', "--",
+            'umask 077; for path in "$@"; do mkdir "$path"; chmod u=rwx,go=,a-s,a-t "$path"; done', "--",
             REMOTE_CURRENT, REMOTE_IDENTITY, REMOTE_OPERATION, REMOTE_CANDIDATE])
         remote_ready = True
         transport.upload(pod, REMOTE_OPERATOR, operator_bytes, executable=True)

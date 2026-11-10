@@ -14,8 +14,10 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bootstrap_kubernetes_openbao as bootstrap
 import stage_kubernetes_application_credentials as staging
+from test_bootstrap_kubernetes_openbao import assert_private_directory_command, capture_private_directory_commands
 
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Linux private transport contract")
@@ -249,6 +251,13 @@ def flow(tmp_path, monkeypatch):
     monkeypatch.setattr(bootstrap, "Transport", Transport)
     monkeypatch.setattr(staging, "private_bytes", guarded_private_bytes)
     return item
+
+
+def test_application_stage_private_directories_clear_inherited_setgid(flow, tmp_path, monkeypatch):
+    commands = capture_private_directory_commands(monkeypatch, bootstrap.Transport)
+    staging.stage(flow.args)
+    assert len(commands) == 1
+    assert_private_directory_command(commands[0], tmp_path)
 
 
 def test_stages_candidate_only_with_native_proofs_private_captures_and_preserved_modes(flow, capsys):

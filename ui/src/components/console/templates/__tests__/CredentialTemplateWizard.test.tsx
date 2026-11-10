@@ -278,7 +278,30 @@ describe('CredentialTemplateWizard', () => {
         await user.click(await screen.findByRole('option', { name: /lifecycle status/i }))
       }
       await waitFor(() => expect(screen.getByTestId('wizard.template.next')).toBeEnabled())
+      if (mode === 'digital') {
+        const validity = screen.getByRole('spinbutton', { name: /Default Validity/ })
+        await user.clear(validity)
+        expect(validity).toHaveValue(null)
+        expect(screen.getByTestId('wizard.template.next')).toBeDisabled()
+        expect(screen.getByTestId('wizard.template.skip')).toBeDisabled()
+        await user.type(validity, '0')
+        expect(validity).toHaveValue(0)
+        expect(validity).toHaveAttribute('aria-invalid', 'true')
+        expect(screen.getByTestId('wizard.template.next')).toBeDisabled()
+        expect(createdPayload).toBeUndefined()
+        await user.clear(validity); await user.type(validity, '31')
+        const maximum = screen.getByRole('spinbutton', { name: /Maximum Validity/ })
+        await user.clear(maximum); await user.type(maximum, '90')
+        const offset = screen.getByRole('spinbutton', { name: /Not Before Offset/ })
+        await user.clear(offset); await user.type(offset, '-900')
+      }
       await user.click(screen.getByTestId('wizard.template.next'))
+
+      if (mode === 'digital') {
+        expect(screen.getByText('31 days')).toBeInTheDocument()
+        expect(screen.getByText('90 days')).toBeInTheDocument()
+        expect(screen.getByText('-900')).toBeInTheDocument()
+      }
 
       await waitFor(() => expect(screen.getByTestId('wizard.template.submit')).toBeEnabled())
       await user.click(screen.getByTestId('wizard.template.submit'))
@@ -313,6 +336,9 @@ describe('CredentialTemplateWizard', () => {
         expect(createdPayload).not.toHaveProperty('supported_wallet_ids')
         expect(createdPayload).not.toHaveProperty('_issuer_selection')
         expect(createdPayload).not.toHaveProperty('_organization_default_trust')
+        expect(createdPayload?.validity_rules).toEqual(mode === 'digital'
+          ? { default_validity_days: 31, max_validity_days: 90, not_before_offset_seconds: -900 }
+          : { default_validity_days: 365, max_validity_days: 730, not_before_offset_seconds: 0 })
         expect(internalIssuerProfileFetches).toBe(0)
         expect(activationRequested).toBe(true)
         expect(screen.getByText(/now active/i)).toBeInTheDocument()

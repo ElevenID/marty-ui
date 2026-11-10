@@ -230,18 +230,19 @@ describe('ConsoleHeaderBar', () => {
     const drawerButton = within(header).getByRole('button', { name: 'open drawer' })
     expect(drawerButton).toHaveStyle({ marginLeft: '0px' })
     await user.click(drawerButton)
-    const applicant = collapsed
-      ? screen.getByRole('button', { name: 'Applicant Console' })
-      : within(screen.getByRole('group')).getByRole('button', { name: 'Applicant' })
-    await user.click(applicant)
+    const modeSwitcher = within(screen.getByRole('group'))
+    expect(modeSwitcher.getByRole('button', { name: 'Applicant' })).toBeVisible()
+    expect(modeSwitcher.getByRole('button', { name: 'Org' })).toBeVisible()
+    await user.click(modeSwitcher.getByRole('button', { name: 'Applicant' }))
     await waitFor(() => expect(mockSetMode).toHaveBeenLastCalledWith('applicant'))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     mockConsoleState.mode = 'applicant'
     rerender(<MemoryRouter><MobileNavigationHarness /></MemoryRouter>)
-    const organization = collapsed
-      ? screen.getByRole('button', { name: 'Organization Console' })
-      : within(screen.getByRole('group')).getByRole('button', { name: 'Org' })
-    await user.click(organization)
+    await user.click(within(screen.getByRole('banner')).getByRole('button', { name: 'open drawer' }))
+    await user.click(within(screen.getByRole('group')).getByRole('button', { name: 'Org' }))
     await waitFor(() => expect(mockSetMode).toHaveBeenLastCalledWith('org'))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(window.localStorage.getItem('sidebar-collapsed')).toBe(String(collapsed))
   })
 
   it.each(['applicant mode', 'permissions loading', 'permission denied', 'no organization', 'no principal'])('does not render or poll the header bell with %s', (condition) => {
